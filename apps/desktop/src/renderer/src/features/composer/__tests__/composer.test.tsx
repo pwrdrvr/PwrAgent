@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { StrictMode, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
+  buildFederatedThreadRef,
   type BackendSummary,
   type CompactThreadRequest,
   type ComposerDraftRecoveryCandidate,
@@ -2255,6 +2256,102 @@ describe("Composer", () => {
         undefined,
         [],
       );
+    });
+  });
+
+  it("appends Cmd+K federation results and inserts a remote thread link", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const remoteThread: NavigationThreadSummary = {
+      id: "thread-remote",
+      title: "Remote fix",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      federation: {
+        ref: buildFederatedThreadRef({
+          backend: "codex",
+          instanceId: "peer-laptop",
+          threadId: "thread-remote",
+        }),
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+        capabilities: [],
+      },
+    };
+    const jumpSearchRemoteThreads = vi.fn(async () => ({
+      results: [remoteThread],
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: currentThread.id,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          jumpSearchRemoteThreads,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #Remote" } });
+    expect(await screen.findByText("Searching other instances…"))
+      .toBeInTheDocument();
+
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    const remoteOption = await within(listbox).findByRole("button", {
+      name: /#Remote fix/,
+    });
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledWith({
+      query: "Remote",
+      limit: 8,
+    });
+    expect(within(listbox).getByText("Other instances")).toBeInTheDocument();
+    expect(within(remoteOption).getByLabelText("Runs on Laptop"))
+      .toBeInTheDocument();
+    fireEvent.click(remoteOption);
+
+    const chip = await waitFor(() =>
+      within(textbox)
+        .getByText("#Remote fix")
+        .closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveAttribute("data-mention-kind", "thread");
+    expect(chip).toHaveAttribute(
+      "data-skill-path",
+      "pwragent://thread/thread-remote?backend=codex&instanceId=peer-laptop",
+    );
+
+    await clickButton("Send");
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: currentThread.id,
+        input: [
+          {
+            type: "text",
+            text: "Ask [Remote fix](pwragent://thread/thread-remote?backend=codex&instanceId=peer-laptop)",
+          },
+        ],
+      });
     });
   });
 
@@ -15186,7 +15283,7 @@ describe("Composer", () => {
 
     expect(
       await within(screen.getByTestId("composer-tiptap-input"))
-        .findByText("Bob's Best Thread 3000"),
+        .findByText("#Bob's Best Thread 3000"),
     ).toBeInTheDocument();
     expect(screen.queryByText("Untitled thread")).not.toBeInTheDocument();
   });

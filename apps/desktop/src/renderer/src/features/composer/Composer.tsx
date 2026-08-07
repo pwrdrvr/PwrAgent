@@ -1,4 +1,5 @@
 import {
+  Fragment,
   type ReactNode,
   type ClipboardEvent,
   type DragEvent,
@@ -43,9 +44,12 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  buildPullRequestStatusKey,
+  buildThreadIdentityKey,
   buildThreadMarkdownLink,
   buildThreadUrl,
   buildReviewBranchOptions,
+  federatedThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
   isRemoteFederationTarget,
   normalizeGitOriginUrl,
@@ -70,6 +74,7 @@ import {
   ThreadIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
+import { InstanceChip } from "../federation/InstanceGlyph";
 import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -115,6 +120,10 @@ import {
   type ThreadLinkContextValue,
 } from "../../lib/thread-links";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
+import {
+  FEDERATED_THREAD_SEARCH_LIMIT,
+  useFederatedThreadSearch,
+} from "../../lib/useFederatedThreadSearch";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   findSkillTrigger,
@@ -4375,6 +4384,14 @@ export function Composer(props: ComposerProps) {
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
   const directoryRefTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
   const hashReferenceTrigger = findHashReferenceTrigger(draft, selectionStart);
+  const {
+    loading: federatedHashSearchLoading,
+    results: federatedHashSearchResults,
+  } = useFederatedThreadSearch({
+    query: hashReferenceTrigger?.query ?? "",
+    limit: FEDERATED_THREAD_SEARCH_LIMIT,
+    search: props.desktopApi?.jumpSearchRemoteThreads,
+  });
   const filteredSkills = useMemo(() => {
     if (!trigger) {
       return [];
@@ -4434,25 +4451,69 @@ export function Composer(props: ComposerProps) {
       directoryRefTrigger.query,
     );
   }, [props.directories, directoryRefTrigger]);
-  const filteredHashReferences = useMemo(() => {
+  const filteredHashReferenceOptions = useMemo(() => {
     if (!hashReferenceTrigger) {
-      return { pullRequests: [], threads: [] };
+      return [];
     }
-    return filterHashReferenceCandidates(
+    const localCandidates = filterHashReferenceCandidates(
       props.threads ?? [],
       hashReferenceTrigger.query,
     );
-  }, [hashReferenceTrigger, props.threads]);
-  const hashReferenceCount =
-    filteredHashReferences.threads.length
-    + filteredHashReferences.pullRequests.length;
+    const localThreadKeys = new Set(
+      (props.threads ?? []).map((thread) =>
+        buildThreadIdentityKey(thread.source, thread.id),
+      ),
+    );
+    const remoteCandidates = filterHashReferenceCandidates(
+      federatedHashSearchResults.filter(
+        (thread) =>
+          thread.federation?.ref.target.scope === "remote"
+          && !localThreadKeys.has(
+            buildThreadIdentityKey(thread.source, thread.id),
+          ),
+      ),
+      hashReferenceTrigger.query,
+    );
+    const localPullRequestKeys = new Set(
+      localCandidates.pullRequests.map(buildPullRequestStatusKey),
+    );
+    return [
+      ...localCandidates.threads.map((thread) => ({
+        kind: "thread" as const,
+        remote: false,
+        thread,
+      })),
+      ...localCandidates.pullRequests.map((pullRequest) => ({
+        kind: "pull-request" as const,
+        pullRequest,
+        remote: false,
+      })),
+      ...remoteCandidates.threads.map((thread) => ({
+        kind: "thread" as const,
+        remote: true,
+        thread,
+      })),
+      ...remoteCandidates.pullRequests
+        .filter(
+          (pullRequest) =>
+            !localPullRequestKeys.has(buildPullRequestStatusKey(pullRequest)),
+        )
+        .map((pullRequest) => ({
+          kind: "pull-request" as const,
+          pullRequest,
+          remote: true,
+        })),
+    ];
+  }, [federatedHashSearchResults, hashReferenceTrigger, props.threads]);
+  const hashReferenceCount = filteredHashReferenceOptions.length;
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
       ? "slash"
       : directoryRefTrigger && filteredDirectoryRefs.length > 0
         ? "directories"
-        : hashReferenceTrigger && hashReferenceCount > 0
+        : hashReferenceTrigger
+            && (hashReferenceCount > 0 || federatedHashSearchLoading)
           ? "hash-references"
           : undefined;
   const autocompleteKey =
@@ -4500,7 +4561,7 @@ export function Composer(props: ComposerProps) {
             ? hashReferenceListboxId
           : undefined;
   const activeAutocompleteOptionId =
-    autocompleteListboxId && autocompleteKind
+    autocompleteListboxId && autocompleteKind && autocompleteLength > 0
       ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
       : undefined;
   // Directories the draft references: `@` chips (authoritative, from the
@@ -8828,19 +8889,21 @@ export function Composer(props: ComposerProps) {
     }
 
     if (autocompleteKind === "hash-references") {
-      const thread = filteredHashReferences.threads[activeHashReferenceIndex];
-      if (thread) {
+      const option =
+        filteredHashReferenceOptions[activeHashReferenceIndex]
+        ?? filteredHashReferenceOptions[0];
+      if (option?.kind === "thread") {
         applyHashReference((index) =>
-          createComposerThreadToken(resolveThreadSummaryReference(thread), index),
+          createComposerThreadToken(
+            resolveThreadSummaryReference(option.thread),
+            index,
+          ),
         );
         return;
       }
-      const pullRequest = filteredHashReferences.pullRequests[
-        activeHashReferenceIndex - filteredHashReferences.threads.length
-      ];
-      if (pullRequest) {
+      if (option?.kind === "pull-request") {
         applyHashReference((index) =>
-          createComposerPullRequestToken(pullRequest, index),
+          createComposerPullRequestToken(option.pullRequest, index),
         );
       }
       return;
@@ -10394,103 +10457,151 @@ export function Composer(props: ComposerProps) {
             id={hashReferenceListboxId}
             style={{ maxHeight: autocompleteLayout.maxHeight }}
           >
-            {filteredHashReferences.threads.map((thread, index) => (
-              <button
-                key={`${thread.source}:${thread.id}`}
-                id={`${hashReferenceListboxId}-option-${index}`}
-                ref={(node) => {
-                  autocompleteOptionRefs.current[index] = node;
-                }}
-                aria-selected={index === activeHashReferenceIndex}
-                className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
-                tabIndex={index === activeHashReferenceIndex ? 0 : -1}
-                type="button"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  applyHashReference((tokenIndex) =>
-                    createComposerThreadToken(
-                      resolveThreadSummaryReference(thread),
-                      tokenIndex,
-                    ),
-                  );
-                }}
-                onClick={() => {
-                  applyHashReference((tokenIndex) =>
-                    createComposerThreadToken(
-                      resolveThreadSummaryReference(thread),
-                      tokenIndex,
-                    ),
-                  );
-                }}
-                onFocus={() => {
-                  setActiveHashReferenceIndex(index);
-                }}
-                onKeyDown={handleAutocompleteKeyDown}
-              >
-                <span className="composer__autocomplete-title">
-                  <ThreadIcon size={13} aria-hidden="true" />
-                  <HighlightedAutocompleteLabel
-                    label={`#${thread.title.replace(/^#/, "")}`}
-                    query={
-                      hashReferenceTrigger?.query
-                        ? `#${hashReferenceTrigger.query}`
-                        : "#"
-                    }
-                  />
-                  <span className="composer__autocomplete-source composer__autocomplete-source--pwragent">
-                    Thread
-                  </span>
-                </span>
-                <span className="composer__autocomplete-meta">
-                  {describeHashReferenceThread(
-                    thread,
-                    hashReferenceTrigger?.query ?? "",
-                  )}
-                </span>
-              </button>
-            ))}
-            {filteredHashReferences.pullRequests.map((pullRequest, offset) => {
-              const index = filteredHashReferences.threads.length + offset;
+            {filteredHashReferenceOptions.map((option, index) => {
+              const showRemoteDivider =
+                option.remote
+                && !filteredHashReferenceOptions[index - 1]?.remote;
+              if (option.kind === "thread") {
+                const thread = option.thread;
+                const key = thread.federation
+                  ? federatedThreadIdentityKey(thread.federation.ref)
+                  : buildThreadIdentityKey(thread.source, thread.id);
+                return (
+                  <Fragment key={key}>
+                    {showRemoteDivider ? (
+                      <div
+                        aria-hidden="true"
+                        className="composer__autocomplete-section-divider"
+                        role="presentation"
+                      >
+                        Other instances
+                      </div>
+                    ) : null}
+                    <button
+                      id={`${hashReferenceListboxId}-option-${index}`}
+                      ref={(node) => {
+                        autocompleteOptionRefs.current[index] = node;
+                      }}
+                      aria-selected={index === activeHashReferenceIndex}
+                      className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
+                      tabIndex={index === activeHashReferenceIndex ? 0 : -1}
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        applyHashReference((tokenIndex) =>
+                          createComposerThreadToken(
+                            resolveThreadSummaryReference(thread),
+                            tokenIndex,
+                          ),
+                        );
+                      }}
+                      onClick={() => {
+                        applyHashReference((tokenIndex) =>
+                          createComposerThreadToken(
+                            resolveThreadSummaryReference(thread),
+                            tokenIndex,
+                          ),
+                        );
+                      }}
+                      onFocus={() => {
+                        setActiveHashReferenceIndex(index);
+                      }}
+                      onKeyDown={handleAutocompleteKeyDown}
+                    >
+                      <span className="composer__autocomplete-title">
+                        <ThreadIcon size={13} aria-hidden="true" />
+                        <HighlightedAutocompleteLabel
+                          label={`#${thread.title.replace(/^#/, "")}`}
+                          query={
+                            hashReferenceTrigger?.query
+                              ? `#${hashReferenceTrigger.query}`
+                              : "#"
+                          }
+                        />
+                        <span className="composer__autocomplete-source composer__autocomplete-source--pwragent">
+                          Thread
+                        </span>
+                      </span>
+                      <span className="composer__autocomplete-meta composer__autocomplete-meta--thread">
+                        {thread.federation?.ref.target.scope === "remote" ? (
+                          <InstanceChip
+                            icon={thread.federation.celestialIcon}
+                            instanceId={thread.federation.ref.target.instanceId}
+                            label={thread.federation.instanceLabel}
+                          />
+                        ) : null}
+                        <span>
+                          {describeHashReferenceThread(
+                            thread,
+                            hashReferenceTrigger?.query ?? "",
+                          )}
+                        </span>
+                      </span>
+                    </button>
+                  </Fragment>
+                );
+              }
+
+              const pullRequest = option.pullRequest;
               return (
-                <button
-                  key={pullRequest.url}
-                  id={`${hashReferenceListboxId}-option-${index}`}
-                  ref={(node) => {
-                    autocompleteOptionRefs.current[index] = node;
-                  }}
-                  aria-selected={index === activeHashReferenceIndex}
-                  className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
-                  tabIndex={index === activeHashReferenceIndex ? 0 : -1}
-                  type="button"
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    applyHashReference((tokenIndex) =>
-                      createComposerPullRequestToken(pullRequest, tokenIndex),
-                    );
-                  }}
-                  onClick={() => {
-                    applyHashReference((tokenIndex) =>
-                      createComposerPullRequestToken(pullRequest, tokenIndex),
-                    );
-                  }}
-                  onFocus={() => {
-                    setActiveHashReferenceIndex(index);
-                  }}
-                  onKeyDown={handleAutocompleteKeyDown}
-                >
-                  <span className="composer__autocomplete-title">
-                    <PullRequestIcon size={13} aria-hidden="true" />
-                    <span>{`${pullRequest.org}/${pullRequest.repo}#${pullRequest.number}`}</span>
-                    <span className="composer__autocomplete-source composer__autocomplete-source--provider">
-                      Pull request
+                <Fragment key={pullRequest.url}>
+                  {showRemoteDivider ? (
+                    <div
+                      aria-hidden="true"
+                      className="composer__autocomplete-section-divider"
+                      role="presentation"
+                    >
+                      Other instances
+                    </div>
+                  ) : null}
+                  <button
+                    id={`${hashReferenceListboxId}-option-${index}`}
+                    ref={(node) => {
+                      autocompleteOptionRefs.current[index] = node;
+                    }}
+                    aria-selected={index === activeHashReferenceIndex}
+                    className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
+                    tabIndex={index === activeHashReferenceIndex ? 0 : -1}
+                    type="button"
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      applyHashReference((tokenIndex) =>
+                        createComposerPullRequestToken(pullRequest, tokenIndex),
+                      );
+                    }}
+                    onClick={() => {
+                      applyHashReference((tokenIndex) =>
+                        createComposerPullRequestToken(pullRequest, tokenIndex),
+                      );
+                    }}
+                    onFocus={() => {
+                      setActiveHashReferenceIndex(index);
+                    }}
+                    onKeyDown={handleAutocompleteKeyDown}
+                  >
+                    <span className="composer__autocomplete-title">
+                      <PullRequestIcon size={13} aria-hidden="true" />
+                      <span>{`${pullRequest.org}/${pullRequest.repo}#${pullRequest.number}`}</span>
+                      <span className="composer__autocomplete-source composer__autocomplete-source--provider">
+                        Pull request
+                      </span>
                     </span>
-                  </span>
-                  <span className="composer__autocomplete-meta">
-                    {pullRequest.title || pullRequest.url}
-                  </span>
-                </button>
+                    <span className="composer__autocomplete-meta">
+                      {pullRequest.title || pullRequest.url}
+                    </span>
+                  </button>
+                </Fragment>
               );
             })}
+            {federatedHashSearchLoading ? (
+              <div
+                aria-hidden="true"
+                className="composer__autocomplete-remote-loading"
+                role="presentation"
+              >
+                Searching other instances…
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

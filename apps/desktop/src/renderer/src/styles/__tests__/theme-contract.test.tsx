@@ -670,8 +670,8 @@ describe("Tangerine Terminal theme contract", () => {
       "inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 6%, transparent)",
     );
     expect(autocompleteRule).not.toContain("background: rgba(10, 10, 10, 0.98);");
-    expect(directoryAutocompleteRule).toContain("right: auto;");
-    expect(directoryAutocompleteRule).toContain("width: min(100%, 440px);");
+    expect(directoryAutocompleteRule).not.toContain("right: auto;");
+    expect(directoryAutocompleteRule).not.toContain("width: min(100%, 440px);");
     expect(directoryAutocompleteRule).toContain(
       "border-color: var(--border-subtle);",
     );

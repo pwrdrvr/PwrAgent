@@ -19696,12 +19696,10 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* The typed "@" picker mirrors the compact scan pattern of the "+" reference
-   picker: folder + name on the left, path on the same row at right. Keep the
-   autocomplete's keyboard/type-to-filter behavior, but share the reference
-   picker's panel width, density, and accent-focused row treatment. */
+   picker: folder + name on the left, path on the same row at right. Keep its
+   dense rows and accent-focused treatment while using the same full composer
+   width as the thread-reference autocomplete. */
 .composer__autocomplete--directories {
-  right: auto;
-  width: min(100%, 440px);
   gap: 0;
   padding: 6px;
   border-color: var(--border-subtle);
@@ -19860,6 +19858,38 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.composer__autocomplete-meta--thread {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.composer__autocomplete-meta--thread .chip--instance {
+  flex: none;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.composer__autocomplete-section-divider {
+  margin: 2px 4px 0;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.composer__autocomplete-remote-loading {
+  padding: 6px 12px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
 }
 
 /* Divider between the matched options and the "Add directory… / Add
