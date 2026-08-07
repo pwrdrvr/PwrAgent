@@ -220,7 +220,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
         timeout-minutes: 10
 
       # pwrdrvr/configure-nodejs is POSIX-only, so use a Windows-specific
