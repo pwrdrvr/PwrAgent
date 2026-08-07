@@ -2259,6 +2259,77 @@ describe("useThreadNavigation", () => {
     expect(setRemoteThreadLocalPin).not.toHaveBeenCalled();
   });
 
+  it("adds reactions through the owner in a remote-viewer window", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    (window as typeof window & {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-remote",
+          title: "Remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          reactions: ["✋"],
+          inbox: { inInbox: false },
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "thread-remote",
+            },
+          },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setThreadReaction = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-remote",
+      reactions: ["✋", "👀"],
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      setThreadReaction,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.reactions).toEqual(["✋"]);
+    });
+    await act(async () => {
+      await result.current.setThreadReaction(
+        result.current.threads[0]!,
+        "👀",
+        true,
+      );
+    });
+
+    expect(setThreadReaction).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-remote",
+      emoji: "👀",
+      present: true,
+    });
+    expect(result.current.threads[0]?.reactions).toEqual(["✋", "👀"]);
+  });
+
   it("marks a remote snapshot unavailable and refreshes it after reconnect", async () => {
     const federationTarget = {
       scope: "remote" as const,

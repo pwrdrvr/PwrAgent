@@ -100,6 +100,8 @@ import {
   type MarkThreadSeenRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
+  type SetThreadReactionRequest,
+  type SetThreadReactionResponse,
   type SetThreadPrAutoDispatchRequest,
   type SetThreadPrAutoDispatchResponse,
   type CancelThreadPrAutoDispatchRequest,
@@ -3640,6 +3642,22 @@ function localBackendOperations(): FederationBackendOperations {
         backend,
         threadId: request.threadId,
         pinnedRank: overlay.pinnedRank,
+      };
+    },
+    async setThreadReaction(
+      request: SetThreadReactionRequest,
+    ): Promise<SetThreadReactionResponse> {
+      const backend = request.backend ?? "codex";
+      const overlay = await getDesktopOverlayStore().setThreadReaction({
+        backend,
+        threadId: request.threadId,
+        emoji: request.emoji,
+        present: request.present,
+      });
+      return {
+        backend,
+        threadId: request.threadId,
+        reactions: overlay.reactions ?? [],
       };
     },
     async readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]> {

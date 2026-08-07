@@ -5970,6 +5970,8 @@ export function useThreadNavigation(
       try {
         const result = await setThreadReactionRequest({
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           emoji,
           present,

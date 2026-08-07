@@ -5466,6 +5466,15 @@ class DesktopAppServerService {
   async setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setThreadReaction(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
 
     const overlay = await this.getOverlayStore().setThreadReaction({

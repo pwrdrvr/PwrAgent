@@ -43,6 +43,8 @@ import type {
   MarkThreadSeenResponse,
   MessagingPlatformStatus,
   PwrSnapConnectionStatus,
+  SetThreadReactionRequest,
+  SetThreadReactionResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
   SetThreadPrAutoDispatchRequest,
@@ -136,6 +138,7 @@ export const FEDERATION_BACKEND_METHODS = {
   listSkills: "backend.listSkills",
   listBackends: "backend.listBackends",
   markThreadSeen: "backend.markThreadSeen",
+  setThreadReaction: "backend.setThreadReaction",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
   detachThreadPullRequest: "backend.detachThreadPullRequest",
@@ -212,6 +215,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.markThreadSeen]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.setThreadReaction]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   // PR detach cancels pending auto-dispatch work and auto-dispatch arms
@@ -297,6 +301,9 @@ export type FederationBackendOperations = {
   ): Promise<AppServerListSkillsResponse>;
   listBackends(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
   markThreadSeen(request: MarkThreadSeenRequest): Promise<MarkThreadSeenResponse>;
+  setThreadReaction(
+    request: SetThreadReactionRequest,
+  ): Promise<SetThreadReactionResponse>;
   setThreadPin(request: SetThreadPinRequest): Promise<SetThreadPinResponse>;
   reorderThreadPins(
     request: ReorderThreadPinsRequest,
@@ -506,6 +513,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.markThreadSeen(
         envelope.params as MarkThreadSeenRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadReaction,
+    async (envelope) =>
+      await params.backend.setThreadReaction(
+        envelope.params as SetThreadReactionRequest,
       ),
   );
   params.router.registerHandler(
@@ -918,6 +932,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetThreadPinResponse> {
     return await this.rpc.request<SetThreadPinResponse>({
       method: FEDERATION_BACKEND_METHODS.setThreadPin,
+      params: request,
+    });
+  }
+
+  async setThreadReaction(
+    request: SetThreadReactionRequest,
+  ): Promise<SetThreadReactionResponse> {
+    return await this.rpc.request<SetThreadReactionResponse>({
+      method: FEDERATION_BACKEND_METHODS.setThreadReaction,
       params: request,
     });
   }
