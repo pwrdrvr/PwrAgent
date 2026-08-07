@@ -145,6 +145,7 @@ function upsertHealth(
     ...(event.detail !== undefined ? { detail: event.detail } : {}),
     changedAt: event.at,
     reason: event.reason,
+    startupFailure: event.startupFailure,
     degradationReasons: event.degradationReasons,
     lastActivityAt: existing?.lastActivityAt,
   };

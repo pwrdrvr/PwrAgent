@@ -83,7 +83,10 @@ import {
   publishInboundPreview,
 } from "./inbound-preview-bus";
 import { getDesktopMessagingPairingStore } from "./desktop-messaging-pairing-store";
-import { loadConfiguredMessagingAdapters } from "./provider-loader";
+import {
+  configuredMessagingProviderIds,
+  loadConfiguredMessagingAdapters,
+} from "./provider-loader";
 import {
   MessagingDeliveryBudget,
   type MessagingDeliveryPriority,
@@ -404,7 +407,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     this.pendingAdapterStartCancellationReasons.clear();
     await this.enqueueLifecycle(async () => {
       const config = await this.loadConfig({ logStartupEligibility: true });
-      await this.applyConfigNow(config);
+      await this.applyConfigWithFailureStatus(config);
     });
   }
 
@@ -464,7 +467,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     // so the renderer keeps the icon visible with a gray dot — the user
     // knows it's configured but currently off.
     for (const channel of stoppedChannels) {
-      this.setPlatformHealth(channel, "suspended");
+      const previous = this.platformStatuses.get(channel);
+      this.setPlatformHealth(channel, "suspended", {
+        reason: previous?.startupFailure ? previous.reason : undefined,
+        startupFailure: previous?.startupFailure,
+      });
     }
   }
 
@@ -474,8 +481,30 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): Promise<void> {
     this.updatePendingAdapterStartIntent(config);
     await this.enqueueLifecycle(async () => {
-      await this.applyConfigNow(config, options);
+      await this.applyConfigWithFailureStatus(config, options);
     });
+  }
+
+  private async applyConfigWithFailureStatus(
+    config: DesktopMessagingConfig,
+    options: { allowStart?: boolean } = {},
+  ): Promise<void> {
+    try {
+      await this.applyConfigNow(config, options);
+    } catch (error) {
+      // Config application can reject after adapters have already reported
+      // enabled (for example, a post-start federation subscription sync).
+      // Mark every configured platform before cleanup so the failure remains
+      // visible even when stopNow subsequently suspends running adapters.
+      const reason = error instanceof Error ? error.message : String(error);
+      for (const platform of configuredMessagingProviderIds(config)) {
+        this.setPlatformHealth(platform, "errored", {
+          reason,
+          startupFailure: true,
+        });
+      }
+      throw error;
+    }
   }
 
   private async applyConfigNow(
@@ -621,7 +650,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
     await this.enqueueLifecycle(async () => {
-      await this.applyConfigNow(await this.loadConfig(), options);
+      await this.applyConfigWithFailureStatus(await this.loadConfig(), options);
     });
   }
 
@@ -1673,6 +1702,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     options: {
       credentialMetadata?: MessagingCredentialMetadata;
       reason?: string;
+      startupFailure?: boolean;
     } = {},
   ): void {
     const at = Date.now();
@@ -1711,6 +1741,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       changedAt: at,
       ...definedCredentialMetadata(credentialMetadata ?? {}),
       reason: options.reason,
+      startupFailure: options.startupFailure,
       degradationReasons,
       // Preserve the existing activity timestamp through health
       // transitions; activity is independent of health and shouldn't
@@ -1724,6 +1755,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       health: effectiveHealth,
       ...definedCredentialMetadata(next),
       reason: options.reason,
+      startupFailure: options.startupFailure,
       degradationReasons,
       at,
     });

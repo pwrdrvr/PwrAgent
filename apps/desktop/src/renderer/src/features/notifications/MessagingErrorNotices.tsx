@@ -131,6 +131,7 @@ function applyStatusEvent(
     health: event.health,
     changedAt: event.at,
     reason: event.reason,
+    startupFailure: event.startupFailure,
   }, "event");
 }
 
@@ -138,7 +139,7 @@ function applyPlatformHealth(
   current: Map<MessagingChannelKind, MessagingPlatformNoticeState>,
   status: Pick<
     MessagingPlatformStatus,
-    "changedAt" | "health" | "platform" | "reason"
+    "changedAt" | "health" | "platform" | "reason" | "startupFailure"
   >,
   source: MessagingPlatformNoticeState["source"],
 ): Map<MessagingChannelKind, MessagingPlatformNoticeState> {
@@ -157,7 +158,10 @@ function applyPlatformHealth(
     return current;
   }
 
-  const notice = status.health === "errored"
+  const notice = (
+    status.health === "errored"
+    || (status.health === "suspended" && status.startupFailure === true)
+  )
     ? buildMessagingErrorNotice(status)
     : undefined;
   if (
@@ -179,17 +183,19 @@ function applyPlatformHealth(
 export function buildMessagingErrorNotice(
   status: Pick<
     MessagingPlatformStatus,
-    "changedAt" | "platform" | "reason"
+    "changedAt" | "platform" | "reason" | "startupFailure"
   >,
 ): AppNoticeToastNotice {
   const platformName = formatMessagingPlatformName(status.platform);
   return {
     autoDismiss: false,
     detail: status.reason?.trim() || undefined,
-    id: `messaging-platform-error:${status.platform}:${status.changedAt}`,
-    message:
-      `${platformName} reported an adapter error. Messages may be unavailable `
-      + "until it recovers or is restarted.",
+    id: `messaging-platform-error:${status.platform}:active`,
+    message: status.startupFailure
+      ? `PwrAgent could not complete messaging startup for ${platformName}. `
+        + "Messages may be unavailable until it starts successfully."
+      : `${platformName} reported an adapter error. Messages may be unavailable `
+        + "until it recovers or is restarted.",
     title: `${platformName} messaging failed`,
     tone: "error",
   };
