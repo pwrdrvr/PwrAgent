@@ -5764,6 +5764,155 @@ describe("app server ipc", () => {
     });
   });
 
+  it("reprobes stale working state after the automatic startup batch", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const now = 10_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const threads = Array.from({ length: 8 }, (_, index) => ({
+      id: `thread-${index}`,
+      title: `Thread ${index}`,
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      projectKey: `/repo/wt-${index}`,
+      linkedDirectories: [],
+      updatedAt: 2_000 - index,
+    }));
+    listThreads.mockResolvedValue(threads as never);
+
+    try {
+      registerAppServerIpcHandlers();
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await vi.waitFor(() => {
+        expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(1);
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(8);
+      });
+
+      nowSpy.mockReturnValue(now + 31_000);
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+      await vi.waitFor(() => {
+        expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(2);
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(16);
+      });
+      expect(readWorktreeWorkingStateEntries.mock.calls[1]?.[0]).toEqual(
+        threads.map((thread) => thread.projectKey),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("rotates bounded automatic working-state refreshes past the first batch", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const now = 20_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const threads = Array.from({ length: 9 }, (_, index) => ({
+      id: `thread-${index}`,
+      title: `Thread ${index}`,
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      projectKey: `/repo/wt-${index}`,
+      linkedDirectories: [],
+      updatedAt: 2_000 - index,
+    }));
+    listThreads.mockResolvedValue(threads as never);
+
+    try {
+      registerAppServerIpcHandlers();
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+      await vi.waitFor(() => {
+        expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(1);
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(8);
+      });
+      const firstBatch = readWorktreeWorkingStateEntries.mock.calls[0]?.[0];
+      expect(firstBatch).toEqual(
+        threads.slice(0, 8).map((thread) => thread.projectKey),
+      );
+
+      nowSpy.mockReturnValue(now + 31_000);
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+      await vi.waitFor(() => {
+        expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(2);
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(16);
+      });
+      const secondBatch = readWorktreeWorkingStateEntries.mock.calls[1]?.[0];
+      expect(secondBatch).toHaveLength(8);
+      expect(secondBatch).toContain(threads[8]!.projectKey);
+      expect(new Set([...firstBatch!, ...secondBatch!])).toEqual(
+        new Set(threads.map((thread) => thread.projectKey)),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("lets a user-triggered working-state refresh bypass fresh cache", async () => {
+    const {
+      NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+      NAVIGATION_SNAPSHOT_CHANNEL,
+    } = await import("../../shared/ipc");
+    const worktreePath = "/repo/wt";
+    const gitWorkingState = {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 0,
+      baseBranch: "main",
+    };
+    listThreads.mockResolvedValue([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: worktreePath,
+        linkedDirectories: [],
+        updatedAt: 2_000,
+      },
+    ] as never);
+    readThreadGitWorkingStateCache.mockResolvedValueOnce({
+      [worktreePath]: {
+        worktreePath,
+        fetchedAt: Date.now(),
+        gitWorkingState,
+      },
+    });
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    expect(readWorktreeWorkingStateEntries).not.toHaveBeenCalled();
+
+    await expect(
+      handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
+        {},
+        { backend: "codex", threadId: "thread-1", trigger: "scheduled" },
+      ),
+    ).resolves.toEqual({ scheduled: false });
+    expect(invalidateWorktreeWorkingState).not.toHaveBeenCalled();
+
+    await expect(
+      handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
+        {},
+        { backend: "codex", threadId: "thread-1", trigger: "user" },
+      ),
+    ).resolves.toEqual({ scheduled: true });
+    expect(invalidateWorktreeWorkingState).toHaveBeenCalledExactlyOnceWith(
+      worktreePath,
+    );
+    await vi.waitFor(() => {
+      expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(
+        [worktreePath],
+        expect.any(Object),
+      );
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ worktreePath }),
+      );
+    });
+  });
+
   it("hydrates working state from linked worktrees when the thread has no project key", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 

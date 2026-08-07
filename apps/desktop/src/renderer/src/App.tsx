@@ -74,6 +74,7 @@ import { MarkdownRenderingOptionsProvider } from "./lib/markdown-rendering-optio
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
+import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "./lib/thread-history-limits";
 import { setSidebarResizing } from "./lib/sidebar-resize-signal";
@@ -873,6 +874,10 @@ function DesktopAppShell(props: {
   const pullRequests = usePullRequestRefresh({
     desktopApi,
     onRefreshNavigation: navigation.refresh,
+    selectedThread: navigation.selectedThread,
+  });
+  const gitWorkingState = useThreadGitWorkingStateRefresh({
+    desktopApi,
     selectedThread: navigation.selectedThread,
   });
   // Browser-style back/forward across threads, project launchpads, and the
@@ -1830,6 +1835,7 @@ function DesktopAppShell(props: {
             void navigation.removeDirectory(directory.key);
           }}
           onPrefetchPullRequests={pullRequests.prefetch}
+          onPrefetchGitWorkingState={gitWorkingState.prefetch}
           onDetachPullRequest={async (thread, pr) => {
             if (!desktopApi?.detachThreadPullRequest) return;
             await desktopApi.detachThreadPullRequest({

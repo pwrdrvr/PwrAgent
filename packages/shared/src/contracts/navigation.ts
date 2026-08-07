@@ -799,6 +799,17 @@ export type NavigationThreadGitWorkingStateUpdatedNotification = {
   };
 };
 
+export type RefreshThreadGitWorkingStateRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  /** User inspection bypasses cache freshness; scheduled focus refreshes do not. */
+  trigger: "scheduled" | "user";
+};
+
+export type RefreshThreadGitWorkingStateResponse = {
+  scheduled: boolean;
+};
+
 export type RefreshDirectoryGitStatusesRequest = {
   directoryKeys: string[];
   /** Route filesystem inspection to the instance that owns these directories. */
