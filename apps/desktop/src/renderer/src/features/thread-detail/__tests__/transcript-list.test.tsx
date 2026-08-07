@@ -962,6 +962,45 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("hides Codex Desktop git directives from assistant messages and copied text", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const visibleText =
+      "Committed and pushed `5b286a74da` to `codex/migrate-media-fingerprint-sessions`.";
+    const messageText = `${visibleText}
+
+::git-stage{cwd="/Users/vitaliy/giphy/giphy-services"}
+::git-commit{cwd="/Users/vitaliy/giphy/giphy-services"}
+::git-push{cwd="/Users/vitaliy/giphy/giphy-services" branch="codex/migrate-media-fingerprint-sessions"}`;
+
+    render(
+      <TranscriptList
+        desktopApi={{ copyText }}
+        entries={[
+          {
+            type: "message",
+            id: "message-git-directives",
+            role: "assistant",
+            text: messageText,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("Committed and pushed", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText(/::git-stage/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/::git-commit/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/::git-push/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(visibleText);
+    });
+  });
+
   it("copies both markdown text and rendered HTML when the rich clipboard bridge exists", async () => {
     const copyText = vi.fn(async () => undefined);
     const copyRichText = vi.fn(async () => undefined);

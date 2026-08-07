@@ -6,6 +6,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import { stripCodexGitActionDirectives } from "@pwragent/shared";
 import type {
   DesktopApplicationsSnapshot,
   AppServerSkillSummary,
@@ -63,13 +64,17 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     ? threadLinks?.resolve(props.message.origin.sourceThread)
     : undefined;
   const contentParts = useMemo(
-    () =>
-      props.message.parts && props.message.parts.length > 0
+    () => {
+      const parts = props.message.parts && props.message.parts.length > 0
         ? props.message.parts
         : props.message.text
           ? [{ type: "text", text: props.message.text } satisfies AppServerThreadMessagePart]
-          : [],
-    [props.message.parts, props.message.text],
+          : [];
+      return props.message.role === "assistant"
+        ? stripCodexGitActionDirectivesFromParts(parts)
+        : parts;
+    },
+    [props.message.parts, props.message.role, props.message.text],
   );
   const messageCopyText = useMemo(
     () => buildMessageCopyText(props.message, contentParts),
@@ -1039,7 +1044,9 @@ function buildMessageCopyText(
   parts: AppServerThreadMessagePart[]
 ): string {
   if (typeof message.text === "string" && message.text.length > 0) {
-    return message.text;
+    return message.role === "assistant"
+      ? stripCodexGitActionDirectives(message.text)
+      : message.text;
   }
 
   return parts
@@ -1048,4 +1055,16 @@ function buildMessageCopyText(
     )
     .map((part) => part.text)
     .join("\n\n");
+}
+
+function stripCodexGitActionDirectivesFromParts(
+  parts: AppServerThreadMessagePart[],
+): AppServerThreadMessagePart[] {
+  return parts.map((part) => {
+    if (part.type !== "text") {
+      return part;
+    }
+    const text = stripCodexGitActionDirectives(part.text);
+    return text === part.text ? part : { ...part, text };
+  });
 }

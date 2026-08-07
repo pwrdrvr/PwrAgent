@@ -13,6 +13,7 @@ import {
   parseCodexTurnErrorMessage,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
+  stripCodexGitActionDirectives,
 } from "@pwragent/shared";
 import type {
   AgentEvent,
@@ -14914,7 +14915,10 @@ export class MessagingController {
     if (binding && shouldFlushToolUpdatesBeforeIntent(intent)) {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
     }
-    const routedIntent = this.withRoutingAudit(intent, binding, event);
+    const displayIntent = binding?.backend === "codex"
+      ? stripCodexGitActionDirectivesFromMessagingIntent(intent)
+      : intent;
+    const routedIntent = this.withRoutingAudit(displayIntent, binding, event);
     const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
     let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
     const priority = messagingDeliveryPriority(routedIntent, {
@@ -18938,6 +18942,40 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
     return false;
   }
   return true;
+}
+
+function stripCodexGitActionDirectivesFromMessagingIntent(
+  intent: MessagingSurfaceIntent,
+): MessagingSurfaceIntent {
+  if (intent.kind === "message" && intent.role === "assistant") {
+    let changed = false;
+    const parts = intent.parts.map((part) => {
+      if (part.type !== "text") {
+        return part;
+      }
+      const text = stripCodexGitActionDirectives(part.text);
+      if (text === part.text) {
+        return part;
+      }
+      changed = true;
+      return { ...part, text };
+    });
+    return changed ? { ...intent, parts } : intent;
+  }
+
+  if (intent.kind === "stream_update" && intent.role === "assistant") {
+    const text = stripCodexGitActionDirectives(intent.text);
+    if (text === intent.text) {
+      return intent;
+    }
+    return {
+      ...intent,
+      delta: undefined,
+      text,
+    };
+  }
+
+  return intent;
 }
 
 function messagingEventFromAutomationSource(
