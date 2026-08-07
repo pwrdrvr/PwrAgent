@@ -3746,13 +3746,10 @@ function localBackendOperations(): FederationBackendOperations {
     async cancelQueuedTurn(
       request: CancelQueuedTurnRequest,
     ): Promise<CancelQueuedTurnResponse> {
-      return {
-        queueEntryId: request.queueEntryId,
-        cancelled: getDesktopBackendRegistry().cancelQueuedTurn(
-          request.queueEntryId,
-          "Cancelled from a federated desktop composer.",
-        ),
-      };
+      return getDesktopBackendRegistry().cancelQueuedTurnWithDisposition(
+        request.queueEntryId,
+        "Cancelled from a federated desktop composer.",
+      );
     },
     async listScheduledThreadActions(
       request: ListScheduledThreadActionsRequest = {},

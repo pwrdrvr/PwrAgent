@@ -1212,12 +1212,16 @@ describe("federation backend bridge", () => {
       createdAt: 1_400,
       result: {
         queueEntryId: "queue-1",
-        cancelled: true,
+        cancelled: false,
+        disposition: "already_admitted",
+        turnId: "turn-1",
       },
     });
     await expect(cancelPending).resolves.toEqual({
       queueEntryId: "queue-1",
-      cancelled: true,
+      cancelled: false,
+      disposition: "already_admitted",
+      turnId: "turn-1",
     });
   });
 

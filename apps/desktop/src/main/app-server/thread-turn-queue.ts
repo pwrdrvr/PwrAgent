@@ -56,6 +56,20 @@ export type ThreadTurnQueueImmediateSubmissionResult =
   | Extract<ThreadTurnQueueSubmissionResult, { status: "started" }>
   | { status: "busy" };
 
+export type ThreadTurnQueueCancellationResult =
+  | {
+      disposition: "cancelled";
+      entry: ThreadTurnQueueEntry;
+    }
+  | {
+      disposition: "already_admitted";
+      entryId: string;
+      turnId?: string;
+    }
+  | {
+      disposition: "not_found";
+    };
+
 export type ThreadTurnQueueLifecycleEvent =
   | {
       type: "queued";
@@ -99,10 +113,18 @@ type RunningEntry = {
   turnId?: string;
 };
 
+type AdmittedEntry = {
+  entryId: string;
+  turnId?: string;
+};
+
+const RECENT_ADMITTED_ENTRY_LIMIT = 1_000;
+
 export class ThreadTurnQueue {
   private readonly queuedEntries = new Map<string, ThreadTurnQueueEntry[]>();
   private readonly startingKeys = new Set<string>();
   private readonly runningEntries = new Map<string, RunningEntry>();
+  private readonly recentlyAdmittedEntries = new Map<string, AdmittedEntry>();
   private readonly releasingKeys = new Set<string>();
 
   constructor(private readonly options: ThreadTurnQueueOptions) {}
@@ -202,6 +224,28 @@ export class ThreadTurnQueue {
     return undefined;
   }
 
+  cancelEntryWithDisposition(
+    entryId: string,
+    reason?: string,
+  ): ThreadTurnQueueCancellationResult {
+    const cancelled = this.cancelEntry(entryId, reason);
+    if (cancelled) {
+      return {
+        disposition: "cancelled",
+        entry: cancelled,
+      };
+    }
+    const admitted = this.recentlyAdmittedEntries.get(entryId);
+    if (admitted) {
+      return {
+        disposition: "already_admitted",
+        entryId: admitted.entryId,
+        ...(admitted.turnId ? { turnId: admitted.turnId } : {}),
+      };
+    }
+    return { disposition: "not_found" };
+  }
+
   updateQueuedEntryInput(
     entryId: string,
     input: AppServerTurnInputItem[],
@@ -272,15 +316,22 @@ export class ThreadTurnQueue {
   private async startEntry(entry: ThreadTurnQueueEntry): Promise<ThreadTurnQueueStartResult> {
     const key = this.keyFor(entry);
     this.startingKeys.add(key);
+    this.rememberAdmittedEntry({ entryId: entry.id });
     try {
       const result = await this.options.startTurn(entry);
-      this.runningEntries.set(key, {
+      const running = {
         entry,
+        turnId: result.turnId,
+      };
+      this.runningEntries.set(key, running);
+      this.rememberAdmittedEntry({
+        entryId: entry.id,
         turnId: result.turnId,
       });
       await this.emit({ type: "started", entry, turnId: result.turnId });
       return result;
     } catch (error) {
+      this.recentlyAdmittedEntries.delete(entry.id);
       const normalized = error instanceof Error ? error : new Error(String(error));
       await this.emit({ type: "failed", entry, error: normalized });
       throw normalized;
@@ -295,6 +346,16 @@ export class ThreadTurnQueue {
     const nextQueue: ThreadTurnQueueEntry[] = [];
     this.queuedEntries.set(key, nextQueue);
     return nextQueue;
+  }
+
+  private rememberAdmittedEntry(entry: AdmittedEntry): void {
+    this.recentlyAdmittedEntries.delete(entry.entryId);
+    this.recentlyAdmittedEntries.set(entry.entryId, entry);
+    while (this.recentlyAdmittedEntries.size > RECENT_ADMITTED_ENTRY_LIMIT) {
+      const oldestId = this.recentlyAdmittedEntries.keys().next().value;
+      if (typeof oldestId !== "string") break;
+      this.recentlyAdmittedEntries.delete(oldestId);
+    }
   }
 
   private keyFor(params: {
