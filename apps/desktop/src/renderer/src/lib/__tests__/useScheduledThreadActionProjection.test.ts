@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import type { ScheduledThreadAction } from "@pwragent/shared";
+import type { AgentEvent, ScheduledThreadAction } from "@pwragent/shared";
 import { useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "../desktop-api";
 import {
@@ -68,6 +68,44 @@ describe("scheduled thread action projections", () => {
     );
 
     expect(store.getQueuedTurns(scopeKey)).toEqual([]);
+  });
+
+  it("refreshes navigation when an unborn scheduled thread becomes terminal", async () => {
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
+    const onThreadLifecycleChanged = vi.fn();
+    const { result } = renderHook(() => useComposerDraftStore());
+    const projection = renderHook(() => useScheduledThreadActionProjection({
+      composerDraftStore: result.current,
+      desktopApi: {
+        listScheduledThreadActions: vi.fn(async () => ({
+          actions: [],
+          observedAt: 1_000,
+        })),
+        onAgentEvent: (handler: (event: AgentEvent) => void) => {
+          agentEventHandler = handler;
+          return () => undefined;
+        },
+      } as unknown as DesktopApi,
+      onThreadLifecycleChanged,
+    }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/scheduledAction/updated",
+          params: {
+            action: scheduledAction({ status: "cancelled" }),
+          },
+        },
+      });
+    });
+
+    expect(onThreadLifecycleChanged).toHaveBeenCalledTimes(1);
+    projection.unmount();
   });
 
   it("turns a failed backend action into a locally recoverable draft", () => {

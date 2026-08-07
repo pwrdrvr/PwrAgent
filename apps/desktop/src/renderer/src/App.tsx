@@ -1090,6 +1090,7 @@ function DesktopAppShell(props: {
   useScheduledThreadActionProjection({
     composerDraftStore,
     desktopApi,
+    onThreadLifecycleChanged: navigation.refresh,
     sources: scheduledActionProjectionSources,
   });
   const replayCodexProfileSetup = settings.snapshot

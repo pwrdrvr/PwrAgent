@@ -5,6 +5,19 @@ export type ParsedReviewCommand = {
   displayText: string;
 };
 
+export function formatReviewCommand(target: AppServerReviewTarget): string {
+  if (target.type === "uncommittedChanges") {
+    return "/review";
+  }
+  if (target.type === "baseBranch") {
+    return `/review ${target.branch}`;
+  }
+  if (target.type === "commit") {
+    return `/review --commit ${[target.sha, target.title].filter(Boolean).join(" ")}`;
+  }
+  return `/review --custom ${target.instructions}`;
+}
+
 export function normalizeReviewDisplayText(value: string): string {
   const normalized = value.trim().replace(/\s+/g, " ");
   if (!normalized) {

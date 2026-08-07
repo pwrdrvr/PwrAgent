@@ -5571,7 +5571,11 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
     await screen.findByLabelText("Queued message");
 
-    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    const steerButton = screen.getByRole("button", { name: "Steer" });
+    await waitFor(() => {
+      expect(steerButton).toBeEnabled();
+    });
+    fireEvent.click(steerButton);
 
     await waitFor(() => {
       expect(cancelQueuedTurn).toHaveBeenCalledWith({
@@ -5673,7 +5677,11 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
     await screen.findByLabelText("Queued message");
 
-    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    const steerButton = screen.getByRole("button", { name: "Steer" });
+    await waitFor(() => {
+      expect(steerButton).toBeEnabled();
+    });
+    fireEvent.click(steerButton);
 
     await waitFor(() => {
       expect(cancelQueuedTurn).toHaveBeenCalledWith({

@@ -16,6 +16,7 @@ import type {
   MessagingApprovalDecision,
   MessagingBindingRecord,
 } from "@pwragent/messaging-interface";
+import { formatReviewCommand } from "../../shared/review-command";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
   getAppStateDb,
@@ -15871,9 +15872,9 @@ export class DesktopBackendRegistry {
       });
       this.invalidateThreadListCache(launchpad.backend);
       try {
-        const displayText =
-          extractFirstMeaningfulTextInput(input)
-          ?? (request.reviewTarget ? "Scheduled review" : "Scheduled message");
+        const displayText = request.reviewTarget
+          ? reviewTaskLabel(request.reviewTarget)
+          : extractFirstMeaningfulTextInput(input) ?? "Scheduled message";
         const createScheduledThreadAction = this.createScheduledThreadActionFn;
         if (!createScheduledThreadAction) {
           throw new Error("Scheduled thread action service is unavailable");
@@ -15892,7 +15893,7 @@ export class DesktopBackendRegistry {
               ? {
                   review: {
                     target: request.reviewTarget,
-                    draftText: displayText,
+                    draftText: formatReviewCommand(request.reviewTarget),
                     delivery: "inline" as const,
                     model: launchpad.model,
                     reasoningEffort: launchpad.reasoningEffort,

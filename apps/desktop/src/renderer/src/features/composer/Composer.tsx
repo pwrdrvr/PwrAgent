@@ -132,7 +132,10 @@ import {
   parseSkillMentionParts,
   buildSkillMentionMarkdown,
 } from "../../lib/skill-mentions";
-import { parseReviewCommand } from "../../../../shared/review-command";
+import {
+  formatReviewCommand,
+  parseReviewCommand,
+} from "../../../../shared/review-command";
 import {
   type ComposerInputChangeMetadata,
   type ComposerInputHandle,
@@ -1267,23 +1270,6 @@ function notificationIncludesDraftContent(
 function parseStaleInterruptError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.toLowerCase().includes("no active turn to interrupt");
-}
-
-function reviewCommandToDraftText(command: {
-  cwd?: string;
-  target: AppServerReviewTarget;
-}): string {
-  const target = command.target;
-  if (target.type === "uncommittedChanges") {
-    return "/review";
-  }
-  if (target.type === "baseBranch") {
-    return `/review ${target.branch}`;
-  }
-  if (target.type === "commit") {
-    return `/review --commit ${[target.sha, target.title].filter(Boolean).join(" ")}`;
-  }
-  return `/review --custom ${target.instructions}`;
 }
 
 function reviewSubmissionKey(command: {
@@ -6409,7 +6395,7 @@ export function Composer(props: ComposerProps) {
     options?: { scheduledSendAt?: number },
   ): Promise<void> | undefined => {
     const enqueue = async (): Promise<void> => {
-      const text = reviewCommandToDraftText(reviewCommand);
+      const text = formatReviewCommand(reviewCommand.target);
       if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
         throw new Error("Backend-owned review queuing is unavailable.");
       }

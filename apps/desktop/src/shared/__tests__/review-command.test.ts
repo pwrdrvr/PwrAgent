@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeReviewDisplayText, parseReviewCommand } from "../review-command";
+import {
+  formatReviewCommand,
+  normalizeReviewDisplayText,
+  parseReviewCommand,
+} from "../review-command";
 
 describe("parseReviewCommand", () => {
   it("parses bare review as uncommitted changes", () => {
@@ -34,6 +38,24 @@ describe("parseReviewCommand", () => {
     expect(parseReviewCommand("/reviewer main")).toBeUndefined();
     expect(parseReviewCommand("please /review main")).toBeUndefined();
     expect(parseReviewCommand("/review --custom")).toBeUndefined();
+  });
+});
+
+describe("formatReviewCommand", () => {
+  it("formats every review target as an editable slash command", () => {
+    expect(formatReviewCommand({ type: "uncommittedChanges" })).toBe("/review");
+    expect(formatReviewCommand({ type: "baseBranch", branch: "main" })).toBe(
+      "/review main",
+    );
+    expect(formatReviewCommand({
+      type: "commit",
+      sha: "abc123",
+      title: "Fix title",
+    })).toBe("/review --commit abc123 Fix title");
+    expect(formatReviewCommand({
+      type: "custom",
+      instructions: "focus on API compatibility",
+    })).toBe("/review --custom focus on API compatibility");
   });
 });
 

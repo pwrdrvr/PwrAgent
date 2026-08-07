@@ -5712,6 +5712,40 @@ describe("DesktopBackendRegistry", () => {
       name: "Scheduled launchpad work",
     });
 
+    vi.spyOn(codexClient, "startThread").mockResolvedValueOnce({
+      threadId: "thread-review",
+    });
+    createScheduledThreadAction.mockClear();
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "workspace:scheduled-review",
+      scheduledFor,
+      reviewTarget: { type: "baseBranch", branch: "main" },
+      launchpad: {
+        directoryKey: "workspace:scheduled-review",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        backend: "codex",
+        executionMode: "full-access",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    expect(createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayText: "Review changes against main",
+        kind: "review",
+        threadId: "thread-review",
+        review: expect.objectContaining({
+          draftText: "/review main",
+          target: { type: "baseBranch", branch: "main" },
+        }),
+      }),
+      { id: expect.stringMatching(/^scheduled-action:/) },
+    );
+
     await registry.close();
   });
 
