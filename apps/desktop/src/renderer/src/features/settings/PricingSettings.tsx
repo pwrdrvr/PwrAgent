@@ -76,7 +76,7 @@ export function PricingSettings(props: {
           <SettingsField
             label="Price displays"
             sub="Choose one or both estimates to show with thread usage."
-            help="Dollars use OpenAI API list prices. Codex Credits use Codex's token-based credit rate card."
+            help="List Price uses each provider's published rates. Codex Credits use Codex's token-based credit rate card."
             control={
               <div
                 className="settings-segmented"
@@ -96,7 +96,7 @@ export function PricingSettings(props: {
                     );
                   }}
                 >
-                  Dollars
+                  List Price
                 </button>
                 <button
                   aria-pressed={threadPricingDisplayCodexCredits.value}

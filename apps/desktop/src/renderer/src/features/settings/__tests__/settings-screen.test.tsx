@@ -840,7 +840,9 @@ describe("SettingsScreen", () => {
         experimental: { threadPricingSummary: false },
       });
     });
-    expect(screen.getByRole("button", { name: "Dollars" })).not.toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "List Price" }),
+    ).not.toBeDisabled();
     expect(
       screen.getByRole("button", { name: "Codex Credits" }),
     ).not.toBeDisabled();
@@ -1231,12 +1233,17 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Usage & Pricing" }));
 
-    const dollarsChip = screen.getByRole("button", { name: "Dollars" });
+    expect(
+      screen.getByText(
+        "List Price uses each provider's published rates. Codex Credits use Codex's token-based credit rate card.",
+      ),
+    ).toBeInTheDocument();
+    const listPriceChip = screen.getByRole("button", { name: "List Price" });
     const creditsChip = screen.getByRole("button", { name: "Codex Credits" });
-    expect(dollarsChip).toHaveAttribute("aria-pressed", "true");
+    expect(listPriceChip).toHaveAttribute("aria-pressed", "true");
     expect(creditsChip).toHaveAttribute("aria-pressed", "false");
 
-    fireEvent.click(dollarsChip);
+    fireEvent.click(listPriceChip);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { threadPricingDisplayUsd: false },
@@ -1279,7 +1286,7 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Usage & Pricing" }));
 
-    expect(screen.getByRole("button", { name: "Dollars" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "List Price" })).toBeDisabled();
     expect(
       screen.getByRole("button", { name: "Codex Credits" }),
     ).toBeDisabled();
