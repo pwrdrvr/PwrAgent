@@ -212,8 +212,8 @@ jobs:
         timeout-minutes: 10
         run: pnpm run test
 
-  windows:
-    name: Windows (build + test)
+  windows-verify:
+    name: Windows verify
     runs-on: windows-latest
     needs: changes
     if: needs.changes.outputs.code_impacting == 'true'
@@ -233,10 +233,6 @@ jobs:
         timeout-minutes: 15
         run: pnpm install --frozen-lockfile
 
-      - name: Install ripgrep
-        timeout-minutes: 5
-        uses: ./.github/actions/install-ripgrep
-
       - name: Type check
         timeout-minutes: 10
         run: pnpm typecheck
@@ -245,9 +241,61 @@ jobs:
         timeout-minutes: 15
         run: pnpm run build
 
+  windows-desktop-main:
+    name: Windows desktop-main
+    runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.code_impacting == 'true'
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+
+      - name: Setup Node.js and pnpm
+        uses: ./.github/actions/configure-windows-nodejs
+        timeout-minutes: 10
+
+      - name: Install dependencies
+        timeout-minutes: 15
+        run: pnpm install --frozen-lockfile
+
       - name: Test
         timeout-minutes: 20
-        run: pnpm run test
+        run: pnpm exec vitest run --config vitest.workspace.ts --project desktop-main
+
+  windows-renderer-packages:
+    name: Windows renderer + packages
+    runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.code_impacting == 'true'
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+
+      - name: Setup Node.js and pnpm
+        uses: ./.github/actions/configure-windows-nodejs
+        timeout-minutes: 10
+
+      - name: Install dependencies
+        timeout-minutes: 15
+        run: pnpm install --frozen-lockfile
+
+      - name: Install ripgrep
+        timeout-minutes: 5
+        uses: ./.github/actions/install-ripgrep
+
+      - name: Test
+        timeout-minutes: 20
+        run: >-
+          pnpm exec vitest run --config vitest.workspace.ts
+          --project desktop-renderer
+          --project agent-core
+          --project grok-app-server
+          --project messaging
+          --project shared
 
   windows-package:
     name: Windows installer (label-gated)
