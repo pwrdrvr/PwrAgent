@@ -1,4 +1,8 @@
 import { isAppServerBackendKind } from "./navigation";
+import {
+  isFederationInstanceId,
+  type FederationInstanceId,
+} from "./federation";
 import type {
   AppServerBackendKind,
   ThreadIdentifier,
@@ -8,7 +12,7 @@ import type {
  * PwrAgent's in-app link scheme.
  *
  * ```
- * pwragent://thread/<threadId>[?backend=<kind>][&profile=<name>]
+ * pwragent://thread/<threadId>[?backend=<kind>][&instanceId=<id>][&profile=<name>]
  * ```
  *
  * The scheme is NAVIGATION-ONLY and must stay that way. It never grows action
@@ -42,6 +46,12 @@ export type ThreadLinkRef = {
    */
   backend?: AppServerBackendKind;
   /**
+   * Optional owning federation instance. Remote emitters include it so the
+   * renderer can open an arbitrary thread on the correct peer even when that
+   * thread is not already present in the local navigation snapshot.
+   */
+  instanceId?: FederationInstanceId;
+  /**
    * Optional profile name. Only meaningful for links that travel outside the
    * app. A link naming a profile other than the running one reports the
    * mismatch rather than silently switching profiles.
@@ -66,6 +76,9 @@ export function buildThreadUrl(ref: ThreadLinkRef): string {
   const query: string[] = [];
   if (ref.backend) {
     query.push(`backend=${encodeURIComponent(ref.backend)}`);
+  }
+  if (ref.instanceId) {
+    query.push(`instanceId=${encodeURIComponent(ref.instanceId)}`);
   }
   if (ref.profile) {
     query.push(`profile=${encodeURIComponent(ref.profile)}`);
@@ -102,11 +115,14 @@ export function parseThreadUrl(value: string): ThreadLinkRef | undefined {
 
   const params = parseQuery(query);
   const backend = params.get("backend");
+  const instanceId = params.get("instanceId");
   const profile = params.get("profile");
 
   return {
     threadId,
     backend: backend && isAppServerBackendKind(backend) ? backend : undefined,
+    instanceId:
+      instanceId && isFederationInstanceId(instanceId) ? instanceId : undefined,
     profile: profile || undefined,
   };
 }

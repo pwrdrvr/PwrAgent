@@ -25975,6 +25975,13 @@ script = "printf setup"
   it("sends a follow-up prompt to another thread from an active turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        id: "target-thread",
+        title: "target-thread",
+        titleSource: "fallback",
+        source: "codex",
+        linkedDirectories: [],
+      }],
     });
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
@@ -26620,6 +26627,144 @@ script = "printf setup"
         },
       },
     });
+
+    await registry.close();
+  });
+
+  it("resolves and sends to a federated thread after a local UUID miss", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error(
+          "grok app server unavailable: XAI_API_KEY is not set",
+        ),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const federatedSend = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "019fd821-1450-7952-85ca-3bb8e5d150da",
+      turnId: "remote-turn-1",
+      title: "Thread list stays disabled after reconnect",
+      instanceId: "pwr_harold",
+      instanceLabel: "Harold-Mac-Mini-M4",
+    }));
+    registry.setFederatedThreadMessageHandler(federatedSend);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "turn-1",
+      tool: "send_message_to_thread",
+      args: {
+        backend: "codex",
+        threadId: "019fd821-1450-7952-85ca-3bb8e5d150da",
+        prompt: "Please handle the expanded reconnect scope.",
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "019fd821-1450-7952-85ca-3bb8e5d150da",
+        turnId: "remote-turn-1",
+        threadLink:
+          "[Thread list stays disabled after reconnect](pwragent://thread/019fd821-1450-7952-85ca-3bb8e5d150da?backend=codex&instanceId=pwr_harold)",
+        threadUrl:
+          "pwragent://thread/019fd821-1450-7952-85ca-3bb8e5d150da?backend=codex&instanceId=pwr_harold",
+      },
+    });
+    expect(codexClient.startTurnCallCount).toBe(0);
+    expect(federatedSend).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "019fd821-1450-7952-85ca-3bb8e5d150da",
+      input: [
+        { type: "text", text: "Please handle the expanded reconnect scope." },
+      ],
+      messageOrigin: {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "parent-thread",
+        },
+      },
+      executionMode: undefined,
+      model: undefined,
+      reasoningEffort: undefined,
+      serviceTier: undefined,
+      fastMode: undefined,
+      approvalPolicy: undefined,
+      sandbox: undefined,
+    });
+
+    await registry.close();
+  });
+
+  it("routes an ACP target through federation when no local session owns it", async () => {
+    const { acpBackendId, registry, startPrompt } = createKimiAcpRegistry({
+      sessions: [],
+    });
+    const federatedSend = vi.fn(async () => ({
+      backend: acpBackendId,
+      threadId: "remote-acp-session",
+      turnId: "remote-acp-turn",
+      title: "Remote ACP thread",
+      instanceId: "pwr_studio",
+      instanceLabel: "Studio Mac",
+    }));
+    registry.setFederatedThreadMessageHandler(federatedSend);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "turn-1",
+      tool: "send_message_to_thread",
+      args: {
+        backend: acpBackendId,
+        threadId: "remote-acp-session",
+        prompt: "Continue on the remote ACP agent.",
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: acpBackendId,
+        threadId: "remote-acp-session",
+        turnId: "remote-acp-turn",
+        threadUrl:
+          "pwragent://thread/remote-acp-session?backend=acp%3Akimi&instanceId=pwr_studio",
+      },
+    });
+    expect(startPrompt).not.toHaveBeenCalled();
+    expect(federatedSend).toHaveBeenCalledOnce();
 
     await registry.close();
   });

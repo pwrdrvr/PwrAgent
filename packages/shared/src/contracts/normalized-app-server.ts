@@ -692,6 +692,15 @@ export type AppServerListThreadsResponse = {
   workspaceRoots?: string[];
 };
 
+export type ResolveThreadRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type ResolveThreadResponse = {
+  thread?: AppServerThreadSummary;
+};
+
 export type ArchiveThreadCleanupResult = {
   worktreePath?: string;
   branch?: string;

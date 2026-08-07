@@ -235,3 +235,10 @@ describe themselves to peers with the Settings → Federation "Instance name"
 and "Purpose notes" fields, so agents can route work by what each machine is
 for. Operators can steer routing and thread-startup defaults with
 [`~/.pwragent/AGENTS.md`](agent-operator-preferences.md).
+
+The general `send_message_to_thread` tool also routes transparently across
+federation. It tries the local backend first, then resolves an exact thread ID
+across connected peers and starts the turn on the owning instance. Agents do
+not need to discover or supply an instance ID. Exact UUID queries passed to
+`search_federation_threads` use the same ownership lookup instead of relying
+on fuzzy thread-list filtering.

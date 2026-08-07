@@ -238,6 +238,27 @@ describe("thread links in transcript markdown", () => {
     });
   });
 
+  it("keeps an arbitrary remote thread actionable with its owning instance", () => {
+    const onShowThread = vi.fn();
+    renderWithLinks(
+      `See [Remote handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex&instanceId=pwr_harold)`,
+      {
+        onShowThread,
+        threads: [],
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Open thread Remote handoff",
+    }));
+
+    expect(onShowThread).toHaveBeenCalledWith({
+      backend: "codex",
+      instanceId: "pwr_harold",
+      threadId: CHILD_THREAD_ID,
+    });
+  });
+
   it("linkifies a bare thread id written as inline code", () => {
     // The shape every pre-protocol handoff message used.
     renderWithLinks(`Created the PwrAgent handoff thread: \`${CHILD_THREAD_ID}\``);

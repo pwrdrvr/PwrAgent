@@ -128,7 +128,6 @@ import {
   type StartReviewRequest,
   type StartThreadRequest,
   type SteerTurnRequest,
-  type StartTurnRequest,
   type StartTurnResponse,
   type SubmitServerRequestRequest,
   type StopCodexEnvironmentActionRequest,
@@ -173,6 +172,7 @@ import {
   type FederationBackendEventNotification,
   type FederationBackendOperations,
   type FederationEnvironmentSetupProgressNotification,
+  type FederationStartTurnRequest,
 } from "./federation-backend-bridge";
 import {
   buildFederationHealthStatus,
@@ -3535,6 +3535,10 @@ function localBackendOperations(): FederationBackendOperations {
         threads,
       };
     },
+    async resolveThread(request) {
+      const thread = await getDesktopBackendRegistry().resolveThread(request);
+      return thread ? { thread } : {};
+    },
     async readThread(
       request: AppServerReadThreadRequest,
     ): Promise<AppServerReadThreadResponse> {
@@ -3687,7 +3691,9 @@ function localBackendOperations(): FederationBackendOperations {
           options?.onCodexEnvironmentSetupProgress,
       });
     },
-    async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
+    async startTurn(
+      request: FederationStartTurnRequest,
+    ): Promise<StartTurnResponse> {
       const submitted = await getDesktopBackendRegistry().submitTurn({
         ...request,
         origin: "manual",

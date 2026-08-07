@@ -1695,6 +1695,10 @@ describe("federation backend bridge", () => {
           backend: "codex",
           threadId: "thread-1",
           input: [{ type: "text", text: "ship it" }],
+          messageOrigin: {
+            kind: "agent",
+            sourceThread: { backend: "codex", threadId: "source-thread" },
+          },
         },
         protocolVersion: 1,
         sourceInstanceId: "gateway_one",
@@ -1707,6 +1711,10 @@ describe("federation backend bridge", () => {
       backend: "codex",
       threadId: "thread-1",
       input: [{ type: "text", text: "ship it" }],
+      messageOrigin: {
+        kind: "agent",
+        sourceThread: { backend: "codex", threadId: "source-thread" },
+      },
     });
     expect(replies).toMatchObject([
       {
@@ -1721,10 +1729,70 @@ describe("federation backend bridge", () => {
     ]);
   });
 
+  it("resolves an exact thread id through thread_navigation", async () => {
+    const resolveThread = vi.fn(async () => ({
+      thread: {
+        source: "codex" as const,
+        id: "019fd821-1450-7952-85ca-3bb8e5d150da",
+        title: "Thread list stays disabled after reconnect",
+        linkedDirectories: [],
+      },
+    }));
+    const backend = {
+      resolveThread,
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "gateway_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "request-resolve",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.resolveThread,
+        params: {
+          backend: "codex",
+          threadId: "019fd821-1450-7952-85ca-3bb8e5d150da",
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(resolveThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "019fd821-1450-7952-85ca-3bb8e5d150da",
+    });
+    expect(replies).toMatchObject([
+      {
+        kind: "response",
+        requestId: "request-resolve",
+        result: {
+          thread: {
+            id: "019fd821-1450-7952-85ca-3bb8e5d150da",
+            title: "Thread list stays disabled after reconnect",
+          },
+        },
+      },
+    ]);
+  });
+
   it("maps expanded remote control operations to capability-guarded handlers", async () => {
     const backend: FederationBackendOperations = {
       getNavigationSnapshot: vi.fn(),
       listThreads: vi.fn(),
+      resolveThread: vi.fn(),
       readThread: vi.fn(),
       readTranscriptImage: vi.fn(),
       listSkills: vi.fn(),
@@ -1944,6 +2012,7 @@ describe("federation backend bridge", () => {
       backend: {
         getNavigationSnapshot: vi.fn(),
         listThreads: vi.fn(),
+        resolveThread: vi.fn(),
         readThread: vi.fn(),
         readTranscriptImage: vi.fn(),
         listSkills: vi.fn(),

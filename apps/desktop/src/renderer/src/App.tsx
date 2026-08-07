@@ -21,6 +21,7 @@ import {
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
+  type FederationInstanceId,
   type MessagingChannelKind,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
@@ -900,11 +901,33 @@ function DesktopAppShell(props: {
   // the scheme never carries an action, so this is the entire surface it can
   // reach. Mirrors the tray/notification `onShowThreadRequested` path below.
   const showThreadFromLink = useCallback(
-    (request: { backend: AppServerBackendKind; threadId: string }): void => {
+    (request: {
+      backend: AppServerBackendKind;
+      instanceId?: FederationInstanceId;
+      threadId: string;
+    }): void => {
+      if (request.instanceId) {
+        const windowTarget = readRendererFederationTarget();
+        if (windowTarget?.instanceId !== request.instanceId) {
+          const target = {
+            scope: "remote" as const,
+            instanceId: request.instanceId,
+          };
+          void desktopApi?.openFederationWindow?.({
+            target,
+            initialThread: {
+              backend: request.backend,
+              target,
+              threadId: request.threadId,
+            },
+          });
+          return;
+        }
+      }
       setMainView("thread");
-      void showThread(request);
+      void showThread({ backend: request.backend, threadId: request.threadId });
     },
-    [showThread],
+    [desktopApi, showThread],
   );
   const restoreHistoryLocation = useCallback(
     (location: NavigationHistoryLocation): void => {
