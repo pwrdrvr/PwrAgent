@@ -13461,6 +13461,31 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not deliver an empty assistant message for directive-only output", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: `::git-stage{cwd="/workspace"}
+::git-commit{cwd="/workspace"}`,
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+  });
+
   it("routes assistant item text without completing the active turn", async () => {
     const harness = await createHarness();
     await bindThread(harness);

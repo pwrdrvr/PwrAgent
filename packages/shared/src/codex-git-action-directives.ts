@@ -75,9 +75,10 @@ function classifyLines(lines: string[]): ClassifiedLine[] {
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
-    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (fence) {
       const marker = fence[1] ?? "";
+      const suffix = fence[2] ?? "";
       const markerCharacter = marker[0] as "`" | "~";
       if (!fenceCharacter) {
         fenceCharacter = markerCharacter;
@@ -85,6 +86,7 @@ function classifyLines(lines: string[]): ClassifiedLine[] {
       } else if (
         markerCharacter === fenceCharacter
         && marker.length >= fenceLength
+        && /^[ \t]*$/.test(suffix)
       ) {
         fenceCharacter = undefined;
         fenceLength = 0;

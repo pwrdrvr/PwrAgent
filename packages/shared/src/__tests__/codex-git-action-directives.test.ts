@@ -41,6 +41,15 @@ After.`);
     expect(stripCodexGitActionDirectives(markdown)).toBe(markdown);
   });
 
+  it("does not close a fenced block when the fence run has an info suffix", () => {
+    const markdown = `\`\`\`text
+\`\`\`js
+::git-stage{cwd="/workspace"}
+\`\`\``;
+
+    expect(stripCodexGitActionDirectives(markdown)).toBe(markdown);
+  });
+
   it("leaves unrelated double-colon syntax untouched", () => {
     const text = "Rust uses `std::io`, and ::custom{value=1} is ordinary text.";
     expect(stripCodexGitActionDirectives(text)).toBe(text);

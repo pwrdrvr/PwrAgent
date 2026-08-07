@@ -14918,6 +14918,13 @@ export class MessagingController {
     const displayIntent = binding?.backend === "codex"
       ? stripCodexGitActionDirectivesFromMessagingIntent(intent)
       : intent;
+    if (!displayIntent) {
+      return {
+        channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
     const routedIntent = this.withRoutingAudit(displayIntent, binding, event);
     const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
     let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
@@ -18946,7 +18953,7 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
 
 function stripCodexGitActionDirectivesFromMessagingIntent(
   intent: MessagingSurfaceIntent,
-): MessagingSurfaceIntent {
+): MessagingSurfaceIntent | undefined {
   if (intent.kind === "message" && intent.role === "assistant") {
     let changed = false;
     const parts = intent.parts.map((part) => {
@@ -18960,13 +18967,22 @@ function stripCodexGitActionDirectivesFromMessagingIntent(
       changed = true;
       return { ...part, text };
     });
-    return changed ? { ...intent, parts } : intent;
+    if (!changed) {
+      return intent;
+    }
+    const hasDeliverablePart = parts.some(
+      (part) => part.type !== "text" || part.text.trim().length > 0,
+    );
+    return hasDeliverablePart ? { ...intent, parts } : undefined;
   }
 
   if (intent.kind === "stream_update" && intent.role === "assistant") {
     const text = stripCodexGitActionDirectives(intent.text);
     if (text === intent.text) {
       return intent;
+    }
+    if (text.trim().length === 0) {
+      return undefined;
     }
     return {
       ...intent,
