@@ -195,6 +195,15 @@ type RunningMessagingAuthorization = {
   actorIdSet: Set<string>;
 };
 
+type RejectedInboundRoute = {
+  backend: MessagingBindingRecord["backend"];
+  bindingId?: string;
+  destinationAgentName?: string;
+  routeSource: "binding" | "default-agent";
+  targetKind: NonNullable<MessagingBindingRecord["targetKind"]>;
+  threadId: MessagingBindingRecord["threadId"];
+};
+
 type PendingAdapterStart = {
   cancel(reason: string): void;
 };
@@ -228,6 +237,7 @@ const PAIRING_TOKEN_ALPHABET =
 const RATE_LIMIT_HEALTH_BUFFER_MS = 2_000;
 const DELIVERY_BUDGET_WARNING_TTL_MS = 30_000;
 const DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS = 30_000;
+const REJECTED_ROUTE_AGENT_METADATA_TTL_MS = 60_000;
 const DEFAULT_ADAPTER_START_TIMEOUT_MS = 90_000;
 const FAILED_START_STOP_TIMEOUT_MS = 3_000;
 const CONFIGURABLE_MESSAGING_CHANNELS = [
@@ -344,6 +354,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     ReturnType<typeof setTimeout>
   >();
   private readonly deliveryBudgetDiagnosticLastLoggedAt = new Map<string, number>();
+  private readonly rejectedRouteAgentNameCache = new Map<
+    string,
+    { expiresAt: number; value: Promise<string | undefined> }
+  >();
   private readonly platformStatusListeners = new Set<
     (event: MessagingPlatformStatusEvent) => void
   >();
@@ -440,6 +454,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     this.runningAdapters.clear();
     this.adapters = [];
     this.controllers = [];
+    this.rejectedRouteAgentNameCache.clear();
     // Mark each previously-running platform as suspended (not removed),
     // so the renderer keeps the icon visible with a gray dot — the user
     // knows it's configured but currently off.
@@ -1160,21 +1175,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           },
         });
       });
-      unsubscribeInboundRejected = adapter.onInboundRejected?.((event) => {
-        this.emitPlatformActivity(adapter.channel);
-        this.recordActivityFromRejected(adapter.channel, event);
-        messagingLog.warn("messaging event rejected before dispatch", {
-          actorDisplayName: event.actor.displayName,
-          actorId: event.actor.platformUserId,
-          actorIsBot: event.actor.isBot,
-          actorUsername: event.actor.username,
-          channel: adapter.channel,
-          conversationId: event.channel.conversation.id,
-          conversationKind: event.channel.conversation.kind,
-          eventId: event.id,
-          eventKind: event.kind,
-          reason: event.reason,
-        });
+      unsubscribeInboundRejected = adapter.onInboundRejected?.(async (event) => {
+        await this.handleRejectedInbound(adapter.channel, event, store);
       });
       this.setPlatformHealth(adapter.channel, "unknown");
       await this.startAdapterWithDeadline(adapter, async (event) => {
@@ -2285,17 +2287,29 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private recordActivityFromRejected(
     platform: MessagingChannelKind,
     event: MessagingRejectedInboundEvent,
+    route: RejectedInboundRoute,
   ): void {
     try {
       const conversation = event.channel.conversation;
+      const actorName = event.actor.displayName ?? event.actor.platformUserId;
+      const destinationName =
+        route.destinationAgentName
+        ?? route.threadId;
+      const conversationName = describeRejectedConversation(platform, conversation);
+      const attemptKind = event.botMention ? "@mention" : event.kind;
       getDesktopMessagingActivityLog().record({
         platform,
         kind: "inbound-rejected",
+        backend: route.backend,
+        threadId: route.threadId,
+        bindingId: route.bindingId,
         conversationId: conversation.id,
         conversationTitle: conversation.title,
         actorId: event.actor.platformUserId,
         actorDisplayName: event.actor.displayName,
-        summary: `Rejected inbound from ${event.actor.displayName ?? event.actor.platformUserId}`,
+        summary:
+          `Blocked ${attemptKind} to ${destinationName} from ${actorName}`
+          + ` in ${conversationName}`,
         payload: {
           eventId: event.id,
           eventKind: event.kind,
@@ -2303,7 +2317,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           conversationParentId: conversation.parentId,
           actorUsername: event.actor.username,
           actorIsBot: event.actor.isBot,
+          conversationDisplayName: conversationName,
           rejectionReason: event.reason,
+          destinationAgentName: route.destinationAgentName,
+          destinationBackend: route.backend,
+          destinationTargetKind: route.targetKind,
+          destinationThreadId: route.threadId,
+          routeSource: route.routeSource,
         },
       });
     } catch (error) {
@@ -2313,6 +2333,111 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async handleRejectedInbound(
+    platform: MessagingChannelKind,
+    event: MessagingRejectedInboundEvent,
+    store: MessagingStoreLike,
+  ): Promise<void> {
+    if (!isActionableRejectedInbound(event)) {
+      return;
+    }
+    try {
+      const route = await this.resolveRejectedInboundRoute(store, event);
+      if (!route) {
+        return;
+      }
+      this.emitPlatformActivity(platform);
+      this.recordActivityFromRejected(platform, event, route);
+      messagingLog.warn("actionable messaging event rejected for a routed destination", {
+        actorDisplayName: event.actor.displayName,
+        actorId: event.actor.platformUserId,
+        actorIsBot: event.actor.isBot,
+        actorUsername: event.actor.username,
+        channel: platform,
+        conversationId: event.channel.conversation.id,
+        conversationKind: event.channel.conversation.kind,
+        conversationDisplayName: describeRejectedConversation(
+          platform,
+          event.channel.conversation,
+        ),
+        conversationTitle: event.channel.conversation.title,
+        destinationAgentName: route.destinationAgentName,
+        destinationBackend: route.backend,
+        destinationTargetKind: route.targetKind,
+        destinationThreadId: route.threadId,
+        eventId: event.id,
+        eventKind: event.kind,
+        reason: event.reason,
+        routeSource: route.routeSource,
+      });
+    } catch (error) {
+      messagingLog.warn("messaging rejected-event route resolution failed", {
+        channel: platform,
+        eventId: event.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async resolveRejectedInboundRoute(
+    store: MessagingStoreLike,
+    event: MessagingRejectedInboundEvent,
+  ): Promise<RejectedInboundRoute | undefined> {
+    const binding = await store.findActiveBindingForChannel(event.channel);
+    const assignment = binding
+      ? undefined
+      : await store.findActiveDefaultAgentAssignmentForChannel(event.channel);
+    if (!binding && !assignment) {
+      return undefined;
+    }
+    const backend = binding?.backend ?? assignment!.target.backend;
+    const threadId = binding?.threadId ?? assignment!.target.threadId;
+    return {
+      backend,
+      ...(binding ? { bindingId: binding.id } : {}),
+      destinationAgentName: await this.resolveRejectedRouteAgentName(
+        backend,
+        threadId,
+      ),
+      routeSource: binding ? "binding" : "default-agent",
+      targetKind: binding?.targetKind ?? "agent_thread",
+      threadId,
+    };
+  }
+
+  private async resolveRejectedRouteAgentName(
+    backend: MessagingBindingRecord["backend"],
+    threadId: MessagingBindingRecord["threadId"],
+  ): Promise<string | undefined> {
+    if (!this.options.backendBridge.readThreadAgentMetadata) {
+      return undefined;
+    }
+    const key = `${backend}:${threadId}`;
+    const now = Date.now();
+    const cached = this.rejectedRouteAgentNameCache.get(key);
+    if (cached && cached.expiresAt > now) {
+      return await cached.value;
+    }
+    const value = this.options.backendBridge.readThreadAgentMetadata({
+      backend,
+      threadId,
+    })
+      .then((metadata) => clipStatusText(metadata?.name))
+      .catch((error) => {
+        messagingLog.debug("messaging rejected route Agent-name lookup failed", {
+          backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId,
+        });
+        return undefined;
+      });
+    this.rejectedRouteAgentNameCache.set(key, {
+      expiresAt: now + REJECTED_ROUTE_AGENT_METADATA_TTL_MS,
+      value,
+    });
+    return await value;
   }
 
   private broadcastPlatformStatus(event: MessagingPlatformStatusEvent): void {
@@ -2764,6 +2889,36 @@ function describeConversation(
     conversation.title,
   ].filter((piece): piece is string => Boolean(piece));
   return pieces.length > 0 ? pieces.join(" / ") : conversation.id;
+}
+
+function describeRejectedConversation(
+  platform: MessagingChannelKind,
+  conversation: MessagingChannelRef["conversation"],
+): string {
+  const description = describeConversation(conversation);
+  if (
+    platform === "slack"
+    && conversation.kind !== "dm"
+    && conversation.isDirectMessage !== true
+  ) {
+    return description.startsWith("#") ? description : `#${description}`;
+  }
+  return description;
+}
+
+function isActionableRejectedInbound(
+  event: MessagingRejectedInboundEvent,
+): boolean {
+  if (
+    event.channel.conversation.kind === "dm"
+    || event.channel.conversation.isDirectMessage === true
+  ) {
+    return true;
+  }
+  if (event.kind === "text" || event.kind === "media") {
+    return event.botMention === true;
+  }
+  return true;
 }
 
 /**

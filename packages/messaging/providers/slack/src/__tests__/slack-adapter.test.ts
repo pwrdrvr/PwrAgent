@@ -2144,6 +2144,129 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("ignores ambient channel chatter from unauthorized actors", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({
+        conversations: { C012ABCDEF0: "p-search-signals-projects" },
+      }),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U099ZZZZZZZ",
+        text: "ordinary conversation between channel members",
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([]);
+  });
+
+  it("ignores ambient file shares from unauthorized channel actors", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        subtype: "file_share",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U099ZZZZZZZ",
+        text: "sharing this with the channel",
+        files: [{
+          id: "F012ABCDEF0",
+          mimetype: "image/png",
+          name: "chart.png",
+        }],
+      },
+    });
+
+    expect(events).toEqual([]);
+    expect(rejected).toEqual([]);
+  });
+
+  it("marks unauthorized bot mentions with the resolved channel title", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({
+        conversations: { C012ABCDEF0: "p-search-signals-projects" },
+      }),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async () => undefined);
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "app_mention",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U099ZZZZZZZ",
+        text: "<@U0BOTUSERID> can you help?",
+      },
+    });
+
+    expect(rejected).toEqual([
+      expect.objectContaining({
+        botMention: true,
+        kind: "text",
+        reason: "unauthorized-actor",
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "C012ABCDEF0",
+            title: "p-search-signals-projects",
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("rejects events from workspaces outside the authorized team list", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
@@ -2622,13 +2745,13 @@ describe("SlackAdapter", () => {
     await socket.emitEvent("slack_event", {
       ack: async () => undefined,
       event: {
-        type: "message",
+        type: "app_mention",
         channel: "C012ABCDEF0",
         channel_type: "channel",
         team: "TEXTERNAL",
         ts: "1712023032.123456",
         user: "U012ABCDEF0",
-        text: "blocked shared channel chatter",
+        text: "<@U0BOTUSERID> blocked shared channel request",
       },
     });
 
@@ -2780,13 +2903,13 @@ describe("SlackAdapter", () => {
     await socket.emitEvent("slack_event", {
       ack: async () => undefined,
       event: {
-        type: "message",
+        type: "app_mention",
         channel: "C012ABCDEF0",
         channel_type: "channel",
         team: "T012ABCDEF0",
         ts: "1712023036.123456",
         user: "UNOTLISTED0",
-        text: "unlisted user in an approved channel",
+        text: "<@U0BOTUSERID> unlisted user in an approved channel",
       },
     });
 

@@ -612,7 +612,7 @@ describe("LineAdapter", () => {
 
     expect(events).toHaveLength(0);
     expect(rejections[0]).toMatchObject({
-      kind: "text",
+      kind: "command",
       reason: "unauthorized-conversation",
       channel: {
         conversation: {
@@ -620,6 +620,36 @@ describe("LineAdapter", () => {
           kind: "channel",
         },
       },
+    });
+  });
+
+  it("marks rejected LINE self-mentions as explicit bot mentions", async () => {
+    const port = await getFreePort();
+    const config = createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` });
+    const adapter = new LineAdapter({
+      api: createApi(),
+      callbackHandleStore: createCallbackStore(),
+      config,
+    });
+    adapters.push(adapter);
+    const rejections: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejections.push(event);
+    });
+    await adapter.start(async () => undefined);
+
+    await postLineWebhook(port, config.channelSecret, {
+      events: [lineGroupTextEvent({
+        text: "@PwrAgent status please",
+        mentionSelf: true,
+      })],
+    });
+    await waitFor(() => rejections.length === 1);
+
+    expect(rejections[0]).toMatchObject({
+      botMention: true,
+      kind: "text",
+      reason: "unauthorized-conversation",
     });
   });
 
@@ -945,7 +975,10 @@ async function postLineWebhook(
   });
 }
 
-function lineGroupTextEvent(params: { text: string }): unknown {
+function lineGroupTextEvent(params: {
+  mentionSelf?: boolean;
+  text: string;
+}): unknown {
   return {
     type: "message",
     webhookEventId: "event-group-text",
@@ -958,6 +991,13 @@ function lineGroupTextEvent(params: { text: string }): unknown {
       id: "12345",
       type: "text",
       text: params.text,
+      ...(params.mentionSelf
+        ? {
+            mention: {
+              mentionees: [{ isSelf: true, type: "user" }],
+            },
+          }
+        : {}),
     },
   };
 }

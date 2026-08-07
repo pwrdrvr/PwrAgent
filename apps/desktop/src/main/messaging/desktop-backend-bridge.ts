@@ -48,6 +48,7 @@ import type {
   StartReviewRequest,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  ThreadAgentMetadata,
   ThreadMessagingBindingTransition,
   UpdateScheduledThreadActionRequest,
   UpdateDirectoryLaunchpadRequest,
@@ -230,6 +231,13 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         ...availableRemoteSnapshots.flatMap((remote) => remote.inboxThreadKeys),
       ],
     };
+  }
+
+  async readThreadAgentMetadata(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadAgentMetadata | undefined> {
+    return await this.registry.getThreadAgentMetadata(request);
   }
 
   async readThreadStatus(request: {

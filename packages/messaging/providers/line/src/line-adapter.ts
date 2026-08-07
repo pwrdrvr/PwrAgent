@@ -622,13 +622,22 @@ export class LineAdapter implements LineProviderAdapter {
     if (!this.listener || !event.message) return;
     const text = event.message.type === "text" ? event.message.text ?? "" : "";
     const isPairing = Boolean(extractMessagingPairingToken(text));
+    const isCommand = event.message.type === "text" && text.startsWith("/");
+    const botMention =
+      event.message.type === "text"
+      && this.eventMentionsBot(event);
     if (!isPairing && !this.shouldAcceptTextEvent(event, channel, text)) {
       return;
     }
     if (!this.authorizeInbound({
       actor,
+      botMention,
       channel,
-      kind: event.message.type === "text" ? "text" : "media",
+      kind: isCommand
+        ? "command"
+        : event.message.type === "text"
+          ? "text"
+          : "media",
       pairing: isPairing,
       routingState,
     })) {
@@ -731,6 +740,7 @@ export class LineAdapter implements LineProviderAdapter {
 
   private authorizeInbound(params: {
     actor: MessagingActorIdentity;
+    botMention?: boolean;
     channel: MessagingChannelRef;
     kind: MessagingInboundEvent["kind"];
     pairing?: boolean;
@@ -742,6 +752,7 @@ export class LineAdapter implements LineProviderAdapter {
         id: this.newEventId("line-rejected"),
         kind: params.kind,
         actor: params.actor,
+        ...(params.botMention ? { botMention: true } : {}),
         channel: params.channel,
         receivedAt: this.now(),
         reason: "unauthorized-actor",
@@ -754,6 +765,7 @@ export class LineAdapter implements LineProviderAdapter {
         id: this.newEventId("line-rejected"),
         kind: params.kind,
         actor: params.actor,
+        ...(params.botMention ? { botMention: true } : {}),
         channel: params.channel,
         receivedAt: this.now(),
         reason: "unauthorized-conversation",
@@ -784,6 +796,10 @@ export class LineAdapter implements LineProviderAdapter {
   ): boolean {
     if (channel.conversation.kind === "dm") return true;
     if (text.startsWith("/")) return true;
+    return this.eventMentionsBot(event);
+  }
+
+  private eventMentionsBot(event: LineWebhookEvent): boolean {
     const mentionees = event.message?.mention?.mentionees ?? [];
     return mentionees.some((mention) => mention.isSelf === true || mention.userId === this.botUserId);
   }
