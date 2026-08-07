@@ -151,11 +151,7 @@ export type CreateInstanceThreadResult = {
   executionMode: ThreadExecutionMode;
   workMode: LaunchpadWorkMode;
   turnId?: string;
-  /**
-   * Present for local-instance threads only: the pwragent:// link scheme
-   * has no cross-instance addressing yet, so a link to a remote thread
-   * would resolve against the wrong instance.
-   */
+  /** Canonical link, including instanceId for a remote owner on newer peers. */
   threadUrl?: string;
   threadLink?: string;
   message: string;
@@ -195,7 +191,7 @@ export type FederationThreadSearchResultSummary = {
   projectKey?: string;
   gitBranch?: string;
   score: number;
-  /** Local-instance results only; see CreateInstanceThreadResult.threadLink. */
+  /** Canonical link, including instanceId for a remote owner on newer peers. */
   threadLink?: string;
 };
 

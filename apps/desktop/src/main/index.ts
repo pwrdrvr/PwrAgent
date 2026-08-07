@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, Menu, nativeImage, shell } from "electron";
 import { join } from "node:path";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
+import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
 import { createFederatedThreadMessageHandler } from "./federation/federated-thread-message-service";
@@ -1005,10 +1006,14 @@ export function bootstrapApp(): void {
     // Injected rather than owned by the registry: the federation runtime
     // already imports the registry, so the reverse import would be a cycle.
     getDesktopBackendRegistry().setPwrAgentFederationHandler(
-      createFederationAgentToolsHandler(),
+      createFederationAgentToolsHandler({
+        targetStore: getDesktopOverlayStore(),
+      }),
     );
     getDesktopBackendRegistry().setFederatedThreadMessageHandler(
-      createFederatedThreadMessageHandler(),
+      createFederatedThreadMessageHandler({
+        targetStore: getDesktopOverlayStore(),
+      }),
     );
     // Windows: serve the painted title-bar menu bar from the live application
     // menu (idempotent; the renderer mounts the bar only on win32).

@@ -8,6 +8,7 @@ import type {
   ThreadWorkspaceHandoffDirection,
   ThreadWorkspaceHandoffStrategy,
 } from "./normalized-app-server";
+import type { FederationInstanceId } from "./federation";
 import type {
   CodexEnvironmentStartupFailure,
   ThreadAutoPinFailure,
@@ -29,6 +30,7 @@ export type PwrAgentThreadOrchestrationOperationName =
 export const PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES = [
   "invalid_arguments",
   "not_found",
+  "peer_unavailable",
   "forbidden",
   "unsupported_backend",
   "unsupported_workspace",
@@ -116,6 +118,12 @@ export type HandoffTaskToolArgs = {
 export type SendMessageToThreadToolArgs = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /**
+   * Owning remote instance when known from create_instance_thread,
+   * search_federation_threads, or a cross-instance thread link. Omit for
+   * local threads and legacy callers; PwrAgent falls back to durable lookup.
+   */
+  instanceId?: FederationInstanceId;
   prompt: string;
   model?: string;
   reasoningEffort?: string;
@@ -370,6 +378,8 @@ export type HandoffTaskResult = {
 export type SendMessageToThreadResult = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** Owning remote instance when the target is federated. */
+  instanceId?: FederationInstanceId;
   turnId: string;
   promptPreview: string;
   /** Canonical `pwragent://thread/…` URL for the messaged thread. */

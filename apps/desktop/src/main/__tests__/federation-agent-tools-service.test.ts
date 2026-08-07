@@ -506,6 +506,77 @@ describe("federation agent tools service", () => {
     expect(data.threadLink).toContain("pwragent://thread/thread-9");
   });
 
+  it("remembers a remotely created thread and returns an addressed link", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-thread-9",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+      turnId: "remote-turn-9",
+    }));
+    const getNavigationSnapshot = vi.fn(async () =>
+      buildSnapshot({
+        directories: [{
+          key: "dir:/repo",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }] as NavigationSnapshot["directories"],
+      }),
+    );
+    const rememberRemoteThreadTarget = vi.fn(async (target) => ({
+      ...target,
+      firstSeenAt: 1_000,
+      lastSeenAt: 1_000,
+    }));
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      targetStore: {
+        rememberRemoteThreadTarget,
+        listRemoteThreadTargets: vi.fn(async () => []),
+      },
+      runtime: buildRuntime({
+        health: async () =>
+          buildHealth({
+            peers: [{
+              id: "pwr_studio",
+              label: "Studio Mac",
+              role: "client",
+              status: "connected",
+              capabilities: ["thread_navigation", "environment_actions"],
+            }],
+          }),
+        remoteBackend: (() => ({
+          getNavigationSnapshot,
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        workMode: "local",
+      },
+    });
+
+    const data = (response as { ok: true; data: CreateInstanceThreadResult })
+      .data;
+    expect(data.threadUrl).toContain("instanceId=pwr_studio");
+    expect(data.threadLink).toContain("instanceId=pwr_studio");
+    expect(rememberRemoteThreadTarget).toHaveBeenCalledWith({
+      instanceId: "pwr_studio",
+      instanceLabel: "Studio Mac",
+      backend: "codex",
+      threadId: "remote-thread-9",
+    });
+  });
+
   it("merges local and peer results in search_federation_threads", async () => {
     const localThread = {
       id: "thread-local",
@@ -523,9 +594,18 @@ describe("federation agent tools service", () => {
       createdAt: 1,
       updatedAt: 3,
     };
+    const rememberRemoteThreadTarget = vi.fn(async (target) => ({
+      ...target,
+      firstSeenAt: 1_000,
+      lastSeenAt: 1_000,
+    }));
     const handler = createFederationAgentToolsHandler({
       // Never let unit tests mint a machine-id in the real PwrAgent root.
       collectHostInfo: async () => localHostInfo,
+      targetStore: {
+        rememberRemoteThreadTarget,
+        listRemoteThreadTargets: vi.fn(async () => []),
+      },
       runtime: buildRuntime({
         health: async () => buildHealth(),
         localBackend: (() => ({
@@ -574,7 +654,15 @@ describe("federation agent tools service", () => {
       instanceLabel: "Studio Mac",
       threadId: "thread-remote",
     });
-    expect(remote?.threadLink).toBeUndefined();
+    expect(remote?.threadLink).toContain(
+      "instanceId=pwr_studio",
+    );
+    expect(rememberRemoteThreadTarget).toHaveBeenCalledWith({
+      instanceId: "pwr_studio",
+      instanceLabel: "Studio Mac",
+      backend: "codex",
+      threadId: "thread-remote",
+    });
     expect(data.searchedInstances).toEqual([
       { instanceId: "pwr_local", instanceLabel: "Local Mac", resultCount: 1 },
       { instanceId: "pwr_studio", instanceLabel: "Studio Mac", resultCount: 1 },

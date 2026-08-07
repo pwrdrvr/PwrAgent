@@ -456,6 +456,10 @@ vi.mock("../state/app-state", () => ({
   initializeAppState: initializeAppStateMock,
   disposeAppState: disposeAppStateMock,
   isAppStateInitialized: isAppStateInitializedMock,
+  getAppOverlayStore: vi.fn(() => ({
+    rememberRemoteThreadTarget: vi.fn(),
+    listRemoteThreadTargets: vi.fn(),
+  })),
   recordBootDecision: vi.fn(),
 }));
 

@@ -347,9 +347,10 @@ import {
   isPwrAgentThreadOrchestrationDynamicToolCall,
   readPwrAgentThreadOrchestrationDynamicToolCall,
 } from "../agent-tools/pwragent-thread-orchestration-codex-tools";
-import type {
-  PwrAgentFederatedThreadMessageHandler,
-  PwrAgentThreadOrchestrationHandler,
+import {
+  PwrAgentFederatedThreadMessageError,
+  type PwrAgentFederatedThreadMessageHandler,
+  type PwrAgentThreadOrchestrationHandler,
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import {
   buildPwrAgentFederationDynamicToolErrorResponse,
@@ -22184,6 +22185,7 @@ export class DesktopBackendRegistry {
       );
     }
     const threadId = request.args.threadId.trim();
+    const instanceId = request.args.instanceId?.trim();
     const prompt = request.args.prompt.trim();
     if (!threadId || !prompt) {
       return threadOrchestrationFailure(
@@ -22193,7 +22195,8 @@ export class DesktopBackendRegistry {
     }
     if (
       backend === request.context.backend &&
-      threadId === request.context.threadId
+      threadId === request.context.threadId &&
+      !instanceId
     ) {
       return threadOrchestrationFailure(
         "forbidden",
@@ -22234,54 +22237,74 @@ export class DesktopBackendRegistry {
       let turn: { backend: AppServerBackendKind; threadId: string; turnId: string };
       let localResolutionError: unknown;
       let localThread: AppServerThreadSummary | undefined;
-      try {
-        localThread = await this.resolveThread({ backend, threadId });
-      } catch (error) {
-        localResolutionError = error;
-      }
-      if (localThread) {
-        turn = await this.startTurn({
-          backend,
-          threadId,
-          input,
-          messageOrigin,
-          executionMode: request.args.executionMode,
-          model: request.args.model,
-          reasoningEffort: request.args.reasoningEffort,
-          serviceTier: request.args.serviceTier,
-          fastMode: request.args.fastMode,
-          approvalPolicy: request.args.approvalPolicy,
-          sandbox: request.args.sandbox,
-        });
-        targetTitle = localThread.title;
-      } else if (this.federatedThreadMessageHandler) {
-        const remoteTurn = await this.federatedThreadMessageHandler({
-          backend,
-          threadId,
-          input,
-          messageOrigin,
-          executionMode: request.args.executionMode,
-          model: request.args.model,
-          reasoningEffort: request.args.reasoningEffort,
-          serviceTier: request.args.serviceTier,
-          fastMode: request.args.fastMode,
-          approvalPolicy: request.args.approvalPolicy,
-          sandbox: request.args.sandbox,
-        });
-        if (!remoteTurn) {
+      const remoteRequest = {
+        backend,
+        threadId,
+        input,
+        messageOrigin,
+        executionMode: request.args.executionMode,
+        model: request.args.model,
+        reasoningEffort: request.args.reasoningEffort,
+        serviceTier: request.args.serviceTier,
+        fastMode: request.args.fastMode,
+        approvalPolicy: request.args.approvalPolicy,
+        sandbox: request.args.sandbox,
+      };
+      const rememberedRemoteTurn = this.federatedThreadMessageHandler
+        ? await this.federatedThreadMessageHandler({
+            ...remoteRequest,
+            ...(instanceId
+              ? { instanceId }
+              : { resolutionMode: "remembered_only" as const }),
+          })
+        : undefined;
+      if (rememberedRemoteTurn) {
+        turn = rememberedRemoteTurn;
+        targetTitle = rememberedRemoteTurn.title;
+        targetInstanceId = rememberedRemoteTurn.instanceId;
+      } else if (instanceId) {
+        throw new Error(`Thread not found: ${threadId}`);
+      } else {
+        try {
+          localThread = await this.resolveThread({ backend, threadId });
+        } catch (error) {
+          localResolutionError = error;
+        }
+        if (localThread) {
+          turn = await this.startTurn({
+            backend,
+            threadId,
+            input,
+            messageOrigin,
+            executionMode: request.args.executionMode,
+            model: request.args.model,
+            reasoningEffort: request.args.reasoningEffort,
+            serviceTier: request.args.serviceTier,
+            fastMode: request.args.fastMode,
+            approvalPolicy: request.args.approvalPolicy,
+            sandbox: request.args.sandbox,
+          });
+          targetTitle = localThread.title;
+        } else if (this.federatedThreadMessageHandler) {
+          const discoveredRemoteTurn = await this.federatedThreadMessageHandler({
+            ...remoteRequest,
+            resolutionMode: "discover_only",
+          });
+          if (!discoveredRemoteTurn) {
+            if (localResolutionError) {
+              throw localResolutionError;
+            }
+            throw new Error(`Thread not found: ${threadId}`);
+          }
+          turn = discoveredRemoteTurn;
+          targetTitle = discoveredRemoteTurn.title;
+          targetInstanceId = discoveredRemoteTurn.instanceId;
+        } else {
           if (localResolutionError) {
             throw localResolutionError;
           }
           throw new Error(`Thread not found: ${threadId}`);
         }
-        turn = remoteTurn;
-        targetTitle = remoteTurn.title;
-        targetInstanceId = remoteTurn.instanceId;
-      } else {
-        if (localResolutionError) {
-          throw localResolutionError;
-        }
-        throw new Error(`Thread not found: ${threadId}`);
       }
       const threadLinkRef = {
         backend,
@@ -22293,6 +22316,7 @@ export class DesktopBackendRegistry {
         data: {
           backend,
           threadId: turn.threadId,
+          ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
           turnId: turn.turnId,
           promptPreview: truncateThreadInspectionText(prompt, 240),
           threadUrl: buildThreadUrl(threadLinkRef),
@@ -22306,7 +22330,11 @@ export class DesktopBackendRegistry {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return threadOrchestrationFailure(
-        /not found/i.test(message) ? "not_found" : "turn_start_failed",
+        error instanceof PwrAgentFederatedThreadMessageError
+          ? error.code
+          : /not found/i.test(message)
+            ? "not_found"
+            : "turn_start_failed",
         message,
       );
     }
