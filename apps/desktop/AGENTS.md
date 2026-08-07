@@ -275,9 +275,41 @@ existing replay-fixture harness and runs `@axe-core/playwright`'s
 Things to know when extending the audit:
 
 - **Surface coverage.** Each `test(...)` block drives the renderer to a
-  state (open thread, settings overlay, settings → messaging) and then
-  calls `runAxe(window)`. Add a new block per surface you want gated;
-  reuse `launchElectronApp` with whatever fixture seeds that state.
+  state (open thread, settings overlay, settings → messaging, the Star
+  Map layer, the Star Map intake dialog) and then calls `runAxe(window)`.
+  Add a new block per surface you want gated; go through
+  `launchAuditApp()`, which emulates reduced motion and takes an optional
+  `fixturePath` / `theme`.
+- **Seed the fixture so the surface is actually populated.** The smoke
+  fixture's thread reaches no Star Map lane — `deriveInboxState` keeps a
+  first-snapshot thread out of the inbox, and an idle thread with no PR
+  and no unpushed commits matches no attention category — so auditing the
+  map on it would scan chrome and no cards. `e2e/fixtures/star-map/` is a
+  hand-written fixture (same class as `readme-recents-hero/`) whose
+  threads are `threadStatus: "active"` for exactly that reason. Check
+  what your surface renders before trusting a green run.
+- **Every surface is audited in both themes.** The file wraps its
+  `describe` in `for (const theme of AUDIT_THEMES)` and threads the theme
+  into `launchAuditApp({ theme })`, so a new block is gated in light and
+  dark for free. This matters because contrast is the one rule class that
+  is genuinely theme-dependent — roles, names, and focus order are not.
+  The gate ran dark-only for its whole life, which is how three
+  token-level light-theme contrast failures shipped unnoticed.
+- **`runAxe(window, { include })` narrows the scan to one subtree.** No
+  block passes it today, and it is not a tool for silencing a failure —
+  everything outside the scope stops being gated. Prefer a
+  `KNOWN_VIOLATIONS` entry, which waives one selector for one rule and
+  leaves the rest of the surface audited. (It exists because the
+  celestial-watermark blocks once scoped to `.thread-view__primary` to
+  avoid measuring window-wide light-theme debt; that debt is fixed, light
+  theme is gated unscoped, and those blocks folded their
+  watermark-is-painted assertion into "open thread view".)
+- **Reduced motion has to reach the element that animates.** The gate
+  emulates `prefers-reduced-motion: reduce` so it measures contrast at
+  rest; a rule that zeroes the animation on the wrong selector leaves
+  text mid-fade and axe reports a real-looking contrast miss. That is how
+  the Star Map card rise was caught: the animation lives on
+  `.star-map-card-shell`, the reduced-motion rule named `.star-map-card`.
 - **`setLegacyMode(true)` is required under Electron.** The default
   `AxeBuilder.analyze()` opens a worker page via
   `browserContext.newPage()` to scan cross-origin iframes; Electron's

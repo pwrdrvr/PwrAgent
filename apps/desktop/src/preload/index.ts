@@ -269,6 +269,8 @@ import type {
   ReadFederationHealthResponse,
   ReadFederationDiagnosticsRequest,
   ReadFederationDiagnosticsResponse,
+  ReadFederationPinImpactRequest,
+  ReadFederationPinImpactResponse,
   ReadFederationTailscaleStatusRequest,
   ReadFederationTailscaleStatusResponse,
   ResetFederationEnrollmentRequest,
@@ -463,6 +465,7 @@ import {
   FEDERATION_GENERATE_INVITE_CHANNEL,
   FEDERATION_IMPORT_INVITE_CHANNEL,
   FEDERATION_OPEN_WINDOW_CHANNEL,
+  FEDERATION_PIN_IMPACT_CHANNEL,
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
@@ -890,6 +893,10 @@ const desktopApi = Object.freeze({
     request?: ResetFederationEnrollmentRequest,
   ): Promise<ResetFederationEnrollmentResponse> =>
     await ipcRenderer.invoke(FEDERATION_RESET_ENROLLMENT_CHANNEL, request),
+  readFederationPinImpact: async (
+    request: ReadFederationPinImpactRequest,
+  ): Promise<ReadFederationPinImpactResponse> =>
+    await ipcRenderer.invoke(FEDERATION_PIN_IMPACT_CHANNEL, request),
   readFederationTailscaleStatus: async (
     request?: ReadFederationTailscaleStatusRequest,
   ): Promise<ReadFederationTailscaleStatusResponse> =>

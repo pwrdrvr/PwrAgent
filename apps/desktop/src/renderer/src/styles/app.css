@@ -9601,8 +9601,14 @@ textarea,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .star-map-card {
-    animation-duration: 0s;
+  /* The rise lives on the SHELL, not the card - the card only transitions.
+     Zeroing it on `.star-map-card` left every card fading in for its full
+     380ms plus the inline stagger delay, which is both the motion the
+     operator asked not to see and, for a card still mid-fade, a real
+     contrast miss on its own title (the a11y gate caught the second card
+     of a lane at 2.02:1 against text that clears AA at rest). */
+  .star-map-card-shell {
+    animation: none;
   }
   .star-map-card {
     transition: none;

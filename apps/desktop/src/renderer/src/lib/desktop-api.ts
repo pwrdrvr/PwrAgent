@@ -103,6 +103,8 @@ import type {
   ReadFederationHealthResponse,
   ReadFederationDiagnosticsRequest,
   ReadFederationDiagnosticsResponse,
+  ReadFederationPinImpactRequest,
+  ReadFederationPinImpactResponse,
   ReadFederationTailscaleStatusRequest,
   ReadFederationTailscaleStatusResponse,
   AddRemoteThreadPinRequest,
@@ -500,6 +502,9 @@ export type DesktopApi = {
   resetFederationEnrollment?: (
     request?: ResetFederationEnrollmentRequest,
   ) => Promise<ResetFederationEnrollmentResponse>;
+  readFederationPinImpact?: (
+    request: ReadFederationPinImpactRequest,
+  ) => Promise<ReadFederationPinImpactResponse>;
   readFederationTailscaleStatus?: (
     request?: ReadFederationTailscaleStatusRequest,
   ) => Promise<ReadFederationTailscaleStatusResponse>;

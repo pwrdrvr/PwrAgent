@@ -12,19 +12,20 @@
 // To extend: add another entry to SURFACES below, or a separate
 // `test(...)` block that drives the renderer into a state (open a
 // dialog, switch a tab) and then calls `runAxe(window)`. Launch via
-// `launchAuditApp(theme)` so the surface is audited at rest (see below).
+// `launchAuditApp({ theme })` so the surface is audited at rest (see below).
 //
 // Every surface is audited in BOTH themes. The gate ran dark-only for
 // its whole life, which is exactly why three light-theme token-level
 // contrast failures shipped unnoticed: `--accent` at 4.20:1 on the
 // sidebar wordmark, `--accent-bright` at 3.17:1 on the active lens tab,
-// `--text-muted` at 4.23:1 on the .context-grid thread-info labels.
+// and `--text-muted` at 4.23:1 on the .context-grid thread-info labels.
 // Contrast is the one rule class that is genuinely theme-dependent —
-// roles, names, and focus order are not — so auditing one theme buys
-// you roughly half the coverage you think it does.
+// roles, names, and focus order are not — so auditing a single theme
+// buys roughly half the coverage it appears to.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
+import type { DesktopAppearanceTheme } from "@pwragent/shared";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -45,18 +46,51 @@ const specDir = path.dirname(fileURLToPath(import.meta.url));
 // state, so the gate measures real, persistent contrast instead of a
 // sub-second animation frame. No renderer JS branches on reduced motion,
 // so this only settles CSS animation — it never changes what renders.
-async function launchAuditApp(theme: AuditTheme) {
+async function launchAuditApp(options?: {
+  /** Defaults to the smoke fixture; pass another to seed a richer state. */
+  fixturePath?: string;
+  /** Defaults to the harness default (dark). */
+  theme?: DesktopAppearanceTheme;
+}) {
   const app = await launchElectronApp({
-    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
-    appearance: { theme },
+    fixturePath:
+      options?.fixturePath
+      ?? path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    ...(options?.theme ? { appearance: { theme: options.theme } } : {}),
   });
   await app.window.emulateMedia({ reducedMotion: "reduce" });
   return app;
 }
 
+// The smoke thread never reaches the Star Map: `deriveInboxState` keeps a
+// first-snapshot thread out of the inbox, and with no PR, no unpushed
+// commits and an idle status it matches none of the attention categories,
+// so the smoke fixture's map is bodies-and-chrome with zero cards. The
+// cards are exactly what carries the contrast risk (title and status
+// indicator over the star field, meta chips, the low-opacity instance
+// watermark behind them), so the map audits run against a fixture whose
+// threads are `threadStatus: "active"` and therefore populate a lane.
+//
+// That fixture's threads deliberately carry NO linked directories. A
+// project chip renders through `CopyableThreadChip`, which is a
+// `role="button" tabIndex={0}` span, and both the sidebar thread row and
+// the star-map card wrap their content in a real `<button>` — so any
+// fixture with a directory trips `nested-interactive` on BOTH surfaces.
+// That is pre-existing renderer debt, not a Star Map regression, and the
+// fix is a structural change to the row/card (hoist the chips out of the
+// button, the way `.star-map-card-shell` already hoists the kebab).
+// Waiving it here is not an option worth taking: `KNOWN_VIOLATIONS`
+// works by `exclude()`, so waiving the rule would drop the whole card
+// from the scan and blind the very contrast pairs this block exists to
+// audit. Tracked separately; when it lands, give these threads a
+// directory so the project chip is covered too.
 // Both themes ship, so both themes are gated. See the header note.
-const AUDIT_THEMES = ["dark", "light"] as const;
-type AuditTheme = (typeof AUDIT_THEMES)[number];
+const AUDIT_THEMES: readonly DesktopAppearanceTheme[] = ["dark", "light"];
+
+const STAR_MAP_FIXTURE = path.resolve(
+  specDir,
+  "fixtures/star-map/replay.fixture.json",
+);
 
 const WCAG_AA_TAGS = [
   "wcag2a",
@@ -78,16 +112,28 @@ const KNOWN_VIOLATIONS: ReadonlyArray<{
   reason: string;
 }> = [];
 
-// `include` narrows the scan to one subtree instead of the whole
-// window. Reach for it only to keep a *newly added* surface's audit
-// from re-reporting known debt that already has a KNOWN_VIOLATIONS
-// entry or a tracked follow-up — never to make a fresh failure go
-// away, since anything outside the scope stops being gated entirely.
-// Prefer a KNOWN_VIOLATIONS entry, which waives one selector for one
-// rule and leaves the rest of the surface audited.
 async function runAxe(
   window: Page,
-  options: { include?: string } = {},
+  options?: {
+    /**
+     * Narrow the scan to one subtree. Use it only when the test is about
+     * a specific composited surface rather than the whole window — an
+     * unscoped run is the default because it is what catches regressions
+     * nobody thought to point at. Never reach for it to make a fresh
+     * failure go away: everything outside the scope stops being gated,
+     * whereas a KNOWN_VIOLATIONS entry waives one selector for one rule
+     * and leaves the rest of the surface audited.
+     *
+     * No block passes this today. It was added by #1303 so the
+     * celestial-watermark blocks could scope to `.thread-view__primary`
+     * and measure the watermark rather than the window-wide light-theme
+     * contrast debt that existed then. That debt is fixed and light
+     * theme is now gated unscoped like dark, so the scoping came out.
+     * Kept as the documented affordance for the next surface that
+     * genuinely needs it.
+     */
+    include?: string;
+  },
 ): Promise<void> {
   // setLegacyMode is required under Electron: the default analyze()
   // path tries to spawn a worker page via browserContext.newPage() to
@@ -100,7 +146,7 @@ async function runAxe(
   let builder = new AxeBuilder({ page: window })
     .withTags(WCAG_AA_TAGS)
     .setLegacyMode(true);
-  if (options.include) {
+  if (options?.include) {
     builder = builder.include(options.include);
   }
   for (const known of KNOWN_VIOLATIONS) {
@@ -133,7 +179,7 @@ async function runAxe(
 for (const theme of AUDIT_THEMES) {
   test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme)`, () => {
     test("sidebar + empty-thread shell has no violations", async () => {
-      const app = await launchAuditApp(theme);
+      const app = await launchAuditApp({ theme });
       try {
         // Wait for first paint of the inbox lens — the "Replay smoke
         // thread" row is the proxy for "renderer has hydrated".
@@ -147,7 +193,7 @@ for (const theme of AUDIT_THEMES) {
     });
 
     test("open thread view has no violations", async () => {
-      const app = await launchAuditApp(theme);
+      const app = await launchAuditApp({ theme });
       try {
         await app.window
           .getByRole("button", { name: /Replay smoke thread/i })
@@ -160,6 +206,20 @@ for (const theme of AUDIT_THEMES) {
           }),
         ).toBeVisible();
         await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+        // The celestial watermark paints the owning instance's mark behind
+        // the transcript at 0.05 opacity, tinted with `--text-muted`. That
+        // is a real compositing input to every contrast pair in the thread
+        // body, and it resolves differently per theme — a value harmless
+        // behind a dark surface can eat the margin on a light one. Assert
+        // it is actually painted, or the audit below keeps passing after a
+        // regression that stopped rendering it. It is aria-hidden, so it
+        // has no role to locate it by; the class IS the contract the a11y
+        // note in app.css points at. (Added by #1303 as its own scoped
+        // pair of blocks; folded in here once light theme went AA-clean
+        // window-wide and the scoping stopped being needed.)
+        await expect(
+          app.window.locator(".thread-view__primary .celestial-watermark"),
+        ).toHaveCount(1);
         await runAxe(app.window);
       } finally {
         await app.close();
@@ -167,7 +227,7 @@ for (const theme of AUDIT_THEMES) {
     });
 
     test("settings overlay has no violations", async () => {
-      const app = await launchAuditApp(theme);
+      const app = await launchAuditApp({ theme });
       try {
         await expect(
           app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
@@ -186,7 +246,7 @@ for (const theme of AUDIT_THEMES) {
     });
 
     test("thread search has no violations", async () => {
-      const app = await launchAuditApp(theme);
+      const app = await launchAuditApp({ theme });
       try {
         await expect(
           app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
@@ -206,7 +266,7 @@ for (const theme of AUDIT_THEMES) {
     });
 
     test("settings → messaging has no violations", async () => {
-      const app = await launchAuditApp(theme);
+      const app = await launchAuditApp({ theme });
       try {
         await expect(
           app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
@@ -219,6 +279,69 @@ for (const theme of AUDIT_THEMES) {
           .getByRole("navigation", { name: "Settings sections" })
           .getByRole("button", { name: /^Messaging$/ })
           .click();
+        await runAxe(app.window);
+      } finally {
+        await app.close();
+      }
+    });
+
+    test("star map layer has no violations", async () => {
+      const app = await launchAuditApp({ fixturePath: STAR_MAP_FIXTURE, theme });
+      try {
+        await expect(
+          app.window
+            .getByRole("button", { name: /Star map attention thread/i })
+            .first(),
+        ).toBeVisible();
+        await app.window.getByRole("button", { name: "Open Star Map" }).click();
+        // `exact` because role-name matching is substring by default, and a
+        // chat card's "Chat: <title>" region can match "Star Map" too.
+        const starMap = app.window.getByRole("region", {
+          name: "Star Map",
+          exact: true,
+        });
+        await expect(starMap).toBeVisible();
+        // A single E2E instance means one body on the map. Gate on a card
+        // rather than the body: the lane populates from the navigation
+        // snapshot after the layer mounts, and auditing the empty layer
+        // would silently skip every card-borne contrast pair.
+        await expect(
+          starMap.getByRole("button", {
+            name: "Open thread: Star map attention thread",
+          }),
+        ).toBeVisible();
+        await runAxe(app.window);
+      } finally {
+        await app.close();
+      }
+    });
+
+    test("star map intake dialog has no violations", async () => {
+      const app = await launchAuditApp({ fixturePath: STAR_MAP_FIXTURE, theme });
+      try {
+        await expect(
+          app.window
+            .getByRole("button", { name: /Star map attention thread/i })
+            .first(),
+        ).toBeVisible();
+        await app.window.getByRole("button", { name: "Open Star Map" }).click();
+        // `exact` because role-name matching is substring by default, and a
+        // chat card's "Chat: <title>" region can match "Star Map" too.
+        const starMap = app.window.getByRole("region", {
+          name: "Star Map",
+          exact: true,
+        });
+        await expect(starMap).toBeVisible();
+        // The [+] beside the local body carries the machine label, which is
+        // the runner's hostname — match the copy, not the machine.
+        await starMap.getByRole("button", { name: /^New thread on / }).click();
+        const intake = app.window.getByRole("dialog", {
+          name: /^New thread on /,
+        });
+        await expect(intake).toBeVisible();
+        await expect(
+          intake.getByRole("button", { name: "Start thread" }),
+        ).toBeVisible();
         await runAxe(app.window);
       } finally {
         await app.close();

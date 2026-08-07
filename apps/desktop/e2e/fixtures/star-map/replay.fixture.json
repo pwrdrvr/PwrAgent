@@ -1,0 +1,100 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "star-map-attention",
+    "threadId": "thread-star-map-active"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-star-map-active",
+          "title": "Star map attention thread",
+          "titleSource": "explicit",
+          "summary": "An active thread, so the map has a card to audit.",
+          "source": "codex",
+          "executionMode": "default",
+          "threadStatus": "active",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000100000
+        },
+        {
+          "id": "thread-star-map-second",
+          "title": "Second star map attention thread",
+          "titleSource": "explicit",
+          "summary": "A second card, so the lane stacks more than one body.",
+          "source": "codex",
+          "executionMode": "default",
+          "threadStatus": "active",
+          "linkedDirectories": [],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Show me the star map."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "The star map is live."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Show me the star map."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "The star map is live."
+          }
+        ],
+        "lastUserMessage": "Show me the star map.",
+        "lastAssistantMessage": "The star map is live.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

@@ -8,6 +8,7 @@ export const FEDERATION_IMPORT_INVITE_CHANNEL = "federation:import-invite";
 export const FEDERATION_REVOKE_PEER_CHANNEL = "federation:revoke-peer";
 export const FEDERATION_RESET_ENROLLMENT_CHANNEL =
   "federation:reset-enrollment";
+export const FEDERATION_PIN_IMPACT_CHANNEL = "federation:pin-impact";
 export const FEDERATION_TAILSCALE_STATUS_CHANNEL = "federation:tailscale-status";
 export const FEDERATION_TAILSCALE_CONFIGURE_CHANNEL =
   "federation:tailscale-configure";

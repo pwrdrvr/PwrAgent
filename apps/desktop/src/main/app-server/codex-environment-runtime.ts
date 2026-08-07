@@ -25,9 +25,9 @@ import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
   formatWindowsJobStartupTelemetry,
+  formatWindowsJobStartupTimeout,
   readWindowsJobStartupTelemetry,
   startWindowsJobReadyPoll,
-  WINDOWS_JOB_READY_TIMEOUT_MS,
   wrapCommandInWindowsJob,
 } from "../windows-job-wrapper";
 import {
@@ -985,14 +985,14 @@ function runShellCommand(
             }
             resolveStarted();
           },
-          onTimeout: (startupTelemetry) => {
+          onTimeout: (startupTimeout) => {
             windowsJobReadyPoll = undefined;
             if (settled || closed) return;
             terminateChild("SIGKILL");
             settle(() => {
               reject(
                 new CodexEnvironmentCommandError(
-                  `Windows Job shell did not become ready within ${WINDOWS_JOB_READY_TIMEOUT_MS}ms: ${formatWindowsJobStartupTelemetry(startupTelemetry)}`,
+                  formatWindowsJobStartupTimeout(startupTimeout),
                 ),
               );
             });
