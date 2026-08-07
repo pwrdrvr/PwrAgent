@@ -586,6 +586,43 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  // The thread row and star-map card draw their focus ring on the CARD via
+  // `:has()`, because the focusable element inside them is a transparent
+  // overlay button (see ThreadRow / StarMapThreadCard). That indirection is
+  // exactly where a brand token drifts unnoticed: nothing else renders these
+  // rings, so a wrong token or offset ships looking plausible. Both must name
+  // `--focus-ring` — the semantic token, `var(--accent)` in both themes — and
+  // each keeps its own offset: 2px on the sidebar row, 1px on the star-map
+  // card, whose cards shingle so a wider ring bleeds onto the neighbour.
+  // Changing either is a design decision; change this test in the same commit
+  // so it is reviewed rather than accidental.
+  it("draws both card focus rings from the focus-ring token at their own offsets", () => {
+    // `extractRuleBody`, not a `[\s\S]*?` regex over the whole sheet: a lazy
+    // span like that runs straight past the closing brace and can satisfy
+    // itself from a LATER rule, so it passes on a wrong token. That is not
+    // hypothetical — the first draft of this test did exactly that and waved
+    // through a mutation to `--accent-bright` at the wrong offset.
+    const rowRing = extractRuleBody(
+      css,
+      ".thread-row:has(.thread-row__open:focus)",
+    );
+    expect(rowRing).toContain("outline: 2px solid var(--focus-ring);");
+    expect(rowRing).toContain("outline-offset: 2px;");
+
+    const cardRing = extractRuleBody(
+      css,
+      ".star-map-card:has(.star-map-card__open:focus-visible)",
+    );
+    expect(cardRing).toContain("outline: 2px solid var(--focus-ring);");
+    expect(cardRing).toContain("outline-offset: 1px;");
+    // The star-map rule this replaced keyed off the card itself being
+    // focusable. The card is a plain container now, so such a rule can never
+    // match and would only mislead the next reader. (No equivalent assertion
+    // for `.thread-row`: that class is still worn by a real `<button>` on
+    // directory summaries, so a focus rule naming it is legitimate there.)
+    expect(css).not.toMatch(/\.star-map-card:focus-visible\s*\{/);
+  });
+
   it("keeps long directory names from crowding the count and expand control", () => {
     const summaryRule = extractRuleBody(css, ".directory-row__summary");
     const summaryMetaRule = extractRuleBody(css, ".directory-row__summary-meta");
