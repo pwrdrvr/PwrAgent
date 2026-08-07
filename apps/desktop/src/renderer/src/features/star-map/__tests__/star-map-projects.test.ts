@@ -368,4 +368,25 @@ describe("gravity seating", () => {
     ] as { key: string; cardCount: number; mass: number }[]);
     expect(d.get("big")!).toBeLessThan(d.get("small")!);
   });
+
+  it("seats an unranked fleet at the core, not the rim", () => {
+    // Every project one thread of similar age — the shape of a new or
+    // small fleet. There is no ranking to express, so they belong at the
+    // centre; a zero mass span used to give them all the LIGHTEST
+    // treatment and leave a hollow galaxy.
+    const d = distances(
+      Array.from({ length: 6 }, (_, index) => ({
+        key: `p${index}`,
+        cardCount: 1,
+        mass: 1,
+      })),
+    );
+    const closest = Math.min(...d.values());
+    expect(closest).toBeLessThan(400);
+  });
+
+  it("puts a lone project at its own core", () => {
+    const d = distances([{ key: "solo", cardCount: 3, mass: 8 }]);
+    expect(d.get("solo")!).toBeLessThan(400);
+  });
 });

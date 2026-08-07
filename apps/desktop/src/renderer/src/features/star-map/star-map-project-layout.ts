@@ -99,13 +99,22 @@ export function computeProjectLayout(params: {
   );
   const heaviest = Math.max(...masses, 1);
   const lightest = Math.min(...masses, heaviest);
-  const span = Math.max(heaviest - lightest, 1e-6);
+  const span = heaviest - lightest;
+  /**
+   * With no spread in mass there is nothing to rank, so everything is
+   * equally heavy and belongs at the core — the common shape for a small
+   * or new fleet, where every project has one thread of similar age.
+   * Deriving `pull` from a zero span instead gave every project the
+   * *lightest* treatment and flung the whole galaxy to the rim around an
+   * empty centre.
+   */
+  const ranked = span > 1e-6;
 
   const seated: (ProjectPlacement & { radius: number })[] = [];
   params.projects.forEach((project, index) => {
     const extent = cardRingExtent(project.cardCount, params.cardWidth);
     const arm = index % ARM_COUNT;
-    const pull = (masses[index] - lightest) / span;
+    const pull = ranked ? (masses[index] - lightest) / span : 1;
     // Square-root so the middle of the pack spreads out rather than
     // bunching against the rim; heavy projects still dominate the core.
     let radius = CORE_RADIUS + RIM_SPREAD * Math.sqrt(1 - pull);

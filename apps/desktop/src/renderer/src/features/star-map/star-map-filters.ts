@@ -93,13 +93,26 @@ export function threadMatchesFilter(
   );
 }
 
-function facetKeys(facet: StarMapFilterFacet): StarMapFilterKey[] {
-  return STAR_MAP_FILTERS.filter(
-    (definition) => definition.facet === facet,
-  ).map((definition) => definition.key);
-}
-
 const FACETS: StarMapFilterFacet[] = ["attention", "pinned", "agent"];
+
+/**
+ * Built once. `passesFacet` runs per facet per thread, and counting runs
+ * it again per chip, so rebuilding these arrays inside the loop churned
+ * two allocations per call across a few thousand calls per snapshot.
+ */
+const FACET_KEYS: Record<StarMapFilterFacet, StarMapFilterKey[]> =
+  Object.fromEntries(
+    FACETS.map((facet) => [
+      facet,
+      STAR_MAP_FILTERS.filter((definition) => definition.facet === facet).map(
+        (definition) => definition.key,
+      ),
+    ]),
+  ) as Record<StarMapFilterFacet, StarMapFilterKey[]>;
+
+function facetKeys(facet: StarMapFilterFacet): StarMapFilterKey[] {
+  return FACET_KEYS[facet];
+}
 
 /**
  * Whether a thread survives one facet: it must match none of that facet's
