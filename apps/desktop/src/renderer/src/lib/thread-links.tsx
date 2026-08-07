@@ -261,11 +261,12 @@ export function ThreadLinkProvider(props: {
 
     return {
       resolve(ref) {
+        let resolved: ResolvedThreadLink | undefined;
         if (ref.instanceId) {
           if (!ref.backend) {
             return undefined;
           }
-          return byFederatedIdentity.get(threadLinkKey({
+          resolved = byFederatedIdentity.get(threadLinkKey({
             backend: ref.backend,
             instanceId: ref.instanceId,
             threadId: ref.threadId,
@@ -275,11 +276,16 @@ export function ThreadLinkProvider(props: {
             threadId: ref.threadId,
             title: "",
           };
+        } else if (ref.backend) {
+          resolved = byIdentity.get(`${ref.backend}:${ref.threadId}`);
+        } else {
+          resolved = byThreadId.get(ref.threadId);
         }
-        if (ref.backend) {
-          return byIdentity.get(`${ref.backend}:${ref.threadId}`);
-        }
-        return byThreadId.get(ref.threadId);
+
+        // The maps above are rebuilt only when membership changes, so their
+        // metadata may predate a live rename. Resolve through the mutable store
+        // before returning a value to one-shot consumers such as the composer.
+        return resolved ? metadataStore.getSnapshot(resolved) : undefined;
       },
       show(link) {
         onShowThreadRef.current({
