@@ -1,0 +1,117 @@
+/**
+ * Geometry for the star map's pan/zoom view.
+ *
+ * The orbit and projects lenses lay their bodies out on a canvas larger
+ * than the window and move it under a `translate(x, y) scale(s)` with
+ * `transform-origin: 0 0`, so the canvas occupies the viewport-pixel rect
+ * `[x, x + width * scale] x [y, y + height * scale]`.
+ *
+ * Everything here is pure: the screen owns the state, this owns the rules.
+ */
+
+export type StarMapView = { x: number; y: number; scale: number };
+
+export type StarMapViewBox = { width: number; height: number };
+
+export const MIN_ZOOM = 0.35;
+export const MAX_ZOOM = 2;
+
+/**
+ * How much of the canvas has to stay on screen, per axis, as a fraction of
+ * the viewport.
+ *
+ * A pan/zoom surface with no bounds can be dragged until the populated area
+ * is entirely outside the window, and an empty star field gives the operator
+ * nothing to drag back — the map is only recoverable by closing it. Keeping
+ * a strip of canvas in view on both axes means there is always something to
+ * grab and always a direction that leads back to the bodies.
+ *
+ * Per-axis rather than by area: an area rule is satisfied by a one-pixel-tall
+ * band across the window, which is not a usable handle.
+ */
+const MIN_VISIBLE_FRACTION = 0.15;
+
+/**
+ * Clamp one axis so the canvas's overlap with the viewport stays at or above
+ * the minimum.
+ *
+ * With canvas extent `content` placed at `position` against a viewport of
+ * `viewportExtent`, the overlap is the least of `viewportExtent`, `content`,
+ * `position + content`, and `viewportExtent - position`. The first two do
+ * not depend on `position`, so requiring the overlap to be at least
+ * `minVisible` reduces to the two bounds below.
+ */
+function clampAxis(params: {
+  position: number;
+  content: number;
+  viewportExtent: number;
+}): number {
+  const { position, content, viewportExtent } = params;
+  // A zero-sized canvas or an unmeasured viewport has no meaningful bounds;
+  // leaving the position alone beats clamping it to an arbitrary origin.
+  if (
+    !Number.isFinite(position)
+    || !(content > 0)
+    || !(viewportExtent > 0)
+  ) {
+    return position;
+  }
+  // Never demand more overlap than the canvas can supply — a canvas smaller
+  // than the demanded strip would otherwise have no legal position at all.
+  const minVisible = Math.min(content, viewportExtent * MIN_VISIBLE_FRACTION);
+  const min = minVisible - content;
+  const max = viewportExtent - minVisible;
+  return Math.min(Math.max(position, min), max);
+}
+
+/**
+ * Keep a pan/zoom view within reach of its content.
+ *
+ * Applied to every operator-driven write of the view — wheel pan, pinch
+ * zoom, and each animation frame of a pointer drag. Clamping the live drag
+ * frames as well as the value committed on pointerup is what stops the
+ * canvas visibly snapping back when the operator lets go.
+ *
+ * Deliberately NOT applied when the map's *contents* change. A cloud that
+ * resizes must never move a view the operator positioned; that is the whole
+ * point of the view-ownership rule, and re-clamping on a content change
+ * would reintroduce exactly the jerk it removed. A content change that
+ * leaves the operator off the map is recovered with "Reset view".
+ */
+export function clampStarMapView(params: {
+  view: StarMapView;
+  /** Untransformed canvas size for the current lens. */
+  canvas: StarMapViewBox;
+  viewport: StarMapViewBox;
+}): StarMapView {
+  const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, params.view.scale));
+  return {
+    scale,
+    x: clampAxis({
+      position: params.view.x,
+      content: params.canvas.width * scale,
+      viewportExtent: params.viewport.width,
+    }),
+    y: clampAxis({
+      position: params.view.y,
+      content: params.canvas.height * scale,
+      viewportExtent: params.viewport.height,
+    }),
+  };
+}
+
+/**
+ * The view that puts the middle of the canvas in the middle of the window
+ * at 1:1. Used to place the map on open, on a lens switch, and by "Reset
+ * view".
+ */
+export function centerStarMapView(params: {
+  canvas: StarMapViewBox;
+  viewport: StarMapViewBox;
+}): StarMapView {
+  return {
+    x: (params.viewport.width - params.canvas.width) / 2,
+    y: (params.viewport.height - params.canvas.height) / 2,
+    scale: 1,
+  };
+}

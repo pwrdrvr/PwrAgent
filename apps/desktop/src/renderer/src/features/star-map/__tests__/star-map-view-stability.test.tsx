@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -52,7 +52,7 @@ function threads(count: number): NavigationThreadSummary[] {
   return Array.from({ length: count }, (_, index) => thread(`t${index}`));
 }
 
-function seedLayout(layout: "orbit" | "projects") {
+function seedLayout(layout: "lanes" | "orbit" | "projects") {
   window.localStorage.setItem(
     "pwragent.starMap.viewPreferences",
     JSON.stringify({ layout }),
@@ -73,6 +73,40 @@ function pan(dx: number, dy: number) {
   fireEvent.pointerDown(viewport, { button: 0, clientX: 500, clientY: 400 });
   fireEvent.pointerMove(window, { clientX: 500 + dx, clientY: 400 + dy });
   fireEvent.pointerUp(window, { clientX: 500 + dx, clientY: 400 + dy });
+}
+
+/**
+ * jsdom measures every element as 0x0, so the screen keeps its unmeasured
+ * default viewport. The bounds below are computed against it.
+ */
+const VIEWPORT = { width: 1280, height: 800 };
+/** Mirrors MIN_VISIBLE_FRACTION in star-map-view-geometry. */
+const MIN_VISIBLE_FRACTION = 0.15;
+
+function readTransform(): { x: number; y: number; scale: number } {
+  const raw = canvas().style.transform;
+  const match = /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(
+    raw,
+  );
+  if (!match) throw new Error(`unparsable transform: ${raw}`);
+  return { x: Number(match[1]), y: Number(match[2]), scale: Number(match[3]) };
+}
+
+/** The canvas's untransformed size, as the screen sized the element. */
+function canvasBox(): { width: number; height: number } {
+  const style = canvas().style;
+  return {
+    width: Number.parseFloat(style.width),
+    height: Number.parseFloat(style.height),
+  };
+}
+
+/** How much of the canvas the operator can still see, on one axis. */
+function visible(position: number, content: number, viewportExtent: number) {
+  return Math.max(
+    0,
+    Math.min(viewportExtent, position + content) - Math.max(0, position),
+  );
 }
 
 function renderMap(props: { threads: NavigationThreadSummary[] }) {
@@ -237,5 +271,219 @@ describe("star map view stability", () => {
       ).toBeNull();
     });
     expect(canvas().style.transform).toBe(panned);
+  });
+});
+
+/**
+ * The map must also never leave.
+ *
+ * A pan/zoom surface with no bounds can be dragged until every body is
+ * outside the window, and an empty star field offers nothing to drag back
+ * — before this, closing and reopening the map was the only way out. The
+ * view being sticky (above) is what makes that state permanent, so the two
+ * rules ship together: the operator owns the view, and the view stays
+ * within reach of the content.
+ */
+describe("star map view bounds", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+  });
+
+  async function openOrbit() {
+    seedLayout("orbit");
+    const rendered = renderMap({ threads: threads(9) });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance/ }),
+      ).toBeTruthy();
+    });
+    return rendered;
+  }
+
+  /** Let the pan's animation frame run so it writes the live transform. */
+  async function flushFrame() {
+    await act(async () => {
+      await new Promise((resolve) => {
+        requestAnimationFrame(() => resolve(undefined));
+      });
+    });
+  }
+
+  it("keeps a strip of canvas on screen when dragged off the top-left", async () => {
+    await openOrbit();
+    const box = canvasBox();
+
+    pan(-40000, -40000);
+
+    const after = readTransform();
+    expect(visible(after.x, box.width, VIEWPORT.width)).toBeGreaterThanOrEqual(
+      VIEWPORT.width * MIN_VISIBLE_FRACTION,
+    );
+    expect(
+      visible(after.y, box.height, VIEWPORT.height),
+    ).toBeGreaterThanOrEqual(VIEWPORT.height * MIN_VISIBLE_FRACTION);
+  });
+
+  it("keeps a strip of canvas on screen when dragged off the bottom-right", async () => {
+    await openOrbit();
+    const box = canvasBox();
+
+    pan(40000, 40000);
+
+    const after = readTransform();
+    expect(after.x).toBe(VIEWPORT.width * (1 - MIN_VISIBLE_FRACTION));
+    expect(visible(after.x, box.width, VIEWPORT.width)).toBeGreaterThanOrEqual(
+      VIEWPORT.width * MIN_VISIBLE_FRACTION,
+    );
+    expect(
+      visible(after.y, box.height, VIEWPORT.height),
+    ).toBeGreaterThanOrEqual(VIEWPORT.height * MIN_VISIBLE_FRACTION);
+  });
+
+  it("bounds the trackpad two-finger pan as well as the drag", async () => {
+    await openOrbit();
+    const box = canvasBox();
+    const viewport = document.querySelector(".star-map__viewport")!;
+
+    // One flick is enough; a real trackpad emits a stream of these.
+    fireEvent.wheel(viewport, { deltaX: 40000, deltaY: 40000 });
+
+    const after = readTransform();
+    expect(visible(after.x, box.width, VIEWPORT.width)).toBeGreaterThanOrEqual(
+      VIEWPORT.width * MIN_VISIBLE_FRACTION,
+    );
+    expect(
+      visible(after.y, box.height, VIEWPORT.height),
+    ).toBeGreaterThanOrEqual(VIEWPORT.height * MIN_VISIBLE_FRACTION);
+  });
+
+  it("does not snap the canvas back when the drag is released", async () => {
+    // The drag writes the transform onto the canvas itself on every frame,
+    // bypassing React state. Clamping only the committed value would let
+    // the map run off during the drag and jump back on pointerup.
+    await openOrbit();
+    const viewport = document.querySelector(".star-map__viewport")!;
+
+    fireEvent.pointerDown(viewport, { button: 0, clientX: 500, clientY: 400 });
+    fireEvent.pointerMove(window, { clientX: -39500, clientY: -39600 });
+    await flushFrame();
+    const midDrag = canvas().style.transform;
+    expect(midDrag).toMatch(/translate/);
+
+    fireEvent.pointerUp(window, { clientX: -39500, clientY: -39600 });
+
+    expect(canvas().style.transform).toBe(midDrag);
+  });
+
+  it("bounds the projects lens too", async () => {
+    seedLayout("projects");
+    renderMap({ threads: threads(9) });
+    await waitFor(() => {
+      expect(screen.getByTitle("PwrSnap")).toBeTruthy();
+    });
+    const box = canvasBox();
+
+    pan(-40000, -40000);
+
+    const after = readTransform();
+    expect(visible(after.x, box.width, VIEWPORT.width)).toBeGreaterThanOrEqual(
+      VIEWPORT.width * MIN_VISIBLE_FRACTION,
+    );
+    expect(
+      visible(after.y, box.height, VIEWPORT.height),
+    ).toBeGreaterThanOrEqual(VIEWPORT.height * MIN_VISIBLE_FRACTION);
+  });
+
+  it("re-centres the map on Reset view", async () => {
+    await openOrbit();
+    const centred = canvas().style.transform;
+
+    pan(-900, -600);
+    expect(canvas().style.transform).not.toBe(centred);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset view" }));
+
+    expect(canvas().style.transform).toBe(centred);
+    const box = canvasBox();
+    expect(readTransform()).toEqual({
+      x: (VIEWPORT.width - box.width) / 2,
+      y: (VIEWPORT.height - box.height) / 2,
+      scale: 1,
+    });
+  });
+
+  it("resets the zoom as well as the position", async () => {
+    await openOrbit();
+    const viewport = document.querySelector(".star-map__viewport")!;
+
+    fireEvent.wheel(viewport, {
+      deltaY: -240,
+      ctrlKey: true,
+      clientX: 400,
+      clientY: 300,
+    });
+    expect(readTransform().scale).not.toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset view" }));
+
+    expect(readTransform().scale).toBe(1);
+  });
+
+  it("hands the view back to the map on Reset view", async () => {
+    // Resetting is also how the operator says "you place it again" — the
+    // ownership flag has to clear, or auto-centring stays off for the life
+    // of the mounted map.
+    const { rerender } = await openOrbit();
+
+    pan(-900, -600);
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset view" }));
+    const beforeResize = canvas().style.transform;
+
+    rerender(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={threads(4)}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: /Open thread: Thread t8/ }),
+      ).toBeNull();
+    });
+    // The smaller cloud re-centres, which it would not do if the map were
+    // still treating the view as the operator's.
+    expect(canvas().style.transform).not.toBe(beforeResize);
+    const box = canvasBox();
+    expect(readTransform()).toEqual({
+      x: (VIEWPORT.width - box.width) / 2,
+      y: (VIEWPORT.height - box.height) / 2,
+      scale: 1,
+    });
+  });
+
+  it("offers no reset in the lens that has no view to lose", async () => {
+    // Lanes fits the window: there is nothing to pan, so a reset control
+    // would be a button that does nothing.
+    seedLayout("lanes");
+    renderMap({ threads: threads(9) });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance/ }),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+
+    expect(screen.queryByRole("button", { name: "Reset view" })).toBeNull();
   });
 });
