@@ -394,6 +394,9 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
     ).rejects.toThrow("apply failed");
 
     expect(runtime.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.stop).toHaveBeenCalledWith({
+      preserveStartupFailures: true,
+    });
     expect(store.getMessagingLease()).toMatchObject({
       ownerInstanceId: "instance-a",
       status: "released",

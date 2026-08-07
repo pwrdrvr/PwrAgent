@@ -23,6 +23,7 @@ describe("MessagingErrorNotices", () => {
             health: "errored",
             changedAt: 1_785_926_400_000,
             reason: "gateway disconnected",
+            startupFailure: true,
           }],
           onMessagingPlatformStatusEvent: (listener) => {
             emitStatus = listener;
@@ -48,9 +49,43 @@ describe("MessagingErrorNotices", () => {
     act(() => {
       emitStatus?.({
         kind: "health-changed",
+        platform: "discord",
+        health: "suspended",
+        at: 1_785_926_400_001,
+        reason: "gateway disconnected",
+        startupFailure: true,
+      });
+    });
+    await waitFor(() => {
+      expect(discordPublicationCount()).toBe(1);
+    });
+
+    act(() => {
+      emitStatus?.({
+        kind: "health-changed",
+        platform: "discord",
+        health: "errored",
+        at: 1_785_926_400_002,
+        reason: "bot token was revoked",
+      });
+    });
+    await waitFor(() => {
+      expect(discordPublicationCount()).toBe(2);
+    });
+    expect(onNoticeChanged).toHaveBeenLastCalledWith(
+      "discord",
+      expect.objectContaining({
+        detail: "bot token was revoked",
+        id: "messaging-platform-error:discord:active",
+      }),
+    );
+
+    act(() => {
+      emitStatus?.({
+        kind: "health-changed",
         platform: "slack",
         health: "errored",
-        at: 1_785_926_400_001,
+        at: 1_785_926_400_003,
         reason: "socket disconnected",
       });
     });
@@ -60,14 +95,14 @@ describe("MessagingErrorNotices", () => {
         expect.objectContaining({ title: "Slack messaging failed" }),
       );
     });
-    expect(discordPublicationCount()).toBe(1);
+    expect(discordPublicationCount()).toBe(2);
 
     act(() => {
       emitStatus?.({
         kind: "health-changed",
         platform: "discord",
         health: "enabled",
-        at: 1_785_926_400_002,
+        at: 1_785_926_400_004,
       });
     });
     await waitFor(() => {
@@ -100,6 +135,73 @@ describe("MessagingErrorNotices", () => {
     expect(screen.getByRole("status")).toHaveAttribute("data-tone", "error");
     expect(container.querySelector(".app-notice-toast__timer")).toBeNull();
     expect(getMessagingPlatformStatuses).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces each platform suspended by a rejected startup until recovery", async () => {
+    let emitStatus: ((event: MessagingPlatformStatusEvent) => void) | undefined;
+    render(
+      <MessagingErrorNotices
+        desktopApi={{
+          getMessagingPlatformStatuses: async () => [
+            {
+              platform: "telegram",
+              health: "suspended",
+              changedAt: 1_785_926_400_000,
+              reason: "Cannot read properties of undefined (reading 'federation')",
+              startupFailure: true,
+            },
+            {
+              platform: "discord",
+              health: "suspended",
+              changedAt: 1_785_926_400_001,
+              reason: "Cannot read properties of undefined (reading 'federation')",
+              startupFailure: true,
+            },
+          ],
+          onMessagingPlatformStatusEvent: (listener) => {
+            emitStatus = listener;
+            return () => undefined;
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("Telegram messaging failed")).toBeInTheDocument();
+    expect(screen.getByText("Discord messaging failed")).toBeInTheDocument();
+    expect(screen.getAllByText(/could not complete messaging startup/)).toHaveLength(2);
+    expect(screen.getAllByRole("status")).toHaveLength(2);
+
+    act(() => {
+      emitStatus?.({
+        kind: "health-changed",
+        platform: "telegram",
+        health: "enabled",
+        at: 1_785_926_400_002,
+      });
+    });
+
+    expect(screen.queryByText("Telegram messaging failed")).not.toBeInTheDocument();
+    expect(screen.getByText("Discord messaging failed")).toBeInTheDocument();
+  });
+
+  it("does not treat an intentional suspension as a startup failure", async () => {
+    render(
+      <MessagingErrorNotices
+        desktopApi={{
+          getMessagingPlatformStatuses: async () => [{
+            platform: "slack",
+            health: "suspended",
+            changedAt: 1_785_926_400_000,
+            reason: "Messaging is stopped for this app instance.",
+          }],
+          onMessagingPlatformStatusEvent: () => () => undefined,
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
   });
 
   it("adds live failures and removes their notices when the platform recovers", async () => {
