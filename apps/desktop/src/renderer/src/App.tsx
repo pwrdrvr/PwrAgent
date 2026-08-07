@@ -1037,6 +1037,10 @@ function DesktopAppShell(props: {
     baseComposerDraftStore,
     desktopApi,
   );
+  useQueuedTurnProjection({
+    composerDraftStore,
+    threads: navigation.threads,
+  });
   useScheduledThreadActionProjection({
     composerDraftStore,
     desktopApi,
