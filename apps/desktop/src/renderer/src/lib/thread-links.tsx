@@ -2,6 +2,7 @@ import {
   isThreadLinkId,
   parseThreadUrl,
   type AppServerBackendKind,
+  type FederationInstanceId,
   type LinkedDirectorySummary,
   type NavigationThreadSummary,
   type ThreadLinkRef,
@@ -19,6 +20,7 @@ import {
 
 export type ResolvedThreadLink = {
   backend: AppServerBackendKind;
+  instanceId?: FederationInstanceId;
   threadId: string;
   title: string;
   gitBranch?: string;
@@ -37,13 +39,17 @@ export type ThreadLinkContextValue = {
   subscribe: (link: ResolvedThreadLink, listener: () => void) => () => void;
 };
 
-function threadLinkKey(link: Pick<ResolvedThreadLink, "backend" | "threadId">): string {
-  return `${link.backend}:${link.threadId}`;
+function threadLinkKey(
+  link: Pick<ResolvedThreadLink, "backend" | "instanceId" | "threadId">,
+): string {
+  return `${link.instanceId ?? "local"}:${link.backend}:${link.threadId}`;
 }
 
 function threadSummaryLink(thread: NavigationThreadSummary): ResolvedThreadLink {
+  const target = thread.federation?.ref.target;
   return {
     backend: thread.source,
+    ...(target?.scope === "remote" ? { instanceId: target.instanceId } : {}),
     threadId: thread.id,
     title: thread.title,
     gitBranch: thread.gitBranch,
@@ -82,6 +88,9 @@ function threadLinkMetadataKey(threads: NavigationThreadSummary[]): string {
   return JSON.stringify(
     threads.map((thread) => [
       thread.source,
+      thread.federation?.ref.target.scope === "remote"
+        ? thread.federation.ref.target.instanceId
+        : null,
       thread.id,
       thread.title,
       thread.gitBranch ?? null,
@@ -189,7 +198,11 @@ export function useLiveThreadLink(link: ResolvedThreadLink): ResolvedThreadLink 
 
 export function ThreadLinkProvider(props: {
   children: ReactNode;
-  onShowThread: (request: { backend: AppServerBackendKind; threadId: string }) => void;
+  onShowThread: (request: {
+    backend: AppServerBackendKind;
+    instanceId?: FederationInstanceId;
+    threadId: string;
+  }) => void;
   threads: NavigationThreadSummary[];
 }) {
   const { onShowThread, threads } = props;
@@ -216,7 +229,9 @@ export function ThreadLinkProvider(props: {
   // reflected in the context value. The per-thread metadata store above
   // updates only chips that reference the changed thread.
   const membershipKey = useMemo(
-    () => threads.map((thread) => `${thread.source}:${thread.id}`).sort().join("\u0000"),
+    () => threads.map((thread) => threadLinkKey(threadSummaryLink(thread)))
+      .sort()
+      .join("\u0000"),
     [threads],
   );
 
@@ -228,10 +243,14 @@ export function ThreadLinkProvider(props: {
   const value = useMemo<ThreadLinkContextValue>(() => {
     const byThreadId = new Map<string, ResolvedThreadLink>();
     const byIdentity = new Map<string, ResolvedThreadLink>();
+    const byFederatedIdentity = new Map<string, ResolvedThreadLink>();
 
     for (const thread of threadsRef.current) {
       const link = threadSummaryLink(thread);
       byIdentity.set(`${thread.source}:${thread.id}`, link);
+      if (link.instanceId) {
+        byFederatedIdentity.set(threadLinkKey(link), link);
+      }
       // Thread ids are backend-generated and effectively unique, so a bare
       // `pwragent://thread/<id>` resolves without a backend hint. If two
       // backends ever collide on an id, the explicit `?backend=` form wins.
@@ -242,13 +261,32 @@ export function ThreadLinkProvider(props: {
 
     return {
       resolve(ref) {
+        if (ref.instanceId) {
+          if (!ref.backend) {
+            return undefined;
+          }
+          return byFederatedIdentity.get(threadLinkKey({
+            backend: ref.backend,
+            instanceId: ref.instanceId,
+            threadId: ref.threadId,
+          })) ?? {
+            backend: ref.backend,
+            instanceId: ref.instanceId,
+            threadId: ref.threadId,
+            title: "",
+          };
+        }
         if (ref.backend) {
           return byIdentity.get(`${ref.backend}:${ref.threadId}`);
         }
         return byThreadId.get(ref.threadId);
       },
       show(link) {
-        onShowThreadRef.current({ backend: link.backend, threadId: link.threadId });
+        onShowThreadRef.current({
+          backend: link.backend,
+          ...(link.instanceId ? { instanceId: link.instanceId } : {}),
+          threadId: link.threadId,
+        });
       },
       getSnapshot(link) {
         return metadataStore.getSnapshot(link);

@@ -1342,6 +1342,7 @@ function createComposerThreadToken(
 ): ComposerSkillToken {
   const path = buildThreadUrl({
     backend: thread.backend,
+    ...(thread.instanceId ? { instanceId: thread.instanceId } : {}),
     threadId: thread.threadId,
   });
   return {

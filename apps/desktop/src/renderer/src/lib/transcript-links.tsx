@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  FederationInstanceId,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { ReactNode } from "react";
@@ -11,6 +12,7 @@ export function TranscriptLinkProvider(props: {
   children: ReactNode;
   onShowThread: (request: {
     backend: AppServerBackendKind;
+    instanceId?: FederationInstanceId;
     threadId: string;
   }) => void;
   threads: NavigationThreadSummary[];

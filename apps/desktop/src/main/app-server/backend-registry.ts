@@ -7678,6 +7678,7 @@ export class DesktopBackendRegistry {
       archived: false,
       callerReason: "thread-id-lookup",
       enrichDirectories: false,
+      forceRefresh: true,
     });
     return threads.find((thread) => thread.id === threadId);
   }
@@ -22229,8 +22230,16 @@ export class DesktopBackendRegistry {
         },
       };
       let targetTitle: string | undefined;
+      let targetInstanceId: string | undefined;
       let turn: { backend: AppServerBackendKind; threadId: string; turnId: string };
+      let localResolutionError: unknown;
+      let localThread: AppServerThreadSummary | undefined;
       try {
+        localThread = await this.resolveThread({ backend, threadId });
+      } catch (error) {
+        localResolutionError = error;
+      }
+      if (localThread) {
         turn = await this.startTurn({
           backend,
           threadId,
@@ -22244,15 +22253,8 @@ export class DesktopBackendRegistry {
           approvalPolicy: request.args.approvalPolicy,
           sandbox: request.args.sandbox,
         });
-      } catch (localError) {
-        const localMessage =
-          localError instanceof Error ? localError.message : String(localError);
-        if (
-          !this.federatedThreadMessageHandler
-          || !/thread not found/i.test(localMessage)
-        ) {
-          throw localError;
-        }
+        targetTitle = localThread.title;
+      } else if (this.federatedThreadMessageHandler) {
         const remoteTurn = await this.federatedThreadMessageHandler({
           backend,
           threadId,
@@ -22267,22 +22269,25 @@ export class DesktopBackendRegistry {
           sandbox: request.args.sandbox,
         });
         if (!remoteTurn) {
-          throw localError;
+          if (localResolutionError) {
+            throw localResolutionError;
+          }
+          throw new Error(`Thread not found: ${threadId}`);
         }
         turn = remoteTurn;
         targetTitle = remoteTurn.title;
+        targetInstanceId = remoteTurn.instanceId;
+      } else {
+        if (localResolutionError) {
+          throw localResolutionError;
+        }
+        throw new Error(`Thread not found: ${threadId}`);
       }
-      // Best-effort: give the link its human title so it reads well on
-      // surfaces that can't resolve the id against the live snapshot (the
-      // desktop chip shows the live title regardless). `listThreads` is
-      // cached, so this usually costs nothing.
-      const targetThread = targetTitle
-        ? undefined
-        : await this.findThreadForWorkspaceHandoff({
-            backend,
-            callerReason: "send-message-link",
-            threadId: turn.threadId,
-          });
+      const threadLinkRef = {
+        backend,
+        ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
+        threadId: turn.threadId,
+      };
       return {
         ok: true,
         data: {
@@ -22290,11 +22295,10 @@ export class DesktopBackendRegistry {
           threadId: turn.threadId,
           turnId: turn.turnId,
           promptPreview: truncateThreadInspectionText(prompt, 240),
-          threadUrl: buildThreadUrl({ backend, threadId: turn.threadId }),
+          threadUrl: buildThreadUrl(threadLinkRef),
           threadLink: buildThreadMarkdownLink({
-            backend,
-            threadId: turn.threadId,
-            title: targetTitle ?? targetThread?.title,
+            ...threadLinkRef,
+            title: targetTitle,
           }),
           settings,
         },

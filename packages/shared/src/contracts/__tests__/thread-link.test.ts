@@ -14,14 +14,17 @@ describe("buildThreadUrl", () => {
     );
   });
 
-  it("carries backend and profile as query params", () => {
+  it("carries backend, instance, and profile as query params", () => {
     expect(
       buildThreadUrl({
         threadId: "019f5d79",
         backend: "codex",
+        instanceId: "pwr_harold",
         profile: "sstk",
       }),
-    ).toBe("pwragent://thread/019f5d79?backend=codex&profile=sstk");
+    ).toBe(
+      "pwragent://thread/019f5d79?backend=codex&instanceId=pwr_harold&profile=sstk",
+    );
   });
 
   it("percent-encodes an acp backend id rather than breaking the path", () => {
@@ -40,6 +43,7 @@ describe("parseThreadUrl", () => {
     const ref = {
       threadId: "019f5d79-a595-73f2-84d9-a0976762c303",
       backend: "codex",
+      instanceId: "pwr_harold",
       profile: "sstk",
     } as const;
 
@@ -50,8 +54,17 @@ describe("parseThreadUrl", () => {
     expect(parseThreadUrl("pwragent://thread/019f5d79")).toEqual({
       threadId: "019f5d79",
       backend: undefined,
+      instanceId: undefined,
       profile: undefined,
     });
+  });
+
+  it("drops an invalid federation instance id rather than trusting it", () => {
+    expect(
+      parseThreadUrl(
+        "pwragent://thread/019f5d79?backend=codex&instanceId=not%2Fa%2Fpeer",
+      )?.instanceId,
+    ).toBeUndefined();
   });
 
   it("drops a backend that is not a known kind rather than trusting it", () => {
