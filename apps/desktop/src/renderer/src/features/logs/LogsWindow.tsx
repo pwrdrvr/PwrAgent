@@ -627,6 +627,7 @@ function LogLine(props: {
           title={copyLabel}
           type="button"
           onClick={() => props.onCopy(props.line.lineNumber, lineText)}
+          onPointerDown={(event) => event.stopPropagation()}
         >
           {props.copied ? (
             <CheckIcon aria-hidden="true" size={12} />

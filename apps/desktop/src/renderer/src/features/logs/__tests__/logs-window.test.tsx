@@ -196,7 +196,8 @@ describe("LogsWindow", () => {
     });
   });
 
-  it("copies an individual log line without its line number", async () => {
+  it("copies an individual log line without pausing following", async () => {
+    let listener: Parameters<NonNullable<DesktopApi["onAppLogEntry"]>>[0] | undefined;
     const copyText = vi.fn(async () => undefined);
     const desktopApi = {
       copyText,
@@ -215,13 +216,18 @@ describe("LogsWindow", () => {
         readAt: Date.now(),
         truncated: false,
       })),
-      onAppLogEntry: vi.fn(() => () => undefined),
+      onAppLogEntry: vi.fn((callback) => {
+        listener = callback;
+        return () => undefined;
+      }),
     } as unknown as DesktopApi;
     (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
 
     render(<LogsWindow />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Copy line 1" }));
+    const copyButton = await screen.findByRole("button", { name: "Copy line 1" });
+    fireEvent.pointerDown(copyButton);
+    fireEvent.click(copyButton);
 
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith(
@@ -231,6 +237,18 @@ describe("LogsWindow", () => {
     expect(
       screen.getByRole("button", { name: "Copied line 1" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("Live app log stream")).toBeInTheDocument();
+
+    act(() => {
+      listener?.({
+        sequence: 2,
+        timestamp: Date.now(),
+        level: "info",
+        line: "[2026-05-12 20:06:29.000] [info] (pwragent:main) next line",
+      });
+    });
+
+    expect(await screen.findByText(/next line/)).toBeInTheDocument();
   });
 
   it("defaults to Error, Warning, and Info toggles with Debug off", async () => {
