@@ -203,7 +203,9 @@ export function ThreadRow(props: ThreadRowProps) {
     if (hoverTimerRef.current !== undefined) return;
     hoverTimerRef.current = window.setTimeout(() => {
       hoverTimerRef.current = undefined;
-      props.onPrefetchPullRequests?.(props.thread);
+      if (prs.length > 0) {
+        props.onPrefetchPullRequests?.(props.thread);
+      }
       props.onPrefetchGitWorkingState?.(props.thread);
     }, HOVER_PREFETCH_DELAY_MS);
   };

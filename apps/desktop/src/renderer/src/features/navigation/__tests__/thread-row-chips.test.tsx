@@ -350,7 +350,11 @@ describe("ThreadRow chip flow", () => {
     vi.useFakeTimers();
     try {
       const onPrefetchGitWorkingState = vi.fn();
-      const { container } = renderRow({ onPrefetchGitWorkingState });
+      const onPrefetchPullRequests = vi.fn();
+      const { container } = renderRow({
+        onPrefetchGitWorkingState,
+        onPrefetchPullRequests,
+      });
 
       fireEvent.mouseEnter(container.querySelector(".thread-row__chips")!);
       vi.advanceTimersByTime(749);
@@ -360,6 +364,7 @@ describe("ThreadRow chip flow", () => {
       expect(onPrefetchGitWorkingState).toHaveBeenCalledWith(
         expect.objectContaining({ id: baseThread.id }),
       );
+      expect(onPrefetchPullRequests).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

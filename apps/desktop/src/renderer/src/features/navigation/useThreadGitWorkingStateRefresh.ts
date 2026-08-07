@@ -6,6 +6,7 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 
 const SELECTED_REFRESH_INTERVAL_MS = 60_000;
 const USER_REFRESH_COOLDOWN_MS = 10_000;
@@ -28,7 +29,7 @@ export function useThreadGitWorkingStateRefresh(params: {
     ): void => {
       if (!desktopApi?.refreshThreadGitWorkingState) return;
       if (isFederationWindow || isRemoteFederatedThread(thread)) return;
-      if (!resolveWorkingStatePath(thread)) return;
+      if (!resolveThreadWorkingStatePath(thread)) return;
       void desktopApi.refreshThreadGitWorkingState({
         backend: thread.source,
         threadId: thread.id,
@@ -90,22 +91,12 @@ export function useThreadGitWorkingStateRefresh(params: {
 function buildRefreshRequestKey(
   thread: NavigationThreadSummary,
 ): string | undefined {
-  const worktreePath = resolveWorkingStatePath(thread);
+  const worktreePath = resolveThreadWorkingStatePath(thread);
   if (!worktreePath) return undefined;
   return JSON.stringify({
     threadKey: buildThreadIdentityKey(thread.source, thread.id),
     worktreePath,
   });
-}
-
-function resolveWorkingStatePath(
-  thread: NavigationThreadSummary,
-): string | undefined {
-  const projectKey = thread.projectKey?.trim();
-  if (projectKey) return projectKey;
-  return thread.linkedDirectories.find((directory) =>
-    Boolean(directory.worktreePath?.trim())
-  )?.worktreePath?.trim();
 }
 
 function isRemoteFederatedThread(thread: NavigationThreadSummary): boolean {

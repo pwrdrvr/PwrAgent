@@ -67,6 +67,38 @@ describe("useThreadGitWorkingStateRefresh", () => {
     });
   });
 
+  it("refreshes a selected thread from its linked local directory", async () => {
+    const refreshThreadGitWorkingState = vi.fn(async () => ({ scheduled: true }));
+    const desktopApi = {
+      refreshThreadGitWorkingState,
+    } satisfies DesktopApi;
+
+    renderHook(() =>
+      useThreadGitWorkingStateRefresh({
+        desktopApi,
+        selectedThread: buildThread({
+          projectKey: undefined,
+          linkedDirectories: [
+            {
+              id: "directory:/repo/local",
+              kind: "local",
+              label: "local",
+              path: "/repo/local",
+            },
+          ],
+        }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(refreshThreadGitWorkingState).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "scheduled",
+      });
+    });
+  });
+
   it("does not refresh remote-owned threads from the viewer", async () => {
     const refreshThreadGitWorkingState = vi.fn(async () => ({ scheduled: true }));
     const desktopApi = {

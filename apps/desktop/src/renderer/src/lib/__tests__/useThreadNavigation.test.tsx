@@ -1773,8 +1773,15 @@ describe("useThreadNavigation", () => {
           titleSource: "explicit" as const,
           summary: "First thread summary",
           source: "codex" as const,
-          projectKey: "/repo/wt",
-          linkedDirectories: [],
+          linkedDirectories: [
+            {
+              id: "directory:/repo/wt",
+              kind: "worktree" as const,
+              label: "wt",
+              path: "/repo",
+              worktreePath: "/repo/wt",
+            },
+          ],
           inbox: {
             inInbox: true,
             reason: "new-thread" as const,
