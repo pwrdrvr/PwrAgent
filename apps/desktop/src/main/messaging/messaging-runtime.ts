@@ -1609,11 +1609,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   private async syncFederationEventSubscriptions(): Promise<void> {
-    const setSubscriptions =
-      this.options.backendBridge.setRemoteEventSubscriptions;
-    if (!setSubscriptions) return;
+    if (!this.options.backendBridge.setRemoteEventSubscriptions) return;
     if (!this.started || this.runningAdapters.size === 0) {
-      setSubscriptions([]);
+      this.options.backendBridge.setRemoteEventSubscriptions([]);
       return;
     }
     const instanceIds = new Set<string>();
@@ -1625,7 +1623,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         instanceIds.add(binding.federatedThread.target.instanceId);
       }
     }
-    setSubscriptions(
+    this.options.backendBridge.setRemoteEventSubscriptions(
       [...instanceIds].map((sourceInstanceId) => ({
         sourceInstanceId,
         eventClasses: [
