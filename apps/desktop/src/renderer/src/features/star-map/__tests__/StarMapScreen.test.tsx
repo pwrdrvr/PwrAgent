@@ -202,7 +202,7 @@ describe("StarMapScreen", () => {
     });
   });
 
-  it("hides cards whose categories are filtered off", async () => {
+  it("cycles a filter chip neutral -> only -> exclude", async () => {
     render(
       <StarMapScreen
         desktopApi={buildDesktopApi()}
@@ -215,11 +215,51 @@ describe("StarMapScreen", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /Open thread: Thread t2/ })).toBeTruthy();
+    const card = () =>
+      screen.queryByRole("button", { name: /Open thread: Thread t2/ });
+    expect(card()).toBeTruthy();
+
     // Scope to the chip row: thread cards also expose an "Unread" status.
-    const filterRow = screen.getByRole("group", { name: "Attention filters" });
-    fireEvent.click(within(filterRow).getByRole("button", { name: /^Unread/ }));
-    expect(screen.queryByRole("button", { name: /Open thread: Thread t2/ })).toBeNull();
+    const filterRow = screen.getByRole("group", { name: "Thread filters" });
+    const unreadChip = within(filterRow).getByRole("button", {
+      name: /^Unread:/,
+    });
+
+    // First click isolates rather than hides — the thread IS unread, so it
+    // survives. Under the old all-on model this click removed it.
+    fireEvent.click(unreadChip);
+    expect(card()).toBeTruthy();
+
+    // Second click flips the same chip to exclude.
+    fireEvent.click(
+      within(filterRow).getByRole("button", { name: /^Unread:/ }),
+    );
+    expect(card()).toBeNull();
+
+    // Third click returns to neutral.
+    fireEvent.click(
+      within(filterRow).getByRole("button", { name: /^Unread:/ }),
+    );
+    expect(card()).toBeTruthy();
+  });
+
+  it("shows every card when no filter is selected", async () => {
+    // The old model's "all chips off" state showed an empty map; neutral
+    // has no such dead end.
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[unreadThread("t3")]}
+        sessionKeys={{}}
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /Open thread: Thread t3/ }),
+    ).toBeTruthy();
   });
 
   it("closes on Escape", async () => {

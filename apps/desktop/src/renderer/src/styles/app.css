@@ -10034,10 +10034,30 @@ textarea,
   cursor: pointer;
 }
 
-.star-map__filter-chip.is-on {
+/* Tri-state. Neutral is the resting style above: not filtering on this.
+   Include reads as selected; exclude reads as struck through, because
+   "hidden" is a different idea from "chosen" and sharing one highlight
+   would make the two indistinguishable at a glance. */
+.star-map__filter-chip--include {
   border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--text-primary);
+}
+
+.star-map__filter-chip--exclude {
+  border-color: var(--border-strong);
+  border-style: dashed;
+  background: color-mix(in srgb, var(--bg-panel) 75%, transparent);
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--danger-text);
+}
+
+.star-map__filter-mark {
+  color: var(--danger-text);
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
 }
 
 .star-map__filter-chip:focus-visible {
@@ -10045,7 +10065,7 @@ textarea,
   outline-offset: 1px;
 }
 
-/* How many cards appear/disappear if this chip is flipped. */
+/* How many cards this chip speaks for, given the other facets. */
 .star-map__filter-count {
   min-width: 14px;
   padding: 0 4px;
