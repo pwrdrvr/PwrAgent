@@ -363,6 +363,7 @@ describe("TranscriptList", () => {
                 prKey: "github.com/pwrdrvr/pwragent#1128",
                 prNumber: 1128,
                 prTitle: "Wake threads on PR completion",
+                failedCheckUrl: "https://github.com/pwrdrvr/PwrAgent/actions/runs/123",
                 headSha: "a".repeat(40),
                 eventKinds: ["ci-failure"],
               },
@@ -382,6 +383,11 @@ describe("TranscriptList", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("CI failed")).toBeInTheDocument();
+    const failedRunLink = screen.getByRole("link", { name: "View failed run" });
+    expect(failedRunLink).toHaveAttribute(
+      "href",
+      "https://github.com/pwrdrvr/PwrAgent/actions/runs/123",
+    );
     expect(
       screen.queryByText("Pull request event"),
     ).not.toBeInTheDocument();
@@ -393,8 +399,42 @@ describe("TranscriptList", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(failedRunLink).toBeInTheDocument();
     expect(screen.getByText("Pull request event")).toBeInTheDocument();
     expect(screen.getByText(/Dedupe fingerprint/)).toBeInTheDocument();
+  });
+
+  it("omits the failed-run link for merge-conflict auto-fix cards", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "pr-auto-fix-conflict",
+            role: "user",
+            text: "PwrAgent scheduled this bounded repair turn because an attached pull request needs attention.",
+            origin: {
+              kind: "pwragent",
+              prAutomation: {
+                kind: "auto-fix",
+                prKey: "github.com/pwrdrvr/pwragent#1128",
+                prNumber: 1128,
+                headSha: "a".repeat(40),
+                eventKinds: ["merge-conflict"],
+              },
+            },
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Conflict")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "View failed run" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders a completed PR watch with its result pill", () => {

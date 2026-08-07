@@ -392,8 +392,11 @@ describe("PrAutoDispatchCoordinator", () => {
   });
 
   it("dispatches only after the countdown and includes structured PR context", async () => {
-    const harness = createHarness();
-    await observe(harness.coordinator);
+    const failedCheckUrl =
+      "https://github.com/pwrdrvr/PwrAgent/actions/runs/123";
+    const failedPr = pr({ failedCheckUrl });
+    const harness = createHarness({ currentPr: failedPr });
+    await observe(harness.coordinator, failedPr);
 
     await vi.advanceTimersByTimeAsync(PR_AUTO_DISPATCH_DELAY_MS - 1);
     expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
@@ -413,6 +416,7 @@ describe("PrAutoDispatchCoordinator", () => {
         prAutomation: {
           kind: "auto-fix",
           prNumber: 1105,
+          failedCheckUrl,
           eventKinds: ["ci-failure"],
         },
       },

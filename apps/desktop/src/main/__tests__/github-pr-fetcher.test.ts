@@ -79,6 +79,24 @@ describe("parseGhPrPayload", () => {
     expect(summary.org).toBe("");
     expect(summary.repo).toBe("");
   });
+
+  it("retains the first safe failed-check destination", () => {
+    const summary = parseGhPrPayload({
+      ...rawMergedPr(),
+      statusCheckRollup: [
+        {
+          __typename: "CheckRun",
+          conclusion: "FAILURE",
+          detailsUrl: "https://github.com/pwrdrvr/PwrAgent/actions/runs/123",
+          status: "COMPLETED",
+        },
+      ],
+    });
+
+    expect(summary.failedCheckUrl).toBe(
+      "https://github.com/pwrdrvr/PwrAgent/actions/runs/123",
+    );
+  });
 });
 
 describe("derive PR states", () => {
