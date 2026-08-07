@@ -14900,6 +14900,76 @@ describe("Composer", () => {
     });
   });
 
+  it("uses a live thread name when pasting an in-progress thread id", async () => {
+    const targetThreadId = "019fbbbe-ad52-77c2-b7f7-28182d9a6f83";
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const untitledTarget: NavigationThreadSummary = {
+      id: targetThreadId,
+      title: "Untitled thread",
+      titleSource: "fallback",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const onShowThread = vi.fn();
+    const { rerender } = render(
+      <ThreadLinkProvider
+        onShowThread={onShowThread}
+        threads={[currentThread, untitledTarget]}
+      >
+        <Composer
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={currentThread}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    rerender(
+      <ThreadLinkProvider
+        onShowThread={onShowThread}
+        threads={[
+          currentThread,
+          {
+            ...untitledTarget,
+            title: "Bob's Best Thread 3000",
+            titleSource: "explicit",
+          },
+        ]}
+      >
+        <Composer
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={currentThread}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => type === "text/plain" ? targetThreadId : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    expect(
+      await within(screen.getByTestId("composer-tiptap-input"))
+        .findByText("Bob's Best Thread 3000"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Untitled thread")).not.toBeInTheDocument();
+  });
+
   it("replaces the selected composer text with a pasted thread chip", async () => {
     const targetThreadId = "019fbbbe-ad52-77c2-b7f7-28182d9a6f83";
     const currentThread: NavigationThreadSummary = {

@@ -259,6 +259,46 @@ describe("thread links in transcript markdown", () => {
     });
   });
 
+  it("drops live metadata when a federated thread leaves the snapshot", () => {
+    const text =
+      `See [Remote handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex&instanceId=pwr_harold)`;
+    const onShowThread = vi.fn();
+    const remoteThread = threadSummary({
+      title: "Old remote title",
+      gitBranch: "agent/old-remote-branch",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "pwr_harold" },
+          threadId: CHILD_THREAD_ID,
+        },
+        instanceLabel: "Harold",
+        peerStatus: "connected",
+      },
+    });
+    const { rerender } = render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[remoteThread]}>
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Open thread Old remote title" }),
+    ).toBeInTheDocument();
+
+    rerender(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Open thread Remote handoff" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open thread Old remote title" }))
+      .not.toBeInTheDocument();
+  });
+
   it("linkifies a bare thread id written as inline code", () => {
     // The shape every pre-protocol handoff message used.
     renderWithLinks(`Created the PwrAgent handoff thread: \`${CHILD_THREAD_ID}\``);
