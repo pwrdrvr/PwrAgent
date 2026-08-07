@@ -76,8 +76,82 @@ describe("StarMapScreen", () => {
     expect(card.textContent).not.toMatch(/local/i);
     expect(card.textContent).not.toMatch(/worktree/i);
 
+    // Clicking a card floats a chat card over the map rather than
+    // navigating away from it; the full thread view is one click further,
+    // behind the card's own Open button.
     fireEvent.click(card);
+    const chat = await screen.findByRole("region", {
+      name: "Chat: Thread t1",
+    });
+    expect(onOpenLocalThread).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(chat).getByRole("button", {
+        name: /Open Thread t1 in the full thread view/,
+      }),
+    );
     expect(onOpenLocalThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("raises an already-open chat card instead of stacking a duplicate", async () => {
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
+      ).toBeTruthy();
+    });
+    const card = screen.getByRole("button", { name: /Thread t1/ });
+    fireEvent.click(card);
+    await screen.findByRole("region", { name: "Chat: Thread t1" });
+    fireEvent.click(card);
+
+    expect(
+      screen.getAllByRole("region", { name: "Chat: Thread t1" }),
+    ).toHaveLength(1);
+  });
+
+  it("closes a chat card from its close button", async () => {
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Thread t1/ }));
+    const chat = await screen.findByRole("region", { name: "Chat: Thread t1" });
+    fireEvent.click(
+      within(chat).getByRole("button", { name: "Close chat: Thread t1" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: "Chat: Thread t1" }),
+      ).toBeNull();
+    });
   });
 
   it("hides cards whose categories are filtered off", async () => {
