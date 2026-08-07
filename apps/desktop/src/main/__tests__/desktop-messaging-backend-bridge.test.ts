@@ -666,6 +666,68 @@ describe("DesktopMessagingBackendBridge", () => {
     ]);
   });
 
+  it("resolves an explicit remote attach target with a federated thread ref", async () => {
+    const remoteThread: NavigationSnapshot["threads"][number] = {
+      id: "remote-thread",
+      title: "Remote collector",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const remoteNavigation: NavigationSnapshot = {
+      backend: "codex",
+      fetchedAt: 2_000,
+      unchanged: false,
+      threads: [remoteThread],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const resolveThread = vi.fn(async () => ({
+      thread: {
+        ...remoteThread,
+        inbox: undefined,
+      },
+    }));
+    const federation = {
+      connectedPeerTargets: () => [{
+        target: { scope: "remote" as const, instanceId: "pwr_remote" },
+        label: "Remote Mac",
+        capabilities: ["thread_navigation", "messaging_route"] as const,
+      }],
+      health: async () => ({
+        enabled: true,
+        role: "dual" as const,
+        status: "connected" as const,
+        peers: [],
+      }),
+      onRemoteBackendEvent: () => () => undefined,
+      remoteBackend: () => ({ resolveThread } as unknown as FederationBackendOperations),
+      remoteNavigationSnapshot: vi.fn(async () => remoteNavigation),
+    } satisfies DesktopMessagingFederationBridge;
+    const registry = {
+      listThreads: vi.fn(async () => []),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry, federation);
+
+    await expect(bridge.resolveThreadTarget({
+      backend: "codex",
+      threadId: "remote-thread",
+      instanceId: "pwr_remote",
+    })).resolves.toMatchObject({
+      thread: { id: "remote-thread" },
+      federatedThread: {
+        backend: "codex",
+        threadId: "remote-thread",
+        target: { scope: "remote", instanceId: "pwr_remote" },
+      },
+    });
+  });
+
   it("routes targeted messaging turns and navigation to the remote backend", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
@@ -714,6 +776,12 @@ describe("DesktopMessagingBackendBridge", () => {
     const listScheduledThreadActions = vi.fn(async () => ({ actions: [] }));
     const federation = {
       connectedPeerTargets: () => [],
+      health: async () => ({
+        enabled: false,
+        role: "dual" as const,
+        status: "disabled" as const,
+        peers: [],
+      }),
       onRemoteBackendEvent: () => () => undefined,
       remoteBackend: () => ({
         createScheduledThreadAction,

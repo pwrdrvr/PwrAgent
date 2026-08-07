@@ -5,6 +5,7 @@ import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
 import { createFederatedThreadInspectionHandler } from "./federation/federated-thread-inspection-service";
+import { createFederatedThreadMutationHandler } from "./federation/federated-thread-mutation-service";
 import { createFederatedThreadMessageHandler } from "./federation/federated-thread-message-service";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
@@ -1018,6 +1019,11 @@ export function bootstrapApp(): void {
     );
     getDesktopBackendRegistry().setFederatedThreadInspectionHandler(
       createFederatedThreadInspectionHandler({
+        targetStore: getDesktopOverlayStore(),
+      }),
+    );
+    getDesktopBackendRegistry().setFederatedThreadMutationHandler(
+      createFederatedThreadMutationHandler({
         targetStore: getDesktopOverlayStore(),
       }),
     );

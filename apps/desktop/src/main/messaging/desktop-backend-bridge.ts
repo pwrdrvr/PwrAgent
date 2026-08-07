@@ -17,6 +17,8 @@ import type {
   EnsureDirectoryLaunchpadResponse,
   FederationCapability,
   FederationEventSubscription,
+  FederationHealthStatus,
+  FederationInstanceId,
   FederationRemoteTarget,
   FederationTarget,
   GetNavigationSnapshotRequest,
@@ -56,11 +58,15 @@ import type {
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
 import type { MessagingImagePart } from "@pwragent/messaging-interface";
-import { isRemoteFederationTarget } from "@pwragent/shared";
+import {
+  buildFederatedThreadRef,
+  isRemoteFederationTarget,
+} from "@pwragent/shared";
 import type {
   MessagingBackendBridge,
   MessagingLastAssistantReply,
 } from "./core/messaging-adapter";
+import { MessagingFederatedThreadTargetError } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
@@ -69,6 +75,10 @@ import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { materializeTranscriptMessageImagesForMessaging } from "../transcript-image-protocol";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
+import {
+  FederatedThreadTargetError,
+  resolveFederatedThreadTarget,
+} from "../federation/federated-thread-target-service";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 
 export type DesktopMessagingFederationBridge = {
@@ -77,6 +87,7 @@ export type DesktopMessagingFederationBridge = {
     label: string;
     capabilities: FederationCapability[];
   }>;
+  health(): Promise<FederationHealthStatus>;
   onRemoteBackendEvent(
     listener: (event: AgentEvent) => void | Promise<void>,
   ): () => void;
@@ -236,6 +247,89 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         ...availableRemoteSnapshots.flatMap((remote) => remote.inboxThreadKeys),
       ],
     };
+  }
+
+  async resolveThreadTarget(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    instanceId?: FederationInstanceId;
+    includeRemote?: boolean;
+  }) {
+    if (!request.instanceId) {
+      const localThreads = await this.registry.listThreads({
+        backend: request.backend,
+        archived: false,
+        callerReason: "messaging-attach-thread-target",
+      });
+      const localThread = localThreads.find(
+        (thread) => thread.id === request.threadId,
+      );
+      if (localThread) {
+        const navigation = await this.getNavigationSnapshot({
+          backend: request.backend,
+        });
+        const thread = navigation.threads.find(
+          (candidate) =>
+            candidate.source === request.backend
+            && candidate.id === request.threadId,
+        );
+        if (thread) {
+          return { navigation, thread };
+        }
+      }
+    }
+    if (request.includeRemote === false || !this.federation) {
+      return undefined;
+    }
+
+    try {
+      const match = await resolveFederatedThreadTarget({
+        runtime: this.federation,
+        targetStore: getDesktopOverlayStore(),
+        request,
+      });
+      if (!match) {
+        return undefined;
+      }
+      if (!match.peer.capabilities.includes("messaging_route")) {
+        throw new Error(
+          `Federation instance ${match.peer.label} owns thread ${request.threadId} but does not grant messaging_route.`,
+        );
+      }
+      const federationTarget = match.peer.target;
+      const navigation = await this.federation.remoteNavigationSnapshot(
+        federationTarget,
+        {
+          backend: request.backend,
+          federationTarget,
+        },
+      );
+      const thread = navigation.threads.find(
+        (candidate) =>
+          candidate.source === request.backend
+          && candidate.id === request.threadId,
+      );
+      if (!thread) {
+        return undefined;
+      }
+      return {
+        navigation,
+        thread,
+        federatedThread: buildFederatedThreadRef({
+          backend: request.backend,
+          threadId: request.threadId,
+          instanceId: federationTarget.instanceId,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof FederatedThreadTargetError) {
+        throw new MessagingFederatedThreadTargetError(
+          error.code,
+          error.message,
+        );
+      }
+      throw error;
+    }
   }
 
   async readThreadAgentMetadata(request: {

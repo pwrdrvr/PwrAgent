@@ -29777,6 +29777,167 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("combines local search_threads results with connected Federation metadata", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [{
+        id: "local-thread",
+        title: "Local collector",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        updatedAt: 1_000,
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: { "codex:agent-thread": createAgentOverlay() },
+      }),
+    });
+    const federationHandler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        query: "collector",
+        results: [{
+          instanceId: "pwr_remote",
+          instanceLabel: "Remote Mac",
+          isLocal: false,
+          backend: "codex" as const,
+          threadId: "remote-thread",
+          title: "Remote collector",
+          updatedAt: 2_000,
+          projectKey: "PwrSuiteLab",
+          score: 10,
+          threadLink: "[Remote collector](pwragent://thread/remote-thread)",
+        }],
+        searchedInstances: [{
+          instanceId: "pwr_remote",
+          instanceLabel: "Remote Mac",
+          resultCount: 1,
+        }],
+        failures: [],
+      },
+    }));
+    registry.setPwrAgentFederationHandler(federationHandler);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-search",
+        requestId: "call-search",
+        namespace: "pwragent",
+        tool: "search_threads",
+        arguments: { query: "collector" },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+
+    expect(payload.threads).toEqual(expect.arrayContaining([
+      expect.objectContaining({ threadId: "local-thread" }),
+      expect.objectContaining({
+        threadId: "remote-thread",
+        instanceId: "pwr_remote",
+        instanceLabel: "Remote Mac",
+        linkedDirectories: [],
+      }),
+    ]));
+    expect(federationHandler).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "search_federation_threads",
+      args: expect.objectContaining({ scope: "remote", query: "collector" }),
+    }));
+
+    await registry.close();
+  });
+
+  it("routes mutate_thread to a remote owner when no local thread matches", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: { "codex:agent-thread": createAgentOverlay() },
+      }),
+    });
+    const mutationHandler = vi.fn(async () => ({
+      instanceId: "pwr_remote",
+      instanceLabel: "Remote Mac",
+    }));
+    registry.setFederatedThreadMutationHandler(mutationHandler);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-mutate",
+        requestId: "call-mutate",
+        namespace: "pwragent",
+        tool: "mutate_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "remote-thread",
+          instanceId: "pwr_remote",
+          title: "Remote title",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+
+    expect(payload.mutation).toMatchObject({
+      backend: "codex",
+      threadId: "remote-thread",
+      instanceId: "pwr_remote",
+      instanceLabel: "Remote Mac",
+      dryRun: false,
+    });
+    expect(mutationHandler).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "remote-thread",
+      instanceId: "pwr_remote",
+      title: "Remote title",
+      dryRun: false,
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("mutates PwrAgent thread settings from active turns", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },

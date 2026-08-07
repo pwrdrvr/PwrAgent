@@ -70,6 +70,16 @@ describe("PwrAgent thread agent tools", () => {
           }),
         }),
       });
+    for (const name of ["search_threads", "mutate_thread"]) {
+      expect(tools.find((tool) => tool.name === name)).toMatchObject({
+        inputSchema: expect.objectContaining({
+          properties: expect.objectContaining({
+            instanceId: expect.objectContaining({ type: "string" }),
+            includeRemote: expect.objectContaining({ type: "boolean" }),
+          }),
+        }),
+      });
+    }
 
     await expect(
       router.handleDynamicToolCall({

@@ -11,7 +11,11 @@ import type {
   ThreadWorkspaceHandoffDirection,
   ThreadWorkspaceHandoffStrategy,
 } from "./normalized-app-server";
-import type { FederationInstanceId } from "./federation";
+import type {
+  FederatedSearchInstanceSummary,
+  FederatedSearchPeerFailure,
+  FederationInstanceId,
+} from "./federation";
 import type { LinkedDirectorySummary } from "./normalized-app-server";
 import type {
   MessagingThreadBindingSummary,
@@ -80,6 +84,10 @@ export type PwrAgentThreadInspectionContext = {
 export type SearchThreadsToolArgs = {
   query?: string;
   backend?: AppServerBackendKind | "all";
+  /** Restrict the search to one connected Federation instance. */
+  instanceId?: FederationInstanceId;
+  /** Defaults to true. Set false to search only the local instance. */
+  includeRemote?: boolean;
   includeArchived?: boolean;
   agentOnly?: boolean;
   projectKeys?: string[];
@@ -156,6 +164,13 @@ export type ReadThreadToolArgs = {
 export type MutateThreadToolArgs = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /**
+   * Federation instance that owns the thread. When omitted, PwrAgent first
+   * checks the local instance, then resolves a remembered or connected peer.
+   */
+  instanceId?: FederationInstanceId;
+  /** Defaults to true. Set false to restrict resolution to the local instance. */
+  includeRemote?: boolean;
   /**
    * Renames the PwrAgent thread itself. This does not rename any attached
    * Telegram topic, Discord thread, or other messaging surface.
@@ -299,6 +314,8 @@ export type ThreadMutationAppliedChange = {
 export type ThreadMutationResult = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  instanceId?: FederationInstanceId;
+  instanceLabel?: string;
   dryRun: boolean;
   changes: ThreadMutationAppliedChange[];
 };
@@ -308,6 +325,8 @@ export type ThreadInspectionSummary = {
   threadId: ThreadIdentifier;
   instanceId?: FederationInstanceId;
   instanceLabel?: string;
+  /** Canonical navigation link, including the owning instance when remote. */
+  threadLink?: string;
   title: string;
   summary?: string;
   projectKey?: string;
@@ -539,6 +558,8 @@ export type PwrAgentThreadInspectionResponse =
             unavailableScopes?: ThreadSearchUnavailableScope[];
             contentMode?: ThreadSearchContentMode;
             semanticMode?: ThreadSearchSemanticMode;
+            searchedInstances?: FederatedSearchInstanceSummary[];
+            federationFailures?: FederatedSearchPeerFailure[];
           }
         | {
             read: ThreadReadResult;

@@ -249,12 +249,20 @@ thread ID across connected peers. Exact UUID queries passed to
 `search_federation_threads` use the same ownership lookup instead of relying on
 fuzzy thread-list filtering.
 
-The `read_thread` and `get_thread_status` tools use the same local-first routing
-for exact thread IDs. Callers may pass `instanceId` to route directly to a
-known owner, but it is not required: after a local miss, PwrAgent checks durable
-ownership metadata and then connected peers. This compatibility fallback also
-lets already-running agent threads use remote inspection before their persisted
-tool schema includes the newer field. Set `includeRemote: false` on
-`read_thread`, `get_thread_status`, or `send_message_to_thread` when an
-operation must stay local. Remote transcript reads require the peer's
-`thread_detail` capability; ownership resolution requires `thread_navigation`.
+The `read_thread`, `get_thread_status`, `mutate_thread`, and
+`attach_thread_here` tools use the same local-first routing for exact thread
+IDs. Callers may pass `instanceId` to route directly to a known owner, but it is
+not required: after a local miss, PwrAgent checks durable ownership metadata
+and then connected peers. This compatibility fallback also lets already-running
+agent threads use remote routing before their persisted tool schema includes
+the newer fields. Set `includeRemote: false` on these tools or
+`send_message_to_thread` when an operation must stay local.
+
+`search_threads` also includes metadata matches from connected Federation
+instances by default, while preserving its richer local transcript, semantic,
+Agent, model, and directory filters as local-only capabilities. Pass
+`instanceId` to search one connected instance, or `includeRemote: false` for a
+strictly local search. Remote transcript reads require `thread_detail`, remote
+mutations require `turn_control`, remote messaging attachments require
+`messaging_route`, and all exact-thread ownership resolution requires
+`thread_navigation`.

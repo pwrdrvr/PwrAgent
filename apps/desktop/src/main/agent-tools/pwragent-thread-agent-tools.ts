@@ -3,6 +3,8 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   FederationInstanceId,
+  SetThreadModelSettingsRequest,
+  ThreadExecutionMode,
   PwrAgentThreadInspectionOperationName,
   PwrAgentThreadInspectionRequest,
   PwrAgentThreadInspectionResponse,
@@ -47,6 +49,25 @@ export type PwrAgentFederatedThreadInspectionResult = {
 export type PwrAgentFederatedThreadInspectionHandler = (
   request: PwrAgentFederatedThreadInspectionRequest,
 ) => Promise<PwrAgentFederatedThreadInspectionResult | undefined>;
+
+export type PwrAgentFederatedThreadMutationRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  instanceId?: FederationInstanceId;
+  title?: string;
+  modelSettings?: Omit<SetThreadModelSettingsRequest, "backend" | "threadId">;
+  executionMode?: ThreadExecutionMode;
+  dryRun: boolean;
+};
+
+export type PwrAgentFederatedThreadMutationResult = {
+  instanceId: FederationInstanceId;
+  instanceLabel: string;
+};
+
+export type PwrAgentFederatedThreadMutationHandler = (
+  request: PwrAgentFederatedThreadMutationRequest,
+) => Promise<PwrAgentFederatedThreadMutationResult | undefined>;
 
 export class PwrAgentFederatedThreadInspectionError extends Error {
   constructor(
@@ -105,7 +126,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "search_threads":
-      return "Search known PwrAgent threads by title, summary, Agent metadata, backend, and linked directory. Omit query to inspect recent lightweight thread candidates before choosing a thread. The response may include pendingHandoffs for handoff_task calls that are still creating a child thread and pendingWorkspaceMoves for move_thread_workspace calls that are still moving the same thread; do not retry those operations while they are starting.";
+      return "Search known PwrAgent threads by title, summary, Agent metadata, backend, and linked directory. By default PwrAgent combines local results with metadata matches from connected Federation instances; pass instanceId to target one instance or includeRemote=false to search locally only. Omit query to inspect recent lightweight thread candidates before choosing a thread. Advanced transcript, semantic, Agent, model, and directory filters remain local-only. The response may include pendingHandoffs for handoff_task calls that are still creating a child thread and pendingWorkspaceMoves for move_thread_workspace calls that are still moving the same thread; do not retry those operations while they are starting.";
     case "read_thread":
       return "Read a bounded page of another known PwrAgent thread's recent transcript and activity. Use search_threads first when the threadId is unknown. Pass instanceId for a remote thread when known; otherwise PwrAgent checks the local instance and then resolves a remembered or connected Federation peer.";
     case "get_thread_status":
@@ -117,7 +138,7 @@ function descriptionForOperation(
     case "watch_thread_pull_request":
       return "Create a durable one-shot watch for a pull request attached to the thread's primary workspace at its current head. PwrAgent starts one follow-up turn on the first requested terminal outcome: an early CI failure or merge conflict, or full CI success. Informational PRs from secondary linked repositories are not eligible. If several threads watch the same PR and head, the oldest watch receives the result and the others are satisfied without duplicate turns. If the current provider snapshot is already terminal, the result returns currentOutcome immediately without creating a watch. Omit backend and threadId for the current thread, and omit url only when exactly one eligible PR is attached. After a watch is created, end the current turn—do not poll CI and do not create a monitor thread. When Auto-fix PR is active at failure time, its repair dispatch satisfies the failure wake-up so the watch does not create a duplicate turn.";
     case "mutate_thread":
-      return "Mutate guarded PwrAgent thread settings such as the PwrAgent thread title, model settings, or execution mode. This does not rename any attached Telegram topic, Discord thread, or other messaging surface.";
+      return "Mutate guarded PwrAgent thread settings such as the PwrAgent thread title, model settings, or execution mode. Pass instanceId for a remote thread when known; otherwise PwrAgent checks the local instance and then resolves a remembered or connected Federation peer. This does not rename any attached Telegram topic, Discord thread, or other messaging surface.";
   }
 }
 
@@ -139,6 +160,16 @@ function inputSchemaForOperation(
             type: "string",
             description:
               "Backend to search. Defaults to all known PwrAgent backends.",
+          },
+          instanceId: {
+            type: "string",
+            description:
+              "Restrict the search to one connected Federation instance. Omit to combine local and connected remote results.",
+          },
+          includeRemote: {
+            type: "boolean",
+            description:
+              "Whether to include metadata matches from connected Federation instances. Defaults to true.",
           },
           includeArchived: {
             type: "boolean",
@@ -404,6 +435,16 @@ function inputSchemaForOperation(
             type: "string",
           },
           threadId: { type: "string" },
+          instanceId: {
+            type: "string",
+            description:
+              "Federation instance that owns the thread. Omit to check the local instance, then remembered and connected peers.",
+          },
+          includeRemote: {
+            type: "boolean",
+            description:
+              "Whether to resolve the thread across connected Federation peers after checking locally. Defaults to true.",
+          },
           title: {
             type: "string",
             description:

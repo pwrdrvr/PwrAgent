@@ -2,6 +2,7 @@ import type {
   AppServerBackendKind,
   AppServerThreadSummary,
   FederationCapability,
+  FederationHealthStatus,
   FederationInstanceId,
   FederationRemoteTarget,
   ThreadIdentifier,
@@ -10,7 +11,16 @@ import { formatFederationPeerDisplayLabel } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
-import type { DesktopFederationRuntime } from "./federation-runtime";
+
+export type FederatedThreadTargetRuntime = {
+  connectedPeerTargets(): Array<{
+    target: FederationRemoteTarget;
+    label: string;
+    capabilities: FederationCapability[];
+  }>;
+  health(): Promise<FederationHealthStatus>;
+  remoteBackend(target: FederationRemoteTarget): FederationBackendOperations;
+};
 
 export type FederatedThreadTargetRequest = {
   backend: AppServerBackendKind;
@@ -42,7 +52,7 @@ export class FederatedThreadTargetError extends Error {
 const log = getMainLogger("pwragent:federated-thread-target");
 
 export async function resolveFederatedThreadTarget(params: {
-  runtime: DesktopFederationRuntime;
+  runtime: FederatedThreadTargetRuntime;
   targetStore?: RemoteThreadTargetStore;
   request: FederatedThreadTargetRequest;
 }): Promise<ResolvedFederatedThreadTarget | undefined> {
@@ -146,7 +156,7 @@ export async function resolveFederatedThreadTarget(params: {
 }
 
 async function resolveThreadOnPeer(
-  runtime: DesktopFederationRuntime,
+  runtime: FederatedThreadTargetRuntime,
   peer: ResolvedFederatedThreadTarget["peer"],
   request: FederatedThreadTargetRequest,
 ): Promise<ResolvedFederatedThreadTarget | undefined> {

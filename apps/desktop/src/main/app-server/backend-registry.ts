@@ -336,6 +336,7 @@ import {
   PwrAgentFederatedThreadInspectionError,
   type PwrAgentFederatedThreadInspectionHandler,
   type PwrAgentFederatedThreadInspectionResult,
+  type PwrAgentFederatedThreadMutationHandler,
   type PwrAgentThreadInspectionHandler,
 } from "../agent-tools/pwragent-thread-agent-tools";
 import {
@@ -6429,6 +6430,9 @@ export class DesktopBackendRegistry {
   private federatedThreadInspectionHandler:
     | PwrAgentFederatedThreadInspectionHandler
     | undefined;
+  private federatedThreadMutationHandler:
+    | PwrAgentFederatedThreadMutationHandler
+    | undefined;
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
     async (request) => await this.handleThreadOrchestrationRequest(request);
   private federationHandler: PwrAgentFederationHandler | undefined;
@@ -7161,6 +7165,12 @@ export class DesktopBackendRegistry {
     handler: PwrAgentFederatedThreadInspectionHandler | null | undefined,
   ): void {
     this.federatedThreadInspectionHandler = handler ?? undefined;
+  }
+
+  setFederatedThreadMutationHandler(
+    handler: PwrAgentFederatedThreadMutationHandler | null | undefined,
+  ): void {
+    this.federatedThreadMutationHandler = handler ?? undefined;
   }
 
   setThreadPullRequestStatusToolHandler(
@@ -24501,6 +24511,20 @@ export class DesktopBackendRegistry {
           },
         };
       }
+      const instanceId = request.args.instanceId?.trim();
+      const includeRemote = request.args.includeRemote !== false;
+      if (Object.hasOwn(request.args, "instanceId") && !instanceId) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "instanceId must be a non-empty string when provided.",
+        );
+      }
+      if (instanceId && !includeRemote) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "instanceId cannot be used when includeRemote is false.",
+        );
+      }
       const hasQuery = Boolean(request.args.query?.trim());
       if (
         request.args.contentMode !== undefined &&
@@ -24533,6 +24557,24 @@ export class DesktopBackendRegistry {
           : DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
         MAX_THREAD_INSPECTION_SEARCH_LIMIT,
       );
+      if (instanceId) {
+        return await this.mergeFederatedThreadSearchResults({
+          args: request.args,
+          context: request.context,
+          instanceId,
+          includeRemote,
+          limit,
+          localResponse: {
+            ok: true,
+            data: {
+              threads: [],
+              totalCount: 0,
+              limit,
+              truncated: false,
+            },
+          },
+        });
+      }
       const pendingHandoffs = this.getPendingThreadHandoffsForInspection({
         backend,
         query: request.args.query,
@@ -24585,22 +24627,29 @@ export class DesktopBackendRegistry {
         const threads = filtered
           .slice(0, limit)
           .map(toThreadInspectionSearchSummary);
-        return {
-          ok: true,
-          data: {
-            threads,
-            totalCount: filtered.length,
-            limit,
-            truncated: response.truncated === true || filtered.length > limit,
-            ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
-            ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
-            query: response.query,
-            searchedScopes: response.searchedScopes,
-            unavailableScopes: response.unavailableScopes,
-            contentMode: response.contentMode,
-            semanticMode: response.semanticMode,
+        return await this.mergeFederatedThreadSearchResults({
+          args: request.args,
+          context: request.context,
+          instanceId,
+          includeRemote,
+          limit,
+          localResponse: {
+            ok: true,
+            data: {
+              threads,
+              totalCount: filtered.length,
+              limit,
+              truncated: response.truncated === true || filtered.length > limit,
+              ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
+              ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
+              query: response.query,
+              searchedScopes: response.searchedScopes,
+              unavailableScopes: response.unavailableScopes,
+              contentMode: response.contentMode,
+              semanticMode: response.semanticMode,
+            },
           },
-        };
+        });
       }
       const listBackend = backend === "all" ? undefined : backend;
       const activeThreads = await this.listThreads({
@@ -24624,17 +24673,24 @@ export class DesktopBackendRegistry {
         agentOnly: request.args.agentOnly === true,
         query: request.args.query,
       });
-      return {
-        ok: true,
-        data: {
-          threads: filtered.slice(0, limit).map(toThreadInspectionSearchSummary),
-          totalCount: filtered.length,
-          limit,
-          truncated: filtered.length > limit,
-          ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
-          ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
+      return await this.mergeFederatedThreadSearchResults({
+        args: request.args,
+        context: request.context,
+        instanceId,
+        includeRemote,
+        limit,
+        localResponse: {
+          ok: true,
+          data: {
+            threads: filtered.slice(0, limit).map(toThreadInspectionSearchSummary),
+            totalCount: filtered.length,
+            limit,
+            truncated: filtered.length > limit,
+            ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
+            ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
+          },
         },
-      };
+      });
     }
 
     if (request.operation === "get_thread_status") {
@@ -24700,6 +24756,123 @@ export class DesktopBackendRegistry {
       error: {
         code: "unsupported_operation",
         message: "Unsupported PwrAgent thread inspection operation.",
+      },
+    };
+  }
+
+  private async mergeFederatedThreadSearchResults(params: {
+    args: Extract<
+      PwrAgentThreadInspectionRequest,
+      { operation: "search_threads" }
+    >["args"];
+    context: PwrAgentThreadInspectionRequest["context"];
+    instanceId?: string;
+    includeRemote: boolean;
+    limit: number;
+    localResponse: Extract<PwrAgentThreadInspectionResponse, { ok: true }>;
+  }): Promise<PwrAgentThreadInspectionResponse> {
+    if (!params.includeRemote || !this.federationHandler) {
+      return params.localResponse;
+    }
+    const localData = params.localResponse.data;
+    if (!("threads" in localData)) {
+      return params.localResponse;
+    }
+
+    const hasUnsupportedRemoteFilters =
+      params.args.agentOnly === true
+      || Boolean(nonEmptyStringArray(params.args.directoryPaths))
+      || Boolean(nonEmptyStringArray(params.args.models))
+      || params.args.contentMode === "required"
+      || params.args.semanticMode === "required";
+    if (hasUnsupportedRemoteFilters) {
+      if (params.instanceId) {
+        return threadInspectionFailure(
+          "invalid_arguments",
+          "instanceId cannot be combined with local-only Agent, directory, model, required transcript, or required semantic filters.",
+        );
+      }
+      return params.localResponse;
+    }
+
+    const response = await this.federationHandler({
+      operation: "search_federation_threads",
+      context: params.context,
+      args: {
+        query: params.args.query?.trim() ?? "",
+        scope: "remote",
+        ...(params.instanceId ? { instanceId: params.instanceId } : {}),
+        limit: params.limit,
+      },
+    });
+    if (!response.ok) {
+      if (params.instanceId) {
+        return threadInspectionFailure(
+          response.error.code === "turn_start_failed"
+            ? "internal_error"
+            : response.error.code,
+          response.error.message,
+        );
+      }
+      return params.localResponse;
+    }
+    if (!("results" in response.data)) {
+      return params.localResponse;
+    }
+
+    const backend = readThreadInspectionBackend(params.args.backend);
+    const projectKeys = nonEmptyStringArray(params.args.projectKeys);
+    const remoteThreads = response.data.results
+      .filter((entry) => backend === "all" || !backend || entry.backend === backend)
+      .filter(
+        (entry) =>
+          !projectKeys
+          || Boolean(entry.projectKey && projectKeys.includes(entry.projectKey)),
+      )
+      .filter(
+        (entry) =>
+          params.args.updatedAfter === undefined
+          || (entry.updatedAt ?? 0) >= params.args.updatedAfter,
+      )
+      .filter(
+        (entry) =>
+          params.args.updatedBefore === undefined
+          || (entry.updatedAt ?? Number.POSITIVE_INFINITY)
+            <= params.args.updatedBefore,
+      )
+      .map(
+        (entry): ThreadInspectionSummary => ({
+          backend: entry.backend,
+          threadId: entry.threadId,
+          instanceId: entry.instanceId,
+          instanceLabel: entry.instanceLabel,
+          threadLink: entry.threadLink,
+          title: entry.title,
+          updatedAt: entry.updatedAt,
+          projectKey: entry.projectKey,
+          linkedDirectories: [],
+          score: entry.score,
+        }),
+      );
+    const localThreads = params.instanceId ? [] : localData.threads;
+    const threads = [...localThreads, ...remoteThreads]
+      .sort(
+        (left, right) =>
+          (right.score ?? 0) - (left.score ?? 0)
+          || (right.updatedAt ?? right.createdAt ?? 0)
+            - (left.updatedAt ?? left.createdAt ?? 0),
+      );
+    const totalCount = (params.instanceId ? 0 : localData.totalCount)
+      + remoteThreads.length;
+    return {
+      ok: true,
+      data: {
+        ...localData,
+        threads: threads.slice(0, params.limit),
+        totalCount,
+        truncated: localData.truncated || threads.length > params.limit,
+        searchedInstances: response.data.searchedInstances,
+        federationFailures: response.data.failures,
       },
     };
   }
@@ -24859,7 +25032,6 @@ export class DesktopBackendRegistry {
         },
       };
     }
-
     const summary = await this.readThreadInspectionSummaryForMutation({
       backend: args.backend,
       threadId,
@@ -25115,6 +25287,20 @@ export class DesktopBackendRegistry {
         },
       };
     }
+    const instanceId = args.instanceId?.trim();
+    const includeRemote = args.includeRemote !== false;
+    if (Object.hasOwn(args, "instanceId") && !instanceId) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "instanceId must be a non-empty string when provided.",
+      );
+    }
+    if (instanceId && !includeRemote) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "instanceId cannot be used when includeRemote is false.",
+      );
+    }
 
     const dryRun = args.dryRun === true;
 
@@ -25191,7 +25377,47 @@ export class DesktopBackendRegistry {
       };
     }
 
-    if (title !== undefined && !dryRun) {
+    const localSummary = !instanceId
+      ? await this.readThreadInspectionSummaryForMutation({
+          backend: args.backend,
+          threadId,
+        })
+      : undefined;
+    const localOverlay = !instanceId && !localSummary
+      ? await this.overlayStore.getThreadOverlayState({
+          backend: args.backend,
+          threadId,
+        })
+      : undefined;
+    const mutateLocally = Boolean(localSummary || localOverlay);
+    let remoteOwner:
+      | { instanceId: string; instanceLabel: string }
+      | undefined;
+    if (!mutateLocally && includeRemote && this.federatedThreadMutationHandler) {
+      try {
+        remoteOwner = await this.federatedThreadMutationHandler({
+          backend: args.backend,
+          threadId,
+          ...(instanceId ? { instanceId } : {}),
+          ...(title !== undefined ? { title } : {}),
+          ...(modelSettings.value ? { modelSettings: modelSettings.value } : {}),
+          ...(executionMode !== undefined ? { executionMode } : {}),
+          dryRun,
+        });
+      } catch (error) {
+        return federatedThreadInspectionFailure(error);
+      }
+    }
+    if (!mutateLocally && !remoteOwner) {
+      return threadInspectionFailure(
+        "not_found",
+        `Thread ${args.backend}:${threadId} was not found${
+          includeRemote ? " locally or on a connected Federation peer" : " locally"
+        }.`,
+      );
+    }
+
+    if (mutateLocally && title !== undefined && !dryRun) {
       await this.renameThread({
         backend: args.backend,
         threadId,
@@ -25199,7 +25425,7 @@ export class DesktopBackendRegistry {
       });
     }
 
-    if (modelSettings.value && !dryRun) {
+    if (mutateLocally && modelSettings.value && !dryRun) {
       await this.setThreadModelSettings({
         backend: args.backend,
         threadId,
@@ -25207,7 +25433,7 @@ export class DesktopBackendRegistry {
       });
     }
 
-    if (executionMode !== undefined && !dryRun) {
+    if (mutateLocally && executionMode !== undefined && !dryRun) {
       await this.setThreadExecutionMode({
         backend: args.backend,
         threadId,
@@ -25221,6 +25447,7 @@ export class DesktopBackendRegistry {
         mutation: {
           backend: args.backend,
           threadId,
+          ...(remoteOwner ?? {}),
           dryRun,
           changes,
         },
