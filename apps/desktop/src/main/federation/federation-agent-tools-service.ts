@@ -27,7 +27,9 @@ import {
   isRemoteFederationTarget,
 } from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
+import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
 import { FederatedSearchService } from "./federated-search-service";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 import { collectFederationHostInfo } from "./federation-host-info";
@@ -38,6 +40,7 @@ import {
 } from "./federation-runtime";
 
 const DEFAULT_INSTANCE_PAGE_SIZE = 25;
+const log = getMainLogger("pwragent:federation-agent-tools");
 
 /**
  * Continuation tokens deliberately live for about a minute: they exist so an
@@ -77,6 +80,7 @@ export function createFederationAgentToolsHandler(
   options: {
     runtime?: () => DesktopFederationRuntime;
     collectHostInfo?: () => Promise<FederationHostInfo>;
+    targetStore?: RemoteThreadTargetStore;
   } = {},
 ): PwrAgentFederationHandler {
   const runtime = options.runtime ?? getDesktopFederationRuntime;
@@ -96,12 +100,18 @@ export function createFederationAgentToolsHandler(
         return await listInstanceProjects(runtime(), request.args, collectHostInfo);
       }
       if (request.operation === "create_instance_thread") {
-        return await createInstanceThread(runtime(), request.args, collectHostInfo);
+        return await createInstanceThread(
+          runtime(),
+          request.args,
+          collectHostInfo,
+          options.targetStore,
+        );
       }
       return await searchFederationThreads(
         runtime(),
         request.args,
         collectHostInfo,
+        options.targetStore,
       );
     } catch (error) {
       return failure(
@@ -268,6 +278,7 @@ async function createInstanceThread(
   runtime: DesktopFederationRuntime,
   args: CreateInstanceThreadToolArgs,
   collectHostInfo: () => Promise<FederationHostInfo>,
+  targetStore: RemoteThreadTargetStore | undefined,
 ): Promise<PwrAgentFederationResponse> {
   const resolved = await resolveInstance(runtime, args.instanceId, collectHostInfo);
   if (!resolved.ok) {
@@ -291,6 +302,19 @@ async function createInstanceThread(
     launchpad: draft,
     ...(args.input ? { input: [{ type: "text", text: args.input }] } : {}),
   });
+  if (!instance.isLocal) {
+    await rememberTarget(targetStore, {
+      instanceId: instance.instanceId,
+      instanceLabel: instance.label,
+      backend: response.backend,
+      threadId: response.threadId,
+    });
+  }
+  const threadLinkRef = {
+    threadId: response.threadId,
+    backend: response.backend,
+    ...(!instance.isLocal ? { instanceId: instance.instanceId } : {}),
+  };
   const result: CreateInstanceThreadResult = {
     instanceId: instance.instanceId,
     instanceLabel: instance.label,
@@ -300,19 +324,11 @@ async function createInstanceThread(
     executionMode: response.executionMode,
     workMode: response.workMode,
     turnId: response.turnId,
-    ...(instance.isLocal
-      ? {
-          threadUrl: buildThreadUrl({
-            threadId: response.threadId,
-            backend: response.backend,
-          }),
-          threadLink: buildThreadMarkdownLink({
-            threadId: response.threadId,
-            backend: response.backend,
-            title: directory.label,
-          }),
-        }
-      : {}),
+    threadUrl: buildThreadUrl(threadLinkRef),
+    threadLink: buildThreadMarkdownLink({
+      ...threadLinkRef,
+      title: directory.label,
+    }),
     message: instance.isLocal
       ? `Created thread in ${directory.label}.`
       : `Created thread in ${directory.label} on ${instance.label}.`,
@@ -326,6 +342,7 @@ async function searchFederationThreads(
   runtime: DesktopFederationRuntime,
   args: SearchFederationThreadsToolArgs,
   collectHostInfo: () => Promise<FederationHostInfo>,
+  targetStore: RemoteThreadTargetStore | undefined,
 ): Promise<PwrAgentFederationResponse> {
   const scope = args.scope ?? "all";
   const health = await runtime.health();
@@ -379,17 +396,26 @@ async function searchFederationThreads(
         projectKey: entry.thread.projectKey,
         gitBranch: entry.thread.gitBranch,
         score: entry.score,
-        ...(isLocal
-          ? {
-              threadLink: buildThreadMarkdownLink({
-                threadId: entry.thread.id,
-                backend: entry.thread.source,
-                title: entry.thread.title,
-              }),
-            }
-          : {}),
+        threadLink: buildThreadMarkdownLink({
+          threadId: entry.thread.id,
+          backend: entry.thread.source,
+          ...(isRemoteFederationTarget(target)
+            ? { instanceId: target.instanceId }
+            : {}),
+          title: entry.thread.title,
+        }),
       };
     },
+  );
+  await Promise.all(
+    results
+      .filter((entry) => !entry.isLocal)
+      .map(async (entry) => await rememberTarget(targetStore, {
+        instanceId: entry.instanceId,
+        instanceLabel: entry.instanceLabel,
+        backend: entry.backend,
+        threadId: entry.threadId,
+      })),
   );
   const localResultCount = results.filter((entry) => entry.isLocal).length;
   const result: SearchFederationThreadsResult = {
@@ -572,4 +598,23 @@ function classifyFederationToolError(error: unknown): PwrAgentFederationErrorCod
     return "peer_unavailable";
   }
   return "internal_error";
+}
+
+async function rememberTarget(
+  targetStore: RemoteThreadTargetStore | undefined,
+  target: Parameters<RemoteThreadTargetStore["rememberRemoteThreadTarget"]>[0],
+): Promise<void> {
+  if (!targetStore) {
+    return;
+  }
+  try {
+    await targetStore.rememberRemoteThreadTarget(target);
+  } catch (error) {
+    log.warn("failed to remember remote thread target", {
+      backend: target.backend,
+      error: error instanceof Error ? error.message : String(error),
+      instanceId: target.instanceId,
+      threadId: target.threadId,
+    });
+  }
 }

@@ -65,6 +65,10 @@ import {
   resolveOpenAiPricingServiceTier,
 } from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
+import type {
+  RemoteThreadTarget,
+  RemoteThreadTargetStore,
+} from "./remote-thread-target-store.js";
 
 export type DirectoryGitStatusCacheEntry = {
   directoryKey: string;
@@ -115,6 +119,28 @@ export type PrAutoDispatchBudgetReservationResult =
       budget: PrAutoDispatchBudgetStatus;
       status: "empty" | "paused" | "stale";
     };
+
+type RemoteThreadTargetRow = {
+  instance_id: string;
+  instance_label: string;
+  backend: RemoteThreadTarget["backend"];
+  thread_id: string;
+  first_seen_at: number;
+  last_seen_at: number;
+};
+
+function remoteThreadTargetFromRow(
+  row: RemoteThreadTargetRow,
+): RemoteThreadTarget {
+  return {
+    instanceId: row.instance_id,
+    instanceLabel: row.instance_label,
+    backend: row.backend,
+    threadId: row.thread_id,
+    firstSeenAt: row.first_seen_at,
+    lastSeenAt: row.last_seen_at,
+  };
+}
 
 export type PrAutoDispatchBudgetCompletionResult = {
   budget: PrAutoDispatchBudgetStatus;
@@ -494,7 +520,7 @@ function stripFederationStamp(
   return rest;
 }
 
-export class SqliteOverlayStore {
+export class SqliteOverlayStore implements RemoteThreadTargetStore {
   constructor(private readonly stateDb: StateDb) {}
 
   async reconcileNavigationSnapshot(params: {
@@ -1835,6 +1861,73 @@ export class SqliteOverlayStore {
       ...(params.summary ? { summary: stripFederationStamp(params.summary) } : {}),
       ...(params.pinnedVia ? { pinnedVia: params.pinnedVia } : {}),
     };
+  }
+
+  async rememberRemoteThreadTarget(params: {
+    instanceId: RemoteThreadTarget["instanceId"];
+    instanceLabel: string;
+    backend: RemoteThreadTarget["backend"];
+    threadId: string;
+    observedAt?: number;
+  }): Promise<RemoteThreadTarget> {
+    const instanceId = params.instanceId.trim();
+    const instanceLabel = params.instanceLabel.trim() || instanceId;
+    const threadId = params.threadId.trim();
+    if (!instanceId || !threadId) {
+      throw new Error("Remote thread targets require instance and thread ids.");
+    }
+    const observedAt = params.observedAt ?? Date.now();
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO remote_thread_targets(
+           instance_id,
+           backend,
+           thread_id,
+           instance_label,
+           first_seen_at,
+           last_seen_at
+         ) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(instance_id, backend, thread_id) DO UPDATE SET
+           instance_label = excluded.instance_label,
+           last_seen_at = MAX(remote_thread_targets.last_seen_at, excluded.last_seen_at)`,
+      )
+      .run(
+        instanceId,
+        params.backend,
+        threadId,
+        instanceLabel,
+        observedAt,
+        observedAt,
+      );
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT instance_id, backend, thread_id, instance_label,
+                first_seen_at, last_seen_at
+         FROM remote_thread_targets
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .get(instanceId, params.backend, threadId) as RemoteThreadTargetRow;
+    return remoteThreadTargetFromRow(row);
+  }
+
+  async listRemoteThreadTargets(params: {
+    backend: RemoteThreadTarget["backend"];
+    threadId: string;
+  }): Promise<RemoteThreadTarget[]> {
+    const threadId = params.threadId.trim();
+    if (!threadId) {
+      return [];
+    }
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT instance_id, backend, thread_id, instance_label,
+                first_seen_at, last_seen_at
+         FROM remote_thread_targets
+         WHERE backend = ? AND thread_id = ?
+         ORDER BY last_seen_at DESC, instance_id ASC`,
+      )
+      .all(params.backend, threadId) as RemoteThreadTargetRow[];
+    return rows.map(remoteThreadTargetFromRow);
   }
 
   /**

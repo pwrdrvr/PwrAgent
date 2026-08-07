@@ -237,8 +237,14 @@ for. Operators can steer routing and thread-startup defaults with
 [`~/.pwragent/AGENTS.md`](agent-operator-preferences.md).
 
 The general `send_message_to_thread` tool also routes transparently across
-federation. It tries the local backend first, then resolves an exact thread ID
-across connected peers and starts the turn on the owning instance. Agents do
-not need to discover or supply an instance ID. Exact UUID queries passed to
-`search_federation_threads` use the same ownership lookup instead of relying
-on fuzzy thread-list filtering.
+federation. Remote create and search results carry cross-instance links and an
+`instanceId`; newer tool definitions pass that owner directly. PwrAgent also
+stores the `(instanceId, backend, threadId)` routing metadata in its own profile
+database, so older active threads that call the original tool shape can still
+resolve a previously created or discovered remote thread after a restart. A
+known owner is checked for connectivity before dispatch, producing a structured
+`peer_unavailable` result instead of trying the UUID against the local backend.
+When no durable owner is known, compatibility fallback still resolves the exact
+thread ID across connected peers. Exact UUID queries passed to
+`search_federation_threads` use the same ownership lookup instead of relying on
+fuzzy thread-list filtering.

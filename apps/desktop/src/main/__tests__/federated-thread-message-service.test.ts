@@ -110,6 +110,116 @@ describe("federated thread message service", () => {
     });
   });
 
+  it("routes directly through a remembered owner and refreshes the mapping", async () => {
+    const { backends, runtime } = buildRuntime({
+      peers: [
+        { instanceId: "pwr_other", label: "Other Mac" },
+        {
+          instanceId: "pwr_harold",
+          label: "Harold-Mac-Mini-M4",
+          ownsThread: true,
+        },
+      ],
+    });
+    const rememberRemoteThreadTarget = vi.fn(async (target) => ({
+      ...target,
+      firstSeenAt: 1_000,
+      lastSeenAt: 1_000,
+    }));
+    const handler = createFederatedThreadMessageHandler({
+      runtime: () => runtime,
+      targetStore: {
+        listRemoteThreadTargets: vi.fn(async () => [{
+          instanceId: "pwr_harold",
+          instanceLabel: "Harold-Mac-Mini-M4",
+          backend: "codex" as const,
+          threadId: request.threadId,
+          firstSeenAt: 500,
+          lastSeenAt: 500,
+        }]),
+        rememberRemoteThreadTarget,
+      },
+    });
+
+    await expect(handler(request)).resolves.toMatchObject({
+      instanceId: "pwr_harold",
+      turnId: "remote-turn-1",
+    });
+    expect(backends.get("pwr_other")?.resolveThread).not.toHaveBeenCalled();
+    expect(rememberRemoteThreadTarget).toHaveBeenCalledWith({
+      instanceId: "pwr_harold",
+      instanceLabel: "Harold-Mac-Mini-M4",
+      backend: "codex",
+      threadId: request.threadId,
+    });
+  });
+
+  it("reports a remembered disconnected owner without probing other peers", async () => {
+    const runtime = {
+      connectedPeerTargets: () => [],
+      health: async () => ({
+        enabled: true,
+        role: "gateway",
+        status: "listening",
+        instanceId: "pwr_local",
+        peers: [{
+          id: "pwr_harold",
+          label: "Harold-Mac-Mini-M4",
+          role: "client",
+          status: "disconnected",
+          capabilities: [],
+        }],
+      }),
+    } as unknown as DesktopFederationRuntime;
+    const handler = createFederatedThreadMessageHandler({
+      runtime: () => runtime,
+      targetStore: {
+        listRemoteThreadTargets: vi.fn(async () => [{
+          instanceId: "pwr_harold",
+          instanceLabel: "Harold-Mac-Mini-M4",
+          backend: "codex" as const,
+          threadId: request.threadId,
+          firstSeenAt: 500,
+          lastSeenAt: 500,
+        }]),
+        rememberRemoteThreadTarget: vi.fn(),
+      },
+    });
+
+    await expect(handler(request)).rejects.toMatchObject({
+      code: "peer_unavailable",
+      message: expect.stringContaining("is disconnected; the message was not sent"),
+    });
+  });
+
+  it("uses an explicit instanceId without reading remembered targets", async () => {
+    const { backends, runtime } = buildRuntime({
+      peers: [
+        { instanceId: "pwr_other", label: "Other Mac" },
+        {
+          instanceId: "pwr_harold",
+          label: "Harold-Mac-Mini-M4",
+          ownsThread: true,
+        },
+      ],
+    });
+    const listRemoteThreadTargets = vi.fn(async () => []);
+    const handler = createFederatedThreadMessageHandler({
+      runtime: () => runtime,
+      targetStore: {
+        listRemoteThreadTargets,
+        rememberRemoteThreadTarget: vi.fn(),
+      },
+    });
+
+    await expect(handler({
+      ...request,
+      instanceId: "pwr_harold",
+    })).resolves.toMatchObject({ instanceId: "pwr_harold" });
+    expect(listRemoteThreadTargets).not.toHaveBeenCalled();
+    expect(backends.get("pwr_other")?.resolveThread).not.toHaveBeenCalled();
+  });
+
   it("returns undefined when no connected peer owns the thread", async () => {
     const { runtime } = buildRuntime({
       peers: [{ instanceId: "pwr_other", label: "Other Mac" }],

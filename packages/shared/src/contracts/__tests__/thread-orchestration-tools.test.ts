@@ -32,6 +32,7 @@ describe("thread orchestration tool contracts", () => {
     expect(PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES).toEqual([
       "invalid_arguments",
       "not_found",
+      "peer_unavailable",
       "forbidden",
       "unsupported_backend",
       "unsupported_workspace",

@@ -86,6 +86,7 @@ import type {
   AgentToolMcpRegistration,
   AgentToolMcpServerLike,
 } from "../agent-tools/agent-tool-mcp-server";
+import { PwrAgentFederatedThreadMessageError } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 
 const jeepStickerPageFixture = fileURLToPath(
   new URL("./fixtures/pdf/jeep-sticker-page-size.pdf", import.meta.url),
@@ -26683,6 +26684,7 @@ script = "printf setup"
       structuredContent: {
         backend: "codex",
         threadId: "019fd821-1450-7952-85ca-3bb8e5d150da",
+        instanceId: "pwr_harold",
         turnId: "remote-turn-1",
         threadLink:
           "[Thread list stays disabled after reconnect](pwragent://thread/019fd821-1450-7952-85ca-3bb8e5d150da?backend=codex&instanceId=pwr_harold)",
@@ -26712,6 +26714,76 @@ script = "printf setup"
       approvalPolicy: undefined,
       sandbox: undefined,
     });
+
+    await registry.close();
+  });
+
+  it("returns peer_unavailable for an addressed remote owner without a local turn attempt", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error(
+          "grok app server unavailable: XAI_API_KEY is not set",
+        ),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    registry.setFederatedThreadMessageHandler(async () => {
+      throw new PwrAgentFederatedThreadMessageError(
+        "peer_unavailable",
+        "Federation instance Studio Mac, the known owner of thread remote-thread, is disconnected; the message was not sent.",
+      );
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "send_message_to_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "remote-thread",
+          instanceId: "pwr_studio",
+          prompt: "Continue when available.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toEqual({
+      success: false,
+      contentItems: [{
+        type: "inputText",
+        text: JSON.stringify(
+          {
+            code: "peer_unavailable",
+            message:
+              "Federation instance Studio Mac, the known owner of thread remote-thread, is disconnected; the message was not sent.",
+          },
+          null,
+          2,
+        ),
+      }],
+    });
+    expect(codexClient.startTurnCallCount).toBe(0);
 
     await registry.close();
   });

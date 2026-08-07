@@ -52,6 +52,7 @@ export type PwrAgentThreadOrchestrationHandler = (
 export type PwrAgentFederatedThreadMessageRequest = {
   backend: SendMessageToThreadToolArgs["backend"];
   threadId: SendMessageToThreadToolArgs["threadId"];
+  instanceId?: SendMessageToThreadToolArgs["instanceId"];
   input: AppServerTurnInputItem[];
   messageOrigin: AppServerThreadMessageOrigin;
   model?: string;
@@ -75,6 +76,16 @@ export type PwrAgentFederatedThreadMessageResult = {
 export type PwrAgentFederatedThreadMessageHandler = (
   request: PwrAgentFederatedThreadMessageRequest,
 ) => Promise<PwrAgentFederatedThreadMessageResult | undefined>;
+
+export class PwrAgentFederatedThreadMessageError extends Error {
+  constructor(
+    readonly code: "peer_unavailable",
+    message: string,
+  ) {
+    super(message);
+    this.name = "PwrAgentFederatedThreadMessageError";
+  }
+}
 
 export function buildPwrAgentThreadOrchestrationToolRouter(
   handler: PwrAgentThreadOrchestrationHandler | undefined,
@@ -143,7 +154,7 @@ function descriptionForOperation(
     case "move_thread_workspace":
       return "Move the current PwrAgent thread runtime workspace after the invoking turn reaches a terminal boundary. Use this when the user asks to continue this same thread from an isolated worktree instead of creating a child handoff thread. The operation is path-keyed: pass sourcePath when the thread has multiple linked directories or when the intended workspace is not obvious. The tool returns a pending workspaceMoveId and stop-and-wait guidance; after the current turn ends, PwrAgent performs the move, updates future-turn cwd metadata, rebinds an ACP session when required, and starts a same-thread continuation with the result. Do not keep editing after a successful call in the invoking turn; wait for the continuation or inspect get_thread_status pendingWorkspaceMoves.";
     case "send_message_to_thread":
-      return "Send a follow-up prompt to another existing PwrAgent thread. Use search_threads or read_thread first when the target threadId is unknown. Federation ownership is resolved automatically from the threadId, so do not ask the user for an instance id. Do not use this for the current thread; reply normally instead. The result includes threadLink, a ready-made markdown link to the target thread. When you mention that thread to the user, include threadLink verbatim instead of the raw threadId so it renders as a clickable chip.";
+      return "Send a follow-up prompt to another existing PwrAgent thread. Use search_threads or read_thread first when the target threadId is unknown. Pass instanceId when a remote create/search result or thread link supplied it; omit it for local threads and older results, which PwrAgent resolves through durable ownership metadata and connected-peer discovery. Do not use this for the current thread; reply normally instead. The result includes threadLink, a ready-made markdown link to the target thread. When you mention that thread to the user, include threadLink verbatim instead of the raw threadId so it renders as a clickable chip.";
     case "start_review":
       return "Schedule a code review of the invoking PwrAgent thread after the current turn completes successfully. Use this only when the operator explicitly asks for a review. Choose one structured target: uncommittedChanges, baseBranch, commit, or custom. The tool returns a pendingReviewId; after a successful call, stop work and let the current turn finish so PwrAgent can start the review. Do not poll or call the tool again for the same request.";
   }
@@ -336,6 +347,11 @@ function inputSchemaForOperation(
           threadId: {
             type: "string",
             description: "Existing target thread id that should receive the prompt.",
+          },
+          instanceId: {
+            type: "string",
+            description:
+              "Owning remote instance id from create_instance_thread, search_federation_threads, or a cross-instance thread link. Omit for local threads or when unknown.",
           },
           prompt: {
             type: "string",
@@ -608,13 +624,18 @@ function normalizeSendMessageToThreadArgs(
 ): SendMessageToThreadToolArgs | undefined {
   const backend = readTrimmedString(args.backend);
   const threadId = readTrimmedString(args.threadId);
+  const instanceId = readTrimmedString(args.instanceId);
   const prompt = readTrimmedString(args.prompt);
   if (!backend || !threadId || !prompt) {
+    return undefined;
+  }
+  if (Object.hasOwn(args, "instanceId") && !instanceId) {
     return undefined;
   }
   return {
     backend: backend as SendMessageToThreadToolArgs["backend"],
     threadId,
+    ...(instanceId ? { instanceId } : {}),
     prompt,
     ...(readTrimmedString(args.model)
       ? { model: readTrimmedString(args.model) }

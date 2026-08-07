@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 45;
+export const CURRENT_STATE_DB_USER_VERSION = 46;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -893,6 +893,20 @@ CREATE INDEX IF NOT EXISTS idx_remote_thread_pins_instance
   ON remote_thread_pins(instance_id, added_at DESC);
 `;
 
+const REMOTE_THREAD_TARGET_SCHEMA = `
+CREATE TABLE IF NOT EXISTS remote_thread_targets (
+  instance_id   TEXT NOT NULL,
+  backend       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  instance_label TEXT NOT NULL,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at  INTEGER NOT NULL,
+  PRIMARY KEY (instance_id, backend, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_remote_thread_targets_thread
+  ON remote_thread_targets(backend, thread_id, last_seen_at DESC);
+`;
+
 /**
  * `revoked_at` tombstones a pin whose owning instance was revoked or whose
  * gateway pairing was forgotten. The row stops rendering but survives, so
@@ -1312,6 +1326,34 @@ export class StateDb {
         // Revoking a peer used to hard-delete its pins. Tombstone them
         // instead so a re-enrollment can restore the operator's list.
         ensureRemoteThreadPinRevokedAtColumn(db);
+        db.pragma("user_version = 45");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 46) {
+      db.transaction(() => {
+        // Routing knowledge is broader than the curated pin list: agent tools
+        // also create and discover remote threads that the viewer never pins.
+        db.exec(REMOTE_THREAD_TARGET_SCHEMA);
+        db.exec(`
+INSERT OR IGNORE INTO remote_thread_targets(
+  instance_id,
+  backend,
+  thread_id,
+  instance_label,
+  first_seen_at,
+  last_seen_at
+)
+SELECT
+  remote_thread_pins.instance_id,
+  remote_thread_pins.backend,
+  remote_thread_pins.thread_id,
+  COALESCE(federation_peers.label, remote_thread_pins.instance_id),
+  remote_thread_pins.added_at,
+  remote_thread_pins.added_at
+FROM remote_thread_pins
+LEFT JOIN federation_peers
+  ON federation_peers.peer_id = remote_thread_pins.instance_id
+`);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1500,6 +1542,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(FEDERATION_SCHEMA);
     db.exec(REMOTE_THREAD_PIN_SCHEMA);
     ensureRemoteThreadPinRevokedAtColumn(db);
+    db.exec(REMOTE_THREAD_TARGET_SCHEMA);
     db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");

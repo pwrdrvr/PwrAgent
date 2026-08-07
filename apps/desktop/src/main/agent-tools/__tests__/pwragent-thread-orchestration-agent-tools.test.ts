@@ -100,9 +100,13 @@ describe("pwragent thread orchestration agent tools", () => {
           expect.objectContaining({
             type: "function",
             name: "send_message_to_thread",
+            description: expect.stringContaining("instanceId"),
             deferLoading: false,
             inputSchema: expect.objectContaining({
               required: ["backend", "threadId", "prompt"],
+              properties: expect.objectContaining({
+                instanceId: expect.objectContaining({ type: "string" }),
+              }),
             }),
           }),
           expect.objectContaining({
@@ -512,6 +516,7 @@ describe("pwragent thread orchestration agent tools", () => {
         arguments: {
           backend: "codex",
           threadId: " target-thread ",
+          instanceId: " pwr_studio ",
           prompt: " Check CI ",
           model: " gpt-5.5 ",
           fastMode: true,
@@ -530,6 +535,7 @@ describe("pwragent thread orchestration agent tools", () => {
       args: {
         backend: "codex",
         threadId: "target-thread",
+        instanceId: "pwr_studio",
         prompt: "Check CI",
         model: "gpt-5.5",
         fastMode: true,
