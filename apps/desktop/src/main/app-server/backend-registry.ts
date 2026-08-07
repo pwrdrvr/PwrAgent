@@ -6916,10 +6916,8 @@ export class DesktopBackendRegistry {
     this.threadTurnQueue = new ThreadTurnQueue({
       startTurn: async (entry) => await this.startTurnNow(entry),
       isThreadActive: ({ backend, threadId }) =>
-        backend === "codex"
-          ? this.threadHasActiveTurn(threadId)
-            || this.threadHasBlockingWorkspaceMove({ backend, threadId })
-          : false,
+        this.threadHasActiveTurn(threadId, backend)
+        || this.threadHasBlockingWorkspaceMove({ backend, threadId }),
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
     this.taskMonitorWatchdogTimer = setInterval(() => {
@@ -11368,9 +11366,12 @@ export class DesktopBackendRegistry {
     this.activeCodexTurnModes.delete(
       buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
     );
-    if (params.backend === "codex") {
-      this.activeTurnKeys.delete(
-        buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
+    this.activeTurnKeys.delete(
+      buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
+    );
+    if (params.backend === "grok") {
+      this.activeTurnKeys.add(
+        buildActiveTurnKey(params.backend, result.threadId, result.turnId),
       );
     }
     if (
