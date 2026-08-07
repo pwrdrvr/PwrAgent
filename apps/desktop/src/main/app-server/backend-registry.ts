@@ -9541,6 +9541,34 @@ export class DesktopBackendRegistry {
     );
   }
 
+  async listWorktreeUnpublishedCommits(
+    worktreePath: string,
+    options?: {
+      acceptedPushedCommitShas?: string[];
+      maxCommits?: number;
+      maxFilesPerCommit?: number;
+    },
+  ) {
+    return await this.gitWorkingStateService.listUnpublishedCommits(
+      worktreePath,
+      options,
+    );
+  }
+
+  async getWorktreeUnpublishedCommitDiff(
+    worktreePath: string,
+    commitSha: string,
+    filePath: string,
+    options?: { acceptedPushedCommitShas?: string[]; maxBytes?: number },
+  ) {
+    return await this.gitWorkingStateService.getUnpublishedCommitDiff(
+      worktreePath,
+      commitSha,
+      filePath,
+      options,
+    );
+  }
+
   async readThread(
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {

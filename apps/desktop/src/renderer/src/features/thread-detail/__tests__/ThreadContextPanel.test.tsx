@@ -3029,7 +3029,7 @@ describe("ThreadContextPanel", () => {
     renderPanel({ activeTab: "edits", pinned: true });
 
     expect(
-      screen.getByText(/No uncommitted file edits yet/),
+      screen.getByText(/No uncommitted file edits or unpublished commits/),
     ).toBeInTheDocument();
   });
 

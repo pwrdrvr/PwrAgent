@@ -55,6 +55,82 @@ function renderEditsPanel(groups: EditedFileGroup[]) {
 }
 
 describe("EditsPanel", () => {
+  it("shows unpublished commits and fetches a committed file diff on expansion", async () => {
+    const commitSha = "b".repeat(40);
+    const listWorktreeUnpublishedCommits = vi.fn(async () => ({
+      commits: [
+        {
+          sha: commitSha,
+          shortSha: "bbbbbbb",
+          subject: "Preserve remote callback evidence",
+          committedAt: 1_718_000_000_000,
+          files: [
+            {
+              path: "/repo/src/config.ts",
+              repoPath: "src/config.ts",
+              additions: 2,
+              removals: 1,
+            },
+          ],
+          totalFiles: 1,
+          filesTruncated: false,
+          additions: 2,
+          removals: 1,
+        },
+      ],
+      totalCommits: 1,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    }));
+    const getWorktreeUnpublishedCommitDiff = vi.fn(async () => ({
+      detail: {
+        id: "commit-file",
+        kind: "write" as const,
+        label: "config.ts",
+        path: "/repo/src/config.ts",
+        fileDiff: {
+          kind: "update" as const,
+          diff: "@@ -1 +1,2 @@\n-old\n+new\n+line\n",
+          additions: 2,
+          removals: 1,
+        },
+      },
+    }));
+
+    render(
+      <EditsPanel
+        groups={[]}
+        dock="sidebar"
+        onDockChange={vi.fn()}
+        worktreeRoot="/repo"
+        desktopApi={{
+          listWorktreeUnpublishedCommits,
+          getWorktreeUnpublishedCommitDiff,
+        }}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: /Unpublished 1 commit/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Preserve remote callback evidence"))
+      .toBeInTheDocument();
+    expect(screen.getByText("bbbbbbb")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /config\.ts/i }));
+
+    await waitFor(() => {
+      expect(getWorktreeUnpublishedCommitDiff).toHaveBeenCalledWith({
+        worktreePath: "/repo",
+        commitSha,
+        path: "/repo/src/config.ts",
+        maxBytes: 200_000,
+      });
+    });
+    expect(await screen.findByText("new")).toBeInTheDocument();
+  });
+
   it("keeps the group header for a single edit history in the sidebar", () => {
     render(renderEditsPanel([editedGroup()]));
 

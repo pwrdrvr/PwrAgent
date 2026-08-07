@@ -5,6 +5,8 @@ import type {
   EditGroupCommitState,
   WorktreeOtherChangeEntry,
   WorktreeOtherChangeStatus,
+  WorktreeUnpublishedCommit,
+  WorktreeUnpublishedCommitFile,
 } from "@pwragent/shared";
 import { ArrowUpIcon, EditorIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -39,13 +41,18 @@ type EditsPanelProps = {
   onDockChange: (dock: EditedFilesDock) => void;
   desktopApi?: Pick<
     DesktopApi,
-    "listWorktreeOtherChanges" | "getWorktreeOtherChangeDiff"
+    | "listWorktreeOtherChanges"
+    | "getWorktreeOtherChangeDiff"
+    | "listWorktreeUnpublishedCommits"
+    | "getWorktreeUnpublishedCommitDiff"
   >;
   workingStateRefreshKey?: string;
 };
 
 const OTHER_CHANGES_MAX_FILES = 50;
 const OTHER_CHANGE_DIFF_MAX_BYTES = 200_000;
+const UNPUBLISHED_COMMITS_MAX = 20;
+const UNPUBLISHED_COMMIT_FILES_MAX = 50;
 
 function isAbsolutePathLike(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
@@ -157,6 +164,66 @@ function useOtherWorktreeChanges(params: {
     editedPathSignature,
     sortedEditedPaths,
     params.refreshKey,
+  ]);
+
+  return state;
+}
+
+function useUnpublishedCommits(params: {
+  desktopApi?: Pick<DesktopApi, "listWorktreeUnpublishedCommits">;
+  worktreeRoot?: string;
+  refreshKey?: string;
+}) {
+  const [state, setState] = useState<{
+    commits: WorktreeUnpublishedCommit[];
+    totalCommits: number;
+    truncated: boolean;
+    loading: boolean;
+  }>({ commits: [], totalCommits: 0, truncated: false, loading: false });
+
+  useEffect(() => {
+    const listCommits = params.desktopApi?.listWorktreeUnpublishedCommits;
+    const worktreePath = params.worktreeRoot?.trim();
+    if (!listCommits || !worktreePath) {
+      setState({ commits: [], totalCommits: 0, truncated: false, loading: false });
+      return;
+    }
+
+    let cancelled = false;
+    setState({ commits: [], totalCommits: 0, truncated: false, loading: true });
+    void listCommits({
+      worktreePath,
+      maxCommits: UNPUBLISHED_COMMITS_MAX,
+      maxFilesPerCommit: UNPUBLISHED_COMMIT_FILES_MAX,
+    })
+      .then((response) => {
+        if (!cancelled) {
+          setState({
+            commits: response.commits,
+            totalCommits: response.totalCommits,
+            truncated: response.truncated,
+            loading: false,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setState({
+            commits: [],
+            totalCommits: 0,
+            truncated: false,
+            loading: false,
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    params.desktopApi?.listWorktreeUnpublishedCommits,
+    params.refreshKey,
+    params.worktreeRoot,
   ]);
 
   return state;
@@ -324,10 +391,10 @@ function FileSizeStat(props: { bytes: number }) {
 }
 
 /**
- * Context-rail Edits tab: the accumulated uncommitted file edits for
- * the open thread, grouped per turn (newest first). Shows the same
- * data as the LiveWorkRail's Edited Files section; the dock toggle
- * controls whether that above-composer copy renders at all.
+ * Context-rail Edits tab: unpublished commits plus the accumulated
+ * uncommitted file edits for the open thread, grouped per turn (newest
+ * first). The turn groups mirror the LiveWorkRail's Edited Files section;
+ * the dock toggle controls whether that above-composer copy renders at all.
  *
  * The panel is a flex column with a FIXED header (title + view toggle +
  * dock toggle) and an internally scrolling body, so the chrome never
@@ -362,7 +429,13 @@ export function EditsPanel(props: EditsPanelProps) {
     refreshKey: props.workingStateRefreshKey,
     worktreeRoot: props.worktreeRoot,
   });
+  const unpublishedCommits = useUnpublishedCommits({
+    desktopApi: props.desktopApi,
+    worktreeRoot: props.worktreeRoot,
+    refreshKey: props.workingStateRefreshKey,
+  });
   const hasOtherChanges = otherChanges.changes.length > 0;
+  const hasUnpublishedCommits = unpublishedCommits.commits.length > 0;
 
   return (
     <section className="context-panel__section context-panel__section--edits">
@@ -392,6 +465,16 @@ export function EditsPanel(props: EditsPanelProps) {
         {dockTooltip.tooltipNode}
       </div>
       <div className="edits-panel__body">
+        {hasUnpublishedCommits ? (
+          <UnpublishedCommitsSection
+            commits={unpublishedCommits.commits}
+            totalCommits={unpublishedCommits.totalCommits}
+            truncated={unpublishedCommits.truncated}
+            worktreeRoot={props.worktreeRoot}
+            desktopApi={props.desktopApi}
+            onOpenFile={props.onOpenFile}
+          />
+        ) : null}
         {hasOtherChanges ? (
           <OtherChangesSection
             changes={otherChanges.changes}
@@ -415,15 +498,277 @@ export function EditsPanel(props: EditsPanelProps) {
             showSingleGroupHeader
           />
         ) : (
-          !hasOtherChanges && !otherChanges.loading ? (
+          !hasOtherChanges
+          && !hasUnpublishedCommits
+          && !otherChanges.loading
+          && !unpublishedCommits.loading ? (
             <p className="context-empty">
-              No uncommitted file edits yet. Edits from agent turns accumulate
-              here until they are committed.
+              No uncommitted file edits or unpublished commits.
             </p>
           ) : null
         )}
       </div>
     </section>
+  );
+}
+
+function unpublishedCommitsSummary(totalCommits: number): string {
+  return `Unpublished ${totalCommits.toLocaleString()} ${
+    totalCommits === 1 ? "commit" : "commits"
+  }`;
+}
+
+function UnpublishedCommitsSection(props: {
+  commits: WorktreeUnpublishedCommit[];
+  totalCommits: number;
+  truncated: boolean;
+  worktreeRoot?: string;
+  desktopApi?: Pick<DesktopApi, "getWorktreeUnpublishedCommitDiff">;
+  onOpenFile?: (absolutePath: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const bodyId = useId();
+  const hiddenCount = Math.max(0, props.totalCommits - props.commits.length);
+  const totals = useMemo(
+    () =>
+      props.commits.reduce(
+        (sum, commit) => ({
+          additions: sum.additions + commit.additions,
+          removals: sum.removals + commit.removals,
+        }),
+        { additions: 0, removals: 0 },
+      ),
+    [props.commits],
+  );
+
+  return (
+    <section className="edited-file-groups__group unpublished-commits">
+      <div className="edited-file-groups__group-header unpublished-commits__header">
+        <button
+          type="button"
+          className="edited-file-groups__group-toggle unpublished-commits__toggle"
+          aria-expanded={expanded}
+          aria-controls={bodyId}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <span className="live-work-rail__chevron" aria-hidden="true" />
+          <span className="edited-file-groups__group-summary">
+            {unpublishedCommitsSummary(props.totalCommits)}
+          </span>
+        </button>
+        <DiffStat
+          additions={totals.additions}
+          removals={totals.removals}
+          className="diff-stat--chip"
+        />
+      </div>
+      <div id={bodyId} hidden={!expanded}>
+        {expanded ? (
+          <div className="unpublished-commits__list">
+            {props.commits.map((commit, index) => (
+              <UnpublishedCommitSection
+                key={commit.sha}
+                commit={commit}
+                initiallyExpanded={index === 0}
+                worktreeRoot={props.worktreeRoot}
+                desktopApi={props.desktopApi}
+                onOpenFile={props.onOpenFile}
+              />
+            ))}
+            {props.truncated ? (
+              <p className="other-changes__truncated">
+                {hiddenCount.toLocaleString()} more not shown.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function UnpublishedCommitSection(props: {
+  commit: WorktreeUnpublishedCommit;
+  initiallyExpanded: boolean;
+  worktreeRoot?: string;
+  desktopApi?: Pick<DesktopApi, "getWorktreeUnpublishedCommitDiff">;
+  onOpenFile?: (absolutePath: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(props.initiallyExpanded);
+  const bodyId = useId();
+  const hiddenCount = Math.max(
+    0,
+    props.commit.totalFiles - props.commit.files.length,
+  );
+
+  return (
+    <section className="unpublished-commit">
+      <div className="unpublished-commit__header">
+        <button
+          type="button"
+          className="unpublished-commit__toggle"
+          aria-expanded={expanded}
+          aria-controls={bodyId}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <span className="live-work-rail__chevron" aria-hidden="true" />
+          <span className="unpublished-commit__identity">
+            <span className="unpublished-commit__subject">
+              {props.commit.subject}
+            </span>
+            <span className="unpublished-commit__sha">{props.commit.shortSha}</span>
+          </span>
+        </button>
+        <DiffStat
+          additions={props.commit.additions}
+          removals={props.commit.removals}
+          className="diff-stat--chip"
+        />
+      </div>
+      <div id={bodyId} hidden={!expanded}>
+        {expanded ? (
+          <>
+            <ul className="live-work-rail__file-list">
+              {props.commit.files.map((file) => (
+                <li key={file.repoPath} className="live-work-rail__file-row">
+                  <UnpublishedCommitFileRow
+                    commitSha={props.commit.sha}
+                    file={file}
+                    worktreeRoot={props.worktreeRoot}
+                    desktopApi={props.desktopApi}
+                    onOpenFile={props.onOpenFile}
+                  />
+                </li>
+              ))}
+            </ul>
+            {props.commit.filesTruncated ? (
+              <p className="other-changes__truncated">
+                {hiddenCount.toLocaleString()} more files not shown.
+              </p>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function UnpublishedCommitFileRow(props: {
+  commitSha: string;
+  file: WorktreeUnpublishedCommitFile;
+  worktreeRoot?: string;
+  desktopApi?: Pick<DesktopApi, "getWorktreeUnpublishedCommitDiff">;
+  onOpenFile?: (absolutePath: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [detail, setDetail] = useState<
+    AppServerThreadActivityDetail | undefined
+  >();
+  const [loading, setLoading] = useState(false);
+  const diffId = useId();
+  const canOpen = Boolean(props.onOpenFile);
+  const hasStats =
+    props.file.additions !== undefined || props.file.removals !== undefined;
+
+  useEffect(() => {
+    if (!expanded || detail) {
+      return;
+    }
+    const getDiff = props.desktopApi?.getWorktreeUnpublishedCommitDiff;
+    const worktreePath = props.worktreeRoot?.trim();
+    if (!getDiff || !worktreePath) {
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    void getDiff({
+      worktreePath,
+      commitSha: props.commitSha,
+      path: props.file.path,
+      maxBytes: OTHER_CHANGE_DIFF_MAX_BYTES,
+    })
+      .then((response) => {
+        if (!cancelled) {
+          setDetail(response.detail);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDetail(undefined);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    detail,
+    expanded,
+    props.commitSha,
+    props.desktopApi,
+    props.file.path,
+    props.worktreeRoot,
+  ]);
+
+  return (
+    <>
+      <button
+        type="button"
+        className="live-work-rail__file-toggle"
+        aria-controls={diffId}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span className="live-work-rail__chevron" aria-hidden="true" />
+        <span className="live-work-rail__file-label">
+          <span className="live-work-rail__file-path" title={props.file.path}>
+            {basename(props.file.repoPath)}
+          </span>
+        </span>
+        {hasStats ? (
+          <DiffStat
+            additions={props.file.additions ?? 0}
+            removals={props.file.removals ?? 0}
+            className="diff-stat--chip"
+          />
+        ) : props.file.binary ? (
+          <span className="unpublished-commit__binary">Binary</span>
+        ) : null}
+      </button>
+      <div id={diffId} className="live-work-rail__file-diff" hidden={!expanded}>
+        {expanded ? (
+          <>
+            <div className="edited-file-row__meta">
+              <span className="edited-file-row__path" title={props.file.path}>
+                {props.file.repoPath}
+              </span>
+              {canOpen ? (
+                <button
+                  type="button"
+                  className="edited-file-row__open"
+                  onClick={() => props.onOpenFile?.(props.file.path)}
+                  aria-label={`Open ${props.file.repoPath} in editor`}
+                  title="Open in editor"
+                >
+                  <EditorIcon className="edited-file-row__open-icon" />
+                </button>
+              ) : null}
+            </div>
+            {loading ? (
+              <p className="other-changes__loading">Loading diff...</p>
+            ) : detail ? (
+              <TranscriptDiff detail={detail} compact />
+            ) : (
+              <p className="other-changes__loading">Diff unavailable.</p>
+            )}
+          </>
+        ) : null}
+      </div>
+    </>
   );
 }
 

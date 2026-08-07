@@ -136,6 +136,10 @@ import {
   type ListWorktreeOtherChangesResponse,
   type GetWorktreeOtherChangeDiffRequest,
   type GetWorktreeOtherChangeDiffResponse,
+  type ListWorktreeUnpublishedCommitsRequest,
+  type ListWorktreeUnpublishedCommitsResponse,
+  type GetWorktreeUnpublishedCommitDiffRequest,
+  type GetWorktreeUnpublishedCommitDiffResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
   type ThreadGitWorkingState,
@@ -210,6 +214,8 @@ import {
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
+  NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
+  NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
@@ -2176,6 +2182,37 @@ class DesktopAppServerService {
       request.worktreePath,
       request.path,
       { maxBytes: request.maxBytes },
+    );
+  }
+
+  async listWorktreeUnpublishedCommits(
+    request: ListWorktreeUnpublishedCommitsRequest,
+  ): Promise<ListWorktreeUnpublishedCommitsResponse> {
+    return await getDesktopBackendRegistry().listWorktreeUnpublishedCommits(
+      request.worktreePath,
+      {
+        acceptedPushedCommitShas: this.getMergedPrCommitShasForWorktree(
+          request.worktreePath,
+        ),
+        maxCommits: request.maxCommits,
+        maxFilesPerCommit: request.maxFilesPerCommit,
+      },
+    );
+  }
+
+  async getWorktreeUnpublishedCommitDiff(
+    request: GetWorktreeUnpublishedCommitDiffRequest,
+  ): Promise<GetWorktreeUnpublishedCommitDiffResponse> {
+    return await getDesktopBackendRegistry().getWorktreeUnpublishedCommitDiff(
+      request.worktreePath,
+      request.commitSha,
+      request.path,
+      {
+        acceptedPushedCommitShas: this.getMergedPrCommitShasForWorktree(
+          request.worktreePath,
+        ),
+        maxBytes: request.maxBytes,
+      },
     );
   }
 
@@ -7336,6 +7373,26 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.getWorktreeOtherChangeDiff(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
+    async (
+      _event,
+      request: ListWorktreeUnpublishedCommitsRequest,
+    ): Promise<ListWorktreeUnpublishedCommitsResponse> => {
+      return await appServerService.listWorktreeUnpublishedCommits(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
+    async (
+      _event,
+      request: GetWorktreeUnpublishedCommitDiffRequest,
+    ): Promise<GetWorktreeUnpublishedCommitDiffResponse> => {
+      return await appServerService.getWorktreeUnpublishedCommitDiff(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -7516,6 +7573,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);

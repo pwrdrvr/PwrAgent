@@ -775,6 +775,85 @@ describe("GitWorkingStateService", () => {
     }
   });
 
+  it("lists unpublished commit files and loads their diffs on demand", async () => {
+    const root = await mkdtemp(makeTempPrefix());
+    const repo = path.join(root, "repo");
+    const remote = path.join(root, "remote.git");
+
+    try {
+      await mkdir(repo);
+      await git(root, "init", "--bare", remote);
+      await git(repo, "init", "-b", "main");
+      await git(repo, "config", "user.email", "test@example.com");
+      await git(repo, "config", "user.name", "PwrAgent Test");
+      await writeFile(path.join(repo, "tracked.txt"), "base\n");
+      await git(repo, "add", "tracked.txt");
+      await git(repo, "commit", "-m", "base");
+      await git(repo, "remote", "add", "origin", remote);
+      await git(repo, "push", "-u", "origin", "main");
+      const pushedSha = (await git(repo, "rev-parse", "HEAD")).trim();
+
+      await writeFile(path.join(repo, "tracked.txt"), "base\nlocal\n");
+      await writeFile(path.join(repo, "new.txt"), "new\n");
+      await git(repo, "add", "tracked.txt", "new.txt");
+      await git(repo, "commit", "-m", "local changes");
+      const localSha = (await git(repo, "rev-parse", "HEAD")).trim();
+      await git(repo, "checkout", "--detach");
+
+      const service = new GitWorkingStateService();
+      const response = await service.listUnpublishedCommits(repo);
+
+      expect(response).toMatchObject({
+        totalCommits: 1,
+        truncated: false,
+        commits: [
+          {
+            sha: localSha,
+            subject: "local changes",
+            totalFiles: 2,
+            filesTruncated: false,
+            additions: 2,
+            removals: 0,
+          },
+        ],
+      });
+      expect(response.commits[0]?.files.map((file) => file.repoPath).sort())
+        .toEqual(["new.txt", "tracked.txt"]);
+
+      const detail = await service.getUnpublishedCommitDiff(
+        repo,
+        localSha,
+        path.join(repo, "tracked.txt"),
+      );
+      expect(detail.detail?.fileDiff).toMatchObject({
+        kind: "update",
+        additions: 1,
+        removals: 0,
+      });
+      expect(detail.detail?.fileDiff?.diff).toContain("+local");
+
+      const pushed = await service.getUnpublishedCommitDiff(
+        repo,
+        pushedSha,
+        path.join(repo, "tracked.txt"),
+      );
+      expect(pushed.detail).toBeUndefined();
+
+      const accepted = await service.listUnpublishedCommits(repo, {
+        acceptedPushedCommitShas: [localSha],
+      });
+      expect(accepted.commits).toEqual([]);
+      expect(accepted.totalCommits).toBe(0);
+    } finally {
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+    }
+  }, 20_000);
+
   it("builds a single-file diff on demand for an untracked file", async () => {
     const tmpRoot = await mkdtemp(makeTempPrefix());
     const filePath = path.join(tmpRoot, "note.txt");

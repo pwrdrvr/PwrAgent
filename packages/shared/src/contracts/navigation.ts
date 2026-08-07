@@ -911,6 +911,54 @@ export type GetWorktreeOtherChangeDiffResponse = {
   detail?: AppServerThreadActivityDetail;
 };
 
+export type WorktreeUnpublishedCommitFile = {
+  path: string;
+  repoPath: string;
+  binary?: boolean;
+  additions?: number;
+  removals?: number;
+};
+
+export type WorktreeUnpublishedCommit = {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  committedAt?: number;
+  files: WorktreeUnpublishedCommitFile[];
+  totalFiles: number;
+  filesTruncated: boolean;
+  additions: number;
+  removals: number;
+};
+
+export type ListWorktreeUnpublishedCommitsRequest = {
+  worktreePath: string;
+  /** Bounded by the main process; callers can request a smaller cap. */
+  maxCommits?: number;
+  /** Bounded per commit by the main process. */
+  maxFilesPerCommit?: number;
+};
+
+export type ListWorktreeUnpublishedCommitsResponse = {
+  commits: WorktreeUnpublishedCommit[];
+  totalCommits: number;
+  truncated: boolean;
+  maxCommits: number;
+  maxFilesPerCommit: number;
+};
+
+export type GetWorktreeUnpublishedCommitDiffRequest = {
+  worktreePath: string;
+  commitSha: string;
+  path: string;
+  /** Bounded by the main process; callers can request a smaller cap. */
+  maxBytes?: number;
+};
+
+export type GetWorktreeUnpublishedCommitDiffResponse = {
+  detail?: AppServerThreadActivityDetail;
+};
+
 const ACP_BACKEND_ID_PREFIX = "acp:";
 const ACP_REGISTRY_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
