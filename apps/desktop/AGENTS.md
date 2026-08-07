@@ -321,6 +321,53 @@ ACP fallback direction, read
 before changing ACP session storage, thread replay restoration, or rollout
 persistence.
 
+## Pull-Request Status Source of Truth
+
+There are two stores holding PR data, and they answer **different
+questions**. Do not treat them as interchangeable:
+
+- **Attachment list** — `ThreadOverlayState.prs` (sqlite `threads`
+  overlay JSON, written by `setThreadPullRequests`). Authoritative for
+  *which* PRs belong to a thread. The status fields on those rows are a
+  cached projection and go stale by design: they are only rewritten when
+  the attachment list itself is rewritten (a branch lookup).
+- **Status** — the PR status registry in `DesktopAppServerService`
+  (`prStatusRegistry`, durable via the `pr_status_cache` table).
+  Authoritative for *what state* a PR is in. The background poller
+  writes here and here only, then emits `pullRequest/status/updated`.
+  It never writes back into the overlay.
+
+**Every path that serves PR chips to a client MUST canonicalize the
+overlay rows through the status registry.** The seam is the injected
+`ThreadPullRequestCanonicalizer` (`setThreadPullRequestCanonicalizer`,
+backed by `canonicalizeStoredPullRequests`, which loads
+`pr_status_cache` first so it works before any window has driven a
+lookup). Use `canonicalizeNavigationThreadPullRequests` for a navigation
+snapshot's threads.
+
+Skipping it is not a cosmetic staleness bug. `collectPrPollTargets`
+drops terminal PRs from the rotation, so once a PR merges the background
+poller emits no further `pullRequest/status/updated` for it — a client
+served an uncanonicalized snapshot shows that PR as open with checks
+running until something else happens to refresh it. (An owner-side
+branch lookup still republishes terminal PRs via
+`thread/pullRequests/updated`, so the row can converge if the *owner*
+opens that thread — but nothing the viewer does will fix it.) This is
+exactly what federation remote viewers hit: their only snapshot source
+is `DesktopMessagingBackendBridge.getNavigationSnapshot`, which did not
+canonicalize, while the renderer's local path did.
+
+Canonicalization failures degrade rather than propagate:
+`canonicalizeNavigationThreadPullRequests` catches, logs, and serves the
+overlay rows, because possibly-stale chips beat a failed snapshot (which
+for a viewer means a disconnected window).
+
+Known remaining gap: remote-stamped `pullRequest/status/updated` and
+`thread/pullRequests/updated` events are dropped by the main window's
+federation-target filter in `useThreadNavigation`, so viewer-side pinned
+remote rows converge on the next snapshot refresh rather than live.
+Dedicated remote windows do apply these events.
+
 ## Thread-State Update Bus
 
 When mutating persistent thread state (model, reasoning effort, fast mode,

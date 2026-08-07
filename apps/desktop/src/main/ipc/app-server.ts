@@ -4413,7 +4413,14 @@ class DesktopAppServerService {
     });
   }
 
-  async canonicalizeThreadInspectionPullRequests(
+  /**
+   * Project stored PR rows through the canonical status registry,
+   * loading it from `pr_status_cache` first so this works even when no
+   * window has driven a lookup yet. Injected into the backend registry,
+   * which serves both thread inspection and the navigation snapshot the
+   * federation/messaging bridge hands to remote viewers.
+   */
+  async canonicalizeStoredPullRequests(
     prs: PrSummary[],
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
@@ -6688,7 +6695,7 @@ export function registerAppServerIpcHandlers(): void {
   );
   getDesktopBackendRegistry().setThreadPullRequestCanonicalizer(
     async (prs) =>
-      await appServerService.canonicalizeThreadInspectionPullRequests(prs),
+      await appServerService.canonicalizeStoredPullRequests(prs),
   );
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),

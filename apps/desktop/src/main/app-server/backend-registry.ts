@@ -25177,6 +25177,63 @@ export class DesktopBackendRegistry {
     );
   }
 
+  /**
+   * Project a navigation snapshot's PR chips through the canonical PR
+   * status registry.
+   *
+   * The thread overlay stores which PRs are attached to a thread; the
+   * *status* on those stored rows is only a cached projection, and the
+   * background poller does not write back into it — it updates the PR
+   * status registry (and its `pr_status_cache` table) and emits
+   * `pullRequest/status/updated`. Every path that serves PR chips to a
+   * client therefore has to canonicalize, or it hands out whatever
+   * status happened to be persisted the last time the attachment list
+   * was rewritten. The renderer's own snapshot path does this; so must
+   * the bridge that serves federation viewers and messaging browse,
+   * otherwise a viewer sees a PR that merged hours ago still rendered
+   * open with checks running, and never converges — the background
+   * poller drops terminal PRs from its rotation, so nothing it emits
+   * will correct the stale row.
+   *
+   * Deliberately does less than the renderer path's
+   * `applyCanonicalPrStatuses`: no seeding of the status registry from
+   * the passed threads (a serving path should read the registry, not
+   * write to it) and no equality check to preserve thread identity
+   * (these threads are about to be serialized over IPC or federation,
+   * so identity buys nothing). Keep it that way if the two are ever
+   * merged.
+   */
+  async canonicalizeNavigationThreadPullRequests(
+    threads: NavigationSnapshot["threads"],
+  ): Promise<NavigationSnapshot["threads"]> {
+    const canonicalizer = this.threadPullRequestCanonicalizer;
+    if (!canonicalizer) {
+      return threads;
+    }
+    try {
+      return await Promise.all(
+        threads.map(async (thread) => {
+          if (!thread.prs?.length) {
+            return thread;
+          }
+          return { ...thread, prs: await canonicalizer(thread.prs) };
+        }),
+      );
+    } catch (error) {
+      // Canonicalizing reads the durable `pr_status_cache`. If that read
+      // fails, serving the snapshot with the overlay's own PR rows is a
+      // far better outcome than failing the snapshot: the client gets
+      // possibly-stale chips instead of an error, and for a federation
+      // viewer an error means a disconnected window rather than one
+      // slightly wrong row.
+      backendRegistryLog.warn("pr status canonicalization failed", {
+        error: error instanceof Error ? error.message : String(error),
+        threadCount: threads.length,
+      });
+      return threads;
+    }
+  }
+
   private async projectCanonicalPullRequests(
     overlay: ThreadOverlayState | undefined,
   ): Promise<ThreadOverlayState | undefined> {
