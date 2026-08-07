@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import {
+  countAgentFilterImpact,
   countFilterImpact,
+  isAgentThread,
   selectAttentionThreads,
   threadAttentionCategories,
 } from "../attention";
+import { nextAgentFilter } from "../star-map-preferences";
 import {
   clampToCloudRadius,
   computeStarMapLayout,
@@ -324,5 +327,94 @@ describe("countFilterImpact", () => {
       enabled: new Set(["unread"]),
     });
     expect(counts.unread).toBe(0);
+  });
+});
+
+describe("agent filter", () => {
+  const agentThread = thread({
+    id: "a1",
+    inbox: { inInbox: true, reason: "updated-since-seen" },
+    agent: {
+      name: "Reviewer",
+      instructionLineCount: 4,
+      instructionsTooLong: false,
+      updatedAt: 1,
+    },
+  } as Partial<NavigationThreadSummary> & { id: string });
+  const plainThread = thread({
+    id: "p1",
+    inbox: { inInbox: true, reason: "updated-since-seen" },
+  });
+  const threads = [agentThread, plainThread];
+  const enabled = new Set<"unread">(["unread"]);
+
+  it("recognizes an agent-driven thread", () => {
+    expect(isAgentThread(agentThread)).toBe(true);
+    expect(isAgentThread(plainThread)).toBe(false);
+  });
+
+  it("includes everything by default", () => {
+    expect(
+      selectAttentionThreads({ threads, enabled })
+        .map((entry) => entry.id)
+        .sort(),
+    ).toEqual(["a1", "p1"]);
+  });
+
+  it("narrows to agent threads", () => {
+    expect(
+      selectAttentionThreads({ threads, enabled, agentFilter: "only" }).map(
+        (entry) => entry.id,
+      ),
+    ).toEqual(["a1"]);
+  });
+
+  it("excludes agent threads", () => {
+    expect(
+      selectAttentionThreads({ threads, enabled, agentFilter: "none" }).map(
+        (entry) => entry.id,
+      ),
+    ).toEqual(["p1"]);
+  });
+
+  it("ANDs with the attention chips rather than widening them", () => {
+    // An agent thread no enabled category claims stays hidden even under
+    // "only" — this filter narrows the set, it never adds to it.
+    const quietAgent = thread({
+      id: "a2",
+      agent: {
+        name: "Reviewer",
+        instructionLineCount: 4,
+        instructionsTooLong: false,
+        updatedAt: 1,
+      },
+    } as Partial<NavigationThreadSummary> & { id: string });
+    expect(
+      selectAttentionThreads({
+        threads: [quietAgent],
+        enabled,
+        agentFilter: "only",
+      }),
+    ).toEqual([]);
+  });
+
+  it("counts what the filter is holding back", () => {
+    expect(
+      countAgentFilterImpact({ threads, enabled, agentFilter: "none" }),
+    ).toBe(1);
+    expect(
+      countAgentFilterImpact({ threads, enabled, agentFilter: "only" }),
+    ).toBe(1);
+    expect(
+      countAgentFilterImpact({ threads, enabled, agentFilter: "all" }),
+    ).toBe(0);
+  });
+});
+
+describe("nextAgentFilter", () => {
+  it("cycles all -> only -> none -> all", () => {
+    expect(nextAgentFilter("all")).toBe("only");
+    expect(nextAgentFilter("only")).toBe("none");
+    expect(nextAgentFilter("none")).toBe("all");
   });
 });

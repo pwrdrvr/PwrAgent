@@ -66,7 +66,8 @@ function viewportSize(): { width: number; height: number } {
  * handed, so a card over a peer's thread reads and writes on that peer.
  */
 export function StarMapChatCard(props: StarMapChatCardProps) {
-  const { cardKey, desktopApi, onRaise, onRectChange, rect, thread } = props;
+  const { cardKey, desktopApi, onOpenFull, onRaise, onRectChange, rect, thread } =
+    props;
   const dragRef = useRef<DragState | undefined>(undefined);
   const [sendError, setSendError] = useState<string | undefined>(undefined);
 
@@ -253,10 +254,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     entries.push({
       key: "open-full",
       label: "Open in full view",
-      onSelect: () => props.onOpenFull(thread),
+      onSelect: () => onOpenFull(thread),
     });
     return entries;
-  }, [desktopApi, federationTarget, props, session.threadBusy, thread]);
+  }, [desktopApi, federationTarget, onOpenFull, session.threadBusy, thread]);
 
   const style: CSSProperties = {
     left: `${rect.left}px`,
@@ -296,7 +297,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         <button
           aria-label={`Open ${thread.title} in the full thread view`}
           className="star-map-chat-card__expand"
-          onClick={() => props.onOpenFull(thread)}
+          onClick={() => onOpenFull(thread)}
           onPointerDown={(event) => event.stopPropagation()}
           type="button"
         >

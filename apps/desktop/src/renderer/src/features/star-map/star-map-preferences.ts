@@ -20,12 +20,43 @@ export type StarMapCardFields = {
 
 export type StarMapLayoutMode = "lanes" | "orbit";
 
+/**
+ * Include everything, only agent-driven threads, or everything except
+ * them. Unlike the attention categories this narrows the result rather
+ * than widening it, so it is a cycle rather than a toggle.
+ */
+export type StarMapAgentFilter = "all" | "only" | "none";
+
+export const STAR_MAP_AGENT_FILTER_ORDER: readonly StarMapAgentFilter[] = [
+  "all",
+  "only",
+  "none",
+];
+
+export const STAR_MAP_AGENT_FILTER_LABELS: Record<StarMapAgentFilter, string> =
+  {
+    all: "Agents: all",
+    only: "Agents only",
+    none: "Agents hidden",
+  };
+
+export function nextAgentFilter(
+  current: StarMapAgentFilter,
+): StarMapAgentFilter {
+  const index = STAR_MAP_AGENT_FILTER_ORDER.indexOf(current);
+  return STAR_MAP_AGENT_FILTER_ORDER[
+    (index + 1) % STAR_MAP_AGENT_FILTER_ORDER.length
+  ];
+}
+
 export type StarMapViewPreferences = {
   /** Lane columns under a body row, or bodies with orbiting card rings. */
   layout: StarMapLayoutMode;
   cardFields: StarMapCardFields;
   /** Drop instances that are not currently connected from the map. */
   hideOfflineInstances: boolean;
+  /** Include agent-driven threads, show only those, or hide them. */
+  agentFilter: StarMapAgentFilter;
 };
 
 /**
@@ -43,6 +74,7 @@ export const DEFAULT_STAR_MAP_PREFERENCES: StarMapViewPreferences = {
     terminalPullRequests: false,
   },
   hideOfflineInstances: false,
+  agentFilter: "all",
 };
 
 export const STAR_MAP_CARD_FIELD_LABELS: Record<
@@ -73,6 +105,11 @@ export function readStoredPreferences(): StarMapViewPreferences {
       hideOfflineInstances:
         parsed.hideOfflineInstances
         ?? DEFAULT_STAR_MAP_PREFERENCES.hideOfflineInstances,
+      agentFilter: STAR_MAP_AGENT_FILTER_ORDER.includes(
+        parsed.agentFilter as StarMapAgentFilter,
+      )
+        ? (parsed.agentFilter as StarMapAgentFilter)
+        : DEFAULT_STAR_MAP_PREFERENCES.agentFilter,
     };
   } catch {
     return DEFAULT_STAR_MAP_PREFERENCES;
