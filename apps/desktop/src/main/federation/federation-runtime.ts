@@ -96,7 +96,11 @@ import {
   type FederationRemoteTarget,
   type DesktopApplicationsSnapshot,
   type HandoffThreadWorkspaceRequest,
+  type GetWorktreeUnpublishedCommitDiffRequest,
+  type GetWorktreeUnpublishedCommitDiffResponse,
   type InterruptTurnRequest,
+  type ListWorktreeUnpublishedCommitsRequest,
+  type ListWorktreeUnpublishedCommitsResponse,
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
   type MarkThreadSeenRequest,
@@ -3548,6 +3552,33 @@ export function setFederationMessagingPlatformStatusReader(
   messagingPlatformStatusReader = reader;
 }
 
+async function resolveFederatedWorktreeGitReadContext(request: {
+  backend?: ListWorktreeUnpublishedCommitsRequest["backend"];
+  threadId?: string;
+  worktreePath: string;
+}): Promise<{
+  acceptedPushedCommitShas: string[];
+  worktreePath: string;
+}> {
+  if (!request.backend || !request.threadId?.trim()) {
+    throw new Error(
+      "Federated unpublished commit reads require an owning thread identity.",
+    );
+  }
+  const context = await getDesktopBackendRegistry()
+    .resolveThreadWorktreeGitReadContext({
+      backend: request.backend,
+      threadId: request.threadId,
+      worktreePath: request.worktreePath,
+    });
+  if (!context) {
+    throw new Error(
+      "Federated unpublished commit reads must target the owning thread's worktree.",
+    );
+  }
+  return context;
+}
+
 function localBackendOperations(): FederationBackendOperations {
   return {
     async getNavigationSnapshot(request = {}): Promise<NavigationSnapshot> {
@@ -3941,6 +3972,33 @@ function localBackendOperations(): FederationBackendOperations {
       request: RefreshDirectoryGitStatusesRequest,
     ): Promise<RefreshDirectoryGitStatusesResponse> {
       return await getDesktopBackendRegistry().refreshDirectoryGitStatuses(request);
+    },
+    async listWorktreeUnpublishedCommits(
+      request: ListWorktreeUnpublishedCommitsRequest,
+    ): Promise<ListWorktreeUnpublishedCommitsResponse> {
+      const context = await resolveFederatedWorktreeGitReadContext(request);
+      return await getDesktopBackendRegistry().listWorktreeUnpublishedCommits(
+        context.worktreePath,
+        {
+          acceptedPushedCommitShas: context.acceptedPushedCommitShas,
+          maxCommits: request.maxCommits,
+          maxFilesPerCommit: request.maxFilesPerCommit,
+        },
+      );
+    },
+    async getWorktreeUnpublishedCommitDiff(
+      request: GetWorktreeUnpublishedCommitDiffRequest,
+    ): Promise<GetWorktreeUnpublishedCommitDiffResponse> {
+      const context = await resolveFederatedWorktreeGitReadContext(request);
+      return await getDesktopBackendRegistry().getWorktreeUnpublishedCommitDiff(
+        context.worktreePath,
+        request.commitSha,
+        request.path,
+        {
+          acceptedPushedCommitShas: context.acceptedPushedCommitShas,
+          maxBytes: request.maxBytes,
+        },
+      );
     },
     async materializeDirectoryLaunchpad(
       request: MaterializeDirectoryLaunchpadRequest,

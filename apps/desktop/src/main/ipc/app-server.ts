@@ -136,6 +136,10 @@ import {
   type ListWorktreeOtherChangesResponse,
   type GetWorktreeOtherChangeDiffRequest,
   type GetWorktreeOtherChangeDiffResponse,
+  type ListWorktreeUnpublishedCommitsRequest,
+  type ListWorktreeUnpublishedCommitsResponse,
+  type GetWorktreeUnpublishedCommitDiffRequest,
+  type GetWorktreeUnpublishedCommitDiffResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
   type ThreadGitWorkingState,
@@ -210,6 +214,8 @@ import {
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
+  NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
+  NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
@@ -2180,6 +2186,76 @@ class DesktopAppServerService {
     );
   }
 
+  async listWorktreeUnpublishedCommits(
+    request: ListWorktreeUnpublishedCommitsRequest,
+  ): Promise<ListWorktreeUnpublishedCommitsResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      if (!request.backend || !request.threadId?.trim()) {
+        throw new Error(
+          "Remote unpublished commit reads require an owning thread identity.",
+        );
+      }
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listWorktreeUnpublishedCommits({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+          maxCommits: request.maxCommits,
+          maxFilesPerCommit: request.maxFilesPerCommit,
+        });
+    }
+    return await getDesktopBackendRegistry().listWorktreeUnpublishedCommits(
+      request.worktreePath,
+      {
+        acceptedPushedCommitShas: this.getMergedPrCommitShasForWorktree(
+          request.worktreePath,
+        ),
+        maxCommits: request.maxCommits,
+        maxFilesPerCommit: request.maxFilesPerCommit,
+      },
+    );
+  }
+
+  async getWorktreeUnpublishedCommitDiff(
+    request: GetWorktreeUnpublishedCommitDiffRequest,
+  ): Promise<GetWorktreeUnpublishedCommitDiffResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      if (!request.backend || !request.threadId?.trim()) {
+        throw new Error(
+          "Remote unpublished commit reads require an owning thread identity.",
+        );
+      }
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .getWorktreeUnpublishedCommitDiff({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+          commitSha: request.commitSha,
+          path: request.path,
+          maxBytes: request.maxBytes,
+        });
+    }
+    return await getDesktopBackendRegistry().getWorktreeUnpublishedCommitDiff(
+      request.worktreePath,
+      request.commitSha,
+      request.path,
+      {
+        acceptedPushedCommitShas: this.getMergedPrCommitShasForWorktree(
+          request.worktreePath,
+        ),
+        maxBytes: request.maxBytes,
+      },
+    );
+  }
+
   private collectThreadWorktreePaths(
     threads: NavigationSnapshot["threads"],
   ): string[] {
@@ -2499,8 +2575,14 @@ class DesktopAppServerService {
     // Threads arrive without working state (the enricher no longer computes
     // it), so hydration only ever adds the cached value. A worktree the cache
     // doesn't know about yet shows no chips until the background probe lands.
-    if (cached?.gitWorkingState && thread.gitWorkingState !== cached.gitWorkingState) {
-      return { ...thread, gitWorkingState: cached.gitWorkingState };
+    if (cached) {
+      return {
+        ...thread,
+        gitWorkingStateFetchedAt: cached.fetchedAt,
+        ...(cached.gitWorkingState
+          ? { gitWorkingState: cached.gitWorkingState }
+          : {}),
+      };
     }
     return thread;
   }
@@ -3015,31 +3097,25 @@ class DesktopAppServerService {
     gitWorkingState?: ThreadGitWorkingState;
   }): Promise<void> {
     const previous = this.workingStateByWorktree.get(params.worktreePath);
+    const fetchedAt = Math.max(
+      params.fetchedAt,
+      (previous?.fetchedAt ?? params.fetchedAt - 1) + 1,
+    );
     const cacheEntry: WorktreeGitWorkingStateCacheEntry = {
       worktreePath: params.worktreePath,
-      fetchedAt: params.fetchedAt,
+      fetchedAt,
       ...(params.gitWorkingState ? { gitWorkingState: params.gitWorkingState } : {}),
     };
     this.workingStateByWorktree.set(params.worktreePath, cacheEntry);
     await getDesktopBackendRegistry()
       .rememberThreadGitWorkingStateCacheEntry(cacheEntry);
 
-    // Skip the push when the probed value is identical to what clients
-    // already hold — avoids a snapshot patch + re-render on every idle
-    // background refresh that found nothing changed.
-    if (
-      JSON.stringify(previous?.gitWorkingState ?? null) ===
-      JSON.stringify(params.gitWorkingState ?? null)
-    ) {
-      return;
-    }
-
     const notification: NavigationThreadGitWorkingStateUpdatedNotification = {
       method: "navigation/threadGitWorkingState/updated",
       params: {
         worktreePath: params.worktreePath,
         gitWorkingState: params.gitWorkingState ?? null,
-        fetchedAt: params.fetchedAt,
+        fetchedAt,
       },
     };
     await getDesktopBackendRegistry().publishLocalEvent({
@@ -7358,6 +7434,48 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.getWorktreeOtherChangeDiff(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
+    async (
+      event,
+      request: ListWorktreeUnpublishedCommitsRequest,
+    ): Promise<ListWorktreeUnpublishedCommitsResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Unpublished commit reads for a remote thread must target the owning instance.",
+        );
+      }
+      return await appServerService.listWorktreeUnpublishedCommits(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
+    async (
+      event,
+      request: GetWorktreeUnpublishedCommitDiffRequest,
+    ): Promise<GetWorktreeUnpublishedCommitDiffResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Unpublished commit reads for a remote thread must target the owning instance.",
+        );
+      }
+      return await appServerService.getWorktreeUnpublishedCommitDiff(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -7538,6 +7656,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);

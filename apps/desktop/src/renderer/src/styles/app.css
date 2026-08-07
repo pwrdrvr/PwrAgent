@@ -13397,6 +13397,95 @@ a.transcript-message__messaging-origin:focus-visible {
   margin: 8px 0 10px;
 }
 
+.unpublished-commits {
+  margin: 8px 0 10px;
+}
+
+.unpublished-commits__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.unpublished-commit {
+  min-width: 0;
+  border-left: 1px solid var(--border-subtle);
+  padding-left: 4px;
+}
+
+.unpublished-commit__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 2px;
+}
+
+.unpublished-commit__toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.unpublished-commit__toggle:hover {
+  color: var(--text-primary);
+}
+
+.unpublished-commit__toggle:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.unpublished-commit__toggle[aria-expanded="false"] .live-work-rail__chevron {
+  transform: rotate(-90deg);
+}
+
+.unpublished-commit__toggle[aria-expanded="true"] .live-work-rail__chevron {
+  transform: rotate(0deg);
+}
+
+.unpublished-commit__identity {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.unpublished-commit__subject {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unpublished-commit__sha,
+.unpublished-commit__binary {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.unpublished-commit__binary {
+  flex: 0 0 auto;
+}
+
+.unpublished-commit .live-work-rail__file-list {
+  margin-top: 2px;
+}
+
 .other-changes__truncated,
 .other-changes__loading {
   margin: 6px 0 0;

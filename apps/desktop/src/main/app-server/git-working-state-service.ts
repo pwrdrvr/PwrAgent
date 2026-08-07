@@ -6,6 +6,8 @@ import type {
   AppServerThreadActivityDetail,
   EditGroupCommitInput,
   EditGroupCommitState,
+  WorktreeUnpublishedCommit,
+  WorktreeUnpublishedCommitFile,
   ThreadGitWorkingState,
   WorktreeOtherChangeEntry,
   WorktreeOtherChangeStatus,
@@ -24,6 +26,11 @@ const HARD_OTHER_CHANGES_MAX_FILES = 100;
 const OTHER_CHANGES_MAX_FILES_PER_TOP_LEVEL = 20;
 const DEFAULT_OTHER_CHANGE_DIFF_MAX_BYTES = 200_000;
 const HARD_OTHER_CHANGE_DIFF_MAX_BYTES = 500_000;
+const DEFAULT_UNPUBLISHED_COMMITS_MAX = 20;
+const HARD_UNPUBLISHED_COMMITS_MAX = 50;
+const DEFAULT_UNPUBLISHED_COMMIT_FILES_MAX = 50;
+const HARD_UNPUBLISHED_COMMIT_FILES_MAX = 100;
+const UNPUBLISHED_COMMIT_SUMMARY_CONCURRENCY = 4;
 const UNTRACKED_DIRECTORY_EXPANSION_MAX_BYTES = 128_000;
 const UNTRACKED_DIRECTORY_EXPANSION_TIMEOUT_MS = 1_500;
 const MAX_BASE_BRANCH_CANDIDATES = 24;
@@ -528,6 +535,67 @@ function parseNumstatByPath(
     }
   }
   return stats;
+}
+
+function parseUnpublishedCommitSummary(
+  cwd: string,
+  output: string,
+  maxFiles: number,
+): WorktreeUnpublishedCommit | undefined {
+  const [sha, shortSha, subject, committedAtSeconds, ...rawRecords] =
+    output.split("\0");
+  if (!sha || !shortSha || subject === undefined) {
+    return undefined;
+  }
+
+  const files: WorktreeUnpublishedCommitFile[] = [];
+  let totalFiles = 0;
+  let additions = 0;
+  let removals = 0;
+  for (const [index, rawRecord] of rawRecords.entries()) {
+    const record = index === 0 && rawRecord.startsWith("\n")
+      ? rawRecord.slice(1)
+      : rawRecord;
+    const additionsSeparator = record.indexOf("\t");
+    const removalsSeparator = record.indexOf("\t", additionsSeparator + 1);
+    if (additionsSeparator < 0 || removalsSeparator < 0) {
+      continue;
+    }
+    const rawAdditions = record.slice(0, additionsSeparator);
+    const rawRemovals = record.slice(additionsSeparator + 1, removalsSeparator);
+    const repoPath = normalizeGitRelativePath(record.slice(removalsSeparator + 1));
+    if (!repoPath) {
+      continue;
+    }
+    totalFiles += 1;
+    const binary = rawAdditions === "-" || rawRemovals === "-";
+    const fileAdditions = binary ? undefined : parseGitCount(rawAdditions);
+    const fileRemovals = binary ? undefined : parseGitCount(rawRemovals);
+    additions += fileAdditions ?? 0;
+    removals += fileRemovals ?? 0;
+    if (files.length < maxFiles) {
+      files.push({
+        path: normalizeAbsolutePath(path.resolve(cwd, repoPath)),
+        repoPath,
+        ...(binary
+          ? { binary: true }
+          : { additions: fileAdditions ?? 0, removals: fileRemovals ?? 0 }),
+      });
+    }
+  }
+
+  const committedAt = Number.parseInt(committedAtSeconds ?? "", 10);
+  return {
+    sha,
+    shortSha,
+    subject,
+    ...(Number.isFinite(committedAt) ? { committedAt: committedAt * 1_000 } : {}),
+    files,
+    totalFiles,
+    filesTruncated: totalFiles > files.length,
+    additions,
+    removals,
+  };
 }
 
 function isPathInsideWorktree(cwd: string, absolutePath: string): boolean {
@@ -1302,6 +1370,249 @@ export class GitWorkingStateService {
           ...(omittedReason ? { omittedReason } : {}),
         },
         markdown: statusLabel(status.status),
+      },
+    };
+  }
+
+  /**
+   * List commits reachable from HEAD that exist on no remote ref or accepted
+   * merged-PR head. Commit and per-commit file lists are bounded; patch text is
+   * loaded only when the renderer expands an individual file.
+   */
+  async listUnpublishedCommits(
+    worktreePath: string,
+    options: {
+      maxCommits?: number;
+      maxFilesPerCommit?: number;
+    } & AcceptedPushedCommitOptions = {},
+  ): Promise<{
+    commits: WorktreeUnpublishedCommit[];
+    totalCommits: number;
+    truncated: boolean;
+    maxCommits: number;
+    maxFilesPerCommit: number;
+  }> {
+    const cwd = worktreePath?.trim();
+    const maxCommits = clampPositiveInteger(
+      options.maxCommits,
+      DEFAULT_UNPUBLISHED_COMMITS_MAX,
+      HARD_UNPUBLISHED_COMMITS_MAX,
+    );
+    const maxFilesPerCommit = clampPositiveInteger(
+      options.maxFilesPerCommit,
+      DEFAULT_UNPUBLISHED_COMMIT_FILES_MAX,
+      HARD_UNPUBLISHED_COMMIT_FILES_MAX,
+    );
+    const empty = {
+      commits: [],
+      totalCommits: 0,
+      truncated: false,
+      maxCommits,
+      maxFilesPerCommit,
+    };
+    if (!cwd) {
+      return empty;
+    }
+
+    const noLocks = (args: string[], input?: string): Promise<string> =>
+      this.runGit(cwd, ["--no-optional-locks", ...args], this.gitEnv, input);
+    const remotes = await noLocks(["remote"]).catch(() => "");
+    if (!remotes.trim()) {
+      return empty;
+    }
+
+    const exclusionInput = buildRevisionExclusionInput(
+      buildAcceptedPushedCommitSet(options.acceptedPushedCommitShas),
+    );
+    const readRevisions = async (
+      input?: string,
+    ): Promise<{ countOutput: string; shasOutput: string }> => {
+      const stdinArg = input ? ["--stdin"] : [];
+      const [countOutput, shasOutput] = await Promise.all([
+        noLocks(
+          [
+            "rev-list",
+            "--ignore-missing",
+            "--count",
+            "HEAD",
+            "--not",
+            "--remotes",
+            ...stdinArg,
+          ],
+          input,
+        ),
+        noLocks(
+          [
+            "rev-list",
+            "--ignore-missing",
+            `--max-count=${maxCommits + 1}`,
+            "HEAD",
+            "--not",
+            "--remotes",
+            ...stdinArg,
+          ],
+          input,
+        ),
+      ]);
+      return { countOutput, shasOutput };
+    };
+    let revisionData: { countOutput: string; shasOutput: string };
+    try {
+      revisionData = await readRevisions(exclusionInput);
+    } catch {
+      if (!exclusionInput) {
+        return empty;
+      }
+      // Mirror the working-state badge: a false-positive raw list is safer
+      // than hiding genuinely local work when the accepted-head probe fails.
+      revisionData = await readRevisions().catch(() => ({
+        countOutput: "",
+        shasOutput: "",
+      }));
+    }
+    const { countOutput, shasOutput } = revisionData;
+    const shas = parseGitLines(shasOutput).filter((sha) =>
+      /^[0-9a-f]{40}$/i.test(sha),
+    );
+    const visibleShas = shas.slice(0, maxCommits);
+    const summaries: Array<WorktreeUnpublishedCommit | undefined> =
+      new Array(visibleShas.length);
+    for await (const entry of new IterableMapper(
+      visibleShas,
+      async (sha, index) => ({
+        index,
+        summary: parseUnpublishedCommitSummary(
+          cwd,
+          await noLocks([
+            "show",
+            "--first-parent",
+            "--no-ext-diff",
+            "--no-renames",
+            "--format=%H%x00%h%x00%s%x00%ct",
+            "--numstat",
+            "-z",
+            sha,
+            "--",
+          ]).catch(() => ""),
+          maxFilesPerCommit,
+        ),
+      }),
+      {
+        concurrency: UNPUBLISHED_COMMIT_SUMMARY_CONCURRENCY,
+        maxUnread: UNPUBLISHED_COMMIT_SUMMARY_CONCURRENCY * 2,
+      },
+    )) {
+      summaries[entry.index] = entry.summary;
+    }
+    const commits = summaries.filter(
+      (commit): commit is WorktreeUnpublishedCommit => Boolean(commit),
+    );
+    const totalCommits = Math.max(parseGitCount(countOutput), shas.length);
+    return {
+      commits,
+      totalCommits,
+      truncated: totalCommits > commits.length,
+      maxCommits,
+      maxFilesPerCommit,
+    };
+  }
+
+  async getUnpublishedCommitDiff(
+    worktreePath: string,
+    commitSha: string,
+    filePath: string,
+    options: { maxBytes?: number } & AcceptedPushedCommitOptions = {},
+  ): Promise<{ detail?: AppServerThreadActivityDetail }> {
+    const cwd = worktreePath?.trim();
+    const sha = commitSha?.trim();
+    const absolutePath = normalizeAbsolutePath(path.resolve(filePath));
+    const maxBytes = clampPositiveInteger(
+      options.maxBytes,
+      DEFAULT_OTHER_CHANGE_DIFF_MAX_BYTES,
+      HARD_OTHER_CHANGE_DIFF_MAX_BYTES,
+    );
+    if (
+      !cwd
+      || !/^[0-9a-f]{40}$/i.test(sha)
+      || !isPathInsideWorktree(cwd, absolutePath)
+    ) {
+      return {};
+    }
+
+    const noLocks = (args: string[], input?: string): Promise<string> =>
+      this.runGit(cwd, ["--no-optional-locks", ...args], this.gitEnv, input);
+    const [remotes, isAncestor] = await Promise.all([
+      noLocks(["remote"]).catch(() => ""),
+      noLocks(["merge-base", "--is-ancestor", sha, "HEAD"])
+        .then(() => true)
+        .catch(() => false),
+    ]);
+    if (!remotes.trim() || !isAncestor) {
+      return {};
+    }
+
+    const exclusionInput = buildRevisionExclusionInput(
+      buildAcceptedPushedCommitSet(options.acceptedPushedCommitShas),
+    );
+    const unpublished = await noLocks(
+      [
+        "rev-list",
+        "--ignore-missing",
+        "-1",
+        sha,
+        "--not",
+        "--remotes",
+        ...(exclusionInput ? ["--stdin"] : []),
+      ],
+      exclusionInput,
+    ).catch(() => "");
+    if (!unpublished.trim()) {
+      return {};
+    }
+
+    const repoPath = normalizeGitRelativePath(path.relative(cwd, absolutePath));
+    let diff = await noLocks([
+      "show",
+      "--first-parent",
+      "--format=",
+      "--no-ext-diff",
+      "--no-renames",
+      sha,
+      "--",
+      repoPath,
+    ]).catch(() => "");
+    if (!diff) {
+      return {};
+    }
+
+    let omittedReason: string | undefined;
+    if (/^(?:Binary files |GIT binary patch)/m.test(diff)) {
+      omittedReason = "Diff omitted for binary committed file.";
+      diff = "";
+    } else if (diff.length > maxBytes) {
+      omittedReason = `Diff omitted because it exceeds ${maxBytes.toLocaleString()} bytes.`;
+      diff = "";
+    }
+    const stats = summarizeDiffText(diff);
+    const kind = diff.includes("deleted file mode")
+      ? "delete"
+      : diff.includes("new file mode")
+        ? "add"
+        : "update";
+    return {
+      detail: {
+        id: `unpublished-commit:${sha}:${repoPath}`,
+        kind: "write",
+        label: path.basename(repoPath) || repoPath,
+        path: absolutePath,
+        fileDiff: {
+          kind,
+          diff,
+          additions: stats.additions,
+          removals: stats.removals,
+          ...(omittedReason ? { omittedReason } : {}),
+        },
+        markdown: `Unpublished commit ${sha.slice(0, 7)}`,
       },
     };
   }
