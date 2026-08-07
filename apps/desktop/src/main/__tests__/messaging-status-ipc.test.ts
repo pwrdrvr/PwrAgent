@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const runtimeMock = vi.hoisted(() => ({
@@ -141,6 +141,18 @@ vi.mock("../messaging/messaging-routes-service", () =>
 );
 
 describe("messaging status ipc", () => {
+  type MessagingStatusIpcModule = typeof import("../ipc/messaging-status");
+  let registerMessagingStatusIpcHandlers:
+    MessagingStatusIpcModule["registerMessagingStatusIpcHandlers"];
+
+  beforeAll(async () => {
+    // Import after the hoisted mocks exist, but before an individual test can
+    // pay the cold module-graph evaluation cost.
+    const messagingStatusIpc = await import("../ipc/messaging-status");
+    registerMessagingStatusIpcHandlers =
+      messagingStatusIpc.registerMessagingStatusIpcHandlers;
+  });
+
   beforeEach(() => {
     handlers.clear();
     runtimeMock.applyConfig.mockClear();
@@ -185,9 +197,6 @@ describe("messaging status ipc", () => {
     const { FederationPeerUnavailableError } = await import(
       "../federation/federation-peer-unavailable-error"
     );
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_GET_PLATFORM_STATUSES_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -214,9 +223,6 @@ describe("messaging status ipc", () => {
   });
 
   it("keeps unexpected remote platform-status failures actionable", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_GET_PLATFORM_STATUSES_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -250,9 +256,6 @@ describe("messaging status ipc", () => {
     messagingRoutesServiceMock.clearDesktopMessagingDefaultAgent
       .mockResolvedValueOnce({ assignmentId: "assignment-1", cleared: true })
       .mockResolvedValueOnce({ assignmentId: "missing", cleared: false });
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const {
       MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
       MESSAGING_LIST_ROUTES_CHANNEL,
@@ -291,9 +294,6 @@ describe("messaging status ipc", () => {
   });
 
   it("resets selected bound Working Updates through IPC", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -323,9 +323,6 @@ describe("messaging status ipc", () => {
   });
 
   it("loads startup eligibility diagnostics when enabling messaging at runtime", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_SET_ENABLED_CHANNEL } = await import("../../shared/ipc");
 
     registerMessagingStatusIpcHandlers();
@@ -355,9 +352,6 @@ describe("messaging status ipc", () => {
   });
 
   it("approves LINE user pairing into authorized users", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const entry = {
       id: "pairing-line-user",
@@ -399,9 +393,6 @@ describe("messaging status ipc", () => {
   });
 
   it("approves LINE group and room pairing into separate bucket lists", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const approve = async (entry: Record<string, unknown>) => {
       runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
@@ -464,9 +455,6 @@ describe("messaging status ipc", () => {
   });
 
   it("approves Slack observed pairing into the requested allowlist", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-channel",
@@ -535,9 +523,6 @@ describe("messaging status ipc", () => {
   });
 
   it("keeps a Slack request observed and records the target when consume is false", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-stay",
@@ -596,9 +581,6 @@ describe("messaging status ipc", () => {
   it.each(["observed", "expired"] as const)(
     "dismisses a %s partially approved Slack pairing without reporting rejection",
     async (status) => {
-      const { registerMessagingStatusIpcHandlers } = await import(
-        "../ipc/messaging-status"
-      );
       const { MESSAGING_REJECT_PAIRING_CHANNEL } = await import("../../shared/ipc");
       const entry = {
         id: "pairing-slack-partial",
@@ -639,9 +621,6 @@ describe("messaging status ipc", () => {
   );
 
   it("reports rejection when dismissing a Slack pairing with no approvals", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_REJECT_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-unapproved",
@@ -683,9 +662,6 @@ describe("messaging status ipc", () => {
   });
 
   it("confirms a user-only approval and notes the channel is still gated", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-actor-note",
@@ -724,9 +700,6 @@ describe("messaging status ipc", () => {
   });
 
   it("maps a Slack thread pairing to the channel name and team ID, not the thread text", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     // Pairing sent as a thread reply in #signals-chat: title is the thread's
     // root message ("hi"), parentTitle is the channel name, bucketId the team.
@@ -784,9 +757,6 @@ describe("messaging status ipc", () => {
   });
 
   it("maps a Slack channel-level pairing (no thread) to the channel name", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     // Pairing sent directly in #signals-chat (not a thread): the channel name
     // is the chat title, there is no parentTitle, bucketId is the team.
@@ -827,9 +797,6 @@ describe("messaging status ipc", () => {
   });
 
   it("resolves the Slack workspace name for a team approval when available", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-teamname",
@@ -879,9 +846,6 @@ describe("messaging status ipc", () => {
   });
 
   it("falls back to a blank Slack workspace name when the lookup fails", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const entry = {
       id: "pairing-slack-teamname-fail",
@@ -922,9 +886,6 @@ describe("messaging status ipc", () => {
   });
 
   it("approves Feishu user and group pairing into the Feishu allowlists", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     const approve = async (entry: Record<string, unknown>) => {
       runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
@@ -1001,9 +962,6 @@ describe("messaging status ipc", () => {
     // still polling. Asserting the IPC routes through to the lease
     // coordinator's `shutdown` (which both stops the runtime AND
     // releases its lease, mirroring the SIGTERM cleanup).
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_SHUTDOWN_RUNTIME_CHANNEL } = await import("../../shared/ipc");
 
     registerMessagingStatusIpcHandlers();
@@ -1027,9 +985,6 @@ describe("messaging status ipc", () => {
       ],
     };
     activityLogMock.getPlatformActivitySummary.mockReturnValue(summary);
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -1049,9 +1004,6 @@ describe("messaging status ipc", () => {
     // logged but the spawn proceeds. Otherwise a stuck adapter
     // teardown would strand the operator with no main window.
     leaseCoordinatorMock.shutdown.mockRejectedValueOnce(new Error("boom"));
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
     const { MESSAGING_SHUTDOWN_RUNTIME_CHANNEL } = await import("../../shared/ipc");
 
     registerMessagingStatusIpcHandlers();
