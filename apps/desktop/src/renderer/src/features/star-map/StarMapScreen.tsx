@@ -161,9 +161,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // Orbit places bodies on a canvas larger than the window, so the surface
   // pans and zooms rather than compressing the map to fit.
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
+  /**
+   * Set once the operator pans or zooms. From then on the view is theirs:
+   * nothing that merely changes the map's contents may move it.
+   */
+  const operatorMovedViewRef = useRef(false);
   const orbitMode = preferences.layout === "orbit";
   /** Projects as suns: threads pooled across instances, one body per repo. */
   const projectsMode = preferences.layout === "projects";
+  /**
+   * Both big-canvas lenses pan and zoom; lanes fits the window and does
+   * not. Projects previously failed every one of these gates, so its
+   * oversized canvas could not be navigated at all, and the centring
+   * effect pinned it to the origin instead of centring it.
+   */
+  const panZoomMode = orbitMode || projectsMode;
 
   // Focus the layer on open AND whenever the floating thread closes -
   // "Back to map" leaves focus inside <main>, and without a refocus the
@@ -227,10 +239,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // pointer. Registered natively because the listener must not be passive.
   useEffect(() => {
     const element = viewportRef.current;
-    if (!element || !orbitMode) return;
+    if (!element || !panZoomMode) return;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       if (event.ctrlKey) {
+        operatorMovedViewRef.current = true;
         const rect = element.getBoundingClientRect();
         const pointerX = event.clientX - rect.left;
         const pointerY = event.clientY - rect.top;
@@ -249,6 +262,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         });
         return;
       }
+      operatorMovedViewRef.current = true;
       setView((current) => ({
         ...current,
         x: current.x - event.deltaX,
@@ -257,10 +271,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
     };
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => element.removeEventListener("wheel", onWheel);
-  }, [orbitMode]);
+  }, [panZoomMode]);
 
   const startCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!orbitMode || event.button !== 0) return;
+    if (!panZoomMode || event.button !== 0) return;
     if (!shouldStartCanvasPan(event.target)) return;
     const canvas = canvasRef.current;
     const viewport = viewportRef.current;
@@ -293,6 +307,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         frame = 0;
       }
       viewport?.classList.remove("is-panning");
+      operatorMovedViewRef.current = true;
       setView((current) => ({ ...current, x: lastX, y: lastY }));
     };
     window.addEventListener("pointermove", move);
@@ -592,19 +607,44 @@ export function StarMapScreen(props: StarMapScreenProps) {
     });
   }, [laneLayout, lanes, orbit, orbitMode]);
 
-  // Centre the canvas on mode switch / topology change rather than leaving
-  // the operator staring at empty space in a corner.
+  const panZoomCanvas = orbitMode
+    ? { width: orbit.canvasWidth, height: orbit.canvasHeight }
+    : { width: projectLayout.canvasWidth, height: projectLayout.canvasHeight };
+
+  // A lens switch is a different map, so the view starts centred again.
   useEffect(() => {
-    if (!orbitMode) {
+    operatorMovedViewRef.current = false;
+  }, [preferences.layout]);
+
+  /**
+   * Centre the canvas so the operator does not open onto empty space —
+   * but only while the view is still ours to place.
+   *
+   * The canvas size is an input here, and it changes whenever a cloud's
+   * card count changes: archiving a card can drop a ring and resize the
+   * whole canvas. Before the ownership check, that meant tidying up a
+   * thread in one corner of the map threw away the operator's pan and
+   * zoom and snapped them back to centre — the map moving under the
+   * person using it.
+   */
+  useEffect(() => {
+    if (operatorMovedViewRef.current) return;
+    if (!panZoomMode) {
       setView({ x: 0, y: 0, scale: 1 });
       return;
     }
     setView({
-      x: (viewportSize.width - orbit.canvasWidth) / 2,
-      y: (viewportSize.height - orbit.canvasHeight) / 2,
+      x: (viewportSize.width - panZoomCanvas.width) / 2,
+      y: (viewportSize.height - panZoomCanvas.height) / 2,
       scale: 1,
     });
-  }, [orbitMode, orbit.canvasWidth, orbit.canvasHeight, viewportSize.width, viewportSize.height]);
+  }, [
+    panZoomMode,
+    panZoomCanvas.width,
+    panZoomCanvas.height,
+    viewportSize.width,
+    viewportSize.height,
+  ]);
 
   const peerById = useMemo(
     () => new Map(peers.map((peer) => [peer.id, peer])),
