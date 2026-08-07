@@ -84,12 +84,12 @@ export const QUIT_DIALOG_PALETTES: Record<"dark" | "light", QuitDialogPalette> =
     // src/renderer/src/styles/app.css — this dialog is a separate
     // BrowserWindow, so the renderer's a11y gate (e2e/a11y.spec.ts) cannot
     // reach it and will not catch drift. All three below are used as text
-    // colors, and each is at its AA-clearing value: on --bg-panel-hover
-    // (#f4f0e8, the darkest surface here) they measure 4.55:1, 4.57:1, and
-    // 4.91:1 against the 4.5:1 floor.
+    // colors, and each is at its AA-clearing value: against the darkest
+    // background each can land on they measure 4.55:1, 4.57:1, and 4.64:1
+    // against the 4.5:1 floor.
     textMuted: "#736c64",
     accent: "#b74c00",
-    accentBright: "#a35200",
+    accentBright: "#994c00",
     buttonText: "#ffffff",
   },
 };

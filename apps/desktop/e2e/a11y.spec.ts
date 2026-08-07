@@ -85,7 +85,12 @@ async function launchAuditApp(options?: {
 // audit. Tracked separately; when it lands, give these threads a
 // directory so the project chip is covered too.
 // Both themes ship, so both themes are gated. See the header note.
-const AUDIT_THEMES: readonly DesktopAppearanceTheme[] = ["dark", "light"];
+// `as const`, not `readonly DesktopAppearanceTheme[]` — that type also
+// admits "system", which resolves through the OS and lands on light on
+// most Linux runners (see the note on `appearance` in
+// fixtures/electron-app.ts). Pinning the literals keeps a
+// nondeterministic third entry from typechecking its way in.
+const AUDIT_THEMES = ["dark", "light"] as const satisfies readonly DesktopAppearanceTheme[];
 
 const STAR_MAP_FIXTURE = path.resolve(
   specDir,

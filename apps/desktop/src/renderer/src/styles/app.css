@@ -221,16 +221,42 @@
    bright)` text rules sitting at 3.0-3.4:1 on every light surface — e.g. the
    active lens-switch tab at 3.17:1. It now runs with the rest of the ramp.
 
-   CONTRAST FLOOR. Every value here that paints text is chosen to clear WCAG 2
-   AA (4.5:1) against the *darkest* light-theme surface it can land on, which
-   is --bg-panel-hover (#f4f0e8) — not against --bg-app. Measuring against
-   white alone is what let --accent (4.61:1 on white) ship at 4.20:1 on the
-   sidebar and --text-muted (4.34:1 on white) at 3.82:1 on a hovered row.
-   apps/desktop/e2e/a11y.spec.ts gates this in light theme as well as dark.
+   CONTRAST FLOOR. The four tokens below that this pass retuned (--accent,
+   --accent-bright, --text-muted, and by extension the ramp) clear WCAG 2 AA
+   (4.5:1) against the *darkest* background each can land on — not against
+   --bg-app. Measuring against white alone is what let --accent (4.61:1 on
+   white) ship at 4.20:1 on the sidebar and --text-muted (4.34:1 on white) at
+   3.82:1 on a hovered row.
 
-   This is still a v1 light palette — now AA-clean, but designed and not
-   Claude-Design-passed. Worth a polish pass before shipping wide; keep the
-   contrast floor above intact through any such pass.
+   "Darkest background" includes ACCENT-TINTED surfaces, not just the flat
+   --bg-* tokens. 34 rules pair `background: var(--accent-soft)` (12% accent)
+   with `color: var(--accent-bright)`, and that composite is darker than
+   --bg-panel-hover: over a hovered row it lands at #eddccc. --accent-bright
+   is therefore floored against the tint (4.64:1 there) rather than against
+   the flat surface (5.45:1), which is why it sits darker than a
+   flat-surface-only reading would suggest.
+
+   NOT COVERED — pre-existing light-theme debt this pass did NOT fix. Do not
+   read the block below as uniformly AA-clean:
+     --accent on --accent-soft            3.88-4.39  (7 rules: 6 onboarding
+                                          wizard + .launchpad-pending__status.
+                                          Darkening --accent to fix it would
+                                          cost the brand mark more than it is
+                                          worth — move those rules to
+                                          --accent-bright instead.)
+     --status-warning  #a86b00            3.87       (16 `color:` rules)
+     --info-teal       #0e9b95            3.01       (1 rule)
+     --text-subtle     rgba(26,22,18,.42) 2.38       (3 rules)
+     --status-ok       #2e7d3c            4.49       (2 rules, marginal)
+
+   apps/desktop/e2e/a11y.spec.ts gates light as well as dark, but it only
+   proves the surfaces it drives — the onboarding wizard is not one of them.
+   A green gate is not a claim about the whole app.
+
+   This is still a v1 light palette — designed, not Claude-Design-passed.
+   Worth a polish pass before shipping wide; keep the contrast floor above
+   intact through any such pass, and prefer clearing the list above to
+   adding new tokens beside it.
    =========================================================================== */
 :root[data-theme="light"] {
   color-scheme: light;
@@ -268,13 +294,16 @@
      Hue and saturation are held at the original values (25deg / 30deg,
      fully saturated) so this stays the same tangerine; only lightness
      moves. See the ramp-direction note in the block comment above.
-     Worst-case ratios against --bg-panel-hover, the darkest light
-     surface: accent 4.57:1, strong 4.74:1 (value unchanged — it already
-     cleared AA and still lands between the other two), bright 4.91:1.
-     White --accent-on / --button-text on an --accent fill is 5.19:1. */
+     Worst-case ratios: accent 4.57:1 and strong 4.74:1 against
+     --bg-panel-hover, the darkest flat surface (strong's value is
+     unchanged — it already cleared AA and still lands between the other
+     two). --accent-bright is floored against the --accent-soft tint
+     instead, at 4.64:1, because that is where 34 of its rules put it;
+     on flat surfaces it reads 5.45:1. White --accent-on /
+     --button-text on an --accent fill is 5.19:1. */
   --accent: #b74c00;
   --accent-strong: #b34a00;
-  --accent-bright: #a35200;
+  --accent-bright: #994c00;
   /* Light foreground on the darker light-theme accent fill. */
   --accent-on: #ffffff;
   --focus-ring: var(--accent);

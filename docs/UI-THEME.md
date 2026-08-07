@@ -158,7 +158,7 @@ when the app theme changes.
 |---|---|---|
 | `--accent` | `#ff8a1f` | `#b74c00` |
 | `--accent-strong` | `#ffa33d` | `#b34a00` |
-| `--accent-bright` | `#ffb35c` | `#a35200` |
+| `--accent-bright` | `#ffb35c` | `#994c00` |
 | `--accent-soft` | derived (12% of `--accent`) | derived |
 | `--accent-border` | derived (42% of `--accent`) | derived |
 | `--accent-shadow` | derived (34% of `--accent`) | derived |
@@ -172,11 +172,34 @@ The light-theme accent is darker (`#b74c00`) for WCAG-readable contrast on light
 | | `--accent` | `--accent-strong` | `--accent-bright` |
 |---|---|---|---|
 | Dark (emphasis = lightness) | `#ff8a1f` | `#ffa33d` | `#ffb35c` |
-| Light (emphasis = depth) | `#b74c00` | `#b34a00` | `#a35200` |
+| Light (emphasis = depth) | `#b74c00` | `#b34a00` | `#994c00` |
 
-Hue and saturation are held constant per token across the flip — only lightness moves — so both themes render the same tangerine.
+Hue and saturation are held constant per token across the flip — only lightness moves — so both themes render the same tangerine. The brand mark reads `--accent` in every window (see the chrome table in `AGENTS.md`), and its light-theme hue is unchanged by this retune: `#c45200` → `#b74c00` holds Lab hue at 54.2° and moves ΔE2000 3.3.
 
-**Pick contrast against the darkest surface a token can land on, not against `--bg-app`.** In light theme that is `--bg-panel-hover` (`#f4f0e8`), not white. Measuring against white alone is what let `--accent` ship at 4.61:1 on `--bg-app` but 4.20:1 on the sidebar wordmark, and `--text-muted` at 4.34:1 on white but 3.82:1 on a hovered row. Current worst-case ratios: `--accent` 4.57:1, `--accent-strong` 4.74:1, `--accent-bright` 4.91:1, `--text-muted` 4.55:1 — all clear of the 4.5:1 AA floor. `apps/desktop/e2e/a11y.spec.ts` gates both themes.
+**Pick contrast against the darkest background a token can land on, not against `--bg-app`.** Measuring against white alone is what let `--accent` ship at 4.61:1 on `--bg-app` but 4.20:1 on the sidebar wordmark, and `--text-muted` at 4.34:1 on white but 3.82:1 on a hovered row.
+
+"Darkest background" is **not** always a flat `--bg-*` token. 34 rules pair `background: var(--accent-soft)` (12% accent) with `color: var(--accent-bright)`, and that composite is darker than `--bg-panel-hover` — so `--accent-bright` is floored against the tint (4.64:1) rather than the flat surface (5.45:1). Retuned tokens and their worst case:
+
+| Token | Worst-case | Measured against |
+|---|---|---|
+| `--accent` | 4.57:1 | `--bg-panel-hover` |
+| `--accent-strong` | 4.74:1 | `--bg-panel-hover` |
+| `--accent-bright` | 4.64:1 | `--accent-soft` over `--bg-panel-hover` |
+| `--text-muted` | 4.55:1 | `--bg-panel-hover` |
+
+### Known light-theme contrast debt (not fixed)
+
+The light block is **not** uniformly AA-clean. These predate the accent retune and remain open:
+
+| Token / pair | Worst-case | Rules |
+|---|---|---|
+| `--accent` on `--accent-soft` | 3.88–4.39 | 7 (6 onboarding wizard + `.launchpad-pending__status`) — should move to `--accent-bright` |
+| `--status-warning` `#a86b00` | 3.87:1 | 16 `color:` rules |
+| `--info-teal` `#0e9b95` | 3.01:1 | 1 |
+| `--text-subtle` `rgba(26,22,18,.42)` | 2.38:1 | 3 |
+| `--status-ok` `#2e7d3c` | 4.49:1 | 2 (marginal) |
+
+`apps/desktop/e2e/a11y.spec.ts` gates both themes, but only across the surfaces it drives — the onboarding wizard is not one of them. **A green gate is not a claim about the whole app.**
 
 #### Semantic — danger / success / info
 
