@@ -5174,6 +5174,143 @@ describe("Composer", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("preserves a remote queued projection while admission is still pending", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          federationTarget?: {
+            scope: "remote";
+            instanceId: string;
+          };
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const draftStore = createComposerDraftStore();
+    const cancelQueuedTurn = vi.fn(async ({ queueEntryId }: {
+      queueEntryId: string;
+    }) => ({
+      queueEntryId,
+      cancelled: false,
+      disposition: "already_admitted" as const,
+    }));
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex"),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          cancelQueuedTurn,
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: vi.fn(async () => ({
+            backend: "codex" as const,
+            threadId: "thread-1",
+            turnId: "queue-entry-1",
+            queueStatus: "queued" as const,
+            queueEntryId: "queue-entry-1",
+          })),
+          steerTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Remote active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: federationTarget,
+              threadId: "thread-1",
+            },
+            instanceLabel: "Remote",
+            peerStatus: "connected",
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Preserve until admitted" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    await screen.findByLabelText("Queued message");
+
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+
+    await waitFor(() => {
+      expect(cancelQueuedTurn).toHaveBeenCalledWith({
+        federationTarget,
+        queueEntryId: "queue-entry-1",
+      });
+    });
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Preserve until admitted",
+    );
+    expect(
+      draftStore.getQueuedTurn("thread:codex:thread-1"),
+    ).toMatchObject({
+      queueEntryId: "queue-entry-1",
+      text: "Preserve until admitted",
+    });
+    expect(steerTurn).not.toHaveBeenCalled();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "thread-1",
+            queueEntryId: "queue-entry-1",
+            status: "failed",
+            errorMessage: "Remote queue startup failed",
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    expect(screen.getByText("Remote queue startup failed")).toBeInTheDocument();
+  });
+
   it("removes concurrently cancelled queue entries by stable id", async () => {
     const cancellationOne = createDeferred<{
       queueEntryId: string;

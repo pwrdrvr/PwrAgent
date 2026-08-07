@@ -258,4 +258,38 @@ describe("ThreadTurnQueue", () => {
       turnId: "turn-admitted-1",
     });
   });
+
+  it("reports an admission without a turn id while backend startup is pending", async () => {
+    let rejectStart!: (reason?: unknown) => void;
+    const starting = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const queue = new ThreadTurnQueue({
+      startTurn: () => starting,
+      onLifecycle: (event) => {
+        events.push(event);
+      },
+    });
+
+    const submission = queue.submit(buildEntry({ id: "starting-1" }));
+    await Promise.resolve();
+
+    expect(queue.cancelEntryWithDisposition("starting-1")).toEqual({
+      disposition: "already_admitted",
+      entryId: "starting-1",
+    });
+
+    rejectStart(new Error("backend startup failed"));
+    await expect(submission).rejects.toThrow("backend startup failed");
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "failed",
+        entry: expect.objectContaining({ id: "starting-1" }),
+      }),
+    ]);
+    expect(queue.cancelEntryWithDisposition("starting-1")).toEqual({
+      disposition: "not_found",
+    });
+  });
 });

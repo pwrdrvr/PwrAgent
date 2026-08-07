@@ -4068,7 +4068,14 @@ export function Composer(props: ComposerProps) {
       });
       if (!response.cancelled) {
         if (response.disposition === "already_admitted") {
-          removeQueuedTurnInScope(scopeKey, queued);
+          // The owner records admission before awaiting backend startup so a
+          // second cancellation cannot race back into the FIFO. Until startup
+          // returns a turn id, however, this draft is still the recovery copy
+          // for a possible failed lifecycle event. Keep it visible and durable
+          // until `started` or `failed` resolves the admission.
+          if (response.turnId) {
+            removeQueuedTurnInScope(scopeKey, queued);
+          }
           if (activeComposerScopeKeyRef.current === scopeKey) {
             setSendError(undefined);
           }
