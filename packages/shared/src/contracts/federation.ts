@@ -376,12 +376,54 @@ export type ReadFederationDiagnosticsResponse = {
   events: FederationDiagnosticEvent[];
 };
 
+/**
+ * What a revoke / forget-pairing does to the viewer's pinned remote
+ * threads for the affected instances.
+ *
+ * `remember` (the default everywhere) tombstones them: the rows stop
+ * rendering, but a later re-enrollment restores the operator's curated
+ * list. `forget` is the explicit, irreversible discard. Defaulting to
+ * `remember` keeps an un-updated or buggy caller on the non-destructive
+ * path — the reverse default would silently delete operator data.
+ */
+export type FederationPinDisposition = "forget" | "remember";
+
+export function isFederationPinDisposition(
+  value: unknown,
+): value is FederationPinDisposition {
+  return value === "forget" || value === "remember";
+}
+
 export type RevokeFederationPeerRequest = {
   peerId: FederationPeerId;
+  pinDisposition?: FederationPinDisposition;
 };
 
 export type RevokeFederationPeerResponse = {
   peer: FederationPeerSummary;
+};
+
+/** Which instances a pending revoke / forget would affect. */
+export type FederationPinImpactScope =
+  | { kind: "peer"; peerId: FederationPeerId }
+  | { kind: "enrollment" };
+
+export type ReadFederationPinImpactRequest = {
+  scope: FederationPinImpactScope;
+};
+
+/**
+ * Drives the keep-or-forget prompt. Both counts zero means the operator
+ * has nothing pinned from the affected instances, so the prompt must not
+ * appear at all — there is nothing to preserve or discard.
+ */
+export type ReadFederationPinImpactResponse = {
+  /** Live pins that would be hidden (remember) or deleted (forget). */
+  pinnedThreadCount: number;
+  /** Pins already tombstoned by an earlier revoke of the same scope. */
+  tombstonedThreadCount: number;
+  /** Display labels of the affected instances, for the prompt copy. */
+  instanceLabels: string[];
 };
 
 export type GenerateFederationInviteRequest = {
@@ -410,7 +452,9 @@ export type ImportFederationInviteResponse = {
   gatewayEndpoints: string[];
 };
 
-export type ResetFederationEnrollmentRequest = Record<string, never>;
+export type ResetFederationEnrollmentRequest = {
+  pinDisposition?: FederationPinDisposition;
+};
 
 export type ResetFederationEnrollmentResponse = {
   cleared: boolean;

@@ -8,6 +8,7 @@ export const FEDERATION_IMPORT_INVITE_CHANNEL = "federation:import-invite";
 export const FEDERATION_REVOKE_PEER_CHANNEL = "federation:revoke-peer";
 export const FEDERATION_RESET_ENROLLMENT_CHANNEL =
   "federation:reset-enrollment";
+export const FEDERATION_PIN_IMPACT_CHANNEL = "federation:pin-impact";
 export const FEDERATION_TAILSCALE_STATUS_CHANNEL = "federation:tailscale-status";
 export const FEDERATION_TAILSCALE_CONFIGURE_CHANNEL =
   "federation:tailscale-configure";
@@ -151,6 +152,8 @@ export const NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL =
   "navigation:set-directory-threads-collapsed";
 export const NAVIGATION_REFRESH_THREAD_PRS_CHANNEL =
   "navigation:refresh-thread-prs";
+export const NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL =
+  "navigation:refresh-thread-git-working-state";
 export const NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL =
   "navigation:set-pr-polling-focus";
 export const NAVIGATION_DETACH_THREAD_PR_CHANNEL =

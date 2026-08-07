@@ -47,6 +47,7 @@ type RecentsListProps = {
     position: { x: number; y: number; anchorTop?: number }
   ) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
+  onPrefetchGitWorkingState?: (thread: NavigationThreadSummary) => void;
   onDetachPullRequest?: (
     thread: NavigationThreadSummary,
     pr: PrSummary,
@@ -243,6 +244,7 @@ export function RecentsList(props: RecentsListProps) {
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
               onDetachPullRequest={props.onDetachPullRequest}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
+              onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
               onRevealSelectedThreadComplete={
                 props.onRevealSelectedThreadComplete
               }
@@ -391,6 +393,7 @@ export function RecentsList(props: RecentsListProps) {
           onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
           onDetachPullRequest={props.onDetachPullRequest}
           onPrefetchPullRequests={props.onPrefetchPullRequests}
+          onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
           onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
           onSelectThread={(target, event) =>
             props.onSelectThread(target, event, selectionOrder)

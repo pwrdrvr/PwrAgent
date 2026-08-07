@@ -21,6 +21,7 @@ import {
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
+  type FederationInstanceId,
   type MessagingChannelKind,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
@@ -74,6 +75,7 @@ import { MarkdownRenderingOptionsProvider } from "./lib/markdown-rendering-optio
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
+import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
 import { useThreadSessionState } from "./lib/useThreadSessionState";
 import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "./lib/thread-history-limits";
 import { setSidebarResizing } from "./lib/sidebar-resize-signal";
@@ -881,6 +883,10 @@ function DesktopAppShell(props: {
     onRefreshNavigation: navigation.refresh,
     selectedThread: navigation.selectedThread,
   });
+  const gitWorkingState = useThreadGitWorkingStateRefresh({
+    desktopApi,
+    selectedThread: navigation.selectedThread,
+  });
   // Browser-style back/forward across threads, project launchpads, and the
   // search view. Settings and Automations stay untracked because they're
   // modal-ish chrome. Search query/results live up here so Back lands on a
@@ -907,11 +913,33 @@ function DesktopAppShell(props: {
   // the scheme never carries an action, so this is the entire surface it can
   // reach. Mirrors the tray/notification `onShowThreadRequested` path below.
   const showThreadFromLink = useCallback(
-    (request: { backend: AppServerBackendKind; threadId: string }): void => {
+    (request: {
+      backend: AppServerBackendKind;
+      instanceId?: FederationInstanceId;
+      threadId: string;
+    }): void => {
+      if (request.instanceId) {
+        const windowTarget = readRendererFederationTarget();
+        if (windowTarget?.instanceId !== request.instanceId) {
+          const target = {
+            scope: "remote" as const,
+            instanceId: request.instanceId,
+          };
+          void desktopApi?.openFederationWindow?.({
+            target,
+            initialThread: {
+              backend: request.backend,
+              target,
+              threadId: request.threadId,
+            },
+          });
+          return;
+        }
+      }
       setMainView("thread");
-      void showThread(request);
+      void showThread({ backend: request.backend, threadId: request.threadId });
     },
-    [showThread],
+    [desktopApi, showThread],
   );
   const restoreHistoryLocation = useCallback(
     (location: NavigationHistoryLocation): void => {
@@ -1833,6 +1861,7 @@ function DesktopAppShell(props: {
             void navigation.removeDirectory(directory.key);
           }}
           onPrefetchPullRequests={pullRequests.prefetch}
+          onPrefetchGitWorkingState={gitWorkingState.prefetch}
           onDetachPullRequest={async (thread, pr) => {
             if (!desktopApi?.detachThreadPullRequest) return;
             await desktopApi.detachThreadPullRequest({

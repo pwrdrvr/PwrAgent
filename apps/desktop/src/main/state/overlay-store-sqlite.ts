@@ -1811,7 +1811,13 @@ export class SqliteOverlayStore {
            payload
          ) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(instance_id, backend, thread_id) DO UPDATE SET
-           payload = excluded.payload`,
+           payload = excluded.payload,
+           -- Pinning is unambiguous intent that this row should be live.
+           -- Leaving a tombstone in place would swallow the click: the pin
+           -- succeeds in the db and never appears in the list. Restoring on
+           -- reconnect is best-effort, so the invariant has to hold here too
+           -- rather than depend on that hook having run.
+           revoked_at = NULL`,
       )
       .run(instanceId, params.ref.backend, params.ref.threadId, addedAt, payload);
     const row = this.stateDb.raw
@@ -1912,11 +1918,19 @@ export class SqliteOverlayStore {
     return ranks;
   }
 
+  /**
+   * Whether a LIVE pin exists. A tombstoned row must answer false: callers
+   * ask this to decide whether they still need to pin something, and a
+   * hidden row cannot satisfy that. Counting one would, for instance, let
+   * companion-parent pinning skip a parent that never renders, leaving its
+   * child as a bare top-level row.
+   */
   async hasRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
     const row = this.stateDb.raw
       .prepare(
         `SELECT 1 FROM remote_thread_pins
-         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?
+           AND revoked_at IS NULL`,
       )
       .get(
         remotePinInstanceId(params.ref),
@@ -1940,12 +1954,29 @@ export class SqliteOverlayStore {
     return result.changes > 0;
   }
 
-  async listRemoteThreadPins(): Promise<RemoteThreadPin[]> {
+  /**
+   * Live pins, newest first. Tombstoned rows (owning instance revoked or
+   * its gateway pairing forgotten) are excluded by default: we know they
+   * are unreachable FOR CAUSE, so unlike a peer that is merely offline
+   * they must not sit in the list dimming. Pass `includeRevoked` for
+   * impact counts and restore bookkeeping.
+   */
+  async listRemoteThreadPins(options?: {
+    includeRevoked?: boolean;
+  }): Promise<RemoteThreadPin[]> {
+    // Two fully-written statements rather than one with an interpolated
+    // WHERE: the SQL guard rejects assembled query text outright, and a
+    // literal pair is what the rest of this file does.
     const rows = this.stateDb.raw
       .prepare(
-        `SELECT instance_id, backend, thread_id, added_at, payload
-         FROM remote_thread_pins
-         ORDER BY added_at DESC`,
+        options?.includeRevoked
+          ? `SELECT instance_id, backend, thread_id, added_at, payload, revoked_at
+             FROM remote_thread_pins
+             ORDER BY added_at DESC`
+          : `SELECT instance_id, backend, thread_id, added_at, payload, revoked_at
+             FROM remote_thread_pins
+             WHERE revoked_at IS NULL
+             ORDER BY added_at DESC`,
       )
       .all() as Array<{
         instance_id: string;
@@ -1953,6 +1984,7 @@ export class SqliteOverlayStore {
         thread_id: string;
         added_at: number;
         payload: string;
+        revoked_at: number | null;
       }>;
     const pins: RemoteThreadPin[] = [];
     for (const row of rows) {
@@ -1989,6 +2021,7 @@ export class SqliteOverlayStore {
         ...(typeof parsed.localPinnedRank === "string" && parsed.localPinnedRank
           ? { localPinnedRank: parsed.localPinnedRank }
           : {}),
+        ...(row.revoked_at !== null ? { revokedAt: row.revoked_at } : {}),
       });
     }
     return pins;
@@ -2029,18 +2062,105 @@ export class SqliteOverlayStore {
             parsed = {};
           }
         }
+        const nextPayload = JSON.stringify({
+          ...parsed,
+          instanceLabel: entry.instanceLabel,
+          summary: stripFederationStamp(entry.summary),
+        });
+        // The merge re-serves cached rows on every navigation refresh;
+        // skip the write when nothing actually changed.
+        if (row && row.payload === nextPayload) {
+          continue;
+        }
         update.run(
-          JSON.stringify({
-            ...parsed,
-            instanceLabel: entry.instanceLabel,
-            summary: stripFederationStamp(entry.summary),
-          }),
+          nextPayload,
           instanceId,
           entry.ref.backend,
           entry.ref.threadId,
         );
       }
     })();
+  }
+
+  /**
+   * Permanently drop every pin owned by one instance. This is the operator
+   * explicitly choosing "forget these threads" at revoke time — the
+   * default path tombstones instead, because revoke-then-re-enroll to
+   * repair a peer is common and losing the curated list would be hostile.
+   * Returns the number of pins removed.
+   */
+  async removeRemoteThreadPinsForInstance(params: {
+    instanceId: string;
+  }): Promise<number> {
+    const result = this.stateDb.raw
+      .prepare("DELETE FROM remote_thread_pins WHERE instance_id = ?")
+      .run(params.instanceId);
+    return result.changes;
+  }
+
+  /**
+   * Hide one instance's pins without discarding them. Already-tombstoned
+   * rows keep their original timestamp so a second revoke does not restate
+   * when the list was actually put away.
+   */
+  async tombstoneRemoteThreadPinsForInstance(params: {
+    instanceId: string;
+    revokedAt?: number;
+  }): Promise<number> {
+    const result = this.stateDb.raw
+      .prepare(
+        `UPDATE remote_thread_pins
+         SET revoked_at = ?
+         WHERE instance_id = ? AND revoked_at IS NULL`,
+      )
+      .run(params.revokedAt ?? Date.now(), params.instanceId);
+    return result.changes;
+  }
+
+  /** Bring one instance's tombstoned pins back after a re-enrollment. */
+  async restoreRemoteThreadPinsForInstance(params: {
+    instanceId: string;
+  }): Promise<number> {
+    const result = this.stateDb.raw
+      .prepare(
+        `UPDATE remote_thread_pins
+         SET revoked_at = NULL
+         WHERE instance_id = ? AND revoked_at IS NOT NULL`,
+      )
+      .run(params.instanceId);
+    return result.changes;
+  }
+
+  /**
+   * Live vs tombstoned pin counts, keyed by instance. Drives the
+   * keep-or-forget prompt, which must stay hidden when the operator has
+   * nothing pinned from the affected instances — there would be nothing to
+   * decide. One grouped read rather than a query per instance: the caller
+   * needs several at once and an absent instance is simply a missing key.
+   */
+  async countRemoteThreadPinsByInstance(): Promise<
+    Map<string, { live: number; revoked: number }>
+  > {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT
+           instance_id,
+           SUM(CASE WHEN revoked_at IS NULL THEN 1 ELSE 0 END) AS live,
+           SUM(CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END) AS revoked
+         FROM remote_thread_pins
+         GROUP BY instance_id`,
+      )
+      .all() as Array<{
+        instance_id: string;
+        live: number | null;
+        revoked: number | null;
+      }>;
+    return new Map(
+      rows.map((row) => [
+        row.instance_id,
+        { live: row.live ?? 0, revoked: row.revoked ?? 0 },
+      ]),
+    );
   }
 
   async setThreadAgent(params: {

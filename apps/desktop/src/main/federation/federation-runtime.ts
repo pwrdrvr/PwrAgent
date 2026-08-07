@@ -25,6 +25,7 @@ import type {
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
+  FederationPinDisposition,
   FederationProtocolEnvelope,
   FederationSessionId,
   ForkThreadResponse,
@@ -38,7 +39,10 @@ import type {
   PwrSnapConnectionStatus,
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
+  ReadFederationPinImpactRequest,
+  ReadFederationPinImpactResponse,
   RefreshDirectoryGitStatusesResponse,
+  ResetFederationEnrollmentRequest,
   RetainThreadBranchDriftResponse,
   RenameThreadResponse,
   RunCodexEnvironmentActionResponse,
@@ -59,6 +63,7 @@ import type {
   UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared";
 import {
+  FEDERATION_EVENT_CLASSES,
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
@@ -124,7 +129,6 @@ import {
   type StartReviewRequest,
   type StartThreadRequest,
   type SteerTurnRequest,
-  type StartTurnRequest,
   type StartTurnResponse,
   type SubmitServerRequestRequest,
   type StopCodexEnvironmentActionRequest,
@@ -169,6 +173,7 @@ import {
   type FederationBackendEventNotification,
   type FederationBackendOperations,
   type FederationEnvironmentSetupProgressNotification,
+  type FederationStartTurnRequest,
 } from "./federation-backend-bridge";
 import {
   buildFederationHealthStatus,
@@ -615,6 +620,29 @@ export class DesktopFederationRuntime {
     );
   }
 
+  /**
+   * A full remote viewer holds one source-wide desired-state consumer for
+   * every event class its peer capabilities authorize. Narrower consumers
+   * (Star Map, pinned summaries, messaging) are unioned independently, so
+   * their cleanup cannot unsubscribe a still-open remote desktop window.
+   */
+  setRemoteWindowEventSubscription(
+    webContentsId: number,
+    sourceInstanceId: FederationInstanceId,
+    capabilities: readonly FederationCapability[],
+  ): FederationEventSubscription[] {
+    return this.setRendererEventSubscriptions(
+      webContentsId,
+      "remote-window",
+      [{
+        sourceInstanceId,
+        eventClasses: FEDERATION_EVENT_CLASSES.filter((eventClass) =>
+          eventClassAllowedByCapabilities(eventClass, capabilities)
+        ),
+      }],
+    );
+  }
+
   clearRendererEventSubscriptions(
     webContentsId: number,
     consumerId?: "remote-window" | "star-map" | "thread-view",
@@ -821,9 +849,13 @@ export class DesktopFederationRuntime {
    * the runtime. A client-only instance falls back to disabled mode so
    * it does not sit in a doomed reconnect loop against nothing.
    */
-  async resetEnrollment(): Promise<{ cleared: boolean }> {
+  async resetEnrollment(
+    request?: ResetFederationEnrollmentRequest,
+  ): Promise<{ cleared: boolean }> {
     const stateDb = getAppStateDb();
-    const hadEnrollment = Boolean(stateDb.getMeta(GATEWAY_INSTANCE_ID_META_KEY));
+    const hadEnrollment = Boolean(
+      stateDb.getMeta(GATEWAY_INSTANCE_ID_META_KEY),
+    );
     stateDb.setMeta(GATEWAY_INSTANCE_ID_META_KEY, "");
     stateDb.setMeta(GATEWAY_PUBLIC_KEY_META_KEY, "");
     stateDb.setMeta(GATEWAY_NOISE_PUBLIC_KEY_META_KEY, "");
@@ -876,6 +908,18 @@ export class DesktopFederationRuntime {
       this.persistCelestialAssignments();
       this.publishCelestialIconsChanged();
     }
+    // Every pinned instance reachable only through the forgotten gateway
+    // goes with it, not just the gateway's own threads — those rows are
+    // exactly as unreachable, and leaving them behind was the gap in the
+    // first cut of this cleanup.
+    const pinDisposition = request?.pinDisposition ?? "remember";
+    const pinCountsByInstance = await getDesktopOverlayStore()
+      .countRemoteThreadPinsByInstance();
+    for (const instanceId of this.enrollmentScopedPinInstanceIds(
+      pinCountsByInstance,
+    )) {
+      await this.cleanupRemoteThreadPins(instanceId, pinDisposition);
+    }
     await this.restart();
     return { cleared: hadEnrollment };
   }
@@ -898,7 +942,10 @@ export class DesktopFederationRuntime {
     };
   }
 
-  async revokePeer(peerId: FederationInstanceId): Promise<FederationPeerSummary> {
+  async revokePeer(
+    peerId: FederationInstanceId,
+    request?: { pinDisposition?: FederationPinDisposition },
+  ): Promise<FederationPeerSummary> {
     const store = this.store();
     const peer = store.getPeer(peerId);
     if (!peer) {
@@ -914,11 +961,155 @@ export class DesktopFederationRuntime {
     // Free the revoked instance's celestial icon and propagate the removal
     // so it cannot squat one of the five ids forever.
     this.removeCelestialAssignment(peerId, revokedAt);
+    await this.cleanupRemoteThreadPins(
+      peerId,
+      request?.pinDisposition ?? "remember",
+      revokedAt,
+    );
     return publicPeerSummary({
       ...peer,
       status: "revoked",
       revokedAt,
     });
+  }
+
+  /**
+   * Put away (or discard) one instance's pinned rows. They must stop
+   * rendering either way: unlike a peer that is merely offline, a revoked
+   * instance is unreachable FOR CAUSE, so leaving the rows to dim would be
+   * noise the operator cannot act on.
+   *
+   * `remember` tombstones, and is the default. Revoking a peer and
+   * re-enrolling it to clear up a problem is a routine repair, and hard
+   * deletion would make the operator re-find and re-pin every thread each
+   * time. `forget` is reserved for the operator explicitly asking to
+   * discard. Best-effort throughout: pin bookkeeping must never block or
+   * fail the revocation itself.
+   */
+  private async cleanupRemoteThreadPins(
+    instanceId: FederationInstanceId,
+    disposition: FederationPinDisposition,
+    revokedAt?: number,
+  ): Promise<void> {
+    try {
+      this.remoteThreadSummaryCache?.invalidate(instanceId);
+      const overlayStore = getDesktopOverlayStore();
+      const affected =
+        disposition === "forget"
+          ? await overlayStore.removeRemoteThreadPinsForInstance({ instanceId })
+          : await overlayStore.tombstoneRemoteThreadPinsForInstance({
+              instanceId,
+              revokedAt,
+            });
+      if (affected === 0) {
+        return;
+      }
+      log.info("remote thread pins cleaned up after revocation", {
+        instanceId,
+        disposition,
+        affected,
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: { instanceId, pinned: false },
+        },
+      });
+    } catch (error) {
+      log.warn("remote thread pin cleanup failed", {
+        instanceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * A peer that connects again has been re-enrolled (federation policy
+   * refuses revoked peers), so its tombstoned pins are live again. This is
+   * the payoff for tombstoning: the revoke → fix → re-enroll cycle returns
+   * the operator's curated list without them lifting a finger.
+   */
+  private async restoreRemoteThreadPins(
+    instanceId: FederationInstanceId,
+  ): Promise<void> {
+    try {
+      const restored = await getDesktopOverlayStore()
+        .restoreRemoteThreadPinsForInstance({ instanceId });
+      if (restored === 0) {
+        return;
+      }
+      this.remoteThreadSummaryCache?.invalidate(instanceId);
+      log.info("remote thread pins restored after re-enrollment", {
+        instanceId,
+        restored,
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: { instanceId, pinned: true },
+        },
+      });
+    } catch (error) {
+      log.warn("remote thread pin restore failed", {
+        instanceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * How many pinned threads a pending revoke / forget would affect, so the
+   * renderer can skip the keep-or-forget prompt entirely when the operator
+   * has nothing pinned from the affected instances.
+   */
+  async readRemoteThreadPinImpact(
+    request: ReadFederationPinImpactRequest,
+  ): Promise<ReadFederationPinImpactResponse> {
+    const countsByInstance = await getDesktopOverlayStore()
+      .countRemoteThreadPinsByInstance();
+    const instanceIds =
+      request.scope.kind === "peer"
+        ? [request.scope.peerId]
+        : this.enrollmentScopedPinInstanceIds(countsByInstance);
+    let pinnedThreadCount = 0;
+    let tombstonedThreadCount = 0;
+    const instanceLabels: string[] = [];
+    let visible: FederationPeerSummary[];
+    try {
+      visible = this.visiblePeers();
+    } catch {
+      visible = [];
+    }
+    for (const instanceId of instanceIds) {
+      const counts = countsByInstance.get(instanceId);
+      if (!counts) {
+        continue;
+      }
+      pinnedThreadCount += counts.live;
+      tombstonedThreadCount += counts.revoked;
+      const peer = visible.find((candidate) => candidate.id === instanceId);
+      instanceLabels.push(
+        peer ? formatFederationPeerDisplayLabel(peer, visible) : instanceId,
+      );
+    }
+    return { pinnedThreadCount, tombstonedThreadCount, instanceLabels };
+  }
+
+  /**
+   * Instances whose pins a "forget gateway pairing" would affect: the
+   * gateway itself plus every pinned instance this viewer reaches only
+   * THROUGH it. A directly connected peer (a dual instance's own enrolled
+   * client) survives the upstream reset, so its pins must not be touched —
+   * the same reasoning `resetEnrollment` applies to celestial icons.
+   */
+  private enrollmentScopedPinInstanceIds(
+    countsByInstance: ReadonlyMap<string, unknown>,
+  ): FederationInstanceId[] {
+    return [...countsByInstance.keys()].filter(
+      (instanceId) => !this.router?.getConnection(instanceId),
+    );
   }
 
   async generateInvite(request: {
@@ -1102,13 +1293,10 @@ export class DesktopFederationRuntime {
     const instanceLabel = peer
       ? formatFederationPeerDisplayLabel(peer, visible)
       : target.instanceId;
-    // The granted set the viewer can act on. Gateway-advertised capabilities
-    // remain authoritative for relayed peers just as live connection
-    // capabilities are for direct peers.
-    const directConnection = this.router?.getConnection(target.instanceId);
-    const capabilities = directConnection
-      ? [...directConnection.capabilities]
-      : [...(visiblePeer?.capabilities ?? [])];
+    const capabilities = this.viewerCapabilitiesFor(
+      target.instanceId,
+      visiblePeer,
+    );
     const peerStatus = visiblePeer?.status ?? peer?.status;
     const threads = response.threads.map((thread) => {
       const ref = buildFederatedThreadRef({
@@ -1133,6 +1321,29 @@ export class DesktopFederationRuntime {
       unchanged: false,
       threads,
     };
+  }
+
+  /**
+   * The granted set the VIEWER can act on for a peer: the live connection's
+   * capabilities for a direct peer, the gateway-advertised set for a relayed
+   * one. Both are authoritative — PTY relays through gateways as of #1289,
+   * so nothing is withheld from a relayed peer.
+   *
+   * Single source of truth for every viewer-side stamp — the live snapshot
+   * rows AND the pinned-row fallback served from cache. Copying the rule
+   * into the fallback path instead would let the two drift, and the drift
+   * that matters is silent: a pinned row offering a capability the live row
+   * refuses, or withholding one it grants. `connectedPeerTargets()` is NOT a
+   * substitute — it only knows directly connected peers.
+   */
+  private viewerCapabilitiesFor(
+    instanceId: FederationInstanceId,
+    visiblePeer: FederationPeerSummary | undefined,
+  ): FederationCapability[] {
+    const directConnection = this.router?.getConnection(instanceId);
+    return directConnection
+      ? [...directConnection.capabilities]
+      : [...(visiblePeer?.capabilities ?? [])];
   }
 
   /**
@@ -1161,6 +1372,7 @@ export class DesktopFederationRuntime {
                 status: peer.status,
                 label: formatFederationPeerDisplayLabel(peer, visible),
                 celestialIcon: peer.celestialIcon,
+                capabilities: this.viewerCapabilitiesFor(instanceId, peer),
               }
             : {};
         } catch {
@@ -1183,6 +1395,24 @@ export class DesktopFederationRuntime {
               eventClasses: ["navigation"],
             })),
         );
+      },
+      // Pinned-summary refreshes land in the background (the snapshot
+      // merge never awaits a peer) — poke the renderer so its next
+      // navigation refresh serves the fresh rows.
+      onPinnedSummariesRefreshed: (instanceId) => {
+        void getDesktopBackendRegistry()
+          .publishLocalEvent({
+            backend: "codex",
+            notification: {
+              method: "navigation/remoteThreadPins/changed",
+              params: { instanceId },
+            },
+          })
+          .catch((error: unknown) => {
+            log.warn("remote pin summary refresh publish failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
       },
     });
     return this.remoteThreadSummaryCache;
@@ -3145,6 +3375,13 @@ export class DesktopFederationRuntime {
       return;
     }
     this.publishedPeerStatuses.set(instanceId, { status, unavailableReason });
+    if (status === "connected") {
+      // Hooked to the status TRANSITION (this method already de-dupes
+      // repeats) rather than to a specific enrollment call site, so every
+      // way a peer can come back — invite redemption, gateway re-pairing,
+      // a relayed peer reappearing — restores its pins through one path.
+      void this.restoreRemoteThreadPins(instanceId);
+    }
     for (const listener of this.peerStatusListeners) {
       try {
         listener();
@@ -3322,6 +3559,10 @@ function localBackendOperations(): FederationBackendOperations {
         threads,
       };
     },
+    async resolveThread(request) {
+      const thread = await getDesktopBackendRegistry().resolveThread(request);
+      return thread ? { thread } : {};
+    },
     async readThread(
       request: AppServerReadThreadRequest,
     ): Promise<AppServerReadThreadResponse> {
@@ -3474,7 +3715,9 @@ function localBackendOperations(): FederationBackendOperations {
           options?.onCodexEnvironmentSetupProgress,
       });
     },
-    async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
+    async startTurn(
+      request: FederationStartTurnRequest,
+    ): Promise<StartTurnResponse> {
       const submitted = await getDesktopBackendRegistry().submitTurn({
         ...request,
         origin: "manual",

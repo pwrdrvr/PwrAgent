@@ -347,7 +347,10 @@ import {
   isPwrAgentThreadOrchestrationDynamicToolCall,
   readPwrAgentThreadOrchestrationDynamicToolCall,
 } from "../agent-tools/pwragent-thread-orchestration-codex-tools";
-import type { PwrAgentThreadOrchestrationHandler } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
+import type {
+  PwrAgentFederatedThreadMessageHandler,
+  PwrAgentThreadOrchestrationHandler,
+} from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import {
   buildPwrAgentFederationDynamicToolErrorResponse,
   handlePwrAgentFederationDynamicToolCall,
@@ -6394,6 +6397,9 @@ export class DesktopBackendRegistry {
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
     async (request) => await this.handleThreadOrchestrationRequest(request);
   private federationHandler: PwrAgentFederationHandler | undefined;
+  private federatedThreadMessageHandler:
+    | PwrAgentFederatedThreadMessageHandler
+    | undefined;
   private threadPullRequestStatusToolHandler:
     | ThreadPullRequestStatusToolHandler
     | undefined;
@@ -7110,6 +7116,12 @@ export class DesktopBackendRegistry {
     this.federationHandler = handler ?? undefined;
   }
 
+  setFederatedThreadMessageHandler(
+    handler: PwrAgentFederatedThreadMessageHandler | null | undefined,
+  ): void {
+    this.federatedThreadMessageHandler = handler ?? undefined;
+  }
+
   setThreadPullRequestStatusToolHandler(
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
@@ -7641,6 +7653,34 @@ export class DesktopBackendRegistry {
       });
     this.threadListCache.set(cacheKey, { promise });
     return await promise;
+  }
+
+  async resolveThread(params: {
+    backend?: AppServerBackendKind;
+    threadId: string;
+  }): Promise<AppServerThreadSummary | undefined> {
+    const threadId = params.threadId.trim();
+    if (!threadId) {
+      return undefined;
+    }
+    for (const state of this.threadListCache.values()) {
+      const cached = state.threads?.find(
+        (thread) =>
+          (!params.backend || thread.source === params.backend)
+          && thread.id === threadId,
+      );
+      if (cached) {
+        return cached;
+      }
+    }
+    const threads = await this.listThreads({
+      backend: params.backend,
+      archived: false,
+      callerReason: "thread-id-lookup",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+    return threads.find((thread) => thread.id === threadId);
   }
 
   async getThreadAgentMetadata(params: {
@@ -22181,34 +22221,73 @@ export class DesktopBackendRegistry {
           : {}),
         ...(request.args.sandbox ? { sandbox: request.args.sandbox } : {}),
       };
-      const turn = await this.startTurn({
-        backend,
-        threadId,
-        input: [{ type: "text", text: prompt }],
-        messageOrigin: {
-          kind: "agent",
-          sourceThread: {
-            backend: request.context.backend,
-            threadId: request.context.threadId,
-          },
+      const input = [{ type: "text" as const, text: prompt }];
+      const messageOrigin = {
+        kind: "agent" as const,
+        sourceThread: {
+          backend: request.context.backend,
+          threadId: request.context.threadId,
         },
-        executionMode: request.args.executionMode,
-        model: request.args.model,
-        reasoningEffort: request.args.reasoningEffort,
-        serviceTier: request.args.serviceTier,
-        fastMode: request.args.fastMode,
-        approvalPolicy: request.args.approvalPolicy,
-        sandbox: request.args.sandbox,
-      });
-      // Best-effort: give the link its human title so it reads well on
-      // surfaces that can't resolve the id against the live snapshot (the
-      // desktop chip shows the live title regardless). `listThreads` is
-      // cached, so this usually costs nothing.
-      const targetThread = await this.findThreadForWorkspaceHandoff({
+      };
+      let targetTitle: string | undefined;
+      let targetInstanceId: string | undefined;
+      let turn: { backend: AppServerBackendKind; threadId: string; turnId: string };
+      let localResolutionError: unknown;
+      let localThread: AppServerThreadSummary | undefined;
+      try {
+        localThread = await this.resolveThread({ backend, threadId });
+      } catch (error) {
+        localResolutionError = error;
+      }
+      if (localThread) {
+        turn = await this.startTurn({
+          backend,
+          threadId,
+          input,
+          messageOrigin,
+          executionMode: request.args.executionMode,
+          model: request.args.model,
+          reasoningEffort: request.args.reasoningEffort,
+          serviceTier: request.args.serviceTier,
+          fastMode: request.args.fastMode,
+          approvalPolicy: request.args.approvalPolicy,
+          sandbox: request.args.sandbox,
+        });
+        targetTitle = localThread.title;
+      } else if (this.federatedThreadMessageHandler) {
+        const remoteTurn = await this.federatedThreadMessageHandler({
+          backend,
+          threadId,
+          input,
+          messageOrigin,
+          executionMode: request.args.executionMode,
+          model: request.args.model,
+          reasoningEffort: request.args.reasoningEffort,
+          serviceTier: request.args.serviceTier,
+          fastMode: request.args.fastMode,
+          approvalPolicy: request.args.approvalPolicy,
+          sandbox: request.args.sandbox,
+        });
+        if (!remoteTurn) {
+          if (localResolutionError) {
+            throw localResolutionError;
+          }
+          throw new Error(`Thread not found: ${threadId}`);
+        }
+        turn = remoteTurn;
+        targetTitle = remoteTurn.title;
+        targetInstanceId = remoteTurn.instanceId;
+      } else {
+        if (localResolutionError) {
+          throw localResolutionError;
+        }
+        throw new Error(`Thread not found: ${threadId}`);
+      }
+      const threadLinkRef = {
         backend,
-        callerReason: "send-message-link",
+        ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
         threadId: turn.threadId,
-      });
+      };
       return {
         ok: true,
         data: {
@@ -22216,11 +22295,10 @@ export class DesktopBackendRegistry {
           threadId: turn.threadId,
           turnId: turn.turnId,
           promptPreview: truncateThreadInspectionText(prompt, 240),
-          threadUrl: buildThreadUrl({ backend, threadId: turn.threadId }),
+          threadUrl: buildThreadUrl(threadLinkRef),
           threadLink: buildThreadMarkdownLink({
-            backend,
-            threadId: turn.threadId,
-            title: targetThread?.title,
+            ...threadLinkRef,
+            title: targetTitle,
           }),
           settings,
         },

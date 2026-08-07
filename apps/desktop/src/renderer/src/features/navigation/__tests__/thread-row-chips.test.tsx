@@ -346,6 +346,30 @@ describe("ThreadRow chip flow", () => {
     }
   });
 
+  it("prefetches Git working state after hover dwell without a PR", () => {
+    vi.useFakeTimers();
+    try {
+      const onPrefetchGitWorkingState = vi.fn();
+      const onPrefetchPullRequests = vi.fn();
+      const { container } = renderRow({
+        onPrefetchGitWorkingState,
+        onPrefetchPullRequests,
+      });
+
+      fireEvent.mouseEnter(container.querySelector(".thread-row__chips")!);
+      vi.advanceTimersByTime(749);
+      expect(onPrefetchGitWorkingState).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(onPrefetchGitWorkingState).toHaveBeenCalledWith(
+        expect.objectContaining({ id: baseThread.id }),
+      );
+      expect(onPrefetchPullRequests).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses a full card without action controls for the drag preview", () => {
     vi.useFakeTimers();
     try {

@@ -16,6 +16,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
+import type { DesktopAppearanceTheme } from "@pwragent/shared";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
@@ -36,13 +37,48 @@ const specDir = path.dirname(fileURLToPath(import.meta.url));
 // state, so the gate measures real, persistent contrast instead of a
 // sub-second animation frame. No renderer JS branches on reduced motion,
 // so this only settles CSS animation — it never changes what renders.
-async function launchAuditApp() {
+async function launchAuditApp(options?: {
+  /** Defaults to the smoke fixture; pass another to seed a richer state. */
+  fixturePath?: string;
+  /** Defaults to the harness default (dark). */
+  theme?: DesktopAppearanceTheme;
+}) {
   const app = await launchElectronApp({
-    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    fixturePath:
+      options?.fixturePath
+      ?? path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    ...(options?.theme ? { appearance: { theme: options.theme } } : {}),
   });
   await app.window.emulateMedia({ reducedMotion: "reduce" });
   return app;
 }
+
+// The smoke thread never reaches the Star Map: `deriveInboxState` keeps a
+// first-snapshot thread out of the inbox, and with no PR, no unpushed
+// commits and an idle status it matches none of the attention categories,
+// so the smoke fixture's map is bodies-and-chrome with zero cards. The
+// cards are exactly what carries the contrast risk (title and status
+// indicator over the star field, meta chips, the low-opacity instance
+// watermark behind them), so the map audits run against a fixture whose
+// threads are `threadStatus: "active"` and therefore populate a lane.
+//
+// That fixture's threads deliberately carry NO linked directories. A
+// project chip renders through `CopyableThreadChip`, which is a
+// `role="button" tabIndex={0}` span, and both the sidebar thread row and
+// the star-map card wrap their content in a real `<button>` — so any
+// fixture with a directory trips `nested-interactive` on BOTH surfaces.
+// That is pre-existing renderer debt, not a Star Map regression, and the
+// fix is a structural change to the row/card (hoist the chips out of the
+// button, the way `.star-map-card-shell` already hoists the kebab).
+// Waiving it here is not an option worth taking: `KNOWN_VIOLATIONS`
+// works by `exclude()`, so waiving the rule would drop the whole card
+// from the scan and blind the very contrast pairs this block exists to
+// audit. Tracked separately; when it lands, give these threads a
+// directory so the project chip is covered too.
+const STAR_MAP_FIXTURE = path.resolve(
+  specDir,
+  "fixtures/star-map/replay.fixture.json",
+);
 
 const WCAG_AA_TAGS = [
   "wcag2a",
@@ -64,7 +100,18 @@ const KNOWN_VIOLATIONS: ReadonlyArray<{
   reason: string;
 }> = [];
 
-async function runAxe(window: Page): Promise<void> {
+async function runAxe(
+  window: Page,
+  options?: {
+    /**
+     * Narrow the scan to one subtree. Use it only when the test is about
+     * a specific composited surface rather than the whole window — an
+     * unscoped run is the default because it is what catches regressions
+     * nobody thought to point at.
+     */
+    include?: string;
+  },
+): Promise<void> {
   // setLegacyMode is required under Electron: the default analyze()
   // path tries to spawn a worker page via browserContext.newPage() to
   // audit cross-origin iframes, which Electron's CDP target doesn't
@@ -76,6 +123,9 @@ async function runAxe(window: Page): Promise<void> {
   let builder = new AxeBuilder({ page: window })
     .withTags(WCAG_AA_TAGS)
     .setLegacyMode(true);
+  if (options?.include) {
+    builder = builder.include(options.include);
+  }
   for (const known of KNOWN_VIOLATIONS) {
     // exclude() removes the node from the scan entirely. Combined with
     // the .rule mapping in KNOWN_VIOLATIONS above, this gives an
@@ -196,4 +246,114 @@ test.describe("desktop renderer accessibility (WCAG2 AA)", () => {
       await app.close();
     }
   });
+
+  test("star map layer has no violations", async () => {
+    const app = await launchAuditApp({ fixturePath: STAR_MAP_FIXTURE });
+    try {
+      await expect(
+        app.window
+          .getByRole("button", { name: /Star map attention thread/i })
+          .first(),
+      ).toBeVisible();
+      await app.window.getByRole("button", { name: "Open Star Map" }).click();
+      // `exact` because role-name matching is substring by default, and a
+      // chat card's "Chat: <title>" region can match "Star Map" too.
+      const starMap = app.window.getByRole("region", {
+        name: "Star Map",
+        exact: true,
+      });
+      await expect(starMap).toBeVisible();
+      // A single E2E instance means one body on the map. Gate on a card
+      // rather than the body: the lane populates from the navigation
+      // snapshot after the layer mounts, and auditing the empty layer
+      // would silently skip every card-borne contrast pair.
+      await expect(
+        starMap.getByRole("button", {
+          name: "Open thread: Star map attention thread",
+        }),
+      ).toBeVisible();
+      await runAxe(app.window);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("star map intake dialog has no violations", async () => {
+    const app = await launchAuditApp({ fixturePath: STAR_MAP_FIXTURE });
+    try {
+      await expect(
+        app.window
+          .getByRole("button", { name: /Star map attention thread/i })
+          .first(),
+      ).toBeVisible();
+      await app.window.getByRole("button", { name: "Open Star Map" }).click();
+      // `exact` because role-name matching is substring by default, and a
+      // chat card's "Chat: <title>" region can match "Star Map" too.
+      const starMap = app.window.getByRole("region", {
+        name: "Star Map",
+        exact: true,
+      });
+      await expect(starMap).toBeVisible();
+      // The [+] beside the local body carries the machine label, which is
+      // the runner's hostname — match the copy, not the machine.
+      await starMap.getByRole("button", { name: /^New thread on / }).click();
+      const intake = app.window.getByRole("dialog", {
+        name: /^New thread on /,
+      });
+      await expect(intake).toBeVisible();
+      await expect(
+        intake.getByRole("button", { name: "Start thread" }),
+      ).toBeVisible();
+      await runAxe(app.window);
+    } finally {
+      await app.close();
+    }
+  });
+
+  // The celestial watermark paints the owning instance's mark behind the
+  // transcript at 0.05 opacity. That is a real compositing input to every
+  // contrast pair in the thread body, and the token it tints with
+  // (`--text-muted`) resolves differently per theme — a value that is
+  // harmless behind a dark surface can eat the margin on a light one. So
+  // this pair of blocks audits the same surface twice, once per theme,
+  // and asserts the watermark is actually painted first: without that the
+  // audit would keep passing after a regression that stopped rendering it.
+  //
+  // Scoped to `.thread-view__primary` — the element the watermark is a
+  // child of, and therefore the exact subtree it composites into. The
+  // scope is what makes the LIGHT run meaningful rather than a proxy for
+  // unrelated debt: light theme is not AA-clean window-wide today (the
+  // sidebar wordmark accent lands at 4.2:1, the active lens-switch label
+  // at 3.17:1, and the context-grid `dt` labels at 4.23:1), none of which
+  // the watermark touches. Every other block in this file stays unscoped;
+  // the dark thread surface is already audited whole by "open thread view
+  // has no violations" above.
+  for (const theme of ["dark", "light"] as const) {
+    test(`thread transcript behind the celestial watermark has no violations (${theme})`, async () => {
+      const app = await launchAuditApp({ theme });
+      try {
+        await app.window
+          .getByRole("button", { name: /Replay smoke thread/i })
+          .first()
+          .click();
+        await expect(
+          app.window.getByRole("heading", {
+            level: 2,
+            name: "Replay smoke thread",
+          }),
+        ).toBeVisible();
+        await expect(
+          app.window.getByText("The replay harness is live."),
+        ).toBeVisible();
+        // aria-hidden, so it has no role to locate it by; the class IS
+        // the contract the a11y note in app.css points at.
+        await expect(
+          app.window.locator(".thread-view__primary .celestial-watermark"),
+        ).toHaveCount(1);
+        await runAxe(app.window, { include: ".thread-view__primary" });
+      } finally {
+        await app.close();
+      }
+    });
+  }
 });

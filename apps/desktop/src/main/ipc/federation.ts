@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import type {
   ConfigureFederationTailscaleRequest,
   ConfigureFederationTailscaleResponse,
+  FederationPinDisposition,
   GenerateFederationInviteRequest,
   GenerateFederationInviteResponse,
   ImportFederationInviteRequest,
@@ -14,6 +15,8 @@ import type {
   ReadFederationHealthResponse,
   ReadFederationDiagnosticsRequest,
   ReadFederationDiagnosticsResponse,
+  ReadFederationPinImpactRequest,
+  ReadFederationPinImpactResponse,
   ReadFederationTailscaleStatusRequest,
   ReadFederationTailscaleStatusResponse,
   RevokeFederationPeerRequest,
@@ -27,6 +30,7 @@ import {
   isCelestialIconId,
   isFederationEventClass,
   isFederationInstanceId,
+  isFederationPinDisposition,
 } from "@pwragent/shared";
 import {
   FEDERATION_GET_HEALTH_CHANNEL,
@@ -34,6 +38,7 @@ import {
   FEDERATION_GENERATE_INVITE_CHANNEL,
   FEDERATION_IMPORT_INVITE_CHANNEL,
   FEDERATION_OPEN_WINDOW_CHANNEL,
+  FEDERATION_PIN_IMPACT_CHANNEL,
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
@@ -43,7 +48,7 @@ import {
 } from "../../shared/ipc";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getFederationTailscaleService } from "../federation/federation-tailscale";
-import { createMainWindow } from "../window";
+import { createFederationWindow } from "../federation/federation-window";
 
 const rendererSubscriptionCleanupIds = new Set<number>();
 
@@ -78,6 +83,7 @@ export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_CELESTIAL_ICON_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_PIN_IMPACT_CHANNEL);
   ipcMain.handle(
     FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
     async (
@@ -189,11 +195,6 @@ export function registerFederationIpcHandlers(): void {
       if (!peer) {
         throw new Error("Federation peer is not connected.");
       }
-      if (!peer.capabilities.includes("remote_window")) {
-        throw new Error(
-          "Federation peer does not allow remote windows (remote_window capability).",
-        );
-      }
       if (
         request.initialThread &&
         (
@@ -203,36 +204,14 @@ export function registerFederationIpcHandlers(): void {
       ) {
         throw new Error("Federation initial thread target does not match its window.");
       }
-      const window = createMainWindow({
-        federationLabel: peer.label,
-        federationTarget: request.target,
+      const window = createFederationWindow({
+        peer,
         initialThread: request.initialThread
           ? {
               backend: request.initialThread.backend,
               threadId: request.initialThread.threadId,
             }
           : undefined,
-      });
-      const webContentsId = window.webContents.id;
-      runtime.setRendererEventSubscriptions(webContentsId, "remote-window", [{
-        sourceInstanceId: request.target.instanceId,
-        eventClasses: [
-          ...(peer.capabilities.includes("thread_navigation")
-            ? ["navigation" as const]
-            : []),
-          ...(peer.capabilities.includes("thread_detail")
-            ? ["transcript" as const]
-            : []),
-          ...(peer.capabilities.includes("pending_request_control")
-            ? ["pending_requests" as const]
-            : []),
-          ...(peer.capabilities.includes("scheduled_actions")
-            ? ["scheduled_actions" as const]
-            : []),
-        ],
-      }]);
-      window.once("closed", () => {
-        runtime.clearRendererEventSubscriptions(webContentsId, "remote-window");
       });
       return {
         opened: true,
@@ -272,9 +251,11 @@ export function registerFederationIpcHandlers(): void {
     FEDERATION_RESET_ENROLLMENT_CHANNEL,
     async (
       _event,
-      _request?: ResetFederationEnrollmentRequest,
+      request?: ResetFederationEnrollmentRequest,
     ): Promise<ResetFederationEnrollmentResponse> =>
-      await getDesktopFederationRuntime().resetEnrollment(),
+      await getDesktopFederationRuntime().resetEnrollment({
+        pinDisposition: readPinDisposition(request?.pinDisposition),
+      }),
   );
   ipcMain.handle(
     FEDERATION_REVOKE_PEER_CHANNEL,
@@ -286,10 +267,41 @@ export function registerFederationIpcHandlers(): void {
         throw new Error("Invalid federation peer id");
       }
       return {
-        peer: await getDesktopFederationRuntime().revokePeer(request.peerId),
+        peer: await getDesktopFederationRuntime().revokePeer(request.peerId, {
+          pinDisposition: readPinDisposition(request.pinDisposition),
+        }),
       };
     },
   );
+  ipcMain.handle(
+    FEDERATION_PIN_IMPACT_CHANNEL,
+    async (
+      _event,
+      request: ReadFederationPinImpactRequest,
+    ): Promise<ReadFederationPinImpactResponse> => {
+      const scope = request?.scope;
+      if (scope?.kind === "peer") {
+        if (!isFederationInstanceId(scope.peerId)) {
+          throw new Error("Invalid federation peer id");
+        }
+      } else if (scope?.kind !== "enrollment") {
+        throw new Error("Invalid federation pin impact scope");
+      }
+      return await getDesktopFederationRuntime().readRemoteThreadPinImpact({
+        scope,
+      });
+    },
+  );
+}
+
+/**
+ * An absent or unrecognized disposition means "remember". Discarding an
+ * operator's pinned threads is irreversible, so an out-of-date renderer or
+ * a malformed payload must never be able to select the destructive branch
+ * by accident — only an explicit "forget" does.
+ */
+function readPinDisposition(value: unknown): FederationPinDisposition {
+  return isFederationPinDisposition(value) ? value : "remember";
 }
 
 export function disposeFederationIpcHandlers(): void {
@@ -304,5 +316,6 @@ export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_CELESTIAL_ICON_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_PIN_IMPACT_CHANNEL);
   rendererSubscriptionCleanupIds.clear();
 }

@@ -692,6 +692,15 @@ export type AppServerListThreadsResponse = {
   workspaceRoots?: string[];
 };
 
+export type ResolveThreadRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type ResolveThreadResponse = {
+  thread?: AppServerThreadSummary;
+};
+
 export type ArchiveThreadCleanupResult = {
   worktreePath?: string;
   branch?: string;
@@ -1623,8 +1632,12 @@ export type AppServerNotification =
       params: {
         /** Instance the pinned/unpinned thread lives on. */
         instanceId: string;
-        threadId: string;
-        pinned: boolean;
+        /**
+         * Absent for instance-wide changes: a background pinned-summary
+         * refresh landing, or peer-revocation pin cleanup.
+         */
+        threadId?: string;
+        pinned?: boolean;
       };
     }
   | {

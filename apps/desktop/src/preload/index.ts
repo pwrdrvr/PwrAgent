@@ -176,6 +176,8 @@ import type {
   UnbindMessagingThreadRequest,
   UnbindMessagingThreadResponse,
   RefreshThreadPullRequestsRequest,
+  RefreshThreadGitWorkingStateRequest,
+  RefreshThreadGitWorkingStateResponse,
   SetPullRequestPollingFocusRequest,
   RefreshThreadPullRequestsResponse,
   RefreshDirectoryGitStatusesRequest,
@@ -269,6 +271,8 @@ import type {
   ReadFederationHealthResponse,
   ReadFederationDiagnosticsRequest,
   ReadFederationDiagnosticsResponse,
+  ReadFederationPinImpactRequest,
+  ReadFederationPinImpactResponse,
   ReadFederationTailscaleStatusRequest,
   ReadFederationTailscaleStatusResponse,
   ResetFederationEnrollmentRequest,
@@ -463,6 +467,7 @@ import {
   FEDERATION_GENERATE_INVITE_CHANNEL,
   FEDERATION_IMPORT_INVITE_CHANNEL,
   FEDERATION_OPEN_WINDOW_CHANNEL,
+  FEDERATION_PIN_IMPACT_CHANNEL,
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
@@ -521,6 +526,7 @@ import {
   NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
   NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+  NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
   NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
@@ -890,6 +896,10 @@ const desktopApi = Object.freeze({
     request?: ResetFederationEnrollmentRequest,
   ): Promise<ResetFederationEnrollmentResponse> =>
     await ipcRenderer.invoke(FEDERATION_RESET_ENROLLMENT_CHANNEL, request),
+  readFederationPinImpact: async (
+    request: ReadFederationPinImpactRequest,
+  ): Promise<ReadFederationPinImpactResponse> =>
+    await ipcRenderer.invoke(FEDERATION_PIN_IMPACT_CHANNEL, request),
   readFederationTailscaleStatus: async (
     request?: ReadFederationTailscaleStatusRequest,
   ): Promise<ReadFederationTailscaleStatusResponse> =>
@@ -1488,6 +1498,13 @@ const desktopApi = Object.freeze({
     await invokeWithStartupProfileTiming(
       "refreshThreadPullRequests",
       NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
+      request,
+    ),
+  refreshThreadGitWorkingState: async (
+    request: RefreshThreadGitWorkingStateRequest,
+  ): Promise<RefreshThreadGitWorkingStateResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
       request,
     ),
   setPullRequestPollingFocus: async (

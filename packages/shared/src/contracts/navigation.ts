@@ -799,6 +799,17 @@ export type NavigationThreadGitWorkingStateUpdatedNotification = {
   };
 };
 
+export type RefreshThreadGitWorkingStateRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  /** User inspection bypasses cache freshness; scheduled focus refreshes do not. */
+  trigger: "scheduled" | "user";
+};
+
+export type RefreshThreadGitWorkingStateResponse = {
+  scheduled: boolean;
+};
+
 export type RefreshDirectoryGitStatusesRequest = {
   directoryKeys: string[];
   /** Route filesystem inspection to the instance that owns these directories. */
@@ -1076,6 +1087,14 @@ export type RemoteThreadPin = {
    * list): pin or unpin here and only the viewer knows.
    */
   localPinnedRank?: string;
+  /**
+   * Set when the owning instance was revoked or its gateway pairing was
+   * forgotten. Tombstoned pins are hidden rather than deleted, because
+   * revoking and re-enrolling to repair a peer is routine and the operator
+   * would otherwise have to re-find and re-pin every thread. Cleared when
+   * that instance connects again.
+   */
+  revokedAt?: number;
 };
 
 export type SetRemoteThreadLocalPinRequest = {

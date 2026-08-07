@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
+import { createFederatedThreadMessageHandler } from "./federation/federated-thread-message-service";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
   disposeScheduledActionIpcHandlers,
@@ -61,6 +62,7 @@ import {
   disposeDesktopFederationRuntime,
   getDesktopFederationRuntime,
 } from "./federation/federation-runtime";
+import { createFederationWindow } from "./federation/federation-window";
 import {
   disposeIntegratedTerminalIpcHandlers,
   registerIntegratedTerminalIpcHandlers,
@@ -818,13 +820,14 @@ function installApplicationMenu(): void {
         await shell.openExternal(PWRAGENT_DOCUMENTATION_URL);
       },
       openFederationWindow: (peer) => {
-        createMainWindow({
-          federationLabel: peer.label,
-          federationTarget: {
-            scope: "remote",
-            instanceId: peer.instanceId,
-          },
-        });
+        const connectedPeer = getDesktopFederationRuntime()
+          .connectedPeerTargets()
+          .find((candidate) => candidate.target.instanceId === peer.instanceId);
+        if (!connectedPeer) {
+          installApplicationMenu();
+          return;
+        }
+        createFederationWindow({ peer: connectedPeer });
       },
       openIssueReporter: async () => {
         await shell.openExternal(PWRAGENT_ISSUE_REPORTER_URL);
@@ -1003,6 +1006,9 @@ export function bootstrapApp(): void {
     // already imports the registry, so the reverse import would be a cycle.
     getDesktopBackendRegistry().setPwrAgentFederationHandler(
       createFederationAgentToolsHandler(),
+    );
+    getDesktopBackendRegistry().setFederatedThreadMessageHandler(
+      createFederatedThreadMessageHandler(),
     );
     // Windows: serve the painted title-bar menu bar from the live application
     // menu (idempotent; the renderer mounts the bar only on win32).

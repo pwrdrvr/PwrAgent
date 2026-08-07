@@ -262,7 +262,18 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
   backend: (params as { backend: "all" | "codex" | "grok" }).backend,
   fetchedAt: 1234,
   unchanged: false,
-  threads: (params as { threads: unknown[] }).threads,
+  // Mirror the real reconcile: every materialized row carries a derived
+  // inbox state, consistent with the inboxThreadKeys below. The remote-pin
+  // merge re-ranks the combined local + remote rows from these states.
+  threads: (params as { threads: Array<{ source: string; id: string }> }).threads.map(
+    (thread) => ({
+      inbox:
+        `${thread.source}:${thread.id}` === "grok:thread-1"
+          ? { inInbox: true, reason: "updated-since-seen" as const }
+          : { inInbox: false },
+      ...thread,
+    }),
+  ) as unknown[],
   inboxThreadKeys: ["grok:thread-1"],
   directories: [
     {
@@ -1838,7 +1849,11 @@ describe("app server ipc", () => {
       threads: Array<{ id: string }>;
       inboxThreadKeys: string[];
       unchanged: boolean;
-      directories: Array<{ key: string; threadKeys: string[] }>;
+      directories: Array<{
+        key: string;
+        threadKeys: string[];
+        needsAttentionCount: number;
+      }>;
     };
 
     expect(
@@ -1854,8 +1869,13 @@ describe("app server ipc", () => {
       (thread) => thread.id === "remote-1",
     ) as { pinnedRank?: string } | undefined;
     expect(mergedRemoteRow?.pinnedRank).toBeUndefined();
-    // The remote row joins the inbox ranking behind the local keys.
-    expect(response.inboxThreadKeys).toContain("codex:remote-1");
+    // Unified inbox ranking over local + remote rows: the fresher remote
+    // unread (updatedAt 9000) outranks the stale local unread (1000)
+    // instead of always trailing every local key.
+    expect(response.inboxThreadKeys).toEqual([
+      "codex:remote-1",
+      "grok:thread-1",
+    ]);
     // A newly appearing remote row must defeat the unchanged optimization.
     expect(response.unchanged).toBe(false);
     // Consolidated into the matching LOCAL project group (label "app"), so
@@ -1864,6 +1884,9 @@ describe("app server ipc", () => {
       (directory) => directory.key === "directory:/repo/app",
     );
     expect(appDirectory?.threadKeys).toContain("codex:remote-1");
+    // The unread remote row bumps the group's "N to review" badge past the
+    // reconcile-computed local count.
+    expect(appDirectory?.needsAttentionCount).toBe(2);
   });
 
   it("removes a viewer-side remote pin when the owner proves it is archived", async () => {
@@ -1908,7 +1931,10 @@ describe("app server ipc", () => {
       backend: (params as { backend: "all" | "codex" | "grok" }).backend,
       fetchedAt: 1234,
       unchanged: false,
-      threads: (params as { threads: unknown[] }).threads,
+      threads: (params as { threads: object[] }).threads.map((thread) => ({
+        inbox: { inInbox: false },
+        ...thread,
+      })),
       inboxThreadKeys: [],
       directories: [
         {
@@ -2280,6 +2306,58 @@ describe("app server ipc", () => {
     expect(addRemoteThreadPinStore.mock.calls[0][0]).toMatchObject({
       pinnedVia: "explicit",
     });
+  });
+
+  it("rejects malformed pin refs at the service boundary", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const {
+      NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
+      NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+      NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    registerAppServerIpcHandlers();
+    addRemoteThreadPinStore.mockClear();
+    setRemoteThreadLocalPin.mockClear();
+
+    // A malformed instance id (spaces, punctuation) must never reach the
+    // store — the sqlite key would persist a row that dims forever.
+    const badInstanceRef = {
+      backend: "codex" as const,
+      target: { scope: "remote" as const, instanceId: "peer laptop!" },
+      threadId: "thread-1",
+    };
+    // An unknown backend kind is equally unresolvable later.
+    const badBackendRef = {
+      backend: "not-a-backend",
+      target: { scope: "remote" as const, instanceId: "peer-laptop" },
+      threadId: "thread-1",
+    };
+    await expect(
+      handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
+        ref: badInstanceRef,
+        instanceLabel: "Laptop",
+      }),
+    ).rejects.toThrow(/remote federation target/i);
+    await expect(
+      handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
+        ref: badBackendRef,
+        instanceLabel: "Laptop",
+      }),
+    ).rejects.toThrow(/backend/i);
+    await expect(
+      handlers.get(NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
+        ref: badInstanceRef,
+      }),
+    ).rejects.toThrow(/remote federation target/i);
+    await expect(
+      handlers.get(NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL)?.({}, {
+        ref: badInstanceRef,
+        pinnedRank: "1024",
+      }),
+    ).rejects.toThrow(/remote federation target/i);
+    expect(addRemoteThreadPinStore).not.toHaveBeenCalled();
+    expect(setRemoteThreadLocalPin).not.toHaveBeenCalled();
   });
 
   it("keeps pinned remote rows, dimmed, when the owner is unreachable", async () => {
@@ -5683,6 +5761,155 @@ describe("app server ipc", () => {
           gitWorkingState,
         }),
       },
+    });
+  });
+
+  it("reprobes stale working state after the automatic startup batch", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const now = 10_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const threads = Array.from({ length: 8 }, (_, index) => ({
+      id: `thread-${index}`,
+      title: `Thread ${index}`,
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      projectKey: `/repo/wt-${index}`,
+      linkedDirectories: [],
+      updatedAt: 2_000 - index,
+    }));
+    listThreads.mockResolvedValue(threads as never);
+
+    try {
+      registerAppServerIpcHandlers();
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await vi.waitFor(() => {
+        expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(1);
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(8);
+      });
+
+      nowSpy.mockReturnValue(now + 31_000);
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+      await vi.waitFor(() => {
+        expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(2);
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(16);
+      });
+      expect(readWorktreeWorkingStateEntries.mock.calls[1]?.[0]).toEqual(
+        threads.map((thread) => thread.projectKey),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("rotates bounded automatic working-state refreshes past the first batch", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const now = 20_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const threads = Array.from({ length: 9 }, (_, index) => ({
+      id: `thread-${index}`,
+      title: `Thread ${index}`,
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      projectKey: `/repo/wt-${index}`,
+      linkedDirectories: [],
+      updatedAt: 2_000 - index,
+    }));
+    listThreads.mockResolvedValue(threads as never);
+
+    try {
+      registerAppServerIpcHandlers();
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+      await vi.waitFor(() => {
+        expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(1);
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(8);
+      });
+      const firstBatch = readWorktreeWorkingStateEntries.mock.calls[0]?.[0];
+      expect(firstBatch).toEqual(
+        threads.slice(0, 8).map((thread) => thread.projectKey),
+      );
+
+      nowSpy.mockReturnValue(now + 31_000);
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+      await vi.waitFor(() => {
+        expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(2);
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(16);
+      });
+      const secondBatch = readWorktreeWorkingStateEntries.mock.calls[1]?.[0];
+      expect(secondBatch).toHaveLength(8);
+      expect(secondBatch).toContain(threads[8]!.projectKey);
+      expect(new Set([...firstBatch!, ...secondBatch!])).toEqual(
+        new Set(threads.map((thread) => thread.projectKey)),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("lets a user-triggered working-state refresh bypass fresh cache", async () => {
+    const {
+      NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+      NAVIGATION_SNAPSHOT_CHANNEL,
+    } = await import("../../shared/ipc");
+    const worktreePath = "/repo/wt";
+    const gitWorkingState = {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 0,
+      baseBranch: "main",
+    };
+    listThreads.mockResolvedValue([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: worktreePath,
+        linkedDirectories: [],
+        updatedAt: 2_000,
+      },
+    ] as never);
+    readThreadGitWorkingStateCache.mockResolvedValueOnce({
+      [worktreePath]: {
+        worktreePath,
+        fetchedAt: Date.now(),
+        gitWorkingState,
+      },
+    });
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    expect(readWorktreeWorkingStateEntries).not.toHaveBeenCalled();
+
+    await expect(
+      handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
+        {},
+        { backend: "codex", threadId: "thread-1", trigger: "scheduled" },
+      ),
+    ).resolves.toEqual({ scheduled: false });
+    expect(invalidateWorktreeWorkingState).not.toHaveBeenCalled();
+
+    await expect(
+      handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
+        {},
+        { backend: "codex", threadId: "thread-1", trigger: "user" },
+      ),
+    ).resolves.toEqual({ scheduled: true });
+    expect(invalidateWorktreeWorkingState).toHaveBeenCalledExactlyOnceWith(
+      worktreePath,
+    );
+    await vi.waitFor(() => {
+      expect(readWorktreeWorkingStateEntries).toHaveBeenCalledWith(
+        [worktreePath],
+        expect.any(Object),
+      );
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ worktreePath }),
+      );
     });
   });
 

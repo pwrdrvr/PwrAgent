@@ -13,13 +13,14 @@ export type FederatedSearchPeer = {
   instanceId: FederationInstanceId;
   label: string;
   status?: FederationPeerSummary["status"];
-  backend: Pick<FederationBackendOperations, "listThreads">;
+  backend: Pick<FederationBackendOperations, "listThreads">
+    & Partial<Pick<FederationBackendOperations, "resolveThread">>;
 };
 
 export type FederatedSearchLocalBackend = Pick<
   FederationBackendOperations,
   "listThreads"
->;
+> & Partial<Pick<FederationBackendOperations, "resolveThread">>;
 
 /**
  * Per-peer deadline for a search fan-out. Much tighter than the 30s RPC
@@ -98,6 +99,24 @@ export class FederatedSearchService {
     query: string,
     backend?: FederatedSearchRequest["backend"],
   ): Promise<FederatedSearchResponse["results"]> {
+    const resolved = await this.resolveExactThreadId(
+      this.options.local,
+      query,
+      backend,
+    );
+    if (resolved !== undefined) {
+      return resolved
+        ? [{
+            ref: buildFederatedThreadRef({
+              backend: resolved.source,
+              threadId: resolved.id,
+            }),
+            thread: resolved,
+            instanceLabel: "This Mac",
+            score: scoreThread(resolved, query),
+          }]
+        : [];
+    }
     const response = await this.options.local.listThreads({
       backend: backend === "all" ? undefined : backend,
       filter: query,
@@ -118,6 +137,26 @@ export class FederatedSearchService {
     query: string,
     backend?: FederatedSearchRequest["backend"],
   ): Promise<FederatedSearchResponse["results"]> {
+    const resolved = await this.resolveExactThreadId(
+      peer.backend,
+      query,
+      backend,
+    );
+    if (resolved !== undefined) {
+      return resolved
+        ? [{
+            ref: buildFederatedThreadRef({
+              backend: resolved.source,
+              instanceId: peer.instanceId,
+              threadId: resolved.id,
+            }),
+            thread: resolved,
+            instanceLabel: peer.label,
+            peerStatus: peer.status,
+            score: scoreThread(resolved, query),
+          }]
+        : [];
+    }
     const response: AppServerListThreadsResponse = await peer.backend.listThreads({
       backend: backend === "all" ? undefined : backend,
       filter: query,
@@ -134,6 +173,40 @@ export class FederatedSearchService {
       score: scoreThread(thread, query),
     }));
   }
+
+  private async resolveExactThreadId(
+    backendOperations: FederatedSearchPeer["backend"],
+    query: string,
+    backend?: FederatedSearchRequest["backend"],
+  ): Promise<AppServerThreadSummary | null | undefined> {
+    if (
+      !backendOperations.resolveThread
+      || !looksLikeExactThreadId(query)
+    ) {
+      return undefined;
+    }
+    try {
+      const response = await backendOperations.resolveThread({
+        ...(backend && backend !== "all" ? { backend } : {}),
+        threadId: query,
+      });
+      return response.thread ?? null;
+    } catch {
+      // Mixed-version peers may not expose the exact lookup RPC yet. Avoid
+      // their provider's fuzzy UUID filter and scan the active list exactly.
+      const response = await backendOperations.listThreads({
+        backend: backend === "all" ? undefined : backend,
+      });
+      return response.threads.find((thread) => thread.id === query) ?? null;
+    }
+  }
+}
+
+function looksLikeExactThreadId(query: string): boolean {
+  return (
+    /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(query)
+    || /^session_[0-9a-z_-]{10,}$/i.test(query)
+  );
 }
 
 function withTimeout<T>(

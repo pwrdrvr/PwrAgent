@@ -71,6 +71,8 @@ import {
   type DesktopSettingsSnapshot,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
+  type RefreshThreadGitWorkingStateRequest,
+  type RefreshThreadGitWorkingStateResponse,
   type RefreshThreadPullRequestsRequest,
   type SetPullRequestPollingFocusRequest,
   type RefreshThreadPullRequestsResponse,
@@ -158,6 +160,7 @@ import {
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
   isAppServerBackendKind,
+  isFederationInstanceId,
   isRemoteFederationTarget,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
   parseThreadIdentityKey,
@@ -203,6 +206,7 @@ import {
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
+  NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
@@ -317,7 +321,7 @@ const DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS = 5 * 60_000;
 // closes the sequential post-completion gap so "747, 732, 747, 747, 732,
 // 747" collapses to "747, 732".
 const DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS = 3_000;
-const STARTUP_WORKTREE_WORKING_STATE_REFRESH_LIMIT = 8;
+const BACKGROUND_WORKTREE_WORKING_STATE_REFRESH_BATCH_SIZE = 8;
 // PR discovery (Layer B): a slow branch-lookup rotation across ALL open threads
 // to catch newly opened PRs on projects the operator is not looking at. Tick
 // often, but sweep each thread rarely and only a few per tick, so discovery
@@ -582,7 +586,10 @@ function attachRemoteThreadsToLocalDirectories(
   if (remoteThreads.length === 0) {
     return directories;
   }
-  const addedKeysByDirectoryIndex = new Map<number, string[]>();
+  const addedByDirectoryIndex = new Map<
+    number,
+    Array<{ threadKey: string; inInbox: boolean }>
+  >();
   for (const thread of remoteThreads) {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
     const homeIndex = findRemoteHomeDirectoryIndex(
@@ -592,24 +599,53 @@ function attachRemoteThreadsToLocalDirectories(
     if (homeIndex === undefined) {
       continue;
     }
-    const added = addedKeysByDirectoryIndex.get(homeIndex) ?? [];
-    added.push(threadKey);
-    addedKeysByDirectoryIndex.set(homeIndex, added);
+    const added = addedByDirectoryIndex.get(homeIndex) ?? [];
+    added.push({ threadKey, inInbox: Boolean(thread.inbox?.inInbox) });
+    addedByDirectoryIndex.set(homeIndex, added);
   }
-  if (addedKeysByDirectoryIndex.size === 0) {
+  if (addedByDirectoryIndex.size === 0) {
     return directories;
   }
   return directories.map((directory, index) => {
-    const added = addedKeysByDirectoryIndex.get(index);
-    if (!added) {
+    const added = addedByDirectoryIndex
+      .get(index)
+      ?.filter((entry) => !directory.threadKeys.includes(entry.threadKey));
+    if (!added?.length) {
       return directory;
     }
-    const threadKeys = [
-      ...directory.threadKeys,
-      ...added.filter((key) => !directory.threadKeys.includes(key)),
-    ];
-    return { ...directory, threadKeys };
+    return {
+      ...directory,
+      threadKeys: [
+        ...directory.threadKeys,
+        ...added.map((entry) => entry.threadKey),
+      ],
+      // Unread remote rows count toward the group's "N to review" badge
+      // just like local rows do.
+      needsAttentionCount:
+        directory.needsAttentionCount
+        + added.filter((entry) => entry.inInbox).length,
+    };
   });
+}
+
+/**
+ * Service-boundary validation for remote-pin refs. The sqlite key is
+ * (instanceId, backend, threadId); a malformed ref from a buggy caller
+ * would persist a row that dims forever with no owner to resolve it, so
+ * reject anything that is not a well-formed remote target with a known
+ * backend before it reaches the store. Returns the validated instance id.
+ */
+function validateRemoteThreadPinRef(ref: FederatedThreadRef): string {
+  if (
+    !isRemoteFederationTarget(ref.target)
+    || !isFederationInstanceId(ref.target.instanceId)
+  ) {
+    throw new Error("Remote thread pins require a valid remote federation target.");
+  }
+  if (!isAppServerBackendKind(ref.backend)) {
+    throw new Error("Remote thread pins require a known backend kind.");
+  }
+  return ref.target.instanceId;
 }
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -1306,7 +1342,6 @@ class DesktopAppServerService {
     WorktreeGitWorkingStateCacheEntry
   >();
   private workingStateCacheLoaded = false;
-  private automaticWorktreeWorkingStateRefreshesStarted = 0;
   private readonly pendingWorktreeWorkingStateRefreshes = new Map<
     string,
     Promise<void>
@@ -1978,10 +2013,18 @@ class DesktopAppServerService {
     return {
       ...snapshot,
       threads: [...threadsWithWorkingState, ...remotePins.threads],
-      inboxThreadKeys: [
-        ...snapshot.inboxThreadKeys,
-        ...rankInboxThreadKeys(remotePins.threads),
-      ],
+      // One unified ranking over local + remote rows: the local keys were
+      // computed by this same function inside the reconcile, so re-ranking
+      // the combined set preserves their order while letting a fresher
+      // remote unread outrank stale local entries instead of always
+      // trailing them.
+      inboxThreadKeys:
+        remotePins.threads.length === 0
+          ? snapshot.inboxThreadKeys
+          : rankInboxThreadKeys([
+              ...threadsWithWorkingState,
+              ...remotePins.threads,
+            ]),
       directories: attachRemoteThreadsToLocalDirectories(
         directories,
         remotePins.threads,
@@ -1997,11 +2040,15 @@ class DesktopAppServerService {
 
   /**
    * Viewer-side remote thread pins, merged into the main window's snapshot.
-   * Reachable owners serve fresh stamped rows (and refresh the cached pin
-   * payload); unreachable owners fall back to the cached payload stamped
-   * with their current non-connected status so rows render dimmed. The
-   * merged rows get their own change hash so a peer-side title/PR/status
-   * change can never be suppressed by the local `unchanged` optimization.
+   * Reachable owners serve their cached stamped rows (and refresh the
+   * cached pin payload); unreachable owners fall back to the persisted
+   * payload stamped with their current non-connected status so rows render
+   * dimmed. The merge never awaits a peer — stale summaries refetch in the
+   * background and land via `navigation/remoteThreadPins/changed`, so
+   * navigation refresh latency stays independent of peer responsiveness.
+   * The merged rows get their own change hash so a peer-side
+   * title/PR/status change can never be suppressed by the local
+   * `unchanged` optimization.
    */
   private async mergePinnedRemoteThreads(): Promise<{
     threads: NavigationThreadSummary[];
@@ -2823,9 +2870,9 @@ class DesktopAppServerService {
   /**
    * Schedule a background per-worktree working-state probe. Mirrors
    * `startDirectoryGitStatusRefresh`: concurrent same-key requests coalesce
-   * through `pendingWorktreeWorkingStateKeys`, automatic refreshes obey a
-   * startup budget + cache freshness, and `force` (event-driven invalidation)
-   * bypasses freshness. Returns the number of worktrees scheduled.
+   * through `pendingWorktreeWorkingStateKeys`, each automatic refresh obeys a
+   * bounded batch size + cache freshness, and `force` (event-driven
+   * invalidation) bypasses freshness. Returns the number of worktrees scheduled.
    */
   private startWorktreeWorkingStateRefresh(params: {
     automatic: boolean;
@@ -2847,9 +2894,6 @@ class DesktopAppServerService {
       return 0;
     }
 
-    if (params.automatic) {
-      this.automaticWorktreeWorkingStateRefreshesStarted += worktreePaths.length;
-    }
     for (const worktreePath of worktreePaths) {
       this.pendingWorktreeWorkingStateKeys.add(worktreePath);
     }
@@ -2870,6 +2914,29 @@ class DesktopAppServerService {
       });
     this.pendingWorktreeWorkingStateRefreshes.set(refreshKey, promise);
     return worktreePaths.length;
+  }
+
+  async refreshThreadGitWorkingState(
+    request: RefreshThreadGitWorkingStateRequest,
+  ): Promise<RefreshThreadGitWorkingStateResponse> {
+    const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
+    const worktreePath = this.worktreePathByThreadKey.get(threadKey);
+    if (!worktreePath) {
+      return { scheduled: false };
+    }
+
+    await this.loadThreadGitWorkingStateCache();
+    const force = request.trigger === "user";
+    if (force) {
+      getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
+    }
+    return {
+      scheduled: this.startWorktreeWorkingStateRefresh({
+        automatic: false,
+        worktreePaths: [worktreePath],
+        force,
+      }) > 0,
+    };
   }
 
   private selectWorktreeWorkingStateRefreshCandidates(params: {
@@ -2894,13 +2961,24 @@ class DesktopAppServerService {
       return candidates;
     }
 
-    const remaining =
-      STARTUP_WORKTREE_WORKING_STATE_REFRESH_LIMIT -
-      this.automaticWorktreeWorkingStateRefreshesStarted;
-    if (remaining <= 0) {
-      return [];
-    }
-    return candidates.slice(0, remaining);
+    // Stable thread ordering must not make the same prefix win forever.
+    // Unseen worktrees sort first; after that, rotate the oldest probes
+    // forward. Selected and hover-inspected threads use the focused/user lane.
+    candidates.sort((left, right) => {
+      const leftFetchedAt = this.workingStateByWorktree.get(left)?.fetchedAt;
+      const rightFetchedAt = this.workingStateByWorktree.get(right)?.fetchedAt;
+      if (leftFetchedAt === undefined) {
+        return rightFetchedAt === undefined ? 0 : -1;
+      }
+      if (rightFetchedAt === undefined) {
+        return 1;
+      }
+      return leftFetchedAt - rightFetchedAt;
+    });
+    return candidates.slice(
+      0,
+      BACKGROUND_WORKTREE_WORKING_STATE_REFRESH_BATCH_SIZE,
+    );
   }
 
   private async refreshWorktreeWorkingStates(
@@ -5559,10 +5637,7 @@ class DesktopAppServerService {
   async addRemoteThreadPin(
     request: AddRemoteThreadPinRequest,
   ): Promise<AddRemoteThreadPinResponse> {
-    if (!isRemoteFederationTarget(request.ref.target)) {
-      throw new Error("Remote thread pins require a remote federation target.");
-    }
-    const instanceId = request.ref.target.instanceId;
+    const instanceId = validateRemoteThreadPinRef(request.ref);
     const instanceLabel =
       request.instanceLabel
       ?? request.summary?.federation?.instanceLabel
@@ -5769,9 +5844,7 @@ class DesktopAppServerService {
   async removeRemoteThreadPin(
     request: RemoveRemoteThreadPinRequest,
   ): Promise<RemoveRemoteThreadPinResponse> {
-    if (!isRemoteFederationTarget(request.ref.target)) {
-      throw new Error("Remote thread pins require a remote federation target.");
-    }
+    const instanceId = validateRemoteThreadPinRef(request.ref);
     // Local DELETE only — removal must keep working while the owning
     // instance is unreachable, and the owner's thread is untouched.
     const removed = await this.getOverlayStore().removeRemoteThreadPin({
@@ -5780,7 +5853,7 @@ class DesktopAppServerService {
 
     logDebug("removeRemoteThreadPin", {
       backend: request.ref.backend,
-      instanceId: request.ref.target.instanceId,
+      instanceId,
       threadId: request.ref.threadId,
       removed,
     });
@@ -5791,7 +5864,7 @@ class DesktopAppServerService {
         notification: {
           method: "navigation/remoteThreadPins/changed",
           params: {
-            instanceId: request.ref.target.instanceId,
+            instanceId,
             threadId: request.ref.threadId,
             pinned: false,
           },
@@ -5811,9 +5884,7 @@ class DesktopAppServerService {
   async setRemoteThreadLocalPin(
     request: SetRemoteThreadLocalPinRequest,
   ): Promise<SetRemoteThreadLocalPinResponse> {
-    if (!isRemoteFederationTarget(request.ref.target)) {
-      throw new Error("Remote thread pins require a remote federation target.");
-    }
+    const instanceId = validateRemoteThreadPinRef(request.ref);
     const result = await this.getOverlayStore().setRemoteThreadLocalPin({
       ref: request.ref,
       pinnedRank: request.pinnedRank,
@@ -5823,7 +5894,7 @@ class DesktopAppServerService {
       notification: {
         method: "navigation/remoteThreadPins/changed",
         params: {
-          instanceId: request.ref.target.instanceId,
+          instanceId,
           threadId: request.ref.threadId,
           pinned: Boolean(result.pinnedRank),
         },
@@ -6468,7 +6539,6 @@ class DesktopAppServerService {
     this.pendingWorktreeWorkingStateKeys.clear();
     this.workingStateByWorktree.clear();
     this.workingStateCacheLoaded = false;
-    this.automaticWorktreeWorkingStateRefreshesStarted = 0;
     this.worktreePathByThreadKey.clear();
     this.prRefreshContextByThreadKey.clear();
     await disposeDesktopBackendRegistry();
@@ -7153,6 +7223,21 @@ export function registerAppServerIpcHandlers(): void {
       });
     },
   );
+  ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+    async (
+      event,
+      request: RefreshThreadGitWorkingStateRequest,
+    ): Promise<RefreshThreadGitWorkingStateResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error(
+          "Git working-state refreshes for remote threads run on the owning instance.",
+        );
+      }
+      return await appServerService.refreshThreadGitWorkingState(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
@@ -7425,6 +7510,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);

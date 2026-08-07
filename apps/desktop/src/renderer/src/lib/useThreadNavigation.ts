@@ -42,6 +42,7 @@ import {
 import type { DesktopApi } from "./desktop-api";
 import { fileLabelFromPath } from "./directory-references";
 import { readRendererFederationTarget } from "./federation-window";
+import { resolveThreadWorkingStatePath } from "./thread-working-state-path";
 import {
   agentEventThreadIdentityKey,
   federationTargetsEqual,
@@ -864,7 +865,7 @@ function applyThreadGitWorkingStateUpdate(
 
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.projectKey !== params.worktreePath) {
+    if (resolveThreadWorkingStatePath(thread) !== params.worktreePath) {
       return thread;
     }
     if (
