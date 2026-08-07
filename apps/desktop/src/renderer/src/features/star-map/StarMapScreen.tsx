@@ -1187,6 +1187,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
           );
         })}
         {(projectsMode ? [] : bodies).map((position) => renderCloud(position))}
+        {projectsMode && projectLayout.arms.length > 0 ? (
+          <svg
+            className="star-map__arms"
+            width={projectLayout.canvasWidth}
+            height={projectLayout.canvasHeight}
+            aria-hidden="true"
+          >
+            {projectLayout.arms.map((d, index) => (
+              <path className="star-map__arm" d={d} key={index} />
+            ))}
+          </svg>
+        ) : null}
         {projectsMode
           ? projectLayout.projects.map((placement) => {
               const project = projects.find(

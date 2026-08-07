@@ -9583,11 +9583,29 @@ textarea,
   cursor: default;
 }
 
-/* Projects lens: each project is a sun with its threads — pooled from
-   every instance — orbiting it. */
+/* Projects lens: projects seat along spiral arms, each the centre of its
+   own little system. Deliberately quiet — a project is a place, not a
+   star, and a field of bright orange discs reads as noise rather than as
+   a galaxy. The instance lens keeps the luminous bodies. */
 .star-map__project-cloud {
   position: absolute;
   z-index: 1;
+}
+
+/* The arms themselves, behind everything. */
+.star-map__arms {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.star-map__arm {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 0.16;
 }
 
 .star-map-project {
@@ -9595,38 +9613,35 @@ textarea,
   position: absolute;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   transform: translate(-50%, -50%);
   z-index: 2;
 }
 
+/* A dim halo rather than a disc: enough to mark a centre of gravity
+   without competing with the cards, which are the content. */
 .star-map-project__glow {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 168px;
-  height: 168px;
+  width: 132px;
+  height: 132px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  /* Cooler than an instance body: a project is a place, not a machine. */
   background: radial-gradient(
     circle,
-    color-mix(in srgb, var(--accent) 26%, transparent) 0%,
-    transparent 68%
+    color-mix(in srgb, var(--accent) 14%, transparent) 0%,
+    transparent 70%
   );
   pointer-events: none;
 }
 
 .star-map-project__core {
-  width: 86px;
-  height: 86px;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--accent-border);
   border-radius: 50%;
-  background: radial-gradient(
-    circle at 35% 32%,
-    var(--accent-bright) 0%,
-    var(--accent) 58%,
-    color-mix(in srgb, var(--accent) 55%, transparent) 100%
-  );
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .star-map-project__label {

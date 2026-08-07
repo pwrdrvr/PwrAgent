@@ -216,3 +216,60 @@ describe("computeProjectLayout", () => {
     }
   });
 });
+
+describe("computeProjectLayout galaxy shape", () => {
+  const defs = Array.from({ length: 12 }, (_, index) => ({
+    key: `p${index}`,
+    cardCount: 12 - index,
+  }));
+
+  it("emits one path per arm", () => {
+    const layout = computeProjectLayout({ cardWidth: 200, projects: defs });
+    expect(layout.arms).toHaveLength(3);
+    for (const arm of layout.arms) {
+      expect(arm.startsWith("M ")).toBe(true);
+      expect(arm).toContain("L ");
+    }
+  });
+
+  it("seats the busiest project nearest the core", () => {
+    const layout = computeProjectLayout({ cardWidth: 200, projects: defs });
+    const distance = (key: string) => {
+      const project = layout.projects.find((entry) => entry.key === key)!;
+      return Math.hypot(
+        project.x - layout.core.x,
+        project.y - layout.core.y,
+      );
+    };
+    // p0 is the busiest and seats first; the last-placed project has been
+    // pushed well outward by everything before it.
+    expect(distance("p0")).toBeLessThan(distance("p11"));
+  });
+
+  it("spreads projects around the core rather than along a lattice", () => {
+    const layout = computeProjectLayout({ cardWidth: 200, projects: defs });
+    const angles = layout.projects.map((project) =>
+      Math.atan2(project.y - layout.core.y, project.x - layout.core.x),
+    );
+    // A grid would repeat a handful of angles; a spiral fans them out.
+    expect(new Set(angles.map((angle) => angle.toFixed(2))).size).toBeGreaterThan(
+      6,
+    );
+  });
+
+  it("is deterministic", () => {
+    const first = computeProjectLayout({ cardWidth: 200, projects: defs });
+    const second = computeProjectLayout({ cardWidth: 200, projects: defs });
+    expect(first.projects).toEqual(second.projects);
+    expect(first.arms).toEqual(second.arms);
+  });
+
+  it("still seats a single project", () => {
+    const layout = computeProjectLayout({
+      cardWidth: 200,
+      projects: [{ key: "solo", cardCount: 3 }],
+    });
+    expect(layout.projects).toHaveLength(1);
+    expect(layout.canvasWidth).toBeGreaterThan(0);
+  });
+});
