@@ -13,6 +13,7 @@ import {
   parseCodexTurnErrorMessage,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
+  stripCodexGitActionDirectives,
 } from "@pwragent/shared";
 import type {
   AgentEvent,
@@ -14914,7 +14915,17 @@ export class MessagingController {
     if (binding && shouldFlushToolUpdatesBeforeIntent(intent)) {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
     }
-    const routedIntent = this.withRoutingAudit(intent, binding, event);
+    const displayIntent = binding?.backend === "codex"
+      ? stripCodexGitActionDirectivesFromMessagingIntent(intent)
+      : intent;
+    if (!displayIntent) {
+      return {
+        channel: binding?.channel.channel ?? this.options.channel ?? "telegram",
+        deliveredAt: this.now(),
+        outcome: "discarded",
+      };
+    }
+    const routedIntent = this.withRoutingAudit(displayIntent, binding, event);
     const consumeDeliveryBudget = shouldConsumeDeliveryBudget(routedIntent);
     let scope = this.options.adapter.resolveDeliveryScope?.(routedIntent);
     const priority = messagingDeliveryPriority(routedIntent, {
@@ -18938,6 +18949,49 @@ function shouldFlushToolUpdatesBeforeIntent(intent: MessagingSurfaceIntent): boo
     return false;
   }
   return true;
+}
+
+function stripCodexGitActionDirectivesFromMessagingIntent(
+  intent: MessagingSurfaceIntent,
+): MessagingSurfaceIntent | undefined {
+  if (intent.kind === "message" && intent.role === "assistant") {
+    let changed = false;
+    const parts = intent.parts.map((part) => {
+      if (part.type !== "text") {
+        return part;
+      }
+      const text = stripCodexGitActionDirectives(part.text);
+      if (text === part.text) {
+        return part;
+      }
+      changed = true;
+      return { ...part, text };
+    });
+    if (!changed) {
+      return intent;
+    }
+    const hasDeliverablePart = parts.some(
+      (part) => part.type !== "text" || part.text.trim().length > 0,
+    );
+    return hasDeliverablePart ? { ...intent, parts } : undefined;
+  }
+
+  if (intent.kind === "stream_update" && intent.role === "assistant") {
+    const text = stripCodexGitActionDirectives(intent.text);
+    if (text === intent.text) {
+      return intent;
+    }
+    if (text.trim().length === 0) {
+      return undefined;
+    }
+    return {
+      ...intent,
+      delta: undefined,
+      text,
+    };
+  }
+
+  return intent;
 }
 
 function messagingEventFromAutomationSource(

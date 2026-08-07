@@ -13425,6 +13425,67 @@ describe("MessagingController", () => {
     });
   });
 
+  it("strips Codex Desktop git directives from assistant output", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    const visibleText = "Committed and pushed the branch.";
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: `${visibleText}
+
+::git-stage{cwd="/workspace"}
+::git-commit{cwd="/workspace"}
+::git-create-branch{cwd="/workspace" branch="agent/fix"}
+::git-push{cwd="/workspace" branch="agent/fix"}
+::git-create-pr{cwd="/workspace" branch="agent/fix" url="https://github.com/acme/repo/pull/1" isDraft=true}`,
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      parts: [{ type: "text", text: visibleText, markdown: "markdown" }],
+    });
+  });
+
+  it("does not deliver an empty assistant message for directive-only output", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: `::git-stage{cwd="/workspace"}
+::git-commit{cwd="/workspace"}`,
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+  });
+
   it("routes assistant item text without completing the active turn", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -13610,6 +13671,76 @@ describe("MessagingController", () => {
       createdAt: 1000,
     });
     expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([]);
+  });
+
+  it("keeps Codex Desktop git directives out of streamed assistant updates", async () => {
+    let now = 1000;
+    const harness = await createHarness({
+      streamingResponsesDefault: true,
+      now: () => now,
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "Finished.",
+        },
+      },
+    } satisfies AgentEvent);
+
+    now += 500;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: "\n\n::git-push{cwd=\"/work",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.filter((intent) => intent.kind === "stream_update"))
+      .toEqual([
+        expect.objectContaining({
+          text: "Finished.",
+          stream: expect.objectContaining({ isFinal: false }),
+        }),
+      ]);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: `Finished.
+
+::git-push{cwd="/workspace" branch="agent/fix"}`,
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.filter((intent) => intent.kind === "stream_update").at(-1))
+      .toMatchObject({
+        text: "Finished.",
+        stream: { isFinal: true },
+      });
+    expect(JSON.stringify(harness.delivered)).not.toContain("::git-push");
   });
 
   it("ignores assistant stream deltas that are not tied to a turn", async () => {
