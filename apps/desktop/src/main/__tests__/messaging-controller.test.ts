@@ -191,6 +191,23 @@ describe("MessagingController", () => {
     });
   });
 
+  it("preserves the backend receiver when listing scheduled messages", async () => {
+    let receiverSeen = false;
+    const harness = await createHarness({
+      listScheduledThreadActions: async function () {
+        receiverSeen = typeof this.getNavigationSnapshot === "function";
+        return { actions: [] };
+      },
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/scheduled"),
+    );
+
+    expect(receiverSeen).toBe(true);
+  });
+
   it("reports a failed send-now mutation instead of confirming it", async () => {
     const harness = await createHarness({
       sendScheduledThreadActionNow: async () => ({

@@ -144,7 +144,10 @@ async function resolvePathCommand(
   }
 
   const delimiter = platform === "win32" ? ";" : path.delimiter;
-  const joinPath = platform === "win32" ? path.win32.join : path.join;
+  const joinPath = (...parts: string[]): string =>
+    platform === "win32"
+      ? path.win32.join(...parts)
+      : path.join(...parts);
   const commandNames = buildPathCommandNames(command, env, platform);
 
   for (const directory of pathValue

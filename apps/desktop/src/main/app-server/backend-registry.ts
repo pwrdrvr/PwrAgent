@@ -16087,7 +16087,10 @@ export class DesktopBackendRegistry {
   }
 
   private async drainCodexInvalidIdRecoveries(): Promise<void> {
-    const recover = this.codexClient.recoverInvalidPersistedResponseMessageIds;
+    const recover =
+      this.codexClient.recoverInvalidPersistedResponseMessageIds?.bind(
+        this.codexClient,
+      );
     if (!recover) {
       return;
     }
@@ -16103,7 +16106,7 @@ export class DesktopBackendRegistry {
           await this.resolveCodexInvalidIdRecoveryForkLineage(
             recovery.params.threadId,
           );
-        const repaired = await recover.call(this.codexClient, {
+        const repaired = await recover({
           ...(forkLineageThreadIds.length > 0
             ? { forkLineageThreadIds }
             : {}),

@@ -746,11 +746,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     const adapter = this.adapters.find(
       (entry) => entry.channel === params.provider,
     );
-    const fetch = adapter?.fetchRecentMessages;
+    const fetch = adapter?.fetchRecentMessages?.bind(adapter);
     if (!adapter || !fetch) return [];
     let events: MessagingInboundEvent[];
     try {
-      events = await fetch.call(adapter, {
+      events = await fetch({
         conversationId: params.conversationId,
         ...(params.limit ? { limit: params.limit } : {}),
       });
