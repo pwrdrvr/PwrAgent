@@ -16,6 +16,8 @@ import type {
   FederationConnectionState,
   FederationDiagnosticEvent,
   FederationEndpointStatus,
+  FederationEventClass,
+  FederationEventSubscription,
   FederatedSearchRequest,
   FederatedSearchResponse,
   FederationHealthStatus,
@@ -67,6 +69,7 @@ import {
   isStarMapArrangementEntry,
   isFederationGatewayEndpointUrl,
   isFederationInstanceId,
+  isFederationEventClass,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
   mergeCelestialIconAssignments,
@@ -220,6 +223,8 @@ const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_CELESTIAL_ICONS_METHOD = "federation.celestialIcons";
 const FEDERATION_STAR_MAP_ARRANGEMENT_METHOD = "federation.starMapArrangement";
+const FEDERATION_EVENT_SUBSCRIPTION_METHOD = "federation.eventSubscription";
+const FEDERATION_EVENT_RELAY_MAX_HOPS = 4;
 const CELESTIAL_ICON_ASSIGNMENTS_META_KEY =
   "federation_celestial_icon_assignments";
 /**
@@ -310,6 +315,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // permits code execution via agent turns, so the direct shell defaults to
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
+  "event_subscriptions",
 ];
 
 type FederationPeerDirectoryNotification = {
@@ -332,6 +338,129 @@ type FederationStarMapArrangementNotification = {
     entries: StarMapArrangementEntry[];
   };
 };
+
+type FederationEventSubscriptionNotification = {
+  method: typeof FEDERATION_EVENT_SUBSCRIPTION_METHOD;
+  params: {
+    eventClasses: FederationEventClass[];
+  };
+};
+
+type IncomingEventSubscription = {
+  eventClasses: Set<FederationEventClass>;
+  viaPeerId: FederationInstanceId;
+};
+
+type RelayedEventSubscription = IncomingEventSubscription & {
+  sourceInstanceId: FederationInstanceId;
+  subscriberInstanceId: FederationInstanceId;
+};
+
+const NAVIGATION_EVENT_METHODS = new Set<string>([
+  "automation/run/updated",
+  "directory/pin/added",
+  "directory/pin/removed",
+  "directory/pin/reordered",
+  "directory/threadsCollapsed/updated",
+  "navigation/directoryGitStatus/updated",
+  "navigation/threadDirectories/updated",
+  "navigation/threadGitWorkingState/updated",
+  "pullRequest/status/updated",
+  "thread/acpRuntime/updated",
+  "thread/agent/updated",
+  "thread/archived",
+  "thread/automations/updated",
+  "thread/codexEnvironment/updated",
+  "thread/codexInvalidIdRecovery/updated",
+  "thread/executionMode/queueCleared",
+  "thread/executionMode/queued",
+  "thread/executionMode/updated",
+  "thread/modelSettings/updated",
+  "thread/name/updated",
+  "thread/parent/cleared",
+  "thread/parent/set",
+  "thread/pin/added",
+  "thread/pin/removed",
+  "thread/pin/reordered",
+  "thread/prAutoDispatch/pendingUpdated",
+  "thread/prAutoDispatch/updated",
+  "thread/pullRequests/updated",
+  "thread/started",
+  "thread/status/changed",
+  "thread/subAgents/updated",
+  "thread/subthreadOrder/updated",
+  "thread/subthreadsCollapsed/updated",
+  "thread/turnQueue/updated",
+  "thread/unarchived",
+  "turn/cancelled",
+  "turn/completed",
+  "turn/failed",
+  "turn/started",
+]);
+
+export function federationEventClassForMethod(
+  method: string,
+): FederationEventClass {
+  if (method === "thread/scheduledAction/updated") {
+    return "scheduled_actions";
+  }
+  if (
+    method === "item/tool/requestUserInput"
+    || method === "mcpServer/elicitation/request"
+    || method === "applyPatchApproval"
+    || method === "execCommandApproval"
+    || method === "serverRequest/resolved"
+    || method.toLowerCase().includes("requestapproval")
+  ) {
+    return "pending_requests";
+  }
+  if (
+    method === "starMap/arrangement/changed"
+    || method === "starMap/intake/status"
+    || method === "federation/celestialIcons/changed"
+  ) {
+    return "star_map";
+  }
+  if (NAVIGATION_EVENT_METHODS.has(method)) {
+    return "navigation";
+  }
+  // Fail closed: newly introduced notification methods do not reach
+  // navigation-only or Star Map subscribers until explicitly classified.
+  return "transcript";
+}
+
+function eventSubscriptionKey(params: {
+  sourceInstanceId: FederationInstanceId;
+  subscriberInstanceId: FederationInstanceId;
+}): string {
+  return `${params.sourceInstanceId}\u0000${params.subscriberInstanceId}`;
+}
+
+function equalEventClassSets(
+  left: ReadonlySet<FederationEventClass> | undefined,
+  right: ReadonlySet<FederationEventClass> | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.size === right.size && [...left].every((value) => right.has(value));
+}
+
+function eventClassAllowedByCapabilities(
+  eventClass: FederationEventClass,
+  capabilities: readonly FederationCapability[],
+): boolean {
+  if (!capabilities.includes("event_subscriptions")) return false;
+  switch (eventClass) {
+    case "navigation":
+    case "star_map":
+      return capabilities.includes("thread_navigation");
+    case "transcript":
+      return capabilities.includes("thread_detail");
+    case "pending_requests":
+      return capabilities.includes("pending_request_control");
+    case "scheduled_actions":
+      return capabilities.includes("scheduled_actions");
+  }
+}
 
 export class DesktopFederationRuntime {
   private router?: FederationRouter;
@@ -378,6 +507,18 @@ export class DesktopFederationRuntime {
     (event: AgentEvent) => void | Promise<void>
   >();
   private readonly peerStatusListeners = new Set<() => void>();
+  private readonly desiredEventSubscriptions = new Map<
+    string,
+    Map<FederationInstanceId, Set<FederationEventClass>>
+  >();
+  private readonly incomingEventSubscriptions = new Map<
+    FederationInstanceId,
+    IncomingEventSubscription
+  >();
+  private readonly relayedEventSubscriptions = new Map<
+    string,
+    RelayedEventSubscription
+  >();
   private unsubscribeLocalBackendEvents?: () => void;
   private restartPromise: Promise<void> | undefined;
   private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
@@ -414,6 +555,95 @@ export class DesktopFederationRuntime {
     return () => {
       this.remoteBackendEventListeners.delete(listener);
     };
+  }
+
+  setEventSubscriptions(
+    consumerId: string,
+    subscriptions: readonly FederationEventSubscription[],
+  ): FederationEventSubscription[] {
+    const previous = this.aggregateDesiredEventSubscriptions();
+    const normalized = new Map<
+      FederationInstanceId,
+      Set<FederationEventClass>
+    >();
+    for (const subscription of subscriptions) {
+      if (!isFederationInstanceId(subscription.sourceInstanceId)) continue;
+      const eventClasses = subscription.eventClasses.filter(isFederationEventClass);
+      if (eventClasses.length === 0) continue;
+      const current = normalized.get(subscription.sourceInstanceId) ?? new Set();
+      for (const eventClass of eventClasses) current.add(eventClass);
+      normalized.set(subscription.sourceInstanceId, current);
+    }
+    if (normalized.size > 0) {
+      this.desiredEventSubscriptions.set(consumerId, normalized);
+    } else {
+      this.desiredEventSubscriptions.delete(consumerId);
+    }
+    const next = this.aggregateDesiredEventSubscriptions();
+    const sourceIds = new Set([...previous.keys(), ...next.keys()]);
+    for (const sourceInstanceId of sourceIds) {
+      if (
+        equalEventClassSets(
+          previous.get(sourceInstanceId),
+          next.get(sourceInstanceId),
+        )
+      ) {
+        continue;
+      }
+      this.sendDesiredEventSubscription(
+        sourceInstanceId,
+        next.get(sourceInstanceId) ?? new Set(),
+      );
+    }
+    return [...normalized].map(([sourceInstanceId, eventClasses]) => ({
+      sourceInstanceId,
+      eventClasses: [...eventClasses],
+    }));
+  }
+
+  setRendererEventSubscriptions(
+    webContentsId: number,
+    consumerId: "remote-window" | "star-map",
+    subscriptions: readonly FederationEventSubscription[],
+  ): FederationEventSubscription[] {
+    return this.setEventSubscriptions(
+      `renderer:${webContentsId}:${consumerId}`,
+      subscriptions,
+    );
+  }
+
+  clearRendererEventSubscriptions(
+    webContentsId: number,
+    consumerId?: "remote-window" | "star-map",
+  ): void {
+    const prefix = `renderer:${webContentsId}:`;
+    if (consumerId) {
+      this.setEventSubscriptions(`${prefix}${consumerId}`, []);
+      return;
+    }
+    for (const key of [...this.desiredEventSubscriptions.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.setEventSubscriptions(key, []);
+      }
+    }
+  }
+
+  rendererWantsRemoteEvent(
+    webContentsId: number,
+    sourceInstanceId: FederationInstanceId,
+    eventClass: FederationEventClass,
+  ): boolean {
+    const prefix = `renderer:${webContentsId}:`;
+    for (const [consumerId, subscriptions] of
+      this.desiredEventSubscriptions) {
+      if (
+        consumerId.startsWith(prefix)
+        && subscriptions.get(sourceInstanceId)?.has(eventClass)
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -491,6 +721,8 @@ export class DesktopFederationRuntime {
     this.rpcByPeer.clear();
     this.remotePeerDirectory.clear();
     this.publishedPeerStatuses.clear();
+    this.incomingEventSubscriptions.clear();
+    this.relayedEventSubscriptions.clear();
     this.reconnectAttempt = 0;
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
@@ -1412,11 +1644,11 @@ export class DesktopFederationRuntime {
       connectedAt: Date.now(),
     });
     this.publishPeerStatus(gatewayInstanceId, "connected");
-    // Push our persisted assignments up so overrides made while offline win
-    // LWW merges at the gateway; its authoritative snapshot comes back on
-    // the same channel.
+    // Icon assignments are sparse federation control-plane state rather than
+    // a live backend event stream. Keep the existing reconnect convergence.
     this.broadcastCelestialIcons();
-    this.sendStarMapArrangementSnapshot();
+    this.syncDesiredEventSubscriptions();
+    this.replayRelayedEventSubscriptions();
     if (pendingInviteToken) {
       getAppStateDb().setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     }
@@ -1538,12 +1770,13 @@ export class DesktopFederationRuntime {
     // remote PTY sessions alive.
     this.ptyService?.notifyPeerConnected(connection.peerId);
     this.publishPeerStatus(connection.peerId, "connected");
+    this.replayRelayedEventSubscriptions(connection.peerId);
+    this.syncDesiredEventSubscriptions();
     this.broadcastPeerDirectory();
     // Mirrors the broadcastPeerDirectory guard: connections registered
     // before app state exists (unit harnesses) skip icon coordination.
     if (isAppStateInitialized()) {
       this.reconcileCelestialAssignments();
-      this.sendStarMapArrangementSnapshot();
     }
   }
 
@@ -1562,6 +1795,7 @@ export class DesktopFederationRuntime {
   }
 
   private unregisterPeer(peerId: FederationInstanceId): void {
+    this.removeEventSubscriptionsForPeer(peerId);
     this.router?.unregisterConnection(peerId);
     // Remote PTY sessions this peer opened get the 10s reap grace; if the
     // peer reconnects first, registerGatewayConnection cancels the reap.
@@ -1607,6 +1841,12 @@ export class DesktopFederationRuntime {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ): Promise<void> {
+    // Subscription relays authenticate their delegated subscriber and route
+    // explicitly inside applyEventSubscription. Other envelopes retain the
+    // router's stricter direct-or-configured-upstream origin check.
+    if (this.applyEventSubscription(envelope, sourcePeerId)) {
+      return;
+    }
     if (
       this.router
       && !this.router.authenticatesOrigin(envelope, sourcePeerId)
@@ -1810,6 +2050,25 @@ export class DesktopFederationRuntime {
     }
 
     throw new FederationPeerUnavailableError(targetInstanceId);
+  }
+
+  private sendEnvelopeToEventSubscriber(
+    subscriberInstanceId: FederationInstanceId,
+    envelope: FederationProtocolEnvelope,
+  ): void {
+    if (this.router?.sendToPeer(subscriberInstanceId, envelope)) {
+      return;
+    }
+    const viaPeerId = this.incomingEventSubscriptions
+      .get(subscriberInstanceId)
+      ?.viaPeerId;
+    if (
+      viaPeerId
+      && this.router?.sendToPeer(viaPeerId, envelope)
+    ) {
+      return;
+    }
+    this.sendEnvelopeToTarget(subscriberInstanceId, envelope);
   }
 
   private visiblePeers(): FederationPeerSummary[] {
@@ -2381,34 +2640,38 @@ export class DesktopFederationRuntime {
   }
 
   /**
-   * Fan an arrangement delta out to connected peers. Called for local
-   * writes (broadcast to everyone) and for received deltas (re-broadcast
-   * excluding the sender), so a gateway relays client drags to siblings.
+   * Fan an arrangement delta out only to explicit Star Map subscribers.
    */
   broadcastStarMapArrangement(
     entries: StarMapArrangementEntry[],
-    excludePeerId?: FederationInstanceId,
   ): void {
-    const router = this.router;
-    if (!router || entries.length === 0) return;
-    const localInstanceId = this.ensureLocalInstanceId();
-    for (const connection of router.listConnections()) {
-      if (connection.peerId === excludePeerId) continue;
-      connection.sendEnvelope({
-        id: `federation-star-map:${randomUUID()}`,
-        kind: "notification",
-        method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
-        params: { entries },
-        protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: localInstanceId,
-        targetInstanceId: connection.peerId,
-        createdAt: Date.now(),
-      });
+    if (!this.router || entries.length === 0) return;
+    for (const [subscriberInstanceId, subscription] of
+      this.incomingEventSubscriptions) {
+      if (!subscription.eventClasses.has("star_map")) {
+        continue;
+      }
+      try {
+        this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
+          id: `federation-star-map:${randomUUID()}`,
+          kind: "notification",
+          method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
+          params: { entries },
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: this.ensureLocalInstanceId(),
+          targetInstanceId: subscriberInstanceId,
+          createdAt: Date.now(),
+        });
+      } catch {
+        // Live subscribers are cleaned up with their connection.
+      }
     }
   }
 
-  /** Reconnect convergence: push the full persisted arrangement snapshot. */
-  private sendStarMapArrangementSnapshot(): void {
+  /** Subscription convergence: push the full persisted arrangement snapshot. */
+  private sendStarMapArrangementSnapshot(
+    subscriberInstanceId: FederationInstanceId,
+  ): void {
     if (!isAppStateInitialized()) return;
     let store: ReturnType<typeof getDesktopOverlayStore>;
     try {
@@ -2421,7 +2684,25 @@ export class DesktopFederationRuntime {
     }
     void store
       .readStarMapArrangement()
-      .then((entries) => this.broadcastStarMapArrangement(entries))
+      .then((entries) => {
+        const subscription = this.incomingEventSubscriptions
+          .get(subscriberInstanceId);
+        if (!subscription?.eventClasses.has("star_map")) return;
+        try {
+          this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
+            id: `federation-star-map:${randomUUID()}`,
+            kind: "notification",
+            method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
+            params: { entries },
+            protocolVersion: FEDERATION_PROTOCOL_VERSION,
+            sourceInstanceId: this.ensureLocalInstanceId(),
+            targetInstanceId: subscriberInstanceId,
+            createdAt: Date.now(),
+          });
+        } catch {
+          // The subscription will replay on the next connection.
+        }
+      })
       .catch((error) => {
         log.warn("star map arrangement snapshot send failed", {
           error: error instanceof Error ? error.message : String(error),
@@ -2439,6 +2720,23 @@ export class DesktopFederationRuntime {
     ) {
       return false;
     }
+    if (
+      envelope.targetInstanceId
+      && envelope.targetInstanceId !== this.ensureLocalInstanceId()
+    ) {
+      this.relaySubscribedBackendEvent(envelope, sourcePeerId, "star_map");
+      return true;
+    }
+    if (
+      !envelope.targetInstanceId
+      || !this.wantsRemoteEvent(envelope.sourceInstanceId, "star_map")
+      || (
+        envelope.sourceInstanceId !== sourcePeerId
+        && sourcePeerId !== this.gatewayInstanceId
+      )
+    ) {
+      return true;
+    }
     if (!isAppStateInitialized()) return true;
     const notification =
       envelope as FederationStarMapArrangementNotification & typeof envelope;
@@ -2451,9 +2749,6 @@ export class DesktopFederationRuntime {
       .then(({ accepted }) => {
         if (accepted.length === 0) return;
         this.publishStarMapArrangementChanged(accepted);
-        // Accepted-only re-broadcast: idempotent merges terminate the loop,
-        // and the gateway relays client drags to every sibling.
-        this.broadcastStarMapArrangement(accepted, sourcePeerId);
       })
       .catch((error) => {
         log.warn("star map arrangement merge failed", {
@@ -2563,6 +2858,252 @@ export class DesktopFederationRuntime {
     return { assignments: this.celestialIconAssignments() };
   }
 
+  private aggregateDesiredEventSubscriptions(): Map<
+    FederationInstanceId,
+    Set<FederationEventClass>
+  > {
+    const aggregated = new Map<
+      FederationInstanceId,
+      Set<FederationEventClass>
+    >();
+    for (const subscriptions of this.desiredEventSubscriptions.values()) {
+      for (const [sourceInstanceId, eventClasses] of subscriptions) {
+        const current = aggregated.get(sourceInstanceId) ?? new Set();
+        for (const eventClass of eventClasses) current.add(eventClass);
+        aggregated.set(sourceInstanceId, current);
+      }
+    }
+    return aggregated;
+  }
+
+  private wantsRemoteEvent(
+    sourceInstanceId: FederationInstanceId,
+    eventClass: FederationEventClass,
+  ): boolean {
+    for (const subscriptions of this.desiredEventSubscriptions.values()) {
+      if (subscriptions.get(sourceInstanceId)?.has(eventClass)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private sendDesiredEventSubscription(
+    sourceInstanceId: FederationInstanceId,
+    eventClasses: ReadonlySet<FederationEventClass>,
+  ): void {
+    if (sourceInstanceId === this.ensureLocalInstanceId()) return;
+    try {
+      this.sendEnvelopeToTarget(sourceInstanceId, {
+        id: `federation-subscription:${randomUUID()}`,
+        kind: "notification",
+        method: FEDERATION_EVENT_SUBSCRIPTION_METHOD,
+        params: { eventClasses: [...eventClasses] },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: this.ensureLocalInstanceId(),
+        targetInstanceId: sourceInstanceId,
+        createdAt: Date.now(),
+      });
+    } catch {
+      // Desired state survives disconnects and is replayed after reconnect.
+    }
+  }
+
+  private syncDesiredEventSubscriptions(): void {
+    for (const [sourceInstanceId, eventClasses] of
+      this.aggregateDesiredEventSubscriptions()) {
+      this.sendDesiredEventSubscription(sourceInstanceId, eventClasses);
+    }
+  }
+
+  private applyEventSubscription(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ): boolean {
+    if (
+      envelope.kind !== "notification"
+      || envelope.method !== FEDERATION_EVENT_SUBSCRIPTION_METHOD
+    ) {
+      return false;
+    }
+    const subscriberInstanceId = envelope.sourceInstanceId;
+    const sourceInstanceId = envelope.targetInstanceId;
+    if (
+      !isFederationInstanceId(subscriberInstanceId)
+      || !sourceInstanceId
+      || !isFederationInstanceId(sourceInstanceId)
+    ) {
+      return true;
+    }
+    const sourceConnection = this.router?.getConnection(sourcePeerId);
+    const delegatedSubscriber = subscriberInstanceId !== sourcePeerId;
+    const authenticatedSubscriptionRelay =
+      delegatedSubscriber
+      && (envelope.hopCount ?? 0) >= 1
+      && (
+        sourcePeerId === this.gatewayInstanceId
+        || sourceConnection?.capabilities.includes("gateway_relay")
+      );
+    if (
+      !sourceConnection?.capabilities.includes("event_subscriptions")
+      || (delegatedSubscriber && !authenticatedSubscriptionRelay)
+    ) {
+      return true;
+    }
+    const notification =
+      envelope as FederationEventSubscriptionNotification & typeof envelope;
+    const requestedClasses = Array.isArray(notification.params?.eventClasses)
+      ? notification.params.eventClasses.filter(isFederationEventClass)
+      : [];
+
+    if (sourceInstanceId !== this.ensureLocalInstanceId()) {
+      const allowedClasses = requestedClasses.filter((eventClass) =>
+        eventClassAllowedByCapabilities(
+          eventClass,
+          sourceConnection.capabilities,
+        )
+      );
+      const key = eventSubscriptionKey({
+        sourceInstanceId,
+        subscriberInstanceId,
+      });
+      const relayedSubscription: RelayedEventSubscription = {
+        eventClasses: new Set(allowedClasses),
+        sourceInstanceId,
+        subscriberInstanceId,
+        viaPeerId: sourcePeerId,
+      };
+      if (allowedClasses.length > 0) {
+        this.relayedEventSubscriptions.set(key, relayedSubscription);
+      } else {
+        this.relayedEventSubscriptions.delete(key);
+      }
+      this.sendRelayedEventSubscription(
+        relayedSubscription,
+        relayedSubscription.eventClasses,
+      );
+      return true;
+    }
+
+    const previous = this.incomingEventSubscriptions.get(subscriberInstanceId);
+    const allowedClasses = subscriberInstanceId === sourcePeerId
+      ? requestedClasses.filter((eventClass) =>
+          eventClassAllowedByCapabilities(
+            eventClass,
+            sourceConnection.capabilities,
+          )
+        )
+      : requestedClasses;
+    if (allowedClasses.length > 0) {
+      this.incomingEventSubscriptions.set(subscriberInstanceId, {
+        eventClasses: new Set(allowedClasses),
+        viaPeerId: sourcePeerId,
+      });
+    } else {
+      this.incomingEventSubscriptions.delete(subscriberInstanceId);
+    }
+    if (
+      allowedClasses.includes("star_map")
+      && !previous?.eventClasses.has("star_map")
+    ) {
+      this.sendStarMapArrangementSnapshot(subscriberInstanceId);
+    }
+    return true;
+  }
+
+  private relaySubscribedBackendEvent(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+    eventClass: FederationEventClass,
+  ): boolean {
+    const subscriberInstanceId = envelope.targetInstanceId;
+    if (!subscriberInstanceId) return false;
+    const subscription = this.relayedEventSubscriptions.get(
+      eventSubscriptionKey({
+        sourceInstanceId: envelope.sourceInstanceId,
+        subscriberInstanceId,
+      }),
+    );
+    if (!subscription?.eventClasses.has(eventClass)) return false;
+    if (
+      envelope.sourceInstanceId !== sourcePeerId
+      && !this.router?.authenticatesOrigin(envelope, sourcePeerId)
+    ) {
+      return false;
+    }
+    const hopCount = envelope.hopCount ?? 0;
+    if (
+      hopCount >= FEDERATION_EVENT_RELAY_MAX_HOPS
+      || subscription.viaPeerId === sourcePeerId
+    ) {
+      return false;
+    }
+    return this.router?.sendToPeer(subscription.viaPeerId, {
+      ...envelope,
+      hopCount: hopCount + 1,
+    }) ?? false;
+  }
+
+  private removeEventSubscriptionsForPeer(peerId: FederationInstanceId): void {
+    for (const [subscriberInstanceId, subscription] of
+      this.incomingEventSubscriptions) {
+      if (
+        subscriberInstanceId === peerId
+        || subscription.viaPeerId === peerId
+      ) {
+        this.incomingEventSubscriptions.delete(subscriberInstanceId);
+      }
+    }
+    for (const [key, subscription] of this.relayedEventSubscriptions) {
+      if (subscription.subscriberInstanceId === peerId) {
+        this.sendRelayedEventSubscription(subscription, new Set());
+        this.relayedEventSubscriptions.delete(key);
+        continue;
+      }
+      if (subscription.viaPeerId === peerId) {
+        this.sendRelayedEventSubscription(subscription, new Set());
+        this.relayedEventSubscriptions.delete(key);
+      }
+    }
+  }
+
+  private sendRelayedEventSubscription(
+    subscription: RelayedEventSubscription,
+    eventClasses: ReadonlySet<FederationEventClass>,
+  ): void {
+    try {
+      this.sendEnvelopeToTarget(subscription.sourceInstanceId, {
+        id: `federation-subscription-relay:${randomUUID()}`,
+        kind: "notification",
+        method: FEDERATION_EVENT_SUBSCRIPTION_METHOD,
+        params: { eventClasses: [...eventClasses] },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: subscription.subscriberInstanceId,
+        targetInstanceId: subscription.sourceInstanceId,
+        hopCount: 1,
+        createdAt: Date.now(),
+      });
+    } catch {
+      // A disconnected source already cleared subscriptions via its route.
+    }
+  }
+
+  private replayRelayedEventSubscriptions(
+    sourceInstanceId?: FederationInstanceId,
+  ): void {
+    for (const subscription of this.relayedEventSubscriptions.values()) {
+      if (
+        sourceInstanceId === undefined
+        || subscription.sourceInstanceId === sourceInstanceId
+      ) {
+        this.sendRelayedEventSubscription(
+          subscription,
+          subscription.eventClasses,
+        );
+      }
+    }
+  }
+
   private publishPeerStatus(
     instanceId: FederationInstanceId,
     status: FederationConnectionState,
@@ -2610,39 +3151,37 @@ export class DesktopFederationRuntime {
   }
 
   private forwardLocalBackendEvent(event: AgentEvent): void {
-    const router = this.router;
-    if (!router) return;
+    if (!this.router) return;
     const ownerInstanceId = this.ensureLocalInstanceId();
     const federatedEvent = rewriteLiveTranscriptImagesForFederation(
       event,
       ownerInstanceId,
     );
+    const eventClass = federationEventClassForMethod(
+      federatedEvent.notification.method,
+    );
 
-    for (const connection of router.listConnections()) {
-      const scheduledActionEvent =
-        federatedEvent.notification.method === "thread/scheduledAction/updated";
-      if (
-        scheduledActionEvent
-          ? !connection.capabilities.includes("scheduled_actions")
-          : !connection.capabilities.includes("remote_window")
-            && !connection.capabilities.includes("thread_detail")
-      ) {
-        continue;
+    for (const [subscriberInstanceId, subscription] of
+      this.incomingEventSubscriptions) {
+      if (!subscription.eventClasses.has(eventClass)) continue;
+      try {
+        this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
+          id: `federation-event:${randomUUID()}`,
+          kind: "notification",
+          method: FEDERATION_BACKEND_EVENT_METHOD,
+          params: {
+            backend: federatedEvent.backend,
+            notification: federatedEvent.notification,
+          },
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: ownerInstanceId,
+          targetInstanceId: subscriberInstanceId,
+          createdAt: Date.now(),
+        });
+      } catch {
+        // Connection teardown clears the subscription. A route that vanished
+        // between iteration and send simply misses this live notification.
       }
-
-      connection.sendEnvelope({
-        id: `federation-event:${randomUUID()}`,
-        kind: "notification",
-        method: FEDERATION_BACKEND_EVENT_METHOD,
-        params: {
-          backend: federatedEvent.backend,
-          notification: federatedEvent.notification,
-        },
-        protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: ownerInstanceId,
-        targetInstanceId: connection.peerId,
-        createdAt: Date.now(),
-      });
     }
   }
 
@@ -2658,11 +3197,35 @@ export class DesktopFederationRuntime {
     }
 
     const notification = envelope as FederationBackendEventNotification & typeof envelope;
+    const eventClass = federationEventClassForMethod(
+      notification.params.notification.method,
+    );
+    const targetInstanceId = envelope.targetInstanceId;
+    if (
+      targetInstanceId
+      && targetInstanceId !== this.ensureLocalInstanceId()
+    ) {
+      this.relaySubscribedBackendEvent(envelope, sourcePeerId, eventClass);
+      return true;
+    }
+    const sourceInstanceId = envelope.sourceInstanceId || sourcePeerId;
+    if (
+      !targetInstanceId
+      || !this.wantsRemoteEvent(sourceInstanceId, eventClass)
+    ) {
+      return true;
+    }
+    if (
+      sourceInstanceId !== sourcePeerId
+      && sourcePeerId !== this.gatewayInstanceId
+    ) {
+      return true;
+    }
     const event: AgentEvent = {
       backend: notification.params.backend,
       federationTarget: {
         scope: "remote",
-        instanceId: envelope.sourceInstanceId || sourcePeerId,
+        instanceId: sourceInstanceId,
       },
       notification: notification.params.notification,
     };
@@ -2675,43 +3238,7 @@ export class DesktopFederationRuntime {
         });
       });
     }
-    this.relayRemoteBackendEvent(envelope, sourcePeerId);
     return true;
-  }
-
-  private relayRemoteBackendEvent(
-    envelope: FederationProtocolEnvelope,
-    sourcePeerId: FederationInstanceId,
-  ): void {
-    const router = this.router;
-    if (!router || sourcePeerId === this.gatewayInstanceId) {
-      return;
-    }
-    const hopCount = envelope.hopCount ?? 0;
-    if (hopCount >= 1) {
-      return;
-    }
-
-    const notification = envelope as FederationBackendEventNotification & typeof envelope;
-    for (const connection of router.listConnections()) {
-      if (connection.peerId === sourcePeerId) continue;
-      const scheduledActionEvent =
-        notification.params.notification.method
-          === "thread/scheduledAction/updated";
-      if (
-        scheduledActionEvent
-          ? !connection.capabilities.includes("scheduled_actions")
-          : !connection.capabilities.includes("remote_window")
-            && !connection.capabilities.includes("thread_detail")
-      ) {
-        continue;
-      }
-      connection.sendEnvelope({
-        ...envelope,
-        hopCount: hopCount + 1,
-        targetInstanceId: connection.peerId,
-      });
-    }
   }
 }
 

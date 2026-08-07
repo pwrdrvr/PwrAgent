@@ -119,6 +119,8 @@ import type {
   RevokeFederationPeerResponse,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  SetFederationEventSubscriptionsRequest,
+  SetFederationEventSubscriptionsResponse,
   ReadStarMapArrangementResponse,
   SetStarMapCardPositionRequest,
   StarMapIntakeRequest,
@@ -507,6 +509,9 @@ export type DesktopApi = {
   setCelestialIcon?: (
     request: SetCelestialIconRequest,
   ) => Promise<SetCelestialIconResponse>;
+  setFederationEventSubscriptions?: (
+    request: SetFederationEventSubscriptionsRequest,
+  ) => Promise<SetFederationEventSubscriptionsResponse>;
   readStarMapArrangement?: () => Promise<ReadStarMapArrangementResponse>;
   setStarMapCardPosition?: (
     request: SetStarMapCardPositionRequest,

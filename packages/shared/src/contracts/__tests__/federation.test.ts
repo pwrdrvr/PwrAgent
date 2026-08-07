@@ -6,6 +6,7 @@ import {
   federationTargetKey,
   formatFederationPeerDisplayLabel,
   isFederationCapability,
+  isFederationEventClass,
   isFederationInstanceId,
   isRemoteFederationTarget,
   type FederationCapabilitySet,
@@ -56,7 +57,11 @@ describe("federation contracts", () => {
 
     expect(isFederationCapability("remote_window")).toBe(true);
     expect(isFederationCapability("scheduled_actions")).toBe(true);
+    expect(isFederationCapability("event_subscriptions")).toBe(true);
     expect(isFederationCapability("unknown")).toBe(false);
+    expect(isFederationEventClass("navigation")).toBe(true);
+    expect(isFederationEventClass("pending_requests")).toBe(true);
+    expect(isFederationEventClass("everything")).toBe(false);
   });
 
   it("keeps protocol envelopes correlated and versioned", () => {

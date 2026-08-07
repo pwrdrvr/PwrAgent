@@ -824,7 +824,7 @@ export function createMainWindow(options?: {
     WINDOW_OPEN_SETTINGS_CHANNEL,
     WINDOW_REPLAY_ONBOARDING_CHANNEL,
     WINDOW_SHOW_THREAD_CHANNEL,
-  ]);
+  ], options?.federationTarget);
 
   window.on("closed", () => {
     hotCpuProfilerSyncHandlers.delete(window.id);

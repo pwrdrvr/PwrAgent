@@ -23,9 +23,39 @@ export const FEDERATION_CAPABILITIES = [
   "pwrsnap_connection",
   "gateway_relay",
   "remote_pty",
+  "event_subscriptions",
 ] as const;
 
 export type FederationCapability = (typeof FEDERATION_CAPABILITIES)[number];
+
+/**
+ * Backend-event streams are opt-in and intentionally split by consumer need.
+ * Unknown notification methods fall into `transcript`, the most restrictive
+ * class, so a new producer cannot silently widen navigation-only subscribers.
+ */
+export const FEDERATION_EVENT_CLASSES = [
+  "navigation",
+  "transcript",
+  "pending_requests",
+  "scheduled_actions",
+  "star_map",
+] as const;
+
+export type FederationEventClass =
+  (typeof FEDERATION_EVENT_CLASSES)[number];
+
+export type FederationEventSubscription = {
+  sourceInstanceId: FederationInstanceId;
+  eventClasses: FederationEventClass[];
+};
+
+export type SetFederationEventSubscriptionsRequest = {
+  subscriptions: FederationEventSubscription[];
+};
+
+export type SetFederationEventSubscriptionsResponse = {
+  subscriptions: FederationEventSubscription[];
+};
 
 export type FederationInstanceRole = "gateway" | "client" | "dual";
 
@@ -481,6 +511,15 @@ export function isFederationCapability(
   return (
     typeof value === "string" &&
     (FEDERATION_CAPABILITIES as readonly string[]).includes(value)
+  );
+}
+
+export function isFederationEventClass(
+  value: unknown,
+): value is FederationEventClass {
+  return (
+    typeof value === "string"
+    && (FEDERATION_EVENT_CLASSES as readonly string[]).includes(value)
   );
 }
 

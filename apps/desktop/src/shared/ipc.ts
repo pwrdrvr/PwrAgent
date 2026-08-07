@@ -13,6 +13,8 @@ export const FEDERATION_TAILSCALE_CONFIGURE_CHANNEL =
   "federation:tailscale-configure";
 export const FEDERATION_SET_CELESTIAL_ICON_CHANNEL =
   "federation:set-celestial-icon";
+export const FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL =
+  "federation:set-event-subscriptions";
 export const STAR_MAP_READ_ARRANGEMENT_CHANNEL = "star-map:read-arrangement";
 export const STAR_MAP_SET_CARD_POSITION_CHANNEL = "star-map:set-card-position";
 export const STAR_MAP_INTAKE_CHANNEL = "star-map:intake";

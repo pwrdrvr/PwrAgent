@@ -74,6 +74,49 @@ The scheduled-action RPC surface is part of federation protocol v1 while the
 protocol remains under development. Peers must authorize `scheduled_actions`
 explicitly; `turn_control` does not imply scheduler access.
 
+### Event subscriptions
+
+An authenticated connection does not subscribe a peer to backend events.
+Live events use the separately negotiated `event_subscriptions` capability and
+replace-style subscriptions scoped by all three of:
+
+- subscriber instance
+- owning/source instance
+- event class (`navigation`, `transcript`, `pending_requests`,
+  `scheduled_actions`, or `star_map`)
+
+Remote workspace windows subscribe to their fixed owning instance for only the
+classes supported by that peer. The Star Map subscribes while mounted to
+`navigation`, `scheduled_actions`, and `star_map` for its connected visible
+instances; it does not request transcript or pending-request traffic.
+Messaging subscribes only for instances referenced by active federated
+bindings and clears that desired state when messaging stops.
+
+Subscriptions are desired state, not additive commands. Retargeting or closing
+a consumer replaces its old set (an empty set is unsubscribe). The subscriber
+replays its aggregate desired set after reconnect. A gateway records relayed
+subscription routes, forwards events only to the named downstream subscriber,
+and removes or replays routes as downstream subscribers or source peers
+disconnect and reconnect. Owners likewise clear session-scoped incoming
+subscriptions when their authenticated next hop disconnects.
+
+Backend-event envelopes are targeted. Receivers drop an event unless its source
+instance and class match local desired state, and they accept a claimed source
+different from the authenticated peer only when that peer is their configured
+upstream gateway. This keeps one instance's stream out of unrelated local and
+remote windows.
+
+Mixed-version behavior is fail-closed on upgraded senders: a peer that does not
+advertise `event_subscriptions` receives no live events from a new owner.
+Upgraded receivers also discard unsolicited events from older senders. An old
+sender can still put legacy broadcast traffic on a connection until it is
+upgraded, so the no-unsolicited-network-traffic guarantee requires upgraded
+software on the producing side (and on a relaying gateway, when present).
+
+Peer-directory and celestial-icon LWW snapshots remain federation control-plane
+state. They exchange when a connection or assignment changes, then settle; they
+do not enable or carry the backend-event stream described above.
+
 ## Diagnostics
 
 `federation:get-health` returns a sanitized health snapshot for settings and

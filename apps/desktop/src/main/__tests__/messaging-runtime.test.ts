@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
+  FederationEventSubscription,
   NavigationSnapshot,
   StartTurnRequest,
 } from "@pwragent/shared";
@@ -109,6 +110,70 @@ describe("DesktopMessagingRuntime", () => {
     // budget where the cold path is comfortably fast, so a genuine hang or
     // regression there still fails fast instead of idling for the full 30s.
   }, process.platform === "win32" ? 30_000 : 15_000);
+
+  it("subscribes only to federated bindings on running adapters", async () => {
+    const { runtime, bridge } = await createRuntimeHarness();
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await getDesktopMessagingStore().upsertBinding({
+      id: "binding:remote",
+      channel: {
+        channel: "telegram",
+        conversation: { id: "chat-1", kind: "dm" },
+      },
+      backend: "codex",
+      threadId: "thread-remote",
+      federatedThread: {
+        backend: "codex",
+        target: { scope: "remote", instanceId: "owner_one" },
+        threadId: "thread-remote",
+      },
+      authorizedActorIds: ["user-1"],
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    });
+    await getDesktopMessagingStore().upsertBinding({
+      id: "binding:inactive-discord",
+      channel: {
+        channel: "discord",
+        conversation: { id: "discord-chat-1", kind: "dm" },
+      },
+      backend: "codex",
+      threadId: "thread-inactive",
+      federatedThread: {
+        backend: "codex",
+        target: { scope: "remote", instanceId: "owner_two" },
+        threadId: "thread-inactive",
+      },
+      authorizedActorIds: ["user-1"],
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    });
+
+    await runtime.start();
+
+    expect(bridge.setRemoteEventSubscriptions).toHaveBeenLastCalledWith([{
+      sourceInstanceId: "owner_one",
+      eventClasses: [
+        "navigation",
+        "transcript",
+        "pending_requests",
+        "scheduled_actions",
+      ],
+    }]);
+
+    await runtime.requestBindingRevoke({
+      bindingId: "binding:remote",
+      origin: "ui",
+    });
+    await vi.waitFor(() => {
+      expect(bridge.setRemoteEventSubscriptions).toHaveBeenLastCalledWith([]);
+    });
+
+    await runtime.stop();
+    expect(bridge.setRemoteEventSubscriptions).toHaveBeenLastCalledWith([]);
+  });
 
   it("rehydrates enabled Monitor bindings after adapter startup", async () => {
     const { runtime, adapter } = await createRuntimeHarness();
@@ -3448,6 +3513,9 @@ function createAdapter(
 function createBackendBridge(): MessagingBackendBridge & {
   emitBackendEvent: (event: AgentEvent) => Promise<void>;
   onEvent: (listener: (event: AgentEvent) => void | Promise<void>) => () => void;
+  setRemoteEventSubscriptions: (
+    subscriptions: readonly FederationEventSubscription[],
+  ) => void;
 } {
   const backendListeners = new Set<(event: AgentEvent) => void | Promise<void>>();
 
@@ -3464,6 +3532,7 @@ function createBackendBridge(): MessagingBackendBridge & {
         backendListeners.delete(listener);
       };
     }),
+    setRemoteEventSubscriptions: vi.fn(),
     emitBackendEvent: async (event: AgentEvent) => {
       await Promise.all(
         [...backendListeners].map(async (listener) => {

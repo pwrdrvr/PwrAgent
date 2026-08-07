@@ -1,6 +1,8 @@
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
-import { subscribersForChannel } from "../window-channels";
-import { federationWindowTargetForWebContents } from "../window";
+import {
+  federationTargetForChannelSubscriber,
+  subscribersForChannel,
+} from "../window-channels";
 import {
   sanitizeRendererPayload,
   type AgentEvent,
@@ -65,7 +67,10 @@ import {
   type UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
 import { isRemoteFederationTarget } from "@pwragent/shared";
-import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  federationEventClassForMethod,
+  getDesktopFederationRuntime,
+} from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
@@ -347,10 +352,28 @@ export function broadcastAgentEvent(event: AgentEvent): void {
   // default — see `apps/desktop/src/main/window-channels.ts`.
   for (const webContents of subscribersForChannel(AGENT_EVENT_CHANNEL)) {
     if (typeof webContents.send !== "function") continue;
+    const windowTarget = federationTargetForChannelSubscriber(webContents);
     if (
       federationWindowsOnly
-      && !federationWindowTargetForWebContents(webContents)
+      && !windowTarget
     ) {
+      continue;
+    }
+    if (event.federationTarget?.scope === "remote") {
+      const isLocalPeerStatus =
+        event.notification.method === "federation/peerStatus/changed"
+        && !windowTarget;
+      if (
+        !isLocalPeerStatus
+        && !getDesktopFederationRuntime().rendererWantsRemoteEvent(
+          webContents.id,
+          event.federationTarget.instanceId,
+          federationEventClassForMethod(event.notification.method),
+        )
+      ) {
+        continue;
+      }
+    } else if (windowTarget) {
       continue;
     }
     webContents.send(AGENT_EVENT_CHANNEL, rendererEvent);

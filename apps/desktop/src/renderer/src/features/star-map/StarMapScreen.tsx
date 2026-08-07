@@ -309,6 +309,38 @@ export function StarMapScreen(props: StarMapScreenProps) {
       ? visible.filter((peer) => peer.status === "connected")
       : visible;
   }, [health, preferences.hideOfflineInstances]);
+  const eventSubscriptionsJson = JSON.stringify(
+    peers
+      .filter(
+        (peer) =>
+          peer.status === "connected"
+          && peer.capabilities.includes("event_subscriptions"),
+      )
+      .map((peer) => ({
+        sourceInstanceId: peer.id,
+        eventClasses: [
+          ...(peer.capabilities.includes("thread_navigation")
+            ? ["navigation" as const, "star_map" as const]
+            : []),
+          ...(peer.capabilities.includes("scheduled_actions")
+            ? ["scheduled_actions" as const]
+            : []),
+        ],
+      })),
+  );
+  useEffect(() => {
+    if (!props.desktopApi?.setFederationEventSubscriptions) return;
+    const subscriptions = JSON.parse(eventSubscriptionsJson) as Array<{
+      sourceInstanceId: string;
+      eventClasses: Array<"navigation" | "scheduled_actions" | "star_map">;
+    }>;
+    void props.desktopApi.setFederationEventSubscriptions({ subscriptions });
+    return () => {
+      void props.desktopApi?.setFederationEventSubscriptions?.({
+        subscriptions: [],
+      });
+    };
+  }, [eventSubscriptionsJson, props.desktopApi]);
   const remote = useStarMapThreads({
     desktopApi: props.desktopApi,
     peers,
