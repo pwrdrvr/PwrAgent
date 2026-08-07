@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ArchiveWorktreeRequest,
   ArchiveThreadRequest,
@@ -835,6 +835,18 @@ vi.mock("../pr-status/git-remote", async () => {
 });
 
 describe("app server ipc", () => {
+  type AppServerIpcModule = typeof import("../ipc/app-server");
+  let disposeAppServerIpcHandlers: AppServerIpcModule["disposeAppServerIpcHandlers"];
+  let registerAppServerIpcHandlers: AppServerIpcModule["registerAppServerIpcHandlers"];
+
+  beforeAll(async () => {
+    // Import after the hoisted mocks exist, but before an individual test can
+    // pay the cold module-graph evaluation cost.
+    const appServerIpc = await import("../ipc/app-server");
+    disposeAppServerIpcHandlers = appServerIpc.disposeAppServerIpcHandlers;
+    registerAppServerIpcHandlers = appServerIpc.registerAppServerIpcHandlers;
+  });
+
   beforeEach(() => {
     backendRegistryLifecycle.existing = true;
     backendRegistryLifecycle.get.mockClear();
@@ -952,13 +964,11 @@ describe("app server ipc", () => {
   });
 
   afterEach(async () => {
-    const { disposeAppServerIpcHandlers } = await import("../ipc/app-server");
     await disposeAppServerIpcHandlers();
   });
 
   it("does not construct a backend registry during disposal", async () => {
     backendRegistryLifecycle.existing = false;
-    const { disposeAppServerIpcHandlers } = await import("../ipc/app-server");
 
     await disposeAppServerIpcHandlers();
 
@@ -973,7 +983,6 @@ describe("app server ipc", () => {
       GithubGraphqlPrClient.prototype,
       "invalidateToken",
     );
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_GET_GH_STATUS_CHANNEL } = await import("../../shared/ipc");
     registerAppServerIpcHandlers();
 
@@ -997,7 +1006,6 @@ describe("app server ipc", () => {
     await writeFile(pdfPath, "%PDF-1.7\n");
     await writeFile(nonPdfPath, "not a PDF");
     try {
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
       const { NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL } = await import(
         "../../shared/ipc"
       );
@@ -1028,7 +1036,6 @@ describe("app server ipc", () => {
     await writeFile(pdfPath, fixture);
     await writeFile(nonPdfPath, "not a PDF");
     try {
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
       const { NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL } = await import(
         "../../shared/ipc"
       );
@@ -1071,7 +1078,6 @@ describe("app server ipc", () => {
   });
 
   it("registers main-process PR auto-dispatch handlers", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
 
     registerAppServerIpcHandlers();
 
@@ -1091,7 +1097,6 @@ describe("app server ipc", () => {
   });
 
   it("persists owner-refreshed directory Git status before publishing it", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
 
     registerAppServerIpcHandlers();
 
@@ -1139,7 +1144,6 @@ describe("app server ipc", () => {
   });
 
   it("hydrates the thread inspection PR canonicalizer from durable cache", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const stalePr = githubPr({
       number: 1132,
       org: "pwrdrvr",
@@ -1176,7 +1180,6 @@ describe("app server ipc", () => {
   });
 
   it("targets only existing threads with an open primary attached PR", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const {
       NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
     } = await import("../../shared/ipc");
@@ -1287,7 +1290,6 @@ describe("app server ipc", () => {
   });
 
   it("does not advertise Auto-fix as active without a primary Git repository", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     listThreads.mockResolvedValueOnce([
       {
@@ -1334,7 +1336,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps Auto-fix PR disabled globally without overwriting its thread setting", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     prAutomationSettings.state.prAutoDispatchAllowed = false;
     getThreadOverlayState.mockResolvedValue({
@@ -1372,7 +1373,6 @@ describe("app server ipc", () => {
   });
 
   it("loads configured budget limits before serving a startup status request", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL } =
       await import("../../shared/ipc");
     prAutomationSettings.state.budgetCapacity = 1_000;
@@ -1399,7 +1399,6 @@ describe("app server ipc", () => {
   });
 
   it("broadcasts each durable budget pause only once", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const {
       APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
       PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
@@ -1431,7 +1430,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps thread preferences intact while a durable budget safety stop pauses Auto-fix PR", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const {
       APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
       APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
@@ -1476,7 +1474,6 @@ describe("app server ipc", () => {
   });
 
   it("does not let a stale settings read re-enable Auto-fix PR", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     let resolveStaleRead:
       | ((settings: {
@@ -1551,7 +1548,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps a new PR watch pending when the cached outcome is stale", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const stalePr = githubPr({
       number: 1128,
@@ -1630,7 +1626,6 @@ describe("app server ipc", () => {
   });
 
   it("aggregates navigation snapshots across backends by default", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -1694,7 +1689,6 @@ describe("app server ipc", () => {
   });
 
   it("merges pinned remote threads into the main-window navigation snapshot", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
@@ -1779,7 +1773,6 @@ describe("app server ipc", () => {
   });
 
   it("groups a multi-directory remote thread into exactly one local project", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
@@ -1885,7 +1878,6 @@ describe("app server ipc", () => {
   });
 
   it("stamps the viewer-owned local rank onto merged remote rows", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
@@ -1931,7 +1923,6 @@ describe("app server ipc", () => {
   });
 
   it("routes pin reorders per key: viewer rank for remote pins, overlay for local", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REORDER_THREAD_PINS_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -1967,7 +1958,6 @@ describe("app server ipc", () => {
   });
 
   it("auto-ranks a remote pin whose home directory group is collapsed", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -2061,7 +2051,6 @@ describe("app server ipc", () => {
   });
 
   it("pins a remote sub-thread's reachable parent as a companion", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -2120,7 +2109,6 @@ describe("app server ipc", () => {
   });
 
   it("does not companion-pin an already-pinned or unreachable parent", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -2167,7 +2155,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps pinned remote rows, dimmed, when the owner is unreachable", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
@@ -2224,7 +2211,6 @@ describe("app server ipc", () => {
   });
 
   it("publishes the primary repository resolved from a worktree to the composer", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const thread = {
       id: "thread-1",
@@ -2266,7 +2252,6 @@ describe("app server ipc", () => {
   });
 
   it("invalidates unchanged snapshots when primary repository resolution recovers", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const thread = {
       id: "thread-1",
@@ -2343,7 +2328,6 @@ describe("app server ipc", () => {
   });
 
   it("uses one active recent page for lightweight navigation refreshes", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2369,7 +2353,6 @@ describe("app server ipc", () => {
   });
 
   it("merges lightweight navigation refreshes into the last full thread list", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const staleThread = {
@@ -2425,7 +2408,6 @@ describe("app server ipc", () => {
   });
 
   it("returns backend scope all when listing threads without a backend filter", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_LIST_THREADS_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2451,7 +2433,6 @@ describe("app server ipc", () => {
   });
 
   it("caps oversized transcript payload strings before readThread crosses IPC", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_READ_THREAD_CHANNEL } = await import("../../shared/ipc");
     const oversizedOutput =
       `{"backend":"codex","captureId":"2026-04-19T01-40-27-292Z-codex"}` +
@@ -2520,7 +2501,6 @@ describe("app server ipc", () => {
   });
 
   it("forwards inspection-only transcript reads to the backend registry", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_READ_THREAD_CHANNEL } = await import("../../shared/ipc");
     readThread.mockResolvedValueOnce({
       backend: "codex",
@@ -2556,7 +2536,6 @@ describe("app server ipc", () => {
   });
 
   it("strips readThread file diffs behind fetchable refs before crossing IPC", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const {
       APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
       APP_SERVER_READ_THREAD_CHANNEL,
@@ -2635,7 +2614,6 @@ describe("app server ipc", () => {
   });
 
   it("hydrates retained worktree snapshots when listing archived threads", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_LIST_THREADS_CHANNEL } = await import("../../shared/ipc");
     getThreadOverlayStates.mockResolvedValue({
       "thread-archived": {
@@ -2695,7 +2673,6 @@ describe("app server ipc", () => {
   });
 
   it("archives threads through the app-server IPC handler", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_ARCHIVE_THREAD_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2718,7 +2695,6 @@ describe("app server ipc", () => {
   });
 
   it("archives remote threads on the selected federation peer", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_ARCHIVE_THREAD_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = {
       scope: "remote" as const,
@@ -2749,7 +2725,6 @@ describe("app server ipc", () => {
   });
 
   it("restores threads through the app-server IPC handler", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_RESTORE_THREAD_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2771,7 +2746,6 @@ describe("app server ipc", () => {
   });
 
   it("archives worktrees through the app-server IPC handler", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_ARCHIVE_WORKTREE_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2801,7 +2775,6 @@ describe("app server ipc", () => {
   });
 
   it("restores worktrees through the app-server IPC handler", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_RESTORE_WORKTREE_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2831,7 +2804,6 @@ describe("app server ipc", () => {
   });
 
   it("hands off thread workspaces through the app-server IPC handler", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2872,7 +2844,6 @@ describe("app server ipc", () => {
   });
 
   it("renames threads through the app-server IPC handler", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_RENAME_THREAD_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2896,7 +2867,6 @@ describe("app server ipc", () => {
   });
 
   it("renames remote threads on the selected federation peer", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { APP_SERVER_RENAME_THREAD_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2929,7 +2899,6 @@ describe("app server ipc", () => {
   });
 
   it("marks Grok threads seen without rejecting the backend", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_MARK_THREAD_SEEN_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2955,7 +2924,6 @@ describe("app server ipc", () => {
   });
 
   it("marks remote threads seen on the owning federation peer", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_MARK_THREAD_SEEN_CHANNEL } = await import("../../shared/ipc");
 
     registerAppServerIpcHandlers();
@@ -2989,7 +2957,6 @@ describe("app server ipc", () => {
   });
 
   it("returns known PR chips immediately and refreshes mixed terminal/non-terminal state in the background", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -3098,7 +3065,6 @@ describe("app server ipc", () => {
   });
 
   it("logs user-triggered PR refresh decisions and background completion with PR ids", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -3206,7 +3172,6 @@ describe("app server ipc", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(3_000_000);
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
       const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
       const request = {
         backend: "codex",
@@ -3273,7 +3238,6 @@ describe("app server ipc", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(4_000_000);
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
       const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
       const stalePr = githubPr({
         number: 847,
@@ -3355,7 +3319,6 @@ describe("app server ipc", () => {
   });
 
   it("serves the same canonical PR state across different thread overlays", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const stalePr = githubPr({
       number: 727,
@@ -3449,7 +3412,6 @@ describe("app server ipc", () => {
   });
 
   it("hydrates canonical PR state from persisted cache without scheduled GitHub refresh", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const stalePr = githubPr({
       number: 727,
@@ -3528,7 +3490,6 @@ describe("app server ipc", () => {
   });
 
   it("skips user-triggered PR refresh when the persisted cache was fetched recently", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const cachedPr = githubPr({
       number: 727,
@@ -3600,7 +3561,6 @@ describe("app server ipc", () => {
   });
 
   it("persists fresh lookup-cache hits to the requesting thread overlay", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const cachedPr = githubPr({
       number: 727,
@@ -3679,7 +3639,6 @@ describe("app server ipc", () => {
   });
 
   it("coalesces concurrent first-time PR lookups for the same branch and directories", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const firstRequest = {
       backend: "codex",
@@ -3751,7 +3710,6 @@ describe("app server ipc", () => {
   });
 
   it("queues an authoritative refresh behind a pending scheduled lookup", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const scheduledRequest = {
       backend: "codex",
@@ -3820,7 +3778,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes retained PRs from all subscribers on a coalesced lookup", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const baseRequest = {
       backend: "codex",
@@ -3974,7 +3931,6 @@ describe("app server ipc", () => {
   });
 
   it("returns recent cached empty PR lookups without hitting GitHub", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4017,7 +3973,6 @@ describe("app server ipc", () => {
   });
 
   it("returns stale cached empty PR lookups immediately and refreshes them in the background", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4086,7 +4041,6 @@ describe("app server ipc", () => {
   });
 
   it("appends newly discovered PRs to the thread PR history", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4163,7 +4117,6 @@ describe("app server ipc", () => {
   });
 
   it("publishes the store-filtered PR list after background refreshes", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4246,7 +4199,6 @@ describe("app server ipc", () => {
   });
 
   it("returns and publishes the store-filtered PR list for lookup-cache hits", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4344,7 +4296,6 @@ describe("app server ipc", () => {
   });
 
   it("keeps detached PRs hidden when gh is unavailable and lookup cache still has them", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4425,7 +4376,6 @@ describe("app server ipc", () => {
   });
 
   it("persists and publishes title-only PR updates", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4488,7 +4438,6 @@ describe("app server ipc", () => {
   });
 
   it("rechecks PRs when cached PRs belong to a different lookup key", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4569,7 +4518,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes retained non-terminal PRs by URL when the current branch lookup is empty", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4689,7 +4637,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes retained detached PRs by URL when the current branch lookup is empty", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4763,7 +4710,6 @@ describe("app server ipc", () => {
   });
 
   it("does not publish PR update events when retained PR status is unchanged", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4838,7 +4784,6 @@ describe("app server ipc", () => {
   });
 
   it("short-circuits PR refresh when all cached PRs are terminal for the same lookup", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
       backend: "codex",
@@ -4901,7 +4846,6 @@ describe("app server ipc", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000_000);
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
       const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
       const request = {
         backend: "codex",
@@ -4963,7 +4907,6 @@ describe("app server ipc", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(2_000_000);
-      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
       const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
       const request = {
         backend: "codex",
@@ -5065,7 +5008,6 @@ describe("app server ipc", () => {
   });
 
   it("preserves unchanged snapshots when directory statuses are unchanged", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     reconcileNavigationSnapshot
@@ -5207,7 +5149,6 @@ describe("app server ipc", () => {
   });
 
   it("marks snapshots changed when canonical PR statuses update thread PRs", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const stalePr = githubPr({
       number: 727,
@@ -5294,7 +5235,6 @@ describe("app server ipc", () => {
   });
 
   it("marks snapshots changed when hydrated launchpad environment options change", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-nav-env-"));
@@ -5397,7 +5337,6 @@ describe("app server ipc", () => {
   });
 
   it("uses cached directory git status without refreshing unchanged directories", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     readDirectoryGitStatusCache.mockResolvedValueOnce({
@@ -5428,7 +5367,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes stale cached directory git status in the background", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     readDirectoryGitStatusCache.mockResolvedValueOnce({
@@ -5454,7 +5392,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes cached directory git status when explicitly requested", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const {
       NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
       NAVIGATION_SNAPSHOT_CHANNEL,
@@ -5499,7 +5436,6 @@ describe("app server ipc", () => {
   });
 
   it("routes remote directory git status refreshes to the owning federation peer", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL } = await import("../../shared/ipc");
     const federationTarget = {
       scope: "remote" as const,
@@ -5533,7 +5469,6 @@ describe("app server ipc", () => {
   });
 
   it("coalesces rapid forced directory git status re-enqueues for the same key", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const {
       NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
       NAVIGATION_SNAPSHOT_CHANNEL,
@@ -5576,7 +5511,6 @@ describe("app server ipc", () => {
   });
 
   it("publishes a working-state chip update when a snapshot probe lands", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     listThreads.mockResolvedValueOnce([
@@ -5624,7 +5558,6 @@ describe("app server ipc", () => {
   });
 
   it("hydrates working state from linked worktrees when the thread has no project key", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const worktreePath =
@@ -5683,7 +5616,6 @@ describe("app server ipc", () => {
   });
 
   it("passes merged PR commit SHAs into working-state probes", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const mergedPrSha = "a".repeat(40);
 
@@ -5727,7 +5659,6 @@ describe("app server ipc", () => {
   });
 
   it("passes detached merged PR commit SHAs into working-state probes", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const mergedPrSha = "b".repeat(40);
     const detachedPr = githubPr({
@@ -5780,7 +5711,6 @@ describe("app server ipc", () => {
   });
 
   it("registers a user-invoked PR status tool handler with freshness metadata", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const fetchedAt = Date.now() - 45_000;
     const cachedPr = githubPr({
       number: 944,
@@ -5861,7 +5791,6 @@ describe("app server ipc", () => {
   });
 
   it("includes overlay attached directories in PR status tool default paths", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const cachedPr = githubPr({
       number: 945,
       org: "pwrdrvr",
@@ -5923,7 +5852,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes a thread's working state after the agent finishes a turn", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     listThreads.mockResolvedValueOnce([
@@ -5969,7 +5897,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes a thread's working state after its expected branch changes", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     listThreads.mockResolvedValueOnce([
@@ -6014,7 +5941,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes pull requests for the rendered branch when a turn completes", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const discoveredPr = githubPr({
       number: 813,
@@ -6092,7 +6018,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes post-turn pull requests for an adopted branch instead of stale snapshot context", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const discoveredPr = githubPr({
       number: 814,
@@ -6171,7 +6096,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes pull requests when branch adoption finishes after turn completion", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const discoveredPr = githubPr({
       number: 815,
@@ -6262,7 +6186,6 @@ describe("app server ipc", () => {
   });
 
   it("preserves PR history when late branch adoption overlaps the post-turn lookup", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const oldBranchPr = githubPr({
       number: 816,
@@ -6372,7 +6295,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes post-turn pull requests for a scoped linked worktree branch", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     listThreads.mockResolvedValueOnce([
@@ -6441,7 +6363,6 @@ describe("app server ipc", () => {
   });
 
   it("routes post-turn retained PR refreshes back to HEAD worktree threads", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const stalePr = githubPr({
       number: 981,
@@ -6561,7 +6482,6 @@ describe("app server ipc", () => {
   });
 
   it("ignores a completed non-git command for working-state refresh", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     listThreads.mockResolvedValueOnce([
@@ -6602,7 +6522,6 @@ describe("app server ipc", () => {
   });
 
   it("coalesces concurrent identical resolveEditCommitStates requests", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -6630,7 +6549,6 @@ describe("app server ipc", () => {
   });
 
   it("caps automatic startup directory git status refreshes", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const directories = Array.from({ length: 6 }, (_, index) => ({
@@ -6684,7 +6602,6 @@ describe("app server ipc", () => {
   });
 
   it("refreshes launchpad directory git status before selecting the default branch", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
 
     readDirectoryStatusEntries.mockImplementationOnce((directories: Array<{ key: string }>) =>
@@ -6741,7 +6658,6 @@ describe("app server ipc", () => {
   });
 
   it("attaches directories with path-shaped linked directory ids", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL } = await import("../../shared/ipc");
     const directoryPath = path.resolve("/repo/app");
     const directoryPathId = directoryPath.replace(/\\/g, "/");
@@ -6781,7 +6697,6 @@ describe("app server ipc", () => {
   });
 
   it("detaches a secondary directory while preserving the primary linked directory", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL } =
       await import("../../shared/ipc");
     const primaryDirectory = {
@@ -6841,7 +6756,6 @@ describe("app server ipc", () => {
   });
 
   it("rejects detaching the last linked directory", async () => {
-    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL } =
       await import("../../shared/ipc");
     const onlyDirectory = {
