@@ -3,6 +3,7 @@ import {
   centerStarMapView,
   clampStarMapView,
   MAX_ZOOM,
+  MIN_VISIBLE_FRACTION,
   MIN_ZOOM,
   type StarMapView,
 } from "../star-map-view-geometry";
@@ -10,9 +11,9 @@ import {
 const VIEWPORT = { width: 1280, height: 800 };
 const CANVAS = { width: 2400, height: 1800 };
 
-/** The 15% strip the clamp guarantees, per axis. */
-const MIN_VISIBLE_X = VIEWPORT.width * 0.15;
-const MIN_VISIBLE_Y = VIEWPORT.height * 0.15;
+/** The strip the clamp guarantees, per axis. */
+const MIN_VISIBLE_X = VIEWPORT.width * MIN_VISIBLE_FRACTION;
+const MIN_VISIBLE_Y = VIEWPORT.height * MIN_VISIBLE_FRACTION;
 
 function clamp(view: StarMapView, canvas = CANVAS, viewport = VIEWPORT) {
   return clampStarMapView({ view, canvas, viewport });

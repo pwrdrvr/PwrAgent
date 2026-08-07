@@ -249,31 +249,31 @@ export function StarMapScreen(props: StarMapScreenProps) {
     viewport?.classList.add("is-panning");
     const startX = event.clientX;
     const startY = event.clientY;
+    // Scale is captured for the whole gesture. A pinch mid-drag moves the
+    // live transform out of step with it until pointerup re-reads the real
+    // scale from state; the drag has always worked this way.
     const base = view;
-    let lastX = base.x;
-    let lastY = base.y;
+    /** Latest raw pointer position, unclamped. Both writers clamp it. */
+    let pointerX = base.x;
+    let pointerY = base.y;
     let frame = 0;
+    const bounds = { canvas: panZoomCanvas, viewport: viewportSize };
     const move = (pointerEvent: globalThis.PointerEvent) => {
-      // Clamped per frame, not just on release: the drag writes the
-      // transform straight onto the canvas, so an unclamped live path
-      // would let the map leave the window and then jump back on
-      // pointerup when the clamped state landed.
-      const clamped = clampStarMapView({
-        view: {
-          x: base.x + pointerEvent.clientX - startX,
-          y: base.y + pointerEvent.clientY - startY,
-          scale: base.scale,
-        },
-        canvas: panZoomCanvas,
-        viewport: viewportSize,
-      });
-      lastX = clamped.x;
-      lastY = clamped.y;
+      pointerX = base.x + pointerEvent.clientX - startX;
+      pointerY = base.y + pointerEvent.clientY - startY;
       if (!frame) {
         frame = requestAnimationFrame(() => {
           frame = 0;
+          // Clamped per frame, not only on release: the drag writes the
+          // transform straight onto the canvas, so an unclamped live path
+          // would let the map leave the window and then jump back on
+          // pointerup when the clamped state landed.
+          const clamped = clampStarMapView({
+            view: { x: pointerX, y: pointerY, scale: base.scale },
+            ...bounds,
+          });
           canvas.style.transform =
-            `translate(${lastX}px, ${lastY}px) scale(${base.scale})`;
+            `translate(${clamped.x}px, ${clamped.y}px) scale(${base.scale})`;
         });
       }
     };
@@ -287,14 +287,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
       }
       viewport?.classList.remove("is-panning");
       operatorMovedViewRef.current = true;
-      // Clamped again rather than trusting the drag's own bookkeeping: the
-      // committed value is the one every later frame builds on, so it is
-      // the one that must be in bounds.
+      // Clamps the raw pointer position independently of the frame above,
+      // rather than committing whatever that frame happened to compute.
+      // The committed value is what every later gesture builds on, so it
+      // has to be in bounds on its own account — and a flick released
+      // before any frame ran still commits where the pointer actually
+      // ended up.
       setView((current) =>
         clampStarMapView({
-          view: { ...current, x: lastX, y: lastY },
-          canvas: panZoomCanvas,
-          viewport: viewportSize,
+          view: { ...current, x: pointerX, y: pointerY },
+          ...bounds,
         }),
       );
     };

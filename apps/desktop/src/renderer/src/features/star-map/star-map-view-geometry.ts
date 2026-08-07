@@ -28,8 +28,10 @@ export const MAX_ZOOM = 2;
  *
  * Per-axis rather than by area: an area rule is satisfied by a one-pixel-tall
  * band across the window, which is not a usable handle.
+ *
+ * Exported so tests assert against this number rather than a copy of it.
  */
-const MIN_VISIBLE_FRACTION = 0.15;
+export const MIN_VISIBLE_FRACTION = 0.15;
 
 /**
  * Clamp one axis so the canvas's overlap with the viewport stays at or above
@@ -75,8 +77,21 @@ function clampAxis(params: {
  * Deliberately NOT applied when the map's *contents* change. A cloud that
  * resizes must never move a view the operator positioned; that is the whole
  * point of the view-ownership rule, and re-clamping on a content change
- * would reintroduce exactly the jerk it removed. A content change that
- * leaves the operator off the map is recovered with "Reset view".
+ * would reintroduce exactly the jerk it removed.
+ *
+ * That leaves a real gap, and it is a reachable one rather than a corner
+ * case: the bounds are a function of canvas size, so a canvas that SHRINKS
+ * can strand a view that was legal when the operator placed it. Parked at
+ * the left bound (`x = minVisible - canvasWidth`, looking at the canvas's
+ * right edge) and then archiving enough cards to drop an orbit ring narrows
+ * the canvas by roughly 2 * RING_STEP_RX — far more than the strip this
+ * guarantees — and the content ends up off-screen entirely.
+ *
+ * So this bounds the operator's own movement and nothing else. Recovery
+ * from a content-induced strand is "Reset view", which is a cheap in-app
+ * action rather than the reopen-the-map it replaced, but it is still a
+ * manual step. Closing that gap needs a rescue that fires only for an
+ * already-out-of-bounds view; see the note on centerStarMapView.
  */
 export function clampStarMapView(params: {
   view: StarMapView;
@@ -104,6 +119,14 @@ export function clampStarMapView(params: {
  * The view that puts the middle of the canvas in the middle of the window
  * at 1:1. Used to place the map on open, on a lens switch, and by "Reset
  * view".
+ *
+ * This is also the manual half of the content-shrink gap described on
+ * clampStarMapView. A rescue that re-placed the view automatically would
+ * have to fire only when the current view is already out of bounds — a
+ * no-op for every view the operator can still use — so that it never moves
+ * a usable view and never reintroduces the jerk the ownership rule fixed.
+ * Deliberately not attempted here: it changes when the map is allowed to
+ * move itself, which wants its own change and its own tests.
  */
 export function centerStarMapView(params: {
   canvas: StarMapViewBox;

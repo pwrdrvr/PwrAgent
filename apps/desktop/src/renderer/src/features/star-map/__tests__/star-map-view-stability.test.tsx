@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { MIN_VISIBLE_FRACTION } from "../star-map-view-geometry";
 import { StarMapScreen } from "../StarMapScreen";
 
 /**
@@ -80,16 +81,17 @@ function pan(dx: number, dy: number) {
  * default viewport. The bounds below are computed against it.
  */
 const VIEWPORT = { width: 1280, height: 800 };
-/** Mirrors MIN_VISIBLE_FRACTION in star-map-view-geometry. */
-const MIN_VISIBLE_FRACTION = 0.15;
 
-function readTransform(): { x: number; y: number; scale: number } {
-  const raw = canvas().style.transform;
+function parseTransform(raw: string): { x: number; y: number; scale: number } {
   const match = /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(
     raw,
   );
   if (!match) throw new Error(`unparsable transform: ${raw}`);
   return { x: Number(match[1]), y: Number(match[2]), scale: Number(match[3]) };
+}
+
+function readTransform(): { x: number; y: number; scale: number } {
+  return parseTransform(canvas().style.transform);
 }
 
 /** The canvas's untransformed size, as the screen sized the element. */
@@ -469,6 +471,80 @@ describe("star map view bounds", () => {
       y: (VIEWPORT.height - box.height) / 2,
       scale: 1,
     });
+  });
+
+  it("lets a shrinking canvas strand the view, recovered by Reset", async () => {
+    // Pins the known gap rather than implying there isn't one. The bounds
+    // are a function of canvas size, and the clamp deliberately does not
+    // re-run on a content change — so a canvas that shrinks out from under
+    // a legally-parked view can leave nothing on screen. Recovery is
+    // manual. If a future change closes this properly, this test should
+    // fail and be rewritten, not deleted.
+    const { rerender } = await openOrbit();
+    const wide = canvasBox();
+
+    // Park hard against the left bound: the canvas's right edge is all
+    // that remains on screen, so any shrink eats straight into it.
+    pan(-40000, -40000);
+    expect(
+      visible(readTransform().x, wide.width, VIEWPORT.width),
+    ).toBeGreaterThanOrEqual(VIEWPORT.width * MIN_VISIBLE_FRACTION);
+
+    rerender(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={threads(1)}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: /Open thread: Thread t8/ }),
+      ).toBeNull();
+    });
+
+    const narrow = canvasBox();
+    // The shrink has to exceed the guaranteed strip for this to be the
+    // gap rather than a rounding artefact.
+    expect(narrow.width).toBeLessThan(
+      wide.width - VIEWPORT.width * MIN_VISIBLE_FRACTION,
+    );
+    const stranded = readTransform();
+    expect(visible(stranded.x, narrow.width, VIEWPORT.width)).toBe(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset view" }));
+
+    const recovered = readTransform();
+    expect(
+      visible(recovered.x, narrow.width, VIEWPORT.width),
+    ).toBeGreaterThanOrEqual(VIEWPORT.width * MIN_VISIBLE_FRACTION);
+    expect(
+      visible(recovered.y, narrow.height, VIEWPORT.height),
+    ).toBeGreaterThanOrEqual(VIEWPORT.height * MIN_VISIBLE_FRACTION);
+  });
+
+  it("commits a flick released before any frame runs", async () => {
+    // The live transform is written inside requestAnimationFrame, but the
+    // committed value must not depend on a frame having fired — a quick
+    // drag-and-release would otherwise throw the gesture away.
+    await openOrbit();
+    const before = canvas().style.transform;
+    const viewport = document.querySelector(".star-map__viewport")!;
+
+    fireEvent.pointerDown(viewport, { button: 0, clientX: 500, clientY: 400 });
+    fireEvent.pointerMove(window, { clientX: 300, clientY: 250 });
+    fireEvent.pointerUp(window, { clientX: 300, clientY: 250 });
+
+    const after = readTransform();
+    const start = parseTransform(before);
+    expect(after.x).toBe(start.x - 200);
+    expect(after.y).toBe(start.y - 150);
   });
 
   it("offers no reset in the lens that has no view to lose", async () => {

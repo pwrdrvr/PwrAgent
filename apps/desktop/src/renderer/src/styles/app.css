@@ -9774,6 +9774,11 @@ textarea,
   color: var(--text-primary);
 }
 
+.star-map__view-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .star-map__view-heading {
   margin: 4px 0 2px;
   color: var(--text-muted);
