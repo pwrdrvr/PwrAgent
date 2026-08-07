@@ -3,7 +3,7 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import {
   STAR_MAP_NO_PROJECT_KEY,
   groupThreadsByProject,
-  instanceIdForThread,
+  instanceIdByThreadKey,
   threadProjectKey,
 } from "../star-map-projects";
 import { computeProjectLayout } from "../star-map-project-layout";
@@ -108,7 +108,7 @@ describe("groupThreadsByProject", () => {
   });
 });
 
-describe("instanceIdForThread", () => {
+describe("instanceIdByThreadKey", () => {
   const local = thread({ id: "l1", repoPath: "/repos/A" });
   const remote = thread({ id: "r1", repoPath: "/repos/A" });
   const byInstance = new Map([
@@ -116,15 +116,24 @@ describe("instanceIdForThread", () => {
     ["peer", [remote]],
   ]);
 
-  it("finds the owning instance", () => {
-    expect(instanceIdForThread(byInstance, remote)).toBe("peer");
-    expect(instanceIdForThread(byInstance, local)).toBe("local");
+  it("maps each thread to its owning instance", () => {
+    const owners = instanceIdByThreadKey(byInstance);
+    expect(owners.get("codex:r1")).toBe("peer");
+    expect(owners.get("codex:l1")).toBe("local");
   });
 
-  it("returns undefined for a thread from nowhere", () => {
+  it("has no entry for a thread from nowhere", () => {
+    expect(instanceIdByThreadKey(byInstance).get("codex:gone")).toBeUndefined();
+  });
+
+  it("keys on thread identity, not object identity", () => {
+    // A clone must resolve the same way — the previous implementation
+    // scanned with `===` and would have missed this entirely.
+    const owners = instanceIdByThreadKey(byInstance);
+    const clone = { ...remote } as typeof remote;
     expect(
-      instanceIdForThread(byInstance, thread({ id: "gone" })),
-    ).toBeUndefined();
+      owners.get(`${clone.source}:${clone.id}`),
+    ).toBe("peer");
   });
 });
 

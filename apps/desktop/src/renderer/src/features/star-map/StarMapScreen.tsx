@@ -47,7 +47,7 @@ import {
 import { buildFederationTopology } from "./star-map-topology";
 import {
   groupThreadsByProject,
-  instanceIdForThread,
+  instanceIdByThreadKey,
 } from "./star-map-projects";
 import { computeProjectLayout } from "./star-map-project-layout";
 import { StarMapProjectBody } from "./StarMapProjectBody";
@@ -442,6 +442,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const projects = useMemo(
     () => groupThreadsByProject(attentionByInstance),
+    [attentionByInstance],
+  );
+
+  const projectThreadOwners = useMemo(
+    () => instanceIdByThreadKey(attentionByInstance),
     [attentionByInstance],
   );
 
@@ -1114,13 +1119,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     threadCount={project.threads.length}
                   />
                   {visible.map((thread, index) => {
-                    const owner = instanceIdForThread(
-                      attentionByInstance,
-                      thread,
+                    const threadKey = buildThreadIdentityKey(
+                      thread.source,
+                      thread.id,
                     );
+                    // Every card here came out of `attentionByInstance`, so
+                    // the owner is always present; fall back to the local
+                    // instance rather than inventing an empty id.
+                    const owner =
+                      projectThreadOwners.get(threadKey) ?? localInstanceId;
                     return (
                       <StarMapThreadCard
-                        key={buildThreadIdentityKey(thread.source, thread.id)}
+                        key={threadKey}
                         thread={thread}
                         sessionKeys={
                           owner === localInstanceId
@@ -1131,6 +1141,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
                           owner === localInstanceId ? undefined : owner,
                         )}
                         baseSlot={slots[index]}
+                        // No drag here on purpose: arrangements are keyed
+                        // and synced per federation instance, and a project
+                        // is not an instance. Giving projects their own
+                        // arrangement space is protocol work, so cards in
+                        // this lens simply do not move rather than moving
+                        // and failing to persist.
                         width={ORBIT_CARD_WIDTH}
                         centered
                         stackIndex={index}
@@ -1144,7 +1160,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                           secondaryDirectories: false,
                         }}
                         showInstanceChip
-                        menuActions={cardMenuActions(thread, owner ?? "")}
+                        menuActions={cardMenuActions(thread, owner)}
                         onOpen={openThread}
                       />
                     );

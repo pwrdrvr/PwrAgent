@@ -1,4 +1,7 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  type NavigationThreadSummary,
+} from "@pwragent/shared";
 
 export type StarMapProject = {
   /** Stable identity: the repo root path, or a sentinel when there is none. */
@@ -76,13 +79,22 @@ export function groupThreadsByProject(
   );
 }
 
-/** Which instance a thread lives on, for the card's instance chip. */
-export function instanceIdForThread(
+/**
+ * Owning instance per thread, for the card's instance chip.
+ *
+ * Built once and looked up by identity key rather than scanned per card:
+ * a per-card scan is O(instances x threads) on every render, and matching
+ * on object identity would break silently the moment any layer cloned a
+ * summary instead of passing the same reference through.
+ */
+export function instanceIdByThreadKey(
   threadsByInstance: ReadonlyMap<string, readonly NavigationThreadSummary[]>,
-  thread: NavigationThreadSummary,
-): string | undefined {
+): Map<string, string> {
+  const owners = new Map<string, string>();
   for (const [instanceId, threads] of threadsByInstance) {
-    if (threads.some((entry) => entry === thread)) return instanceId;
+    for (const thread of threads) {
+      owners.set(buildThreadIdentityKey(thread.source, thread.id), instanceId);
+    }
   }
-  return undefined;
+  return owners;
 }

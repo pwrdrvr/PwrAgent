@@ -9367,7 +9367,11 @@ textarea,
 }
 
 /* The kebab only appears on the card under the pointer (or while its own
-   menu is open) so a dense cloud is not peppered with dots. */
+   menu is open) so a dense cloud is not peppered with dots.
+
+   `pointer-events: none` matters as much as the opacity: an opacity-0
+   button still hit-tests, so without it every card carried an invisible
+   click target in its top-right corner. */
 .star-map-card__menu {
   position: absolute;
   top: 4px;
@@ -9375,12 +9379,14 @@ textarea,
   z-index: 6;
   opacity: 0;
   transition: opacity 120ms ease;
+  pointer-events: none;
 }
 
 .star-map-card-shell:hover .star-map-card__menu,
 .star-map-card__menu:focus-within,
 .star-map-card__menu:has([aria-expanded="true"]) {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .star-map-card__menu-button {
