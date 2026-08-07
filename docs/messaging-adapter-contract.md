@@ -117,6 +117,16 @@ link syntax or a future structured link part. Platform clients may still apply
 native autolinking to plain text; neutralize that only with a provider-specific
 policy and tests for the concrete platform behavior.
 
+`MessagingMessageIntent.attribution` carries optional source identity and
+secondary delivery context for responses routed away from their bound
+conversation. Providers should render it as restrained secondary context, such
+as a Slack Block Kit context block. Producers omit it for routine replies when
+the destination already identifies the bound thread. For bound Agent threads,
+desktop orchestration uses normalized Agent metadata only; for ordinary bound
+threads it uses the normalized thread title unless its title source is
+`fallback`, then uses `PwrAgent thread`. A missing Agent name must not be
+inferred from a derived thread title, prompt text, or `AGENTS.md` content.
+
 Telegram currently uses Bot API long polling, HTML-safe text, inline keyboards,
 `sendPhoto` for image URLs/data images, and `sendDocument` for generic file
 parts. Discord uses Gateway events, REST message delivery, defensive
