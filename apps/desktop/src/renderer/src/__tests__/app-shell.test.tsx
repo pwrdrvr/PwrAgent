@@ -94,6 +94,55 @@ function createDeferred<T>(): {
   return { promise, resolve, reject };
 }
 
+function backendToastEvents(
+  federationTarget?: AgentEvent["federationTarget"],
+): AgentEvent[] {
+  const target = federationTarget ? { federationTarget } : {};
+  return [
+    {
+      backend: "codex",
+      ...target,
+      notification: {
+        method: "turn/failed",
+        params: {
+          threadId: "turn-failure-thread",
+          turnId: "failed-turn",
+          turn: {
+            id: "failed-turn",
+            status: "failed",
+            error: { message: "Scoped turn failure" },
+          },
+        },
+      },
+    },
+    {
+      backend: "codex",
+      ...target,
+      notification: {
+        method: "thread/codexInvalidIdRecovery/updated",
+        params: {
+          threadId: "recovery-thread",
+          turnId: "recovery-turn",
+          status: "failed",
+          failureMessage: "Scoped invalid message ID",
+          recoveryError: "Scoped recovery failure",
+        },
+      },
+    },
+    {
+      backend: "codex",
+      ...target,
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "system-error-thread",
+          status: { type: "systemError" },
+        },
+      },
+    },
+  ];
+}
+
 function profileSummary(
   name: string,
   codexProfileName: string,
@@ -296,14 +345,57 @@ describe("App", () => {
     expect(gitSettingsButton).toHaveAttribute("aria-current", "page");
   });
 
-  it("only surfaces backend error toasts for the renderer window's federation target", async () => {
+  it.each([
+    {
+      label: "local events in the main window",
+      rendererTarget: undefined,
+      eventTarget: undefined,
+      expected: true,
+    },
+    {
+      label: "remote events with no matching viewer",
+      rendererTarget: undefined,
+      eventTarget: { scope: "remote" as const, instanceId: "remote-gateway" },
+      expected: false,
+    },
+    {
+      label: "matching events in a remote viewer",
+      rendererTarget: {
+        scope: "remote" as const,
+        instanceId: "remote-gateway",
+      },
+      eventTarget: { scope: "remote" as const, instanceId: "remote-gateway" },
+      expected: true,
+    },
+    {
+      label: "local events in a remote viewer",
+      rendererTarget: {
+        scope: "remote" as const,
+        instanceId: "remote-gateway",
+      },
+      eventTarget: undefined,
+      expected: false,
+    },
+    {
+      label: "nonmatching events in a remote viewer",
+      rendererTarget: {
+        scope: "remote" as const,
+        instanceId: "remote-gateway",
+      },
+      eventTarget: { scope: "remote" as const, instanceId: "another-peer" },
+      expected: false,
+    },
+  ])("scopes all backend error toast paths for $label", async ({
+    rendererTarget,
+    eventTarget,
+    expected,
+  }) => {
     const agentEventListeners = new Set<(event: AgentEvent) => void>();
-    (window as typeof window & {
-      __pwragentFederationTarget?: unknown;
-    }).__pwragentFederationTarget = {
-      scope: "remote",
-      instanceId: "remote-gateway",
-    };
+    if (rendererTarget) {
+      (window as typeof window & {
+        __pwragentFederationTarget?: unknown;
+      }).__pwragentFederationTarget = rendererTarget;
+    }
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
@@ -336,34 +428,26 @@ describe("App", () => {
     render(<App />);
     await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
 
-    const emitSystemError = (
-      federationTarget?: AgentEvent["federationTarget"],
-    ) => {
-      for (const listener of agentEventListeners) {
-        listener({
-          backend: "codex",
-          federationTarget,
-          notification: {
-            method: "thread/status/changed",
-            params: {
-              threadId: "thread-1",
-              status: { type: "systemError" },
-            },
-          },
-        });
+    act(() => {
+      for (const event of backendToastEvents(eventTarget)) {
+        for (const listener of agentEventListeners) {
+          listener(event);
+        }
       }
-    };
-
-    act(() => {
-      emitSystemError();
-      emitSystemError({ scope: "remote", instanceId: "another-peer" });
     });
-    expect(screen.queryByText("Agent backend error")).not.toBeInTheDocument();
 
-    act(() => {
-      emitSystemError({ scope: "remote", instanceId: "remote-gateway" });
-    });
+    if (!expected) {
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      return;
+    }
+
+    expect(screen.getByText("Turn failed")).toBeInTheDocument();
+    expect(screen.getByText("1 of 3")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next notice" }));
+    expect(screen.getByText("Codex repair failed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next notice" }));
     expect(screen.getByText("Agent backend error")).toBeInTheDocument();
+    expect(screen.getByText("3 of 3")).toBeInTheDocument();
   });
 
   it("reveals the sidebar when adding a project from the hidden-sidebar masthead", async () => {
