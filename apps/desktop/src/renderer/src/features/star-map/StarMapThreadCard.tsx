@@ -15,7 +15,7 @@ import {
   getThreadRowStatus,
   ThreadRowStatus,
 } from "../navigation/ThreadRowStatus";
-import { clampToCloudRadius, STAR_MAP_CLOUD_RADIUS } from "./star-map-layout";
+import { resolveCardDragOffset } from "./star-map-layout";
 import {
   visiblePullRequests,
   type StarMapCardFields,
@@ -55,8 +55,20 @@ export function StarMapThreadCard(props: {
   centered?: boolean;
   /** Owning instance's celestial mark, watermarked behind the content. */
   instanceIcon?: CelestialIconId;
-  /** Present when the card is draggable; receives the clamped offset. */
-  onCommitOffset?: (offset: { dx: number; dy: number }) => void;
+  /**
+   * Present when the card is draggable. Radius and commit travel together
+   * so a draggable card cannot exist without the region it drags in.
+   */
+  drag?: {
+    /**
+     * Where drag resistance begins, measured from the INSTANCE BODY — one
+     * region shared by the whole cloud (`cloudDetentRadius`), not a
+     * per-card allowance, so any card can be placed where any other card
+     * sits. Past it the drag is resisted, not stopped.
+     */
+    detentRadius: number;
+    onCommitOffset: (offset: { dx: number; dy: number }) => void;
+  };
   onOpen: (thread: NavigationThreadSummary) => void;
   /** Kebab entries; the kebab is hidden when empty. */
   menuActions?: StarMapCardMenuAction[];
@@ -90,7 +102,8 @@ export function StarMapThreadCard(props: {
   };
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!props.onCommitOffset || event.button !== 0) return;
+    const drag = props.drag;
+    if (!drag || event.button !== 0) return;
     const element = event.currentTarget;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -110,13 +123,16 @@ export function StarMapThreadCard(props: {
       }
       dragging = true;
       suppressClickRef.current = true;
-      const clamped = clampToCloudRadius(
-        startOffset.dx + deltaX,
-        startOffset.dy + deltaY,
-        STAR_MAP_CLOUD_RADIUS,
-      );
-      lastDx = clamped.dx;
-      lastDy = clamped.dy;
+      const resolved = resolveCardDragOffset({
+        baseSlot: props.baseSlot,
+        offset: {
+          dx: startOffset.dx + deltaX,
+          dy: startOffset.dy + deltaY,
+        },
+        detentRadius: drag.detentRadius,
+      });
+      lastDx = resolved.dx;
+      lastDy = resolved.dy;
       if (!frame) {
         frame = requestAnimationFrame(() => {
           frame = 0;
@@ -134,7 +150,7 @@ export function StarMapThreadCard(props: {
         frame = 0;
       }
       if (dragging) {
-        props.onCommitOffset?.({ dx: lastDx, dy: lastDy });
+        drag.onCommitOffset({ dx: lastDx, dy: lastDy });
       }
     };
     window.addEventListener("pointermove", move);

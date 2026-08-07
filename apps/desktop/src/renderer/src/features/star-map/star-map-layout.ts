@@ -47,8 +47,28 @@ const ARC_MIN_LIFT = 60;
 /** Extra arc lift per pixel of horizontal distance - long links fly higher. */
 const ARC_LIFT_RATIO = 0.14;
 
-/** How far a dragged card may stray from its instance anchor. */
-export const STAR_MAP_CLOUD_RADIUS = 340;
+/**
+ * Free reach past the outermost card of a cloud, before a drag meets the
+ * detent.
+ *
+ * The detent is measured from the instance body, not from the card's own
+ * slot, so every card in a cloud shares one region — that is what lets any
+ * card be dropped where any other card already sits. The outermost slot has
+ * to fall inside it, and this is the free travel the card sitting there
+ * gets on top of that. Cards nearer the body get more, which is the point.
+ */
+export const STAR_MAP_CLOUD_DETENT_SLACK = 340;
+
+/**
+ * Overshoot the detent absorbs before a drag breaks through, in px.
+ *
+ * Past the detent a card is out on its own — that is a real thing to want
+ * (ten cards pulled aside into an island for one project), so this resists
+ * the drag rather than stopping it.
+ */
+const DETENT_WIDTH = 120;
+/** Share of the overshoot inside the detent the card actually travels. */
+const DETENT_TRAVEL = 0.3;
 
 /**
  * Deterministic constellation: spokes sorted by instance id with the hub
@@ -177,18 +197,73 @@ export function visibleCardCount(params: {
   return Math.max(count, Math.min(1, params.heights.length));
 }
 
-/** Clamp an offset to the cloud radius around the instance anchor. */
-export function clampToCloudRadius(
-  dx: number,
-  dy: number,
-  radius: number,
-): StarMapCardSlot {
-  const distance = Math.hypot(dx, dy);
-  if (distance <= radius || distance === 0) {
-    return { dx, dy };
+/**
+ * Distance from the body at which a cloud's drags meet the detent.
+ *
+ * Read off the drawn slots rather than a per-lens constant: lanes stack
+ * downward from the body while orbit and projects ring it, and both have to
+ * yield a region that already contains every card the cloud drew — a detent
+ * tighter than that would fight a far-out card the moment its drag began.
+ * (`cardRingExtent` in star-map-orbit.ts measures the same placed slots for
+ * body spacing, in the two lenses that ring.)
+ */
+export function cloudDetentRadius(slots: readonly StarMapCardSlot[]): number {
+  let outermost = 0;
+  for (const slot of slots) {
+    outermost = Math.max(outermost, Math.hypot(slot.dx, slot.dy));
   }
-  const scale = radius / distance;
-  return { dx: dx * scale, dy: dy * scale };
+  return outermost + STAR_MAP_CLOUD_DETENT_SLACK;
+}
+
+/**
+ * How far from the body a card actually travels when the pointer has taken
+ * it `distance` out. Continuous and monotonic, so the card never jumps.
+ */
+function detentTravel(distance: number, radius: number): number {
+  const overshoot = distance - radius;
+  if (overshoot <= 0) return distance;
+  if (overshoot <= DETENT_WIDTH) {
+    return radius + overshoot * DETENT_TRAVEL;
+  }
+  // Through the detent: the card tracks the pointer one-for-one again,
+  // keeping the travel it gave up as a constant lag.
+  return radius + DETENT_WIDTH * DETENT_TRAVEL + (overshoot - DETENT_WIDTH);
+}
+
+/**
+ * Resolve a dragged card's pointer position against its cloud's detent, and
+ * hand back the offset to commit.
+ *
+ * A card sits at `baseSlot + offset` in body-relative pixels and the detent
+ * is a radius around the body, so the resistance has to be applied to that
+ * position and the offset derived back out. Resisting the offset alone
+ * would centre a separate region on every card's own slot: a card to the
+ * left of the body could not reach the positions cards on the right already
+ * occupy, and each card's freedom would depend on where its slot happened
+ * to land. The committed value stays an offset because arrangements persist
+ * and sync across the federation in that shape.
+ *
+ * Apply this to the live pointer position only. The result is what gets
+ * stored, so running it over a stored offset again would compress a card
+ * that is deliberately parked out past the detent.
+ */
+export function resolveCardDragOffset(params: {
+  baseSlot: StarMapCardSlot;
+  offset: StarMapCardSlot;
+  detentRadius: number;
+}): StarMapCardSlot {
+  const x = params.baseSlot.dx + params.offset.dx;
+  const y = params.baseSlot.dy + params.offset.dy;
+  const distance = Math.hypot(x, y);
+  const travel = detentTravel(distance, params.detentRadius);
+  // Inside the detent the pointer is followed exactly; hand the offset
+  // straight back rather than round-tripping it through the arithmetic.
+  if (travel === distance) return params.offset;
+  const scale = travel / distance;
+  return {
+    dx: x * scale - params.baseSlot.dx,
+    dy: y * scale - params.baseSlot.dy,
+  };
 }
 
 export type StarMapStar = {

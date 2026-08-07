@@ -30,6 +30,7 @@ import {
   type StarMapSessionKeys,
 } from "./attention";
 import {
+  cloudDetentRadius,
   computeCardSlots,
   computeStarMapLayout,
   generateStarField,
@@ -890,6 +891,27 @@ export function StarMapScreen(props: StarMapScreenProps) {
           },
         });
       }
+      // Cards may be dragged out past the detent on purpose — an island of
+      // threads off to one side — and a lane does not pan, so a card pulled
+      // beyond the window has no other way back to its cloud.
+      if (
+        desktopApi?.setStarMapCardPosition
+        && arrangement.offsetFor(
+          instanceId,
+          buildThreadIdentityKey(thread.source, thread.id),
+        )
+      ) {
+        actions.push({
+          key: "reset-position",
+          label: "Reset position",
+          onSelect: () =>
+            arrangement.setCardPosition(
+              instanceId,
+              buildThreadIdentityKey(thread.source, thread.id),
+              null,
+            ),
+        });
+      }
       if (desktopApi?.archiveThread) {
         actions.push({
           danger: true,
@@ -920,7 +942,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       }
       return actions;
     },
-    [chatCards, desktopApi, openThreadFully, refreshOwner],
+    [arrangement, chatCards, desktopApi, openThreadFully, refreshOwner],
   );
 
   const linkState = (peerId: string) => {
@@ -941,6 +963,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const heights = lane?.heights ?? [];
     const visible = threads.slice(0, lane?.count ?? 0);
     const slots = position.slots;
+    // One region for the whole cloud, sized to the slots this lens drew,
+    // so every card in it can reach every other card's position.
+    const detentRadius = cloudDetentRadius(slots);
     const overflow = threads.length - visible.length;
     return (
       <div
@@ -991,16 +1016,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
               stackIndex={index}
               cardFields={preferences.cardFields}
               menuActions={cardMenuActions(thread, position.instanceId)}
-              onCommitOffset={
+              drag={
                 // Drags persist + sync only once the durable instance id is
                 // known; before that, cards stay in their default slots.
                 health?.instanceId
-                  ? (offset) =>
-                      arrangement.setCardPosition(
-                        position.instanceId,
-                        threadKey,
-                        offset,
-                      )
+                  ? {
+                      detentRadius,
+                      onCommitOffset: (offset) =>
+                        arrangement.setCardPosition(
+                          position.instanceId,
+                          threadKey,
+                          offset,
+                        ),
+                    }
                   : undefined
               }
               onOpen={openThread}
