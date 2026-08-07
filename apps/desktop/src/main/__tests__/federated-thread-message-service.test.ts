@@ -154,6 +154,60 @@ describe("federated thread message service", () => {
     });
   });
 
+  it("does not probe peers when remembered-only routing has no owner", async () => {
+    const { backends, runtime } = buildRuntime({
+      peers: [{
+        instanceId: "pwr_harold",
+        label: "Harold-Mac-Mini-M4",
+        ownsThread: true,
+      }],
+    });
+    const handler = createFederatedThreadMessageHandler({
+      runtime: () => runtime,
+      targetStore: {
+        listRemoteThreadTargets: vi.fn(async () => []),
+        rememberRemoteThreadTarget: vi.fn(),
+      },
+    });
+
+    await expect(handler({
+      ...request,
+      resolutionMode: "remembered_only",
+    })).resolves.toBeUndefined();
+    expect(backends.get("pwr_harold")?.resolveThread).not.toHaveBeenCalled();
+  });
+
+  it("does not fall through when a remembered owner no longer reports the thread", async () => {
+    const { backends, runtime } = buildRuntime({
+      peers: [
+        { instanceId: "pwr_other", label: "Other Mac", ownsThread: true },
+        { instanceId: "pwr_harold", label: "Harold-Mac-Mini-M4" },
+      ],
+    });
+    const handler = createFederatedThreadMessageHandler({
+      runtime: () => runtime,
+      targetStore: {
+        listRemoteThreadTargets: vi.fn(async () => [{
+          instanceId: "pwr_harold",
+          instanceLabel: "Harold-Mac-Mini-M4",
+          backend: "codex" as const,
+          threadId: request.threadId,
+          firstSeenAt: 500,
+          lastSeenAt: 500,
+        }]),
+        rememberRemoteThreadTarget: vi.fn(),
+      },
+    });
+
+    await expect(handler({
+      ...request,
+      resolutionMode: "remembered_only",
+    })).rejects.toThrow(
+      `Thread ${request.threadId} was not found on its remembered federation owner Harold-Mac-Mini-M4.`,
+    );
+    expect(backends.get("pwr_other")?.resolveThread).not.toHaveBeenCalled();
+  });
+
   it("reports a remembered disconnected owner without probing other peers", async () => {
     const runtime = {
       connectedPeerTargets: () => [],

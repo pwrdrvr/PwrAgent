@@ -56,6 +56,17 @@ describe("SqliteOverlayStore — remote thread pins", () => {
     expect(listed).toHaveLength(1);
     expect(listed[0].ref).toEqual(ref());
     expect(listed[0].summary?.title).toBe("Remote fix");
+    expect(await store.listRemoteThreadTargets({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toEqual([{
+      instanceId: "peer-laptop",
+      instanceLabel: "Laptop",
+      backend: "codex",
+      threadId: "thread-1",
+      firstSeenAt: 1_000,
+      lastSeenAt: 1_000,
+    }]);
 
     expect(await store.removeRemoteThreadPin({ ref: ref() })).toBe(true);
     expect(await store.listRemoteThreadPins()).toEqual([]);
@@ -81,6 +92,17 @@ describe("SqliteOverlayStore — remote thread pins", () => {
     expect(listed[0].addedAt).toBe(1_000);
     expect(listed[0].summary?.title).toBe("New title");
     expect(listed[0].instanceLabel).toBe("Laptop 2");
+    expect(await store.listRemoteThreadTargets({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toEqual([{
+      instanceId: "peer-laptop",
+      instanceLabel: "Laptop 2",
+      backend: "codex",
+      threadId: "thread-1",
+      firstSeenAt: 1_000,
+      lastSeenAt: 9_000,
+    }]);
   });
 
   it("strips the live federation stamp before persisting summaries", async () => {

@@ -53,6 +53,7 @@ export type PwrAgentFederatedThreadMessageRequest = {
   backend: SendMessageToThreadToolArgs["backend"];
   threadId: SendMessageToThreadToolArgs["threadId"];
   instanceId?: SendMessageToThreadToolArgs["instanceId"];
+  resolutionMode?: "remembered_only" | "discover_only";
   input: AppServerTurnInputItem[];
   messageOrigin: AppServerThreadMessageOrigin;
   model?: string;

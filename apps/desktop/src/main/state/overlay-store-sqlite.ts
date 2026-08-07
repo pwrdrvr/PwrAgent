@@ -1846,6 +1846,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
            revoked_at = NULL`,
       )
       .run(instanceId, params.ref.backend, params.ref.threadId, addedAt, payload);
+    await this.rememberRemoteThreadTarget({
+      instanceId,
+      instanceLabel: params.instanceLabel,
+      backend: params.ref.backend,
+      threadId: params.ref.threadId,
+      observedAt: addedAt,
+    });
     const row = this.stateDb.raw
       .prepare(
         `SELECT added_at FROM remote_thread_pins

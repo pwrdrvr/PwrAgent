@@ -22237,57 +22237,74 @@ export class DesktopBackendRegistry {
       let turn: { backend: AppServerBackendKind; threadId: string; turnId: string };
       let localResolutionError: unknown;
       let localThread: AppServerThreadSummary | undefined;
-      if (!instanceId) {
+      const remoteRequest = {
+        backend,
+        threadId,
+        input,
+        messageOrigin,
+        executionMode: request.args.executionMode,
+        model: request.args.model,
+        reasoningEffort: request.args.reasoningEffort,
+        serviceTier: request.args.serviceTier,
+        fastMode: request.args.fastMode,
+        approvalPolicy: request.args.approvalPolicy,
+        sandbox: request.args.sandbox,
+      };
+      const rememberedRemoteTurn = this.federatedThreadMessageHandler
+        ? await this.federatedThreadMessageHandler({
+            ...remoteRequest,
+            ...(instanceId
+              ? { instanceId }
+              : { resolutionMode: "remembered_only" as const }),
+          })
+        : undefined;
+      if (rememberedRemoteTurn) {
+        turn = rememberedRemoteTurn;
+        targetTitle = rememberedRemoteTurn.title;
+        targetInstanceId = rememberedRemoteTurn.instanceId;
+      } else if (instanceId) {
+        throw new Error(`Thread not found: ${threadId}`);
+      } else {
         try {
           localThread = await this.resolveThread({ backend, threadId });
         } catch (error) {
           localResolutionError = error;
         }
-      }
-      if (localThread) {
-        turn = await this.startTurn({
-          backend,
-          threadId,
-          input,
-          messageOrigin,
-          executionMode: request.args.executionMode,
-          model: request.args.model,
-          reasoningEffort: request.args.reasoningEffort,
-          serviceTier: request.args.serviceTier,
-          fastMode: request.args.fastMode,
-          approvalPolicy: request.args.approvalPolicy,
-          sandbox: request.args.sandbox,
-        });
-        targetTitle = localThread.title;
-      } else if (this.federatedThreadMessageHandler) {
-        const remoteTurn = await this.federatedThreadMessageHandler({
-          backend,
-          threadId,
-          ...(instanceId ? { instanceId } : {}),
-          input,
-          messageOrigin,
-          executionMode: request.args.executionMode,
-          model: request.args.model,
-          reasoningEffort: request.args.reasoningEffort,
-          serviceTier: request.args.serviceTier,
-          fastMode: request.args.fastMode,
-          approvalPolicy: request.args.approvalPolicy,
-          sandbox: request.args.sandbox,
-        });
-        if (!remoteTurn) {
+        if (localThread) {
+          turn = await this.startTurn({
+            backend,
+            threadId,
+            input,
+            messageOrigin,
+            executionMode: request.args.executionMode,
+            model: request.args.model,
+            reasoningEffort: request.args.reasoningEffort,
+            serviceTier: request.args.serviceTier,
+            fastMode: request.args.fastMode,
+            approvalPolicy: request.args.approvalPolicy,
+            sandbox: request.args.sandbox,
+          });
+          targetTitle = localThread.title;
+        } else if (this.federatedThreadMessageHandler) {
+          const discoveredRemoteTurn = await this.federatedThreadMessageHandler({
+            ...remoteRequest,
+            resolutionMode: "discover_only",
+          });
+          if (!discoveredRemoteTurn) {
+            if (localResolutionError) {
+              throw localResolutionError;
+            }
+            throw new Error(`Thread not found: ${threadId}`);
+          }
+          turn = discoveredRemoteTurn;
+          targetTitle = discoveredRemoteTurn.title;
+          targetInstanceId = discoveredRemoteTurn.instanceId;
+        } else {
           if (localResolutionError) {
             throw localResolutionError;
           }
           throw new Error(`Thread not found: ${threadId}`);
         }
-        turn = remoteTurn;
-        targetTitle = remoteTurn.title;
-        targetInstanceId = remoteTurn.instanceId;
-      } else {
-        if (localResolutionError) {
-          throw localResolutionError;
-        }
-        throw new Error(`Thread not found: ${threadId}`);
       }
       const threadLinkRef = {
         backend,

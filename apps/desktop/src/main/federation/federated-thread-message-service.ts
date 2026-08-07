@@ -42,6 +42,7 @@ export function createFederatedThreadMessageHandler(
     const activeRuntime = runtime();
     const connectedPeers = activeRuntime.connectedPeerTargets();
     const rememberedTargets = request.instanceId
+      || request.resolutionMode === "discover_only"
       ? []
       : await readRememberedTargets(options.targetStore, request);
     if (rememberedTargets.length > 1) {
@@ -78,9 +79,21 @@ export function createFederatedThreadMessageHandler(
       }
       const match = await resolveThreadOnPeer(activeRuntime, peer, request);
       if (!match) {
+        if (
+          rememberedTargets.length > 0
+          && request.resolutionMode === "remembered_only"
+        ) {
+          throw new Error(
+            `Thread ${request.threadId} was not found on its remembered federation owner ${peer.label}.`,
+          );
+        }
         return undefined;
       }
       return await sendToRemoteThread(match, request, options.targetStore);
+    }
+
+    if (request.resolutionMode === "remembered_only") {
+      return undefined;
     }
 
     const peers = connectedPeers.filter((peer) =>
