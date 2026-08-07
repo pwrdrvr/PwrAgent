@@ -457,6 +457,7 @@ export type WindowsJobWrappedCommand = {
   command: string;
   env: NodeJS.ProcessEnv;
   readyFilePath: string;
+  startupStartedAt: number;
   startupStatusFilePath: string;
 };
 
@@ -474,11 +475,21 @@ export type WindowsJobReadyPoll = {
   cancel: () => void;
 };
 
-// Public Windows CI placed cold startup on both sides of the former 10-second
-// edge while warm launches completed much sooner. Doubling that observed edge
-// gives helper compilation bounded headroom without approaching the existing
-// 30-second Windows test contract or weakening atomic Job ownership.
-export const WINDOWS_JOB_READY_TIMEOUT_MS = 20_000;
+export type WindowsJobStartupTimeout = {
+  stage: "powershell-start" | "ownership-ready";
+  telemetry: WindowsJobStartupTelemetry;
+  timeoutMs: number;
+};
+
+// The PowerShell host and Job ownership are separate readiness contracts.
+// Hosted Windows CI has taken 16.7 seconds before the wrapper's first
+// PowerShell statement executed, while repeated native Job assignment stayed
+// well below one second once that statement ran. Keep host launch bounded at
+// the existing 20 seconds, then reserve a distinct ownership budget. Their
+// 28-second maximum remains inside the existing 30-second Windows test
+// contract without making a slow host consume the ownership budget.
+export const WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS = 20_000;
+export const WINDOWS_JOB_OWNERSHIP_READY_TIMEOUT_MS = 8_000;
 const WINDOWS_JOB_READY_POLL_INTERVAL_MS = 25;
 
 export function readWindowsJobStartupTelemetry(
@@ -524,17 +535,34 @@ export function formatWindowsJobStartupTelemetry(
     .join(" -> ");
 }
 
+export function formatWindowsJobStartupTimeout(
+  timeout: WindowsJobStartupTimeout,
+): string {
+  const timeoutDescription =
+    timeout.stage === "powershell-start"
+      ? `PowerShell host did not begin executing within ${timeout.timeoutMs}ms`
+      : `shell ownership did not become ready within ${timeout.timeoutMs}ms after PowerShell started`;
+  return `Windows Job ${timeoutDescription}: ${formatWindowsJobStartupTelemetry(timeout.telemetry)}`;
+}
+
 export function startWindowsJobReadyPoll(params: {
   launch: Pick<
     WindowsJobWrappedCommand,
-    "readyFilePath" | "startupStatusFilePath"
+    "readyFilePath" | "startupStartedAt" | "startupStatusFilePath"
   >;
   onReady: (telemetry: WindowsJobStartupTelemetry) => void;
-  onTimeout: (telemetry: WindowsJobStartupTelemetry) => void;
-  timeoutMs?: number;
+  onTimeout: (timeout: WindowsJobStartupTimeout) => void;
+  ownershipReadyTimeoutMs?: number;
+  powershellStartTimeoutMs?: number;
 }): WindowsJobReadyPoll {
-  const timeoutMs = params.timeoutMs ?? WINDOWS_JOB_READY_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
+  const ownershipReadyTimeoutMs =
+    params.ownershipReadyTimeoutMs
+    ?? WINDOWS_JOB_OWNERSHIP_READY_TIMEOUT_MS;
+  const powershellStartTimeoutMs =
+    params.powershellStartTimeoutMs
+    ?? WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS;
+  const powershellStartDeadline =
+    params.launch.startupStartedAt + powershellStartTimeoutMs;
   let cancelled = false;
   let timer: NodeJS.Timeout | undefined;
   const cancel = () => {
@@ -547,15 +575,48 @@ export function startWindowsJobReadyPoll(params: {
   const poll = () => {
     timer = undefined;
     if (cancelled) return;
+    const telemetry = readWindowsJobStartupTelemetry(params.launch);
     if (existsSync(params.launch.readyFilePath)) {
       cancelled = true;
-      params.onReady(readWindowsJobStartupTelemetry(params.launch));
+      params.onReady(telemetry);
       return;
     }
-    if (Date.now() >= deadline) {
+    const powershellStarted = telemetry.phases.find(
+      ({ phase }) => phase === "powershell-started",
+    );
+    const now = Date.now();
+    if (!powershellStarted && now >= powershellStartDeadline) {
       cancelled = true;
-      params.onTimeout(readWindowsJobStartupTelemetry(params.launch));
+      params.onTimeout({
+        stage: "powershell-start",
+        telemetry,
+        timeoutMs: powershellStartTimeoutMs,
+      });
       return;
+    }
+    if (powershellStarted) {
+      if (powershellStarted.elapsedMs > powershellStartTimeoutMs) {
+        cancelled = true;
+        params.onTimeout({
+          stage: "powershell-start",
+          telemetry,
+          timeoutMs: powershellStartTimeoutMs,
+        });
+        return;
+      }
+      const ownershipReadyDeadline =
+        params.launch.startupStartedAt
+        + powershellStarted.elapsedMs
+        + ownershipReadyTimeoutMs;
+      if (now >= ownershipReadyDeadline) {
+        cancelled = true;
+        params.onTimeout({
+          stage: "ownership-ready",
+          telemetry,
+          timeoutMs: ownershipReadyTimeoutMs,
+        });
+        return;
+      }
     }
     timer = setTimeout(poll, WINDOWS_JOB_READY_POLL_INTERVAL_MS);
   };
@@ -640,6 +701,7 @@ export function wrapCommandInWindowsJob(params: {
       [STARTUP_STATUS_FILE_ENV]: startupStatusFilePath,
     },
     readyFilePath,
+    startupStartedAt,
     startupStatusFilePath,
   };
 }
