@@ -8,6 +8,23 @@ export function threadPrNumbers(thread: NavigationThreadSummary): number[] {
   return (thread.prs ?? []).map((pr) => pr.number);
 }
 
+/** True when a bare numeric query exactly identifies any attached PR. */
+export function threadHasExactPrNumberMatch(
+  thread: NavigationThreadSummary,
+  query: string,
+): boolean {
+  const match = query.trim().match(/^#?(\d{1,7})$/);
+  if (!match) {
+    return false;
+  }
+  const number = Number(match[1]);
+  return (
+    Number.isInteger(number)
+    && number > 0
+    && threadPrNumbers(thread).includes(number)
+  );
+}
+
 function threadIdMatchesQuery(threadId: string, query: string): boolean {
   const id = threadId.toLowerCase();
   if (!id.includes(query)) {

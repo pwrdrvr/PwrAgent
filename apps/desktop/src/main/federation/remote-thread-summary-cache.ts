@@ -9,7 +9,10 @@ import type {
   NavigationThreadSummary,
   RemoteThreadPin,
 } from "@pwragent/shared";
-import { threadMatchesQuery } from "@pwragent/shared";
+import {
+  threadHasExactPrNumberMatch,
+  threadMatchesQuery,
+} from "@pwragent/shared";
 
 export type RemoteThreadSummaryPeer = {
   target: FederationRemoteTarget;
@@ -50,11 +53,23 @@ export class RemoteThreadSummaryCache {
     string,
     { fetchedAt: number; threads: NavigationThreadSummary[] }
   >();
-  private readonly inFlight = new Map<string, Promise<NavigationThreadSummary[]>>();
+  private readonly inFlight = new Map<
+    string,
+    {
+      generation: string;
+      promise: Promise<NavigationThreadSummary[]>;
+    }
+  >();
   private readonly archivedCache = new Map<
     string,
     { fetchedAt: number; threadKeys: Set<string> }
   >();
+  private readonly peerInterestTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  private globalGeneration = 0;
+  private readonly peerGenerations = new Map<string, number>();
 
   constructor(
     private readonly options: {
@@ -73,6 +88,8 @@ export class RemoteThreadSummaryCache {
         label?: string;
         celestialIcon?: CelestialIconId;
       };
+      /** Peers whose cached summaries currently need navigation updates. */
+      onPeerInterestChanged?: (instanceIds: string[]) => void;
       ttlMs?: number;
       peerTimeoutMs?: number;
       now?: () => number;
@@ -81,15 +98,31 @@ export class RemoteThreadSummaryCache {
 
   invalidate(instanceId?: string): void {
     if (instanceId === undefined) {
+      this.globalGeneration += 1;
       this.cache.clear();
       this.archivedCache.clear();
       return;
     }
+    this.peerGenerations.set(
+      instanceId,
+      (this.peerGenerations.get(instanceId) ?? 0) + 1,
+    );
     this.cache.delete(instanceId);
     for (const key of this.archivedCache.keys()) {
       if (key.startsWith(`${instanceId}:`)) {
         this.archivedCache.delete(key);
       }
+    }
+  }
+
+  dispose(): void {
+    const hadPeerInterest = this.peerInterestTimers.size > 0;
+    for (const timer of this.peerInterestTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.peerInterestTimers.clear();
+    if (hadPeerInterest) {
+      this.options.onPeerInterestChanged?.([]);
     }
   }
 
@@ -118,11 +151,18 @@ export class RemoteThreadSummaryCache {
     const results = groups
       .flat()
       .filter((thread) => threadMatchesQuery(thread, query))
-      .sort(
-        (left, right) =>
+      .sort((left, right) => {
+        const exactPrPriority =
+          Number(threadHasExactPrNumberMatch(right, query))
+          - Number(threadHasExactPrNumberMatch(left, query));
+        if (exactPrPriority !== 0) {
+          return exactPrPriority;
+        }
+        return (
           (right.updatedAt ?? right.createdAt ?? 0)
-          - (left.updatedAt ?? left.createdAt ?? 0),
-      )
+          - (left.updatedAt ?? left.createdAt ?? 0)
+        );
+      })
       .slice(0, limit);
     return { results };
   }
@@ -306,15 +346,17 @@ export class RemoteThreadSummaryCache {
   ): Promise<NavigationThreadSummary[]> {
     const now = this.options.now?.() ?? Date.now();
     const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
+    this.touchPeerInterest(target.instanceId, ttlMs);
     const cached = this.cache.get(target.instanceId);
     if (cached && now - cached.fetchedAt < ttlMs) {
       return cached.threads;
     }
+    const generation = this.generationFor(target.instanceId);
     const pending = this.inFlight.get(target.instanceId);
-    if (pending) {
-      return await pending;
+    if (pending?.generation === generation) {
+      return await pending.promise;
     }
-    const fetch = (async () => {
+    const promise = (async () => {
       const timeoutMs =
         this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
       const snapshot = await withTimeout(
@@ -322,18 +364,25 @@ export class RemoteThreadSummaryCache {
         timeoutMs,
         `Remote thread summaries timed out after ${Math.round(timeoutMs / 1000)}s.`,
       );
+      if (this.generationFor(target.instanceId) !== generation) {
+        return await this.threadsForPeer(target);
+      }
       const threads = snapshot.threads;
       this.cache.set(target.instanceId, {
         fetchedAt: this.options.now?.() ?? Date.now(),
         threads,
       });
+      this.touchPeerInterest(target.instanceId, ttlMs);
       return threads;
     })();
-    this.inFlight.set(target.instanceId, fetch);
+    const entry = { generation, promise };
+    this.inFlight.set(target.instanceId, entry);
     try {
-      return await fetch;
+      return await promise;
     } finally {
-      this.inFlight.delete(target.instanceId);
+      if (this.inFlight.get(target.instanceId) === entry) {
+        this.inFlight.delete(target.instanceId);
+      }
     }
   }
 
@@ -346,6 +395,7 @@ export class RemoteThreadSummaryCache {
     const cacheKey = `${target.instanceId}:${backend}`;
     const now = this.options.now?.() ?? Date.now();
     const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
+    const generation = this.generationFor(target.instanceId);
     const cached = this.archivedCache.get(cacheKey);
     if (
       cached
@@ -365,11 +415,43 @@ export class RemoteThreadSummaryCache {
     const threadKeys = new Set(
       archivedThreads.map((thread) => `${thread.source}:${thread.id}`),
     );
+    if (this.generationFor(target.instanceId) !== generation) {
+      return new Set();
+    }
     this.archivedCache.set(cacheKey, {
       fetchedAt: this.options.now?.() ?? Date.now(),
       threadKeys,
     });
     return threadKeys;
+  }
+
+  private generationFor(instanceId: string): string {
+    return `${this.globalGeneration}:${this.peerGenerations.get(instanceId) ?? 0}`;
+  }
+
+  private touchPeerInterest(instanceId: string, ttlMs: number): void {
+    const existing = this.peerInterestTimers.get(instanceId);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      if (this.peerInterestTimers.get(instanceId) !== timer) {
+        return;
+      }
+      this.peerInterestTimers.delete(instanceId);
+      this.notifyPeerInterestChanged();
+    }, ttlMs);
+    timer.unref?.();
+    this.peerInterestTimers.set(instanceId, timer);
+    if (!existing) {
+      this.notifyPeerInterestChanged();
+    }
+  }
+
+  private notifyPeerInterestChanged(): void {
+    this.options.onPeerInterestChanged?.(
+      [...this.peerInterestTimers.keys()].sort(),
+    );
   }
 }
 

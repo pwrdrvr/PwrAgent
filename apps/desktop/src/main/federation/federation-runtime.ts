@@ -318,6 +318,9 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "event_subscriptions",
 ];
 
+const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
+  "remote-thread-summary-cache";
+
 type FederationPeerDirectoryNotification = {
   method: typeof FEDERATION_PEER_DIRECTORY_METHOD;
   params: {
@@ -704,6 +707,8 @@ export class DesktopFederationRuntime {
     }
     this.unsubscribeLocalBackendEvents?.();
     this.unsubscribeLocalBackendEvents = undefined;
+    this.remoteThreadSummaryCache?.dispose();
+    this.remoteThreadSummaryCache = undefined;
     // Owner shutdown kills every remote session immediately, mirroring how
     // the local panel's shells die with the app.
     this.ptyService?.disposeAll();
@@ -1162,6 +1167,22 @@ export class DesktopFederationRuntime {
           // Early boot: the app-state db backing visiblePeers may be absent.
           return {};
         }
+      },
+      onPeerInterestChanged: (instanceIds) => {
+        const interested = new Set(instanceIds);
+        this.setEventSubscriptions(
+          REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID,
+          this.connectedPeerTargets()
+            .filter(
+              (peer) =>
+                interested.has(peer.target.instanceId)
+                && peer.capabilities.includes("event_subscriptions"),
+            )
+            .map((peer) => ({
+              sourceInstanceId: peer.target.instanceId,
+              eventClasses: ["navigation"],
+            })),
+        );
       },
     });
     return this.remoteThreadSummaryCache;
@@ -3236,6 +3257,9 @@ export class DesktopFederationRuntime {
       },
       notification: notification.params.notification,
     };
+    if (event.notification.method === "thread/pullRequests/updated") {
+      this.remoteThreadSummaryCache?.invalidate(sourceInstanceId);
+    }
     this.publishAgentEvent?.(event);
     for (const listener of this.remoteBackendEventListeners) {
       void Promise.resolve(listener(event)).catch((error) => {
