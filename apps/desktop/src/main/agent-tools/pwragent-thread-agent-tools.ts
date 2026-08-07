@@ -1,4 +1,8 @@
 import type {
+  AppServerBackendKind,
+  AppServerReadThreadResponse,
+  AppServerThreadSummary,
+  FederationInstanceId,
   PwrAgentThreadInspectionOperationName,
   PwrAgentThreadInspectionRequest,
   PwrAgentThreadInspectionResponse,
@@ -23,6 +27,36 @@ export const PWRAGENT_THREAD_INSPECTION_UNAVAILABLE_MESSAGE =
 export type PwrAgentThreadInspectionHandler = (
   request: PwrAgentThreadInspectionRequest,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
+
+export type PwrAgentFederatedThreadInspectionRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  instanceId?: FederationInstanceId;
+  before?: string;
+  limit: number;
+  includeTurns: boolean;
+};
+
+export type PwrAgentFederatedThreadInspectionResult = {
+  instanceId: FederationInstanceId;
+  instanceLabel: string;
+  thread: AppServerThreadSummary;
+  read: AppServerReadThreadResponse;
+};
+
+export type PwrAgentFederatedThreadInspectionHandler = (
+  request: PwrAgentFederatedThreadInspectionRequest,
+) => Promise<PwrAgentFederatedThreadInspectionResult | undefined>;
+
+export class PwrAgentFederatedThreadInspectionError extends Error {
+  constructor(
+    readonly code: "peer_unavailable",
+    message: string,
+  ) {
+    super(message);
+    this.name = "PwrAgentFederatedThreadInspectionError";
+  }
+}
 
 export function buildPwrAgentThreadToolRouter(
   handler: PwrAgentThreadInspectionHandler | undefined,
@@ -73,9 +107,9 @@ function descriptionForOperation(
     case "search_threads":
       return "Search known PwrAgent threads by title, summary, Agent metadata, backend, and linked directory. Omit query to inspect recent lightweight thread candidates before choosing a thread. The response may include pendingHandoffs for handoff_task calls that are still creating a child thread and pendingWorkspaceMoves for move_thread_workspace calls that are still moving the same thread; do not retry those operations while they are starting.";
     case "read_thread":
-      return "Read a bounded page of another known PwrAgent thread's recent transcript and activity. Use search_threads first when the threadId is unknown.";
+      return "Read a bounded page of another known PwrAgent thread's recent transcript and activity. Use search_threads first when the threadId is unknown. Pass instanceId for a remote thread when known; otherwise PwrAgent checks the local instance and then resolves a remembered or connected Federation peer.";
     case "get_thread_status":
-      return "Read status and compact metadata for a PwrAgent thread, including linked directories, repository groups, pull requests, live PR automation state, pendingHandoffs when this thread has child handoffs that are still being created, and pendingWorkspaceMoves when this thread has same-thread workspace moves in progress. Omit backend and threadId to inspect the current thread; use this for questions like which directories or projects this thread is attached to. Follow prAutomation.guidance: when Auto-fix PR is active, do not poll CI or create a monitor thread.";
+      return "Read status and compact metadata for a PwrAgent thread, including linked directories, repository groups, pull requests, live PR automation state, pendingHandoffs when this thread has child handoffs that are still being created, and pendingWorkspaceMoves when this thread has same-thread workspace moves in progress. Omit backend and threadId to inspect the current thread; pass instanceId for a remote thread when known. Follow prAutomation.guidance: when Auto-fix PR is active, do not poll CI or create a monitor thread.";
     case "attach_thread_pull_request":
       return "Attach a pull request reference to a PwrAgent thread. Omit backend and threadId to attach to the current thread. Use this when a PR was created outside the thread's current working directory or automatic branch-based discovery will not see it. Accepts a full PR/MR URL, a full provider/org/repo/number identity, or a bare number when the thread has exactly one inferable repository.";
     case "check_thread_pull_request_status":
@@ -180,6 +214,16 @@ function inputSchemaForOperation(
             description:
               "Thread id to inspect. Defaults to the invoking PwrAgent thread id.",
           },
+          instanceId: {
+            type: "string",
+            description:
+              "Federation instance that owns the thread. Omit to check the local instance, then remembered and connected peers.",
+          },
+          includeRemote: {
+            type: "boolean",
+            description:
+              "Whether to resolve the thread across connected Federation peers after checking locally. Defaults to true.",
+          },
         },
       };
     case "read_thread":
@@ -192,6 +236,16 @@ function inputSchemaForOperation(
             type: "string",
           },
           threadId: { type: "string" },
+          instanceId: {
+            type: "string",
+            description:
+              "Federation instance that owns the thread. Omit to check the local instance, then remembered and connected peers.",
+          },
+          includeRemote: {
+            type: "boolean",
+            description:
+              "Whether to resolve the thread across connected Federation peers after checking locally. Defaults to true.",
+          },
           before: {
             type: "string",
             description:

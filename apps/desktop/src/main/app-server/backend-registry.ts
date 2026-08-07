@@ -184,7 +184,9 @@ import {
   type WatchThreadPullRequestToolArgs,
   type ThreadPullRequestAutomationStatus,
   type DetachThreadDirectoryToolArgs,
+  type GetThreadStatusToolArgs,
   type ReadThreadToolArgs,
+  type PwrAgentThreadInspectionErrorCode,
   type PwrAgentThreadInspectionRequest,
   type PwrAgentThreadInspectionResponse,
   type ThreadReadEntrySummary,
@@ -330,7 +332,12 @@ import {
   isPwrAgentThreadDynamicToolCall,
   readPwrAgentThreadDynamicToolCall,
 } from "../agent-tools/pwragent-thread-codex-tools";
-import type { PwrAgentThreadInspectionHandler } from "../agent-tools/pwragent-thread-agent-tools";
+import {
+  PwrAgentFederatedThreadInspectionError,
+  type PwrAgentFederatedThreadInspectionHandler,
+  type PwrAgentFederatedThreadInspectionResult,
+  type PwrAgentThreadInspectionHandler,
+} from "../agent-tools/pwragent-thread-agent-tools";
 import {
   buildPwrAgentMessagingDynamicToolErrorResponse,
   handlePwrAgentMessagingDynamicToolCall,
@@ -5896,6 +5903,30 @@ function threadOrchestrationFailure(
   };
 }
 
+function threadInspectionFailure(
+  code: PwrAgentThreadInspectionErrorCode,
+  message: string,
+): PwrAgentThreadInspectionResponse {
+  return {
+    ok: false,
+    error: { code, message },
+  };
+}
+
+function federatedThreadInspectionFailure(
+  error: unknown,
+): PwrAgentThreadInspectionResponse {
+  const message = error instanceof Error ? error.message : String(error);
+  return threadInspectionFailure(
+    error instanceof PwrAgentFederatedThreadInspectionError
+      ? error.code
+      : /not found/i.test(message)
+        ? "not_found"
+        : "internal_error",
+    message,
+  );
+}
+
 function buildHandoffTaskPrompt(params: {
   task: string;
   context?: string;
@@ -6395,6 +6426,9 @@ export class DesktopBackendRegistry {
     };
   private readonly threadInspectionHandler: PwrAgentThreadInspectionHandler =
     async (request) => await this.handleThreadInspectionRequest(request);
+  private federatedThreadInspectionHandler:
+    | PwrAgentFederatedThreadInspectionHandler
+    | undefined;
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
     async (request) => await this.handleThreadOrchestrationRequest(request);
   private federationHandler: PwrAgentFederationHandler | undefined;
@@ -7121,6 +7155,12 @@ export class DesktopBackendRegistry {
     handler: PwrAgentFederatedThreadMessageHandler | null | undefined,
   ): void {
     this.federatedThreadMessageHandler = handler ?? undefined;
+  }
+
+  setFederatedThreadInspectionHandler(
+    handler: PwrAgentFederatedThreadInspectionHandler | null | undefined,
+  ): void {
+    this.federatedThreadInspectionHandler = handler ?? undefined;
   }
 
   setThreadPullRequestStatusToolHandler(
@@ -22186,11 +22226,18 @@ export class DesktopBackendRegistry {
     }
     const threadId = request.args.threadId.trim();
     const instanceId = request.args.instanceId?.trim();
+    const includeRemote = request.args.includeRemote !== false;
     const prompt = request.args.prompt.trim();
     if (!threadId || !prompt) {
       return threadOrchestrationFailure(
         "invalid_arguments",
         "send_message_to_thread requires non-empty threadId and prompt strings.",
+      );
+    }
+    if (instanceId && !includeRemote) {
+      return threadOrchestrationFailure(
+        "invalid_arguments",
+        "instanceId cannot be used when includeRemote is false.",
       );
     }
     if (
@@ -22250,7 +22297,8 @@ export class DesktopBackendRegistry {
         approvalPolicy: request.args.approvalPolicy,
         sandbox: request.args.sandbox,
       };
-      const rememberedRemoteTurn = this.federatedThreadMessageHandler
+      const rememberedRemoteTurn =
+        includeRemote && this.federatedThreadMessageHandler
         ? await this.federatedThreadMessageHandler({
             ...remoteRequest,
             ...(instanceId
@@ -22285,7 +22333,7 @@ export class DesktopBackendRegistry {
             sandbox: request.args.sandbox,
           });
           targetTitle = localThread.title;
-        } else if (this.federatedThreadMessageHandler) {
+        } else if (includeRemote && this.federatedThreadMessageHandler) {
           const discoveredRemoteTurn = await this.federatedThreadMessageHandler({
             ...remoteRequest,
             resolutionMode: "discover_only",
@@ -24590,86 +24638,11 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "get_thread_status") {
-      const backend = request.args.backend ?? request.context.backend;
-      if (!isAppServerBackendKind(backend)) {
-        return {
-          ok: false,
-          error: {
-            code: "invalid_arguments",
-            message: "backend must be a known PwrAgent backend.",
-          },
-        };
-      }
-      const threadId = request.args.threadId?.trim() || request.context.threadId;
-      if (!threadId) {
-        return {
-          ok: false,
-          error: {
-            code: "invalid_arguments",
-            message: "threadId is required.",
-          },
-        };
-      }
-      const activeThreads = await this.listThreads({
-        backend,
-        archived: false,
-        callerReason: "agent-thread-inspection",
+      return await this.handleGetThreadStatusInspectionRequest({
+        ...request.args,
+        backend: request.args.backend ?? request.context.backend,
+        threadId: request.args.threadId ?? request.context.threadId,
       });
-      let candidateThreads = activeThreads.filter((thread) => thread.id === threadId);
-      if (candidateThreads.length === 0) {
-        candidateThreads = (
-          await this.listThreads({
-            backend,
-            archived: true,
-            callerReason: "agent-thread-inspection:archived",
-          })
-        ).filter((thread) => thread.id === threadId);
-      }
-      const [summary] = await this.enrichThreadInspectionSummaries(candidateThreads);
-      if (!summary) {
-        return {
-          ok: false,
-          error: {
-            code: "not_found",
-            message: `Thread ${backend}:${threadId} was not found.`,
-          },
-        };
-      }
-      const status = await this.readThread({
-        backend,
-        includeTurns: false,
-        limit: 0,
-        threadId,
-      })
-        .then((response) => response.threadStatus ?? response.replay.threadStatus)
-        .catch((): AppServerThreadStatus | undefined => undefined);
-      const queueKey = buildThreadIdentityKey(backend, threadId);
-      const queued = this.getQueuedExecutionModesSnapshot()[queueKey];
-      const pendingHandoffs = this.getPendingThreadHandoffsForInspection({
-        backend,
-        sourceThreadId: threadId,
-      });
-      const pendingWorkspaceMoves =
-        this.getPendingThreadWorkspaceMovesForInspection({
-          backend,
-          sourceThreadId: threadId,
-        });
-      const prAutomation =
-        await this.threadPrAutoDispatchHandler?.inspect?.({ backend, threadId });
-      return {
-        ok: true,
-        data: {
-          thread: {
-            ...summary,
-            status,
-            queuedExecutionMode: queued?.mode,
-            queuedExecutionModeAt: queued?.queuedAt,
-            ...(prAutomation ? { prAutomation } : {}),
-            ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
-            ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
-          },
-        },
-      };
     }
 
     if (request.operation === "read_thread") {
@@ -24729,6 +24702,139 @@ export class DesktopBackendRegistry {
         message: "Unsupported PwrAgent thread inspection operation.",
       },
     };
+  }
+
+  private async handleGetThreadStatusInspectionRequest(
+    args: GetThreadStatusToolArgs & {
+      backend: AppServerBackendKind;
+      threadId: string;
+    },
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!isAppServerBackendKind(args.backend)) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "backend must be a known PwrAgent backend.",
+      );
+    }
+    const threadId = args.threadId.trim();
+    const instanceId = args.instanceId?.trim();
+    const includeRemote = args.includeRemote !== false;
+    if (!threadId) {
+      return threadInspectionFailure("invalid_arguments", "threadId is required.");
+    }
+    if (Object.hasOwn(args, "instanceId") && !instanceId) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "instanceId must be a non-empty string when provided.",
+      );
+    }
+    if (instanceId && !includeRemote) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "instanceId cannot be used when includeRemote is false.",
+      );
+    }
+
+    if (!instanceId) {
+      const activeThreads = await this.listThreads({
+        backend: args.backend,
+        archived: false,
+        callerReason: "agent-thread-inspection",
+      });
+      let candidateThreads = activeThreads.filter(
+        (thread) => thread.id === threadId,
+      );
+      if (candidateThreads.length === 0) {
+        candidateThreads = (
+          await this.listThreads({
+            backend: args.backend,
+            archived: true,
+            callerReason: "agent-thread-inspection:archived",
+          })
+        ).filter((thread) => thread.id === threadId);
+      }
+      const [summary] =
+        await this.enrichThreadInspectionSummaries(candidateThreads);
+      if (summary) {
+        const status = await this.readThread({
+          backend: args.backend,
+          includeTurns: false,
+          limit: 0,
+          threadId,
+        })
+          .then(
+            (response) =>
+              response.threadStatus ?? response.replay.threadStatus,
+          )
+          .catch((): AppServerThreadStatus | undefined => undefined);
+        const queueKey = buildThreadIdentityKey(args.backend, threadId);
+        const queued = this.getQueuedExecutionModesSnapshot()[queueKey];
+        const pendingHandoffs = this.getPendingThreadHandoffsForInspection({
+          backend: args.backend,
+          sourceThreadId: threadId,
+        });
+        const pendingWorkspaceMoves =
+          this.getPendingThreadWorkspaceMovesForInspection({
+            backend: args.backend,
+            sourceThreadId: threadId,
+          });
+        const prAutomation =
+          await this.threadPrAutoDispatchHandler?.inspect?.({
+            backend: args.backend,
+            threadId,
+          });
+        return {
+          ok: true,
+          data: {
+            thread: {
+              ...summary,
+              status,
+              queuedExecutionMode: queued?.mode,
+              queuedExecutionModeAt: queued?.queuedAt,
+              ...(prAutomation ? { prAutomation } : {}),
+              ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
+              ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
+            },
+          },
+        };
+      }
+    }
+
+    if (includeRemote && this.federatedThreadInspectionHandler) {
+      try {
+        const remote = await this.federatedThreadInspectionHandler({
+          backend: args.backend,
+          threadId,
+          ...(instanceId ? { instanceId } : {}),
+          limit: 0,
+          includeTurns: false,
+        });
+        if (remote) {
+          return {
+            ok: true,
+            data: {
+              thread: {
+                ...toThreadInspectionSummary(remote.thread, undefined, undefined),
+                instanceId: remote.instanceId,
+                instanceLabel: remote.instanceLabel,
+                status:
+                  remote.read.threadStatus
+                  ?? remote.read.replay.threadStatus,
+              },
+            },
+          };
+        }
+      } catch (error) {
+        return federatedThreadInspectionFailure(error);
+      }
+    }
+
+    return threadInspectionFailure(
+      "not_found",
+      `Thread ${args.backend}:${threadId} was not found${
+        includeRemote ? " locally or on a connected Federation peer" : " locally"
+      }.`,
+    );
   }
 
   private async handleAttachThreadPullRequestInspectionRequest(
@@ -25144,6 +25250,20 @@ export class DesktopBackendRegistry {
         },
       };
     }
+    const instanceId = args.instanceId?.trim();
+    const includeRemote = args.includeRemote !== false;
+    if (Object.hasOwn(args, "instanceId") && !instanceId) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "instanceId must be a non-empty string when provided.",
+      );
+    }
+    if (instanceId && !includeRemote) {
+      return threadInspectionFailure(
+        "invalid_arguments",
+        "instanceId cannot be used when includeRemote is false.",
+      );
+    }
     const before = args.before?.trim();
     const limit = clampInteger(
       args.limit,
@@ -25156,14 +25276,55 @@ export class DesktopBackendRegistry {
       MAX_THREAD_INSPECTION_READ_ENTRY_CHARS,
     );
 
+    let response: AppServerReadThreadResponse | undefined;
+    let remote: PwrAgentFederatedThreadInspectionResult | undefined;
+    let localError: unknown;
+    if (!instanceId) {
+      try {
+        response = await this.readThread({
+          backend: args.backend,
+          threadId,
+          includeTurns: true,
+          ...(before ? { before } : {}),
+          limit,
+        });
+      } catch (error) {
+        localError = error;
+      }
+    }
+    if (!response && includeRemote && this.federatedThreadInspectionHandler) {
+      try {
+        remote = await this.federatedThreadInspectionHandler({
+          backend: args.backend,
+          threadId,
+          ...(instanceId ? { instanceId } : {}),
+          ...(before ? { before } : {}),
+          limit,
+          includeTurns: true,
+        });
+        response = remote?.read;
+      } catch (error) {
+        return federatedThreadInspectionFailure(error);
+      }
+    }
+    if (!response) {
+      if (localError) {
+        const message =
+          localError instanceof Error ? localError.message : String(localError);
+        return threadInspectionFailure(
+          /not found/i.test(message) ? "not_found" : "internal_error",
+          message,
+        );
+      }
+      return threadInspectionFailure(
+        "not_found",
+        `Thread ${args.backend}:${threadId} was not found${
+          includeRemote ? " locally or on a connected Federation peer" : " locally"
+        }.`,
+      );
+    }
+
     try {
-      const response = await this.readThread({
-        backend: args.backend,
-        threadId,
-        includeTurns: true,
-        ...(before ? { before } : {}),
-        limit,
-      });
       const replay = response.replay;
       const status = response.threadStatus ?? replay.threadStatus;
       return {
@@ -25172,6 +25333,12 @@ export class DesktopBackendRegistry {
           read: {
             backend: args.backend,
             threadId,
+            ...(remote
+              ? {
+                  instanceId: remote.instanceId,
+                  instanceLabel: remote.instanceLabel,
+                }
+              : {}),
             limit,
             ...(before ? { before } : {}),
             maxCharsPerEntry,

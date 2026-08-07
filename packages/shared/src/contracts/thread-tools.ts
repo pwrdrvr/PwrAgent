@@ -11,6 +11,7 @@ import type {
   ThreadWorkspaceHandoffDirection,
   ThreadWorkspaceHandoffStrategy,
 } from "./normalized-app-server";
+import type { FederationInstanceId } from "./federation";
 import type { LinkedDirectorySummary } from "./normalized-app-server";
 import type {
   MessagingThreadBindingSummary,
@@ -61,6 +62,7 @@ export const MAX_THREAD_INSPECTION_SEARCH_LIMIT = 100;
 export const PWRAGENT_THREAD_INSPECTION_ERROR_CODES = [
   "invalid_arguments",
   "not_found",
+  "peer_unavailable",
   "forbidden",
   "unsupported_operation",
   "internal_error",
@@ -99,11 +101,29 @@ export type GetThreadStatusToolArgs = {
    * Defaults to the invoking PwrAgent thread id when omitted.
    */
   threadId?: ThreadIdentifier;
+  /**
+   * Federation instance that owns the thread. When omitted, PwrAgent first
+   * checks the local instance, then resolves a remembered or connected peer.
+   */
+  instanceId?: FederationInstanceId;
+  /**
+   * Defaults to true. Set false to restrict resolution to the local instance.
+   */
+  includeRemote?: boolean;
 };
 
 export type ReadThreadToolArgs = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /**
+   * Federation instance that owns the thread. When omitted, PwrAgent first
+   * checks the local instance, then resolves a remembered or connected peer.
+   */
+  instanceId?: FederationInstanceId;
+  /**
+   * Defaults to true. Set false to restrict resolution to the local instance.
+   */
+  includeRemote?: boolean;
   /**
    * Provider pagination cursor returned by a previous read_thread response.
    */
@@ -286,6 +306,8 @@ export type ThreadMutationResult = {
 export type ThreadInspectionSummary = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  instanceId?: FederationInstanceId;
+  instanceLabel?: string;
   title: string;
   summary?: string;
   projectKey?: string;
@@ -462,6 +484,8 @@ export type ThreadReadEntrySummary =
 export type ThreadReadResult = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  instanceId?: FederationInstanceId;
+  instanceLabel?: string;
   limit: number;
   before?: string;
   maxCharsPerEntry: number;

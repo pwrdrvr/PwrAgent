@@ -52,6 +52,24 @@ describe("PwrAgent thread agent tools", () => {
         name: "watch_thread_pull_request",
         description: expect.stringContaining("end the current turn"),
       });
+    expect(tools.find((tool) => tool.name === "read_thread")).toMatchObject({
+      description: expect.stringContaining("connected Federation peer"),
+      inputSchema: expect.objectContaining({
+        properties: expect.objectContaining({
+          instanceId: expect.objectContaining({ type: "string" }),
+          includeRemote: expect.objectContaining({ type: "boolean" }),
+        }),
+      }),
+    });
+    expect(tools.find((tool) => tool.name === "get_thread_status"))
+      .toMatchObject({
+        inputSchema: expect.objectContaining({
+          properties: expect.objectContaining({
+            instanceId: expect.objectContaining({ type: "string" }),
+            includeRemote: expect.objectContaining({ type: "boolean" }),
+          }),
+        }),
+      });
 
     await expect(
       router.handleDynamicToolCall({

@@ -106,6 +106,7 @@ describe("pwragent thread orchestration agent tools", () => {
               required: ["backend", "threadId", "prompt"],
               properties: expect.objectContaining({
                 instanceId: expect.objectContaining({ type: "string" }),
+                includeRemote: expect.objectContaining({ type: "boolean" }),
               }),
             }),
           }),
@@ -517,6 +518,7 @@ describe("pwragent thread orchestration agent tools", () => {
           backend: "codex",
           threadId: " target-thread ",
           instanceId: " pwr_studio ",
+          includeRemote: true,
           prompt: " Check CI ",
           model: " gpt-5.5 ",
           fastMode: true,
@@ -536,6 +538,7 @@ describe("pwragent thread orchestration agent tools", () => {
         backend: "codex",
         threadId: "target-thread",
         instanceId: "pwr_studio",
+        includeRemote: true,
         prompt: "Check CI",
         model: "gpt-5.5",
         fastMode: true,
