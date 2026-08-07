@@ -457,6 +457,7 @@ export type WindowsJobWrappedCommand = {
   command: string;
   env: NodeJS.ProcessEnv;
   readyFilePath: string;
+  startupStartedAt: number;
   startupStatusFilePath: string;
 };
 
@@ -474,11 +475,22 @@ export type WindowsJobReadyPoll = {
   cancel: () => void;
 };
 
-// Public Windows CI placed cold startup on both sides of the former 10-second
-// edge while warm launches completed much sooner. Doubling that observed edge
-// gives helper compilation bounded headroom without approaching the existing
-// 30-second Windows test contract or weakening atomic Job ownership.
-export const WINDOWS_JOB_READY_TIMEOUT_MS = 20_000;
+export type WindowsJobStartupTimeout = {
+  stage: "overall-ready" | "powershell-start" | "progress-stall";
+  telemetry: WindowsJobStartupTelemetry;
+  timeoutMs: number;
+};
+
+// Keep cold PowerShell launch, forward progress, and overall readiness as
+// separate contracts. Hosted Windows CI has taken 16.7 seconds to enter the
+// wrapper and 7.1 seconds to compile its helper, but each journaled phase still
+// proved forward progress. A phase-relative stall watchdog keeps real hangs
+// bounded without letting one slow phase consume the next phase's allowance.
+// The 28-second overall maximum remains inside the existing 30-second Windows
+// test contract and does not weaken atomic Job ownership.
+export const WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS = 20_000;
+export const WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS = 10_000;
+export const WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS = 28_000;
 const WINDOWS_JOB_READY_POLL_INTERVAL_MS = 25;
 
 export function readWindowsJobStartupTelemetry(
@@ -524,17 +536,51 @@ export function formatWindowsJobStartupTelemetry(
     .join(" -> ");
 }
 
+export function formatWindowsJobStartupTimeout(
+  timeout: WindowsJobStartupTimeout,
+): string {
+  let timeoutDescription: string;
+  if (timeout.stage === "powershell-start") {
+    timeoutDescription =
+      `PowerShell host did not begin executing within ${timeout.timeoutMs}ms`;
+  } else if (timeout.stage === "progress-stall") {
+    const lastPhase = timeout.telemetry.phases.at(-1);
+    timeoutDescription =
+      `startup made no progress for ${timeout.timeoutMs}ms`
+      + (lastPhase
+        ? ` after ${lastPhase.phase}@${lastPhase.elapsedMs}ms`
+        : " after the last recorded phase");
+  } else {
+    timeoutDescription =
+      `shell ownership did not become ready within ${timeout.timeoutMs}ms overall`;
+  }
+  return `Windows Job ${timeoutDescription}: ${formatWindowsJobStartupTelemetry(timeout.telemetry)}`;
+}
+
 export function startWindowsJobReadyPoll(params: {
   launch: Pick<
     WindowsJobWrappedCommand,
-    "readyFilePath" | "startupStatusFilePath"
+    "readyFilePath" | "startupStartedAt" | "startupStatusFilePath"
   >;
   onReady: (telemetry: WindowsJobStartupTelemetry) => void;
-  onTimeout: (telemetry: WindowsJobStartupTelemetry) => void;
-  timeoutMs?: number;
+  onTimeout: (timeout: WindowsJobStartupTimeout) => void;
+  overallReadyTimeoutMs?: number;
+  powershellStartTimeoutMs?: number;
+  progressTimeoutMs?: number;
 }): WindowsJobReadyPoll {
-  const timeoutMs = params.timeoutMs ?? WINDOWS_JOB_READY_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
+  const overallReadyTimeoutMs =
+    params.overallReadyTimeoutMs
+    ?? WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS;
+  const powershellStartTimeoutMs =
+    params.powershellStartTimeoutMs
+    ?? WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS;
+  const progressTimeoutMs =
+    params.progressTimeoutMs
+    ?? WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS;
+  const overallReadyDeadline =
+    params.launch.startupStartedAt + overallReadyTimeoutMs;
+  const powershellStartDeadline =
+    params.launch.startupStartedAt + powershellStartTimeoutMs;
   let cancelled = false;
   let timer: NodeJS.Timeout | undefined;
   const cancel = () => {
@@ -547,15 +593,58 @@ export function startWindowsJobReadyPoll(params: {
   const poll = () => {
     timer = undefined;
     if (cancelled) return;
+    const telemetry = readWindowsJobStartupTelemetry(params.launch);
     if (existsSync(params.launch.readyFilePath)) {
       cancelled = true;
-      params.onReady(readWindowsJobStartupTelemetry(params.launch));
+      params.onReady(telemetry);
       return;
     }
-    if (Date.now() >= deadline) {
+    const powershellStarted = telemetry.phases.find(
+      ({ phase }) => phase === "powershell-started",
+    );
+    const now = Date.now();
+    if (!powershellStarted && now >= powershellStartDeadline) {
       cancelled = true;
-      params.onTimeout(readWindowsJobStartupTelemetry(params.launch));
+      params.onTimeout({
+        stage: "powershell-start",
+        telemetry,
+        timeoutMs: powershellStartTimeoutMs,
+      });
       return;
+    }
+    if (powershellStarted) {
+      if (powershellStarted.elapsedMs > powershellStartTimeoutMs) {
+        cancelled = true;
+        params.onTimeout({
+          stage: "powershell-start",
+          telemetry,
+          timeoutMs: powershellStartTimeoutMs,
+        });
+        return;
+      }
+      const lastPhase = telemetry.phases.at(-1) ?? powershellStarted;
+      const progressDeadline =
+        params.launch.startupStartedAt
+        + lastPhase.elapsedMs
+        + progressTimeoutMs;
+      if (now >= overallReadyDeadline) {
+        cancelled = true;
+        params.onTimeout({
+          stage: "overall-ready",
+          telemetry,
+          timeoutMs: overallReadyTimeoutMs,
+        });
+        return;
+      }
+      if (now >= progressDeadline) {
+        cancelled = true;
+        params.onTimeout({
+          stage: "progress-stall",
+          telemetry,
+          timeoutMs: progressTimeoutMs,
+        });
+        return;
+      }
     }
     timer = setTimeout(poll, WINDOWS_JOB_READY_POLL_INTERVAL_MS);
   };
@@ -640,6 +729,7 @@ export function wrapCommandInWindowsJob(params: {
       [STARTUP_STATUS_FILE_ENV]: startupStatusFilePath,
     },
     readyFilePath,
+    startupStartedAt,
     startupStatusFilePath,
   };
 }

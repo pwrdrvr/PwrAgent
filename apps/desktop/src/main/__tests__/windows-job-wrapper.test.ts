@@ -6,9 +6,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   formatWindowsJobStartupTelemetry,
+  formatWindowsJobStartupTimeout,
   readWindowsJobStartupTelemetry,
   startWindowsJobReadyPoll,
-  WINDOWS_JOB_READY_TIMEOUT_MS,
+  type WindowsJobStartupTimeout,
+  WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS,
+  WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS,
+  WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS,
   wrapCommandInWindowsJob,
 } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
@@ -58,9 +62,11 @@ async function runWrappedCommand(params: {
 }
 
 describe("wrapCommandInWindowsJob", () => {
-  it("keeps cold startup bounded inside the Windows test contract", () => {
-    expect(WINDOWS_JOB_READY_TIMEOUT_MS).toBe(20_000);
-    expect(WINDOWS_JOB_READY_TIMEOUT_MS).toBeLessThan(30_000);
+  it("bounds host launch, phase progress, and overall readiness", () => {
+    expect(WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS).toBe(20_000);
+    expect(WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS).toBe(10_000);
+    expect(WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS).toBe(28_000);
+    expect(WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS).toBeLessThan(30_000);
   });
 
   it("launches the shell through an atomic kill-on-close Job wrapper", () => {
@@ -120,6 +126,9 @@ describe("wrapCommandInWindowsJob", () => {
     expect(wrapped.env.PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE).toBe(
       wrapped.startupStatusFilePath,
     );
+    expect(wrapped.env.PWRAGENT_JOB_WRAPPER_STARTED_AT).toBe(
+      String(wrapped.startupStartedAt),
+    );
     expect(readWindowsJobStartupTelemetry(wrapped)).toEqual({
       phases: [{ detail: undefined, elapsedMs: 0, phase: "wrapper-created" }],
     });
@@ -130,7 +139,7 @@ describe("wrapCommandInWindowsJob", () => {
     wrapped.cleanup();
   });
 
-  it("waits through delayed helper phases and reports their timings", async () => {
+  it("honors journaled progress inside the overall readiness bound", async () => {
     const wrapped = wrapCommandInWindowsJob({
       args: ["/c", "exit 0"],
       command: "C:\\Windows\\System32\\cmd.exe",
@@ -143,22 +152,34 @@ describe("wrapCommandInWindowsJob", () => {
         startWindowsJobReadyPoll({
           launch: wrapped,
           onReady: resolve,
-          onTimeout: () => reject(new Error("Delayed readiness timed out")),
-          timeoutMs: 500,
+          onTimeout: ({ stage }) =>
+            reject(new Error(`Delayed readiness timed out during ${stage}`)),
+          overallReadyTimeoutMs: 350,
+          powershellStartTimeoutMs: 200,
+          progressTimeoutMs: 100,
         });
         setTimeout(() => {
           appendFileSync(
             wrapped.startupStatusFilePath,
-            "25\tpowershell-started\t\n50\thelper-compile-started\t\n",
+            "150\tpowershell-started\t\n170\thelper-compile-started\t\n",
           );
-        }, 25);
+        }, 150);
         setTimeout(() => {
           appendFileSync(
             wrapped.startupStatusFilePath,
-            "75\thelper-ready\t\n100\ttarget-assigned\t\n125\tready\t\n",
+            "240\thelper-ready\t\n",
           );
+        }, 240);
+        setTimeout(() => {
+          appendFileSync(
+            wrapped.startupStatusFilePath,
+            "300\ttarget-assigned\t\n",
+          );
+        }, 300);
+        setTimeout(() => {
+          appendFileSync(wrapped.startupStatusFilePath, "320\tready\t\n");
           writeFileSync(wrapped.readyFilePath, "ready", "utf8");
-        }, 75);
+        }, 320);
       });
 
       expect(telemetry.phases.map(({ phase }) => phase)).toEqual([
@@ -170,14 +191,48 @@ describe("wrapCommandInWindowsJob", () => {
         "ready",
       ]);
       expect(formatWindowsJobStartupTelemetry(telemetry)).toBe(
-        "wrapper-created@0ms -> powershell-started@25ms -> helper-compile-started@50ms -> helper-ready@75ms -> target-assigned@100ms -> ready@125ms",
+        "wrapper-created@0ms -> powershell-started@150ms -> helper-compile-started@170ms -> helper-ready@240ms -> target-assigned@300ms -> ready@320ms",
       );
     } finally {
       wrapped.cleanup();
     }
   });
 
-  it("reports the last startup phase when readiness times out", async () => {
+  it("reports a PowerShell host-start timeout before wrapper code runs", async () => {
+    const wrapped = wrapCommandInWindowsJob({
+      args: ["/c", "exit 0"],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      env: { SystemRoot: "C:\\Windows" },
+    });
+    try {
+      const startupTimeout = await new Promise<WindowsJobStartupTimeout>(
+        (resolve, reject) => {
+          startWindowsJobReadyPoll({
+            launch: wrapped,
+            onReady: () => reject(new Error("Unexpected readiness")),
+            onTimeout: resolve,
+            overallReadyTimeoutMs: 100,
+            powershellStartTimeoutMs: 40,
+            progressTimeoutMs: 100,
+          });
+        },
+      );
+      expect(startupTimeout).toMatchObject({
+        stage: "powershell-start",
+        timeoutMs: 40,
+        telemetry: {
+          phases: [{ elapsedMs: 0, phase: "wrapper-created" }],
+        },
+      });
+      expect(formatWindowsJobStartupTimeout(startupTimeout)).toBe(
+        "Windows Job PowerShell host did not begin executing within 40ms: wrapper-created@0ms",
+      );
+    } finally {
+      wrapped.cleanup();
+    }
+  });
+
+  it("reports the last startup phase when progress stalls", async () => {
     const wrapped = wrapCommandInWindowsJob({
       args: ["/c", "exit 0"],
       command: "C:\\Windows\\System32\\cmd.exe",
@@ -188,20 +243,64 @@ describe("wrapCommandInWindowsJob", () => {
         wrapped.startupStatusFilePath,
         "12\tpowershell-started\t\n18\thelper-compile-started\t\n",
       );
-      const telemetry = await new Promise<
-        ReturnType<typeof readWindowsJobStartupTelemetry>
-      >((resolve, reject) => {
-        startWindowsJobReadyPoll({
-          launch: wrapped,
-          onReady: () => reject(new Error("Unexpected readiness")),
-          onTimeout: resolve,
-          timeoutMs: 40,
-        });
+      const startupTimeout = await new Promise<WindowsJobStartupTimeout>(
+        (resolve, reject) => {
+          startWindowsJobReadyPoll({
+            launch: wrapped,
+            onReady: () => reject(new Error("Unexpected readiness")),
+            onTimeout: resolve,
+            overallReadyTimeoutMs: 200,
+            powershellStartTimeoutMs: 100,
+            progressTimeoutMs: 40,
+          });
+        },
+      );
+      expect(startupTimeout).toMatchObject({
+        stage: "progress-stall",
+        timeoutMs: 40,
       });
-      expect(telemetry.phases.at(-1)).toMatchObject({
+      expect(startupTimeout.telemetry.phases.at(-1)).toMatchObject({
         elapsedMs: 18,
         phase: "helper-compile-started",
       });
+      expect(formatWindowsJobStartupTimeout(startupTimeout)).toBe(
+        "Windows Job startup made no progress for 40ms after helper-compile-started@18ms: wrapper-created@0ms -> powershell-started@12ms -> helper-compile-started@18ms",
+      );
+    } finally {
+      wrapped.cleanup();
+    }
+  });
+
+  it("keeps progress extensions inside the overall readiness bound", async () => {
+    const wrapped = wrapCommandInWindowsJob({
+      args: ["/c", "exit 0"],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      env: { SystemRoot: "C:\\Windows" },
+    });
+    try {
+      appendFileSync(
+        wrapped.startupStatusFilePath,
+        "12\tpowershell-started\t\n18\thelper-compile-started\t\n25\thelper-ready\t\n",
+      );
+      const startupTimeout = await new Promise<WindowsJobStartupTimeout>(
+        (resolve, reject) => {
+          startWindowsJobReadyPoll({
+            launch: wrapped,
+            onReady: () => reject(new Error("Unexpected readiness")),
+            onTimeout: resolve,
+            overallReadyTimeoutMs: 40,
+            powershellStartTimeoutMs: 100,
+            progressTimeoutMs: 100,
+          });
+        },
+      );
+      expect(startupTimeout).toMatchObject({
+        stage: "overall-ready",
+        timeoutMs: 40,
+      });
+      expect(formatWindowsJobStartupTimeout(startupTimeout)).toBe(
+        "Windows Job shell ownership did not become ready within 40ms overall: wrapper-created@0ms -> powershell-started@12ms -> helper-compile-started@18ms -> helper-ready@25ms",
+      );
     } finally {
       wrapped.cleanup();
     }
