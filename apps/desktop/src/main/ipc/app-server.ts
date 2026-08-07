@@ -1615,8 +1615,10 @@ class DesktopAppServerService {
       threadStatus: response.threadStatus ?? response.replay.threadStatus,
     });
 
+    const hydrated = await getDesktopFederationRuntime()
+      .hydrateThreadMessageOrigins(response);
     const materialized = await materializeTranscriptImageUrlsForRenderer(
-      response,
+      hydrated,
       {},
       {
         includeTemporaryImageRoots: true,

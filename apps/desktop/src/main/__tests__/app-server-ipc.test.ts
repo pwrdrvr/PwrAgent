@@ -78,6 +78,7 @@ const federationMock = vi.hoisted(() => {
     remoteBackend,
     remoteThreadSummaries,
     runtime: {
+      hydrateThreadMessageOrigins: vi.fn(async (response) => response),
       remoteBackend: vi.fn(() => remoteBackend),
       remoteNavigationSnapshot: vi.fn(),
       remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
@@ -914,6 +915,7 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.setThreadReaction.mockClear();
     federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.hydrateThreadMessageOrigins.mockClear();
     federationMock.runtime.remoteNavigationSnapshot.mockReset();
     listThreads.mockClear();
     readThread.mockClear();
@@ -2787,6 +2789,9 @@ describe("app server ipc", () => {
       limit: undefined,
       viewOnly: undefined,
     });
+    expect(
+      federationMock.runtime.hydrateThreadMessageOrigins,
+    ).toHaveBeenCalledWith(oversizedReadThreadResponse);
     expect(output.length).toBeLessThan(36_000);
     expect(output).toContain("PwrAgent renderer boundary: truncated");
     expect(output).toContain("$.replay.entries[0].details[0].command.output");

@@ -8,6 +8,7 @@ import type { CelestialIconAssignment } from "./celestial";
 import type { StarMapArrangementEntry, StarMapIntakePhase } from "./star-map";
 import type {
   FederationConnectionState,
+  FederationInstanceId,
   FederationTarget,
 } from "./federation";
 import type {
@@ -419,6 +420,8 @@ export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
   sourceThread?: {
     backend: AppServerBackendKind;
+    /** Durable owner identity when the source thread belongs to another instance. */
+    instanceId?: FederationInstanceId;
     threadId: ThreadIdentifier;
     title?: string;
   };

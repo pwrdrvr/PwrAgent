@@ -904,6 +904,7 @@ describe("useThreadSessionState", () => {
                 kind: "agent",
                 sourceThread: {
                   backend: "codex",
+                  instanceId: "pwr_source",
                   threadId: "parent-thread",
                   title: "Parent thread",
                 },
@@ -941,6 +942,7 @@ describe("useThreadSessionState", () => {
           kind: "agent",
           sourceThread: {
             backend: "codex",
+            instanceId: "pwr_source",
             threadId: "parent-thread",
             title: "Parent thread",
           },

@@ -202,6 +202,48 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("links an unmounted remote Agent source thread by hydrated provenance", () => {
+    const onShowThread = vi.fn();
+
+    render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+        <TranscriptList
+          entries={[
+            {
+              type: "message",
+              id: "remote-message-injected",
+              role: "user",
+              text: "Please report the remote audit findings.",
+              origin: {
+                kind: "agent",
+                sourceThread: {
+                  backend: "codex",
+                  instanceId: "pwr_remote",
+                  threadId: "remote-source-thread",
+                  title: "Remote pagination audit",
+                },
+              },
+            },
+          ]}
+          loading={false}
+          loadingMore={false}
+          onLoadOlder={async () => undefined}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open thread Remote pagination audit",
+      }),
+    );
+    expect(onShowThread).toHaveBeenCalledWith({
+      backend: "codex",
+      instanceId: "pwr_remote",
+      threadId: "remote-source-thread",
+    });
+  });
+
   it("attributes monitor handoffs and keeps their raw payload collapsed", () => {
     const task = "Monitor GitHub CI for PR #1107 until all checks finish.";
     const rawHandoff = [
