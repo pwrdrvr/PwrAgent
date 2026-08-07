@@ -268,6 +268,12 @@ export type CancelQueuedTurnRequest = {
 export type CancelQueuedTurnResponse = {
   queueEntryId: string;
   cancelled: boolean;
+  /**
+   * Owner-authoritative lifecycle result. Optional so a newer viewer remains
+   * compatible with peers that only return the legacy boolean.
+   */
+  disposition?: "cancelled" | "already_admitted" | "not_found";
+  turnId?: string;
 };
 
 export type StartReviewRequest = {

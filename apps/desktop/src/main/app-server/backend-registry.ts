@@ -96,6 +96,7 @@ import {
   type BackendSummary,
   type DesktopProviderModelDefaults,
   type DesktopProviderThreadModelMigration,
+  type CancelQueuedTurnResponse,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
   type ForkThreadRequest,
@@ -10713,6 +10714,24 @@ export class DesktopBackendRegistry {
 
   cancelQueuedTurn(entryId: string, reason?: string): boolean {
     return Boolean(this.threadTurnQueue.cancelEntry(entryId, reason));
+  }
+
+  cancelQueuedTurnWithDisposition(
+    entryId: string,
+    reason?: string,
+  ): CancelQueuedTurnResponse {
+    const result = this.threadTurnQueue.cancelEntryWithDisposition(
+      entryId,
+      reason,
+    );
+    return {
+      queueEntryId: entryId,
+      cancelled: result.disposition === "cancelled",
+      disposition: result.disposition,
+      ...(result.disposition === "already_admitted" && result.turnId
+        ? { turnId: result.turnId }
+        : {}),
+    };
   }
 
   updateQueuedTurnInput(

@@ -4028,7 +4028,7 @@ export function Composer(props: ComposerProps) {
   const cancelServerManagedQueuedTurn = async (
     queued: QueuedTurnDraft,
     scopeKey = composerScopeKey,
-  ): Promise<boolean> => {
+  ): Promise<"cancelled" | "already_admitted" | "failed"> => {
     const reportError = (message: string): void => {
       if (activeComposerScopeKeyRef.current === scopeKey) {
         setSendError(message);
@@ -4037,7 +4037,7 @@ export function Composer(props: ComposerProps) {
     if (queued.scheduledActionId) {
       if (!props.desktopApi?.cancelScheduledThreadAction) {
         reportError("Scheduled action cancellation is unavailable.");
-        return false;
+        return "failed";
       }
       try {
         await props.desktopApi.cancelScheduledThreadAction({
@@ -4045,18 +4045,18 @@ export function Composer(props: ComposerProps) {
             ?? rendererFederationTarget,
           id: queued.scheduledActionId,
         });
-        return true;
+        return "cancelled";
       } catch (error) {
         reportError(error instanceof Error ? error.message : String(error));
-        return false;
+        return "failed";
       }
     }
     if (!queued.queueEntryId) {
-      return true;
+      return "cancelled";
     }
     if (!props.desktopApi?.cancelQueuedTurn) {
       reportError("Queued turn cancellation is unavailable.");
-      return false;
+      return "failed";
     }
     try {
       const federationTarget =
@@ -4067,13 +4067,20 @@ export function Composer(props: ComposerProps) {
         queueEntryId: queued.queueEntryId,
       });
       if (!response.cancelled) {
+        if (response.disposition === "already_admitted") {
+          removeQueuedTurnInScope(scopeKey, queued);
+          if (activeComposerScopeKeyRef.current === scopeKey) {
+            setSendError(undefined);
+          }
+          return "already_admitted";
+        }
         reportError("The queued turn is no longer waiting.");
-        return false;
+        return "failed";
       }
-      return true;
+      return "cancelled";
     } catch (error) {
       reportError(error instanceof Error ? error.message : String(error));
-      return false;
+      return "failed";
     }
   };
   const removeLocalQueuedTurn = (queued: QueuedTurnDraft): void => {
@@ -6712,7 +6719,11 @@ export function Composer(props: ComposerProps) {
     if (!expectedTurnId) {
       return;
     }
-    if (!(await cancelServerManagedQueuedTurn(queued, expectedScopeKey))) {
+    const cancellation = await cancelServerManagedQueuedTurn(
+      queued,
+      expectedScopeKey,
+    );
+    if (cancellation !== "cancelled") {
       return;
     }
     if (
@@ -9563,12 +9574,11 @@ export function Composer(props: ComposerProps) {
                     return;
                   }
                   void (async () => {
-                    if (
-                      !(await cancelServerManagedQueuedTurn(
-                        queued,
-                        queuedScopeKey,
-                      ))
-                    ) {
+                    const cancellation = await cancelServerManagedQueuedTurn(
+                      queued,
+                      queuedScopeKey,
+                    );
+                    if (cancellation !== "cancelled") {
                       return;
                     }
                     editQueuedTurn();
@@ -9587,12 +9597,11 @@ export function Composer(props: ComposerProps) {
                     return;
                   }
                   void (async () => {
-                    if (
-                      await cancelServerManagedQueuedTurn(
-                        queued,
-                        queuedScopeKey,
-                      )
-                    ) {
+                    const cancellation = await cancelServerManagedQueuedTurn(
+                      queued,
+                      queuedScopeKey,
+                    );
+                    if (cancellation === "cancelled") {
                       removeQueuedTurnInScope(queuedScopeKey, queued);
                     }
                   })();

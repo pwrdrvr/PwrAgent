@@ -87,6 +87,11 @@ const registry = {
     turnId: "turn-review-1",
   })),
   cancelQueuedTurn: vi.fn(() => true),
+  cancelQueuedTurnWithDisposition: vi.fn((queueEntryId: string) => ({
+    queueEntryId,
+    cancelled: true,
+    disposition: "cancelled" as const,
+  })),
   interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -391,6 +396,7 @@ describe("agent ipc", () => {
     registry.submitTurn.mockClear();
     registry.startReview.mockClear();
     registry.cancelQueuedTurn.mockClear();
+    registry.cancelQueuedTurnWithDisposition.mockClear();
     registry.interruptTurn.mockClear();
     registry.stopSubAgent.mockClear();
     registry.steerTurn.mockClear();
@@ -631,6 +637,7 @@ describe("agent ipc", () => {
       queueEntryId: "queue-1",
     });
     expect(registry.cancelQueuedTurn).not.toHaveBeenCalled();
+    expect(registry.cancelQueuedTurnWithDisposition).not.toHaveBeenCalled();
     expect(federationMock.remoteBackend.startReview).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -848,8 +855,9 @@ describe("agent ipc", () => {
     ).toEqual({
       queueEntryId: "queue-2",
       cancelled: true,
+      disposition: "cancelled",
     });
-    expect(registry.cancelQueuedTurn).toHaveBeenCalledWith(
+    expect(registry.cancelQueuedTurnWithDisposition).toHaveBeenCalledWith(
       "queue-2",
       "Cancelled from the desktop composer.",
     );

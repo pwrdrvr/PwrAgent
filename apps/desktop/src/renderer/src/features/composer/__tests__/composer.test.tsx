@@ -5089,6 +5089,91 @@ describe("Composer", () => {
     });
   });
 
+  it("clears a remote queued projection when its owner already admitted it", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const cancelQueuedTurn = vi.fn(async ({ queueEntryId }: {
+      queueEntryId: string;
+    }) => ({
+      queueEntryId,
+      cancelled: false,
+      disposition: "already_admitted" as const,
+      turnId: "turn-1",
+    }));
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex"),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          cancelQueuedTurn,
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(async () => ({
+            backend: "codex" as const,
+            threadId: "thread-1",
+            turnId: "queue-entry-1",
+            queueStatus: "queued" as const,
+            queueEntryId: "queue-entry-1",
+          })),
+          steerTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Remote active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: federationTarget,
+              threadId: "thread-1",
+            },
+            instanceLabel: "Remote",
+            peerStatus: "connected",
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Already admitted once" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    await screen.findByLabelText("Queued message");
+
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+
+    await waitFor(() => {
+      expect(cancelQueuedTurn).toHaveBeenCalledWith({
+        federationTarget,
+        queueEntryId: "queue-entry-1",
+      });
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    });
+    expect(steerTurn).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText("The queued turn is no longer waiting."),
+    ).not.toBeInTheDocument();
+  });
+
   it("removes concurrently cancelled queue entries by stable id", async () => {
     const cancellationOne = createDeferred<{
       queueEntryId: string;

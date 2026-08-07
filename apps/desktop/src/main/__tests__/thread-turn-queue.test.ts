@@ -218,10 +218,44 @@ describe("ThreadTurnQueue", () => {
 
     await queue.submit(buildEntry({ id: "queued-1" }));
 
-    expect(queue.cancelEntry("queued-1", "test cancel")).toMatchObject({
-      id: "queued-1",
+    expect(
+      queue.cancelEntryWithDisposition("queued-1", "test cancel"),
+    ).toMatchObject({
+      disposition: "cancelled",
+      entry: { id: "queued-1" },
     });
     expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
       .toEqual([]);
+    expect(queue.cancelEntryWithDisposition("missing")).toEqual({
+      disposition: "not_found",
+    });
+  });
+
+  it("recognizes a queue entry that was already admitted", async () => {
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => ({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        turnId: `turn-${entry.id}`,
+      }),
+    });
+
+    await queue.submit(buildEntry({ id: "admitted-1" }));
+
+    expect(queue.cancelEntryWithDisposition("admitted-1")).toMatchObject({
+      disposition: "already_admitted",
+      entryId: "admitted-1",
+      turnId: "turn-admitted-1",
+    });
+
+    await queue.releaseThread({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-admitted-1",
+    });
+    expect(queue.cancelEntryWithDisposition("admitted-1")).toMatchObject({
+      disposition: "already_admitted",
+      turnId: "turn-admitted-1",
+    });
   });
 });
