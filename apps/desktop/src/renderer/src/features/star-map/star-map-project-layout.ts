@@ -35,8 +35,17 @@ const CANVAS_PADDING = 160;
 const ARM_COUNT = 3;
 /** Tightness of the spiral: bigger unwinds faster. */
 const ARM_PITCH = 0.42;
-/** Where the innermost project can sit, measured from the core. */
+/** Where the heaviest project sits, measured from the core. */
 const CORE_RADIUS = 260;
+/**
+ * How far past the core the lightest project is thrown.
+ *
+ * Mass sets a target radius on this span; collisions only ever push a
+ * project further out from there. Ordering alone was not enough — it made
+ * the 4th-heaviest project land as far out as the 12th whenever the arms
+ * fell that way, which is a queue, not gravity.
+ */
+const RIM_SPREAD = 900;
 /** How far outward to probe when a candidate seat collides. */
 const RADIUS_STEP = 36;
 const MAX_PROBES = 400;
@@ -70,7 +79,7 @@ function overlaps(
 export function computeProjectLayout(params: {
   cardWidth: number;
   /** Visible card count per project key, in the order to place them. */
-  projects: readonly { key: string; cardCount: number }[];
+  projects: readonly { key: string; cardCount: number; mass?: number }[];
 }): ProjectLayout {
   if (params.projects.length === 0) {
     return {
@@ -82,18 +91,24 @@ export function computeProjectLayout(params: {
     };
   }
 
+  // Mass sets where a project WANTS to sit. Normalised against the
+  // heaviest so the galaxy looks the same whether the fleet has three
+  // threads or three hundred.
+  const masses = params.projects.map(
+    (project) => project.mass ?? project.cardCount,
+  );
+  const heaviest = Math.max(...masses, 1);
+  const lightest = Math.min(...masses, heaviest);
+  const span = Math.max(heaviest - lightest, 1e-6);
+
   const seated: (ProjectPlacement & { radius: number })[] = [];
   params.projects.forEach((project, index) => {
     const extent = cardRingExtent(project.cardCount, params.cardWidth);
     const arm = index % ARM_COUNT;
-    // Start just outside the last seat on this arm and let the probe loop
-    // close the gap. Reserving both radii up front spaced the galaxy far
-    // wider than the cards actually need.
-    const previousOnArm = seated.filter(
-      (_, seatIndex) => seatIndex % ARM_COUNT === arm,
-    );
-    const last = previousOnArm[previousOnArm.length - 1];
-    let radius = last ? last.radius + RADIUS_STEP : CORE_RADIUS;
+    const pull = (masses[index] - lightest) / span;
+    // Square-root so the middle of the pack spreads out rather than
+    // bunching against the rim; heavy projects still dominate the core.
+    let radius = CORE_RADIUS + RIM_SPREAD * Math.sqrt(1 - pull);
 
     for (let probe = 0; probe < MAX_PROBES; probe += 1) {
       const angle = armAngle(arm, radius);

@@ -4,6 +4,7 @@ import {
   STAR_MAP_NO_PROJECT_KEY,
   groupThreadsByProject,
   instanceIdByThreadKey,
+  projectMass,
   threadProjectKey,
 } from "../star-map-projects";
 import { computeProjectLayout } from "../star-map-project-layout";
@@ -271,5 +272,100 @@ describe("computeProjectLayout galaxy shape", () => {
     });
     expect(layout.projects).toHaveLength(1);
     expect(layout.canvasWidth).toBeGreaterThan(0);
+  });
+});
+
+describe("projectMass", () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = 1_000 * HOUR;
+
+  it("grows with card count", () => {
+    expect(
+      projectMass({ cardCount: 9, lastActivityAt: now, now }),
+    ).toBeGreaterThan(projectMass({ cardCount: 3, lastActivityAt: now, now }));
+  });
+
+  it("grows with recency at equal size", () => {
+    const fresh = projectMass({ cardCount: 4, lastActivityAt: now, now });
+    const stale = projectMass({
+      cardCount: 4,
+      lastActivityAt: now - 400 * HOUR,
+      now,
+    });
+    expect(fresh).toBeGreaterThan(stale);
+  });
+
+  it("lets a live small project outrank a dormant slightly-bigger one", () => {
+    // The whole point of the recency term: a project you touched an hour
+    // ago is worth reviewing before a marginally larger one nobody has
+    // opened in a fortnight.
+    const live = projectMass({ cardCount: 3, lastActivityAt: now, now });
+    const dormant = projectMass({
+      cardCount: 6,
+      lastActivityAt: now - 800 * HOUR,
+      now,
+    });
+    expect(live).toBeGreaterThan(dormant);
+  });
+
+  it("does not let recency beat a genuinely large project", () => {
+    const live = projectMass({ cardCount: 2, lastActivityAt: now, now });
+    const big = projectMass({
+      cardCount: 20,
+      lastActivityAt: now - 800 * HOUR,
+      now,
+    });
+    expect(big).toBeGreaterThan(live);
+  });
+
+  it("never goes below the card count", () => {
+    expect(
+      projectMass({ cardCount: 5, lastActivityAt: 0, now }),
+    ).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe("gravity seating", () => {
+  const distances = (
+    defs: { key: string; cardCount: number; mass: number }[],
+  ) => {
+    const layout = computeProjectLayout({ cardWidth: 200, projects: defs });
+    return new Map(
+      layout.projects.map((project) => [
+        project.key,
+        Math.hypot(project.x - layout.core.x, project.y - layout.core.y),
+      ]),
+    );
+  };
+
+  it("drags heavier projects toward the core", () => {
+    const d = distances([
+      { key: "heavy", cardCount: 12, mass: 20 },
+      { key: "middle", cardCount: 6, mass: 10 },
+      { key: "light", cardCount: 1, mass: 2 },
+    ]);
+    expect(d.get("heavy")!).toBeLessThan(d.get("middle")!);
+    expect(d.get("middle")!).toBeLessThan(d.get("light")!);
+  });
+
+  it("separates by mass, not just by rank", () => {
+    // Two projects a hair apart in mass should sit at nearly the same
+    // radius; ordering alone would have spaced them a whole ring apart.
+    const d = distances([
+      { key: "a", cardCount: 4, mass: 10 },
+      { key: "b", cardCount: 4, mass: 9.8 },
+      { key: "far", cardCount: 1, mass: 1 },
+    ]);
+    const gapBetweenPeers = Math.abs(d.get("a")! - d.get("b")!);
+    const gapToFar = Math.abs(d.get("a")! - d.get("far")!);
+    expect(gapBetweenPeers).toBeLessThan(gapToFar);
+  });
+
+  it("falls back to card count when mass is absent", () => {
+    const d = distances([
+      { key: "big", cardCount: 12 },
+      { key: "small", cardCount: 1 },
+    ] as { key: string; cardCount: number; mass: number }[]);
+    expect(d.get("big")!).toBeLessThan(d.get("small")!);
   });
 });

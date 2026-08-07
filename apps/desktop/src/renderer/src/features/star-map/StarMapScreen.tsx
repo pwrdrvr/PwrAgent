@@ -439,6 +439,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             project.threads.length,
             ORBIT_MAX_CARDS_PER_INSTANCE,
           ),
+          mass: project.mass,
         })),
       }),
     [projects],
