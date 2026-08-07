@@ -38,9 +38,50 @@ export function pageNormalizedReplay(
   const boundedEndIndex = endIndex >= 0 ? endIndex : replay.entries.length;
   const limit =
     options.limit === undefined ? undefined : Math.max(0, Math.floor(options.limit));
-  const startIndex = limit === undefined ? 0 : Math.max(0, boundedEndIndex - limit);
+  const startIndex = limit === undefined
+    ? 0
+    : findTurnPageStartIndex(replay.entries, boundedEndIndex, limit);
   const entries = replay.entries.slice(startIndex, boundedEndIndex);
   return replayWithEntries(replay, entries, startIndex > 0);
+}
+
+function findTurnPageStartIndex(
+  entries: AppServerThreadEntry[],
+  endIndex: number,
+  limit: number,
+): number {
+  if (limit === 0) {
+    return endIndex;
+  }
+
+  const turnIds = new Set<string>();
+  let oldestRetainedTurnId: string | undefined;
+  for (let index = endIndex - 1; index >= 0; index -= 1) {
+    const turnId = entries[index]?.turn?.id;
+    if (!turnId || turnIds.has(turnId)) {
+      continue;
+    }
+    if (turnIds.size >= limit) {
+      break;
+    }
+    turnIds.add(turnId);
+    oldestRetainedTurnId = turnId;
+  }
+
+  // Older replay formats do not consistently carry turn metadata. Preserve
+  // their established entry-count paging instead of treating the entire
+  // transcript as one synthetic turn.
+  if (!oldestRetainedTurnId) {
+    return Math.max(0, endIndex - limit);
+  }
+  if (turnIds.size < limit) {
+    return 0;
+  }
+
+  const firstTurnEntryIndex = entries.findIndex(
+    (entry, index) => index < endIndex && entry.turn?.id === oldestRetainedTurnId,
+  );
+  return firstTurnEntryIndex >= 0 ? firstTurnEntryIndex : 0;
 }
 
 export function fitNormalizedReplayWithinByteBudget(params: {
