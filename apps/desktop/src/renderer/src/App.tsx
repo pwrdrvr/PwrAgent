@@ -806,7 +806,7 @@ function DesktopAppShell(props: {
       settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     threadViewVisible: mainView === "thread",
   });
-  useFederationThreadEventSubscriptions({
+  const scheduledActionFederationTargets = useFederationThreadEventSubscriptions({
     desktopApi,
     enabled: !readRendererFederationTarget(),
     selectedThread: navigation.selectedThread,
@@ -1041,13 +1041,28 @@ function DesktopAppShell(props: {
     composerDraftStore,
     threads: navigation.threads,
   });
+  const scheduledActionProjectionSources = useMemo(
+    () => readRendererFederationTarget()
+      ? [{
+          federationTarget: activeFederationTarget,
+          suspended: !peerConnectivity.connected,
+        }]
+      : [
+          { federationTarget: undefined },
+          ...scheduledActionFederationTargets.map((federationTarget) => ({
+            federationTarget,
+          })),
+        ],
+    [
+      activeFederationTarget,
+      peerConnectivity.connected,
+      scheduledActionFederationTargets,
+    ],
+  );
   useScheduledThreadActionProjection({
     composerDraftStore,
     desktopApi,
-    federationTarget: activeFederationTarget,
-    // A disconnected peer fails every reconciliation tick — stop polling
-    // until the runtime reports the peer connected again.
-    suspended: !peerConnectivity.connected,
+    sources: scheduledActionProjectionSources,
   });
   const replayCodexProfileSetup = settings.snapshot
     ? inferReplayCodexProfileSetup(

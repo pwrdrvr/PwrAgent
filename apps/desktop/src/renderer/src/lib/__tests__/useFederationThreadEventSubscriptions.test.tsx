@@ -123,6 +123,10 @@ describe("useFederationThreadEventSubscriptions", () => {
         }],
       });
     });
+    expect(rendered.result.current).toEqual([{
+      scope: "remote",
+      instanceId: "owner_one",
+    }]);
 
     rendered.unmount();
     expect(setFederationEventSubscriptions).toHaveBeenLastCalledWith({

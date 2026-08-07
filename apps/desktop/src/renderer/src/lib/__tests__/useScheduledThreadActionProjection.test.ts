@@ -136,6 +136,64 @@ describe("scheduled thread action projections", () => {
     vi.useRealTimers();
   });
 
+  it("projects scheduled actions from every subscribed federation owner", async () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const ownerTwoAction = scheduledAction({
+      id: "owner-two-action",
+      threadId: "owner-two-thread",
+    });
+    const listScheduledThreadActions = vi.fn(async (request) => ({
+      actions:
+        request.federationTarget?.scope === "remote"
+        && request.federationTarget.instanceId === "owner-two"
+          ? [ownerTwoAction]
+          : [],
+      observedAt: 1_000,
+    }));
+    const projection = renderHook(() => useScheduledThreadActionProjection({
+      composerDraftStore: result.current,
+      desktopApi: {
+        listScheduledThreadActions,
+        onAgentEvent: () => () => undefined,
+      } as unknown as DesktopApi,
+      sources: [
+        { federationTarget: undefined },
+        {
+          federationTarget: {
+            scope: "remote",
+            instanceId: "owner-one",
+          },
+        },
+        {
+          federationTarget: {
+            scope: "remote",
+            instanceId: "owner-two",
+          },
+        },
+      ],
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(listScheduledThreadActions).toHaveBeenCalledTimes(3);
+    expect(listScheduledThreadActions).toHaveBeenCalledWith({
+      federationTarget: {
+        scope: "remote",
+        instanceId: "owner-two",
+      },
+      includeFailed: true,
+    });
+    expect(
+      result.current.getQueuedTurns("thread:codex:owner-two-thread"),
+    ).toEqual([
+      expect.objectContaining({ scheduledActionId: "owner-two-action" }),
+    ]);
+
+    projection.unmount();
+  });
+
   it("suspends remote reconciliation until the peer reconnects", async () => {
     vi.useFakeTimers();
     const { result } = renderHook(() => useComposerDraftStore());
@@ -239,6 +297,41 @@ describe("scheduled thread action projections", () => {
         reviewCommand: expect.objectContaining({
           displayText: "Review changes against main",
         }),
+      }),
+    ]);
+  });
+
+  it("deduplicates navigation queue mirrors by backend queue entry id", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = "thread:codex:thread-1";
+    const queuedAction = scheduledAction({
+      status: "queued",
+      queueEntryId: "queue-entry-1",
+    });
+    const genericEntry = {
+      id: "backend-queued:queue-entry-1",
+      queueEntryId: "queue-entry-1",
+      text: "Follow up",
+      imageAttachments: [],
+      fileAttachments: [],
+    };
+
+    store.setQueuedTurns(scopeKey, [genericEntry]);
+    syncScheduledActionProjections(store, [queuedAction]);
+    expect(store.getQueuedTurns(scopeKey)).toEqual([
+      expect.objectContaining({
+        scheduledActionId: "scheduled-1",
+        queueEntryId: "queue-entry-1",
+      }),
+    ]);
+
+    store.setQueuedTurns(scopeKey, [genericEntry]);
+    applyScheduledActionProjection(store, queuedAction);
+    expect(store.getQueuedTurns(scopeKey)).toEqual([
+      expect.objectContaining({
+        scheduledActionId: "scheduled-1",
+        queueEntryId: "queue-entry-1",
       }),
     ]);
   });

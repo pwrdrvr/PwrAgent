@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import {
   isRemoteFederationTarget,
   type FederationEventClass,
   type FederationEventSubscription,
+  type FederationRemoteTarget,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
@@ -86,7 +87,7 @@ export function useFederationThreadEventSubscriptions(params: {
   enabled: boolean;
   selectedThread?: NavigationThreadSummary;
   threads: NavigationThreadSummary[];
-}): void {
+}): FederationRemoteTarget[] {
   const subscriptionsJson = JSON.stringify(
     params.enabled
       ? buildFederationThreadEventSubscriptions(params)
@@ -111,4 +112,18 @@ export function useFederationThreadEventSubscriptions(params: {
       });
     };
   }, [params.desktopApi, subscriptionsJson]);
+
+  return useMemo(() => {
+    const subscriptions = JSON.parse(
+      subscriptionsJson,
+    ) as FederationEventSubscription[];
+    return subscriptions
+      .filter((subscription) =>
+        subscription.eventClasses.includes("scheduled_actions")
+      )
+      .map((subscription) => ({
+        scope: "remote" as const,
+        instanceId: subscription.sourceInstanceId,
+      }));
+  }, [subscriptionsJson]);
 }
