@@ -90,6 +90,26 @@ describe("ThreadRow chip flow", () => {
     expect(flow.querySelector(".thread-row__chip--add-reaction")).toBeNull();
   });
 
+  // The invariant this row's structure exists to hold. The chips carry
+  // real buttons (copy path, copy branch, unpin, unbind, reactions, PR
+  // links); nesting them inside the row's own button is `nested-interactive`
+  // — invalid and unoperable. Only the a11y E2E gate would otherwise catch
+  // a re-nesting, and only against a fixture whose thread has a directory,
+  // which is exactly how this shipped unnoticed the first time.
+  it("keeps the chip flow OUTSIDE the open-thread button", () => {
+    const { container } = renderRow();
+    const openButton = container.querySelector(".thread-row__open");
+    const flow = container.querySelector(".thread-row__chips");
+    expect(openButton).not.toBeNull();
+    expect(flow).not.toBeNull();
+    expect(openButton!.tagName).toBe("BUTTON");
+    expect(openButton!.contains(flow)).toBe(false);
+    // …and no focusable descendant hides inside the button either.
+    expect(
+      openButton!.querySelector('button, a, [tabindex], [role="button"]'),
+    ).toBeNull();
+  });
+
   it("positions the add-reaction trigger outside the wrapping chip flow", () => {
     const { container } = renderRow();
     const actions = container.querySelector(".thread-row__actions");
@@ -335,7 +355,15 @@ describe("ThreadRow chip flow", () => {
         onPrefetchPullRequests,
       });
 
-      fireEvent.mouseEnter(container.querySelector(".thread-row__chips")!);
+      // Hover the CHIP, not its container. `.thread-row__chips` is
+      // `pointer-events: none` so the gaps between chips fall through to
+      // the open-thread overlay (see app.css), which means a real pointer
+      // never enters the container directly — only a chip. jsdom has no
+      // layout and ignores `pointer-events`, so firing on the container
+      // would pass while modelling something a user cannot do. `mouseOver`
+      // is what React's enter/leave plugin synthesizes `onMouseEnter` from,
+      // and it dispatches along the ancestor path to the container.
+      fireEvent.mouseOver(container.querySelector(".pr-chip")!);
       vi.advanceTimersByTime(749);
       expect(onPrefetchPullRequests).not.toHaveBeenCalled();
 

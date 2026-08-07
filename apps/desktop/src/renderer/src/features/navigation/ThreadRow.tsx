@@ -327,7 +327,14 @@ export function ThreadRow(props: ThreadRowProps) {
             fixed-width metadata packs first and single-chip orphan rows
             are minimized. flex-wrap handles overflow naturally; the
             hover-only add-reaction affordance is positioned outside the
-            flow so it cannot reserve a phantom wrapped row while hidden. */}
+            flow so it cannot reserve a phantom wrapped row while hidden.
+
+            The container is `pointer-events: none` (see app.css) so the
+            gaps between chips fall through to the open-thread overlay, so
+            these hover handlers fire when the pointer enters a CHIP —
+            React synthesizes enter/leave along the ancestor path — not
+            when it enters the container's empty space. That matches what
+            the prefetch is for; just don't read it as "hovered the row". */}
         <span
           className="thread-row__chips"
           onMouseEnter={

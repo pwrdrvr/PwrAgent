@@ -1,0 +1,100 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "a11y-copy-chips",
+    "threadId": "thread-a11y-copy-chips"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-a11y-copy-chips",
+          "title": "Copy chip audit thread",
+          "titleSource": "explicit",
+          "summary": "A sidebar row carrying every click-to-copy chip flavour.",
+          "source": "codex",
+          "executionMode": "default",
+          "gitBranch": "feature/copy-chip-audit",
+          "linkedDirectories": [
+            {
+              "id": "copy-chip-worktree-dir",
+              "kind": "worktree",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent",
+              "worktreePath": "/repo/PwrAgent/.worktrees/feature-copy-chip-audit"
+            },
+            {
+              "id": "copy-chip-local-dir",
+              "kind": "local",
+              "label": "PwrSnap",
+              "path": "/repo/PwrSnap"
+            }
+          ],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Show me a row with copy chips."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "The copy chip row is live."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Show me a row with copy chips."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "The copy chip row is live."
+          }
+        ],
+        "lastUserMessage": "Show me a row with copy chips.",
+        "lastAssistantMessage": "The copy chip row is live.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    }
+  ]
+}

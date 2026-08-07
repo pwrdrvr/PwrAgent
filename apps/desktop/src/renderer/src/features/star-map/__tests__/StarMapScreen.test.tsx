@@ -66,6 +66,35 @@ function unreadThread(id: string): NavigationThreadSummary {
 }
 
 describe("StarMapScreen", () => {
+  // Mirrors the sidebar row's invariant (see thread-row-chips.test.tsx):
+  // the chips carry real buttons, so nesting them inside the card's own
+  // button is `nested-interactive` — invalid and unoperable.
+  it("keeps the chip flow OUTSIDE the open-thread button", async () => {
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-card__open")).not.toBeNull();
+    });
+    const openButton = container.querySelector(".star-map-card__open")!;
+    const flow = container.querySelector(".star-map-card__chips");
+    expect(flow).not.toBeNull();
+    expect(openButton.tagName).toBe("BUTTON");
+    expect(openButton.contains(flow)).toBe(false);
+    expect(
+      openButton.querySelector('button, a, [tabindex], [role="button"]'),
+    ).toBeNull();
+  });
+
   it("renders the single-instance map with attention cards sans Local/Worktree labels", async () => {
     const desktopApi = buildDesktopApi();
     const onOpenLocalThread = vi.fn();

@@ -3942,6 +3942,19 @@ textarea,
   content: "";
 }
 
+/* Lift the button's OWN content above that overlay. Hit-testing resolves
+   a pseudo-element to its originating element, so an un-lifted overlay
+   makes the button itself the hover target everywhere — and a native
+   `title` resolves from the hovered element upward through ancestors,
+   never descendants. That silently killed the status indicator's
+   "Thinking" / "Unread update" tooltip. Clicks are unaffected either way:
+   these are the button's own descendants, so they activate it regardless.
+   The empty space around them still falls through to the overlay. */
+.thread-row__open > * {
+  position: relative;
+  z-index: 1;
+}
+
 /* The overlay is invisible, so the focus ring belongs on the card it
    covers — same ring the row drew when the card itself was the button.
    Deliberately `:focus`, NOT `:focus-visible`: the rule this replaces
@@ -9773,6 +9786,17 @@ textarea,
   inset: 0;
   z-index: 0;
   content: "";
+}
+
+/* Lift the button's OWN content above that overlay — same reason as the
+   sidebar row, and it matters more here: `.star-map-card__title` is
+   ellipsised, and its `title` attribute is the only way to read a
+   truncated card title. An un-lifted overlay makes the button the hover
+   target and swallows that tooltip. This also restores the z-index the
+   heading used to carry for painting above the instance watermark. */
+.star-map-card__open > * {
+  position: relative;
+  z-index: 1;
 }
 
 /* The overlay is invisible, so the focus ring belongs on the card it
