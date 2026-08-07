@@ -623,10 +623,27 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.startTurn,
-    async (envelope) =>
-      await params.backend.startTurn(
-        envelope.params as FederationStartTurnRequest,
-      ),
+    async (envelope) => {
+      const request = envelope.params as FederationStartTurnRequest;
+      const messageOrigin = request.messageOrigin;
+      const sourceThread = messageOrigin?.sourceThread;
+      return await params.backend.startTurn({
+        ...request,
+        ...(messageOrigin && sourceThread
+          ? {
+              messageOrigin: {
+                ...messageOrigin,
+                sourceThread: {
+                  ...sourceThread,
+                  // The authenticated envelope sender is authoritative. Do
+                  // not accept a caller-supplied provenance owner here.
+                  instanceId: envelope.sourceInstanceId,
+                },
+              },
+            }
+          : {}),
+      });
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.cancelQueuedTurn,
@@ -909,7 +926,9 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     private readonly rpc: FederationRpcEndpoint,
     private readonly transformReadThreadResponse: (
       response: AppServerReadThreadResponse,
-    ) => AppServerReadThreadResponse = (response) => response,
+    ) =>
+      | AppServerReadThreadResponse
+      | Promise<AppServerReadThreadResponse> = (response) => response,
   ) {}
 
   async getNavigationSnapshot(
@@ -946,7 +965,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.readThread,
       params: request,
     });
-    return this.transformReadThreadResponse(response);
+    return await this.transformReadThreadResponse(response);
   }
 
   async readTranscriptImage(

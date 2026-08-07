@@ -3173,6 +3173,9 @@ function threadMessageOriginFromUnknown(
     kind: record.kind,
     sourceThread: {
       backend: sourceRecord.backend as AppServerBackendKind,
+      ...(typeof sourceRecord.instanceId === "string"
+        ? { instanceId: sourceRecord.instanceId }
+        : {}),
       threadId: sourceRecord.threadId,
       ...(typeof sourceRecord.title === "string"
         ? { title: sourceRecord.title }

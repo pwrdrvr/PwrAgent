@@ -1892,7 +1892,11 @@ describe("federation backend bridge", () => {
       input: [{ type: "text", text: "ship it" }],
       messageOrigin: {
         kind: "agent",
-        sourceThread: { backend: "codex", threadId: "source-thread" },
+        sourceThread: {
+          backend: "codex",
+          instanceId: "gateway_one",
+          threadId: "source-thread",
+        },
       },
     });
     expect(replies).toMatchObject([

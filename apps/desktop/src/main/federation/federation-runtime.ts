@@ -6,6 +6,7 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsResponse,
   AppServerReadThreadResponse,
+  AppServerThreadSummary,
   CancelQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
@@ -173,6 +174,7 @@ import {
 import { FederatedSearchService } from "./federated-search-service";
 import { collectFederationHostInfo } from "./federation-host-info";
 import { RemoteThreadSummaryCache } from "./remote-thread-summary-cache";
+import { hydrateFederatedThreadMessageOrigins } from "./federated-thread-origin-hydrator";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -1225,11 +1227,77 @@ export class DesktopFederationRuntime {
   remoteBackend(target: FederationRemoteTarget): FederationBackendOperations {
     return new FederationRemoteBackendClient(
       this.rpcFor(target),
-      (response) => rewriteFederatedTranscriptImageUrlsForRenderer(
-        response,
-        target.instanceId,
-      ),
+      async (response) =>
+        await this.hydrateThreadMessageOrigins(
+          rewriteFederatedTranscriptImageUrlsForRenderer(
+            response,
+            target.instanceId,
+          ),
+          target.instanceId,
+        ),
     );
+  }
+
+  async hydrateThreadMessageOrigins(
+    response: AppServerReadThreadResponse,
+    ownerInstanceId = this.ensureLocalInstanceId(),
+  ): Promise<AppServerReadThreadResponse> {
+    return await hydrateFederatedThreadMessageOrigins({
+      localInstanceId: this.ensureLocalInstanceId(),
+      ownerInstanceId,
+      response,
+      resolveThread: async (source) => {
+        const resolveOnInstance = async (instanceId: FederationInstanceId) => {
+          if (instanceId === this.ensureLocalInstanceId()) {
+            return await getDesktopBackendRegistry().resolveThread({
+              backend: source.backend,
+              threadId: source.threadId,
+            });
+          }
+          return (
+            await new FederationRemoteBackendClient(
+              this.rpcFor({ scope: "remote", instanceId }),
+            ).resolveThread({
+              backend: source.backend,
+              threadId: source.threadId,
+            })
+          ).thread;
+        };
+        const preferred = await resolveOnInstance(source.instanceId).catch(
+          () => undefined,
+        );
+        if (preferred) {
+          return { instanceId: source.instanceId, thread: preferred };
+        }
+        if (!source.discoverAcrossInstances) {
+          return undefined;
+        }
+
+        const candidateInstanceIds = new Set<FederationInstanceId>([
+          this.ensureLocalInstanceId(),
+          ...this.connectedPeerTargets()
+            .filter((peer) => peer.capabilities.includes("thread_navigation"))
+            .map((peer) => peer.target.instanceId),
+        ]);
+        candidateInstanceIds.delete(source.instanceId);
+        const matches = (
+          await Promise.all(
+            [...candidateInstanceIds].map(async (instanceId) => {
+              const thread = await resolveOnInstance(instanceId).catch(
+                () => undefined,
+              );
+              return thread ? { instanceId, thread } : undefined;
+            }),
+          )
+        ).filter(
+          (match): match is {
+            instanceId: FederationInstanceId;
+            thread: AppServerThreadSummary;
+          } => Boolean(match),
+        );
+        return matches.length === 1 ? matches[0] : undefined;
+      },
+    });
   }
 
   /**
