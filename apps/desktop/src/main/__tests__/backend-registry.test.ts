@@ -1276,38 +1276,6 @@ function createOverlayStoreMock(params?: {
   } as unknown as OverlayStoreLike;
 }
 
-/**
- * Detach-mode env actions resolve on spawn and `unref()` the child, so the
- * spawned process (the shell plus any grandchild it launches) keeps holding
- * its `cwd` directory handle after `runCodexEnvironmentAction` returns. On
- * Windows that open handle blocks the temp-dir cleanup with
- * `EBUSY: resource busy or locked, rmdir` until the process fully exits —
- * POSIX can unlink a directory that still has open handles, Windows cannot.
- *
- * Waiting for the action's output *file* is not sufficient: it is written
- * while the child is still alive. The detached-exit handler flips the run's
- * status to a terminal value ("exited"/"failed") once the child's `close`
- * event fires, so gate temp-dir cleanup on that terminal status — the same
- * pattern the concurrent-runs test uses — to guarantee the process is gone
- * before we remove its working directory. The `rm` retry options remain as a
- * backstop for Windows' lazy post-exit handle release.
- */
-async function waitForDetachedActionRunToExit(
-  overlayStore: OverlayStoreLike,
-  params: { backend: "codex" | "grok"; threadId: string; actionId: string },
-): Promise<void> {
-  await expectEventually(async () => {
-    const overlay = await overlayStore.getThreadOverlayState({
-      backend: params.backend,
-      threadId: params.threadId,
-    });
-    const run = overlay?.codexEnvironmentRuntime?.actionRuns?.find(
-      (candidate) => candidate.actionId === params.actionId,
-    );
-    return run?.status === "exited" || run?.status === "failed";
-  }, true);
-}
-
 const TEST_TASK_MONITOR_MODELS: BackendModelOption[] = [
   {
     id: "gpt-5.6-luna",
@@ -12462,7 +12430,6 @@ command = '''${expectedActionCommand}'''
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-worktree-"));
     const localPath = path.join(root, "local");
     const worktreePath = path.join(root, "worktree");
-    const outputPath = path.join(root, "action-cwd.txt");
     await mkdir(localPath, { recursive: true });
     await mkdir(worktreePath, { recursive: true });
 
@@ -12490,13 +12457,14 @@ command = '''${expectedActionCommand}'''
               {
                 id: "capture-cwd",
                 name: "Capture CWD",
-                command: `node -e "require('node:fs').writeFileSync(process.argv[1], process.cwd())" ${JSON.stringify(outputPath)}`,
+                command: "capture-cwd",
               },
             ],
           },
         },
       },
     });
+    let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
@@ -12506,6 +12474,10 @@ command = '''${expectedActionCommand}'''
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore,
+      codexEnvironmentCommandRunner: vi.fn(async (params) => {
+        commandParams = params;
+        return { pid: 12345 };
+      }),
     });
 
     try {
@@ -12527,17 +12499,11 @@ command = '''${expectedActionCommand}'''
           ],
         },
       });
-      // The action writes process.cwd() (native separators on Windows). Compare
-      // both sides forward-slashed so a backslash/forward-slash difference
-      // doesn't fail the match — no-op on POSIX where there are no backslashes.
-      await expectEventually(
-        async () =>
-          (await realpath((await readFile(outputPath, "utf8")).trim())).replace(
-            /\\/g,
-            "/",
-          ),
-        (await realpath(worktreePath)).replace(/\\/g, "/"),
-      );
+      expect(commandParams).toMatchObject({
+        command: "capture-cwd",
+        cwd: worktreePath,
+        mode: "detach",
+      });
       await expect(
         overlayStore.getThreadOverlayState({
           backend: "codex",
@@ -12547,13 +12513,6 @@ command = '''${expectedActionCommand}'''
         codexEnvironmentRuntime: {
           cwd: worktreePath,
         },
-      });
-      // Gate cleanup on the detached child fully exiting (see helper) so the
-      // worktree dir it ran in is no longer locked when we remove it.
-      await waitForDetachedActionRunToExit(overlayStore, {
-        backend: "codex",
-        threadId: "thread-1",
-        actionId: "capture-cwd",
       });
     } finally {
       await registry.close();
@@ -12565,7 +12524,6 @@ command = '''${expectedActionCommand}'''
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-local-"));
     const localPath = path.join(root, "local");
     const worktreePath = path.join(root, "worktree");
-    const outputPath = path.join(root, "action-cwd.txt");
     await mkdir(localPath, { recursive: true });
     await mkdir(worktreePath, { recursive: true });
 
@@ -12592,13 +12550,14 @@ command = '''${expectedActionCommand}'''
               {
                 id: "capture-cwd",
                 name: "Capture CWD",
-                command: `node -e "require('node:fs').writeFileSync(process.argv[1], process.cwd())" ${JSON.stringify(outputPath)}`,
+                command: "capture-cwd",
               },
             ],
           },
         },
       },
     });
+    let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
@@ -12608,6 +12567,10 @@ command = '''${expectedActionCommand}'''
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore,
+      codexEnvironmentCommandRunner: vi.fn(async (params) => {
+        commandParams = params;
+        return { pid: 12345 };
+      }),
     });
 
     try {
@@ -12629,22 +12592,10 @@ command = '''${expectedActionCommand}'''
           ],
         },
       });
-      // Compare both sides forward-slashed so native Windows separators in the
-      // captured process.cwd() don't fail the match — no-op on POSIX.
-      await expectEventually(
-        async () =>
-          (await realpath((await readFile(outputPath, "utf8")).trim())).replace(
-            /\\/g,
-            "/",
-          ),
-        (await realpath(localPath)).replace(/\\/g, "/"),
-      );
-      // Gate cleanup on the detached child fully exiting (see helper) so the
-      // dir it ran in is no longer locked when we remove it.
-      await waitForDetachedActionRunToExit(overlayStore, {
-        backend: "codex",
-        threadId: "thread-1",
-        actionId: "capture-cwd",
+      expect(commandParams).toMatchObject({
+        command: "capture-cwd",
+        cwd: localPath,
+        mode: "detach",
       });
     } finally {
       await registry.close();
@@ -12850,24 +12801,21 @@ command = '''${expectedActionCommand}'''
             cwd: root,
             actions: [
               {
-                // Print a marker to stdout so the captured output (which
-                // gets attributed to the run via onDetachedExit) has a
-                // deterministic value to assert on. A small sleep makes
-                // the two children genuinely overlap in time.
                 id: "action-a",
                 name: "Action A",
-                command: "sleep 0.2 && printf 'A-output-marker'",
+                command: "action-a-command",
               },
               {
                 id: "action-b",
                 name: "Action B",
-                command: "sleep 0.2 && printf 'B-output-marker'",
+                command: "action-b-command",
               },
             ],
           },
         },
       },
     });
+    const commandParams: Array<Parameters<CodexEnvironmentCommandRunner>[0]> = [];
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
@@ -12877,6 +12825,10 @@ command = '''${expectedActionCommand}'''
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore,
+      codexEnvironmentCommandRunner: vi.fn(async (params) => {
+        commandParams.push(params);
+        return { pid: 12345 + commandParams.length };
+      }),
     });
 
     try {
@@ -12906,9 +12858,33 @@ command = '''${expectedActionCommand}'''
       expect(runIdB).toBeTruthy();
       expect(runIdA).not.toBe(runIdB);
 
-      // After both detached children exit, the overlay's actionRuns should
-      // contain both entries, each with its own captured output. Poll
-      // until the exit + output handlers have both fired and persisted.
+      const paramsA = commandParams.find(
+        (params) => params.command === "action-a-command",
+      );
+      const paramsB = commandParams.find(
+        (params) => params.command === "action-b-command",
+      );
+      expect(paramsA).toBeTruthy();
+      expect(paramsB).toBeTruthy();
+
+      // Interleave the injected lifecycle callbacks after both runs exist.
+      // This exercises run-id attribution without making a unit test launch
+      // competing Git Bash/PowerShell process trees.
+      paramsA?.onDetachedOutput?.({ output: "A-output-marker" });
+      paramsB?.onDetachedOutput?.({ output: "B-output-marker" });
+      paramsB?.onDetachedExit?.({
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 200,
+        output: "B-output-marker",
+      });
+      paramsA?.onDetachedExit?.({
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 250,
+        output: "A-output-marker",
+      });
+
       const deadline = Date.now() + 10_000;
       let lastSnapshot: ReadonlyArray<unknown> | undefined;
       let lastError: string | undefined;
@@ -12945,7 +12921,7 @@ command = '''${expectedActionCommand}'''
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  }, 15_000);
+  });
 
   it("cleans up prior-session env-action runs on startup", async () => {
     // Before the cleanup pass: an overlay row from a previous app launch
