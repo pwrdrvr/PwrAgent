@@ -52,8 +52,15 @@ export default tseslint.config(
     },
   },
   {
-    files: ["apps/desktop/src/main/**/*.{ts,tsx}"],
-    ignores: ["apps/desktop/src/main/**/__tests__/**"],
+    files: [
+      "apps/*/src/**/*.{ts,tsx}",
+      "packages/**/*.{ts,tsx}",
+    ],
+    ignores: [
+      "**/__tests__/**",
+      "**/*.test.ts",
+      "**/*.test.tsx",
+    ],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -61,10 +68,10 @@ export default tseslint.config(
       },
     },
     rules: {
-      // Main-process services are predominantly stateful classes. Extracting
-      // one of their methods and calling it as a plain function silently drops
-      // its receiver, which TypeScript accepts but crashes when the method
-      // reaches `this`. Keep this typed rule scoped to production main code;
+      // Production services and adapters are predominantly stateful classes.
+      // Extracting one of their methods and calling it as a plain function
+      // silently drops its receiver, which TypeScript accepts but crashes when
+      // the method reaches `this`. Keep this typed rule out of test code;
       // test mock assertions intentionally reference methods without calling
       // them and would bury actionable findings in false positives.
       "@typescript-eslint/unbound-method": "error",

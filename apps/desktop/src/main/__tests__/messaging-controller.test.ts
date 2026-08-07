@@ -194,7 +194,9 @@ describe("MessagingController", () => {
   it("preserves the backend receiver when listing scheduled messages", async () => {
     let receiverSeen = false;
     const harness = await createHarness({
-      listScheduledThreadActions: async function () {
+      listScheduledThreadActions: async function (
+        this: MessagingBackendBridge,
+      ) {
         receiverSeen = typeof this.getNavigationSnapshot === "function";
         return { actions: [] };
       },
