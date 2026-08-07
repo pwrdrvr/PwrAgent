@@ -476,20 +476,21 @@ export type WindowsJobReadyPoll = {
 };
 
 export type WindowsJobStartupTimeout = {
-  stage: "powershell-start" | "ownership-ready";
+  stage: "overall-ready" | "powershell-start" | "progress-stall";
   telemetry: WindowsJobStartupTelemetry;
   timeoutMs: number;
 };
 
-// The PowerShell host and Job ownership are separate readiness contracts.
-// Hosted Windows CI has taken 16.7 seconds before the wrapper's first
-// PowerShell statement executed, while repeated native Job assignment stayed
-// well below one second once that statement ran. Keep host launch bounded at
-// the existing 20 seconds, then reserve a distinct ownership budget. Their
-// 28-second maximum remains inside the existing 30-second Windows test
-// contract without making a slow host consume the ownership budget.
+// Keep cold PowerShell launch, forward progress, and overall readiness as
+// separate contracts. Hosted Windows CI has taken 16.7 seconds to enter the
+// wrapper and 7.1 seconds to compile its helper, but each journaled phase still
+// proved forward progress. A phase-relative stall watchdog keeps real hangs
+// bounded without letting one slow phase consume the next phase's allowance.
+// The 28-second overall maximum remains inside the existing 30-second Windows
+// test contract and does not weaken atomic Job ownership.
 export const WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS = 20_000;
-export const WINDOWS_JOB_OWNERSHIP_READY_TIMEOUT_MS = 8_000;
+export const WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS = 10_000;
+export const WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS = 28_000;
 const WINDOWS_JOB_READY_POLL_INTERVAL_MS = 25;
 
 export function readWindowsJobStartupTelemetry(
@@ -538,10 +539,21 @@ export function formatWindowsJobStartupTelemetry(
 export function formatWindowsJobStartupTimeout(
   timeout: WindowsJobStartupTimeout,
 ): string {
-  const timeoutDescription =
-    timeout.stage === "powershell-start"
-      ? `PowerShell host did not begin executing within ${timeout.timeoutMs}ms`
-      : `shell ownership did not become ready within ${timeout.timeoutMs}ms after PowerShell started`;
+  let timeoutDescription: string;
+  if (timeout.stage === "powershell-start") {
+    timeoutDescription =
+      `PowerShell host did not begin executing within ${timeout.timeoutMs}ms`;
+  } else if (timeout.stage === "progress-stall") {
+    const lastPhase = timeout.telemetry.phases.at(-1);
+    timeoutDescription =
+      `startup made no progress for ${timeout.timeoutMs}ms`
+      + (lastPhase
+        ? ` after ${lastPhase.phase}@${lastPhase.elapsedMs}ms`
+        : " after the last recorded phase");
+  } else {
+    timeoutDescription =
+      `shell ownership did not become ready within ${timeout.timeoutMs}ms overall`;
+  }
   return `Windows Job ${timeoutDescription}: ${formatWindowsJobStartupTelemetry(timeout.telemetry)}`;
 }
 
@@ -552,15 +564,21 @@ export function startWindowsJobReadyPoll(params: {
   >;
   onReady: (telemetry: WindowsJobStartupTelemetry) => void;
   onTimeout: (timeout: WindowsJobStartupTimeout) => void;
-  ownershipReadyTimeoutMs?: number;
+  overallReadyTimeoutMs?: number;
   powershellStartTimeoutMs?: number;
+  progressTimeoutMs?: number;
 }): WindowsJobReadyPoll {
-  const ownershipReadyTimeoutMs =
-    params.ownershipReadyTimeoutMs
-    ?? WINDOWS_JOB_OWNERSHIP_READY_TIMEOUT_MS;
+  const overallReadyTimeoutMs =
+    params.overallReadyTimeoutMs
+    ?? WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS;
   const powershellStartTimeoutMs =
     params.powershellStartTimeoutMs
     ?? WINDOWS_JOB_POWERSHELL_START_TIMEOUT_MS;
+  const progressTimeoutMs =
+    params.progressTimeoutMs
+    ?? WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS;
+  const overallReadyDeadline =
+    params.launch.startupStartedAt + overallReadyTimeoutMs;
   const powershellStartDeadline =
     params.launch.startupStartedAt + powershellStartTimeoutMs;
   let cancelled = false;
@@ -604,16 +622,26 @@ export function startWindowsJobReadyPoll(params: {
         });
         return;
       }
-      const ownershipReadyDeadline =
+      const lastPhase = telemetry.phases.at(-1) ?? powershellStarted;
+      const progressDeadline =
         params.launch.startupStartedAt
-        + powershellStarted.elapsedMs
-        + ownershipReadyTimeoutMs;
-      if (now >= ownershipReadyDeadline) {
+        + lastPhase.elapsedMs
+        + progressTimeoutMs;
+      if (now >= overallReadyDeadline) {
         cancelled = true;
         params.onTimeout({
-          stage: "ownership-ready",
+          stage: "overall-ready",
           telemetry,
-          timeoutMs: ownershipReadyTimeoutMs,
+          timeoutMs: overallReadyTimeoutMs,
+        });
+        return;
+      }
+      if (now >= progressDeadline) {
+        cancelled = true;
+        params.onTimeout({
+          stage: "progress-stall",
+          telemetry,
+          timeoutMs: progressTimeoutMs,
         });
         return;
       }
