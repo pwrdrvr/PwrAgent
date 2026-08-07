@@ -204,12 +204,33 @@
    theme is active because the base they reference (e.g. --text-primary,
    --bg-panel) flips here. Only the bases need to override.
 
-   The Tangerine Terminal accent gets a darker variant (#c45200) for readable
-   contrast on white surfaces. Button text on accent flips from near-black to
-   pure white for the same reason.
+   The Tangerine Terminal accent gets darker variants for readable contrast on
+   white surfaces. Button text on accent flips from near-black to pure white
+   for the same reason.
 
-   This is a v1 light palette — designed but not Claude-Design-passed yet.
-   Worth a polish pass before shipping wide.
+   ACCENT RAMP DIRECTION. The accent -> accent-strong -> accent-bright ramp
+   means the same thing in both themes — increasing emphasis — but it travels
+   on opposite axes, because "more emphatic" on a dark surface is lighter and
+   on a light surface is darker:
+
+     dark   #ff8a1f -> #ffa33d -> #ffb35c   (emphasis = lightness)
+     light  #b74c00 -> #b34a00 -> #a35200   (emphasis = depth)
+
+   The original light palette flipped --accent-strong but left --accent-bright
+   travelling the dark-theme direction, which left ~100 `color: var(--accent-
+   bright)` text rules sitting at 3.0-3.4:1 on every light surface — e.g. the
+   active lens-switch tab at 3.17:1. It now runs with the rest of the ramp.
+
+   CONTRAST FLOOR. Every value here that paints text is chosen to clear WCAG 2
+   AA (4.5:1) against the *darkest* light-theme surface it can land on, which
+   is --bg-panel-hover (#f4f0e8) — not against --bg-app. Measuring against
+   white alone is what let --accent (4.61:1 on white) ship at 4.20:1 on the
+   sidebar and --text-muted (4.34:1 on white) at 3.82:1 on a hovered row.
+   apps/desktop/e2e/a11y.spec.ts gates this in light theme as well as dark.
+
+   This is still a v1 light palette — now AA-clean, but designed and not
+   Claude-Design-passed. Worth a polish pass before shipping wide; keep the
+   contrast floor above intact through any such pass.
    =========================================================================== */
 :root[data-theme="light"] {
   color-scheme: light;
@@ -230,16 +251,30 @@
   /* Text — near-black primary, progressively lighter for hierarchy. */
   --text-primary: #1a1612;
   --text-secondary: #524a40;
-  --text-muted: #807870;
+  /* Warm neutral, same hue/saturation as the old #807870, darkened from
+     47% to 42% lightness. The old value cleared AA only against pure
+     white (4.34:1) and missed on every tinted surface it actually paints
+     on — 4.23:1 on --bg-panel (the six .context-grid dt thread-info
+     labels), 3.96:1 on the sidebar, 3.82:1 on a hovered row. Now 4.55:1
+     at worst. */
+  --text-muted: #736c64;
   --text-subtle: rgba(26, 22, 18, 0.42);
 
-  /* Accent — darker Tangerine variant for contrast on white. The
-     three derived accent-soft / -border / -shadow are color-mix() of
-     --accent in :root, so flipping the base above is sufficient — no
-     need to redefine the derivatives here. */
-  --accent: #c45200;
+  /* Accent — darker Tangerine variants for contrast on white. The three
+     derived accent-soft / -border / -shadow are color-mix() of --accent
+     in :root, so flipping the bases here is sufficient — no need to
+     redefine the derivatives.
+
+     Hue and saturation are held at the original values (25deg / 30deg,
+     fully saturated) so this stays the same tangerine; only lightness
+     moves. See the ramp-direction note in the block comment above.
+     Worst-case ratios against --bg-panel-hover, the darkest light
+     surface: accent 4.57:1, strong 4.74:1 (value unchanged — it already
+     cleared AA and still lands between the other two), bright 4.91:1.
+     White --accent-on / --button-text on an --accent fill is 5.19:1. */
+  --accent: #b74c00;
   --accent-strong: #b34a00;
-  --accent-bright: #d96d00;
+  --accent-bright: #a35200;
   /* Light foreground on the darker light-theme accent fill. */
   --accent-on: #ffffff;
   --focus-ring: var(--accent);

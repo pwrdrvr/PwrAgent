@@ -12,7 +12,16 @@
 // To extend: add another entry to SURFACES below, or a separate
 // `test(...)` block that drives the renderer into a state (open a
 // dialog, switch a tab) and then calls `runAxe(window)`. Launch via
-// `launchAuditApp()` so the surface is audited at rest (see below).
+// `launchAuditApp(theme)` so the surface is audited at rest (see below).
+//
+// Every surface is audited in BOTH themes. The gate ran dark-only for
+// its whole life, which is exactly why three light-theme token-level
+// contrast failures shipped unnoticed: `--accent` at 4.20:1 on the
+// sidebar wordmark, `--accent-bright` at 3.17:1 on the active lens tab,
+// `--text-muted` at 4.23:1 on the .context-grid thread-info labels.
+// Contrast is the one rule class that is genuinely theme-dependent —
+// roles, names, and focus order are not — so auditing one theme buys
+// you roughly half the coverage you think it does.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
@@ -36,13 +45,18 @@ const specDir = path.dirname(fileURLToPath(import.meta.url));
 // state, so the gate measures real, persistent contrast instead of a
 // sub-second animation frame. No renderer JS branches on reduced motion,
 // so this only settles CSS animation — it never changes what renders.
-async function launchAuditApp() {
+async function launchAuditApp(theme: AuditTheme) {
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+    appearance: { theme },
   });
   await app.window.emulateMedia({ reducedMotion: "reduce" });
   return app;
 }
+
+// Both themes ship, so both themes are gated. See the header note.
+const AUDIT_THEMES = ["dark", "light"] as const;
+type AuditTheme = (typeof AUDIT_THEMES)[number];
 
 const WCAG_AA_TAGS = [
   "wcag2a",
@@ -64,7 +78,17 @@ const KNOWN_VIOLATIONS: ReadonlyArray<{
   reason: string;
 }> = [];
 
-async function runAxe(window: Page): Promise<void> {
+// `include` narrows the scan to one subtree instead of the whole
+// window. Reach for it only to keep a *newly added* surface's audit
+// from re-reporting known debt that already has a KNOWN_VIOLATIONS
+// entry or a tracked follow-up — never to make a fresh failure go
+// away, since anything outside the scope stops being gated entirely.
+// Prefer a KNOWN_VIOLATIONS entry, which waives one selector for one
+// rule and leaves the rest of the surface audited.
+async function runAxe(
+  window: Page,
+  options: { include?: string } = {},
+): Promise<void> {
   // setLegacyMode is required under Electron: the default analyze()
   // path tries to spawn a worker page via browserContext.newPage() to
   // audit cross-origin iframes, which Electron's CDP target doesn't
@@ -76,6 +100,9 @@ async function runAxe(window: Page): Promise<void> {
   let builder = new AxeBuilder({ page: window })
     .withTags(WCAG_AA_TAGS)
     .setLegacyMode(true);
+  if (options.include) {
+    builder = builder.include(options.include);
+  }
   for (const known of KNOWN_VIOLATIONS) {
     // exclude() removes the node from the scan entirely. Combined with
     // the .rule mapping in KNOWN_VIOLATIONS above, this gives an
@@ -103,97 +130,99 @@ async function runAxe(window: Page): Promise<void> {
   }
 }
 
-test.describe("desktop renderer accessibility (WCAG2 AA)", () => {
-  test("sidebar + empty-thread shell has no violations", async () => {
-    const app = await launchAuditApp();
-    try {
-      // Wait for first paint of the inbox lens — the "Replay smoke
-      // thread" row is the proxy for "renderer has hydrated".
-      await expect(
-        app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
-      ).toBeVisible();
-      await runAxe(app.window);
-    } finally {
-      await app.close();
-    }
-  });
+for (const theme of AUDIT_THEMES) {
+  test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme)`, () => {
+    test("sidebar + empty-thread shell has no violations", async () => {
+      const app = await launchAuditApp(theme);
+      try {
+        // Wait for first paint of the inbox lens — the "Replay smoke
+        // thread" row is the proxy for "renderer has hydrated".
+        await expect(
+          app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
+        ).toBeVisible();
+        await runAxe(app.window);
+      } finally {
+        await app.close();
+      }
+    });
 
-  test("open thread view has no violations", async () => {
-    const app = await launchAuditApp();
-    try {
-      await app.window
-        .getByRole("button", { name: /Replay smoke thread/i })
-        .first()
-        .click();
-      await expect(
-        app.window.getByRole("heading", {
-          level: 2,
-          name: "Replay smoke thread",
-        }),
-      ).toBeVisible();
-      await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
-      await runAxe(app.window);
-    } finally {
-      await app.close();
-    }
-  });
+    test("open thread view has no violations", async () => {
+      const app = await launchAuditApp(theme);
+      try {
+        await app.window
+          .getByRole("button", { name: /Replay smoke thread/i })
+          .first()
+          .click();
+        await expect(
+          app.window.getByRole("heading", {
+            level: 2,
+            name: "Replay smoke thread",
+          }),
+        ).toBeVisible();
+        await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
+        await runAxe(app.window);
+      } finally {
+        await app.close();
+      }
+    });
 
-  test("settings overlay has no violations", async () => {
-    const app = await launchAuditApp();
-    try {
-      await expect(
-        app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
-      ).toBeVisible();
-      await app.window.getByRole("button", { name: "Open settings" }).click();
-      // Settings sections nav is the stable signal that the overlay is
-      // hydrated (the overlay has no level-1 heading; see
-      // composer-draft-settings.spec.ts for the same anchor).
-      await expect(
-        app.window.getByRole("navigation", { name: "Settings sections" }),
-      ).toBeVisible();
-      await runAxe(app.window);
-    } finally {
-      await app.close();
-    }
-  });
+    test("settings overlay has no violations", async () => {
+      const app = await launchAuditApp(theme);
+      try {
+        await expect(
+          app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
+        ).toBeVisible();
+        await app.window.getByRole("button", { name: "Open settings" }).click();
+        // Settings sections nav is the stable signal that the overlay is
+        // hydrated (the overlay has no level-1 heading; see
+        // composer-draft-settings.spec.ts for the same anchor).
+        await expect(
+          app.window.getByRole("navigation", { name: "Settings sections" }),
+        ).toBeVisible();
+        await runAxe(app.window);
+      } finally {
+        await app.close();
+      }
+    });
 
-  test("thread search has no violations", async () => {
-    const app = await launchAuditApp();
-    try {
-      await expect(
-        app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
-      ).toBeVisible();
-      // Open Search from the sidebar masthead. Before it opens, "Search
-      // threads" is unambiguously the masthead button; the autofocused
-      // search field (same accessible name, but role=textbox) is the
-      // stable signal that the search view has mounted.
-      await app.window.getByRole("button", { name: "Search threads" }).click();
-      await expect(
-        app.window.getByRole("textbox", { name: "Search threads" }),
-      ).toBeVisible();
-      await runAxe(app.window);
-    } finally {
-      await app.close();
-    }
-  });
+    test("thread search has no violations", async () => {
+      const app = await launchAuditApp(theme);
+      try {
+        await expect(
+          app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
+        ).toBeVisible();
+        // Open Search from the sidebar masthead. Before it opens, "Search
+        // threads" is unambiguously the masthead button; the autofocused
+        // search field (same accessible name, but role=textbox) is the
+        // stable signal that the search view has mounted.
+        await app.window.getByRole("button", { name: "Search threads" }).click();
+        await expect(
+          app.window.getByRole("textbox", { name: "Search threads" }),
+        ).toBeVisible();
+        await runAxe(app.window);
+      } finally {
+        await app.close();
+      }
+    });
 
-  test("settings → messaging has no violations", async () => {
-    const app = await launchAuditApp();
-    try {
-      await expect(
-        app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
-      ).toBeVisible();
-      await app.window.getByRole("button", { name: "Open settings" }).click();
-      await expect(
-        app.window.getByRole("navigation", { name: "Settings sections" }),
-      ).toBeVisible();
-      await app.window
-        .getByRole("navigation", { name: "Settings sections" })
-        .getByRole("button", { name: /^Messaging$/ })
-        .click();
-      await runAxe(app.window);
-    } finally {
-      await app.close();
-    }
+    test("settings → messaging has no violations", async () => {
+      const app = await launchAuditApp(theme);
+      try {
+        await expect(
+          app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
+        ).toBeVisible();
+        await app.window.getByRole("button", { name: "Open settings" }).click();
+        await expect(
+          app.window.getByRole("navigation", { name: "Settings sections" }),
+        ).toBeVisible();
+        await app.window
+          .getByRole("navigation", { name: "Settings sections" })
+          .getByRole("button", { name: /^Messaging$/ })
+          .click();
+        await runAxe(app.window);
+      } finally {
+        await app.close();
+      }
+    });
   });
-});
+}

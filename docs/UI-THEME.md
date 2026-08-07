@@ -119,7 +119,7 @@ the base is enough to flip every derived alpha.
 |---|---|---|
 | `--text-primary` | `#f7f3eb` | `#1a1612` |
 | `--text-secondary` | `#b8b0a5` | `#524a40` |
-| `--text-muted` | `#8c857a` | `#807870` |
+| `--text-muted` | `#8c857a` | `#736c64` |
 | `--text-subtle` | `rgba(247, 243, 235, 0.42)` | `rgba(26, 22, 18, 0.42)` |
 
 #### Integrated Terminal
@@ -156,16 +156,27 @@ when the app theme changes.
 
 | Token | Dark | Light |
 |---|---|---|
-| `--accent` | `#ff8a1f` | `#c45200` |
+| `--accent` | `#ff8a1f` | `#b74c00` |
 | `--accent-strong` | `#ffa33d` | `#b34a00` |
-| `--accent-bright` | `#ffb35c` | `#d96d00` |
+| `--accent-bright` | `#ffb35c` | `#a35200` |
 | `--accent-soft` | derived (12% of `--accent`) | derived |
 | `--accent-border` | derived (42% of `--accent`) | derived |
 | `--accent-shadow` | derived (34% of `--accent`) | derived |
 | `--focus-ring` | `var(--accent)` | `var(--accent)` |
 | `--button-text` | `#120800` | `#ffffff` |
 
-The light-theme accent is darker (`#c45200`) for WCAG-readable contrast on white surfaces. Button text on accent flips white in light theme.
+The light-theme accent is darker (`#b74c00`) for WCAG-readable contrast on light surfaces. Button text on accent flips white in light theme.
+
+**The ramp travels in opposite directions per theme.** `--accent` → `--accent-strong` → `--accent-bright` means increasing emphasis in both themes, but emphasis reads as *lighter* on a dark surface and *darker* on a light one:
+
+| | `--accent` | `--accent-strong` | `--accent-bright` |
+|---|---|---|---|
+| Dark (emphasis = lightness) | `#ff8a1f` | `#ffa33d` | `#ffb35c` |
+| Light (emphasis = depth) | `#b74c00` | `#b34a00` | `#a35200` |
+
+Hue and saturation are held constant per token across the flip — only lightness moves — so both themes render the same tangerine.
+
+**Pick contrast against the darkest surface a token can land on, not against `--bg-app`.** In light theme that is `--bg-panel-hover` (`#f4f0e8`), not white. Measuring against white alone is what let `--accent` ship at 4.61:1 on `--bg-app` but 4.20:1 on the sidebar wordmark, and `--text-muted` at 4.34:1 on white but 3.82:1 on a hovered row. Current worst-case ratios: `--accent` 4.57:1, `--accent-strong` 4.74:1, `--accent-bright` 4.91:1, `--text-muted` 4.55:1 — all clear of the 4.5:1 AA floor. `apps/desktop/e2e/a11y.spec.ts` gates both themes.
 
 #### Semantic — danger / success / info
 
