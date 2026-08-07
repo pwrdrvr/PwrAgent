@@ -5862,6 +5862,7 @@ describe("app server ipc", () => {
       unpushedCommits: 0,
       baseBranch: "main",
     };
+    const cachedFetchedAt = Date.now();
     listThreads.mockResolvedValue([
       {
         id: "thread-1",
@@ -5876,7 +5877,7 @@ describe("app server ipc", () => {
     readThreadGitWorkingStateCache.mockResolvedValueOnce({
       [worktreePath]: {
         worktreePath,
-        fetchedAt: Date.now(),
+        fetchedAt: cachedFetchedAt,
         gitWorkingState,
       },
     });
@@ -5893,6 +5894,14 @@ describe("app server ipc", () => {
     ).resolves.toEqual({ scheduled: false });
     expect(invalidateWorktreeWorkingState).not.toHaveBeenCalled();
 
+    readWorktreeWorkingStateEntries.mockImplementationOnce((worktreePaths) =>
+      (async function* () {
+        for (const path of worktreePaths) {
+          yield { worktreePath: path, gitWorkingState };
+        }
+      })(),
+    );
+    publishLocalEvent.mockClear();
     await expect(
       handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
         {},
@@ -5910,7 +5919,21 @@ describe("app server ipc", () => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledWith(
         expect.objectContaining({ worktreePath }),
       );
+      expect(publishLocalEvent).toHaveBeenCalledWith({
+        backend: "codex",
+        notification: {
+          method: "navigation/threadGitWorkingState/updated",
+          params: expect.objectContaining({
+            worktreePath,
+            gitWorkingState,
+            fetchedAt: expect.any(Number),
+          }),
+        },
+      });
     });
+    const refreshedCacheEntry = writeThreadGitWorkingStateCacheEntry.mock.calls
+      .at(-1)?.[0];
+    expect(refreshedCacheEntry?.fetchedAt).toBeGreaterThan(cachedFetchedAt);
   });
 
   it("hydrates working state from linked worktrees when the thread has no project key", async () => {
@@ -5960,6 +5983,7 @@ describe("app server ipc", () => {
         expect.objectContaining({
           id: "thread-1",
           gitWorkingState,
+          gitWorkingStateFetchedAt: 1000,
         }),
       ],
     });

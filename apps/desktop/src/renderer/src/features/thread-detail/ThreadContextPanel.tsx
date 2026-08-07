@@ -705,7 +705,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             commitStatesByKey={props.editedFileCommitStates}
             worktreeRoot={props.editedFilesWorktreeRoot}
             desktopApi={props.desktopApi}
-            workingStateRefreshKey={JSON.stringify(props.thread.gitWorkingState ?? null)}
+            workingStateRefreshKey={JSON.stringify({
+              fetchedAt: props.thread.gitWorkingStateFetchedAt,
+              state: props.thread.gitWorkingState ?? null,
+            })}
             onOpenFile={props.onOpenEditedFile}
             preferredEditor={props.preferredEditor}
             onScrollToTurn={props.onScrollToTurn}

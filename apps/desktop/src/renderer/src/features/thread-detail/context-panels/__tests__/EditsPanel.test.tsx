@@ -525,4 +525,45 @@ describe("EditsPanel", () => {
     });
     expect(getWorktreeOtherChangeDiff).toHaveBeenCalledTimes(4);
   });
+
+  it("refreshes unpublished commit metadata when the working-state probe advances", async () => {
+    let subject = "before amend";
+    const listWorktreeUnpublishedCommits = vi.fn(async () => ({
+      commits: [
+        {
+          sha: "b".repeat(40),
+          shortSha: "bbbbbbb",
+          subject,
+          files: [],
+          totalFiles: 0,
+          filesTruncated: false,
+          additions: 0,
+          removals: 0,
+        },
+      ],
+      totalCommits: 1,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    }));
+    const panel = (refreshKey: string) => (
+      <EditsPanel
+        groups={[]}
+        dock="sidebar"
+        onDockChange={vi.fn()}
+        worktreeRoot="/repo"
+        workingStateRefreshKey={refreshKey}
+        desktopApi={{ listWorktreeUnpublishedCommits }}
+      />
+    );
+    const { rerender } = render(panel("probe-1"));
+
+    expect(await screen.findByText("before amend")).toBeInTheDocument();
+
+    subject = "after amend";
+    rerender(panel("probe-2"));
+
+    expect(await screen.findByText("after amend")).toBeInTheDocument();
+    expect(listWorktreeUnpublishedCommits).toHaveBeenCalledTimes(2);
+  });
 });

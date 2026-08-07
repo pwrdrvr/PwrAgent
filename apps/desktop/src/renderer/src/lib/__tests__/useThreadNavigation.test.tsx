@@ -1813,6 +1813,13 @@ describe("useThreadNavigation", () => {
     });
     expect(result.current.threads[0]?.gitWorkingState).toBeUndefined();
 
+    const gitWorkingState = {
+      dirtyFiles: 3,
+      dirtyAdditions: 12,
+      dirtyDeletions: 4,
+      untrackedFiles: 1,
+      unpushedCommits: 2,
+    };
     await act(async () => {
       for (const listener of listeners) {
         listener({
@@ -1821,14 +1828,8 @@ describe("useThreadNavigation", () => {
             method: "navigation/threadGitWorkingState/updated",
             params: {
               worktreePath: "/repo/wt",
-              gitWorkingState: {
-                dirtyFiles: 3,
-                dirtyAdditions: 12,
-                dirtyDeletions: 4,
-                untrackedFiles: 1,
-                unpushedCommits: 2,
-              },
-              fetchedAt: Date.now(),
+              gitWorkingState,
+              fetchedAt: 1000,
             },
           },
         });
@@ -1841,6 +1842,26 @@ describe("useThreadNavigation", () => {
       dirtyFiles: 3,
       unpushedCommits: 2,
     });
+    expect(result.current.threads[0]?.gitWorkingStateFetchedAt).toBe(1000);
+
+    // An amend/rebase can replace commit metadata without changing any aggregate
+    // counts. The fetched-at token must still advance so detail panels reload.
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "navigation/threadGitWorkingState/updated",
+            params: {
+              worktreePath: "/repo/wt",
+              gitWorkingState,
+              fetchedAt: 2000,
+            },
+          },
+        });
+      }
+    });
+    expect(result.current.threads[0]?.gitWorkingStateFetchedAt).toBe(2000);
 
     // A clean probe (null) clears the chips.
     await act(async () => {

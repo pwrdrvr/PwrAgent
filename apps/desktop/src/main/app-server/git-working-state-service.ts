@@ -541,9 +541,8 @@ function parseUnpublishedCommitSummary(
   output: string,
   maxFiles: number,
 ): WorktreeUnpublishedCommit | undefined {
-  const [metadataLine, ...lines] = output.split("\n");
-  const [sha, shortSha, subject, committedAtSeconds] = metadataLine?.split("\x1f")
-    ?? [];
+  const [sha, shortSha, subject, committedAtSeconds, ...rawRecords] =
+    output.split("\0");
   if (!sha || !shortSha || subject === undefined) {
     return undefined;
   }
@@ -552,10 +551,19 @@ function parseUnpublishedCommitSummary(
   let totalFiles = 0;
   let additions = 0;
   let removals = 0;
-  for (const line of lines) {
-    const [rawAdditions, rawRemovals, ...pathParts] = line.split("\t");
-    const repoPath = normalizeGitRelativePath(pathParts.join("\t"));
-    if (!repoPath || rawAdditions === undefined || rawRemovals === undefined) {
+  for (const [index, rawRecord] of rawRecords.entries()) {
+    const record = index === 0 && rawRecord.startsWith("\n")
+      ? rawRecord.slice(1)
+      : rawRecord;
+    const additionsSeparator = record.indexOf("\t");
+    const removalsSeparator = record.indexOf("\t", additionsSeparator + 1);
+    if (additionsSeparator < 0 || removalsSeparator < 0) {
+      continue;
+    }
+    const rawAdditions = record.slice(0, additionsSeparator);
+    const rawRemovals = record.slice(additionsSeparator + 1, removalsSeparator);
+    const repoPath = normalizeGitRelativePath(record.slice(removalsSeparator + 1));
+    if (!repoPath) {
       continue;
     }
     totalFiles += 1;
@@ -1472,10 +1480,12 @@ export class GitWorkingStateService {
           cwd,
           await noLocks([
             "show",
+            "--first-parent",
             "--no-ext-diff",
             "--no-renames",
-            "--format=%H%x1f%h%x1f%s%x1f%ct",
+            "--format=%H%x00%h%x00%s%x00%ct",
             "--numstat",
+            "-z",
             sha,
             "--",
           ]).catch(() => ""),
@@ -1552,6 +1562,7 @@ export class GitWorkingStateService {
     const repoPath = normalizeGitRelativePath(path.relative(cwd, absolutePath));
     let diff = await noLocks([
       "show",
+      "--first-parent",
       "--format=",
       "--no-ext-diff",
       "--no-renames",

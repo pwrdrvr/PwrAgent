@@ -2535,8 +2535,14 @@ class DesktopAppServerService {
     // Threads arrive without working state (the enricher no longer computes
     // it), so hydration only ever adds the cached value. A worktree the cache
     // doesn't know about yet shows no chips until the background probe lands.
-    if (cached?.gitWorkingState && thread.gitWorkingState !== cached.gitWorkingState) {
-      return { ...thread, gitWorkingState: cached.gitWorkingState };
+    if (cached) {
+      return {
+        ...thread,
+        gitWorkingStateFetchedAt: cached.fetchedAt,
+        ...(cached.gitWorkingState
+          ? { gitWorkingState: cached.gitWorkingState }
+          : {}),
+      };
     }
     return thread;
   }
@@ -3051,31 +3057,25 @@ class DesktopAppServerService {
     gitWorkingState?: ThreadGitWorkingState;
   }): Promise<void> {
     const previous = this.workingStateByWorktree.get(params.worktreePath);
+    const fetchedAt = Math.max(
+      params.fetchedAt,
+      (previous?.fetchedAt ?? params.fetchedAt - 1) + 1,
+    );
     const cacheEntry: WorktreeGitWorkingStateCacheEntry = {
       worktreePath: params.worktreePath,
-      fetchedAt: params.fetchedAt,
+      fetchedAt,
       ...(params.gitWorkingState ? { gitWorkingState: params.gitWorkingState } : {}),
     };
     this.workingStateByWorktree.set(params.worktreePath, cacheEntry);
     await getDesktopBackendRegistry()
       .rememberThreadGitWorkingStateCacheEntry(cacheEntry);
 
-    // Skip the push when the probed value is identical to what clients
-    // already hold — avoids a snapshot patch + re-render on every idle
-    // background refresh that found nothing changed.
-    if (
-      JSON.stringify(previous?.gitWorkingState ?? null) ===
-      JSON.stringify(params.gitWorkingState ?? null)
-    ) {
-      return;
-    }
-
     const notification: NavigationThreadGitWorkingStateUpdatedNotification = {
       method: "navigation/threadGitWorkingState/updated",
       params: {
         worktreePath: params.worktreePath,
         gitWorkingState: params.gitWorkingState ?? null,
-        fetchedAt: params.fetchedAt,
+        fetchedAt,
       },
     };
     await getDesktopBackendRegistry().publishLocalEvent({

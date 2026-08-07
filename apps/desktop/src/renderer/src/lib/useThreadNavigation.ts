@@ -869,18 +869,23 @@ function applyThreadGitWorkingStateUpdate(
       return thread;
     }
     if (
-      JSON.stringify(thread.gitWorkingState ?? null) ===
-      JSON.stringify(params.gitWorkingState)
+      thread.gitWorkingStateFetchedAt === params.fetchedAt
+      && JSON.stringify(thread.gitWorkingState ?? null) ===
+        JSON.stringify(params.gitWorkingState)
     ) {
       return thread;
     }
 
     changed = true;
     if (params.gitWorkingState) {
-      return { ...thread, gitWorkingState: params.gitWorkingState };
+      return {
+        ...thread,
+        gitWorkingState: params.gitWorkingState,
+        gitWorkingStateFetchedAt: params.fetchedAt,
+      };
     }
     const { gitWorkingState: _removed, ...rest } = thread;
-    return rest;
+    return { ...rest, gitWorkingStateFetchedAt: params.fetchedAt };
   });
 
   return changed ? { ...snapshot, threads } : snapshot;

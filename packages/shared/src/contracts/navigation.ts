@@ -67,6 +67,8 @@ export type NavigationLaunchpadAgent = Pick<
 >;
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
+  /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
+  gitWorkingStateFetchedAt?: number;
   /** Present when this row describes a thread owned by another PwrAgent instance. */
   federation?: {
     ref: FederatedThreadRef;
