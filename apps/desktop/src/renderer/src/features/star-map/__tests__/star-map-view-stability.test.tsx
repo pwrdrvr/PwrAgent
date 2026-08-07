@@ -179,14 +179,18 @@ describe("star map view stability", () => {
     });
 
     pan(-400, -260);
-    expect(canvas().style.transform).toMatch(/translate/);
+    const panned = canvas().style.transform;
+    expect(panned).toMatch(/translate/);
 
     fireEvent.click(screen.getByRole("button", { name: "View" }));
     fireEvent.click(screen.getByRole("button", { name: "Projects" }));
 
     await waitFor(() => {
-      // A different lens re-centres rather than stranding the operator.
-      expect(canvas().style.transform).not.toBe("");
+      // A different lens re-centres rather than stranding the operator, so
+      // the view must leave where the operator had parked it. Asserting
+      // only that a transform exists would pass even with the reset gone,
+      // because pan/zoom lenses always carry one.
+      expect(canvas().style.transform).not.toBe(panned);
     });
   });
 
