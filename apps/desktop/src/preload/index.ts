@@ -1,4 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import {
+  createEventSubscriptionMultiplexer,
+} from "./event-subscription-multiplexer";
 import type {
   AgentEvent,
   ApplyThreadModelMigrationRequest,
@@ -695,6 +698,17 @@ recordStartupProfileRendererEvent("preload-start", {
 });
 
 const isDevelopment = process.env.NODE_ENV !== "production";
+
+const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
+  (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: AgentEvent) =>
+      callback(payload);
+    ipcRenderer.on(AGENT_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(AGENT_EVENT_CHANNEL, listener);
+    };
+  },
+);
 
 const desktopApi = Object.freeze({
   ping: () => "pong",
@@ -1724,14 +1738,7 @@ const desktopApi = Object.freeze({
   },
   getWindowPointerSnapshot: async (): Promise<WindowPointerSnapshot> =>
     await ipcRenderer.invoke(WINDOW_POINTER_SNAPSHOT_CHANNEL),
-  onAgentEvent: (callback: (event: AgentEvent) => void): (() => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: AgentEvent) =>
-      callback(payload);
-    ipcRenderer.on(AGENT_EVENT_CHANNEL, listener);
-    return () => {
-      ipcRenderer.off(AGENT_EVENT_CHANNEL, listener);
-    };
-  },
+  onAgentEvent: subscribeToAgentEvent,
   onPrAutoDispatchBudgetChanged: (
     callback: (status: PrAutoDispatchBudgetStatus) => void,
   ): (() => void) => {

@@ -2026,7 +2026,7 @@ describe("App", () => {
     expect(await screen.findByRole("textbox", { name: "New thread" })).toBeInTheDocument();
   });
 
-  it("registers a queued review with the backend before navigating away", async () => {
+  it("registers a remote queued review before navigating away and cleans up event subscriptions", async () => {
     const agentEventListeners = new Set<
       (event: {
         backend: "codex";
@@ -2036,6 +2036,12 @@ describe("App", () => {
         };
       }) => void
     >();
+    (window as typeof window & {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "remote-gateway",
+    };
     const startTurn = vi.fn<
       (request: StartTurnRequest) => Promise<StartTurnResponse>
     >(async (request) => ({
@@ -2205,12 +2211,16 @@ describe("App", () => {
       }
     });
 
-    render(<App />);
+    const { unmount } = render(<App />);
 
     await screen.findByRole("heading", {
       level: 2,
       name: "Active background thread"
     });
+    // A remote viewer adds peer-connectivity ownership to the selected-thread
+    // feature subscriptions, legitimately taking the renderer past Node's
+    // default EventEmitter warning threshold.
+    expect(agentEventListeners.size).toBeGreaterThan(10);
 
     pasteComposerText(
       await screen.findByRole("textbox", { name: "Reply" }),
@@ -2243,6 +2253,10 @@ describe("App", () => {
       origin: "desktop",
       scheduledFor: expect.any(Number),
       displayText: "Review changes against main",
+      federationTarget: {
+        scope: "remote",
+        instanceId: "remote-gateway",
+      },
       review: {
         target: {
           type: "baseBranch",
@@ -2287,6 +2301,9 @@ describe("App", () => {
     await flushReactUpdates();
     expect(startReview).not.toHaveBeenCalled();
     expect(startTurn).toHaveBeenCalledTimes(1);
+
+    unmount();
+    expect(agentEventListeners.size).toBe(0);
   });
 
   it("keeps assistant response text out of the thread header", async () => {
