@@ -69,6 +69,8 @@ export type PwrAgentFederatedThreadMessageResult = {
   backend: SendMessageToThreadToolArgs["backend"];
   threadId: SendMessageToThreadToolArgs["threadId"];
   turnId: string;
+  queueStatus?: "queued";
+  queueEntryId?: string;
   title?: string;
   instanceId: string;
   instanceLabel: string;
