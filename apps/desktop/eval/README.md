@@ -158,7 +158,7 @@ the in-tree normalizer. Pass `EVAL_KEEP_TEMP=1` to retain them.
 | `EVAL_STRICT` | off | non-zero exit if ANY scenario fails (not just `whatis`) |
 | `EVAL_KEEP_TEMP` | off | keep the temp profile / clone / captures dirs |
 | `EVAL_DRIVE_UI` | off | drive the composer UI instead of the IPC (`pnpm eval:smoke:ui`) |
-| `EVAL_SETUP_ENV` | — | run a repo Codex environment's setup script in the clone first (e.g. `PwrAgnt`) |
+| `EVAL_SETUP_ENV` | — | run a repo Codex environment's setup script in the clone first (e.g. `PwrAgent`) |
 | `EVAL_SETUP_CMD` | — | run an explicit setup command in the clone first (e.g. `pnpm install`) |
 | `EVAL_SETUP_TIMEOUT_MS` | `900000` | timeout for the clone setup step |
 
@@ -169,8 +169,8 @@ make each agent install deps itself — slow and token-hungry. To install once u
 front so **every** backend starts ready:
 
 ```bash
-# Run the repo's "PwrAgnt" Codex environment setup script in the clone:
-EVAL_SETUP_ENV=PwrAgnt pnpm eval:smoke:ui
+# Run the repo's "PwrAgent" Codex environment setup script in the clone:
+EVAL_SETUP_ENV=PwrAgent pnpm eval:smoke:ui
 
 # …or run an explicit command:
 EVAL_SETUP_CMD="pnpm install" pnpm eval:smoke
