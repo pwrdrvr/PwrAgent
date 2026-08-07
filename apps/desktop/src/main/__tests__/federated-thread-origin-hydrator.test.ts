@@ -199,4 +199,76 @@ describe("federated thread origin hydration", () => {
       },
     });
   });
+
+  it("preserves a later fallback title when a deduplicated lookup fails", async () => {
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1_000,
+      threadId: "remote-child",
+      replay: {
+        entries: [{
+          type: "message",
+          id: "source-without-title",
+          role: "user",
+          text: "First occurrence has no title.",
+          origin: {
+            kind: "agent",
+            sourceThread: {
+              backend: "codex",
+              instanceId: "remote_one",
+              threadId: "remote-parent",
+            },
+          },
+        }],
+        messages: [{
+          id: "source-with-fallback-title",
+          role: "user",
+          text: "Later occurrence retains a useful title.",
+          origin: {
+            kind: "agent",
+            sourceThread: {
+              backend: "codex",
+              instanceId: "remote_one",
+              threadId: "remote-parent",
+              title: "Remote parent fallback",
+            },
+          },
+        }],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const resolveThread = vi.fn(async () => {
+      throw new Error("peer disconnected");
+    });
+
+    const hydrated = await hydrateFederatedThreadMessageOrigins({
+      localInstanceId: "viewer_one",
+      ownerInstanceId: "owner_one",
+      response,
+      resolveThread,
+    });
+
+    expect(resolveThread).toHaveBeenCalledTimes(1);
+    expect(hydrated.replay.entries[0]).toMatchObject({
+      origin: {
+        sourceThread: {
+          instanceId: "remote_one",
+          threadId: "remote-parent",
+          title: "Remote parent fallback",
+        },
+      },
+    });
+    expect(hydrated.replay.messages[0]).toMatchObject({
+      origin: {
+        sourceThread: {
+          instanceId: "remote_one",
+          threadId: "remote-parent",
+          title: "Remote parent fallback",
+        },
+      },
+    });
+  });
 });

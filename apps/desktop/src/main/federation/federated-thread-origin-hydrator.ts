@@ -52,33 +52,46 @@ export async function hydrateFederatedThreadMessageOrigins(params: {
     return params.response;
   }
 
+  const sourcesByKey = new Map<
+    string,
+    {
+      discoverAcrossInstances: boolean;
+      fallbackTitle?: string;
+      instanceId: FederationInstanceId;
+      source: HydratedSourceThread;
+    }
+  >();
+  for (const source of sources) {
+    const instanceId = source.instanceId ?? params.ownerInstanceId;
+    const key = sourceThreadKey({
+      backend: source.backend,
+      instanceId,
+      threadId: source.threadId,
+    });
+    const existing = sourcesByKey.get(key);
+    if (existing) {
+      existing.discoverAcrossInstances ||= source.instanceId === undefined;
+      existing.fallbackTitle ||= source.title?.trim();
+      continue;
+    }
+    sourcesByKey.set(key, {
+      discoverAcrossInstances: source.instanceId === undefined,
+      fallbackTitle: source.title?.trim() || undefined,
+      instanceId,
+      source,
+    });
+  }
+
   const hydratedByKey = new Map<string, HydratedSourceThread>();
   await Promise.all(
-    sources.map(async (source) => {
-      const instanceId = source.instanceId ?? params.ownerInstanceId;
-      const key = sourceThreadKey({
-        backend: source.backend,
-        instanceId,
-        threadId: source.threadId,
-      });
-      if (hydratedByKey.has(key)) {
-        return;
-      }
-
-      // Reserve the key before awaiting so duplicate entry/message views of
-      // the same transcript item produce one point lookup.
-      hydratedByKey.set(key, normalizeSourceThread({
-        localInstanceId: params.localInstanceId,
-        source,
-        instanceId,
-      }));
+    [...sourcesByKey].map(async ([key, sourceGroup]) => {
       let resolved: ResolvedFederatedSourceThread | undefined;
       try {
         resolved = await params.resolveThread({
-          backend: source.backend,
-          discoverAcrossInstances: source.instanceId === undefined,
-          instanceId,
-          threadId: source.threadId,
+          backend: sourceGroup.source.backend,
+          discoverAcrossInstances: sourceGroup.discoverAcrossInstances,
+          instanceId: sourceGroup.instanceId,
+          threadId: sourceGroup.source.threadId,
         });
       } catch {
         // Provenance identity is still useful and click-to-mount remains
@@ -86,9 +99,9 @@ export async function hydrateFederatedThreadMessageOrigins(params: {
       }
       hydratedByKey.set(key, normalizeSourceThread({
         localInstanceId: params.localInstanceId,
-        source,
-        instanceId: resolved?.instanceId ?? instanceId,
-        title: resolved?.thread.title || source.title?.trim(),
+        source: sourceGroup.source,
+        instanceId: resolved?.instanceId ?? sourceGroup.instanceId,
+        title: resolved?.thread.title || sourceGroup.fallbackTitle,
       }));
     }),
   );
