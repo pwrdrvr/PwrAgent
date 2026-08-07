@@ -5923,6 +5923,7 @@ export class CodexAppServerClient {
 
   async recoverInvalidPersistedResponseMessageIds(params: {
     failureMessage: string;
+    forkLineageThreadIds?: string[];
     threadId: string;
   }): Promise<CodexInvalidResponseMessageIdRecoveryResult> {
     if (!isCodexInvalidResponseMessageIdError(params.failureMessage)) {
@@ -5973,6 +5974,7 @@ export class CodexAppServerClient {
     try {
       recoveryResult = await repairCodexInvalidResponseMessageIds({
         codexHome,
+        forkLineageThreadIds: params.forkLineageThreadIds,
         rolloutPath,
         threadId: params.threadId,
       });

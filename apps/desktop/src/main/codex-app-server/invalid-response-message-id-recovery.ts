@@ -30,12 +30,21 @@ export function isCodexInvalidResponseMessageIdError(error: unknown): boolean {
 
 export async function repairCodexInvalidResponseMessageIds(params: {
   codexHome: string;
+  forkLineageThreadIds?: string[];
   now?: () => number;
   rolloutPath: string;
   threadId: string;
   uniqueSuffix?: () => string;
 }): Promise<CodexInvalidResponseMessageIdRecoveryResult> {
   assertCodexThreadId(params.threadId);
+  const allowedSessionMetadataThreadIds = new Set([params.threadId]);
+  // Codex thread/fork can preserve an ancestor's session metadata in the
+  // child-named rollout. The caller derives these IDs from PwrAgent-owned fork
+  // provenance; arbitrary alternate thread IDs must never be supplied here.
+  for (const threadId of params.forkLineageThreadIds ?? []) {
+    assertCodexThreadId(threadId);
+    allowedSessionMetadataThreadIds.add(threadId);
+  }
   const rolloutPath = await resolveAuthorizedRolloutPath({
     codexHome: params.codexHome,
     rolloutPath: params.rolloutPath,
@@ -53,6 +62,7 @@ export async function repairCodexInvalidResponseMessageIds(params: {
   }
 
   const repaired = repairJsonlText({
+    allowedSessionMetadataThreadIds,
     source: originalText,
     threadId: params.threadId,
     rolloutPath,
@@ -115,6 +125,7 @@ export async function repairCodexInvalidResponseMessageIds(params: {
 }
 
 function repairJsonlText(params: {
+  allowedSessionMetadataThreadIds: ReadonlySet<string>;
   rolloutPath: string;
   source: string;
   threadId: string;
@@ -147,7 +158,7 @@ function repairJsonlText(params: {
     const sessionMetadata = readSessionMetadataThreadIds(record);
     if (sessionMetadata.length > 0) {
       const wrongThreadId = sessionMetadata.find(
-        (threadId) => threadId !== params.threadId,
+        (threadId) => !params.allowedSessionMetadataThreadIds.has(threadId),
       );
       if (wrongThreadId) {
         throw new Error(
