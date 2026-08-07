@@ -19,6 +19,8 @@ import type {
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  ControlActiveTurnRequest,
+  ControlActiveTurnResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   DetachThreadPullRequestRequest,
@@ -69,6 +71,8 @@ import type {
   RetainThreadBranchDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  ResolveActiveTurnRequest,
+  ResolveActiveTurnResponse,
   RunCodexEnvironmentActionRequest,
   RunCodexEnvironmentActionResponse,
   ScheduledThreadActionIdRequest,
@@ -157,6 +161,8 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelScheduledThreadAction: "backend.cancelScheduledThreadAction",
   sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
+  controlActiveTurn: "backend.controlActiveTurn",
+  resolveActiveTurn: "backend.resolveActiveTurn",
   interruptTurn: "backend.interruptTurn",
   stopSubAgent: "backend.stopSubAgent",
   steerTurn: "backend.steerTurn",
@@ -237,6 +243,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.controlActiveTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.resolveActiveTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.interruptTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.stopSubAgent]: "turn_control",
   [FEDERATION_BACKEND_METHODS.steerTurn]: "turn_control",
@@ -350,6 +358,12 @@ export type FederationBackendOperations = {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
+  controlActiveTurn?(
+    request: ControlActiveTurnRequest,
+  ): Promise<ControlActiveTurnResponse>;
+  resolveActiveTurn(
+    request: ResolveActiveTurnRequest,
+  ): Promise<ResolveActiveTurnResponse>;
   interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   stopSubAgent(request: StopSubAgentRequest): Promise<StopSubAgentResponse>;
   steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse>;
@@ -654,6 +668,22 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.compactThread(
         envelope.params as CompactThreadRequest,
+      ),
+  );
+  if (params.backend.controlActiveTurn) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.controlActiveTurn,
+      async (envelope) =>
+        await params.backend.controlActiveTurn!(
+          envelope.params as ControlActiveTurnRequest,
+        ),
+    );
+  }
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.resolveActiveTurn,
+    async (envelope) =>
+      await params.backend.resolveActiveTurn(
+        envelope.params as ResolveActiveTurnRequest,
       ),
   );
   params.router.registerHandler(
@@ -1088,6 +1118,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<CompactThreadResponse> {
     return await this.rpc.request<CompactThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.compactThread,
+      params: request,
+    });
+  }
+
+  async controlActiveTurn(
+    request: ControlActiveTurnRequest,
+  ): Promise<ControlActiveTurnResponse> {
+    return await this.rpc.request<ControlActiveTurnResponse>({
+      method: FEDERATION_BACKEND_METHODS.controlActiveTurn,
+      params: request,
+    });
+  }
+
+  async resolveActiveTurn(
+    request: ResolveActiveTurnRequest,
+  ): Promise<ResolveActiveTurnResponse> {
+    return await this.rpc.request<ResolveActiveTurnResponse>({
+      method: FEDERATION_BACKEND_METHODS.resolveActiveTurn,
       params: request,
     });
   }

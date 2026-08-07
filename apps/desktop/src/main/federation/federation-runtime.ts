@@ -10,6 +10,7 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
   CompactThreadResponse,
+  ControlActiveTurnResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
@@ -90,6 +91,7 @@ import {
   type CelestialIconId,
   type CheckThreadBranchDriftRequest,
   type CompactThreadRequest,
+  type ControlActiveTurnRequest,
   type ForkThreadRequest,
   type FederationRemoteTarget,
   type DesktopApplicationsSnapshot,
@@ -118,6 +120,8 @@ import {
   type RefreshDirectoryGitStatusesRequest,
   type RetainThreadBranchDriftRequest,
   type RenameThreadRequest,
+  type ResolveActiveTurnRequest,
+  type ResolveActiveTurnResponse,
   type RunCodexEnvironmentActionRequest,
   type SetAcpSessionRuntimeOptionRequest,
   type SetCelestialIconRequest,
@@ -3828,6 +3832,21 @@ function localBackendOperations(): FederationBackendOperations {
       request: CompactThreadRequest,
     ): Promise<CompactThreadResponse> {
       return await getDesktopBackendRegistry().compactThread(request);
+    },
+    async controlActiveTurn(
+      request: ControlActiveTurnRequest,
+    ): Promise<ControlActiveTurnResponse> {
+      return await getDesktopBackendRegistry().controlActiveTurn(request);
+    },
+    async resolveActiveTurn(
+      request: ResolveActiveTurnRequest,
+    ): Promise<ResolveActiveTurnResponse> {
+      const active = getDesktopBackendRegistry().getActiveTurnForThread(request);
+      return {
+        backend: request.backend,
+        threadId: request.threadId,
+        ...(active ? { turnId: active.turnId } : {}),
+      };
     },
     async interruptTurn(
       request: InterruptTurnRequest,

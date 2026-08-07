@@ -26211,6 +26211,393 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("stops and steers another active local thread with distinct dispositions", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/resume", "turn/interrupt", "turn/steer"],
+      },
+      threads: [{
+        id: "target-thread",
+        title: "target-thread",
+        titleSource: "fallback",
+        source: "codex",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    for (const [threadId, turnId] of [
+      ["target-thread", "target-turn"],
+      ["parent-thread", "parent-turn"],
+    ] as const) {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId,
+            turnId,
+            turn: { id: turnId },
+          },
+        },
+      });
+    }
+
+    const steer = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args: {
+        backend: "codex",
+        threadId: "target-thread",
+        requestId: "steer-request-1",
+        expectedTurnId: "target-turn",
+        prompt: "Use the smaller fixture before continuing.",
+      },
+    });
+    expect(steer).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "target-thread",
+        requestId: "steer-request-1",
+        turnId: "target-turn",
+        disposition: "steered",
+        promptPreview: "Use the smaller fixture before continuing.",
+      },
+    });
+    expect(codexClient.lastSteerTurnParams).toEqual({
+      threadId: "target-thread",
+      expectedTurnId: "target-turn",
+      input: [{
+        type: "text",
+        text: "Use the smaller fixture before continuing.",
+      }],
+    });
+    expect(codexClient.startTurnCallCount).toBe(0);
+
+    const stopArgs = {
+      backend: "codex",
+      threadId: "target-thread",
+      requestId: "stop-request-1",
+      expectedTurnId: "target-turn",
+    };
+    const stop = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "stop_thread",
+      args: stopArgs,
+    });
+    expect(stop).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "target-thread",
+        requestId: "stop-request-1",
+        turnId: "target-turn",
+        disposition: "interrupted",
+        interruptedAt: expect.any(Number),
+      },
+    });
+    expect(codexClient.interruptTurnCallCount).toBe(1);
+
+    const stopReplay = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "stop_thread",
+      args: stopArgs,
+    });
+    expect(stopReplay).toMatchObject({
+      structuredContent: {
+        disposition: "interrupted",
+        idempotentReplay: true,
+        requestId: "stop-request-1",
+      },
+    });
+    expect(codexClient.interruptTurnCallCount).toBe(1);
+
+    await expect(registry.controlActiveTurn({
+      operation: "stop",
+      backend: "codex",
+      threadId: "target-thread",
+      requestId: "stop-request-1",
+      expectedTurnId: "target-turn",
+      messageOrigin: {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "parent-thread",
+        },
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      disposition: "interrupted",
+      idempotentReplay: true,
+    });
+    expect(codexClient.interruptTurnCallCount).toBe(1);
+
+    await registry.close();
+  });
+
+  it("atomically rejects a stale ACP stop and replays an accepted owner stop", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const { acpClient, registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: "acp-target-thread",
+      sessions: [{
+        backendId: acpBackendId,
+        sessionId: "acp-target-thread",
+        title: "ACP target thread",
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        executionMode: "default",
+        status: "idle",
+      }],
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "acp-target-thread",
+          turnId: "turn-a",
+          turn: { id: "turn-a" },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "acp-target-thread",
+          turnId: "turn-a",
+          turn: {
+            id: "turn-a",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "acp-target-thread",
+          turnId: "turn-b",
+          turn: { id: "turn-b" },
+        },
+      },
+    });
+
+    await expect(registry.controlActiveTurn({
+      operation: "stop",
+      backend: acpBackendId,
+      threadId: "acp-target-thread",
+      requestId: "stop-stale-a",
+      expectedTurnId: "turn-a",
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "stale_target",
+        activeTurnId: "turn-b",
+        expectedTurnId: "turn-a",
+      },
+    });
+    expect(acpClient.cancelSession).not.toHaveBeenCalled();
+
+    const acceptedRequest = {
+      operation: "stop" as const,
+      backend: acpBackendId,
+      threadId: "acp-target-thread",
+      requestId: "stop-turn-b",
+      expectedTurnId: "turn-b",
+    };
+    await expect(registry.controlActiveTurn(acceptedRequest)).resolves.toMatchObject({
+      ok: true,
+      turnId: "turn-b",
+      disposition: "interrupted",
+    });
+    await expect(registry.controlActiveTurn(acceptedRequest)).resolves.toMatchObject({
+      ok: true,
+      turnId: "turn-b",
+      disposition: "interrupted",
+      idempotentReplay: true,
+    });
+    expect(acpClient.cancelSession).toHaveBeenCalledTimes(1);
+    expect(acpClient.cancelSession).toHaveBeenCalledWith("acp-target-thread");
+
+    await registry.close();
+  });
+
+  it("rejects self-control, idle targets, and stale expected turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/resume", "turn/interrupt", "turn/steer"],
+      },
+      threads: [{
+        id: "idle-thread",
+        title: "idle-thread",
+        titleSource: "fallback",
+        source: "codex",
+        linkedDirectories: [],
+      }, {
+        id: "live-thread",
+        title: "live-thread",
+        titleSource: "fallback",
+        source: "codex",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    for (const [threadId, turnId] of [
+      ["live-thread", "turn-new"],
+      ["parent-thread", "parent-turn"],
+    ] as const) {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId, turnId, turn: { id: turnId } },
+        },
+      });
+    }
+
+    const idle = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "stop_thread",
+      args: {
+        backend: "codex",
+        threadId: "idle-thread",
+        requestId: "stop-idle",
+      },
+    });
+    expect(idle).toMatchObject({
+      isError: true,
+      structuredContent: { code: "no_active_turn" },
+    });
+
+    const stale = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args: {
+        backend: "codex",
+        threadId: "live-thread",
+        requestId: "steer-stale",
+        expectedTurnId: "turn-old",
+        prompt: "Stop now.",
+      },
+    });
+    expect(stale).toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "stale_target",
+        data: {
+          activeTurnId: "turn-new",
+          expectedTurnId: "turn-old",
+        },
+      },
+    });
+
+    const self = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "stop_thread",
+      args: {
+        backend: "codex",
+        threadId: "parent-thread",
+        requestId: "stop-self",
+      },
+    });
+    expect(self).toMatchObject({
+      isError: true,
+      structuredContent: { code: "forbidden" },
+    });
+    expect(codexClient.interruptTurnCallCount).toBe(0);
+
+    await registry.close();
+  });
+
+  it("reports a local backend turn-control capability denial", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/resume"] },
+      threads: [{
+        id: "target-thread",
+        title: "target-thread",
+        titleSource: "fallback",
+        source: "codex",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    for (const [threadId, turnId] of [
+      ["target-thread", "target-turn"],
+      ["parent-thread", "parent-turn"],
+    ] as const) {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId, turnId, turn: { id: turnId } },
+        },
+      });
+    }
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "stop_thread",
+      args: {
+        backend: "codex",
+        threadId: "target-thread",
+        requestId: "stop-unsupported",
+      },
+    });
+
+    expect(response).toMatchObject({
+      isError: true,
+      structuredContent: { code: "unsupported_capability" },
+    });
+    expect(codexClient.interruptTurnCallCount).toBe(0);
+    await registry.close();
+  });
+
   it("queues a follow-up prompt while a Grok target has an active turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -27008,6 +27395,138 @@ script = "printf setup"
       approvalPolicy: undefined,
       sandbox: undefined,
     });
+
+    await registry.close();
+  });
+
+  it("routes stop and steer controls to an explicit federated owner", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const federatedControl = vi.fn(async (controlRequest) => ({
+      backend: controlRequest.backend,
+      threadId: controlRequest.threadId,
+      turnId: "remote-turn-live",
+      disposition: controlRequest.operation === "stop"
+        ? "interrupted" as const
+        : "steered" as const,
+      instanceId: "pwr_studio",
+      instanceLabel: "Studio Mac",
+    }));
+    registry.setFederatedThreadControlHandler(federatedControl);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    const steer = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args: {
+        backend: "codex",
+        threadId: "remote-thread",
+        instanceId: "pwr_studio",
+        requestId: "steer-remote",
+        prompt: "Avoid the expensive test lane.",
+      },
+    });
+    expect(steer).toMatchObject({
+      structuredContent: {
+        instanceId: "pwr_studio",
+        disposition: "steered",
+        turnId: "remote-turn-live",
+      },
+    });
+    expect(federatedControl).toHaveBeenLastCalledWith({
+      operation: "steer",
+      backend: "codex",
+      threadId: "remote-thread",
+      instanceId: "pwr_studio",
+      requestId: "steer-remote",
+      input: [{ type: "text", text: "Avoid the expensive test lane." }],
+      messageOrigin: {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "parent-thread",
+        },
+      },
+    });
+
+    const stop = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "stop_thread",
+      args: {
+        backend: "codex",
+        threadId: "remote-thread",
+        instanceId: "pwr_studio",
+        requestId: "stop-remote",
+      },
+    });
+    expect(stop).toMatchObject({
+      structuredContent: {
+        instanceId: "pwr_studio",
+        disposition: "interrupted",
+        turnId: "remote-turn-live",
+      },
+    });
+    await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "stop_thread",
+      args: {
+        backend: "codex",
+        threadId: "remote-thread",
+        instanceId: "pwr_studio",
+        requestId: "stop-remote",
+      },
+    });
+    expect(federatedControl).toHaveBeenCalledTimes(2);
+    expect(codexClient.interruptTurnCallCount).toBe(0);
+    expect(codexClient.steerTurnCallCount).toBe(0);
+
+    federatedControl.mockClear();
+    const localOnly = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "stop_thread",
+      args: {
+        backend: "codex",
+        threadId: "remote-thread",
+        includeRemote: false,
+        requestId: "stop-local-only",
+      },
+    });
+    expect(localOnly).toMatchObject({
+      isError: true,
+      structuredContent: { code: "not_found" },
+    });
+    expect(federatedControl).not.toHaveBeenCalled();
 
     await registry.close();
   });

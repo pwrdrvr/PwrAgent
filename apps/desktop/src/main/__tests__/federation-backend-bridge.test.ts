@@ -1879,6 +1879,19 @@ describe("federation backend bridge", () => {
         threadId: "thread-1",
         turnId: "compact-1",
       })),
+      controlActiveTurn: vi.fn(async (request) => ({
+        ok: true as const,
+        backend: request.backend,
+        threadId: request.threadId,
+        requestId: request.requestId,
+        turnId: "turn-live",
+        disposition: "interrupted" as const,
+      })),
+      resolveActiveTurn: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-live",
+      })),
       interruptTurn: vi.fn(),
       stopSubAgent: vi.fn(),
       steerTurn: vi.fn(),
@@ -1955,6 +1968,38 @@ describe("federation backend bridge", () => {
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
       envelope: {
+        id: "control-active-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.controlActiveTurn,
+        params: {
+          operation: "stop",
+          backend: "codex",
+          threadId: "thread-1",
+          requestId: "stop-1",
+          expectedTurnId: "turn-live",
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_025,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "resolve-active-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.resolveActiveTurn,
+        params: { backend: "codex", threadId: "thread-1" },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_050,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
         id: "approval-request",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.submitServerRequest,
@@ -2010,6 +2055,22 @@ describe("federation backend bridge", () => {
       backend: "codex",
       threadId: "thread-1",
     });
+    expect(backend.resolveActiveTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(backend.controlActiveTurn).toHaveBeenCalledWith({
+      operation: "stop",
+      backend: "codex",
+      threadId: "thread-1",
+      requestId: "stop-1",
+      expectedTurnId: "turn-live",
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.controlActiveTurn
+      ],
+    ).toBe("turn_control");
     expect(backend.submitServerRequest).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -2032,6 +2093,20 @@ describe("federation backend bridge", () => {
         kind: "response",
         requestId: "compact-request",
         result: { turnId: "compact-1" },
+      },
+      {
+        kind: "response",
+        requestId: "control-active-request",
+        result: {
+          disposition: "interrupted",
+          requestId: "stop-1",
+          turnId: "turn-live",
+        },
+      },
+      {
+        kind: "response",
+        requestId: "resolve-active-request",
+        result: { turnId: "turn-live" },
       },
       {
         kind: "response",
@@ -2096,6 +2171,7 @@ describe("federation backend bridge", () => {
         cancelScheduledThreadAction: vi.fn(),
         sendScheduledThreadActionNow: vi.fn(),
         compactThread: vi.fn(),
+        resolveActiveTurn: vi.fn(),
         interruptTurn: vi.fn(),
         stopSubAgent: vi.fn(),
         steerTurn: vi.fn(),
