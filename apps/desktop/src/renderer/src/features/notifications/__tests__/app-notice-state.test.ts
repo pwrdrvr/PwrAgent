@@ -91,6 +91,128 @@ describe("appNoticeReducer", () => {
     });
   });
 
+  it("retires same-incident failure notices when recovery starts", () => {
+    let state: AppNoticeState = {
+      durable: [
+        {
+          autoDismiss: false,
+          id: "turn-failed:codex:thread-a:turn-1",
+          message: "invalid message id",
+          title: "Turn failed",
+        },
+        {
+          autoDismiss: false,
+          id: "system-error:codex:thread-a",
+          message: "The active turn may have stopped.",
+          title: "Agent backend error",
+        },
+        {
+          autoDismiss: false,
+          id: "turn-failed:codex:thread-a:turn-older",
+          message: "unrelated earlier failure",
+          title: "Turn failed",
+        },
+        {
+          autoDismiss: false,
+          id: "turn-failed:codex:thread-b:turn-1",
+          message: "unrelated thread failure",
+          title: "Turn failed",
+        },
+      ],
+      transient: [],
+    };
+
+    state = appNoticeReducer(state, {
+      type: "backend-error",
+      signal: {
+        kind: "codex-invalid-id-recovery",
+        failureMessage: "invalid message id",
+        status: "repairing",
+        threadId: "thread-a",
+        threadLabel: "Repair PR",
+        turnId: "turn-1",
+      },
+    });
+
+    expect(state.durable.map((notice) => notice.id)).toEqual([
+      "turn-failed:codex:thread-a:turn-older",
+      "turn-failed:codex:thread-b:turn-1",
+      "codex-invalid-id-recovery:codex:thread-a:turn-1",
+    ]);
+  });
+
+  it("leaves only auto-dismissing success after repairing a failed turn", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
+      type: "backend-error",
+      signal: {
+        kind: "turn-failed",
+        backend: "codex",
+        threadId: "thread-a",
+        turnId: "turn-1",
+        errorMessage: "invalid message id",
+        threadLabel: "Repair PR",
+      },
+    });
+    const recoverySignal = {
+      kind: "codex-invalid-id-recovery" as const,
+      failureMessage: "invalid message id",
+      threadId: "thread-a",
+      threadLabel: "Repair PR",
+      turnId: "turn-1",
+    };
+    state = appNoticeReducer(state, {
+      type: "backend-error",
+      signal: { ...recoverySignal, status: "repairing" },
+    });
+    state = appNoticeReducer(state, {
+      type: "backend-error",
+      signal: { ...recoverySignal, status: "succeeded" },
+    });
+
+    expect(state.durable).toEqual([]);
+    expect(state.transient).toEqual([
+      expect.objectContaining({
+        autoDismiss: true,
+        id: "codex-invalid-id-recovery:codex:thread-a:turn-1",
+        title: "Codex thread repaired",
+      }),
+    ]);
+  });
+
+  it("leaves one durable repair failure instead of the superseded turn failure", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
+      type: "backend-error",
+      signal: {
+        kind: "turn-failed",
+        backend: "codex",
+        threadId: "thread-a",
+        turnId: "turn-1",
+        errorMessage: "invalid message id",
+        threadLabel: "Repair PR",
+      },
+    });
+    state = appNoticeReducer(state, {
+      type: "backend-error",
+      signal: {
+        kind: "codex-invalid-id-recovery",
+        failureMessage: "invalid message id",
+        recoveryError: "repair target did not match",
+        status: "failed",
+        threadId: "thread-a",
+        threadLabel: "Repair PR",
+        turnId: "turn-1",
+      },
+    });
+
+    expect(state.durable).toEqual([
+      expect.objectContaining({
+        autoDismiss: false,
+        id: "codex-invalid-id-recovery:codex:thread-a:turn-1",
+        title: "Codex repair failed",
+      }),
+    ]);
+  });
+
   it("replaces transient notices from the same producer slot", () => {
     let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
       type: "show",
