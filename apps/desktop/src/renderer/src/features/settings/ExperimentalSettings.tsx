@@ -62,16 +62,6 @@ const DEFAULT_THREAD_PRICING_SUMMARY = {
   source: "default" as const,
 };
 
-const DEFAULT_THREAD_PRICING_DISPLAY_USD = {
-  value: true,
-  source: "default" as const,
-};
-
-const DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS = {
-  value: false,
-  source: "default" as const,
-};
-
 const DEFAULT_THREAD_TOOL_ACCOUNTING = {
   value: false,
   source: "default" as const,
@@ -85,9 +75,6 @@ export function ExperimentalSettings(props: {
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
   onLightweightNavigationRefreshChange: (enabled: boolean) => Promise<void>;
   onMarkdownMathRenderingChange: (enabled: boolean) => Promise<void>;
-  onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
-  onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
-  onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
   onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onCodexDefaultModeRequestUserInputChange: (
     enabled: boolean,
@@ -108,12 +95,6 @@ export function ExperimentalSettings(props: {
   const threadPricingSummary =
     props.snapshot.experimental.threadPricingSummary ??
     DEFAULT_THREAD_PRICING_SUMMARY;
-  const threadPricingDisplayUsd =
-    props.snapshot.experimental.threadPricingDisplayUsd ??
-    DEFAULT_THREAD_PRICING_DISPLAY_USD;
-  const threadPricingDisplayCodexCredits =
-    props.snapshot.experimental.threadPricingDisplayCodexCredits ??
-    DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
   const threadToolAccounting =
     props.snapshot.experimental.threadToolAccounting ??
     DEFAULT_THREAD_TOOL_ACCOUNTING;
@@ -142,64 +123,16 @@ export function ExperimentalSettings(props: {
 
       <SettingsSection
         eyebrow="Experimental"
-        title="Thread Pricing Summary"
-        description="Show list-price usage totals in the thread context rail. Enabled by default while pricing reconstruction and provider coverage continue to be validated."
-        chip={threadPricingSummary.value ? "On" : "Off"}
-        chipKind={threadPricingSummary.value ? "ok" : "default"}
+        title="Tool Output Accounting"
+        description="Show tool-output volume and noisy-polling alerts inside the released Pricing panel."
+        chip={threadToolAccounting.value ? "On" : "Off"}
+        chipKind={threadToolAccounting.value ? "ok" : "default"}
       >
         <div className="settings-fields">
           <SettingsField
-            label="Enable thread pricing summary"
-            sub="Show the Pricing tab in the thread context rail."
-            help="Surfaces list-price totals and per-turn usage rows for the thread."
-            source={sourceBadge(threadPricingSummary)}
-            control={
-              <SettingsSwitch
-                checked={threadPricingSummary.value}
-                disabled={props.saving}
-                label="Enable thread pricing summary"
-                onChange={(enabled) => {
-                  void props.onThreadPricingSummaryChange(enabled);
-                }}
-              />
-            }
-          />
-          <SettingsField
-            label="Display USD"
-            sub="Show list-price estimates in USD."
-            help="Estimated from OpenAI API list prices."
-            source={sourceBadge(threadPricingDisplayUsd)}
-            control={
-              <SettingsSwitch
-                checked={threadPricingDisplayUsd.value}
-                disabled={props.saving || !threadPricingSummary.value}
-                label="Display USD"
-                onChange={(enabled) => {
-                  void props.onThreadPricingDisplayUsdChange(enabled);
-                }}
-              />
-            }
-          />
-          <SettingsField
-            label="Display Codex Credits"
-            sub="Show Codex Credits estimates."
-            help="Estimated from Codex's token-based credit rate card."
-            source={sourceBadge(threadPricingDisplayCodexCredits)}
-            control={
-              <SettingsSwitch
-                checked={threadPricingDisplayCodexCredits.value}
-                disabled={props.saving || !threadPricingSummary.value}
-                label="Display Codex Credits"
-                onChange={(enabled) => {
-                  void props.onThreadPricingDisplayCodexCreditsChange(enabled);
-                }}
-              />
-            }
-          />
-          <SettingsField
             label="Display tool output accounting"
             sub="Show experimental tool-output volume and noisy-polling alerts."
-            help="Collection stays on either way; this only controls the operator-facing Pricing panel section."
+            help="Collection stays on either way; this only controls the operator-facing section. Requires thread pricing under Settings → Usage & Pricing."
             source={sourceBadge(threadToolAccounting)}
             control={
               <SettingsSwitch

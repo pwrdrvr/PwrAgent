@@ -21,6 +21,7 @@ import { GitSettings } from "./GitSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
+import { PricingSettings } from "./PricingSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { ArchivedThreadsSettings } from "./ArchivedThreadsSettings";
 import { ThreadManagementSettings } from "./ThreadManagementSettings";
@@ -45,6 +46,7 @@ export type SettingsSection =
   | "federation"
   | "models"
   | "profiles"
+  | "pricing"
   | "applications"
   | "worktrees"
   | "thread-management"
@@ -57,6 +59,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "applications", label: "Applications" },
   { id: "profiles", label: "Profiles" },
   { id: "models", label: "AI Providers" },
+  { id: "pricing", label: "Usage & Pricing" },
   { id: "messaging", label: "Messaging" },
   { id: "git", label: "Git" },
   { id: "federation", label: "Federation" },
@@ -73,6 +76,7 @@ const PRIMARY_SECTIONS: SettingsSection[] = [
   "applications",
   "profiles",
   "models",
+  "pricing",
   "messaging",
   "federation",
 ];
@@ -431,6 +435,30 @@ function SettingsSectionBody(props: {
     );
   }
 
+  if (props.section === "pricing") {
+    return (
+      <PricingSettings
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
+        onThreadPricingSummaryChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { threadPricingSummary: enabled },
+          });
+        }}
+        onThreadPricingDisplayUsdChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { threadPricingDisplayUsd: enabled },
+          });
+        }}
+        onThreadPricingDisplayCodexCreditsChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { threadPricingDisplayCodexCredits: enabled },
+          });
+        }}
+      />
+    );
+  }
+
   if (props.section === "experimental") {
     return (
       <ExperimentalSettings
@@ -459,21 +487,6 @@ function SettingsSectionBody(props: {
         onMarkdownMathRenderingChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { markdownMathRendering: enabled },
-          });
-        }}
-        onThreadPricingSummaryChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { threadPricingSummary: enabled },
-          });
-        }}
-        onThreadPricingDisplayUsdChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { threadPricingDisplayUsd: enabled },
-          });
-        }}
-        onThreadPricingDisplayCodexCreditsChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { threadPricingDisplayCodexCredits: enabled },
           });
         }}
         onThreadToolAccountingChange={async (enabled: boolean) => {
