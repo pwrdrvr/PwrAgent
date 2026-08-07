@@ -9,12 +9,11 @@ import {
 } from "../attention";
 import { nextAgentFilter } from "../star-map-preferences";
 import {
-  clampCardOffset,
-  clampToCloudRadius,
-  cloudDragRadius,
+  cloudDetentRadius,
   computeStarMapLayout,
   computeCardSlots,
   generateStarField,
+  resolveCardDragOffset,
   visibleCardCount,
   type StarMapCardSlot,
 } from "../star-map-layout";
@@ -267,23 +266,15 @@ describe("generateStarField", () => {
   });
 });
 
-describe("clampToCloudRadius", () => {
-  it("keeps offsets inside the radius and scales outliers back", () => {
-    expect(clampToCloudRadius(30, 40, 100)).toEqual({ dx: 30, dy: 40 });
-    const clamped = clampToCloudRadius(300, 400, 100);
-    expect(Math.hypot(clamped.dx, clamped.dy)).toBeCloseTo(100);
-  });
-});
-
-describe("cloudDragRadius", () => {
-  it("contains every slot the cloud drew", () => {
+describe("cloudDetentRadius", () => {
+  it("never starts resisting inside the cloud the lens drew", () => {
     // A lane stacks downward, so its last slot is the far one; an orbit
-    // ring puts slots all around the body. Both must land inside.
+    // ring puts slots all around the body. No slot may sit on the detent.
     for (const slots of [
       computeCardSlots([112, 112, 112, 112, 112]),
       cardRingSlots(16, 200),
     ]) {
-      const radius = cloudDragRadius(slots);
+      const radius = cloudDetentRadius(slots);
       for (const slot of slots) {
         expect(Math.hypot(slot.dx, slot.dy)).toBeLessThan(radius);
       }
@@ -291,25 +282,29 @@ describe("cloudDragRadius", () => {
   });
 
   it("grows with the cloud rather than fixing one lens's bound", () => {
-    expect(cloudDragRadius(computeCardSlots([112, 112, 112]))).toBeGreaterThan(
-      cloudDragRadius(computeCardSlots([112])),
-    );
-    expect(cloudDragRadius([])).toBeGreaterThan(0);
+    expect(
+      cloudDetentRadius(computeCardSlots([112, 112, 112])),
+    ).toBeGreaterThan(cloudDetentRadius(computeCardSlots([112])));
   });
 });
 
-describe("clampCardOffset", () => {
-  const slots = computeCardSlots([112, 112, 112, 112]);
-  const radius = cloudDragRadius(slots);
+describe("resolveCardDragOffset", () => {
+  // Ring slots, because the reported symptom was horizontal: a card to the
+  // LEFT of a body could not reach where the cards on the right sit.
+  const slots = cardRingSlots(8, 200);
+  const detentRadius = cloudDetentRadius(slots);
+  const leftmost = slots.reduce((far, slot) => (slot.dx < far.dx ? slot : far));
+  const rightmost = slots.reduce((far, slot) => (slot.dx > far.dx ? slot : far));
+  const distance = (point: StarMapCardSlot) => Math.hypot(point.dx, point.dy);
   /** Where a card based at `baseSlot` ends up when dragged onto `target`. */
   const dragTo = (baseSlot: StarMapCardSlot, target: StarMapCardSlot) => {
-    const committed = clampCardOffset({
+    const committed = resolveCardDragOffset({
       baseSlot,
       offset: {
         dx: target.dx - baseSlot.dx,
         dy: target.dy - baseSlot.dy,
       },
-      radius,
+      detentRadius,
     });
     return {
       dx: baseSlot.dx + committed.dx,
@@ -319,45 +314,66 @@ describe("clampCardOffset", () => {
 
   it("commits an offset from the card's own slot, not a position", () => {
     // The persisted shape syncs across the federation, so it stays an
-    // offset even though the clamp runs on the body-relative position.
-    const baseSlot = slots[2];
+    // offset even though the detent applies to the body-relative position.
     expect(
-      clampCardOffset({ baseSlot, offset: { dx: 12, dy: -8 }, radius }),
+      resolveCardDragOffset({
+        baseSlot: leftmost,
+        offset: { dx: 12, dy: -8 },
+        detentRadius,
+      }),
     ).toEqual({ dx: 12, dy: -8 });
   });
 
-  it("lets a far-out card reach the mirror position across the body", () => {
-    // The outermost lane slot, dragged to where the same distance on the
-    // opposite side of the body would put it. Bounding the offset instead
-    // of the position would stop this drag short.
-    const baseSlot = slots[slots.length - 1];
-    const mirror = { dx: -baseSlot.dx, dy: -baseSlot.dy };
-    const landed = dragTo(baseSlot, mirror);
-    expect(landed.dx).toBeCloseTo(mirror.dx);
-    expect(landed.dy).toBeCloseTo(mirror.dy);
+  it("carries a left-side card onto the position a right-side card holds", () => {
+    // The symptom this geometry exists to fix. Resisting the offset
+    // instead of the position would stop this drag well short.
+    expect(leftmost.dx).toBeLessThan(0);
+    expect(rightmost.dx).toBeGreaterThan(0);
+    const landed = dragTo(leftmost, rightmost);
+    expect(landed.dx).toBeCloseTo(rightmost.dx);
+    expect(landed.dy).toBeCloseTo(rightmost.dy);
   });
 
-  it("gives every card in the cloud the same reachable region", () => {
-    const near = slots[0];
-    const far = slots[slots.length - 1];
+  it("gives every card in the cloud the same region and the same resistance", () => {
     const targets: StarMapCardSlot[] = [
       // Each other's slots, either way round.
-      near,
-      far,
-      // Off to one side, and out past the region so both get clamped.
-      { dx: 260, dy: -180 },
+      leftmost,
+      rightmost,
+      // Just inside the detent, into it, and far beyond it.
+      { dx: detentRadius - 20, dy: 0 },
+      { dx: 0, dy: detentRadius + 60 },
       { dx: -2000, dy: 900 },
-      { dx: 0, dy: 4000 },
     ];
     for (const target of targets) {
-      const fromNear = dragTo(near, target);
-      const fromFar = dragTo(far, target);
-      expect(fromNear.dx).toBeCloseTo(fromFar.dx);
-      expect(fromNear.dy).toBeCloseTo(fromFar.dy);
-      expect(Math.hypot(fromNear.dx, fromNear.dy)).toBeLessThanOrEqual(
-        radius + 1e-6,
-      );
+      const fromLeft = dragTo(leftmost, target);
+      const fromRight = dragTo(rightmost, target);
+      expect(fromLeft.dx).toBeCloseTo(fromRight.dx);
+      expect(fromLeft.dy).toBeCloseTo(fromRight.dy);
     }
+  });
+
+  it("follows the pointer exactly up to the detent", () => {
+    const target = { dx: detentRadius - 1, dy: 0 };
+    expect(dragTo(leftmost, target).dx).toBeCloseTo(target.dx);
+  });
+
+  it("resists inside the detent instead of stopping the drag", () => {
+    const pushedTo = detentRadius + 60;
+    const landed = distance(dragTo(leftmost, { dx: 0, dy: pushedTo }));
+    // Past the detent, so it moved — but it gave up most of the overshoot.
+    expect(landed).toBeGreaterThan(detentRadius);
+    expect(landed).toBeLessThan(detentRadius + 60);
+  });
+
+  it("breaks through so a card can be parked in an island of its own", () => {
+    const near = distance(dragTo(leftmost, { dx: 0, dy: detentRadius + 400 }));
+    const far = distance(dragTo(leftmost, { dx: 0, dy: detentRadius + 900 }));
+    // Through the detent the pointer is tracked one-for-one again: another
+    // 500px of drag buys another 500px of travel.
+    expect(far - near).toBeCloseTo(500);
+    // The resistance already absorbed stays behind as a constant lag.
+    expect(near).toBeLessThan(detentRadius + 400);
+    expect(near).toBeGreaterThan(detentRadius + 200);
   });
 });
 
