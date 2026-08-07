@@ -61,6 +61,7 @@ export type MessagingPermissionId =
   | "thread.control.stop"
   | "thread.control.compact"
   | "thread.control.handoff"
+  | "thread.control.schedule"
   // Mid-turn interactive surfaces.
   | "approval.respond.default"
   | "approval.respond.escalation"
@@ -225,6 +226,13 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
     group: "control",
   },
   {
+    id: "thread.control.schedule",
+    label: "Schedule messages",
+    description:
+      "Queue a message to the bound thread for later, and list or cancel the queue.",
+    group: "control",
+  },
+  {
     id: "approval.respond.default",
     label: "Respond to approvals",
     description: "Approve or deny non-escalation approval requests.",
@@ -337,6 +345,7 @@ const POWER_USER_PERMISSIONS: MessagingPermissionId[] = [
   "thread.control.stop",
   "thread.control.compact",
   "thread.control.handoff",
+  "thread.control.schedule",
   "approval.respond.default",
 ];
 
@@ -567,6 +576,10 @@ const COMMAND_VERB_PERMISSIONS: Record<string, MessagingPermissionId> = {
   resume: "thread.resume",
   agent: "thread.resume",
   new: "thread.new",
+  // Both halves of the scheduling surface: `/schedule` queues a message for
+  // the bound thread, `/scheduled` lists and cancels the queue.
+  schedule: "thread.control.schedule",
+  scheduled: "thread.control.schedule",
   status: "thread.status.view",
   detach: "thread.detach",
   monitor: "thread.monitor",

@@ -48,6 +48,7 @@ code side).
 | `thread.control.stop` | control | Interrupt the running turn. |
 | `thread.control.compact` | control | Compact the thread's context. |
 | `thread.control.handoff` | control | Move a thread between local/worktree/branches (all `handoff:*` actions). |
+| `thread.control.schedule` | control | Queue a message to the bound thread for later (`/schedule`) and list or cancel the queue (`/scheduled`). |
 | `approval.respond.default` | interactive | Approve or deny non-escalation approval requests. |
 | `approval.respond.escalation` | interactive (danger: med) | Approve or deny network / exec / filesystem escalation requests. |
 | `tools.thread_inspection` | tools (danger: med) | Let the agent search and read OTHER threads on the actor's behalf (`search_threads`, `read_thread`, thread status, PR inspection). |
