@@ -2037,6 +2037,159 @@ describe("Composer", () => {
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
   });
 
+  it("inserts a hash-prefixed thread chip from the inline thread picker", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: "019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+      title: "Bob's Best Thread 3000",
+      titleSource: "explicit",
+      source: "codex",
+      gitBranch: "agent/best-thread",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: currentThread.id,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, targetThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #Bob's Best" } });
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    expect(
+      within(listbox).getByRole("button", {
+        name: /#Bob's Best Thread 3000/,
+      }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(textbox, { key: "Enter" });
+
+    const chip = await waitFor(() =>
+      within(textbox)
+        .getByText("#Bob's Best Thread 3000")
+        .closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveAttribute("data-mention-kind", "thread");
+    expect(textbox).toHaveValue("Ask  ");
+
+    await clickButton("Send");
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: currentThread.id,
+        input: [
+          {
+            type: "text",
+            text: "Ask [Bob's Best Thread 3000](pwragent://thread/019fbbbe-ad52-77c2-b7f7-28182d9a6f83?backend=codex)",
+          },
+        ],
+      });
+    });
+  });
+
+  it("offers matching threads and a precise PR link for a numeric hash query", async () => {
+    const pullRequest = {
+      provider: "github.com" as const,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 123,
+      state: "passing" as const,
+      title: "Ship channel-style thread references",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+    };
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const pullRequestThread: NavigationThreadSummary = {
+      id: "thread-pr-123",
+      title: "Implement hash references",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      prs: [pullRequest],
+    };
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: currentThread.id,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, pullRequestThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "See #123" } });
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    expect(
+      within(listbox).getByRole("button", { name: /#Implement hash references/ }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(listbox).getByRole("button", { name: /pwrdrvr\/PwrAgent#123/ }),
+    );
+
+    const chip = await waitFor(() =>
+      within(textbox)
+        .getByText("#123")
+        .closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveAttribute("data-mention-kind", "pull-request");
+    expect(chip).toHaveAttribute("data-skill-path", pullRequest.url);
+
+    await clickButton("Send");
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: currentThread.id,
+        input: [
+          {
+            type: "text",
+            text: `See [#123](${pullRequest.url})`,
+          },
+        ],
+      });
+    });
+  });
+
   it.each([
     ["acp:gemini", acpGeminiBackendSummary()],
     ["acp:kimi", backendSummary("acp:kimi")],
@@ -14848,7 +15001,7 @@ describe("Composer", () => {
     const richInput = screen.getByTestId("composer-tiptap-input");
     const chip = await waitFor(() => {
       const currentChip = within(richInput)
-        .getByText("Lovely child thread")
+        .getByText("#Lovely child thread")
         .closest("[data-mention-kind]");
       expect(currentChip).toHaveAttribute(
         "data-mention-kind",
@@ -15029,7 +15182,7 @@ describe("Composer", () => {
       expect(textbox).toHaveValue("keep  tail");
       expect(
         within(textbox)
-          .getByText("Lovely child thread")
+          .getByText("#Lovely child thread")
           .closest("[data-mention-kind]"),
       ).toHaveAttribute(
         "data-mention-kind",
@@ -15138,7 +15291,7 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(within(textbox).getByText("Lovely child thread")).toBeInTheDocument();
+      expect(within(textbox).getByText("#Lovely child thread")).toBeInTheDocument();
     });
     expect(textbox.querySelector("h2")).toHaveTextContent("Heading");
     expect(textbox.querySelector("ul li")).toHaveTextContent("List item");

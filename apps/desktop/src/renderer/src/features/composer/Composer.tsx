@@ -37,6 +37,7 @@ import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
   NavigationThreadSummary,
+  PrSummary,
   RenderComposerPdfPreviewResponse,
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
@@ -46,6 +47,7 @@ import {
   buildThreadUrl,
   buildReviewBranchOptions,
   findPreferredReviewWorkspaceCwd,
+  isRemoteFederationTarget,
   normalizeGitOriginUrl,
   parseThreadUrl,
   readCodexEnvironmentActionRuns,
@@ -64,6 +66,7 @@ import {
   PlusIcon,
   PullRequestIcon,
   SearchIcon,
+  ThreadIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import { ImageLightbox } from "../thread-detail/ImageLightbox";
@@ -91,6 +94,10 @@ import {
   listReferencedDirectories,
 } from "../../lib/directory-references";
 import { expandTildePath } from "../../lib/tildify-path";
+import {
+  filterHashReferenceCandidates,
+  findHashReferenceTrigger,
+} from "../../lib/hash-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
 import {
   AGENT_THREAD_CAPABILITIES,
@@ -98,6 +105,7 @@ import {
   canChangeExistingThreadAgentDesignation,
   createDesktopAgentThread,
 } from "../../lib/agent-thread";
+import { parseGitHubPullRequestUrl } from "../../lib/pull-request-links";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -170,6 +178,8 @@ type ComposerProps = {
    * surfaces don't have to provide it.
    */
   directories?: NavigationDirectorySummary[];
+  /** Threads searchable from the inline `#` reference picker. */
+  threads?: NavigationThreadSummary[];
   disabled?: boolean;
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
@@ -496,7 +506,11 @@ type SlashCommandSuggestion = {
   sourceLabel: string;
 };
 
-type AutocompleteKind = "skills" | "slash" | "directories";
+type AutocompleteKind =
+  | "directories"
+  | "hash-references"
+  | "skills"
+  | "slash";
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 
 const CONTEXT_MOON_PHASES = [
@@ -1297,6 +1311,22 @@ function HighlightedAutocompleteLabel(props: {
   );
 }
 
+function describeHashReferenceThread(thread: NavigationThreadSummary): string {
+  const parts: string[] = [];
+  const pullRequest = (thread.prs ?? [])[0];
+  if (pullRequest) {
+    parts.push(`#${pullRequest.number}`);
+  }
+  if (thread.gitBranch) {
+    parts.push(thread.gitBranch);
+  }
+  const directory = (thread.linkedDirectories ?? [])[0];
+  if (directory?.label) {
+    parts.push(directory.label);
+  }
+  return parts.join(" · ") || thread.id;
+}
+
 function createComposerSkillToken(
   skill: AppServerSkillSummary,
   index: number,
@@ -1351,6 +1381,37 @@ function createComposerThreadToken(
     path,
     id: `${path}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     index,
+  };
+}
+
+function createComposerPullRequestToken(
+  pullRequest: PrSummary,
+  index: number,
+): ComposerSkillToken {
+  return {
+    kind: "pull-request",
+    name: `#${pullRequest.number}`,
+    path: pullRequest.url,
+    description: pullRequest.title,
+    shortDescription: `${pullRequest.org}/${pullRequest.repo}`,
+    id: `${pullRequest.url}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    index,
+  };
+}
+
+function resolveThreadSummaryReference(
+  thread: NavigationThreadSummary,
+): ResolvedThreadLink {
+  const federationTarget = thread.federation?.ref.target;
+  return {
+    backend: thread.source,
+    ...(federationTarget && isRemoteFederationTarget(federationTarget)
+      ? { instanceId: federationTarget.instanceId }
+      : {}),
+    threadId: thread.id,
+    title: thread.title,
+    gitBranch: thread.gitBranch,
+    linkedDirectories: thread.linkedDirectories,
   };
 }
 
@@ -1564,6 +1625,10 @@ function serializeDraftWithSkillTokens(
       output += ref
         ? buildThreadMarkdownLink({ ...ref, title: token.name })
         : token.path ?? token.name;
+    } else if (token.kind === "pull-request") {
+      output += token.path
+        ? `[${token.name}](${token.path})`
+        : token.name;
     } else {
       output += buildSkillMentionMarkdown(token);
     }
@@ -1627,19 +1692,27 @@ function hydrateComposerDraft(
     }
   };
 
-  // Thread titles may legitimately begin with `$` or `@`, so recognize the
-  // destination before passing surrounding Markdown through the skill and
-  // directory parser. Unknown thread links remain literal Markdown.
-  const threadLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/thread\/[^)\s]+)\)/gi;
+  // Thread and PR labels may legitimately begin with `$` or `@`, so recognize
+  // their destinations before passing surrounding Markdown through the skill
+  // and directory parser. Unknown links remain literal Markdown.
+  const referenceLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/thread\/[^)\s]+|https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/[1-9]\d*[^)\s]*)\)/gi;
   let cursor = 0;
-  for (const match of canonicalDraft.matchAll(threadLinkPattern)) {
+  for (const match of canonicalDraft.matchAll(referenceLinkPattern)) {
     const matchIndex = match.index ?? 0;
     hydrateSkillAndDirectoryParts(canonicalDraft.slice(cursor, matchIndex));
-    const resolvedThread = resolveThreadHref(match[2] ?? "", threadLinks);
+    const href = match[2] ?? "";
+    const resolvedThread = resolveThreadHref(href, threadLinks);
     if (resolvedThread) {
       skillTokens.push(createComposerThreadToken(resolvedThread, draft.length));
     } else {
-      draft += match[0];
+      const pullRequest = parseGitHubPullRequestUrl(href);
+      if (pullRequest) {
+        skillTokens.push(
+          createComposerPullRequestToken(pullRequest, draft.length),
+        );
+      } else {
+        draft += match[0];
+      }
     }
     cursor = matchIndex + match[0].length;
   }
@@ -2731,6 +2804,7 @@ export function Composer(props: ComposerProps) {
   const skillListboxId = useId();
   const slashListboxId = useId();
   const directoryRefListboxId = useId();
+  const hashReferenceListboxId = useId();
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
   const activeAcpLaunchpadRefreshKeyRef = useRef<string | undefined>(undefined);
   const pendingProviderSelectionKeyRef = useRef<string | undefined>(undefined);
@@ -2950,6 +3024,7 @@ export function Composer(props: ComposerProps) {
   const [activeSkillIndex, setActiveSkillIndex] = useState(0);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [activeDirectoryRefIndex, setActiveDirectoryRefIndex] = useState(0);
+  const [activeHashReferenceIndex, setActiveHashReferenceIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
 
   useEffect(() => {
@@ -4291,6 +4366,7 @@ export function Composer(props: ComposerProps) {
   const trigger = findSkillTrigger(draft, selectionStart);
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
   const directoryRefTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
+  const hashReferenceTrigger = findHashReferenceTrigger(draft, selectionStart);
   const filteredSkills = useMemo(() => {
     if (!trigger) {
       return [];
@@ -4350,13 +4426,27 @@ export function Composer(props: ComposerProps) {
       directoryRefTrigger.query,
     );
   }, [props.directories, directoryRefTrigger]);
+  const filteredHashReferences = useMemo(() => {
+    if (!hashReferenceTrigger) {
+      return { pullRequests: [], threads: [] };
+    }
+    return filterHashReferenceCandidates(
+      props.threads ?? [],
+      hashReferenceTrigger.query,
+    );
+  }, [hashReferenceTrigger, props.threads]);
+  const hashReferenceCount =
+    filteredHashReferences.threads.length
+    + filteredHashReferences.pullRequests.length;
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
     : slashTrigger && filteredSlashCommands.length > 0
       ? "slash"
       : directoryRefTrigger && filteredDirectoryRefs.length > 0
         ? "directories"
-        : undefined;
+        : hashReferenceTrigger && hashReferenceCount > 0
+          ? "hash-references"
+          : undefined;
   const autocompleteKey =
     availableAutocompleteKind === "skills" && trigger
       ? `skills:${trigger.start}:${trigger.end}:${trigger.query}`
@@ -4364,6 +4454,8 @@ export function Composer(props: ComposerProps) {
         ? `slash:${slashTrigger.start}:${slashTrigger.end}:/${slashTrigger.query}`
         : availableAutocompleteKind === "directories" && directoryRefTrigger
           ? `directories:${directoryRefTrigger.start}:${directoryRefTrigger.end}:@${directoryRefTrigger.query}`
+          : availableAutocompleteKind === "hash-references" && hashReferenceTrigger
+            ? `hash-references:${hashReferenceTrigger.start}:${hashReferenceTrigger.end}:#${hashReferenceTrigger.query}`
           : undefined;
   const displayedAutocompleteKind =
     autocompleteKey && autocompleteKey === dismissedAutocompleteKey
@@ -4378,13 +4470,17 @@ export function Composer(props: ComposerProps) {
       ? activeSkillIndex
       : autocompleteKind === "directories"
         ? activeDirectoryRefIndex
-        : activeSlashIndex;
+        : autocompleteKind === "hash-references"
+          ? activeHashReferenceIndex
+          : activeSlashIndex;
   const autocompleteLength =
     autocompleteKind === "skills"
       ? filteredSkills.length
       : autocompleteKind === "directories"
         ? filteredDirectoryRefs.length
-        : filteredSlashCommands.length;
+        : autocompleteKind === "hash-references"
+          ? hashReferenceCount
+          : filteredSlashCommands.length;
   const autocompleteListboxId =
     autocompleteKind === "skills"
       ? skillListboxId
@@ -4392,6 +4488,8 @@ export function Composer(props: ComposerProps) {
         ? slashListboxId
         : autocompleteKind === "directories"
           ? directoryRefListboxId
+          : autocompleteKind === "hash-references"
+            ? hashReferenceListboxId
           : undefined;
   const activeAutocompleteOptionId =
     autocompleteListboxId && autocompleteKind
@@ -4733,6 +4831,10 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     setActiveDirectoryRefIndex(0);
   }, [directoryRefTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
+
+  useEffect(() => {
+    setActiveHashReferenceIndex(0);
+  }, [hashReferenceTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
 
   useEffect(() => {
     if (!dismissedAutocompleteKey) {
@@ -7280,6 +7382,58 @@ export function Composer(props: ComposerProps) {
     inputRef.current.insertMentionToken(createComposerThreadToken(thread, 0));
   };
 
+  const applyHashReference = (
+    createToken: (index: number) => ComposerSkillToken,
+  ): void => {
+    if (!inputRef.current) {
+      return;
+    }
+
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const selectionEnd = Math.min(
+      inputRef.current.selectionEnd ?? selectionStart,
+      draft.length,
+    );
+    const referenceTrigger =
+      findHashReferenceTrigger(draft, selectionStart)
+      ?? findHashReferenceTrigger(draft, draft.length)
+      ?? { start: selectionStart, end: selectionEnd };
+    const before = draft.slice(0, referenceTrigger.start);
+    const after = draft.slice(Math.max(referenceTrigger.end, selectionEnd));
+    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
+    const nextDraft = `${before}${nextAfter}`;
+    const tokenIndex = before.length;
+    const nextSelection = tokenIndex + 1;
+    const nextSkillTokens = [
+      ...adjustSkillTokenIndexesForTextChange({
+        currentDraft: draft,
+        nextDraft,
+        skillTokens,
+      }),
+      createToken(tokenIndex),
+    ];
+
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveHashReferenceIndex(0);
+    });
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+    });
+  };
+
   /**
    * "@ → Add directory…" / "+"-menu action: run the OS picker (which also
    * registers the pick as a tracked directory, without navigating) and
@@ -8665,6 +8819,25 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
+    if (autocompleteKind === "hash-references") {
+      const thread = filteredHashReferences.threads[activeHashReferenceIndex];
+      if (thread) {
+        applyHashReference((index) =>
+          createComposerThreadToken(resolveThreadSummaryReference(thread), index),
+        );
+        return;
+      }
+      const pullRequest = filteredHashReferences.pullRequests[
+        activeHashReferenceIndex - filteredHashReferences.threads.length
+      ];
+      if (pullRequest) {
+        applyHashReference((index) =>
+          createComposerPullRequestToken(pullRequest, index),
+        );
+      }
+      return;
+    }
+
     const currentSlashText = slashTrigger
       ? `/${slashTrigger.query}`.toLowerCase()
       : undefined;
@@ -8754,6 +8927,8 @@ export function Composer(props: ComposerProps) {
         setActiveSkillIndex(updater);
       } else if (autocompleteKind === "directories") {
         setActiveDirectoryRefIndex(updater);
+      } else if (autocompleteKind === "hash-references") {
+        setActiveHashReferenceIndex(updater);
       } else {
         setActiveSlashIndex(updater);
       }
@@ -8807,6 +8982,7 @@ export function Composer(props: ComposerProps) {
       setActiveSkillIndex(0);
       setActiveSlashIndex(0);
       setActiveDirectoryRefIndex(0);
+      setActiveHashReferenceIndex(0);
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
@@ -10200,6 +10376,110 @@ export function Composer(props: ComposerProps) {
                 </span>
               </button>
             ) : null}
+          </div>
+        ) : autocompleteKind === "hash-references" ? (
+          <div
+            className={`composer__autocomplete composer__autocomplete--hash-references composer__autocomplete--${autocompleteLayout.placement}`}
+            ref={autocompleteListRef}
+            role="listbox"
+            aria-label="Threads and pull requests"
+            id={hashReferenceListboxId}
+            style={{ maxHeight: autocompleteLayout.maxHeight }}
+          >
+            {filteredHashReferences.threads.map((thread, index) => (
+              <button
+                key={`${thread.source}:${thread.id}`}
+                id={`${hashReferenceListboxId}-option-${index}`}
+                ref={(node) => {
+                  autocompleteOptionRefs.current[index] = node;
+                }}
+                aria-selected={index === activeHashReferenceIndex}
+                className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
+                tabIndex={index === activeHashReferenceIndex ? 0 : -1}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  applyHashReference((tokenIndex) =>
+                    createComposerThreadToken(
+                      resolveThreadSummaryReference(thread),
+                      tokenIndex,
+                    ),
+                  );
+                }}
+                onClick={() => {
+                  applyHashReference((tokenIndex) =>
+                    createComposerThreadToken(
+                      resolveThreadSummaryReference(thread),
+                      tokenIndex,
+                    ),
+                  );
+                }}
+                onFocus={() => {
+                  setActiveHashReferenceIndex(index);
+                }}
+                onKeyDown={handleAutocompleteKeyDown}
+              >
+                <span className="composer__autocomplete-title">
+                  <ThreadIcon size={13} aria-hidden="true" />
+                  <HighlightedAutocompleteLabel
+                    label={`#${thread.title.replace(/^#/, "")}`}
+                    query={
+                      hashReferenceTrigger?.query
+                        ? `#${hashReferenceTrigger.query}`
+                        : "#"
+                    }
+                  />
+                  <span className="composer__autocomplete-source composer__autocomplete-source--pwragent">
+                    Thread
+                  </span>
+                </span>
+                <span className="composer__autocomplete-meta">
+                  {describeHashReferenceThread(thread)}
+                </span>
+              </button>
+            ))}
+            {filteredHashReferences.pullRequests.map((pullRequest, offset) => {
+              const index = filteredHashReferences.threads.length + offset;
+              return (
+                <button
+                  key={pullRequest.url}
+                  id={`${hashReferenceListboxId}-option-${index}`}
+                  ref={(node) => {
+                    autocompleteOptionRefs.current[index] = node;
+                  }}
+                  aria-selected={index === activeHashReferenceIndex}
+                  className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
+                  tabIndex={index === activeHashReferenceIndex ? 0 : -1}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applyHashReference((tokenIndex) =>
+                      createComposerPullRequestToken(pullRequest, tokenIndex),
+                    );
+                  }}
+                  onClick={() => {
+                    applyHashReference((tokenIndex) =>
+                      createComposerPullRequestToken(pullRequest, tokenIndex),
+                    );
+                  }}
+                  onFocus={() => {
+                    setActiveHashReferenceIndex(index);
+                  }}
+                  onKeyDown={handleAutocompleteKeyDown}
+                >
+                  <span className="composer__autocomplete-title">
+                    <PullRequestIcon size={13} aria-hidden="true" />
+                    <span>{`${pullRequest.org}/${pullRequest.repo}#${pullRequest.number}`}</span>
+                    <span className="composer__autocomplete-source composer__autocomplete-source--provider">
+                      Pull request
+                    </span>
+                  </span>
+                  <span className="composer__autocomplete-meta">
+                    {pullRequest.title || pullRequest.url}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         ) : null}
       </div>

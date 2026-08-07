@@ -917,6 +917,7 @@ export type ThreadViewProps = {
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
   selectedThread?: NavigationThreadSummary;
+  threads?: NavigationThreadSummary[];
   pendingForkEnvironmentSetup?: PendingForkEnvironmentSetup;
   suppressBranchDriftDialog?: boolean;
   fullAccessRiskWarningDismissed?: boolean;
@@ -3325,6 +3326,7 @@ export function ThreadView(props: ThreadViewProps) {
             providerCommands={props.providerCommands ?? []}
             skills={props.skills}
             thread={selectedThread!}
+            threads={props.threads}
             threadBusy={props.threadBusy}
             updatingExecutionMode={props.updatingExecutionMode}
           />

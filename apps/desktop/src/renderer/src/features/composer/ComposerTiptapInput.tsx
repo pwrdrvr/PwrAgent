@@ -31,6 +31,7 @@ import {
   buildFileReferenceTooltip,
   findDirectoryReferenceTrigger,
 } from "../../lib/directory-references";
+import { findHashReferenceTrigger } from "../../lib/hash-references";
 import { tildifyPath } from "../../lib/tildify-path";
 import {
   ChipContextMenu,
@@ -190,7 +191,27 @@ const SkillMention = Mention.extend({
           ["path", { d: "M8 8.5h8" }],
           ["path", { d: "M8 12h5" }],
         ],
-        ["span", { class: "thread-chip__label" }, label],
+        ["span", { class: "thread-chip__label" }, `#${label.replace(/^#/, "")}`],
+      ];
+    }
+    if (node.attrs.kind === "pull-request") {
+      const label = String(node.attrs.name ?? "pull request");
+      const path = typeof node.attrs.path === "string" ? node.attrs.path : "";
+      return [
+        "span",
+        {
+          class: "pr-chip pr-chip--unknown composer-pr-chip composer-tiptap-input__mention",
+          "data-type": "mention",
+          "data-mention-kind": "pull-request",
+          "data-composer-skill-token-id": String(node.attrs.id ?? ""),
+          "data-id": String(node.attrs.id ?? ""),
+          "data-label": label,
+          "data-skill-name": label,
+          ...(path ? { "data-skill-path": path } : {}),
+          ...(path ? { "data-tooltip": path } : {}),
+        },
+        ["span", { class: "pr-chip__dot", "aria-hidden": "true" }],
+        ["span", { class: "pr-chip__label" }, label],
       ];
     }
     if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
@@ -249,7 +270,10 @@ const SkillMention = Mention.extend({
     ];
   },
   renderText: ({ node }) => {
-    if (node.attrs.kind === "thread") {
+    if (
+      node.attrs.kind === "thread"
+      || node.attrs.kind === "pull-request"
+    ) {
       return String(node.attrs.path ?? node.attrs.name ?? "");
     }
     if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
@@ -911,6 +935,7 @@ function mentionAttrsToSkill(
   const kind =
     attrs.kind === "directory"
     || attrs.kind === "file"
+    || attrs.kind === "pull-request"
     || attrs.kind === "thread"
       ? attrs.kind
       : undefined;
@@ -1893,11 +1918,14 @@ function applyExternalSkillInsertion(params: {
   }
 
   // Re-locate the autocomplete trigger the token replaced — `@` for a
-  // directory-reference chip, `$` for a skill.
+  // directory-reference chip, `#` for a thread/PR reference, `$` for a skill.
   const findTrigger =
     insertedSkill.kind === "directory"
       ? findDirectoryReferenceTrigger
-      : findSkillTrigger;
+      : insertedSkill.kind === "thread"
+          || insertedSkill.kind === "pull-request"
+        ? findHashReferenceTrigger
+        : findSkillTrigger;
   const trigger =
     findTrigger(params.current.value, params.selectionIndex) ??
     findTrigger(params.current.value, params.current.value.length);

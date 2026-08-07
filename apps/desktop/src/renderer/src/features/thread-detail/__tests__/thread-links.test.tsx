@@ -221,6 +221,9 @@ describe("thread links in transcript markdown", () => {
     expect(
       screen.getByRole("button", { name: "Open thread RELATED query deranking issue" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open thread RELATED query deranking issue" }),
+    ).toHaveTextContent("#RELATED query deranking issue");
     expect(screen.queryByRole("link", { name: "the handoff" })).not.toBeInTheDocument();
   });
 

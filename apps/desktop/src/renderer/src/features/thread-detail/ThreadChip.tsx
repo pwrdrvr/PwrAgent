@@ -83,7 +83,7 @@ export function ThreadChip(props: ThreadChipProps) {
         onMouseLeave={tooltipController.hide}
       >
         <ThreadIcon className="thread-chip__icon" size={12} />
-        <span className="thread-chip__label">{label}</span>
+        <span className="thread-chip__label">#{label.replace(/^#/, "")}</span>
       </span>
       {tooltipController.tooltipNode}
       {contextMenuPosition && contextMenuInvokerRef.current ? (

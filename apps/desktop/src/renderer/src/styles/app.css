@@ -17484,6 +17484,10 @@ a.transcript-message__messaging-origin:focus-visible {
   cursor: default;
 }
 
+.composer-tiptap-input__mention.composer-pr-chip {
+  cursor: default;
+}
+
 .composer__mentioned-skills {
   display: flex;
   flex-wrap: wrap;
