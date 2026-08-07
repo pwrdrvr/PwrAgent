@@ -2355,6 +2355,59 @@ describe("Composer", () => {
     });
   });
 
+  it("submits while a hash reference has only a pending federation search", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const remoteSearch = createDeferred<{ results: NavigationThreadSummary[] }>();
+    const jumpSearchRemoteThreads = vi.fn(() => remoteSearch.promise);
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: currentThread.id,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          jumpSearchRemoteThreads,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #Remote" } });
+    expect(await screen.findByText("Searching other instances…"))
+      .toBeInTheDocument();
+    await waitFor(() => {
+      expect(jumpSearchRemoteThreads).toHaveBeenCalledWith({
+        query: "Remote",
+        limit: 8,
+      });
+    });
+
+    fireEvent.keyDown(textbox, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: currentThread.id,
+        input: [{ type: "text", text: "Ask #Remote" }],
+      });
+    });
+  });
+
   it.each([
     ["acp:gemini", acpGeminiBackendSummary()],
     ["acp:kimi", backendSummary("acp:kimi")],

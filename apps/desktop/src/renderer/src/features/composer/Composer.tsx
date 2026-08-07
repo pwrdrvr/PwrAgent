@@ -4533,7 +4533,6 @@ export function Composer(props: ComposerProps) {
   const autocompleteKind: AutocompleteKind | undefined = reviewConfig
     ? undefined
     : displayedAutocompleteKind;
-  const hasAutocomplete = Boolean(autocompleteKind);
   const activeAutocompleteIndex =
     autocompleteKind === "skills"
       ? activeSkillIndex
@@ -4550,6 +4549,9 @@ export function Composer(props: ComposerProps) {
         : autocompleteKind === "hash-references"
           ? hashReferenceCount
           : filteredSlashCommands.length;
+  const hasAutocompleteOptions = Boolean(
+    autocompleteKind && autocompleteLength > 0,
+  );
   const autocompleteListboxId =
     autocompleteKind === "skills"
       ? skillListboxId
@@ -8987,7 +8989,7 @@ export function Composer(props: ComposerProps) {
   const handleAutocompleteKeyDown = (
     event: ReactKeyboardEvent<HTMLElement>,
   ): void => {
-    if (!hasAutocomplete && event.key !== "Escape") {
+    if (!hasAutocompleteOptions && event.key !== "Escape") {
       return;
     }
 
@@ -9177,7 +9179,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    if (!hasAutocomplete) {
+    if (!hasAutocompleteOptions) {
       const liveHasComposerContent = Boolean(
         (inputRef.current?.value ?? draft).trim() ||
           (inputRef.current?.skillTokenCount ?? skillTokens.length) > 0,
@@ -10247,7 +10249,7 @@ export function Composer(props: ComposerProps) {
             id="thread-composer"
             ariaActiveDescendant={activeAutocompleteOptionId}
             ariaControls={autocompleteListboxId}
-            ariaExpanded={hasAutocomplete}
+            ariaExpanded={Boolean(autocompleteKind)}
             disabled={composerDisabled}
             label={isLaunchpad ? "New thread" : "Reply"}
             markdownConversion
