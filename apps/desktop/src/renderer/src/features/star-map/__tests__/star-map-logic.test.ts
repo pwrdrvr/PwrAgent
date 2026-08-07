@@ -9,12 +9,16 @@ import {
 } from "../attention";
 import { nextAgentFilter } from "../star-map-preferences";
 import {
+  clampCardOffset,
   clampToCloudRadius,
+  cloudDragRadius,
   computeStarMapLayout,
   computeCardSlots,
   generateStarField,
   visibleCardCount,
+  type StarMapCardSlot,
 } from "../star-map-layout";
+import { cardRingSlots } from "../star-map-orbit";
 
 function thread(
   overrides: Partial<NavigationThreadSummary> & { id: string },
@@ -268,6 +272,92 @@ describe("clampToCloudRadius", () => {
     expect(clampToCloudRadius(30, 40, 100)).toEqual({ dx: 30, dy: 40 });
     const clamped = clampToCloudRadius(300, 400, 100);
     expect(Math.hypot(clamped.dx, clamped.dy)).toBeCloseTo(100);
+  });
+});
+
+describe("cloudDragRadius", () => {
+  it("contains every slot the cloud drew", () => {
+    // A lane stacks downward, so its last slot is the far one; an orbit
+    // ring puts slots all around the body. Both must land inside.
+    for (const slots of [
+      computeCardSlots([112, 112, 112, 112, 112]),
+      cardRingSlots(16, 200),
+    ]) {
+      const radius = cloudDragRadius(slots);
+      for (const slot of slots) {
+        expect(Math.hypot(slot.dx, slot.dy)).toBeLessThan(radius);
+      }
+    }
+  });
+
+  it("grows with the cloud rather than fixing one lens's bound", () => {
+    expect(cloudDragRadius(computeCardSlots([112, 112, 112]))).toBeGreaterThan(
+      cloudDragRadius(computeCardSlots([112])),
+    );
+    expect(cloudDragRadius([])).toBeGreaterThan(0);
+  });
+});
+
+describe("clampCardOffset", () => {
+  const slots = computeCardSlots([112, 112, 112, 112]);
+  const radius = cloudDragRadius(slots);
+  /** Where a card based at `baseSlot` ends up when dragged onto `target`. */
+  const dragTo = (baseSlot: StarMapCardSlot, target: StarMapCardSlot) => {
+    const committed = clampCardOffset({
+      baseSlot,
+      offset: {
+        dx: target.dx - baseSlot.dx,
+        dy: target.dy - baseSlot.dy,
+      },
+      radius,
+    });
+    return {
+      dx: baseSlot.dx + committed.dx,
+      dy: baseSlot.dy + committed.dy,
+    };
+  };
+
+  it("commits an offset from the card's own slot, not a position", () => {
+    // The persisted shape syncs across the federation, so it stays an
+    // offset even though the clamp runs on the body-relative position.
+    const baseSlot = slots[2];
+    expect(
+      clampCardOffset({ baseSlot, offset: { dx: 12, dy: -8 }, radius }),
+    ).toEqual({ dx: 12, dy: -8 });
+  });
+
+  it("lets a far-out card reach the mirror position across the body", () => {
+    // The outermost lane slot, dragged to where the same distance on the
+    // opposite side of the body would put it. Bounding the offset instead
+    // of the position would stop this drag short.
+    const baseSlot = slots[slots.length - 1];
+    const mirror = { dx: -baseSlot.dx, dy: -baseSlot.dy };
+    const landed = dragTo(baseSlot, mirror);
+    expect(landed.dx).toBeCloseTo(mirror.dx);
+    expect(landed.dy).toBeCloseTo(mirror.dy);
+  });
+
+  it("gives every card in the cloud the same reachable region", () => {
+    const near = slots[0];
+    const far = slots[slots.length - 1];
+    const targets: StarMapCardSlot[] = [
+      // Each other's slots, either way round.
+      near,
+      far,
+      // Off to one side, and out past the region so both get clamped.
+      { dx: 260, dy: -180 },
+      { dx: -2000, dy: 900 },
+      { dx: 0, dy: 4000 },
+    ];
+    for (const target of targets) {
+      const fromNear = dragTo(near, target);
+      const fromFar = dragTo(far, target);
+      expect(fromNear.dx).toBeCloseTo(fromFar.dx);
+      expect(fromNear.dy).toBeCloseTo(fromFar.dy);
+      expect(Math.hypot(fromNear.dx, fromNear.dy)).toBeLessThanOrEqual(
+        radius + 1e-6,
+      );
+    }
   });
 });
 

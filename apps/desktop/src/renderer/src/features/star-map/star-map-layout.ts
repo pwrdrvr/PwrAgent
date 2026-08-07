@@ -47,8 +47,17 @@ const ARC_MIN_LIFT = 60;
 /** Extra arc lift per pixel of horizontal distance - long links fly higher. */
 const ARC_LIFT_RATIO = 0.14;
 
-/** How far a dragged card may stray from its instance anchor. */
-export const STAR_MAP_CLOUD_RADIUS = 340;
+/**
+ * Reach a drag gets beyond the outermost card of its cloud.
+ *
+ * The drag bound is measured from the instance body, not from the card's
+ * own slot, so every card in a cloud shares one reachable region — that is
+ * what lets any card be dropped where any other card already sits. The
+ * outermost slot therefore has to fall inside the region, and this is the
+ * freedom the card sitting there gets on top of it. Cards nearer the body
+ * get more, which is the point.
+ */
+export const STAR_MAP_CLOUD_DRAG_SLACK = 340;
 
 /**
  * Deterministic constellation: spokes sorted by instance id with the hub
@@ -177,7 +186,7 @@ export function visibleCardCount(params: {
   return Math.max(count, Math.min(1, params.heights.length));
 }
 
-/** Clamp an offset to the cloud radius around the instance anchor. */
+/** Clamp a body-relative vector to a radius around the instance anchor. */
 export function clampToCloudRadius(
   dx: number,
   dy: number,
@@ -189,6 +198,53 @@ export function clampToCloudRadius(
   }
   const scale = radius / distance;
   return { dx: dx * scale, dy: dy * scale };
+}
+
+/**
+ * Radius a cloud's cards may be dragged within, measured from the body.
+ *
+ * Read off the drawn slots rather than a per-lens constant: lanes stack
+ * downward from the body while orbit and projects ring it, and both have to
+ * yield a region that already contains every card the cloud drew — a bound
+ * tighter than that would snap a far-out card inward the moment its drag
+ * began. (`cardRingExtent` in star-map-orbit.ts measures the same placed
+ * slots for body spacing, in the two lenses that ring.)
+ */
+export function cloudDragRadius(slots: readonly StarMapCardSlot[]): number {
+  let outermost = 0;
+  for (const slot of slots) {
+    outermost = Math.max(outermost, Math.hypot(slot.dx, slot.dy));
+  }
+  return outermost + STAR_MAP_CLOUD_DRAG_SLACK;
+}
+
+/**
+ * Clamp a dragged card into its cloud's reachable region, and hand back the
+ * offset to commit.
+ *
+ * A card sits at `baseSlot + offset` in body-relative pixels and the region
+ * is a radius around the body, so the clamp has to run on that position and
+ * the offset be derived back out. Clamping the offset alone would centre a
+ * separate region on every card's own slot: a card to the left of the body
+ * could not reach the positions cards on the right already occupy, and each
+ * card's freedom would depend on where its slot happened to land. The
+ * committed value stays an offset because arrangements persist and sync
+ * across the federation in that shape.
+ */
+export function clampCardOffset(params: {
+  baseSlot: StarMapCardSlot;
+  offset: StarMapCardSlot;
+  radius: number;
+}): StarMapCardSlot {
+  const position = clampToCloudRadius(
+    params.baseSlot.dx + params.offset.dx,
+    params.baseSlot.dy + params.offset.dy,
+    params.radius,
+  );
+  return {
+    dx: position.dx - params.baseSlot.dx,
+    dy: position.dy - params.baseSlot.dy,
+  };
 }
 
 export type StarMapStar = {

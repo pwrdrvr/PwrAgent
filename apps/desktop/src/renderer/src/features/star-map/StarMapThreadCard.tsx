@@ -15,7 +15,7 @@ import {
   getThreadRowStatus,
   ThreadRowStatus,
 } from "../navigation/ThreadRowStatus";
-import { clampToCloudRadius, STAR_MAP_CLOUD_RADIUS } from "./star-map-layout";
+import { clampCardOffset } from "./star-map-layout";
 import {
   visiblePullRequests,
   type StarMapCardFields,
@@ -49,6 +49,12 @@ export function StarMapThreadCard(props: {
   width: number;
   /** Lane position, so dragged-into-overlap cards paint front-to-back. */
   stackIndex: number;
+  /**
+   * How far from the INSTANCE BODY a drag may reach — one region shared by
+   * the whole cloud (`cloudDragRadius`), not a per-card allowance, so any
+   * card can be placed where any other card sits.
+   */
+  dragRadius: number;
   /** Which chips this card carries (operator preference). */
   cardFields: StarMapCardFields;
   /** Orbit rings centre cards on their slot; lanes hang them from the top. */
@@ -110,11 +116,14 @@ export function StarMapThreadCard(props: {
       }
       dragging = true;
       suppressClickRef.current = true;
-      const clamped = clampToCloudRadius(
-        startOffset.dx + deltaX,
-        startOffset.dy + deltaY,
-        STAR_MAP_CLOUD_RADIUS,
-      );
+      const clamped = clampCardOffset({
+        baseSlot: props.baseSlot,
+        offset: {
+          dx: startOffset.dx + deltaX,
+          dy: startOffset.dy + deltaY,
+        },
+        radius: props.dragRadius,
+      });
       lastDx = clamped.dx;
       lastDy = clamped.dy;
       if (!frame) {

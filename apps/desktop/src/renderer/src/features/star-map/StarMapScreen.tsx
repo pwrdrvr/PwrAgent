@@ -30,6 +30,7 @@ import {
   type StarMapSessionKeys,
 } from "./attention";
 import {
+  cloudDragRadius,
   computeCardSlots,
   computeStarMapLayout,
   generateStarField,
@@ -822,6 +823,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const heights = lane?.heights ?? [];
     const visible = threads.slice(0, lane?.count ?? 0);
     const slots = position.slots;
+    // One region for the whole cloud, sized to the slots this lens drew,
+    // so every card in it can reach every other card's position.
+    const dragRadius = cloudDragRadius(slots);
     const overflow = threads.length - visible.length;
     return (
       <div
@@ -867,6 +871,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               )}
               baseSlot={slot}
               offset={arrangement.offsetFor(position.instanceId, threadKey)}
+              dragRadius={dragRadius}
               width={position.cardWidth}
               centered={orbitMode}
               stackIndex={index}
@@ -1111,6 +1116,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 ORBIT_MAX_CARDS_PER_INSTANCE,
               );
               const slots = cardRingSlots(visible.length, ORBIT_CARD_WIDTH);
+              const dragRadius = cloudDragRadius(slots);
               return (
                 <div
                   key={`project:${placement.key}`}
@@ -1145,6 +1151,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                           owner === localInstanceId ? undefined : owner,
                         )}
                         baseSlot={slots[index]}
+                        dragRadius={dragRadius}
                         // No drag here on purpose: arrangements are keyed
                         // and synced per federation instance, and a project
                         // is not an instance. Giving projects their own
