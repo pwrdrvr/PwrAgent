@@ -9529,6 +9529,76 @@ export class DesktopBackendRegistry {
     return await this.gitWorkingStateService.listOtherChanges(worktreePath, options);
   }
 
+  /**
+   * Resolve a renderer-supplied worktree path against the owning thread before
+   * a federated peer can read commit metadata from it. The peer supplies the
+   * path it rendered, but this instance remains authoritative for both the
+   * linked-directory boundary and merged-PR exclusions.
+   */
+  async resolveThreadWorktreeGitReadContext(params: {
+    backend?: AppServerBackendKind;
+    threadId: string;
+    worktreePath: string;
+  }): Promise<{
+    acceptedPushedCommitShas: string[];
+    worktreePath: string;
+  } | undefined> {
+    const thread = await this.resolveThread({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    if (!thread) {
+      return undefined;
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: thread.source,
+      threadId: thread.id,
+    });
+    const candidatePaths = new Set<string>();
+    if (thread.projectKey?.trim()) {
+      candidatePaths.add(thread.projectKey.trim());
+    }
+    for (const directory of [
+      ...thread.linkedDirectories,
+      ...(overlay?.extraLinkedDirectories ?? []),
+    ]) {
+      const workspacePath = directory.worktreePath?.trim()
+        || (directory.kind === "local" ? directory.path.trim() : "");
+      if (workspacePath) {
+        candidatePaths.add(workspacePath);
+      }
+    }
+    const requestedPath = normalizeLinkedDirectoryPathForMatch(
+      params.worktreePath,
+    );
+    const matchedPath = [...candidatePaths].find(
+      (candidate) =>
+        normalizeLinkedDirectoryPathForMatch(candidate) === requestedPath,
+    );
+    if (!requestedPath || !matchedPath) {
+      return undefined;
+    }
+    const storedPrs = [
+      ...(overlay?.prs ?? []),
+      ...(overlay?.detachedPrs ?? []),
+    ];
+    let canonicalPrs = storedPrs;
+    if (this.threadPullRequestCanonicalizer && storedPrs.length > 0) {
+      try {
+        canonicalPrs = await this.threadPullRequestCanonicalizer(storedPrs);
+      } catch (error) {
+        backendRegistryLog.warn("federated commit PR canonicalization failed", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId: thread.id,
+        });
+      }
+    }
+    return {
+      worktreePath: matchedPath,
+      acceptedPushedCommitShas: mergedPrCommitShas(canonicalPrs),
+    };
+  }
+
   async getWorktreeOtherChangeDiff(
     worktreePath: string,
     filePath: string,

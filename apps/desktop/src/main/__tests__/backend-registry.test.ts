@@ -2695,6 +2695,72 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("authorizes federated commit reads against the owner thread and PR overlay", async () => {
+    const worktreePath = "/worktrees/PwrAgnt";
+    const attachedCommitSha = "a".repeat(40);
+    const detachedCommitSha = "b".repeat(40);
+    const mergedPr = (number: number, commitSha: string): PrSummary => ({
+      provider: "github.com",
+      number,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "merged",
+      lifecycleState: "merged",
+      commitShas: [commitSha],
+      url: `https://github.com/pwrdrvr/PwrAgent/pull/${number}`,
+    });
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Federated unpublished work",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: worktreePath,
+      linkedDirectories: [],
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [thread] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            extraLinkedDirectories: [],
+            prs: [{
+              ...mergedPr(735, attachedCommitSha),
+              state: "unknown",
+              lifecycleState: "open",
+            }],
+            detachedPrs: [mergedPr(734, detachedCommitSha)],
+          },
+        },
+      }),
+    });
+    registry.setThreadPullRequestCanonicalizer(async (prs) =>
+      prs.map((pr) => pr.number === 735
+        ? { ...pr, state: "merged", lifecycleState: "merged" }
+        : pr),
+    );
+
+    try {
+      await expect(registry.resolveThreadWorktreeGitReadContext({
+        backend: "codex",
+        threadId: "thread-1",
+        worktreePath,
+      })).resolves.toEqual({
+        worktreePath,
+        acceptedPushedCommitShas: [attachedCommitSha, detachedCommitSha],
+      });
+      await expect(registry.resolveThreadWorktreeGitReadContext({
+        backend: "codex",
+        threadId: "thread-1",
+        worktreePath: "/outside/repo",
+      })).resolves.toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("evaluates the current PR state when auto-fix is enabled", async () => {
     const preferenceChanged = vi.fn(async () => undefined);
     const sendPendingNow = vi.fn(async () => true);

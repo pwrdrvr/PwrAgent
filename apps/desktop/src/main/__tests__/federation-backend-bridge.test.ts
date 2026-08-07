@@ -61,6 +61,127 @@ describe("federation backend bridge", () => {
     });
   });
 
+  it("routes unpublished commit summaries and diffs through thread-detail RPC", async () => {
+    const listWorktreeUnpublishedCommits = vi.fn(async () => ({
+      commits: [],
+      totalCommits: 0,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    }));
+    const getWorktreeUnpublishedCommitDiff = vi.fn(async () => ({
+      detail: undefined,
+    }));
+    const backend = {
+      listWorktreeUnpublishedCommits,
+      getWorktreeUnpublishedCommitDiff,
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      now: () => 2_000,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+    const baseRequest = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+    };
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "list-unpublished",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits,
+        params: baseRequest,
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "read-unpublished-diff",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff,
+        params: {
+          ...baseRequest,
+          commitSha: "a".repeat(40),
+          path: "/remote/repo/file.ts",
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_100,
+      },
+    });
+
+    expect(listWorktreeUnpublishedCommits).toHaveBeenCalledWith(baseRequest);
+    expect(getWorktreeUnpublishedCommitDiff).toHaveBeenCalledWith({
+      ...baseRequest,
+      commitSha: "a".repeat(40),
+      path: "/remote/repo/file.ts",
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits
+      ],
+    ).toBe("thread_detail");
+    expect(replies).toMatchObject([
+      { kind: "response", requestId: "list-unpublished" },
+      { kind: "response", requestId: "read-unpublished-diff" },
+    ]);
+  });
+
+  it("sends unpublished commit reads from the remote backend client", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+    const request = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+    };
+
+    const pending = client.listWorktreeUnpublishedCommits(request);
+    const envelope = sent.at(-1)!;
+    expect(envelope).toMatchObject({
+      method: FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits,
+      params: request,
+    });
+    rpc.receiveEnvelope({
+      id: "list-response",
+      kind: "response",
+      requestId: envelope.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_000,
+      result: {
+        commits: [],
+        totalCommits: 0,
+        truncated: false,
+        maxCommits: 20,
+        maxFilesPerCommit: 50,
+      },
+    });
+
+    await expect(pending).resolves.toMatchObject({ totalCommits: 0 });
+  });
+
   it("maps federation backend methods to local app-server operations", async () => {
     const backend: FederationBackendOperations = {
       listThreads: vi.fn(async () => ({
@@ -1853,6 +1974,8 @@ describe("federation backend bridge", () => {
       setCodexThreadEnvironment: vi.fn(),
       materializeDirectoryLaunchpad: vi.fn(),
       refreshDirectoryGitStatuses: vi.fn(),
+      listWorktreeUnpublishedCommits: vi.fn(),
+      getWorktreeUnpublishedCommitDiff: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
       renameThread: vi.fn(),
       readApplications: vi.fn(),
@@ -2053,6 +2176,8 @@ describe("federation backend bridge", () => {
         stopCodexEnvironmentAction: vi.fn(),
         setCodexThreadEnvironment: vi.fn(),
         refreshDirectoryGitStatuses: vi.fn(),
+        listWorktreeUnpublishedCommits: vi.fn(),
+        getWorktreeUnpublishedCommitDiff: vi.fn(),
         materializeDirectoryLaunchpad: vi.fn(),
         handoffThreadWorkspace: vi.fn(),
         renameThread: vi.fn(),

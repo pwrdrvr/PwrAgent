@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import type {
+  AppServerBackendKind,
   AppServerThreadActivityDetail,
   DesktopApplicationDiscoveryCandidate,
   EditGroupCommitState,
@@ -25,6 +26,8 @@ import {
 import type { EditedFilesDock } from "./context-tab";
 
 type EditsPanelProps = {
+  backend?: AppServerBackendKind;
+  threadId?: string;
   /** Newest-first accumulated edited-file groups for the open thread. */
   groups: EditedFileGroup[];
   /** Git commit lifecycle per group key, from `useEditCommitStates`. */
@@ -170,7 +173,9 @@ function useOtherWorktreeChanges(params: {
 }
 
 function useUnpublishedCommits(params: {
+  backend?: AppServerBackendKind;
   desktopApi?: Pick<DesktopApi, "listWorktreeUnpublishedCommits">;
+  threadId?: string;
   worktreeRoot?: string;
   refreshKey?: string;
 }) {
@@ -192,6 +197,8 @@ function useUnpublishedCommits(params: {
     let cancelled = false;
     setState({ commits: [], totalCommits: 0, truncated: false, loading: true });
     void listCommits({
+      backend: params.backend,
+      threadId: params.threadId,
       worktreePath,
       maxCommits: UNPUBLISHED_COMMITS_MAX,
       maxFilesPerCommit: UNPUBLISHED_COMMIT_FILES_MAX,
@@ -222,7 +229,9 @@ function useUnpublishedCommits(params: {
     };
   }, [
     params.desktopApi?.listWorktreeUnpublishedCommits,
+    params.backend,
     params.refreshKey,
+    params.threadId,
     params.worktreeRoot,
   ]);
 
@@ -430,7 +439,9 @@ export function EditsPanel(props: EditsPanelProps) {
     worktreeRoot: props.worktreeRoot,
   });
   const unpublishedCommits = useUnpublishedCommits({
+    backend: props.backend,
     desktopApi: props.desktopApi,
+    threadId: props.threadId,
     worktreeRoot: props.worktreeRoot,
     refreshKey: props.workingStateRefreshKey,
   });
@@ -467,11 +478,13 @@ export function EditsPanel(props: EditsPanelProps) {
       <div className="edits-panel__body">
         {hasUnpublishedCommits ? (
           <UnpublishedCommitsSection
+            backend={props.backend}
             commits={unpublishedCommits.commits}
             totalCommits={unpublishedCommits.totalCommits}
             truncated={unpublishedCommits.truncated}
             worktreeRoot={props.worktreeRoot}
             desktopApi={props.desktopApi}
+            threadId={props.threadId}
             onOpenFile={props.onOpenFile}
           />
         ) : null}
@@ -519,11 +532,13 @@ function unpublishedCommitsSummary(totalCommits: number): string {
 }
 
 function UnpublishedCommitsSection(props: {
+  backend?: AppServerBackendKind;
   commits: WorktreeUnpublishedCommit[];
   totalCommits: number;
   truncated: boolean;
   worktreeRoot?: string;
   desktopApi?: Pick<DesktopApi, "getWorktreeUnpublishedCommitDiff">;
+  threadId?: string;
   onOpenFile?: (absolutePath: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -567,11 +582,13 @@ function UnpublishedCommitsSection(props: {
           <div className="unpublished-commits__list">
             {props.commits.map((commit, index) => (
               <UnpublishedCommitSection
+                backend={props.backend}
                 key={commit.sha}
                 commit={commit}
                 initiallyExpanded={index === 0}
                 worktreeRoot={props.worktreeRoot}
                 desktopApi={props.desktopApi}
+                threadId={props.threadId}
                 onOpenFile={props.onOpenFile}
               />
             ))}
@@ -588,10 +605,12 @@ function UnpublishedCommitsSection(props: {
 }
 
 function UnpublishedCommitSection(props: {
+  backend?: AppServerBackendKind;
   commit: WorktreeUnpublishedCommit;
   initiallyExpanded: boolean;
   worktreeRoot?: string;
   desktopApi?: Pick<DesktopApi, "getWorktreeUnpublishedCommitDiff">;
+  threadId?: string;
   onOpenFile?: (absolutePath: string) => void;
 }) {
   const [expanded, setExpanded] = useState(props.initiallyExpanded);
@@ -632,10 +651,12 @@ function UnpublishedCommitSection(props: {
               {props.commit.files.map((file) => (
                 <li key={file.repoPath} className="live-work-rail__file-row">
                   <UnpublishedCommitFileRow
+                    backend={props.backend}
                     commitSha={props.commit.sha}
                     file={file}
                     worktreeRoot={props.worktreeRoot}
                     desktopApi={props.desktopApi}
+                    threadId={props.threadId}
                     onOpenFile={props.onOpenFile}
                   />
                 </li>
@@ -654,10 +675,12 @@ function UnpublishedCommitSection(props: {
 }
 
 function UnpublishedCommitFileRow(props: {
+  backend?: AppServerBackendKind;
   commitSha: string;
   file: WorktreeUnpublishedCommitFile;
   worktreeRoot?: string;
   desktopApi?: Pick<DesktopApi, "getWorktreeUnpublishedCommitDiff">;
+  threadId?: string;
   onOpenFile?: (absolutePath: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -682,6 +705,8 @@ function UnpublishedCommitFileRow(props: {
     let cancelled = false;
     setLoading(true);
     void getDiff({
+      backend: props.backend,
+      threadId: props.threadId,
       worktreePath,
       commitSha: props.commitSha,
       path: props.file.path,
@@ -708,9 +733,11 @@ function UnpublishedCommitFileRow(props: {
   }, [
     detail,
     expanded,
+    props.backend,
     props.commitSha,
     props.desktopApi,
     props.file.path,
+    props.threadId,
     props.worktreeRoot,
   ]);
 

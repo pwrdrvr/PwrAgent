@@ -11,6 +11,10 @@ export function scopeDesktopApiToFederationTarget(
   const openApplication = desktopApi.openApplication;
   const refreshDirectoryGitStatuses = desktopApi.refreshDirectoryGitStatuses;
   const readPwrSnapConnectionStatus = desktopApi.readPwrSnapConnectionStatus;
+  const listWorktreeUnpublishedCommits =
+    desktopApi.listWorktreeUnpublishedCommits;
+  const getWorktreeUnpublishedCommitDiff =
+    desktopApi.getWorktreeUnpublishedCommitDiff;
 
   return {
     ...desktopApi,
@@ -28,6 +32,18 @@ export function scopeDesktopApiToFederationTarget(
       : undefined,
     readPwrSnapConnectionStatus: readPwrSnapConnectionStatus
       ? async () => await readPwrSnapConnectionStatus({ federationTarget })
+      : undefined,
+    listWorktreeUnpublishedCommits: listWorktreeUnpublishedCommits
+      ? async (request) => await listWorktreeUnpublishedCommits({
+          ...request,
+          federationTarget,
+        })
+      : undefined,
+    getWorktreeUnpublishedCommitDiff: getWorktreeUnpublishedCommitDiff
+      ? async (request) => await getWorktreeUnpublishedCommitDiff({
+          ...request,
+          federationTarget,
+        })
       : undefined,
     connectPwrSnap: undefined,
     openPwrSnap: undefined,

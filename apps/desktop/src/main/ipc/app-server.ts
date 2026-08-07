@@ -2188,6 +2188,25 @@ class DesktopAppServerService {
   async listWorktreeUnpublishedCommits(
     request: ListWorktreeUnpublishedCommitsRequest,
   ): Promise<ListWorktreeUnpublishedCommitsResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      if (!request.backend || !request.threadId?.trim()) {
+        throw new Error(
+          "Remote unpublished commit reads require an owning thread identity.",
+        );
+      }
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listWorktreeUnpublishedCommits({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+          maxCommits: request.maxCommits,
+          maxFilesPerCommit: request.maxFilesPerCommit,
+        });
+    }
     return await getDesktopBackendRegistry().listWorktreeUnpublishedCommits(
       request.worktreePath,
       {
@@ -2203,6 +2222,26 @@ class DesktopAppServerService {
   async getWorktreeUnpublishedCommitDiff(
     request: GetWorktreeUnpublishedCommitDiffRequest,
   ): Promise<GetWorktreeUnpublishedCommitDiffResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      if (!request.backend || !request.threadId?.trim()) {
+        throw new Error(
+          "Remote unpublished commit reads require an owning thread identity.",
+        );
+      }
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .getWorktreeUnpublishedCommitDiff({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+          commitSha: request.commitSha,
+          path: request.path,
+          maxBytes: request.maxBytes,
+        });
+    }
     return await getDesktopBackendRegistry().getWorktreeUnpublishedCommitDiff(
       request.worktreePath,
       request.commitSha,
@@ -7377,9 +7416,20 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
     async (
-      _event,
+      event,
       request: ListWorktreeUnpublishedCommitsRequest,
     ): Promise<ListWorktreeUnpublishedCommitsResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Unpublished commit reads for a remote thread must target the owning instance.",
+        );
+      }
       return await appServerService.listWorktreeUnpublishedCommits(request);
     },
   );
@@ -7387,9 +7437,20 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
     async (
-      _event,
+      event,
       request: GetWorktreeUnpublishedCommitDiffRequest,
     ): Promise<GetWorktreeUnpublishedCommitDiffResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Unpublished commit reads for a remote thread must target the owning instance.",
+        );
+      }
       return await appServerService.getWorktreeUnpublishedCommitDiff(request);
     },
   );

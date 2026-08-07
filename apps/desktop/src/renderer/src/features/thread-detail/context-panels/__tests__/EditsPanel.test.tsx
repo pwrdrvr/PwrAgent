@@ -100,9 +100,11 @@ describe("EditsPanel", () => {
 
     render(
       <EditsPanel
+        backend="codex"
         groups={[]}
         dock="sidebar"
         onDockChange={vi.fn()}
+        threadId="thread-1"
         worktreeRoot="/repo"
         desktopApi={{
           listWorktreeUnpublishedCommits,
@@ -117,11 +119,20 @@ describe("EditsPanel", () => {
     expect(screen.getByText("Preserve remote callback evidence"))
       .toBeInTheDocument();
     expect(screen.getByText("bbbbbbb")).toBeInTheDocument();
+    expect(listWorktreeUnpublishedCommits).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/repo",
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    });
 
     fireEvent.click(screen.getByRole("button", { name: /config\.ts/i }));
 
     await waitFor(() => {
       expect(getWorktreeUnpublishedCommitDiff).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
         worktreePath: "/repo",
         commitSha,
         path: "/repo/src/config.ts",

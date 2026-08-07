@@ -934,6 +934,10 @@ export type WorktreeUnpublishedCommit = {
 };
 
 export type ListWorktreeUnpublishedCommitsRequest = {
+  /** Owning thread identity; required when `federationTarget` is remote. */
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+  federationTarget?: FederationTarget;
   worktreePath: string;
   /** Bounded by the main process; callers can request a smaller cap. */
   maxCommits?: number;
@@ -950,6 +954,10 @@ export type ListWorktreeUnpublishedCommitsResponse = {
 };
 
 export type GetWorktreeUnpublishedCommitDiffRequest = {
+  /** Owning thread identity; required when `federationTarget` is remote. */
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+  federationTarget?: FederationTarget;
   worktreePath: string;
   commitSha: string;
   path: string;

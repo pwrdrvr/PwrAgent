@@ -28,6 +28,8 @@ import type {
   ForkThreadRequest,
   ForkThreadResponse,
   GetNavigationSnapshotRequest,
+  GetWorktreeUnpublishedCommitDiffRequest,
+  GetWorktreeUnpublishedCommitDiffResponse,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
@@ -36,6 +38,8 @@ import type {
   ListBackendsResponse,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
+  ListWorktreeUnpublishedCommitsRequest,
+  ListWorktreeUnpublishedCommitsResponse,
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
@@ -171,6 +175,8 @@ export const FEDERATION_BACKEND_METHODS = {
   stopCodexEnvironmentAction: "backend.stopCodexEnvironmentAction",
   setCodexThreadEnvironment: "backend.setCodexThreadEnvironment",
   refreshDirectoryGitStatuses: "backend.refreshDirectoryGitStatuses",
+  listWorktreeUnpublishedCommits: "backend.listWorktreeUnpublishedCommits",
+  getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
   renameThread: "backend.renameThread",
@@ -250,6 +256,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
   [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
@@ -388,6 +396,12 @@ export type FederationBackendOperations = {
   refreshDirectoryGitStatuses(
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse>;
+  listWorktreeUnpublishedCommits(
+    request: ListWorktreeUnpublishedCommitsRequest,
+  ): Promise<ListWorktreeUnpublishedCommitsResponse>;
+  getWorktreeUnpublishedCommitDiff(
+    request: GetWorktreeUnpublishedCommitDiffRequest,
+  ): Promise<GetWorktreeUnpublishedCommitDiffResponse>;
   materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions,
@@ -759,6 +773,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.refreshDirectoryGitStatuses(
         envelope.params as RefreshDirectoryGitStatusesRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits,
+    async (envelope) =>
+      await params.backend.listWorktreeUnpublishedCommits(
+        envelope.params as ListWorktreeUnpublishedCommitsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff,
+    async (envelope) =>
+      await params.backend.getWorktreeUnpublishedCommitDiff(
+        envelope.params as GetWorktreeUnpublishedCommitDiffRequest,
       ),
   );
   params.router.registerHandler(
@@ -1216,6 +1244,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<RefreshDirectoryGitStatusesResponse> {
     return await this.rpc.request<RefreshDirectoryGitStatusesResponse>({
       method: FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses,
+      params: request,
+    });
+  }
+
+  async listWorktreeUnpublishedCommits(
+    request: ListWorktreeUnpublishedCommitsRequest,
+  ): Promise<ListWorktreeUnpublishedCommitsResponse> {
+    return await this.rpc.request<ListWorktreeUnpublishedCommitsResponse>({
+      method: FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits,
+      params: request,
+    });
+  }
+
+  async getWorktreeUnpublishedCommitDiff(
+    request: GetWorktreeUnpublishedCommitDiffRequest,
+  ): Promise<GetWorktreeUnpublishedCommitDiffResponse> {
+    return await this.rpc.request<GetWorktreeUnpublishedCommitDiffResponse>({
+      method: FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff,
       params: request,
     });
   }

@@ -701,10 +701,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         if (!props.thread) return null;
         return (
           <EditsPanel
+            backend={props.thread.source}
             groups={props.editedFileGroups ?? []}
             commitStatesByKey={props.editedFileCommitStates}
             worktreeRoot={props.editedFilesWorktreeRoot}
             desktopApi={props.desktopApi}
+            threadId={props.thread.id}
             workingStateRefreshKey={JSON.stringify({
               fetchedAt: props.thread.gitWorkingStateFetchedAt,
               state: props.thread.gitWorkingState ?? null,

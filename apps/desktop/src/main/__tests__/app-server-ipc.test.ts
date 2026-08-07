@@ -50,6 +50,14 @@ const federationMock = vi.hoisted(() => {
       renamedAt: 6_000,
     })),
     refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
+    listWorktreeUnpublishedCommits: vi.fn(async () => ({
+      commits: [],
+      totalCommits: 0,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    })),
+    getWorktreeUnpublishedCommitDiff: vi.fn(async () => ({})),
   };
   const remoteThreadSummaries = {
     resolvePinnedThreads: vi.fn(
@@ -892,6 +900,8 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.archiveThread.mockClear();
     federationMock.remoteBackend.markThreadSeen.mockClear();
     federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
+    federationMock.remoteBackend.listWorktreeUnpublishedCommits.mockClear();
+    federationMock.remoteBackend.getWorktreeUnpublishedCommitDiff.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     federationMock.runtime.remoteNavigationSnapshot.mockReset();
     listThreads.mockClear();
@@ -5673,6 +5683,62 @@ describe("app server ipc", () => {
     });
     expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
     expect(invalidateDirectoryStatus).not.toHaveBeenCalled();
+  });
+
+  it("routes remote unpublished commit reads to the owning federation peer", async () => {
+    const {
+      NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
+      NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
+    } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const baseRequest = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+      federationTarget,
+    };
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL)?.(
+      {},
+      { ...baseRequest, maxCommits: 20, maxFilesPerCommit: 50 },
+    );
+    await handlers.get(NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL)?.(
+      {},
+      {
+        ...baseRequest,
+        commitSha: "a".repeat(40),
+        path: "/remote/repo/file.ts",
+        maxBytes: 200_000,
+      },
+    );
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(
+      federationMock.remoteBackend.listWorktreeUnpublishedCommits,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    });
+    expect(
+      federationMock.remoteBackend.getWorktreeUnpublishedCommitDiff,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+      commitSha: "a".repeat(40),
+      path: "/remote/repo/file.ts",
+      maxBytes: 200_000,
+    });
   });
 
   it("coalesces rapid forced directory git status re-enqueues for the same key", async () => {
