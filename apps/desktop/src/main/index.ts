@@ -62,6 +62,7 @@ import {
   disposeDesktopFederationRuntime,
   getDesktopFederationRuntime,
 } from "./federation/federation-runtime";
+import { createFederationWindow } from "./federation/federation-window";
 import {
   disposeIntegratedTerminalIpcHandlers,
   registerIntegratedTerminalIpcHandlers,
@@ -819,13 +820,14 @@ function installApplicationMenu(): void {
         await shell.openExternal(PWRAGENT_DOCUMENTATION_URL);
       },
       openFederationWindow: (peer) => {
-        createMainWindow({
-          federationLabel: peer.label,
-          federationTarget: {
-            scope: "remote",
-            instanceId: peer.instanceId,
-          },
-        });
+        const connectedPeer = getDesktopFederationRuntime()
+          .connectedPeerTargets()
+          .find((candidate) => candidate.target.instanceId === peer.instanceId);
+        if (!connectedPeer) {
+          installApplicationMenu();
+          return;
+        }
+        createFederationWindow({ peer: connectedPeer });
       },
       openIssueReporter: async () => {
         await shell.openExternal(PWRAGENT_ISSUE_REPORTER_URL);
