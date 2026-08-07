@@ -21,6 +21,7 @@ import { createHotCpuProfileSession } from "./diagnostics/hot-cpu-profile-sessio
 import { MainProcessHeapMonitor } from "./diagnostics/main-process-heap-monitor";
 import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
 import { RendererHotCpuProfiler } from "./diagnostics/renderer-hot-cpu-profiler";
+import { isSafeExternalOpenUrl } from "./external-url-policy";
 import { getMainLogger } from "./log";
 import { lockMainWindowTitle, mainWindowTitle } from "./main-window-title";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
@@ -64,6 +65,8 @@ import {
 } from "./navigation-browse-mode-bootstrap";
 import { placementForCursorDisplay } from "./window-placement";
 import { federationWindowTargetAdditionalArguments } from "../shared/federation-window";
+
+export { isSafeExternalOpenUrl } from "./external-url-policy";
 
 /**
  * WebContents of windows created with a federationTarget. Remote windows
@@ -300,45 +303,6 @@ function isSafeRendererNavigation(targetUrl: string): boolean {
   }
 }
 
-/**
- * Gate for handing a URL to the OS via `shell.openExternal`.
- *
- * PwrAgent's own `pwragent:` scheme is deliberately NOT allowed here. Thread
- * links are resolved in-app by the transcript renderer, which intercepts the
- * click and navigates; they must never round-trip out through the OS. Keeping
- * the scheme out of this allowlist is what makes that a property of the code
- * rather than a convention — see `contracts/thread-link.ts`.
- */
-export function isSafeExternalOpenUrl(url: string): boolean {
-  let parsed: URL;
-
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-
-  if (
-    parsed.protocol === "https:" ||
-    parsed.protocol === "mailto:" ||
-    parsed.protocol === "file:"
-  ) {
-    return true;
-  }
-
-  return parsed.protocol === "http:" && isLoopbackHost(parsed.hostname);
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-
-  return (
-    normalized === "localhost" ||
-    normalized.endsWith(".localhost") ||
-    normalized === "127.0.0.1" ||
-    normalized === "::1"
-  );
-}
 
 function resolveRepoRoot(): string {
   return resolve(app.getAppPath(), "../..");

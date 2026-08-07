@@ -6,6 +6,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { DEFAULT_PULL_REQUEST_PROVIDER } from "@pwragent/shared";
+import { isSafeExternalOpenUrl } from "../external-url-policy";
 
 /**
  * Shared PR-status derivations.
@@ -225,7 +226,10 @@ export function findFailedCheckUrl(
     if (!candidate) continue;
     try {
       const parsed = new URL(candidate);
-      if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      if (
+        (parsed.protocol === "https:" || parsed.protocol === "http:")
+        && isSafeExternalOpenUrl(parsed.toString())
+      ) {
         return parsed.toString();
       }
     } catch {
