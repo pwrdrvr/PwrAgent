@@ -54,6 +54,16 @@ function findTurnPageStartIndex(
     return endIndex;
   }
 
+  // Turn metadata is optional in older replay formats and may be present on
+  // only part of a logical turn. Mixing both paging strategies can then split
+  // that turn or turn a bounded request into the entire replay, so preserve
+  // entry-count paging unless every entry in scope has a turn ID.
+  for (let index = 0; index < endIndex; index += 1) {
+    if (!entries[index]?.turn?.id) {
+      return Math.max(0, endIndex - limit);
+    }
+  }
+
   const turnIds = new Set<string>();
   let oldestRetainedTurnId: string | undefined;
   for (let index = endIndex - 1; index >= 0; index -= 1) {
@@ -68,9 +78,7 @@ function findTurnPageStartIndex(
     oldestRetainedTurnId = turnId;
   }
 
-  // Older replay formats do not consistently carry turn metadata. Preserve
-  // their established entry-count paging instead of treating the entire
-  // transcript as one synthetic turn.
+  // Empty replays still use the established entry-count paging result.
   if (!oldestRetainedTurnId) {
     return Math.max(0, endIndex - limit);
   }

@@ -58,6 +58,27 @@ describe("thread replay pagination", () => {
       previousCursor: "turn-2-user-Question two",
     });
   });
+
+  it("uses bounded entry paging when turn metadata is only partial", () => {
+    const replay = buildReplay([
+      legacyEntry("legacy-user", "user", "Question one"),
+      turnEntry("turn-1", "assistant", "Answer one", "final"),
+      turnEntry("turn-2", "user", "Question two"),
+      turnEntry("turn-2", "assistant", "Answer two", "final"),
+    ]);
+
+    const page = pageNormalizedReplay(replay, { limit: 2 });
+
+    expect(page.entries.map((entry) => entry.id)).toEqual([
+      "turn-2-user-Question two",
+      "turn-2-assistant-Answer two",
+    ]);
+    expect(page.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: true,
+      previousCursor: "turn-2-user-Question two",
+    });
+  });
 });
 
 function buildReplay(entries: AppServerThreadEntry[]): AppServerThreadReplay {
@@ -97,5 +118,18 @@ function turnEntry(
       id: turnId,
       status: "completed",
     },
+  };
+}
+
+function legacyEntry(
+  id: string,
+  role: "assistant" | "user",
+  text: string,
+): AppServerThreadEntry {
+  return {
+    type: "message",
+    id,
+    role,
+    text,
   };
 }
