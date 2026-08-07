@@ -79,6 +79,56 @@ describe("parseGhPrPayload", () => {
     expect(summary.org).toBe("");
     expect(summary.repo).toBe("");
   });
+
+  it("retains the first safe failed-check destination", () => {
+    const summary = parseGhPrPayload({
+      ...rawMergedPr(),
+      statusCheckRollup: [
+        {
+          __typename: "CheckRun",
+          conclusion: "FAILURE",
+          detailsUrl: "https://github.com/pwrdrvr/PwrAgent/actions/runs/123",
+          status: "COMPLETED",
+        },
+      ],
+    });
+
+    expect(summary.failedCheckUrl).toBe(
+      "https://github.com/pwrdrvr/PwrAgent/actions/runs/123",
+    );
+  });
+
+  it("retains loopback HTTP failed-check destinations", () => {
+    const summary = parseGhPrPayload({
+      ...rawMergedPr(),
+      statusCheckRollup: [
+        {
+          __typename: "CheckRun",
+          conclusion: "FAILURE",
+          detailsUrl: "http://localhost:3000/runs/123",
+          status: "COMPLETED",
+        },
+      ],
+    });
+
+    expect(summary.failedCheckUrl).toBe("http://localhost:3000/runs/123");
+  });
+
+  it("rejects remote HTTP failed-check destinations", () => {
+    const summary = parseGhPrPayload({
+      ...rawMergedPr(),
+      statusCheckRollup: [
+        {
+          __typename: "CheckRun",
+          conclusion: "FAILURE",
+          detailsUrl: "http://ci.example.com/runs/123",
+          status: "COMPLETED",
+        },
+      ],
+    });
+
+    expect(summary).not.toHaveProperty("failedCheckUrl");
+  });
 });
 
 describe("derive PR states", () => {

@@ -83,6 +83,8 @@ describe("buildBatchedPrQuery", () => {
     expect(query).toContain("headRefName");
     expect(query).toContain("contexts(first: 100)");
     expect(query).toContain("pageInfo { hasNextPage endCursor }");
+    expect(query).toContain("conclusion detailsUrl status");
+    expect(query).toContain("state targetUrl");
   });
 
   it("passes every input as a variable rather than interpolating it", () => {
@@ -119,6 +121,8 @@ describe("buildBatchedStatusContextQuery", () => {
     expect(query).toContain("r1: node(id: $id1)");
     expect(query).toContain("contexts(first: 100, after: $c0)");
     expect(query).toContain("contexts(first: 100, after: $c1)");
+    expect(query).toContain("conclusion detailsUrl status");
+    expect(query).toContain("state targetUrl");
     expect(variables).toEqual({
       id0: "commit-1",
       c0: "cursor-1",
@@ -224,6 +228,7 @@ describe("mapGraphqlPrNode", () => {
                     {
                       __typename: "CheckRun",
                       conclusion: "FAILURE",
+                      detailsUrl: "https://github.com/pwrdrvr/PwrAgent/actions/runs/123",
                       status: "COMPLETED",
                     },
                     {
@@ -243,6 +248,7 @@ describe("mapGraphqlPrNode", () => {
     expect(summary).toMatchObject({
       checkState: "failing",
       checksStillRunning: true,
+      failedCheckUrl: "https://github.com/pwrdrvr/PwrAgent/actions/runs/123",
     });
   });
 
@@ -384,6 +390,7 @@ describe("GithubGraphqlPrClient", () => {
                 nodes: [{
                   __typename: "CheckRun",
                   conclusion: "FAILURE",
+                  detailsUrl: "https://github.com/pwrdrvr/PwrAgent/actions/runs/456",
                   status: "COMPLETED",
                 }],
               },
@@ -440,6 +447,7 @@ describe("GithubGraphqlPrClient", () => {
     expect(pr).toMatchObject({
       checkState: "failing",
       checksStillRunning: true,
+      failedCheckUrl: "https://github.com/pwrdrvr/PwrAgent/actions/runs/456",
     });
   });
 

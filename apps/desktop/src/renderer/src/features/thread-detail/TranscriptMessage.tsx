@@ -132,6 +132,18 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
                 : "PR watch completed"}
             </span>
           </button>
+          {prAutomationOrigin.kind === "auto-fix"
+            && prAutomationOrigin.eventKinds?.includes("ci-failure")
+            && prAutomationOrigin.failedCheckUrl ? (
+              <a
+                className="transcript-monitor-result__run-link"
+                href={prAutomationOrigin.failedCheckUrl}
+                rel="noreferrer"
+                target="_blank"
+              >
+                View failed run
+              </a>
+            ) : null}
           <RailStatusChip
             alert={outcomeTone === "error"}
             tone={outcomeTone}

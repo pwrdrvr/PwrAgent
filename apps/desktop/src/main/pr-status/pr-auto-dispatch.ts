@@ -287,6 +287,9 @@ export class PrAutoDispatchCoordinator {
         prNumber: params.pr.number,
         ...(params.pr.title ? { prTitle: params.pr.title } : {}),
         prUrl: params.pr.url,
+        ...(params.pr.failedCheckUrl
+          ? { failedCheckUrl: params.pr.failedCheckUrl }
+          : {}),
         headSha: event.headSha,
         eventKinds: event.eventKinds,
         createdAt: params.observedAt,
@@ -540,6 +543,9 @@ export class PrAutoDispatchCoordinator {
             prNumber: begin.record.pending.prNumber,
             ...(begin.record.pending.prTitle
               ? { prTitle: begin.record.pending.prTitle }
+              : {}),
+            ...(begin.record.pending.failedCheckUrl
+              ? { failedCheckUrl: begin.record.pending.failedCheckUrl }
               : {}),
             headSha: begin.record.pending.headSha,
             eventKinds: begin.record.pending.eventKinds,

@@ -454,6 +454,7 @@ export type AppServerThreadMessageOrigin = {
     prKey: string;
     prNumber: number;
     prTitle?: string;
+    failedCheckUrl?: string;
     headSha: string;
     eventKinds?: ThreadPrAutoDispatchEventKind[];
     outcome?: "success" | "failure";

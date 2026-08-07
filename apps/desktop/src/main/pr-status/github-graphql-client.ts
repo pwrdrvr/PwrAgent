@@ -9,6 +9,7 @@ import {
   deriveLifecycleState,
   deriveMergeState,
   deriveReviewState,
+  findFailedCheckUrl,
   hasChecksStillRunning,
   normalizeCommitShas,
   parsePullRequestProvider,
@@ -128,7 +129,8 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
 /**
  * The PullRequest fields the poller reads. `contexts` carries only enough
  * state to distinguish a completed failure from a failure while sibling
- * checks still run; we deliberately do not fetch names, URLs, or output.
+ * checks still run. Failed destinations are retained for the auto-fix card;
+ * names and output remain deliberately excluded.
  * Later pages are fetched only when this page cannot already prove a check is
  * running.
  */
@@ -155,8 +157,8 @@ fragment PrStatus on PullRequest {
             pageInfo { hasNextPage endCursor }
             nodes {
               __typename
-              ... on CheckRun { conclusion status }
-              ... on StatusContext { state }
+              ... on CheckRun { conclusion detailsUrl status }
+              ... on StatusContext { state targetUrl }
             }
           }
         }
@@ -168,8 +170,15 @@ fragment PrStatus on PullRequest {
 type GraphqlCheckContext = {
   __typename?: string;
   conclusion?: string | null;
+  detailsUrl?: string | null;
   status?: string | null;
   state?: string | null;
+  targetUrl?: string | null;
+};
+
+type PrCheckResolution = {
+  checksStillRunning: boolean;
+  failedCheckUrl?: string;
 };
 
 type GraphqlStatusContextPage = {
@@ -288,8 +297,8 @@ export function buildBatchedStatusContextQuery(refs: StatusContextPageRef[]): {
           pageInfo { hasNextPage endCursor }
           nodes {
             __typename
-            ... on CheckRun { conclusion status }
-            ... on StatusContext { state }
+            ... on CheckRun { conclusion detailsUrl status }
+            ... on StatusContext { state targetUrl }
           }
         }
       }
@@ -374,7 +383,7 @@ ${PR_STATUS_FRAGMENT}`;
 /** Map one GraphQL PullRequest node onto our shared PrSummary. */
 export function mapGraphqlPrNode(
   node: GraphqlPrNode,
-  checksStillRunningOverride?: boolean,
+  checkResolution?: PrCheckResolution,
 ): PrSummary {
   const headCommit = getHeadCommit(node);
   const checkContexts = headCommit?.statusCheckRollup?.contexts?.nodes ?? [];
@@ -382,8 +391,15 @@ export function mapGraphqlPrNode(
     headCommit?.statusCheckRollup?.state,
   );
   const checksStillRunning =
-    checksStillRunningOverride
+    checkResolution?.checksStillRunning
     ?? hasChecksStillRunning(
+      checkContexts.filter(
+        (context): context is GraphqlCheckContext => context !== null,
+      ),
+    );
+  const failedCheckUrl =
+    checkResolution?.failedCheckUrl
+    ?? findFailedCheckUrl(
       checkContexts.filter(
         (context): context is GraphqlCheckContext => context !== null,
       ),
@@ -412,6 +428,7 @@ export function mapGraphqlPrNode(
     state: checkState,
     checkState,
     ...(checksStillRunning ? { checksStillRunning: true } : {}),
+    ...(failedCheckUrl ? { failedCheckUrl } : {}),
     lifecycleState: deriveLifecycleState(shaped),
     reviewState: deriveReviewState(shaped),
     mergeState: deriveMergeState(shaped),
@@ -677,19 +694,19 @@ export class GithubGraphqlPrClient {
           this.notifyRepositoryAccess(ref, "available");
         }
       });
-      const checksStillRunning = await this.resolveChecksStillRunning(
+      const checkResolutions = await this.resolveCheckContexts(
         answers.flatMap((answer) => answer.nodes),
         token,
       );
       answers.forEach(({ ref, repository, nodes }) => {
-        if (!repository || nodes.some((node) => !checksStillRunning.has(node))) {
+        if (!repository || nodes.some((node) => !checkResolutions.has(node))) {
           // An unresolved alias or context page is not an authoritative answer;
           // leave the key absent so callers retain prior state.
           return;
         }
         results.set(
           branchRefKey(ref),
-          nodes.map((node) => mapGraphqlPrNode(node, checksStillRunning.get(node)!)),
+          nodes.map((node) => mapGraphqlPrNode(node, checkResolutions.get(node)!)),
         );
       });
     }
@@ -697,17 +714,18 @@ export class GithubGraphqlPrClient {
   }
 
   /**
-   * Resolve whether each PR has a running check without treating the first
-   * context page as terminal. A failed follow-up page leaves that PR unresolved
-   * so callers retain the last known status instead of clearing its indicator.
+   * Resolve each PR's running state and first failed destination without
+   * treating the first context page as terminal. A failed follow-up page leaves
+   * that PR unresolved so callers retain the last known status.
    */
-  private async resolveChecksStillRunning(
+  private async resolveCheckContexts(
     nodes: GraphqlPrNode[],
     token: string,
-  ): Promise<Map<GraphqlPrNode, boolean>> {
-    const resolved = new Map<GraphqlPrNode, boolean>();
+  ): Promise<Map<GraphqlPrNode, PrCheckResolution>> {
+    const resolved = new Map<GraphqlPrNode, PrCheckResolution>();
     const pendingNodes = new Map<GraphqlPrNode, string>();
     const pendingByCommitId = new Map<string, StatusContextPageRef>();
+    const failedCheckUrlByCommitId = new Map<string, string>();
     const seenCursorsByCommitId = new Map<string, Set<string>>();
 
     const queueNextPage = (commitId: string, cursor: string): boolean => {
@@ -728,23 +746,33 @@ export class GithubGraphqlPrClient {
       const headCommit = getHeadCommit(node);
       const rollup = headCommit?.statusCheckRollup;
       if (!rollup) {
-        resolved.set(node, false);
+        resolved.set(node, { checksStillRunning: false });
         continue;
       }
       const contexts = readCheckContexts(rollup.contexts);
       if (!contexts) {
         continue;
       }
+      const failedCheckUrl = findFailedCheckUrl(contexts);
+      const commitId = headCommit?.id?.trim();
+      if (commitId && failedCheckUrl) {
+        failedCheckUrlByCommitId.set(commitId, failedCheckUrl);
+      }
       if (hasChecksStillRunning(contexts)) {
-        resolved.set(node, true);
+        resolved.set(node, {
+          checksStillRunning: true,
+          ...(failedCheckUrl ? { failedCheckUrl } : {}),
+        });
         continue;
       }
       const pageInfo = rollup.contexts?.pageInfo;
       if (pageInfo?.hasNextPage === false) {
-        resolved.set(node, false);
+        resolved.set(node, {
+          checksStillRunning: false,
+          ...(failedCheckUrl ? { failedCheckUrl } : {}),
+        });
         continue;
       }
-      const commitId = headCommit?.id?.trim();
       const cursor = pageInfo?.endCursor?.trim();
       if (
         pageInfo?.hasNextPage === true
@@ -756,7 +784,7 @@ export class GithubGraphqlPrClient {
       }
     }
 
-    const completedByCommitId = new Map<string, boolean>();
+    const completedByCommitId = new Map<string, PrCheckResolution>();
     while (pendingByCommitId.size > 0) {
       const pending = [...pendingByCommitId.values()];
       pendingByCommitId.clear();
@@ -776,13 +804,25 @@ export class GithubGraphqlPrClient {
           if (!contexts) {
             return;
           }
+          const failedCheckUrl =
+            failedCheckUrlByCommitId.get(ref.commitId)
+            ?? findFailedCheckUrl(contexts);
+          if (failedCheckUrl) {
+            failedCheckUrlByCommitId.set(ref.commitId, failedCheckUrl);
+          }
           if (hasChecksStillRunning(contexts)) {
-            completedByCommitId.set(ref.commitId, true);
+            completedByCommitId.set(ref.commitId, {
+              checksStillRunning: true,
+              ...(failedCheckUrl ? { failedCheckUrl } : {}),
+            });
             return;
           }
           const pageInfo = page?.pageInfo;
           if (pageInfo?.hasNextPage === false) {
-            completedByCommitId.set(ref.commitId, false);
+            completedByCommitId.set(ref.commitId, {
+              checksStillRunning: false,
+              ...(failedCheckUrl ? { failedCheckUrl } : {}),
+            });
             return;
           }
           const cursor = pageInfo?.endCursor?.trim();
@@ -899,7 +939,7 @@ export class GithubGraphqlPrClient {
         this.notifyRepositoryAccess(ref, "available");
       }
     });
-    const checksStillRunning = await this.resolveChecksStillRunning(nodes, token);
+    const checkResolutions = await this.resolveCheckContexts(nodes, token);
     const prs: PrSummary[] = [];
     let dropped = 0;
     let incompleteContexts = 0;
@@ -909,11 +949,11 @@ export class GithubGraphqlPrClient {
         dropped += 1;
         return;
       }
-      if (!checksStillRunning.has(node)) {
+      if (!checkResolutions.has(node)) {
         incompleteContexts += 1;
         return;
       }
-      prs.push(mapGraphqlPrNode(node, checksStillRunning.get(node)!));
+      prs.push(mapGraphqlPrNode(node, checkResolutions.get(node)!));
     });
 
     if (dropped > 0 || incompleteContexts > 0) {

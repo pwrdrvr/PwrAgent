@@ -343,6 +343,8 @@ export type PrSummary = {
   mergeState?: PrMergeState;
   /** Head commit observed with this status snapshot. */
   headSha?: string;
+  /** Direct destination for the first failed CI check in this snapshot. */
+  failedCheckUrl?: string;
   /**
    * Commit OIDs attached to this PR when the provider returns them. Used to
    * keep merged PR commits from reading as local-only after the remote head
@@ -362,6 +364,7 @@ export type ThreadPrAutoDispatchPending = {
   prNumber: number;
   prTitle?: string;
   prUrl: string;
+  failedCheckUrl?: string;
   headSha: string;
   eventKinds: ThreadPrAutoDispatchEventKind[];
   createdAt: number;

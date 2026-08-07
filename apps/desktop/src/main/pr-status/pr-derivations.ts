@@ -6,6 +6,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { DEFAULT_PULL_REQUEST_PROVIDER } from "@pwragent/shared";
+import { isSafeExternalOpenUrl } from "../external-url-policy";
 
 /**
  * Shared PR-status derivations.
@@ -47,10 +48,20 @@ export type GhPrPayload = {
 export type GhCheckRunPayload = {
   __typename?: string;
   conclusion?: string | null;
+  detailsUrl?: string | null;
   status?: string | null;
   state?: string | null;
   name?: string;
+  targetUrl?: string | null;
 };
+
+const FAILING_CHECK_CONCLUSIONS = new Set([
+  "FAILURE",
+  "CANCELLED",
+  "TIMED_OUT",
+  "STARTUP_FAILURE",
+  "ACTION_REQUIRED",
+]);
 
 /**
  * Map a `gh pr list` row to our PrSummary. Exported for direct testing
@@ -59,6 +70,7 @@ export type GhCheckRunPayload = {
 export function parseGhPrPayload(row: GhPrPayload): PrSummary {
   const checkState = deriveChipState(row);
   const checksStillRunning = hasChecksStillRunning(row.statusCheckRollup ?? []);
+  const failedCheckUrl = findFailedCheckUrl(row.statusCheckRollup ?? []);
   const headSha = normalizeCommitShas([
     row.commits?.[row.commits.length - 1]?.oid,
   ])[0];
@@ -73,6 +85,7 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     state: checkState,
     checkState,
     ...(checksStillRunning ? { checksStillRunning: true } : {}),
+    ...(failedCheckUrl ? { failedCheckUrl } : {}),
     lifecycleState: deriveLifecycleState(row),
     reviewState: deriveReviewState(row),
     mergeState: deriveMergeState(row),
@@ -139,13 +152,6 @@ export function deriveChipState(row: GhPrPayload): PrChipState {
   const checks = row.statusCheckRollup ?? [];
   if (checks.length === 0) return "unknown";
 
-  const failingConclusions = new Set([
-    "FAILURE",
-    "CANCELLED",
-    "TIMED_OUT",
-    "STARTUP_FAILURE",
-    "ACTION_REQUIRED",
-  ]);
   const passingConclusions = new Set([
     "SUCCESS",
     "SKIPPED",
@@ -158,7 +164,7 @@ export function deriveChipState(row: GhPrPayload): PrChipState {
   let hasUnknown = false;
   for (const check of checks) {
     const conclusion = check.conclusion?.trim();
-    if (conclusion && failingConclusions.has(conclusion)) {
+    if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
       hasFailure = true;
       continue;
     }
@@ -198,6 +204,39 @@ export function hasChecksStillRunning(
   checks: readonly GhCheckRunPayload[],
 ): boolean {
   return checks.some(isCheckStillRunning);
+}
+
+/** Return the first safe destination attached to a failed check or status. */
+export function findFailedCheckUrl(
+  checks: readonly GhCheckRunPayload[],
+): string | undefined {
+  for (const check of checks) {
+    const conclusion = check.conclusion?.trim();
+    const state = check.state?.trim();
+    if (
+      !(
+        (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion))
+        || state === "FAILURE"
+        || state === "ERROR"
+      )
+    ) {
+      continue;
+    }
+    const candidate = check.detailsUrl?.trim() || check.targetUrl?.trim();
+    if (!candidate) continue;
+    try {
+      const parsed = new URL(candidate);
+      if (
+        (parsed.protocol === "https:" || parsed.protocol === "http:")
+        && isSafeExternalOpenUrl(parsed.toString())
+      ) {
+        return parsed.toString();
+      }
+    } catch {
+      // Ignore malformed provider data instead of exposing an unsafe link.
+    }
+  }
+  return undefined;
 }
 
 function isCheckStillRunning(check: GhCheckRunPayload): boolean {
