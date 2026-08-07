@@ -100,6 +100,8 @@ import {
   type MarkThreadSeenRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
+  type SetThreadReactionRequest,
+  type SetThreadReactionResponse,
   type SetThreadPrAutoDispatchRequest,
   type SetThreadPrAutoDispatchResponse,
   type CancelThreadPrAutoDispatchRequest,
@@ -390,6 +392,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/pin/added",
   "thread/pin/removed",
   "thread/pin/reordered",
+  "thread/reactions/updated",
   "thread/prAutoDispatch/pendingUpdated",
   "thread/prAutoDispatch/updated",
   "thread/pullRequests/updated",
@@ -3494,7 +3497,10 @@ export class DesktopFederationRuntime {
       },
       notification: notification.params.notification,
     };
-    if (event.notification.method === "thread/pullRequests/updated") {
+    if (
+      event.notification.method === "thread/pullRequests/updated"
+      || event.notification.method === "thread/reactions/updated"
+    ) {
       this.remoteThreadSummaryCache?.invalidate(sourceInstanceId);
     }
     this.publishAgentEvent?.(event);
@@ -3640,6 +3646,33 @@ function localBackendOperations(): FederationBackendOperations {
         backend,
         threadId: request.threadId,
         pinnedRank: overlay.pinnedRank,
+      };
+    },
+    async setThreadReaction(
+      request: SetThreadReactionRequest,
+    ): Promise<SetThreadReactionResponse> {
+      const backend = request.backend ?? "codex";
+      const overlay = await getDesktopOverlayStore().setThreadReaction({
+        backend,
+        threadId: request.threadId,
+        emoji: request.emoji,
+        present: request.present,
+      });
+      const reactions = overlay.reactions ?? [];
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "thread/reactions/updated",
+          params: {
+            threadId: request.threadId,
+            reactions,
+          },
+        },
+      });
+      return {
+        backend,
+        threadId: request.threadId,
+        reactions,
       };
     },
     async readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]> {

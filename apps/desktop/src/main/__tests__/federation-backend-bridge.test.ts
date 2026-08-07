@@ -17,6 +17,60 @@ import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 
 describe("federation backend bridge", () => {
+  it("routes thread reactions through the thread-navigation capability", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    const pending = client.setThreadReaction({
+      backend: "codex",
+      threadId: "thread-remote",
+      emoji: "👀",
+      present: true,
+    });
+    const request = sent.at(-1)!;
+    expect(request).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.setThreadReaction,
+      params: {
+        backend: "codex",
+        threadId: "thread-remote",
+        emoji: "👀",
+        present: true,
+      },
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.setThreadReaction
+      ],
+    ).toBe("thread_navigation");
+
+    rpc.receiveEnvelope({
+      id: "response-reaction",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        backend: "codex",
+        threadId: "thread-remote",
+        reactions: ["✋", "👀"],
+      },
+    });
+    await expect(pending).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-remote",
+      reactions: ["✋", "👀"],
+    });
+  });
+
   it("reads remote PwrSnap status through its dedicated capability", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -1802,6 +1856,7 @@ describe("federation backend bridge", () => {
       listSkills: vi.fn(),
       listBackends: vi.fn(),
       markThreadSeen: vi.fn(),
+      setThreadReaction: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
       detachThreadPullRequest: vi.fn(),
@@ -2022,6 +2077,7 @@ describe("federation backend bridge", () => {
         listSkills: vi.fn(),
         listBackends: vi.fn(),
         markThreadSeen: vi.fn(),
+        setThreadReaction: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
         detachThreadPullRequest: vi.fn(),

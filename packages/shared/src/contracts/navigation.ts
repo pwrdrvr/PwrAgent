@@ -1036,6 +1036,7 @@ export type MarkThreadSeenResponse = {
 
 export type SetThreadReactionRequest = {
   backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   emoji: string;
   /** true → add the reaction; false → remove it */

@@ -890,6 +890,7 @@ function updateThreadReactionsInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     reactions: string[];
   },
@@ -902,6 +903,14 @@ function updateThreadReactionsInSnapshot(
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
     if (buildThreadIdentityKey(thread.source, thread.id) !== threadKey) {
+      return thread;
+    }
+    if (
+      !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
       return thread;
     }
     const current = thread.reactions ?? [];
@@ -3227,24 +3236,25 @@ export function useThreadNavigation(
     return desktopApi.onAgentEvent((event) => {
       const windowTarget = readRendererFederationTarget();
       const method = event.notification.method as string;
-      // A peer's PR events are stamped with its own remote target, so they
-      // never match the main window's (absent) target — yet this window
-      // hosts that peer's threads as viewer-side remote pins, and those
-      // rows are the only place their PR chips are shown. Let them past
-      // the target filter and into the shared appliers below.
+      // A peer's row-state events carry its own remote target, which never
+      // matches the main window's absent target — yet this window
+      // hosts that peer's threads as viewer-side remote pins. Let PR and
+      // reaction updates past the target filter and into their origin-scoped
+      // appliers below.
       //
       // Safe against duelling monitors: the main process drops a peer
       // observation for any PR this instance monitors itself, so whatever
       // arrives here has no local poller to contradict. When we do own the
       // PR, our own local event patches the pinned row instead — status
       // updates match by prKey across every thread in the snapshot.
-      const remotePullRequestPassthrough =
+      const remoteThreadStatePassthrough =
         !windowTarget
         && Boolean(event.federationTarget)
         && (method === "pullRequest/status/updated"
-          || method === "thread/pullRequests/updated");
+          || method === "thread/pullRequests/updated"
+          || method === "thread/reactions/updated");
       if (
-        !remotePullRequestPassthrough
+        !remoteThreadStatePassthrough
         && !federationTargetsEqual(event.federationTarget, windowTarget)
       ) {
         // Peer-status events are stamped with the peer's own remote target,
@@ -3415,6 +3425,23 @@ export function useThreadNavigation(
           };
         });
         scheduleRefresh();
+        return;
+      }
+
+      if (method === "thread/reactions/updated") {
+        const { threadId, reactions } = event.notification.params as {
+          threadId: string;
+          reactions: string[];
+        };
+        setState((current) => ({
+          ...current,
+          response: updateThreadReactionsInSnapshot(current.response, {
+            backend: event.backend,
+            federationTarget: event.federationTarget,
+            threadId,
+            reactions,
+          }),
+        }));
         return;
       }
 
@@ -5962,6 +5989,8 @@ export function useThreadNavigation(
         ...current,
         response: updateThreadReactionsInSnapshot(current.response, {
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           reactions: optimisticReactions,
         }),
@@ -5970,6 +5999,8 @@ export function useThreadNavigation(
       try {
         const result = await setThreadReactionRequest({
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           emoji,
           present,
@@ -5979,6 +6010,8 @@ export function useThreadNavigation(
           ...current,
           response: updateThreadReactionsInSnapshot(current.response, {
             backend: thread.source,
+            federationTarget: thread.federation?.ref.target ??
+              readRendererFederationTarget(),
             threadId: thread.id,
             reactions: result.reactions,
           }),

@@ -2047,7 +2047,7 @@ class DesktopAppServerService {
    * background and land via `navigation/remoteThreadPins/changed`, so
    * navigation refresh latency stays independent of peer responsiveness.
    * The merged rows get their own change hash so a peer-side
-   * title/PR/status change can never be suppressed by the local
+   * title/PR/reaction/status change can never be suppressed by the local
    * `unchanged` optimization.
    */
   private async mergePinnedRemoteThreads(): Promise<{
@@ -2113,6 +2113,7 @@ class DesktopAppServerService {
         updatedAt: thread.updatedAt,
         prs: thread.prs,
         federation: thread.federation,
+        reactions: thread.reactions,
         // Viewer-owned rank: a local pin/unpin must invalidate the snapshot.
         pinnedRank: thread.pinnedRank,
         // Directory-group membership derives from these; a peer-side project
@@ -5466,6 +5467,15 @@ class DesktopAppServerService {
   async setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setThreadReaction(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
 
     const overlay = await this.getOverlayStore().setThreadReaction({
@@ -5483,10 +5493,22 @@ class DesktopAppServerService {
       reactionCount: overlay.reactions?.length ?? 0,
     });
 
+    const reactions = overlay.reactions ?? [];
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/reactions/updated",
+        params: {
+          threadId: request.threadId,
+          reactions,
+        },
+      },
+    });
+
     return {
       backend,
       threadId: request.threadId,
-      reactions: overlay.reactions ?? [],
+      reactions,
     };
   }
 

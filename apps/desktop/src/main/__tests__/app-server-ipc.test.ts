@@ -44,6 +44,14 @@ const federationMock = vi.hoisted(() => {
       seenAt: request.seenAt ?? 6_000,
       seenUpdatedAt: request.seenUpdatedAt,
     })),
+    setThreadReaction: vi.fn(async (request: {
+      backend?: "codex" | "grok";
+      threadId: string;
+    }) => ({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      reactions: ["✋", "👀"],
+    })),
     renameThread: vi.fn(async (request: RenameThreadRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -466,6 +474,17 @@ const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   seenAt: request.seenAt ?? 2000,
   seenUpdatedAt: request.seenUpdatedAt,
 }));
+const setThreadReactionOverlay = vi.fn(async (request: {
+  backend: "codex" | "grok";
+  threadId: string;
+  emoji: string;
+}) => ({
+  backend: request.backend,
+  threadId: request.threadId,
+  executionMode: "default" as const,
+  extraLinkedDirectories: [],
+  reactions: [request.emoji],
+}));
 const registerDirectoryFromDiskService = vi.fn(async (request: { path: string }) => {
   const directoryPath = path.resolve(request.path);
   return {
@@ -771,6 +790,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     addRemoteThreadPin: addRemoteThreadPinStore,
     hasRemoteThreadPin,
     setRemoteThreadLocalPin,
+    setThreadReaction: setThreadReactionOverlay,
     setThreadPin: setThreadPinOverlay,
     listPinnedThreadOverlayRanks,
     reorderThreadPins: reorderThreadPinsStore,
@@ -891,6 +911,7 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.renameThread.mockClear();
     federationMock.remoteBackend.archiveThread.mockClear();
     federationMock.remoteBackend.markThreadSeen.mockClear();
+    federationMock.remoteBackend.setThreadReaction.mockClear();
     federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     federationMock.runtime.remoteNavigationSnapshot.mockReset();
@@ -930,6 +951,7 @@ describe("app server ipc", () => {
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
+    setThreadReactionOverlay.mockClear();
     registerDirectoryFromDiskService.mockClear();
     addLinkedDirectory.mockClear();
     removeLinkedDirectory.mockClear();
@@ -1887,6 +1909,71 @@ describe("app server ipc", () => {
     // The unread remote row bumps the group's "N to review" badge past the
     // reconcile-computed local count.
     expect(appDirectory?.needsAttentionCount).toBe(2);
+  });
+
+  it("marks a pinned remote snapshot changed when only reactions change", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "remote-reactions",
+    });
+    const pin = { ref, addedAt: 1_000, instanceLabel: "Laptop" };
+    const localSnapshot = (unchanged: boolean) => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    });
+    const remoteRow = (reactions: string[]) => ({
+      source: "codex" as const,
+      id: "remote-reactions",
+      title: "Remote reactions",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      reactions,
+      federation: {
+        ref,
+        instanceLabel: "Laptop",
+        peerStatus: "connected" as const,
+        capabilities: [],
+      },
+    });
+    reconcileNavigationSnapshot
+      .mockResolvedValueOnce(localSnapshot(false))
+      .mockResolvedValueOnce(localSnapshot(true));
+    listRemoteThreadPins
+      .mockResolvedValueOnce([pin])
+      .mockResolvedValueOnce([pin]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads
+      .mockResolvedValueOnce({
+        threads: [remoteRow(["✋"])],
+        refreshed: [],
+        archived: [],
+      })
+      .mockResolvedValueOnce({
+        threads: [remoteRow(["✋", "👀"])],
+        refreshed: [],
+        archived: [],
+      });
+    registerAppServerIpcHandlers();
+
+    const first = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const second = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    expect(first).toMatchObject({ unchanged: false });
+    expect(second).toMatchObject({
+      unchanged: false,
+      threads: [expect.objectContaining({ reactions: ["✋", "👀"] })],
+    });
   });
 
   it("removes a viewer-side remote pin when the owner proves it is archived", async () => {
@@ -3160,6 +3247,68 @@ describe("app server ipc", () => {
       threadId: "thread-remote",
       seenAt: 6_000,
       seenUpdatedAt: 3_000,
+    });
+  });
+
+  it("adds remote thread reactions on the owner without replacing its ordered reactions", async () => {
+    const { NAVIGATION_SET_THREAD_REACTION_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(
+      NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+    )?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-remote",
+      emoji: "👀",
+      present: true,
+    });
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(federationMock.remoteBackend.setThreadReaction).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-remote",
+      emoji: "👀",
+      present: true,
+    });
+    expect(setThreadReactionOverlay).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-remote",
+      reactions: ["✋", "👀"],
+    });
+  });
+
+  it("publishes local reaction mutations to navigation subscribers", async () => {
+    const { NAVIGATION_SET_THREAD_REACTION_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SET_THREAD_REACTION_CHANNEL)?.({}, {
+      backend: "codex",
+      threadId: "thread-local",
+      emoji: "👀",
+      present: true,
+    });
+
+    expect(publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "thread/reactions/updated",
+        params: {
+          threadId: "thread-local",
+          reactions: ["👀"],
+        },
+      },
     });
   });
 
