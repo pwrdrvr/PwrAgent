@@ -270,12 +270,18 @@ export function ThreadLinkProvider(props: {
             backend: ref.backend,
             instanceId: ref.instanceId,
             threadId: ref.threadId,
-          })) ?? {
-            backend: ref.backend,
-            instanceId: ref.instanceId,
-            threadId: ref.threadId,
-            title: "",
-          };
+          }));
+          if (!resolved) {
+            // Remote links stay actionable without a navigation row, but the
+            // synthetic fallback must not hydrate through metadata that may
+            // still be awaiting removal from the store's layout effect.
+            return {
+              backend: ref.backend,
+              instanceId: ref.instanceId,
+              threadId: ref.threadId,
+              title: "",
+            };
+          }
         } else if (ref.backend) {
           resolved = byIdentity.get(`${ref.backend}:${ref.threadId}`);
         } else {
