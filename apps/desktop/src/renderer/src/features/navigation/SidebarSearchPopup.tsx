@@ -9,6 +9,7 @@ import {
 import {
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
+  threadHasExactPrNumberMatch,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { SearchIcon } from "../../icons";
@@ -63,6 +64,11 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     }
     return props.threads
       .filter((thread) => threadMatchesQuery(thread, trimmed))
+      .sort(
+        (left, right) =>
+          Number(threadHasExactPrNumberMatch(right, trimmed))
+          - Number(threadHasExactPrNumberMatch(left, trimmed)),
+      )
       .slice(0, MAX_RESULTS);
   }, [trimmed, props.threads]);
 
@@ -182,7 +188,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     thread: NavigationThreadSummary,
     index: number,
   ): ReactElement => {
-    const description = describeThread(thread);
+    const description = describeThread(thread, trimmed);
     const key = thread.federation
       ? federatedThreadIdentityKey(thread.federation.ref)
       : buildThreadIdentityKey(thread.source, thread.id);
@@ -272,9 +278,17 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   );
 }
 
-function describeThread(thread: NavigationThreadSummary): string {
+function describeThread(
+  thread: NavigationThreadSummary,
+  query: string,
+): string {
   const parts: string[] = [];
-  const pr = (thread.prs ?? [])[0];
+  const pr = threadHasExactPrNumberMatch(thread, query)
+    ? (thread.prs ?? []).find(
+        (candidate) =>
+          candidate.number === Number(query.trim().replace(/^#/, "")),
+      )
+    : (thread.prs ?? [])[0];
   if (pr) {
     parts.push(`#${pr.number}`);
   }

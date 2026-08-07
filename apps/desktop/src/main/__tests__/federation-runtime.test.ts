@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   CelestialIconAssignment,
@@ -50,6 +50,9 @@ type RuntimeHarness = {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ) => boolean;
+  remoteThreadSummaryCache?: {
+    invalidate: (instanceId?: string) => void;
+  };
   publishRemoteEnvironmentSetupProgress: (
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
@@ -109,6 +112,10 @@ type RuntimeHarness = {
     target: { scope: "remote"; instanceId: FederationInstanceId },
     request: Record<string, never>,
   ) => Promise<NavigationSnapshot>;
+  remoteThreadSummaries: () => {
+    searchForJump: (request: { query: string }) => Promise<{ results: unknown[] }>;
+    dispose: () => void;
+  };
   sendEnvelopeToTarget: (
     targetInstanceId: FederationInstanceId,
     envelope: FederationProtocolEnvelope,
@@ -183,6 +190,7 @@ type RuntimeHarness = {
   connectedPeerTargets: () => Array<{
     target: { scope: "remote"; instanceId: FederationInstanceId };
     label: string;
+    capabilities: FederationCapability[];
   }>;
 };
 
@@ -1345,6 +1353,105 @@ describe("DesktopFederationRuntime", () => {
         },
       },
     ]);
+  });
+
+  it("invalidates cached remote summaries when a peer updates attached PRs", () => {
+    const invalidated: Array<string | undefined> = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(createConnection({
+      peerId: "client_one",
+      capabilities: ["thread_detail", "event_subscriptions"],
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+    runtime.setEventSubscriptions("viewer", [{
+      sourceInstanceId: "client_one",
+      eventClasses: ["navigation"],
+    }]);
+    runtime.remoteThreadSummaryCache = {
+      invalidate: (instanceId) => invalidated.push(instanceId),
+    };
+
+    runtime.publishRemoteBackendEvent(
+      {
+        id: "event-prs",
+        kind: "notification",
+        method: FEDERATION_BACKEND_EVENT_METHOD,
+        params: {
+          backend: "codex",
+          notification: {
+            method: "thread/pullRequests/updated",
+            params: {
+              threadId: "thread-1",
+              prs: [],
+            },
+          },
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 2_000,
+      },
+      "client_one",
+    );
+
+    expect(invalidated).toEqual(["client_one"]);
+  });
+
+  it("subscribes Cmd+K snapshot peers to navigation updates for the cache TTL", async () => {
+    vi.useFakeTimers();
+    const sent: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "viewer_one" });
+    router.registerConnection(createConnection({
+      peerId: "owner_one",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+      sendEnvelope: (envelope) => sent.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "viewer_one";
+    runtime.router = router;
+    runtime.connectedPeerTargets = () => [{
+      target: { scope: "remote", instanceId: "owner_one" },
+      label: "Owner",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+    }];
+    runtime.remoteNavigationSnapshot = async () => ({
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+
+    const cache = runtime.remoteThreadSummaries();
+    try {
+      await cache.searchForJump({ query: "49" });
+      expect(sent).toMatchObject([{
+        kind: "notification",
+        method: "federation.eventSubscription",
+        params: { eventClasses: ["navigation"] },
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+      }]);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(sent.at(-1)).toMatchObject({
+        kind: "notification",
+        method: "federation.eventSubscription",
+        params: { eventClasses: [] },
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+      });
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("publishes remote environment setup progress with its source target", () => {

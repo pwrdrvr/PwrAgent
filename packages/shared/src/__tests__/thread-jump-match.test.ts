@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary, PrSummary } from "../index";
-import { threadMatchesQuery } from "../thread-jump-match";
+import {
+  threadHasExactPrNumberMatch,
+  threadMatchesQuery,
+} from "../thread-jump-match";
 
 function pr(number: number, title?: string): PrSummary {
   return {
@@ -40,6 +43,18 @@ describe("threadMatchesQuery", () => {
     expect(threadMatchesQuery(t, "779")).toBe(true);
     expect(threadMatchesQuery(t, "#779")).toBe(true);
     expect(threadMatchesQuery(t, "pwragent")).toBe(true);
+  });
+
+  it("matches every attached PR and identifies an exact PR query", () => {
+    const stacked = thread({
+      prs: [pr(44), pr(45), pr(46), pr(48), pr(49)],
+    });
+
+    expect(threadMatchesQuery(stacked, "49")).toBe(true);
+    expect(threadMatchesQuery(stacked, "#49")).toBe(true);
+    expect(threadHasExactPrNumberMatch(stacked, "49")).toBe(true);
+    expect(threadHasExactPrNumberMatch(stacked, "#49")).toBe(true);
+    expect(threadHasExactPrNumberMatch(stacked, "4")).toBe(false);
   });
 
   it("matches common thread id shapes", () => {

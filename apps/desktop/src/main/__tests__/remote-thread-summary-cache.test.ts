@@ -32,7 +32,10 @@ function stampedThread(params: {
   title: string;
   updatedAt?: number;
   prNumber?: number;
+  prNumbers?: number[];
 }): NavigationThreadSummary {
+  const prNumbers = params.prNumbers
+    ?? (params.prNumber !== undefined ? [params.prNumber] : []);
   return {
     source: "codex",
     id: params.threadId,
@@ -41,18 +44,16 @@ function stampedThread(params: {
     linkedDirectories: [],
     inbox: { inInbox: false },
     updatedAt: params.updatedAt,
-    ...(params.prNumber !== undefined
+    ...(prNumbers.length > 0
       ? {
-          prs: [
-            {
-              provider: "github.com",
-              number: params.prNumber,
-              org: "pwrdrvr",
-              repo: "PwrAgent",
-              state: "pending",
-              url: `https://github.com/pwrdrvr/PwrAgent/pull/${params.prNumber}`,
-            },
-          ],
+          prs: prNumbers.map((number) => ({
+            provider: "github.com",
+            number,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "pending",
+            url: `https://github.com/pwrdrvr/PwrAgent/pull/${number}`,
+          })),
         }
       : {}),
     federation: {
@@ -149,6 +150,36 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
     expect(response.results.map((thread) => thread.id)).toEqual(["new"]);
   });
 
+  it("ranks an exact attached PR ahead of newer substring matches", async () => {
+    const threads = [
+      stampedThread({
+        instanceId: "peer-a",
+        threadId: "stacked",
+        title: "Stacked PRs",
+        updatedAt: 1,
+        prNumbers: [44, 45, 46, 48, 49],
+      }),
+      ...Array.from({ length: 8 }, (_, index) =>
+        stampedThread({
+          instanceId: "peer-a",
+          threadId: `substring-${index}`,
+          title: `Substring ${index}`,
+          updatedAt: 100 + index,
+          prNumber: 149 + index * 100,
+        }),
+      ),
+    ];
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf(threads),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    const response = await cache.searchForJump({ query: "49", limit: 8 });
+    expect(response.results[0].id).toBe("stacked");
+  });
+
   it("caches snapshots within the TTL and refetches after it", async () => {
     let now = 0;
     const fetchSnapshot = vi.fn(async () =>
@@ -172,6 +203,98 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
     now = 200;
     await cache.searchForJump({ query: "match" });
     expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetches immediately after the peer cache is invalidated", async () => {
+    const fetchSnapshot = vi.fn(async () => snapshotOf([]));
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    await cache.searchForJump({ query: "49" });
+    cache.invalidate("peer-a");
+    await cache.searchForJump({ query: "49" });
+
+    expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not restore a stale snapshot invalidated during its fetch", async () => {
+    let resolveFirst!: (snapshot: NavigationSnapshot) => void;
+    let resolveSecond!: (snapshot: NavigationSnapshot) => void;
+    const fetchSnapshot = vi.fn(() =>
+      new Promise<NavigationSnapshot>((resolve) => {
+        if (fetchSnapshot.mock.calls.length === 1) {
+          resolveFirst = resolve;
+        } else {
+          resolveSecond = resolve;
+        }
+      }),
+    );
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    const staleSearch = cache.searchForJump({ query: "49" });
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+    cache.invalidate("peer-a");
+    const freshSearch = cache.searchForJump({ query: "49" });
+    expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+
+    const freshThread = stampedThread({
+      instanceId: "peer-a",
+      threadId: "stacked",
+      title: "Stacked PRs",
+      prNumbers: [44, 49],
+    });
+    resolveSecond(snapshotOf([freshThread]));
+    await expect(freshSearch).resolves.toMatchObject({
+      results: [{ id: "stacked" }],
+    });
+    resolveFirst(snapshotOf([]));
+    await expect(staleSearch).resolves.toMatchObject({
+      results: [{ id: "stacked" }],
+    });
+
+    await expect(cache.searchForJump({ query: "49" })).resolves.toMatchObject({
+      results: [{ id: "stacked" }],
+    });
+    expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps navigation event interest alive for the cache TTL", async () => {
+    vi.useFakeTimers();
+    const onPeerInterestChanged = vi.fn();
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+      onPeerInterestChanged,
+      ttlMs: 100,
+    });
+
+    try {
+      await cache.searchForJump({ query: "49" });
+      expect(onPeerInterestChanged).toHaveBeenCalledTimes(1);
+      expect(onPeerInterestChanged).toHaveBeenLastCalledWith(["peer-a"]);
+
+      await vi.advanceTimersByTimeAsync(50);
+      await cache.searchForJump({ query: "49" });
+      await vi.advanceTimersByTimeAsync(99);
+      expect(onPeerInterestChanged).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onPeerInterestChanged).toHaveBeenLastCalledWith([]);
+    } finally {
+      cache.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("skips peers that time out instead of failing the search", async () => {

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildFederatedThreadRef,
   type NavigationThreadSummary,
+  type PrSummary,
 } from "@pwragent/shared";
 import { SidebarSearchPopup } from "../SidebarSearchPopup";
 
@@ -36,6 +37,17 @@ function localThread(
     linkedDirectories: [],
     ...partial,
   } as NavigationThreadSummary;
+}
+
+function pr(number: number, repo = "PwrAgent"): PrSummary {
+  return {
+    provider: "github.com",
+    org: "pwrdrvr",
+    repo,
+    number,
+    state: "pending",
+    url: `https://github.com/pwrdrvr/${repo}/pull/${number}`,
+  };
 }
 
 function remoteThread(params: {
@@ -148,6 +160,36 @@ describe("SidebarSearchPopup", () => {
     expect(screen.getByText("Other instances")).toBeInTheDocument();
     expect(screen.getByText("Remote fix")).toBeInTheDocument();
     expect(screen.getByLabelText("Runs on Laptop")).toBeInTheDocument();
+  });
+
+  it("prioritizes and describes the exact PR when a thread has several PRs", async () => {
+    const exact = localThread({
+      id: "exact",
+      title: "Stacked PRs",
+      prs: [pr(44, "PwrGit"), pr(49, "PwrGit")],
+    });
+    const substring = localThread({
+      id: "substring",
+      title: "Newer substring",
+      prs: [pr(349)],
+    });
+
+    render(
+      <SidebarSearchPopup
+        threads={[substring, exact]}
+        onJumpToThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Jump to thread" }), {
+      target: { value: "49" },
+    });
+
+    const rows = screen.getAllByRole("option");
+    expect(rows[0]).toHaveTextContent("Stacked PRs");
+    expect(rows[0]).toHaveTextContent("#49");
+    await settleRemoteSearch();
   });
 
   it("arrows from local into remote rows and Enter selects the remote thread", async () => {
