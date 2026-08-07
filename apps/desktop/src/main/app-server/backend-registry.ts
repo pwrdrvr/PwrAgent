@@ -350,6 +350,7 @@ import {
 } from "../agent-tools/pwragent-thread-orchestration-codex-tools";
 import {
   PwrAgentFederatedThreadMessageError,
+  type PwrAgentFederatedThreadControlHandler,
   type PwrAgentFederatedThreadMessageHandler,
   type PwrAgentThreadOrchestrationHandler,
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
@@ -6091,6 +6092,13 @@ type AcceptedSteerRequest = {
   signature: string;
 };
 
+type AcceptedThreadControlRequest = {
+  promise: Promise<PwrAgentThreadOrchestrationResponse>;
+  signature: string;
+};
+
+const MAX_ACCEPTED_THREAD_CONTROL_REQUESTS = 512;
+
 function buildSteerRequestKey(params: SteerTurnRequest): string {
   return [
     params.backend,
@@ -6280,6 +6288,10 @@ export class DesktopBackendRegistry {
     string,
     AcceptedSteerRequest
   >();
+  private readonly acceptedThreadControlRequests = new Map<
+    string,
+    AcceptedThreadControlRequest
+  >();
   private readonly codexRetryableTurnStarts = new Map<
     string,
     CodexRetryableTurnStart
@@ -6401,6 +6413,9 @@ export class DesktopBackendRegistry {
   private federationHandler: PwrAgentFederationHandler | undefined;
   private federatedThreadMessageHandler:
     | PwrAgentFederatedThreadMessageHandler
+    | undefined;
+  private federatedThreadControlHandler:
+    | PwrAgentFederatedThreadControlHandler
     | undefined;
   private threadPullRequestStatusToolHandler:
     | ThreadPullRequestStatusToolHandler
@@ -7120,6 +7135,12 @@ export class DesktopBackendRegistry {
     handler: PwrAgentFederatedThreadMessageHandler | null | undefined,
   ): void {
     this.federatedThreadMessageHandler = handler ?? undefined;
+  }
+
+  setFederatedThreadControlHandler(
+    handler: PwrAgentFederatedThreadControlHandler | null | undefined,
+  ): void {
+    this.federatedThreadControlHandler = handler ?? undefined;
   }
 
   setThreadPullRequestStatusToolHandler(
@@ -21127,6 +21148,12 @@ export class DesktopBackendRegistry {
     if (request.operation === "send_message_to_thread") {
       return await this.sendMessageToThread(request);
     }
+    if (
+      request.operation === "steer_thread"
+      || request.operation === "stop_thread"
+    ) {
+      return await this.controlThreadTurn(request);
+    }
     if (request.operation === "start_review") {
       return await this.startReviewFromAgentTool(request);
     }
@@ -22209,6 +22236,7 @@ export class DesktopBackendRegistry {
     }
     const threadId = request.args.threadId.trim();
     const instanceId = request.args.instanceId?.trim();
+    const includeRemote = request.args.includeRemote !== false;
     const prompt = request.args.prompt.trim();
     if (!threadId || !prompt) {
       return threadOrchestrationFailure(
@@ -22280,7 +22308,7 @@ export class DesktopBackendRegistry {
         approvalPolicy: request.args.approvalPolicy,
         sandbox: request.args.sandbox,
       };
-      const rememberedRemoteTurn = this.federatedThreadMessageHandler
+      const rememberedRemoteTurn = includeRemote && this.federatedThreadMessageHandler
         ? await this.federatedThreadMessageHandler({
             ...remoteRequest,
             ...(instanceId
@@ -22330,7 +22358,7 @@ export class DesktopBackendRegistry {
                 position: submitted.position,
               };
           targetTitle = localThread.title;
-        } else if (this.federatedThreadMessageHandler) {
+        } else if (includeRemote && this.federatedThreadMessageHandler) {
           const discoveredRemoteTurn = await this.federatedThreadMessageHandler({
             ...remoteRequest,
             resolutionMode: "discover_only",
@@ -22388,6 +22416,311 @@ export class DesktopBackendRegistry {
             ? "not_found"
             : "turn_start_failed",
         message,
+      );
+    }
+  }
+
+  private async controlThreadTurn(
+    request: PwrAgentThreadOrchestrationRequest<"steer_thread" | "stop_thread">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const requestKey = [
+      request.operation,
+      request.args.backend,
+      request.args.threadId,
+      request.args.instanceId ?? "local-or-discover",
+      request.args.requestId,
+    ].join("\u0000");
+    const signature = createHash("sha256")
+      .update(JSON.stringify({
+        args: request.args,
+        sourceBackend: request.context.backend,
+        sourceThreadId: request.context.threadId,
+      }))
+      .digest("hex");
+    const accepted = this.acceptedThreadControlRequests.get(requestKey);
+    if (accepted) {
+      if (accepted.signature !== signature) {
+        return threadOrchestrationFailure(
+          "invalid_arguments",
+          `Thread control request id ${request.args.requestId} was reused with different arguments.`,
+        );
+      }
+      const response = await accepted.promise;
+      return response.ok
+        ? {
+            ok: true,
+            data: {
+              ...response.data,
+              idempotentReplay: true,
+            },
+          }
+        : response;
+    }
+
+    const promise = this.performThreadTurnControl(request);
+    if (
+      this.acceptedThreadControlRequests.size
+      >= MAX_ACCEPTED_THREAD_CONTROL_REQUESTS
+    ) {
+      const oldestKey = this.acceptedThreadControlRequests.keys().next().value;
+      if (oldestKey) {
+        this.acceptedThreadControlRequests.delete(oldestKey);
+      }
+    }
+    this.acceptedThreadControlRequests.set(requestKey, { promise, signature });
+    try {
+      const response = await promise;
+      if (
+        !response.ok
+        && this.acceptedThreadControlRequests.get(requestKey)?.promise === promise
+      ) {
+        this.acceptedThreadControlRequests.delete(requestKey);
+      }
+      return response;
+    } catch (error) {
+      if (this.acceptedThreadControlRequests.get(requestKey)?.promise === promise) {
+        this.acceptedThreadControlRequests.delete(requestKey);
+      }
+      throw error;
+    }
+  }
+
+  private async performThreadTurnControl(
+    request: PwrAgentThreadOrchestrationRequest<"steer_thread" | "stop_thread">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const sourceTurnId = request.context.turnId?.trim();
+    if (
+      !sourceTurnId
+      || !this.isLiveDynamicToolCall(request.context.backend, {
+        threadId: request.context.threadId,
+        turnId: sourceTurnId,
+      })
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        "Thread control tools must be invoked from a live turn.",
+      );
+    }
+    const backend = request.args.backend;
+    if (!isAppServerBackendKind(backend)) {
+      return threadOrchestrationFailure(
+        "unsupported_backend",
+        "backend must be a known PwrAgent backend.",
+      );
+    }
+    const threadId = request.args.threadId.trim();
+    const instanceId = request.args.instanceId?.trim();
+    const includeRemote = request.args.includeRemote !== false;
+    if (
+      backend === request.context.backend
+      && threadId === request.context.threadId
+      && !instanceId
+    ) {
+      return threadOrchestrationFailure(
+        "forbidden",
+        request.operation === "stop_thread"
+          ? "stop_thread cannot interrupt its own current turn because the tool result could not be delivered safely."
+          : "steer_thread cannot steer its own current turn; reply normally to add guidance.",
+      );
+    }
+
+    const remoteRequest = {
+      operation: request.operation === "stop_thread" ? "stop" as const : "steer" as const,
+      backend,
+      threadId,
+      requestId: request.args.requestId,
+      ...(request.args.expectedTurnId
+        ? { expectedTurnId: request.args.expectedTurnId }
+        : {}),
+      ...(request.operation === "steer_thread"
+        ? {
+            input: [{ type: "text" as const, text: request.args.prompt }],
+          }
+        : {}),
+    };
+
+    try {
+      let targetInstanceId: string | undefined;
+      let result:
+        | {
+            backend: AppServerBackendKind;
+            threadId: string;
+            turnId: string;
+            disposition: "interrupted" | "steered";
+          }
+        | undefined;
+      const rememberedRemote =
+        includeRemote && this.federatedThreadControlHandler
+          ? await this.federatedThreadControlHandler({
+              ...remoteRequest,
+              ...(instanceId
+                ? { instanceId }
+                : { resolutionMode: "remembered_only" as const }),
+            })
+          : undefined;
+      if (rememberedRemote) {
+        result = rememberedRemote;
+        targetInstanceId = rememberedRemote.instanceId;
+      } else if (instanceId) {
+        return threadOrchestrationFailure(
+          this.federatedThreadControlHandler
+            ? "stale_target"
+            : "peer_unavailable",
+          this.federatedThreadControlHandler
+            ? `Thread ${threadId} was not found on federation instance ${instanceId}.`
+            : `Federation routing is unavailable; instance ${instanceId} could not be reached.`,
+          { backend, instanceId, threadId },
+        );
+      } else {
+        let localThread: AppServerThreadSummary | undefined;
+        try {
+          localThread = await this.resolveThread({ backend, threadId });
+        } catch {
+          localThread = undefined;
+        }
+        if (localThread) {
+          const backendSummary = (
+            await this.listBackends({ includeUnavailable: true })
+          ).backends.find((candidate) => candidate.kind === backend);
+          if (!backendSummary?.available) {
+            return threadOrchestrationFailure(
+              "unsupported_backend",
+              `Backend ${backend} is not available on this instance.`,
+              { backend, threadId },
+            );
+          }
+          const capability =
+            request.operation === "stop_thread" ? "interruptTurn" : "steerTurn";
+          if (!backendSummary.capabilities[capability]) {
+            return threadOrchestrationFailure(
+              "unsupported_capability",
+              `Backend ${backend} does not support ${request.operation === "stop_thread" ? "turn interruption" : "turn steering"}.`,
+              { backend, threadId },
+            );
+          }
+          const active = this.getActiveTurnForThread({ backend, threadId });
+          if (!active) {
+            return threadOrchestrationFailure(
+              "no_active_turn",
+              `Thread ${threadId} has no active turn.`,
+              { backend, threadId },
+            );
+          }
+          if (
+            request.args.expectedTurnId
+            && request.args.expectedTurnId !== active.turnId
+          ) {
+            return threadOrchestrationFailure(
+              "stale_target",
+              `Thread ${threadId} now has active turn ${active.turnId}, not expected turn ${request.args.expectedTurnId}.`,
+              {
+                activeTurnId: active.turnId,
+                backend,
+                expectedTurnId: request.args.expectedTurnId,
+                threadId,
+              },
+            );
+          }
+          if (request.operation === "stop_thread") {
+            const stopped = await this.interruptTurn(active);
+            result = { ...stopped, disposition: "interrupted" };
+          } else {
+            const steered = await this.steerTurn(
+              {
+                backend,
+                threadId,
+                expectedTurnId: active.turnId,
+                requestId: request.args.requestId,
+                input: [{ type: "text", text: request.args.prompt }],
+              },
+              {
+                kind: "agent",
+                sourceThread: {
+                  backend: request.context.backend,
+                  threadId: request.context.threadId,
+                },
+              },
+            );
+            if (steered.disposition === "scheduled") {
+              return threadOrchestrationFailure(
+                "stale_target",
+                "The active turn changed before steering; no queued fallback was created.",
+                { backend, threadId },
+              );
+            }
+            result = { ...steered, disposition: "steered" };
+          }
+        } else if (includeRemote && this.federatedThreadControlHandler) {
+          const discovered = await this.federatedThreadControlHandler({
+            ...remoteRequest,
+            resolutionMode: "discover_only",
+          });
+          if (discovered) {
+            result = discovered;
+            targetInstanceId = discovered.instanceId;
+          }
+        }
+      }
+
+      if (!result) {
+        if (!includeRemote) {
+          const localBackend = (
+            await this.listBackends({ includeUnavailable: true })
+          ).backends.find((candidate) => candidate.kind === backend);
+          if (!localBackend?.available) {
+            return threadOrchestrationFailure(
+              "unsupported_backend",
+              `Backend ${backend} is not available on this instance.`,
+              { backend, threadId },
+            );
+          }
+        }
+        return threadOrchestrationFailure(
+          "not_found",
+          `Thread ${backend}:${threadId} was not found${includeRemote ? " locally or on a connected Federation peer" : " locally"}.`,
+          { backend, threadId },
+        );
+      }
+      const base = {
+        backend: result.backend,
+        threadId: result.threadId,
+        ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
+        requestId: request.args.requestId,
+        turnId: result.turnId,
+      };
+      return request.operation === "stop_thread"
+        ? {
+            ok: true,
+            data: {
+              ...base,
+              disposition: "interrupted",
+              interruptedAt: Date.now(),
+            },
+          }
+        : {
+            ok: true,
+            data: {
+              ...base,
+              disposition: "steered",
+              promptPreview: truncateThreadInspectionText(request.args.prompt, 240),
+            },
+          };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return threadOrchestrationFailure(
+        error instanceof PwrAgentFederatedThreadMessageError
+          ? error.code
+          : /unsupported|does not support/i.test(message)
+            ? "unsupported_capability"
+            : /active|expected turn|stale/i.test(message)
+              ? "stale_target"
+              : "internal_error",
+        message,
+        {
+          backend,
+          ...(instanceId ? { instanceId } : {}),
+          threadId,
+        },
       );
     }
   }

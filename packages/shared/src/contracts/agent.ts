@@ -309,6 +309,17 @@ export type InterruptTurnResponse = {
   turnId: string;
 };
 
+export type ResolveActiveTurnRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type ResolveActiveTurnResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+};
+
 export type StopSubAgentRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;

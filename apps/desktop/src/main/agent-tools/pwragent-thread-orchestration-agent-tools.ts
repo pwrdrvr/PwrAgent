@@ -15,7 +15,9 @@ import type {
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
   SendMessageToThreadToolArgs,
+  SteerThreadToolArgs,
   StartReviewToolArgs,
+  StopThreadToolArgs,
 } from "@pwragent/shared";
 import {
   ATTACH_THREAD_DIRECTORY_WORKSPACE_MODES,
@@ -80,9 +82,39 @@ export type PwrAgentFederatedThreadMessageHandler = (
   request: PwrAgentFederatedThreadMessageRequest,
 ) => Promise<PwrAgentFederatedThreadMessageResult | undefined>;
 
+export type PwrAgentFederatedThreadControlRequest = {
+  operation: "steer" | "stop";
+  backend: StopThreadToolArgs["backend"];
+  threadId: StopThreadToolArgs["threadId"];
+  instanceId?: StopThreadToolArgs["instanceId"];
+  resolutionMode?: "remembered_only" | "discover_only";
+  requestId: string;
+  expectedTurnId?: string;
+  input?: AppServerTurnInputItem[];
+};
+
+export type PwrAgentFederatedThreadControlResult = {
+  backend: StopThreadToolArgs["backend"];
+  threadId: StopThreadToolArgs["threadId"];
+  turnId: string;
+  disposition: "interrupted" | "steered";
+  instanceId: string;
+  instanceLabel: string;
+};
+
+export type PwrAgentFederatedThreadControlHandler = (
+  request: PwrAgentFederatedThreadControlRequest,
+) => Promise<PwrAgentFederatedThreadControlResult | undefined>;
+
 export class PwrAgentFederatedThreadMessageError extends Error {
   constructor(
-    readonly code: "peer_unavailable",
+    readonly code:
+      | "ambiguous_owner"
+      | "no_active_turn"
+      | "peer_unavailable"
+      | "stale_target"
+      | "unsupported_backend"
+      | "unsupported_capability",
     message: string,
   ) {
     super(message);
@@ -157,7 +189,11 @@ function descriptionForOperation(
     case "move_thread_workspace":
       return "Move the current PwrAgent thread runtime workspace after the invoking turn reaches a terminal boundary. Use this when the user asks to continue this same thread from an isolated worktree instead of creating a child handoff thread. The operation is path-keyed: pass sourcePath when the thread has multiple linked directories or when the intended workspace is not obvious. The tool returns a pending workspaceMoveId and stop-and-wait guidance; after the current turn ends, PwrAgent performs the move, updates future-turn cwd metadata, rebinds an ACP session when required, and starts a same-thread continuation with the result. Do not keep editing after a successful call in the invoking turn; wait for the continuation or inspect get_thread_status pendingWorkspaceMoves.";
     case "send_message_to_thread":
-      return "Send a follow-up prompt to another existing PwrAgent thread. Use search_threads or read_thread first when the target threadId is unknown. Pass instanceId when a remote create/search result or thread link supplied it; omit it for local threads and older results, which PwrAgent resolves through durable ownership metadata and connected-peer discovery. Do not use this for the current thread; reply normally instead. The result includes threadLink, a ready-made markdown link to the target thread. When you mention that thread to the user, include threadLink verbatim instead of the raw threadId so it renders as a clickable chip.";
+      return "Send an ordinary follow-up prompt as a new turn to another existing PwrAgent thread. If the target already has an active turn, this schedules/queues the follow-up instead of steering that turn. Use steer_thread when guidance must reach a long-running active turn at its next tool completion or message boundary, and stop_thread only for an urgent interruption. Use search_threads or read_thread first when the target threadId is unknown. Pass instanceId when a remote create/search result or thread link supplied it; omit it for local threads and older results, which PwrAgent resolves through durable ownership metadata and connected-peer discovery. Set includeRemote=false for a local-only lookup. Do not use this for the current thread; reply normally instead. The result includes threadLink, a ready-made markdown link to the target thread. When you mention that thread to the user, include threadLink verbatim instead of the raw threadId so it renders as a clickable chip.";
+    case "steer_thread":
+      return "Steer the active turn on another PwrAgent thread. Use this when the target is likely to run for a while and guidance needs to reach it at the next tool completion or message boundary, avoiding wasted time and tokens. This preserves real steer semantics: it never reports a queued follow-up as steered. Use send_message_to_thread for an ordinary queued/new-turn follow-up and stop_thread for an urgent interruption. The owning local or federated instance discovers the active turn and rejects stale expectedTurnId races. Pass instanceId when known; set includeRemote=false for local-only resolution. requestId is an idempotency key: reuse it only to retry the exact same steer. The current thread cannot steer itself through this tool; reply normally instead.";
+    case "stop_thread":
+      return "Immediately interrupt the active turn on another PwrAgent thread. Use this high-urgency control only when the target must stop promptly; it calls the owning backend's interrupt operation and never queues text. It works for local and federated targets through turn-control routing. The owning instance discovers the active turn and rejects stale expectedTurnId races. Pass instanceId when known; set includeRemote=false for local-only resolution. requestId is an idempotency key: reuse it only to retry the exact same stop. The current turn cannot stop itself through this tool because its tool result could not be delivered safely.";
     case "start_review":
       return "Schedule a code review of the invoking PwrAgent thread after the current turn completes successfully. Use this only when the operator explicitly asks for a review. Choose one structured target: uncommittedChanges, baseBranch, commit, or custom. The tool returns a pendingReviewId; after a successful call, stop work and let the current turn finish so PwrAgent can start the review. Do not poll or call the tool again for the same request.";
   }
@@ -356,6 +392,11 @@ function inputSchemaForOperation(
             description:
               "Owning remote instance id from create_instance_thread, search_federation_threads, or a cross-instance thread link. Omit for local threads or when unknown.",
           },
+          includeRemote: {
+            type: "boolean",
+            description:
+              "Defaults to true. Set false to restrict resolution to the local instance.",
+          },
           prompt: {
             type: "string",
             description:
@@ -370,6 +411,10 @@ function inputSchemaForOperation(
           sandbox: { type: "string" },
         },
       };
+    case "steer_thread":
+      return threadTurnControlInputSchema({ prompt: true });
+    case "stop_thread":
+      return threadTurnControlInputSchema({ prompt: false });
     case "start_review":
       return {
         type: "object",
@@ -417,7 +462,9 @@ function normalizeArgsForOperation(
   | HandoffTaskToolArgs
   | MoveThreadWorkspaceToolArgs
   | SendMessageToThreadToolArgs
+  | SteerThreadToolArgs
   | StartReviewToolArgs
+  | StopThreadToolArgs
   | undefined {
   switch (operation) {
     case "attach_thread_directory":
@@ -430,6 +477,10 @@ function normalizeArgsForOperation(
       return normalizeMoveThreadWorkspaceArgs(args);
     case "send_message_to_thread":
       return normalizeSendMessageToThreadArgs(args);
+    case "steer_thread":
+      return normalizeSteerThreadArgs(args);
+    case "stop_thread":
+      return normalizeStopThreadArgs(args);
     case "start_review":
       return normalizeStartReviewArgs(args);
   }
@@ -449,6 +500,10 @@ function invalidArgumentsMessageForOperation(
       return "move_thread_workspace accepts only known direction/strategy values and non-empty string fields.";
     case "send_message_to_thread":
       return "send_message_to_thread requires non-empty backend, threadId, and prompt strings.";
+    case "steer_thread":
+      return "steer_thread requires non-empty backend, threadId, requestId, and prompt strings; includeRemote must be boolean when supplied, and instanceId cannot be combined with includeRemote=false.";
+    case "stop_thread":
+      return "stop_thread requires non-empty backend, threadId, and requestId strings; includeRemote must be boolean when supplied, and instanceId cannot be combined with includeRemote=false.";
     case "start_review":
       return "start_review requires a valid structured target and non-empty target-specific fields.";
   }
@@ -635,10 +690,20 @@ function normalizeSendMessageToThreadArgs(
   if (Object.hasOwn(args, "instanceId") && !instanceId) {
     return undefined;
   }
+  if (
+    (Object.hasOwn(args, "includeRemote")
+      && typeof args.includeRemote !== "boolean")
+    || (instanceId && args.includeRemote === false)
+  ) {
+    return undefined;
+  }
   return {
     backend: backend as SendMessageToThreadToolArgs["backend"],
     threadId,
     ...(instanceId ? { instanceId } : {}),
+    ...(typeof args.includeRemote === "boolean"
+      ? { includeRemote: args.includeRemote }
+      : {}),
     prompt,
     ...(readTrimmedString(args.model)
       ? { model: readTrimmedString(args.model) }
@@ -664,6 +729,114 @@ function normalizeSendMessageToThreadArgs(
       ? { sandbox: readTrimmedString(args.sandbox) }
       : {}),
   };
+}
+
+function threadTurnControlInputSchema(
+  options: { prompt: boolean },
+): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: options.prompt
+      ? ["backend", "threadId", "requestId", "prompt"]
+      : ["backend", "threadId", "requestId"],
+    properties: {
+      backend: {
+        type: "string",
+        description: "Backend type for the target thread.",
+      },
+      threadId: {
+        type: "string",
+        description: "Existing target thread id to control.",
+      },
+      instanceId: {
+        type: "string",
+        description:
+          "Owning remote instance id when known. Omit for local threads or automatic ownership resolution.",
+      },
+      includeRemote: {
+        type: "boolean",
+        description:
+          "Defaults to true. Set false to restrict resolution to the local instance.",
+      },
+      requestId: {
+        type: "string",
+        description:
+          "Stable idempotency key. Reuse only to retry this exact action with identical arguments.",
+      },
+      expectedTurnId: {
+        type: "string",
+        description:
+          "Optional compare-and-act guard. The action fails as stale if the owning instance reports another active turn.",
+      },
+      ...(options.prompt
+        ? {
+            prompt: {
+              type: "string",
+              description:
+                "Guidance to deliver into the active turn at the next tool completion or message boundary.",
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+function normalizeStopThreadArgs(
+  args: Record<string, unknown>,
+): StopThreadToolArgs | undefined {
+  return normalizeThreadTurnControlArgs(args, false);
+}
+
+function normalizeSteerThreadArgs(
+  args: Record<string, unknown>,
+): SteerThreadToolArgs | undefined {
+  return normalizeThreadTurnControlArgs(args, true);
+}
+
+function normalizeThreadTurnControlArgs(
+  args: Record<string, unknown>,
+  promptRequired: false,
+): StopThreadToolArgs | undefined;
+function normalizeThreadTurnControlArgs(
+  args: Record<string, unknown>,
+  promptRequired: true,
+): SteerThreadToolArgs | undefined;
+function normalizeThreadTurnControlArgs(
+  args: Record<string, unknown>,
+  promptRequired: boolean,
+): StopThreadToolArgs | SteerThreadToolArgs | undefined {
+  const backend = readTrimmedString(args.backend);
+  const threadId = readTrimmedString(args.threadId);
+  const instanceId = readTrimmedString(args.instanceId);
+  const requestId = readTrimmedString(args.requestId);
+  const expectedTurnId = readTrimmedString(args.expectedTurnId);
+  const prompt = readTrimmedString(args.prompt);
+  if (!backend || !threadId || !requestId || (promptRequired && !prompt)) {
+    return undefined;
+  }
+  if (
+    (Object.hasOwn(args, "instanceId") && !instanceId)
+    || (Object.hasOwn(args, "expectedTurnId") && !expectedTurnId)
+    || (Object.hasOwn(args, "includeRemote")
+      && typeof args.includeRemote !== "boolean")
+    || (instanceId && args.includeRemote === false)
+  ) {
+    return undefined;
+  }
+  const target = {
+    backend: backend as StopThreadToolArgs["backend"],
+    threadId,
+    ...(instanceId ? { instanceId } : {}),
+    ...(typeof args.includeRemote === "boolean"
+      ? { includeRemote: args.includeRemote }
+      : {}),
+    requestId,
+    ...(expectedTurnId ? { expectedTurnId } : {}),
+  };
+  return promptRequired
+    ? { ...target, prompt: prompt as string }
+    : target;
 }
 
 function normalizeStartReviewArgs(
