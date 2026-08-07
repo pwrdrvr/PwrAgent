@@ -83,7 +83,12 @@ export function AppNoticeToast(props: {
 
   const copyValue =
     props.notice.copyText ??
-    [props.notice.title, props.notice.message, props.notice.detail]
+    [
+      props.notice.title,
+      props.notice.status?.label,
+      props.notice.message,
+      props.notice.detail,
+    ]
       .filter(Boolean)
       .join("\n");
   const customActions = props.notice.actions ?? [];

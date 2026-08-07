@@ -41,6 +41,36 @@ describe("AppNoticeToast", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("includes the visible status in the default copy value", () => {
+    const copyText = vi.fn(async () => undefined);
+    const repairNotice = {
+      ...notice,
+      status: {
+        label: "Automatic repair failed: rollout belongs to another thread",
+        state: "error" as const,
+      },
+      title: "Codex repair failed",
+    };
+
+    render(
+      <AppNoticeToast
+        desktopApi={{ copyText }}
+        notice={repairNotice}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy notice" }));
+    expect(copyText).toHaveBeenCalledWith(
+      [
+        repairNotice.title,
+        repairNotice.status.label,
+        repairNotice.message,
+        repairNotice.detail,
+      ].join("\n"),
+    );
+  });
+
   it("marks warning notices for high-contrast styling", () => {
     render(
       <AppNoticeToast

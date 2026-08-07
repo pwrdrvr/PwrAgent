@@ -49,7 +49,6 @@ export function resolveBackendErrorNotice(
 ): AppNoticeToastNotice | undefined {
   if (signal.kind === "codex-invalid-id-recovery") {
     const baseNotice = {
-      copyText: signal.failureMessage,
       detail: signal.threadLabel,
       id:
         `codex-invalid-id-recovery:codex:${signal.threadId}:${signal.turnId}`,
