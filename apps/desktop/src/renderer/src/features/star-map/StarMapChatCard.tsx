@@ -128,21 +128,32 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   }, []);
 
   // A card parked against an edge must stay reachable when the window
-  // shrinks under it.
+  // shrinks under it. The listener reads the current rect through a ref
+  // rather than closing over it: `rect` changes on every pointermove, and
+  // depending on it here tore the listener down and re-added it on every
+  // frame of a drag.
+  const rectRef = useRef(rect);
+  rectRef.current = rect;
   useEffect(() => {
     if (typeof window === "undefined") return;
     const onResize = () => {
-      onRectChange(cardKey, clampChatCardRect(rect, viewportSize()));
+      onRectChange(cardKey, clampChatCardRect(rectRef.current, viewportSize()));
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, [cardKey, onRectChange, rect]);
+  }, [cardKey, onRectChange]);
 
+  /**
+   * Returns whether the turn actually reached the backend. A peer can drop
+   * mid-send, and when it does the operator must get their text back and
+   * the transcript must not keep an optimistic message for a turn that
+   * never started.
+   */
   const send = useCallback(
-    async (text: string) => {
-      if (!desktopApi?.startTurn) return;
+    async (text: string): Promise<boolean> => {
+      if (!desktopApi?.startTurn) return false;
       setSendError(undefined);
-      session.addOptimisticUserMessage(text);
+      const optimisticId = session.addOptimisticUserMessage(text);
       try {
         await desktopApi.startTurn({
           backend: thread.source,
@@ -150,12 +161,15 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           threadId: thread.id,
           input: [{ type: "text", text }],
         });
+        return true;
       } catch (error) {
+        session.removeOptimisticMessage(optimisticId);
         setSendError(
           error instanceof Error
             ? error.message
             : "Could not send that message.",
         );
+        return false;
       }
     },
     [desktopApi, federationTarget, session, thread],
@@ -332,7 +346,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         executionMode={thread.executionMode}
         model={thread.model}
         onInterrupt={() => void interrupt()}
-        onSend={(text) => void send(text)}
+        onSend={send}
         reasoningEffort={thread.reasoningEffort}
         secondaryActions={secondaryActions}
         threadTitle={thread.title}

@@ -21,7 +21,11 @@ export type CompactComposerProps = {
   /** Thread's current model, shown as ambient state rather than a control. */
   model?: string;
   onInterrupt?: () => void;
-  onSend: (text: string) => void;
+  /**
+   * Resolve `false` to hand the text back to the input — a send that never
+   * reached the backend must not cost the operator what they typed.
+   */
+  onSend: (text: string) => void | boolean | Promise<boolean | void>;
   placeholder?: string;
   reasoningEffort?: string;
   /** Consolidated under the kebab; the row itself stays one line tall. */
@@ -63,18 +67,23 @@ export function CompactComposer(props: CompactComposerProps) {
     .filter((part): part is string => Boolean(part))
     .join(" · ");
 
-  const send = useCallback(() => {
+  const send = useCallback(async () => {
     const text = draft.trim();
     if (!text) return;
+    // Clear optimistically so the input frees up immediately, then put the
+    // text back if the send turned out to fail.
     setDraft("");
-    onSend(text);
+    const delivered = await onSend(text);
+    if (delivered === false) {
+      setDraft((current) => (current.length > 0 ? current : text));
+    }
   }, [draft, onSend]);
 
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
-        send();
+        void send();
       }
     },
     [send],
@@ -170,7 +179,7 @@ export function CompactComposer(props: CompactComposerProps) {
           <button
             className="compact-composer__send"
             disabled={props.disabled || draft.trim().length === 0}
-            onClick={send}
+            onClick={() => void send()}
             type="button"
           >
             Send
