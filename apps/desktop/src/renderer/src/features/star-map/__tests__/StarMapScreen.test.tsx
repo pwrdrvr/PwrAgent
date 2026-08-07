@@ -332,6 +332,7 @@ describe("StarMapScreen", () => {
 
     await waitFor(() => {
       expect(setFederationEventSubscriptions).toHaveBeenCalledWith({
+        consumer: "star_map",
         subscriptions: [{
           sourceInstanceId: "pwr_remote",
           eventClasses: [
@@ -355,6 +356,7 @@ describe("StarMapScreen", () => {
 
     rendered.unmount();
     expect(setFederationEventSubscriptions).toHaveBeenLastCalledWith({
+      consumer: "star_map",
       subscriptions: [],
     });
   });

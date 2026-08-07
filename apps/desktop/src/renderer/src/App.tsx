@@ -62,6 +62,7 @@ import {
   readRendererFederationTarget,
 } from "./lib/federation-window";
 import { useFederationPeerConnectivity } from "./lib/useFederationPeerConnectivity";
+import { useFederationThreadEventSubscriptions } from "./lib/useFederationThreadEventSubscriptions";
 import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
 import { federationTargetsEqual } from "./lib/federated-thread-events";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
@@ -807,6 +808,12 @@ function DesktopAppShell(props: {
       settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     threadViewVisible: mainView === "thread",
   });
+  const scheduledActionFederationTargets = useFederationThreadEventSubscriptions({
+    desktopApi,
+    enabled: !readRendererFederationTarget(),
+    selectedThread: navigation.selectedThread,
+    threads: navigation.threads,
+  });
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
   const navigationFederationTarget = navigation.federationTarget;
@@ -1058,13 +1065,32 @@ function DesktopAppShell(props: {
     baseComposerDraftStore,
     desktopApi,
   );
+  useQueuedTurnProjection({
+    composerDraftStore,
+    threads: navigation.threads,
+  });
+  const scheduledActionProjectionSources = useMemo(
+    () => readRendererFederationTarget()
+      ? [{
+          federationTarget: activeFederationTarget,
+          suspended: !peerConnectivity.connected,
+        }]
+      : [
+          { federationTarget: undefined },
+          ...scheduledActionFederationTargets.map((federationTarget) => ({
+            federationTarget,
+          })),
+        ],
+    [
+      activeFederationTarget,
+      peerConnectivity.connected,
+      scheduledActionFederationTargets,
+    ],
+  );
   useScheduledThreadActionProjection({
     composerDraftStore,
     desktopApi,
-    federationTarget: activeFederationTarget,
-    // A disconnected peer fails every reconciliation tick — stop polling
-    // until the runtime reports the peer connected again.
-    suspended: !peerConnectivity.connected,
+    sources: scheduledActionProjectionSources,
   });
   const replayCodexProfileSetup = settings.snapshot
     ? inferReplayCodexProfileSetup(

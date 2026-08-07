@@ -129,7 +129,7 @@ export function registerFederationIpcHandlers(): void {
       return {
         subscriptions: runtime.setRendererEventSubscriptions(
           event.sender.id,
-          "star-map",
+          request.consumer === "thread_view" ? "thread-view" : "star-map",
           subscriptions,
         ),
       };

@@ -49,7 +49,12 @@ export type FederationEventSubscription = {
   eventClasses: FederationEventClass[];
 };
 
+export type FederationEventSubscriptionConsumer =
+  | "star_map"
+  | "thread_view";
+
 export type SetFederationEventSubscriptionsRequest = {
+  consumer?: FederationEventSubscriptionConsumer;
   subscriptions: FederationEventSubscription[];
 };
 
