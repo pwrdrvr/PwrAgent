@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared";
 
 const appEventHandlers = new Map<string, (...args: unknown[]) => void>();
 const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
@@ -87,6 +88,50 @@ const isAppStateInitializedMock = vi.fn();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
 const federationRuntimeRestartMock = vi.fn<() => Promise<void>>();
 const disposeDesktopFederationRuntimeMock = vi.fn<() => Promise<void>>();
+const connectedPeerTargetsMock = vi.fn(() => [] as Array<{
+  target: { scope: "remote"; instanceId: string };
+  label: string;
+  capabilities: Array<
+    | "event_subscriptions"
+    | "remote_window"
+    | "thread_detail"
+    | "thread_navigation"
+  >;
+}>);
+const federationPeerStatusChangedMock = vi.fn(() => () => {});
+const rendererEventSubscriptions = new Map<number, Array<{
+  sourceInstanceId: string;
+  eventClasses: string[];
+}>>();
+const setRemoteWindowEventSubscriptionMock = vi.fn((
+  webContentsId: number,
+  sourceInstanceId: string,
+  capabilities: string[],
+) => {
+  const subscriptions = [{
+    sourceInstanceId,
+    eventClasses: [
+      ...(capabilities.includes("thread_navigation")
+        ? ["navigation", "star_map"]
+        : []),
+      ...(capabilities.includes("thread_detail") ? ["transcript"] : []),
+    ],
+  }];
+  rendererEventSubscriptions.set(webContentsId, subscriptions);
+  return subscriptions;
+});
+const clearRendererEventSubscriptionsMock = vi.fn((webContentsId: number) => {
+  rendererEventSubscriptions.delete(webContentsId);
+});
+const rendererWantsRemoteEventMock = vi.fn((
+  webContentsId: number,
+  sourceInstanceId: string,
+  eventClass: string,
+) => rendererEventSubscriptions.get(webContentsId)?.some(
+  (subscription) =>
+    subscription.sourceInstanceId === sourceInstanceId
+    && subscription.eventClasses.includes(eventClass),
+) ?? false);
 const messagingLeaseStartMock = vi.fn<() => Promise<void>>();
 const messagingLeaseShutdownSyncMock = vi.fn();
 const getRuntimeMessagingLeaseCoordinatorMock = vi.fn();
@@ -389,10 +434,14 @@ vi.mock("../messaging/messaging-runtime", () => ({
 }));
 
 vi.mock("../federation/federation-runtime", () => ({
+  federationEventClassForMethod: vi.fn(() => "transcript"),
   getDesktopFederationRuntime: vi.fn(() => ({
     restart: federationRuntimeRestartMock,
-    connectedPeerTargets: vi.fn(() => []),
-    onPeerStatusChanged: vi.fn(() => () => {}),
+    connectedPeerTargets: connectedPeerTargetsMock,
+    onPeerStatusChanged: federationPeerStatusChangedMock,
+    setRemoteWindowEventSubscription: setRemoteWindowEventSubscriptionMock,
+    clearRendererEventSubscriptions: clearRendererEventSubscriptionsMock,
+    rendererWantsRemoteEvent: rendererWantsRemoteEventMock,
   })),
   disposeDesktopFederationRuntime: disposeDesktopFederationRuntimeMock,
 }));
@@ -595,6 +644,13 @@ describe("bootstrapApp", () => {
     federationRuntimeRestartMock.mockResolvedValue();
     disposeDesktopFederationRuntimeMock.mockReset();
     disposeDesktopFederationRuntimeMock.mockResolvedValue();
+    connectedPeerTargetsMock.mockReset();
+    connectedPeerTargetsMock.mockReturnValue([]);
+    federationPeerStatusChangedMock.mockClear();
+    rendererEventSubscriptions.clear();
+    setRemoteWindowEventSubscriptionMock.mockClear();
+    clearRendererEventSubscriptionsMock.mockClear();
+    rendererWantsRemoteEventMock.mockClear();
     messagingLeaseStartMock.mockReset();
     messagingLeaseStartMock.mockResolvedValue();
     messagingLeaseShutdownSyncMock.mockReset();
@@ -1183,6 +1239,138 @@ describe("bootstrapApp", () => {
     newThread?.click?.();
 
     expect(requestOpenNewThreadMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a File -> Remote Instances window subscribed to live transcript events", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    const peer = {
+      target: { scope: "remote" as const, instanceId: "owner_one" },
+      label: "Owner One",
+      capabilities: [
+        "event_subscriptions" as const,
+        "remote_window" as const,
+        "thread_detail" as const,
+        "thread_navigation" as const,
+      ],
+    };
+    connectedPeerTargetsMock.mockReturnValue([peer]);
+    const remoteWindowHandlers = new Map<string, Array<() => void>>();
+    const remoteWindowSend = vi.fn();
+    const remoteWindow = {
+      id: 42,
+      webContents: {
+        id: 42,
+        isDestroyed: () => false,
+        send: remoteWindowSend,
+      },
+      on: (event: string, handler: () => void) => {
+        const handlers = remoteWindowHandlers.get(event) ?? [];
+        handlers.push(handler);
+        remoteWindowHandlers.set(event, handlers);
+      },
+      once: (event: string, handler: () => void) => {
+        const handlers = remoteWindowHandlers.get(event) ?? [];
+        handlers.push(handler);
+        remoteWindowHandlers.set(event, handlers);
+      },
+    };
+    createMainWindowMock.mockImplementation((options?: {
+      federationTarget?: { scope: "remote"; instanceId: string };
+    }) => options?.federationTarget
+      ? remoteWindow
+      : {
+          on: (event: string, handler: (...args: unknown[]) => void) => {
+            mainWindowHandlers.set(event, handler);
+          },
+          once: (event: string, handler: (...args: unknown[]) => void) => {
+            mainWindowHandlers.set(event, handler);
+          },
+          isVisible: () => false,
+        });
+
+    await import("../index");
+    await flushMicrotasks();
+
+    type TestMenuItem = {
+      label?: string;
+      click?: () => void;
+      submenu?: TestMenuItem[];
+    };
+    const template = buildFromTemplateMock.mock.calls[0]?.[0] as
+      | TestMenuItem[]
+      | undefined;
+    const fileMenu = template?.find((item) => item.label === "File");
+    const remoteInstances = fileMenu?.submenu?.find(
+      (item) => item.label === "Remote Instances",
+    );
+    const owner = remoteInstances?.submenu?.find(
+      (item) => item.label === peer.label,
+    );
+
+    owner?.click?.();
+
+    expect(createMainWindowMock).toHaveBeenLastCalledWith({
+      federationLabel: peer.label,
+      federationTarget: peer.target,
+      initialThread: undefined,
+    });
+    expect(setRemoteWindowEventSubscriptionMock).toHaveBeenCalledWith(
+      remoteWindow.webContents.id,
+      peer.target.instanceId,
+      peer.capabilities,
+    );
+
+    const {
+      _resetWindowChannelsForTests,
+      registerWindowChannels,
+      WINDOW_KIND_MAIN,
+    } = await import("../window-channels");
+    const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
+    _resetWindowChannelsForTests();
+    registerWindowChannels(
+      remoteWindow as never,
+      WINDOW_KIND_MAIN,
+      [AGENT_EVENT_CHANNEL],
+      peer.target,
+    );
+    const { broadcastAgentEvent } = await vi.importActual<
+      typeof import("../ipc/agent-ipc")
+    >("../ipc/agent-ipc");
+    const liveEvent = {
+      backend: "codex",
+      federationTarget: peer.target,
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          delta: "live after snapshot",
+          itemId: "item-1",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      },
+    } as AgentEvent;
+
+    // The renderer's initial navigation snapshot is pull-based. A later
+    // owner event must still cross the subscription gate into this window.
+    broadcastAgentEvent(liveEvent);
+
+    expect(remoteWindowSend).toHaveBeenCalledWith(
+      AGENT_EVENT_CHANNEL,
+      liveEvent,
+    );
+
+    for (const handler of remoteWindowHandlers.get("closed") ?? []) {
+      handler();
+    }
+    expect(clearRendererEventSubscriptionsMock).toHaveBeenCalledWith(
+      remoteWindow.webContents.id,
+      "remote-window",
+    );
+
+    remoteWindowSend.mockClear();
+    broadcastAgentEvent(liveEvent);
+    expect(remoteWindowSend).not.toHaveBeenCalled();
+    _resetWindowChannelsForTests();
   });
 
   it("logs unexpected background messaging startup failures", async () => {

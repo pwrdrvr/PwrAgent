@@ -48,7 +48,7 @@ import {
 } from "../../shared/ipc";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getFederationTailscaleService } from "../federation/federation-tailscale";
-import { createMainWindow } from "../window";
+import { createFederationWindow } from "../federation/federation-window";
 
 const rendererSubscriptionCleanupIds = new Set<number>();
 
@@ -195,11 +195,6 @@ export function registerFederationIpcHandlers(): void {
       if (!peer) {
         throw new Error("Federation peer is not connected.");
       }
-      if (!peer.capabilities.includes("remote_window")) {
-        throw new Error(
-          "Federation peer does not allow remote windows (remote_window capability).",
-        );
-      }
       if (
         request.initialThread &&
         (
@@ -209,36 +204,14 @@ export function registerFederationIpcHandlers(): void {
       ) {
         throw new Error("Federation initial thread target does not match its window.");
       }
-      const window = createMainWindow({
-        federationLabel: peer.label,
-        federationTarget: request.target,
+      const window = createFederationWindow({
+        peer,
         initialThread: request.initialThread
           ? {
               backend: request.initialThread.backend,
               threadId: request.initialThread.threadId,
             }
           : undefined,
-      });
-      const webContentsId = window.webContents.id;
-      runtime.setRendererEventSubscriptions(webContentsId, "remote-window", [{
-        sourceInstanceId: request.target.instanceId,
-        eventClasses: [
-          ...(peer.capabilities.includes("thread_navigation")
-            ? ["navigation" as const]
-            : []),
-          ...(peer.capabilities.includes("thread_detail")
-            ? ["transcript" as const]
-            : []),
-          ...(peer.capabilities.includes("pending_request_control")
-            ? ["pending_requests" as const]
-            : []),
-          ...(peer.capabilities.includes("scheduled_actions")
-            ? ["scheduled_actions" as const]
-            : []),
-        ],
-      }]);
-      window.once("closed", () => {
-        runtime.clearRendererEventSubscriptions(webContentsId, "remote-window");
       });
       return {
         opened: true,

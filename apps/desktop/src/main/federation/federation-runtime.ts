@@ -63,6 +63,7 @@ import type {
   UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared";
 import {
+  FEDERATION_EVENT_CLASSES,
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
@@ -616,6 +617,29 @@ export class DesktopFederationRuntime {
     return this.setEventSubscriptions(
       `renderer:${webContentsId}:${consumerId}`,
       subscriptions,
+    );
+  }
+
+  /**
+   * A full remote viewer holds one source-wide desired-state consumer for
+   * every event class its peer capabilities authorize. Narrower consumers
+   * (Star Map, pinned summaries, messaging) are unioned independently, so
+   * their cleanup cannot unsubscribe a still-open remote desktop window.
+   */
+  setRemoteWindowEventSubscription(
+    webContentsId: number,
+    sourceInstanceId: FederationInstanceId,
+    capabilities: readonly FederationCapability[],
+  ): FederationEventSubscription[] {
+    return this.setRendererEventSubscriptions(
+      webContentsId,
+      "remote-window",
+      [{
+        sourceInstanceId,
+        eventClasses: FEDERATION_EVENT_CLASSES.filter((eventClass) =>
+          eventClassAllowedByCapabilities(eventClass, capabilities)
+        ),
+      }],
     );
   }
 
