@@ -262,7 +262,10 @@ the newer fields. Set `includeRemote: false` on these tools or
 instances by default, while preserving its richer local transcript, semantic,
 Agent, model, and directory filters as local-only capabilities. Pass
 `instanceId` to search one connected instance, or `includeRemote: false` for a
-strictly local search. Remote transcript reads require `thread_detail`, remote
+strictly local search. Supported backend, project, archive, and update-time
+filters run on each instance before the global page limit; merged local and
+remote pages report the combined total and whether more matches were truncated.
+Remote transcript reads require `thread_detail`, remote
 mutations require `turn_control`, remote messaging attachments require
 `messaging_route`, and all exact-thread ownership resolution requires
 `thread_navigation`.

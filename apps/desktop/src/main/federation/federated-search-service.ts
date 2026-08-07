@@ -54,11 +54,11 @@ export class FederatedSearchService {
     const resultGroups = await Promise.all([
       ...(this.options.includeLocal === false
         ? []
-        : [this.searchLocal(query, request.backend)]),
+        : [this.searchLocal(query, request)]),
       ...this.options.peers().map(async (peer) => {
         try {
           const peerResults = await withTimeout(
-            this.searchPeer(peer, query, request.backend),
+            this.searchPeer(peer, query, request),
             peerTimeoutMs,
             `Federated search timed out after ${Math.round(peerTimeoutMs / 1000)}s.`,
           );
@@ -78,18 +78,20 @@ export class FederatedSearchService {
         }
       }),
     ]);
-    const results = resultGroups
+    const matches = resultGroups
       .flat()
       .sort((left, right) => {
         if (right.score !== left.score) return right.score - left.score;
         return (right.thread.updatedAt ?? 0) - (left.thread.updatedAt ?? 0);
-      })
-      .slice(0, limit);
+      });
+    const results = matches.slice(0, limit);
 
     return {
       query,
       searchedAt,
       results,
+      totalCount: matches.length,
+      truncated: matches.length > limit,
       failures,
       searchedInstances,
     };
@@ -97,12 +99,12 @@ export class FederatedSearchService {
 
   private async searchLocal(
     query: string,
-    backend?: FederatedSearchRequest["backend"],
+    request: FederatedSearchRequest,
   ): Promise<FederatedSearchResponse["results"]> {
     const resolved = await this.resolveExactThreadId(
       this.options.local,
       query,
-      backend,
+      request,
     );
     if (resolved !== undefined) {
       return resolved
@@ -117,11 +119,12 @@ export class FederatedSearchService {
           }]
         : [];
     }
-    const response = await this.options.local.listThreads({
-      backend: backend === "all" ? undefined : backend,
-      filter: query,
-    });
-    return response.threads.map((thread) => ({
+    const threads = await listFederatedSearchThreads(
+      this.options.local,
+      query,
+      request,
+    );
+    return threads.map((thread) => ({
       ref: buildFederatedThreadRef({
         backend: thread.source,
         threadId: thread.id,
@@ -135,12 +138,12 @@ export class FederatedSearchService {
   private async searchPeer(
     peer: FederatedSearchPeer,
     query: string,
-    backend?: FederatedSearchRequest["backend"],
+    request: FederatedSearchRequest,
   ): Promise<FederatedSearchResponse["results"]> {
     const resolved = await this.resolveExactThreadId(
       peer.backend,
       query,
-      backend,
+      request,
     );
     if (resolved !== undefined) {
       return resolved
@@ -157,11 +160,12 @@ export class FederatedSearchService {
           }]
         : [];
     }
-    const response: AppServerListThreadsResponse = await peer.backend.listThreads({
-      backend: backend === "all" ? undefined : backend,
-      filter: query,
-    });
-    return response.threads.map((thread) => ({
+    const threads = await listFederatedSearchThreads(
+      peer.backend,
+      query,
+      request,
+    );
+    return threads.map((thread) => ({
       ref: buildFederatedThreadRef({
         backend: thread.source,
         instanceId: peer.instanceId,
@@ -177,7 +181,7 @@ export class FederatedSearchService {
   private async resolveExactThreadId(
     backendOperations: FederatedSearchPeer["backend"],
     query: string,
-    backend?: FederatedSearchRequest["backend"],
+    request: FederatedSearchRequest,
   ): Promise<AppServerThreadSummary | null | undefined> {
     if (
       !backendOperations.resolveThread
@@ -187,19 +191,82 @@ export class FederatedSearchService {
     }
     try {
       const response = await backendOperations.resolveThread({
-        ...(backend && backend !== "all" ? { backend } : {}),
+        ...(request.backend && request.backend !== "all"
+          ? { backend: request.backend }
+          : {}),
         threadId: query,
       });
-      return response.thread ?? null;
+      if (
+        response.thread
+        && matchesFederatedSearchFilters(response.thread, request)
+      ) {
+        return response.thread;
+      }
+      if (!request.includeArchived) {
+        return null;
+      }
     } catch {
-      // Mixed-version peers may not expose the exact lookup RPC yet. Avoid
-      // their provider's fuzzy UUID filter and scan the active list exactly.
-      const response = await backendOperations.listThreads({
-        backend: backend === "all" ? undefined : backend,
-      });
-      return response.threads.find((thread) => thread.id === query) ?? null;
+      // Mixed-version peers may not expose the exact lookup RPC yet. Fall
+      // through to exact list scans rather than using fuzzy UUID filtering.
+    }
+    const threads = await listFederatedSearchThreads(
+      backendOperations,
+      "",
+      request,
+    );
+    return threads.find((thread) => thread.id === query) ?? null;
+  }
+}
+
+async function listFederatedSearchThreads(
+  backendOperations: FederatedSearchPeer["backend"],
+  query: string,
+  request: FederatedSearchRequest,
+): Promise<AppServerThreadSummary[]> {
+  const list = async (archived: boolean) =>
+    await backendOperations.listThreads({
+      backend: request.backend === "all" ? undefined : request.backend,
+      archived,
+      ...(query ? { filter: query } : {}),
+    });
+  const responses: AppServerListThreadsResponse[] = [await list(false)];
+  if (request.includeArchived) {
+    responses.push(await list(true));
+  }
+  const byIdentity = new Map<string, AppServerThreadSummary>();
+  for (const thread of responses.flatMap((response) => response.threads)) {
+    if (matchesFederatedSearchFilters(thread, request)) {
+      byIdentity.set(`${thread.source}:${thread.id}`, thread);
     }
   }
+  return [...byIdentity.values()];
+}
+
+function matchesFederatedSearchFilters(
+  thread: AppServerThreadSummary,
+  request: FederatedSearchRequest,
+): boolean {
+  if (
+    request.backend
+    && request.backend !== "all"
+    && thread.source !== request.backend
+  ) {
+    return false;
+  }
+  if (
+    request.projectKeys?.length
+    && (!thread.projectKey || !request.projectKeys.includes(thread.projectKey))
+  ) {
+    return false;
+  }
+  const updatedAt = thread.updatedAt ?? thread.createdAt ?? 0;
+  if (request.updatedAfter !== undefined && updatedAt < request.updatedAfter) {
+    return false;
+  }
+  if (request.updatedBefore !== undefined && updatedAt > request.updatedBefore) {
+    return false;
+  }
+  return true;
 }
 
 function looksLikeExactThreadId(query: string): boolean {
@@ -231,7 +298,7 @@ function withTimeout<T>(
 }
 
 function scoreThread(thread: AppServerThreadSummary, query: string): number {
-  if (!query) return thread.updatedAt ?? thread.createdAt ?? 0;
+  if (!query) return 0;
   const normalized = query.toLowerCase();
   const title = thread.title.toLowerCase();
   const summary = thread.summary?.toLowerCase() ?? "";
@@ -245,6 +312,5 @@ function scoreThread(thread: AppServerThreadSummary, query: string): number {
   if (title.includes(normalized)) score += 250;
   if (summary.includes(normalized)) score += 100;
   if (directories.includes(normalized)) score += 50;
-  score += Math.min(thread.updatedAt ?? thread.createdAt ?? 0, 9_999_999_999) / 1_000_000;
   return score;
 }

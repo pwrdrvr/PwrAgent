@@ -29786,7 +29786,16 @@ script = "printf setup"
         titleSource: "explicit",
         source: "codex",
         linkedDirectories: [],
+        projectKey: "PwrSuiteLab",
         updatedAt: 1_000,
+      }, {
+        id: "local-thread-2",
+        title: "Local collector follow-up",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        projectKey: "PwrSuiteLab",
+        updatedAt: 900,
       }],
     });
     const registry = new DesktopBackendRegistry({
@@ -29802,6 +29811,8 @@ script = "printf setup"
       ok: true as const,
       data: {
         query: "collector",
+        totalCount: 3,
+        truncated: true,
         results: [{
           instanceId: "pwr_remote",
           instanceLabel: "Remote Mac",
@@ -29811,8 +29822,19 @@ script = "printf setup"
           title: "Remote collector",
           updatedAt: 2_000,
           projectKey: "PwrSuiteLab",
-          score: 10,
+          score: 10_000,
           threadLink: "[Remote collector](pwragent://thread/remote-thread)",
+        }, {
+          instanceId: "pwr_remote",
+          instanceLabel: "Remote Mac",
+          isLocal: false,
+          backend: "codex" as const,
+          threadId: "remote-thread-2",
+          title: "Remote collector follow-up",
+          updatedAt: 1_500,
+          projectKey: "PwrSuiteLab",
+          score: 9_000,
+          threadLink: "[Remote collector follow-up](pwragent://thread/remote-thread-2)",
         }],
         searchedInstances: [{
           instanceId: "pwr_remote",
@@ -29844,25 +29866,47 @@ script = "printf setup"
         requestId: "call-search",
         namespace: "pwragent",
         tool: "search_threads",
-        arguments: { query: "collector" },
+        arguments: {
+          query: "collector",
+          backend: "codex",
+          includeArchived: true,
+          projectKeys: ["PwrSuiteLab"],
+          updatedAfter: 500,
+          updatedBefore: 3_000,
+          limit: 2,
+        },
       },
     } as AppServerPendingRequestNotification);
     const payload = JSON.parse(
       (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
     );
 
-    expect(payload.threads).toEqual(expect.arrayContaining([
-      expect.objectContaining({ threadId: "local-thread" }),
+    expect(payload.threads).toEqual([
       expect.objectContaining({
         threadId: "remote-thread",
         instanceId: "pwr_remote",
         instanceLabel: "Remote Mac",
         linkedDirectories: [],
       }),
-    ]));
+      expect.objectContaining({ threadId: "local-thread" }),
+    ]);
+    expect(payload).toMatchObject({
+      totalCount: 5,
+      limit: 2,
+      truncated: true,
+    });
     expect(federationHandler).toHaveBeenCalledWith(expect.objectContaining({
       operation: "search_federation_threads",
-      args: expect.objectContaining({ scope: "remote", query: "collector" }),
+      args: {
+        scope: "remote",
+        query: "collector",
+        backend: "codex",
+        includeArchived: true,
+        projectKeys: ["PwrSuiteLab"],
+        updatedAfter: 500,
+        updatedBefore: 3_000,
+        limit: 2,
+      },
     }));
 
     await registry.close();

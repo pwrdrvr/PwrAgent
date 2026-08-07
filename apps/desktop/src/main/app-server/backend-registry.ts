@@ -24795,12 +24795,25 @@ export class DesktopBackendRegistry {
       return params.localResponse;
     }
 
+    const backend = readThreadInspectionBackend(params.args.backend);
+    const projectKeys = nonEmptyStringArray(params.args.projectKeys);
     const response = await this.federationHandler({
       operation: "search_federation_threads",
       context: params.context,
       args: {
         query: params.args.query?.trim() ?? "",
         scope: "remote",
+        ...(backend ? { backend } : {}),
+        ...(params.args.includeArchived === true
+          ? { includeArchived: true }
+          : {}),
+        ...(projectKeys ? { projectKeys } : {}),
+        ...(params.args.updatedAfter !== undefined
+          ? { updatedAfter: params.args.updatedAfter }
+          : {}),
+        ...(params.args.updatedBefore !== undefined
+          ? { updatedBefore: params.args.updatedBefore }
+          : {}),
         ...(params.instanceId ? { instanceId: params.instanceId } : {}),
         limit: params.limit,
       },
@@ -24820,26 +24833,7 @@ export class DesktopBackendRegistry {
       return params.localResponse;
     }
 
-    const backend = readThreadInspectionBackend(params.args.backend);
-    const projectKeys = nonEmptyStringArray(params.args.projectKeys);
     const remoteThreads = response.data.results
-      .filter((entry) => backend === "all" || !backend || entry.backend === backend)
-      .filter(
-        (entry) =>
-          !projectKeys
-          || Boolean(entry.projectKey && projectKeys.includes(entry.projectKey)),
-      )
-      .filter(
-        (entry) =>
-          params.args.updatedAfter === undefined
-          || (entry.updatedAt ?? 0) >= params.args.updatedAfter,
-      )
-      .filter(
-        (entry) =>
-          params.args.updatedBefore === undefined
-          || (entry.updatedAt ?? Number.POSITIVE_INFINITY)
-            <= params.args.updatedBefore,
-      )
       .map(
         (entry): ThreadInspectionSummary => ({
           backend: entry.backend,
@@ -24849,13 +24843,19 @@ export class DesktopBackendRegistry {
           threadLink: entry.threadLink,
           title: entry.title,
           updatedAt: entry.updatedAt,
+          archivedAt: entry.archivedAt,
           projectKey: entry.projectKey,
           linkedDirectories: [],
           score: entry.score,
         }),
       );
-    const localThreads = params.instanceId ? [] : localData.threads;
-    const threads = [...localThreads, ...remoteThreads]
+    const localThreads = normalizeThreadInspectionSearchRanks(
+      params.instanceId ? [] : localData.threads,
+    );
+    const normalizedRemoteThreads = normalizeThreadInspectionSearchRanks(
+      remoteThreads,
+    );
+    const threads = [...localThreads, ...normalizedRemoteThreads]
       .sort(
         (left, right) =>
           (right.score ?? 0) - (left.score ?? 0)
@@ -24863,14 +24863,17 @@ export class DesktopBackendRegistry {
             - (left.updatedAt ?? left.createdAt ?? 0),
       );
     const totalCount = (params.instanceId ? 0 : localData.totalCount)
-      + remoteThreads.length;
+      + response.data.totalCount;
     return {
       ok: true,
       data: {
         ...localData,
         threads: threads.slice(0, params.limit),
         totalCount,
-        truncated: localData.truncated || threads.length > params.limit,
+        truncated:
+          localData.truncated
+          || response.data.truncated
+          || totalCount > params.limit,
         searchedInstances: response.data.searchedInstances,
         federationFailures: response.data.failures,
       },
@@ -26961,6 +26964,15 @@ function filterThreadInspectionSummaries(
           (left.thread.updatedAt ?? left.thread.createdAt ?? 0),
     )
     .map((entry) => entry.thread);
+}
+
+function normalizeThreadInspectionSearchRanks(
+  threads: ThreadInspectionSummary[],
+): ThreadInspectionSummary[] {
+  return threads.map((thread, index) => ({
+    ...thread,
+    score: 1 / (index + 1),
+  }));
 }
 
 function toThreadInspectionSummary(

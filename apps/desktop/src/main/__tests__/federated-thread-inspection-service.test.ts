@@ -41,7 +41,12 @@ function buildRuntime(params: {
         },
         threadStatus: "idle" as const,
       }));
-      return [peer.instanceId, { readThread, resolveThread }] as const;
+      const listThreads = vi.fn(async () => ({
+        backend: "codex" as const,
+        fetchedAt: 2_000,
+        threads: [],
+      }));
+      return [peer.instanceId, { listThreads, readThread, resolveThread }] as const;
     }),
   );
   const runtime = {
@@ -163,6 +168,66 @@ describe("federated thread inspection service", () => {
     })).rejects.toThrow(
       "owns thread 019fdc10-799b-7540-8884-87899f896ebc but does not grant thread_detail",
     );
+  });
+
+  it("resolves an archived thread on its explicit remote owner", async () => {
+    const archivedThread = {
+      source: "codex" as const,
+      id: threadId,
+      title: "Archived collector result",
+      archivedAt: 3_000,
+      linkedDirectories: [],
+    };
+    const listThreads = vi.fn(async (request?: { archived?: boolean }) => ({
+      backend: "codex" as const,
+      fetchedAt: 2_000,
+      threads: request?.archived ? [archivedThread] : [],
+    }));
+    const readThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      fetchedAt: 2_000,
+      threadId,
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle" as const,
+      },
+      threadStatus: "idle" as const,
+    }));
+    const runtime = {
+      connectedPeerTargets: () => [{
+        target: { scope: "remote" as const, instanceId: "pwr_owner" },
+        label: "Owner Mac",
+        capabilities: ["thread_navigation", "thread_detail"],
+      }],
+      remoteBackend: () => ({
+        resolveThread: vi.fn(async () => ({})),
+        listThreads,
+        readThread,
+      }),
+    } as unknown as DesktopFederationRuntime;
+    const handler = createFederatedThreadInspectionHandler({
+      runtime: () => runtime,
+    });
+
+    await expect(handler({
+      backend: "codex",
+      threadId,
+      instanceId: "pwr_owner",
+      limit: 10,
+      includeTurns: true,
+    })).resolves.toMatchObject({
+      instanceId: "pwr_owner",
+      thread: { id: threadId, archivedAt: 3_000 },
+    });
+    expect(listThreads).toHaveBeenCalledWith({
+      backend: "codex",
+      archived: true,
+    });
   });
 
   it("returns peer_unavailable for a remembered disconnected owner", async () => {

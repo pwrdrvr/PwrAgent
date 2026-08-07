@@ -215,6 +215,119 @@ describe("FederatedSearchService", () => {
     });
   });
 
+  it("applies backend, project, archive, and date filters before limiting", async () => {
+    const listThreads = vi.fn(async (request?: {
+      archived?: boolean;
+      backend?: string;
+      filter?: string;
+    }) => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      threads: request?.archived
+        ? [{
+            ...thread("archived-match", "Collector result", 5_000),
+            archivedAt: 6_000,
+            projectKey: "PwrSuiteLab",
+          }]
+        : Array.from({ length: 10 }, (_, index) => ({
+            ...thread(`wrong-project-${index}`, "Collector result", 5_000),
+            projectKey: "OtherProject",
+          })),
+    }));
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: { listThreads: vi.fn() },
+      peers: () => [{
+        instanceId: "pwr_remote",
+        label: "Remote Mac",
+        backend: { listThreads },
+      }],
+    });
+
+    await expect(service.search({
+      query: "collector",
+      backend: "codex",
+      includeArchived: true,
+      projectKeys: ["PwrSuiteLab"],
+      updatedAfter: 4_000,
+      updatedBefore: 6_000,
+      limit: 1,
+    })).resolves.toMatchObject({
+      results: [{ thread: { id: "archived-match", archivedAt: 6_000 } }],
+      totalCount: 1,
+      truncated: false,
+    });
+    expect(listThreads).toHaveBeenNthCalledWith(1, {
+      backend: "codex",
+      archived: false,
+      filter: "collector",
+    });
+    expect(listThreads).toHaveBeenNthCalledWith(2, {
+      backend: "codex",
+      archived: true,
+      filter: "collector",
+    });
+  });
+
+  it("reports totalCount and truncation before slicing the result page", async () => {
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: { listThreads: vi.fn() },
+      peers: () => [{
+        instanceId: "pwr_remote",
+        label: "Remote Mac",
+        backend: {
+          listThreads: vi.fn(async () => ({
+            backend: "codex" as const,
+            fetchedAt: 1_000,
+            threads: Array.from({ length: 11 }, (_, index) =>
+              thread(`remote-${index}`, "Collector result", index)),
+          })),
+        },
+      }],
+    });
+
+    const response = await service.search({
+      query: "collector",
+      limit: 10,
+    });
+    expect(response).toMatchObject({
+      results: expect.any(Array),
+      totalCount: 11,
+      truncated: true,
+    });
+    expect(response.results).toHaveLength(10);
+  });
+
+  it("uses recency as a tie-breaker instead of an empty-query score", async () => {
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: { listThreads: vi.fn() },
+      peers: () => [{
+        instanceId: "pwr_remote",
+        label: "Remote Mac",
+        backend: {
+          listThreads: vi.fn(async () => ({
+            backend: "codex" as const,
+            fetchedAt: 1_000,
+            threads: [
+              thread("older", "Older", 1_000),
+              thread("newer", "Newer", 2_000),
+            ],
+          })),
+        },
+      }],
+    });
+
+    const response = await service.search({ query: "", limit: 10 });
+
+    expect(response.results.map((entry) => entry.thread.id)).toEqual([
+      "newer",
+      "older",
+    ]);
+    expect(response.results.map((entry) => entry.score)).toEqual([0, 0]);
+  });
+
   it("times out a hung peer instead of stalling the search", async () => {
     const service = new FederatedSearchService({
       peerTimeoutMs: 25,

@@ -176,6 +176,14 @@ async function resolveThreadOnPeer(
       await backend.listThreads({ backend: request.backend })
     ).threads.find((candidate) => candidate.id === request.threadId);
   }
+  if (!thread) {
+    thread = (
+      await backend.listThreads({
+        backend: request.backend,
+        archived: true,
+      })
+    ).threads.find((candidate) => candidate.id === request.threadId);
+  }
   return thread ? { backend, peer, thread } : undefined;
 }
 

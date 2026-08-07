@@ -60,6 +60,11 @@ describe("pwragent federation agent tools", () => {
             inputSchema: expect.objectContaining({
               required: ["query"],
               properties: expect.objectContaining({
+                backend: expect.objectContaining({ type: "string" }),
+                includeArchived: expect.objectContaining({ type: "boolean" }),
+                projectKeys: expect.objectContaining({ type: "array" }),
+                updatedAfter: expect.objectContaining({ type: "integer" }),
+                updatedBefore: expect.objectContaining({ type: "integer" }),
                 scope: expect.objectContaining({
                   enum: ["all", "local", "remote"],
                 }),
@@ -303,6 +308,8 @@ describe("pwragent federation agent tools", () => {
       ok: true as const,
       data: {
         query: "recorder crash",
+        totalCount: 0,
+        truncated: false,
         results: [],
         searchedInstances: [],
         failures: [],
@@ -318,7 +325,16 @@ describe("pwragent federation agent tools", () => {
         callId: "call-1",
         namespace: "pwragent",
         tool: "search_federation_threads",
-        arguments: { query: " recorder crash ", instanceId: " pwr_studio ", limit: 5 },
+        arguments: {
+          query: " recorder crash ",
+          backend: "codex",
+          includeArchived: true,
+          projectKeys: [" PwrAgent "],
+          updatedAfter: 1_000,
+          updatedBefore: 2_000,
+          instanceId: " pwr_studio ",
+          limit: 5,
+        },
       },
     });
 
@@ -332,6 +348,11 @@ describe("pwragent federation agent tools", () => {
       },
       args: {
         query: "recorder crash",
+        backend: "codex",
+        includeArchived: true,
+        projectKeys: ["PwrAgent"],
+        updatedAfter: 1_000,
+        updatedBefore: 2_000,
         instanceId: "pwr_studio",
         limit: 5,
       },

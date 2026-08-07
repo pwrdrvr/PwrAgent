@@ -11,6 +11,7 @@ import type {
 } from "@pwragent/shared";
 import {
   FEDERATION_SEARCH_SCOPES,
+  isAppServerBackendKind,
   PWRAGENT_FEDERATION_OPERATION_NAMES,
   PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
@@ -98,7 +99,7 @@ function descriptionForOperation(
     case "create_instance_thread":
       return "Create and start a new PwrAgent thread in a project on a chosen instance, local or remote. Pass instanceId from list_federation_instances and projectKey from list_instance_projects; input becomes the first prompt of the created thread. Omitted settings inherit the project's launchpad presets, then the instance defaults — only pass model/executionMode/workMode overrides the user asked for. Consult ~/.pwragent/AGENTS.md (when it exists) for the operator's thread-startup preferences such as default projects and settings before choosing values. For delegating work on the local instance from an ordinary thread, prefer handoff_task, which offers richer workspace and grouping options; use create_instance_thread when targeting another instance or when routing intake work by instance. Thread startup can take minutes while a worktree or environment is prepared; if this call is slow, do not call it again — use search_federation_threads to check whether the thread appeared. The result includes threadLink and instanceId. Include threadLink verbatim when telling the user about the thread so it renders as a clickable chip, and preserve instanceId when passing the remote target to send_message_to_thread.";
     case "search_federation_threads":
-      return "Search threads across every reachable PwrAgent instance, including the local one, in a single call — use it to find 'the PwrSnap thread about X' wherever it lives. Use scope to pick the search surface: `all` (default) is local plus every connected peer, `local` is this instance only, and `remote` is every connected peer excluding local — the right choice when the user knows the thread is not on this machine. Pass instanceId to target one specific instance; scope and instanceId intersect when both are given. Results carry the owning instanceId, its display label, an isLocal flag, and a threadLink that preserves cross-instance routing; failures lists peers that could not be searched. This is a metadata search (titles, summaries, project paths). For deeper local-only search with transcript content modes, use search_threads instead. Include threadLink verbatim when mentioning a result so it renders as a clickable chip, and preserve instanceId when passing a remote target to send_message_to_thread.";
+      return "Search threads across every reachable PwrAgent instance, including the local one, in a single call — use it to find 'the PwrSnap thread about X' wherever it lives. Use scope to pick the search surface: `all` (default) is local plus every connected peer, `local` is this instance only, and `remote` is every connected peer excluding local — the right choice when the user knows the thread is not on this machine. Pass instanceId to target one specific instance; scope and instanceId intersect when both are given. Backend, project, archive, and update-time filters are applied on each instance before the global result limit. Results carry the owning instanceId, its display label, an isLocal flag, and a threadLink that preserves cross-instance routing; failures lists peers that could not be searched. This is a metadata search (titles, summaries, project paths). For deeper local-only search with transcript content modes, use search_threads instead. Include threadLink verbatim when mentioning a result so it renders as a clickable chip, and preserve instanceId when passing a remote target to send_message_to_thread.";
   }
 }
 
@@ -189,6 +190,31 @@ function inputSchemaForOperation(
             type: "string",
             description: "Search text matched against thread titles, summaries, and project paths.",
           },
+          backend: {
+            type: "string",
+            description:
+              "Backend to search. Defaults to all known PwrAgent backends.",
+          },
+          includeArchived: {
+            type: "boolean",
+            description:
+              "When true, search active threads plus archived threads. Defaults to active threads only.",
+          },
+          projectKeys: {
+            type: "array",
+            items: { type: "string" },
+            description: "Exact PwrAgent project keys to require.",
+          },
+          updatedAfter: {
+            type: "integer",
+            description:
+              "Only include threads updated at or after this Unix epoch millisecond timestamp.",
+          },
+          updatedBefore: {
+            type: "integer",
+            description:
+              "Only include threads updated at or before this Unix epoch millisecond timestamp.",
+          },
           scope: {
             type: "string",
             enum: FEDERATION_SEARCH_SCOPES,
@@ -243,7 +269,7 @@ function invalidArgumentsMessageForOperation(
     case "create_instance_thread":
       return "create_instance_thread requires non-empty instanceId and projectKey strings, and accepts only known workMode values.";
     case "search_federation_threads":
-      return "search_federation_threads requires a non-empty query string; scope must be all, local, or remote; limit must be an integer between 1 and 200.";
+      return "search_federation_threads requires a non-empty query string; scope must be all, local, or remote; backend and filters must be valid; limit must be an integer between 1 and 200.";
   }
 }
 
@@ -363,12 +389,59 @@ function normalizeSearchFederationThreadsArgs(
     limit = args.limit;
   }
   const instanceId = readTrimmedString(args.instanceId);
+  let backend: SearchFederationThreadsToolArgs["backend"];
+  if (args.backend !== undefined) {
+    if (
+      typeof args.backend !== "string"
+      || (args.backend !== "all" && !isAppServerBackendKind(args.backend))
+    ) {
+      return undefined;
+    }
+    backend = args.backend;
+  }
+  if (
+    args.includeArchived !== undefined
+    && typeof args.includeArchived !== "boolean"
+  ) {
+    return undefined;
+  }
+  const projectKeys = readNonEmptyStringArray(args.projectKeys);
+  if (args.projectKeys !== undefined && !projectKeys) {
+    return undefined;
+  }
+  for (const field of ["updatedAfter", "updatedBefore"] as const) {
+    if (
+      args[field] !== undefined
+      && (typeof args[field] !== "number" || !Number.isInteger(args[field]))
+    ) {
+      return undefined;
+    }
+  }
   return {
     query,
+    ...(backend ? { backend } : {}),
+    ...(args.includeArchived === true ? { includeArchived: true } : {}),
+    ...(projectKeys ? { projectKeys } : {}),
+    ...(typeof args.updatedAfter === "number"
+      ? { updatedAfter: args.updatedAfter }
+      : {}),
+    ...(typeof args.updatedBefore === "number"
+      ? { updatedBefore: args.updatedBefore }
+      : {}),
     ...(scope ? { scope: scope as FederationSearchScope } : {}),
     ...(instanceId ? { instanceId } : {}),
     ...(limit !== undefined ? { limit } : {}),
   };
+}
+
+function readNonEmptyStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const strings = value.map(readTrimmedString);
+  return strings.every((entry): entry is string => Boolean(entry))
+    ? strings
+    : undefined;
 }
 
 function readTrimmedString(value: unknown): string | undefined {
