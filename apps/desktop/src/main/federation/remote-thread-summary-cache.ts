@@ -55,7 +55,6 @@ export class RemoteThreadSummaryCache {
     string,
     { fetchedAt: number; threadKeys: Set<string> }
   >();
-  private readonly archivedInFlight = new Map<string, Promise<Set<string>>>();
 
   constructor(
     private readonly options: {
@@ -177,6 +176,9 @@ export class RemoteThreadSummaryCache {
     await Promise.all(
       [...pinsByInstanceId.entries()].map(async ([instanceId, group]) => {
         const peer = connectedByInstanceId.get(instanceId);
+        const peerTimeoutMs =
+          this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
+        const peerDeadlineAt = (this.options.now?.() ?? Date.now()) + peerTimeoutMs;
         let fresh: NavigationThreadSummary[] | undefined;
         let fetchFailed = false;
         if (peer) {
@@ -201,10 +203,28 @@ export class RemoteThreadSummaryCache {
           );
           await Promise.all(
             [...missingBackends].map(async (backend) => {
+              const candidateKeys = new Set(
+                group
+                  .filter(
+                    (pin) =>
+                      pin.ref.backend === backend
+                      && !freshByKey.has(
+                        `${pin.ref.backend}:${pin.ref.threadId}`,
+                      ),
+                  )
+                  .map((pin) => `${pin.ref.backend}:${pin.ref.threadId}`),
+              );
               try {
+                const remainingMs =
+                  peerDeadlineAt - (this.options.now?.() ?? Date.now());
+                if (remainingMs <= 0) {
+                  return;
+                }
                 const keys = await this.archivedThreadKeysForPeer(
                   peer.target,
                   backend,
+                  candidateKeys,
+                  remainingMs,
                 );
                 for (const key of keys) {
                   archivedKeys.add(key);
@@ -320,41 +340,36 @@ export class RemoteThreadSummaryCache {
   private async archivedThreadKeysForPeer(
     target: FederationRemoteTarget,
     backend: RemoteThreadPin["ref"]["backend"],
+    candidateKeys: ReadonlySet<string>,
+    timeoutMs: number,
   ): Promise<Set<string>> {
     const cacheKey = `${target.instanceId}:${backend}`;
     const now = this.options.now?.() ?? Date.now();
     const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
     const cached = this.archivedCache.get(cacheKey);
-    if (cached && now - cached.fetchedAt < ttlMs) {
+    if (
+      cached
+      && now - cached.fetchedAt < ttlMs
+      && [...candidateKeys].every((key) => !cached.threadKeys.has(key))
+    ) {
+      // A cached negative can only delay cleanup. A cached positive could
+      // delete a thread restored and re-pinned since the probe, so positive
+      // archive evidence is always revalidated with a fresh owner request.
       return cached.threadKeys;
     }
-    const pending = this.archivedInFlight.get(cacheKey);
-    if (pending) {
-      return await pending;
-    }
-    const fetch = (async () => {
-      const timeoutMs =
-        this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
-      const archivedThreads = await withTimeout(
-        this.options.fetchArchivedThreads(target, backend),
-        timeoutMs,
-        `Remote archived threads timed out after ${Math.round(timeoutMs / 1000)}s.`,
-      );
-      const threadKeys = new Set(
-        archivedThreads.map((thread) => `${thread.source}:${thread.id}`),
-      );
-      this.archivedCache.set(cacheKey, {
-        fetchedAt: this.options.now?.() ?? Date.now(),
-        threadKeys,
-      });
-      return threadKeys;
-    })();
-    this.archivedInFlight.set(cacheKey, fetch);
-    try {
-      return await fetch;
-    } finally {
-      this.archivedInFlight.delete(cacheKey);
-    }
+    const archivedThreads = await withTimeout(
+      this.options.fetchArchivedThreads(target, backend),
+      timeoutMs,
+      `Remote archived threads timed out after ${Math.round(timeoutMs / 1000)}s.`,
+    );
+    const threadKeys = new Set(
+      archivedThreads.map((thread) => `${thread.source}:${thread.id}`),
+    );
+    this.archivedCache.set(cacheKey, {
+      fetchedAt: this.options.now?.() ?? Date.now(),
+      threadKeys,
+    });
+    return threadKeys;
   }
 }
 

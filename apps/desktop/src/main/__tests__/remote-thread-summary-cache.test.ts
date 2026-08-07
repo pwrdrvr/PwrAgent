@@ -392,6 +392,78 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(resolved.archived).toEqual([archivedPin.ref]);
   });
 
+  it("revalidates cached archive evidence before pruning a re-added pin", async () => {
+    const archivedThread = stampedThread({
+      instanceId: "peer-a",
+      threadId: "restored",
+      title: "Restored on owner",
+    });
+    const fetchArchivedThreads = vi
+      .fn()
+      .mockResolvedValueOnce([archivedThread])
+      .mockResolvedValueOnce([]);
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+    });
+    const firstPin = pin({ instanceId: "peer-a", threadId: "restored" });
+    expect((await cache.resolvePinnedThreads([firstPin])).archived).toEqual([
+      firstPin.ref,
+    ]);
+
+    const cachedSummary = { ...archivedThread };
+    delete cachedSummary.federation;
+    const readdedPin = {
+      ...pin({
+        instanceId: "peer-a",
+        threadId: "restored",
+        summary: cachedSummary,
+      }),
+      addedAt: 2_000,
+    };
+    const resolved = await cache.resolvePinnedThreads([readdedPin]);
+
+    expect(fetchArchivedThreads).toHaveBeenCalledTimes(2);
+    expect(resolved.archived).toEqual([]);
+    expect(resolved.threads).toHaveLength(1);
+    expect(resolved.threads[0].title).toBe("Restored on owner");
+  });
+
+  it("shares one peer deadline between the active and archived lookups", async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = new RemoteThreadSummaryCache({
+        peers: () => [peer("peer-a")],
+        fetchSnapshot: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 75));
+          return snapshotOf([]);
+        },
+        fetchArchivedThreads: async () => await new Promise<never>(() => {}),
+        peerStatus: () => ({ status: "connected" }),
+        peerTimeoutMs: 100,
+      });
+      const resolution = cache.resolvePinnedThreads([
+        pin({ instanceId: "peer-a", threadId: "missing" }),
+      ]);
+      let settled = false;
+      void resolution.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(99);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+
+      const resolved = await resolution;
+      expect(resolved.archived).toEqual([]);
+      expect(resolved.threads).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the cached row when archive detection fails", async () => {
     const cached = stampedThread({
       instanceId: "peer-a",
