@@ -1506,6 +1506,7 @@ class MockBackendClient {
       replay?: AppServerThreadReplay;
       readThreadReplays?: AppServerThreadReplay[];
       readThreadError?: Error;
+      readThreadErrorsByThreadId?: Record<string, Error>;
       readThreadDelay?: Promise<unknown>;
       skills?: Array<{
         commands?: AppServerAvailableCommandSummary[];
@@ -1684,8 +1685,13 @@ class MockBackendClient {
     if (this.options.readThreadDelay) {
       await this.options.readThreadDelay;
     }
-    if (this.options.readThreadError) {
-      throw this.options.readThreadError;
+    const readThreadError =
+      (_params
+        ? this.options.readThreadErrorsByThreadId?.[_params.threadId]
+        : undefined)
+      ?? this.options.readThreadError;
+    if (readThreadError) {
+      throw readThreadError;
     }
     if (replay) {
       return replay;
@@ -18012,6 +18018,7 @@ command = "pnpm dev"
       threadId: "thread-env",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      cwd: "/repo/app",
       model: "gpt-5.5",
       reasoningEffort: "high",
       serviceTier: "priority",
@@ -18043,6 +18050,11 @@ command = "pnpm dev"
           supportsReasoning: true,
         },
       ],
+      readThreadErrorsByThreadId: {
+        "managed-review-child": new Error(
+          "ephemeral threads do not support includeTurns",
+        ),
+      },
       startThreadResult: { threadId: "managed-review-child" },
     });
     const overlayStore = createOverlayStoreMock({
@@ -18175,6 +18187,23 @@ command = "pnpm dev"
       },
     });
     await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "managed-review-child",
+        turnId: "turn-1",
+        item: {
+          id: "review-output",
+          type: "agentMessage",
+          text: JSON.stringify({
+            findings: [],
+            overall_correctness: "patch is correct",
+            overall_explanation: "No blocking findings.",
+            overall_confidence_score: 0.96,
+          }),
+        },
+      },
+    });
+    await codexClient.emit({
       method: "turn/completed",
       params: {
         threadId: "managed-review-child",
@@ -18182,15 +18211,7 @@ command = "pnpm dev"
         turn: {
           id: "turn-1",
           status: "completed",
-          output: [{
-            type: "text",
-            text: JSON.stringify({
-              findings: [],
-              overall_correctness: "patch is correct",
-              overall_explanation: "No blocking findings.",
-              overall_confidence_score: 0.96,
-            }),
-          }],
+          output: [],
         },
       },
     });
@@ -18241,6 +18262,9 @@ command = "pnpm dev"
         }),
       }),
     ]);
+    expect(codexClient.readThreadCalls).not.toContainEqual(
+      expect.objectContaining({ threadId: "managed-review-child" }),
+    );
     const hydratedParent = await registry.readThread({
       backend: "codex",
       threadId: "thread-parent",
@@ -18348,30 +18372,153 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("passes the selected review cwd to the Codex client", async () => {
+  it("starts reviews for a selected secondary project in that workspace", async () => {
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["review/start"] },
+      initializeResult: {
+        methods: ["thread/start", "turn/start", "review/start"],
+      },
+      startThreadResult: { threadId: "selected-project-review" },
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
-        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        initializeError: new Error("grok unavailable"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-parent": {
+            backend: "codex",
+            threadId: "thread-parent",
+            codexEnvironmentRuntime: {
+              environmentId: "primary-env",
+              environmentName: "Primary environment",
+              executionTarget: "local",
+              shellEnvironment: {
+                PATH: "/worktrees/primary/.venv/bin:/usr/bin",
+                VIRTUAL_ENV: "/worktrees/primary/.venv",
+              },
+            },
+            executionMode: "full-access",
+            extraLinkedDirectories: [
+              {
+                id: "/repo/primary",
+                kind: "worktree",
+                label: "primary",
+                path: "/repo/primary",
+                worktreePath: "/worktrees/primary",
+              },
+              {
+                id: "/repo/selected",
+                kind: "local",
+                label: "selected",
+                path: "/repo/selected",
+              },
+            ],
+          },
+        },
+      }),
+      resolveManagedReviewEnabled: () => false,
+    });
+
+    const response = await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "origin/main" },
+      delivery: "inline",
+      cwd: "/repo/selected",
+    });
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-parent",
+      reviewThreadId: "selected-project-review",
+      turnId: "turn-1",
+    });
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      cwd: "/repo/selected",
+      ephemeral: true,
+    });
+    expect(
+      codexClient.lastStartThreadParams?.codexEnvironmentRuntime,
+    ).toBeUndefined();
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "selected-project-review",
+      cwd: "/repo/selected",
+    });
+    expect(
+      codexClient.lastStartTurnParams?.codexEnvironmentRuntime,
+    ).toBeUndefined();
+    expect(codexClient.lastStartTurnParams?.input[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("against base branch 'origin/main'"),
+    });
+
+    await registry.close();
+  });
+
+  it("preserves remote environment routing for selected secondary project reviews", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/start", "turn/start", "review/start"],
+      },
+      startThreadResult: { threadId: "remote-project-review" },
+    });
+    const remoteRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "remote-env",
+      environmentName: "Remote environment",
+      executionTarget: "remote",
+      cwd: "/remote/primary",
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-parent": {
+            backend: "codex",
+            threadId: "thread-parent",
+            codexEnvironmentRuntime: remoteRuntime,
+            executionMode: "full-access",
+            extraLinkedDirectories: [
+              {
+                id: "/remote/primary",
+                kind: "local",
+                label: "primary",
+                path: "/remote/primary",
+              },
+              {
+                id: "/remote/selected",
+                kind: "local",
+                label: "selected",
+                path: "/remote/selected",
+              },
+            ],
+          },
+        },
+      }),
+      resolveManagedReviewEnabled: () => false,
     });
 
     await registry.startReview({
       backend: "codex",
-      threadId: "thread-1",
-      target: { type: "baseBranch", branch: "main" },
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "origin/main" },
       delivery: "inline",
-      cwd: "/repo/selected-worktree",
+      cwd: "/remote/selected",
     });
 
-    expect(codexClient.lastStartReviewParams).toMatchObject({
-      threadId: "thread-1",
-      cwd: "/repo/selected-worktree",
-      target: { type: "baseBranch", branch: "main" },
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      cwd: "/remote/selected",
+      codexEnvironmentRuntime: remoteRuntime,
+      ephemeral: true,
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "remote-project-review",
+      cwd: "/remote/selected",
+      codexEnvironmentRuntime: remoteRuntime,
     });
 
     await registry.close();
@@ -26618,10 +26765,13 @@ script = "printf setup"
       },
     });
 
-    expect(codexClient.lastStartReviewParams).toEqual({
-      threadId: "parent-thread",
-      target: { type: "baseBranch", branch: "main" },
-      delivery: "inline",
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      cwd: "/repo/pwragent",
+      ephemeral: true,
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
       cwd: "/repo/pwragent",
     });
 

@@ -6400,6 +6400,7 @@ export class DesktopBackendRegistry {
     string,
     ReviewSubAgentRecord
   >();
+  private readonly managedReviewOutputByReviewTurn = new Map<string, string>();
   private readonly codexNativeSubAgentParents = new Map<string, string>();
   private readonly codexNativeSubAgentReconciliations = new Map<
     string,
@@ -12056,9 +12057,9 @@ export class DesktopBackendRegistry {
     if (isAcpBackendId(params.backend) && !acpManagedMode) {
       throw new Error("Selected backend does not support review/start");
     }
-    const managedMode =
-      acpManagedMode
-      || (params.backend === "codex" && this.resolveManagedReviewEnabledFn());
+    const managedReviewExperiment =
+      params.backend === "codex" && this.resolveManagedReviewEnabledFn();
+    let managedMode = acpManagedMode || managedReviewExperiment;
     const reserveCodexReviewStart = params.backend === "codex";
     const acpReviewReservationKey = isAcpBackendId(params.backend)
       ? buildTurnStartReservationKey(params.backend, params.threadId)
@@ -12078,6 +12079,7 @@ export class DesktopBackendRegistry {
     let result: { threadId: string; reviewThreadId: string; turnId: string };
     let overlay: ThreadOverlayState | undefined;
     let cwd: string | undefined;
+    let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -12088,7 +12090,41 @@ export class DesktopBackendRegistry {
             threadId: params.threadId,
           })
         : undefined;
-      if (params.backend === "codex" || acpManagedMode) {
+      if (params.backend === "codex") {
+        codexEnvironmentRuntime = overlay?.codexEnvironmentRuntime;
+        const threadCwd = await this.resolveThreadEnvironmentCwd(
+          params.backend,
+          params.threadId,
+          overlay,
+        );
+        const requestedCwd = params.cwd?.trim();
+        cwd = requestedCwd || threadCwd;
+        const normalizedRequestedCwd = normalizeLinkedDirectoryIdentityPath(
+          requestedCwd,
+        );
+        const normalizedThreadCwd = normalizeLinkedDirectoryIdentityPath(
+          threadCwd,
+        );
+        const usesSelectedSecondaryWorkspace = Boolean(
+          normalizedRequestedCwd
+          && normalizedRequestedCwd !== normalizedThreadCwd,
+        );
+        // Codex review/start has no cwd field. When the operator selects a
+        // linked project other than the parent thread's workspace, start the
+        // review as a managed child so both thread/start and turn/start are
+        // explicitly rooted in the selected project.
+        managedMode ||= usesSelectedSecondaryWorkspace;
+        if (
+          usesSelectedSecondaryWorkspace
+          && codexEnvironmentRuntime?.executionTarget !== "remote"
+        ) {
+          // A persisted local environment can contain cwd-specific PATH or
+          // VIRTUAL_ENV hydration from the parent workspace. Remote runtimes
+          // must retain their environment ID so Codex routes the selected cwd
+          // to the same host.
+          codexEnvironmentRuntime = undefined;
+        }
+      } else if (acpManagedMode) {
         cwd =
           params.cwd?.trim()
           || await this.resolveThreadEnvironmentCwd(
@@ -12124,8 +12160,8 @@ export class DesktopBackendRegistry {
           delivery: params.delivery ?? "inline",
           ...modelSettings,
           ...(cwd ? { cwd } : {}),
-          ...(overlay?.codexEnvironmentRuntime
-            ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+          ...(codexEnvironmentRuntime
+            ? { codexEnvironmentRuntime }
             : {}),
         });
       };
@@ -12134,6 +12170,7 @@ export class DesktopBackendRegistry {
         ? await this.startManagedReviewChild({
             backend: params.backend,
             cwd,
+            codexEnvironmentRuntime,
             modelSettings,
             overlay,
             parentThreadId: params.threadId,
@@ -12229,6 +12266,7 @@ export class DesktopBackendRegistry {
 
   private async startManagedReviewChild(params: {
     backend: AppServerBackendKind;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     cwd?: string;
     modelSettings: ModelSettings;
     overlay?: ThreadOverlayState;
@@ -12282,8 +12320,8 @@ export class DesktopBackendRegistry {
       ephemeral: true,
       sandbox: modeSettings.sandbox,
       ...params.modelSettings,
-      ...(params.overlay?.codexEnvironmentRuntime
-        ? { codexEnvironmentRuntime: params.overlay.codexEnvironmentRuntime }
+      ...(params.codexEnvironmentRuntime
+        ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
         : {}),
     });
     this.reservedCodexStartThreadIds.add(thread.threadId);
@@ -12295,8 +12333,8 @@ export class DesktopBackendRegistry {
         approvalPolicy: modeSettings.approvalPolicy,
         sandbox: modeSettings.sandbox,
         ...params.modelSettings,
-        ...(params.overlay?.codexEnvironmentRuntime
-          ? { codexEnvironmentRuntime: params.overlay.codexEnvironmentRuntime }
+        ...(params.codexEnvironmentRuntime
+          ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
           : {}),
       });
       this.activeTurnKeys.add(
@@ -19985,6 +20023,7 @@ export class DesktopBackendRegistry {
   }): Promise<void> {
     const completedAt =
       completedAtFromTerminalNotification(params.notification) ?? Date.now();
+    const completedItemOutput = this.takeManagedReviewOutput(params.record);
     if (params.method === "turn/completed") {
       const output = await this.readManagedReviewOutput(
         params.record,
@@ -19992,6 +20031,7 @@ export class DesktopBackendRegistry {
           AppServerNotification,
           { method: "turn/completed" }
         >,
+        completedItemOutput,
       );
       const parsed = parseManagedReviewOutput(output);
       const review = parsed
@@ -20114,6 +20154,7 @@ export class DesktopBackendRegistry {
   private async readManagedReviewOutput(
     record: ReviewSubAgentRecord,
     notification: Extract<AppServerNotification, { method: "turn/completed" }>,
+    completedItemOutput?: string,
   ): Promise<string | undefined> {
     const terminalOutput = notification.params.turn?.output
       ?.map((item) => item.text)
@@ -20122,6 +20163,9 @@ export class DesktopBackendRegistry {
       .trim();
     if (terminalOutput) {
       return terminalOutput;
+    }
+    if (completedItemOutput?.trim()) {
+      return completedItemOutput.trim();
     }
     try {
       const replay = await this.readThread({
@@ -20140,6 +20184,47 @@ export class DesktopBackendRegistry {
       });
       return undefined;
     }
+  }
+
+  private rememberManagedReviewOutput(event: AgentEvent): void {
+    if (
+      event.notification.method !== "item/completed"
+      || readNotificationItemType(event.notification) !== "agentMessage"
+    ) {
+      return;
+    }
+    const params = readRecord(event.notification.params);
+    const reviewThreadId = readNonEmptyString(params?.threadId);
+    const turnId = readNonEmptyString(params?.turnId);
+    const output = textFragmentsFromCodexNotification(event.notification)
+      .at(-1)
+      ?.trim();
+    if (!reviewThreadId || !turnId || !output) {
+      return;
+    }
+    const record = this.findManagedReviewForChildRequest({
+      backend: event.backend,
+      reviewThreadId,
+      turnId,
+    });
+    if (record?.mode !== "managed") {
+      return;
+    }
+    this.managedReviewOutputByReviewTurn.set(
+      buildReviewSubAgentKey(event.backend, reviewThreadId, record.turnId),
+      output,
+    );
+  }
+
+  private takeManagedReviewOutput(record: ReviewSubAgentRecord): string | undefined {
+    const key = buildReviewSubAgentKey(
+      record.backend,
+      record.reviewThreadId,
+      record.turnId,
+    );
+    const output = this.managedReviewOutputByReviewTurn.get(key);
+    this.managedReviewOutputByReviewTurn.delete(key);
+    return output;
   }
 
   private findActiveReviewSubAgentForTerminal(params: {
@@ -27483,6 +27568,7 @@ export class DesktopBackendRegistry {
     event = await this.withThreadMessageContext(event);
     this.rememberFileChangeApprovalContext(event);
     event = this.withEmbeddedFileChangeApprovalContext(event);
+    this.rememberManagedReviewOutput(event);
 
     if (event.backend === "codex") {
       this.recordTaskMonitorActivity(event.notification);
