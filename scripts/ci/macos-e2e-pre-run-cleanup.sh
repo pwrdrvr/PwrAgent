@@ -35,9 +35,13 @@
 # Test seams (see macos-e2e-pre-run-cleanup.test.mjs):
 #   REAP_PS_SNAPSHOT_FILE  Read the process table from this file instead of
 #                          running ps. Forces report-only mode: with an
-#                          injected table the script signals nothing and
-#                          deletes nothing.
+#                          injected table the script signals nothing.
 #   REAP_SELF_PID          Override the pid used for self-exclusion.
+#   REAP_STATE_HOME        Look for saved application state under this
+#                          directory instead of $HOME, and never touch
+#                          cfprefsd defaults. Lets the destructive delete run
+#                          against a throwaway tree under test; without it a
+#                          report-only run deletes nothing at all.
 
 set -euo pipefail
 
@@ -211,18 +215,12 @@ still_in_scope() {
   return 1
 }
 
+# Takes the pid list explicitly rather than reading a caller's variable, so
+# what gets signalled is visible at the call site.
 signal_orphans() {
   local signal="$1" pid
-  for pid in $orphan_pids; do
-    if still_in_scope "$pid"; then
-      kill "-$signal" "$pid" 2>/dev/null || true
-    fi
-  done
-}
-
-signal_orphans() {
-  local signal="$1" pid
-  for pid in $orphan_pids; do
+  shift
+  for pid in "$@"; do
     if still_in_scope "$pid"; then
       kill "-$signal" "$pid" 2>/dev/null || true
     fi
@@ -263,8 +261,10 @@ reap_orphans() {
   # Two rounds, because a leftover Electron main can spawn a helper after the
   # scan that captured it. Round two catches that child; anything still
   # standing after it is not losing a race, it is refusing to die.
+  local -a orphan_pids
   for round in 1 2; do
-    orphan_pids=$(printf '%s\n' "$orphan_lines" | cut -d'|' -f1 | tr '\n' ' ')
+    IFS=$'\n' read -r -d '' -a orphan_pids \
+      < <(printf '%s\n' "$orphan_lines" | cut -d'|' -f1 && printf '\0')
     if [[ "$round" -gt 1 ]]; then
       echo "$LOG: round $round — $orphan_count still present after round $((round - 1)):"
       print_orphans
@@ -273,9 +273,9 @@ reap_orphans() {
     # TERM first so anything still capable of an orderly exit takes it, then
     # KILL whatever ignored it. Both are best-effort: a pid that exits in
     # between is a success, not an error.
-    signal_orphans TERM
+    signal_orphans TERM "${orphan_pids[@]}"
     sleep 2
-    signal_orphans KILL
+    signal_orphans KILL "${orphan_pids[@]}"
     sleep 2
 
     # Re-scan rather than re-checking only the pids just signalled: that is
@@ -328,10 +328,19 @@ reap_orphans() {
 # override (apps/desktop/e2e/fixtures/electron-app.ts) does NOT isolate them,
 # which is why this state survives from job to job on a persistent guest.
 clear_saved_application_state() {
-  local bundle_id state_dir
+  local bundle_id state_dir state_home
+
+  # `set -u` catches an unset HOME but not an empty one, and an empty one
+  # would aim the rm at /Library/Saved Application State. This is the only
+  # destructive line in the script; it does not get to run on a guess.
+  state_home="${REAP_STATE_HOME:-${HOME:-}}"
+  if [[ -z "$state_home" ]]; then
+    echo "$LOG: no home directory resolved; leaving saved application state alone." >&2
+    return 0
+  fi
 
   for bundle_id in "${ELECTRON_BUNDLE_IDS[@]}"; do
-    state_dir="$HOME/Library/Saved Application State/$bundle_id.savedState"
+    state_dir="$state_home/Library/Saved Application State/$bundle_id.savedState"
     if [[ -d "$state_dir" ]]; then
       rm -rf "$state_dir"
       echo "$LOG: removed saved application state for $bundle_id"
@@ -347,11 +356,16 @@ clear_saved_application_state() {
     # it being recreated by the next abnormal exit. Scoped to the dev Electron
     # bundle id, idempotent, and reversible with `defaults delete`.
     #
-    # CI only. These go through cfprefsd, which is keyed on the logged-in user
-    # and ignores $HOME, so there is no way to scope them to a throwaway
-    # profile — running this script by hand on a workstation would silently
-    # change that operator's own Electron behavior. On the runner guest the
-    # same user also runs PwrSnap's E2E, which wants this suppressed too.
+    # CI only, and never under a test state home. These go through cfprefsd,
+    # which is keyed on the logged-in user and ignores $HOME, so there is no
+    # way to scope them to a throwaway profile — running this script by hand
+    # on a workstation, or from the unit tests, would silently change that
+    # operator's own Electron behavior. On the runner guest the same user also
+    # runs PwrSnap's E2E, which wants this suppressed too.
+    if [[ -n "${REAP_STATE_HOME:-}" ]]; then
+      echo "$LOG: test state home in use; leaving $bundle_id defaults untouched"
+      continue
+    fi
     if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
       echo "$LOG: not on GitHub Actions; leaving $bundle_id defaults untouched"
       continue
@@ -367,8 +381,17 @@ echo "$LOG: in scope     $orphan_count orphaned Electron process(es)"
 echo "$LOG: out of scope $outside_count Electron process(es) elsewhere on this guest (not touched)"
 
 if [[ -n "$injected_table" ]]; then
-  echo "$LOG: report-only (process table injected); nothing was signalled or deleted."
+  echo "$LOG: report-only (process table injected); nothing was signalled."
   [[ "$orphan_count" -eq 0 ]] || print_orphans
+  # The saved-state clearing is the one destructive path here, so it does get
+  # exercised under test — but only against an explicitly supplied throwaway
+  # home. Without REAP_STATE_HOME a stray report-only run cannot delete the
+  # invoking user's real state.
+  if [[ -n "${REAP_STATE_HOME:-}" ]]; then
+    clear_saved_application_state
+  else
+    echo "$LOG: report-only; REAP_STATE_HOME unset, saved application state left alone."
+  fi
   exit 0
 fi
 

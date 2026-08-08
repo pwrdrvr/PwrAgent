@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -170,6 +170,47 @@ describe.skipIf(process.platform === "win32")("macos-e2e-pre-run-cleanup.sh", ()
       ),
     ]);
     expect(output).toContain("elapsed=2:14:07");
+  });
+
+  // The delete is the only destructive line in the script, so it gets covered
+  // rather than left to manual testing. REAP_STATE_HOME points it at a
+  // throwaway tree and also blocks the cfprefsd writes, which are user-scoped
+  // and could not be undone by a test.
+  const savedStatePath = (home) =>
+    path.join(home, "Library", "Saved Application State", "com.github.Electron.savedState");
+
+  it("deletes stale saved application state for the Electron bundle", () => {
+    const stateHome = mkdtempSync(path.join(workDir, "home-"));
+    const stateDir = savedStatePath(stateHome);
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(path.join(stateDir, "windows.plist"), "stale", "utf8");
+
+    const output = run(BASELINE, { env: { REAP_STATE_HOME: stateHome } });
+
+    expect(existsSync(stateDir)).toBe(false);
+    expect(output).toContain("removed saved application state for com.github.Electron");
+    // cfprefsd is keyed on the logged-in user, not $HOME — a test must never
+    // reach it.
+    expect(output).toContain("leaving com.github.Electron defaults untouched");
+  });
+
+  it("reports when there is no saved application state to remove", () => {
+    const stateHome = mkdtempSync(path.join(workDir, "home-"));
+    const output = run(BASELINE, { env: { REAP_STATE_HOME: stateHome } });
+    expect(output).toContain("no saved application state for com.github.Electron");
+  });
+
+  it("leaves saved application state alone when no throwaway home is given", () => {
+    // A report-only run without REAP_STATE_HOME must not touch the invoking
+    // user's real state, even though $HOME is set.
+    const stateHome = mkdtempSync(path.join(workDir, "home-"));
+    const stateDir = savedStatePath(stateHome);
+    mkdirSync(stateDir, { recursive: true });
+
+    const output = run(BASELINE, { env: { HOME: stateHome } });
+
+    expect(existsSync(stateDir)).toBe(true);
+    expect(output).toContain("REAP_STATE_HOME unset, saved application state left alone");
   });
 
   it("refuses to run when no workspace is set rather than guessing a scope", () => {
