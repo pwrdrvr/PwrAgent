@@ -9132,18 +9132,22 @@ textarea,
   position: absolute;
   inset: -12%;
   border-radius: 999px;
+  /* Calmer at rest than it was: the cards are the content and the bodies
+     are organisation, so the bodies must not out-shout them. The glow
+     comes back up on hover, where it is answering the pointer rather
+     than competing for it. */
   background: radial-gradient(
     circle,
-    color-mix(in srgb, var(--accent) 17%, transparent),
+    color-mix(in srgb, var(--accent) 11%, transparent),
     transparent 70%
   );
-  opacity: 0.8;
+  opacity: 0.55;
   transition: opacity 160ms ease, transform 160ms ease;
   pointer-events: none;
 }
 
 .star-map-instance__body:hover .star-map-instance__glow {
-  opacity: 1;
+  opacity: 0.95;
   transform: scale(1.12);
 }
 
@@ -10078,6 +10082,58 @@ textarea,
 .star-map__filter-chip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Clearing is only offered when there is something to clear, so it never
+   sits in the strip as dead weight. */
+.star-map__filter-clear {
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.star-map__filter-clear:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+/* A map filtered down to nothing otherwise looks broken rather than
+   empty: the star field renders and the cards are simply absent. */
+.star-map__empty {
+  display: flex;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 20;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 22px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
+  text-align: center;
+}
+
+.star-map__empty-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.star-map__empty-action {
+  padding: 5px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
 }
 
 /* How many cards this chip speaks for, given the other facets. */

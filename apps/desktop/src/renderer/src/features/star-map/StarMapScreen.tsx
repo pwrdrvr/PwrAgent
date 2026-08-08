@@ -445,6 +445,26 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [projects],
   );
 
+  /**
+   * A filtered-to-nothing map is otherwise indistinguishable from a
+   * broken or still-loading one: the star field renders, and every card
+   * is simply absent. The operator needs to be told it was their filter.
+   */
+  const matchedThreadCount = useMemo(
+    () =>
+      [...attentionByInstance.values()].reduce(
+        (total, threads) => total + threads.length,
+        0,
+      ),
+    [attentionByInstance],
+  );
+  const hasFilterSelection = Object.keys(filterSelection).length > 0;
+
+  const clearFilters = useCallback(() => {
+    setFilterSelection({});
+    writeStoredFilterSelection({});
+  }, []);
+
   // Chip counts answer "how many cards is this chip about", measured
   // against whatever the other facets already allow.
   const filterCounts = useMemo(() => {
@@ -1369,6 +1389,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
           onResetView={panZoomMode ? resetView : undefined}
         />
       </div>
+      {matchedThreadCount === 0 && hasFilterSelection ? (
+        <div className="star-map__empty" role="status">
+          <p className="star-map__empty-title">No threads match these filters</p>
+          <button
+            type="button"
+            className="star-map__empty-action"
+            onClick={clearFilters}
+          >
+            Clear filters
+          </button>
+        </div>
+      ) : null}
       <div className="star-map__filters" role="group" aria-label="Thread filters">
         {STAR_MAP_FILTERS.map((definition) => {
           const state = filterState(filterSelection, definition.key);
@@ -1407,6 +1439,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
             </button>
           );
         })}
+        {hasFilterSelection ? (
+          <button
+            type="button"
+            className="star-map__filter-clear"
+            onClick={clearFilters}
+          >
+            Clear
+          </button>
+        ) : null}
       </div>
     </div>
   );
