@@ -2016,6 +2016,14 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
     startReview: supported.has("review/start") || assumeCodexAppServerSurface,
+    // A managed review child is an ephemeral thread plus one turn, so Codex
+    // can review for another provider's thread even on builds whose native
+    // review/start is absent.
+    reviewRunner:
+      (supported.has("thread/start")
+        || supported.has("thread/new")
+        || assumeCodexAppServerSurface)
+      && (supported.has("turn/start") || assumeCodexAppServerSurface),
     interruptTurn: supported.has("turn/interrupt"),
     steerTurn: backend === "codex" || supported.has("turn/steer"),
     transcriptPagination: false,
@@ -11872,6 +11880,23 @@ export class DesktopBackendRegistry {
     });
   }
 
+  /**
+   * A reviewer override runs the review as a managed child on the chosen
+   * backend, so that backend has to be one we trust to answer the managed
+   * review prompt's strict JSON contract.
+   */
+  private assertReviewBackendSupported(backend: AppServerBackendKind): void {
+    if (isAcpBackendId(backend)) {
+      if (!this.acpBackend.supportsManagedReview(backend)) {
+        throw new Error(`Selected review provider cannot run reviews: ${backend}`);
+      }
+      return;
+    }
+    if (backend !== "codex") {
+      throw new Error(`Selected review provider cannot run reviews: ${backend}`);
+    }
+  }
+
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
     const acpManagedMode =
@@ -11880,9 +11905,21 @@ export class DesktopBackendRegistry {
     if (isAcpBackendId(params.backend) && !acpManagedMode) {
       throw new Error("Selected backend does not support review/start");
     }
+    // Presence of reviewBackend means the operator picked the reviewer
+    // explicitly, which keeps the picked settings out of the parent thread's
+    // overlay. A reviewBackend that *differs* from the thread's backend also
+    // forces the managed path, because Codex's native review/start runs on the
+    // thread's own provider and has no way to switch.
+    const reviewerOverridden = Boolean(params.reviewBackend);
+    const reviewBackend = params.reviewBackend ?? params.backend;
+    const reviewBackendDiffers = reviewBackend !== params.backend;
+    if (reviewBackendDiffers) {
+      this.assertReviewBackendSupported(reviewBackend);
+    }
     const managedReviewExperiment =
       params.backend === "codex" && this.resolveManagedReviewEnabledFn();
-    let managedMode = acpManagedMode || managedReviewExperiment;
+    let managedMode =
+      acpManagedMode || managedReviewExperiment || reviewBackendDiffers;
     const reserveCodexReviewStart = params.backend === "codex";
     const acpReviewReservationKey = isAcpBackendId(params.backend)
       ? buildTurnStartReservationKey(params.backend, params.threadId)
@@ -11956,17 +11993,28 @@ export class DesktopBackendRegistry {
             overlay,
           );
       }
-      const requestedModelSettings: ModelSettings = managedMode
+      // A review on another provider cannot inherit the parent thread's model
+      // settings — that model belongs to a different catalog. Fall back to the
+      // review backend's own defaults instead of carrying gpt-5.6-sol onto a
+      // Grok review.
+      const requestedModelSettings: ModelSettings = reviewBackendDiffers
         ? {
-            model: params.model ?? overlay?.model,
-            reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
-            serviceTier: params.serviceTier ?? overlay?.serviceTier ?? undefined,
-            fastMode: params.fastMode ?? overlay?.fastMode,
+            model: params.model,
+            reasoningEffort: params.reasoningEffort,
+            serviceTier: params.serviceTier,
+            fastMode: params.fastMode,
           }
-        : params;
+        : managedMode
+          ? {
+              model: params.model ?? overlay?.model,
+              reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+              serviceTier: params.serviceTier ?? overlay?.serviceTier ?? undefined,
+              fastMode: params.fastMode ?? overlay?.fastMode,
+            }
+          : params;
       modelSettings = hasExplicitModelSettings(requestedModelSettings)
         ? await this.resolveReviewModelSettings(
-            params.backend,
+            reviewBackend,
             requestedModelSettings,
           )
         : {};
@@ -11991,11 +12039,15 @@ export class DesktopBackendRegistry {
 
       result = managedMode
         ? await this.startManagedReviewChild({
-            backend: params.backend,
+            backend: reviewBackend,
             cwd,
-            codexEnvironmentRuntime,
+            // The parent thread's persisted Codex environment only describes
+            // its own provider's runtime; a cross-provider review must not
+            // inherit it.
+            ...(reviewBackendDiffers ? {} : { codexEnvironmentRuntime }),
             modelSettings,
             overlay,
+            parentBackend: params.backend,
             parentThreadId: params.threadId,
             target: params.target,
           })
@@ -12071,7 +12123,10 @@ export class DesktopBackendRegistry {
     if (managedMode) {
       await this.emitManagedReviewStarted(reviewSubAgentRecord);
     }
-    if (hasExplicitModelSettings(modelSettings)) {
+    // An explicitly picked reviewer applies to this review only. Persisting it
+    // would repoint the whole thread — one Grok review would leave the thread
+    // answering as Grok afterwards.
+    if (!reviewerOverridden && hasExplicitModelSettings(modelSettings)) {
       await this.overlayStore.setThreadModelSettings({
         backend: params.backend,
         threadId: result.threadId,
@@ -12088,22 +12143,27 @@ export class DesktopBackendRegistry {
   }
 
   private async startManagedReviewChild(params: {
+    /** Backend that runs the review — the reviewer override when set. */
     backend: AppServerBackendKind;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     cwd?: string;
     modelSettings: ModelSettings;
     overlay?: ThreadOverlayState;
+    /** Backend the reviewed thread itself lives on. */
+    parentBackend: AppServerBackendKind;
     parentThreadId: string;
     target: StartReviewRequest["target"];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    // Only a same-provider review can inherit the parent's live session state;
+    // another provider's agent runtime and execution mode do not transfer.
+    const inheritsParentSession = params.backend === params.parentBackend;
     if (isAcpBackendId(params.backend)) {
-      const parentSession = this.acpBackend.getSession(
-        params.backend,
-        params.parentThreadId,
-      );
+      const parentSession = inheritsParentSession
+        ? this.acpBackend.getSession(params.backend, params.parentThreadId)
+        : undefined;
       const acpRuntime = parentSession?.acpRuntime;
       const executionMode =
-        params.overlay?.executionMode
+        (inheritsParentSession ? params.overlay?.executionMode : undefined)
         ?? parentSession?.executionMode
         ?? "default";
       const thread = await this.startAcpSession({
@@ -12130,11 +12190,12 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const executionMode =
-      params.overlay?.executionMode
-      ?? await this.resolveCodexThreadExecutionModeForActiveTurn(
-        params.parentThreadId,
-      );
+    const executionMode = inheritsParentSession
+      ? params.overlay?.executionMode
+        ?? await this.resolveCodexThreadExecutionModeForActiveTurn(
+          params.parentThreadId,
+        )
+      : params.overlay?.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const client = this.getClient("codex", executionMode);
     const thread = await client.startThread({

@@ -13,6 +13,7 @@ import {
   type NavigationThreadSummary,
   type NavigationLaunchpadDraft,
   type StartReviewRequest,
+  type SetThreadModelSettingsRequest,
   type StartTurnRequest,
   type StartTurnResponse,
   type ScheduledThreadAction,
@@ -4854,6 +4855,158 @@ describe("Composer", () => {
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
     expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+  });
+
+  it("runs a review on a picked reviewer without touching the thread's settings", async () => {
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      reviewThreadId: "review-1",
+      turnId: "turn-1",
+    }));
+    const recordModelSettingsRecent = vi.fn(async () => undefined);
+    const setThreadModelSettings = vi.fn(
+      async (request: SetThreadModelSettingsRequest) => request,
+    );
+    const reviewerBackend = (
+      kind: BackendSummary["kind"],
+      modelId: string,
+    ): BackendSummary => {
+      const summary = backendSummary(kind, {
+        models: [
+          {
+            id: modelId,
+            label: modelId,
+            current: true,
+            supportsReasoning: true,
+            reasoningEfforts: ["low", "high"],
+            defaultReasoningEffort: "high",
+          },
+        ],
+      });
+      return {
+        ...summary,
+        capabilities: {
+          ...summary.capabilities,
+          startReview: true,
+          reviewRunner: true,
+        },
+      };
+    };
+
+    render(
+      <Composer
+        backends={[
+          reviewerBackend("codex", "gpt-5.6-sol"),
+          reviewerBackend("acp:grok", "grok-4"),
+        ]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          listModelSettingsRecents: async () => ({ recents: [] }),
+          recordModelSettingsRecent,
+          setThreadModelSettings,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Reviewer override",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    // Defaults to the thread's own provider — the row reads as inherited.
+    expect(
+      within(reviewTarget).getByRole("button", { name: "Review provider" })
+    ).toHaveAttribute("data-value", "codex");
+    expect(
+      within(reviewTarget).queryByRole("button", {
+        name: "Reset reviewer to thread settings",
+      })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(reviewTarget).getByRole("button", { name: "Review provider" })
+    );
+    fireEvent.click(screen.getByRole("option", { name: "Grok" }));
+
+    // Diverging surfaces the reset control rather than restyling the chip.
+    expect(
+      within(reviewTarget).getByRole("button", {
+        name: "Reset reviewer to thread settings",
+      })
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(
+        within(reviewTarget).getByRole("button", { name: "Start review" })
+      );
+    });
+
+    expect(startReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        reviewBackend: "acp:grok",
+        model: "grok-4",
+        reasoningEffort: "high",
+      })
+    );
+    // A reviewer override is for one review; it must not repoint the thread.
+    expect(setThreadModelSettings).not.toHaveBeenCalled();
+    expect(recordModelSettingsRecent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "review",
+        recent: expect.objectContaining({
+          backend: "acp:grok",
+          model: "grok-4",
+        }),
+      })
+    );
+  });
+
+  it("hides the reviewer row when the owner advertises no review runners", async () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "No reviewer overrides",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    expect(
+      within(reviewTarget).queryByRole("button", { name: "Review provider" })
+    ).not.toBeInTheDocument();
   });
 
   it("submits Enter during an active turn and keeps a queued projection", async () => {

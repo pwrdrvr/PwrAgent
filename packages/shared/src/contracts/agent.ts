@@ -292,6 +292,16 @@ export type StartReviewRequest = {
   target: AppServerReviewTarget;
   delivery?: AppServerReviewDelivery;
   cwd?: string;
+  /**
+   * Backend that should actually run the review, when the operator overrode it
+   * away from the thread's own backend. Codex's native `review/start` cannot
+   * change provider, so any value here that differs from `backend` forces the
+   * PwrAgent-managed review path. Optional so peers that predate reviewer
+   * overrides keep running reviews on the thread's backend; viewers gate the
+   * override UI on the `review_overrides` federation capability rather than
+   * sending this field and hoping an older owner honors it.
+   */
+  reviewBackend?: AppServerBackendKind;
   model?: string;
   serviceTier?: string;
   reasoningEffort?: string;
@@ -955,6 +965,46 @@ export type RecordRecentFileReferencesRequest = {
   /** Owning instance whose recent-file history should be updated. */
   federationTarget?: FederationTarget;
   paths: string[];
+};
+
+/**
+ * Which picker a model-settings recent belongs to. Reviewer overrides are the
+ * first consumer; the composer's own provider/model/reasoning row is the
+ * intended second, which is why the history is scoped rather than named for
+ * reviews.
+ */
+export type ModelSettingsRecentsScope = "review" | "composer";
+
+/**
+ * One remembered provider/model/reasoning combination. Recorded only when the
+ * operator picked it explicitly — a run that used the thread's own settings is
+ * not a choice worth replaying, and recording it would push real picks off the
+ * list.
+ */
+export type ModelSettingsRecent = {
+  backend: AppServerBackendKind;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+};
+
+export type ListModelSettingsRecentsResponse = {
+  recents: ModelSettingsRecent[];
+};
+
+export type ListModelSettingsRecentsRequest = {
+  /** Owning instance whose recents should be read. */
+  federationTarget?: FederationTarget;
+  scope: ModelSettingsRecentsScope;
+};
+
+/** Fire-and-forget record of a combination the operator just ran. */
+export type RecordModelSettingsRecentRequest = {
+  /** Owning instance whose recents should be updated. */
+  federationTarget?: FederationTarget;
+  scope: ModelSettingsRecentsScope;
+  recent: ModelSettingsRecent;
 };
 
 export type RegisterDirectoryFromDiskRequest = {

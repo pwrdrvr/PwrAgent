@@ -72,3 +72,49 @@ describe("normalizeReviewDisplayText", () => {
     );
   });
 });
+
+describe("parseReviewCommand reviewer flags", () => {
+  it("reads a leading reviewer override before a base branch", () => {
+    expect(
+      parseReviewCommand("/review --provider grok --reasoning high main")
+    ).toEqual({
+      target: { type: "baseBranch", branch: "main" },
+      displayText: "Review changes against main",
+      reviewer: { provider: "grok", reasoningEffort: "high" },
+    });
+  });
+
+  it("reads a reviewer override with no target", () => {
+    expect(parseReviewCommand("/review --provider codex --model gpt-5.6-sol")).toEqual({
+      target: { type: "uncommittedChanges" },
+      displayText: "Review current changes",
+      reviewer: { provider: "codex", model: "gpt-5.6-sol" },
+    });
+  });
+
+  it("keeps custom instructions verbatim after a reviewer override", () => {
+    expect(
+      parseReviewCommand(
+        "/review --provider grok --custom check the --model wiring"
+      )
+    ).toEqual({
+      target: { type: "custom", instructions: "check the --model wiring" },
+      displayText: "Review custom instructions",
+      reviewer: { provider: "grok" },
+    });
+  });
+
+  it("leaves trailing flag-looking text inside a commit title alone", () => {
+    expect(parseReviewCommand("/review --commit abc123 fix --model drift")).toEqual({
+      target: { type: "commit", sha: "abc123", title: "fix --model drift" },
+      displayText: "Review commit abc123",
+    });
+  });
+
+  it("omits the reviewer when no flags are present", () => {
+    expect(parseReviewCommand("/review main")).toEqual({
+      target: { type: "baseBranch", branch: "main" },
+      displayText: "Review changes against main",
+    });
+  });
+});

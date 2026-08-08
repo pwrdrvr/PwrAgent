@@ -308,6 +308,7 @@ export function buildAcpCapabilities(
     readThread: true,
     startTurn: true,
     startReview: agentCapabilities?.managedReview === true,
+    reviewRunner: agentCapabilities?.managedReview === true,
     interruptTurn: true,
     steerTurn: false,
     transcriptPagination: false,

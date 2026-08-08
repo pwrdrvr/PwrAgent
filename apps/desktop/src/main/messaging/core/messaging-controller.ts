@@ -2489,7 +2489,8 @@ export class MessagingController {
             createdAt: this.now(),
             title: "Invalid review command",
             body:
-              "Use /review, /review <base branch>, /review --commit <sha>, or /review --custom <instructions>.",
+              "Use /review, /review <base branch>, /review --commit <sha>, or /review --custom <instructions>."
+              + " Add --provider/--model/--reasoning before the target to pick a reviewer.",
             recoverable: true,
           }),
           binding,
@@ -2497,10 +2498,35 @@ export class MessagingController {
         );
         return;
       }
+      let reviewBackend: AppServerBackendKind | undefined;
+      if (parsed.reviewer?.provider) {
+        reviewBackend = await this.resolveReviewerBackend(
+          parsed.reviewer.provider,
+        );
+        if (!reviewBackend) {
+          await this.deliver(
+            buildErrorIntent({
+              id: this.newIntentId("unknown-review-provider"),
+              createdAt: this.now(),
+              title: "Unknown review provider",
+              body: `No installed provider named "${parsed.reviewer.provider}" can run reviews.`,
+              recoverable: true,
+            }),
+            binding,
+            event,
+          );
+          return;
+        }
+      }
       await this.submitMessagingReview({
         binding,
         event,
         target: parsed.target,
+        ...(reviewBackend ? { reviewBackend } : {}),
+        ...(parsed.reviewer?.model ? { model: parsed.reviewer.model } : {}),
+        ...(parsed.reviewer?.reasoningEffort
+          ? { reasoningEffort: parsed.reviewer.reasoningEffort }
+          : {}),
       });
       return;
     }
@@ -4745,6 +4771,10 @@ export class MessagingController {
     event: MessagingInboundEvent;
     target: AppServerReviewTarget;
     cwd?: string;
+    /** Reviewer override typed on the command; absent means inherit. */
+    reviewBackend?: AppServerBackendKind;
+    model?: string;
+    reasoningEffort?: string;
     targetSurface?: MessagingSurfaceRef;
     pendingIntentId?: string;
   }): Promise<void> {
@@ -4767,12 +4797,28 @@ export class MessagingController {
         target: params.target,
         delivery: "inline",
         ...(params.cwd ? { cwd: params.cwd } : {}),
-        ...(settings.model ? { model: settings.model } : {}),
-        ...(settings.reasoningEffort
-          ? { reasoningEffort: settings.reasoningEffort }
-          : {}),
-        ...(settings.serviceTier ? { serviceTier: settings.serviceTier } : {}),
-        ...(settings.fastMode !== undefined ? { fastMode: settings.fastMode } : {}),
+        // An explicit reviewer replaces the binding's inherited settings
+        // wholesale — its model belongs to a different catalog.
+        ...(params.reviewBackend
+          ? {
+              reviewBackend: params.reviewBackend,
+              ...(params.model ? { model: params.model } : {}),
+              ...(params.reasoningEffort
+                ? { reasoningEffort: params.reasoningEffort }
+                : {}),
+            }
+          : {
+              ...(settings.model ? { model: settings.model } : {}),
+              ...(settings.reasoningEffort
+                ? { reasoningEffort: settings.reasoningEffort }
+                : {}),
+              ...(settings.serviceTier
+                ? { serviceTier: settings.serviceTier }
+                : {}),
+              ...(settings.fastMode !== undefined
+                ? { fastMode: settings.fastMode }
+                : {}),
+            }),
       });
       if (params.pendingIntentId) {
         await this.options.store.deletePendingIntent(params.pendingIntentId);
@@ -12993,6 +13039,38 @@ export class MessagingController {
       federationTarget,
     });
     return response?.backends.find((candidate) => candidate.kind === backend);
+  }
+
+  /**
+   * Match a typed `--provider` token against the instance's review runners.
+   * Accepts the backend id (`acp:grok`), its bare registry id (`grok`), and the
+   * display label (`Grok`), all case-insensitively, because a phone keyboard is
+   * a bad place to demand an exact id. Returns undefined when nothing matches
+   * so the caller can say so instead of silently reviewing on the wrong
+   * provider.
+   */
+  private async resolveReviewerBackend(
+    provider: string,
+  ): Promise<AppServerBackendKind | undefined> {
+    const wanted = provider.trim().toLowerCase();
+    if (!wanted) {
+      return undefined;
+    }
+    const response = await this.options.backend.listBackends?.({
+      includeUnavailable: false,
+    });
+    const candidates = (response?.backends ?? []).filter(
+      (candidate) => candidate.capabilities.reviewRunner === true,
+    );
+    const match = candidates.find((candidate) => {
+      const kind = candidate.kind.toLowerCase();
+      return (
+        kind === wanted
+        || kind.replace(/^acp:/, "") === wanted
+        || candidate.label.toLowerCase() === wanted
+      );
+    });
+    return match?.kind;
   }
 
   private async reviewSupportedForBinding(

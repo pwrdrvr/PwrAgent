@@ -203,8 +203,11 @@ import type {
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
   RenderComposerPdfPreviewResponse,
+  ListModelSettingsRecentsRequest,
+  ListModelSettingsRecentsResponse,
   ListRecentFileReferencesRequest,
   ListRecentFileReferencesResponse,
+  RecordModelSettingsRecentRequest,
   RecordRecentFileReferencesRequest,
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
@@ -959,6 +962,14 @@ export type DesktopApi = {
   /** Fire-and-forget record of freshly committed file references. */
   recordRecentFileReferences?: (
     request: RecordRecentFileReferencesRequest,
+  ) => Promise<void>;
+  /** Recently picked provider/model/reasoning combinations for a picker. */
+  listModelSettingsRecents?: (
+    request: ListModelSettingsRecentsRequest,
+  ) => Promise<ListModelSettingsRecentsResponse>;
+  /** Fire-and-forget record of a combination the operator just ran. */
+  recordModelSettingsRecent?: (
+    request: RecordModelSettingsRecentRequest,
   ) => Promise<void>;
   /**
    * Resolve the on-disk path of a dropped/pasted File (Electron

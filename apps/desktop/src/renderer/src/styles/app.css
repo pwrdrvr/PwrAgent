@@ -20764,6 +20764,21 @@ a.transcript-message__messaging-origin:focus-visible {
   resize: vertical;
 }
 
+/* Reviewer override row. Sits below the target detail, above the actions,
+   separated so it reads as "who runs this" rather than another facet of
+   "what to review". */
+.composer__review-reviewer {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.composer__review-reviewer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .composer__review-actions {
   display: flex;
   justify-content: flex-end;
