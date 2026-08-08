@@ -4286,7 +4286,8 @@ export function useThreadSessionState(params: {
                 backendReportedActive: false,
                 completionHydrationRetries: 0,
                 expectOwnUpdate: false,
-                needsHydrationAfterCompletion: false,
+                hydratedUpdatedAt: undefined,
+                needsHydrationAfterCompletion: true,
                 optimisticEntries: settled.optimisticEntries.filter(
                   (entry) => !isLiveOptimisticEntry(entry)
                 ),

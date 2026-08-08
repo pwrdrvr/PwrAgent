@@ -6998,14 +6998,32 @@ describe("useThreadSessionState", () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
-    const readThread = vi.fn(async ({ threadId }) =>
-      readThreadResponse({
-        entries: [],
+    let threadOneReadCount = 0;
+    const readThread = vi.fn(async ({ threadId }) => {
+      const isDurableCompletion =
+        threadId === "thread-1" && ++threadOneReadCount === 2;
+      return readThreadResponse({
+        entries: isDurableCompletion
+          ? [
+              {
+                ...messageEntry({
+                  createdAt: 3_000,
+                  id: "assistant-final",
+                  text: "Durable final response.",
+                }),
+                phase: "final" as const,
+                turn: {
+                  id: "turn-1",
+                  status: "completed" as const,
+                },
+              },
+            ]
+          : [],
         hasPreviousPage: false,
         threadId,
         threadStatus: "idle",
-      })
-    );
+      });
+    });
     const desktopApi: DesktopApi = {
       onAgentEvent: (callback) => {
         agentEventHandler = callback;
@@ -7064,6 +7082,16 @@ describe("useThreadSessionState", () => {
     } finally {
       vi.useRealTimers();
     }
+
+    rerender({
+      currentThread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    });
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+      expect(result.current.messages.map((message) => message.text)).toContain(
+        "Durable final response."
+      );
+    });
   });
 
   it("shows a transcript status when context compaction starts", async () => {
