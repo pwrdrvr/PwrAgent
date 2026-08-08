@@ -1747,6 +1747,65 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("checks Grok updates in the background and persists one daily result", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    let stored: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version: "0.2.118",
+      activeCommand: "/opt/grok",
+    };
+    const upsertInstalledAgent = vi.fn((record: AcpInstalledAgentRecord) => {
+      stored = record;
+    });
+    const updateCheck = vi.fn(async () => ({
+      status: "available" as const,
+      checkedAt: Date.now(),
+      currentVersion: "0.2.118",
+      latestVersion: "1.0.0",
+      channel: "stable",
+    }));
+    const emit = vi.fn(async () => undefined);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored,
+        listInstalledAgents: () => [stored],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      checkGrokCliUpdate: updateCheck,
+      discoverLocalAcpAgents: async () => [],
+      emit,
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    const [summary] = await adapter.describeInstalledBackends();
+    expect(summary?.kind).toBe(backendId);
+    expect(updateCheck).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledWith({
+        backend: backendId,
+        notification: {
+          method: "backend/acpUpdateStatus/updated",
+          params: { backend: backendId },
+        },
+      });
+    });
+    expect(upsertInstalledAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ latestVersion: "1.0.0" }),
+        updateCommand: "/opt/grok",
+      }),
+    );
+
+    await adapter.describeInstalledBackends();
+    expect(updateCheck).toHaveBeenCalledOnce();
+    await adapter.close();
+  });
+
   it("registers the agent-tool HTTP MCP from initialize capabilities", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const transport = new FakeAcpAgentTransport({

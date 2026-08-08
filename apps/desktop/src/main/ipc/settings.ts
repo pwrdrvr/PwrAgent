@@ -4,6 +4,8 @@ import path from "node:path";
 import type {
   AcpAgentPreference,
   AcpAgentSettingsEntry,
+  AcknowledgeAcpAgentUpdateRequest,
+  AcknowledgeAcpAgentUpdateResponse,
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   ClearDesktopSettingsSecretRequest,
@@ -32,6 +34,7 @@ import type {
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
 import {
+  isAcpBackendId,
   isMessagingRuntimeSecret,
   sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
@@ -39,6 +42,7 @@ import {
 import {
   ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
+  ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
@@ -103,6 +107,7 @@ import {
 } from "../profile";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
+const ACP_UPDATE_SNOOZE_MS = 24 * 60 * 60_000;
 // Codex profile login now runs through @pwrdrvr/codex-discovery's
 // CodexLoginManager (extracted from this file's inline flow). PwrAgnt owns the
 // instance so the Electron seam — `shell.openExternal` — is injected and the
@@ -360,6 +365,8 @@ async function listInstalledAndLocalAcpAgents(
         const nextRecord = {
           ...record,
           runtimeCapabilities: current?.runtimeCapabilities,
+          update: current?.update,
+          updateCommand: current?.updateCommand,
           lastDiscoveredAt: current?.lastDiscoveredAt,
           lastDiscoveryError: current?.lastDiscoveryError,
           installedAt: current?.installedAt ?? record.installedAt,
@@ -547,6 +554,7 @@ function installedAcpAgentSettingsEntry(
     lastDiscoveredAt: record.lastDiscoveredAt,
     lastDiscoveryError: record.lastDiscoveryError,
     runtime: record.runtimeCapabilities,
+    update: record.update,
     ...(record.instances !== undefined ? { instances: record.instances } : {}),
     ...(record.incompatibleInstances !== undefined
       ? { incompatibleInstances: record.incompatibleInstances }
@@ -929,6 +937,41 @@ export function registerSettingsIpcHandlers(
       await listAcpAgentSettings(request, service),
   );
 
+  ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
+  ipcMain.handle(
+    ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
+    async (
+      _event,
+      request: AcknowledgeAcpAgentUpdateRequest,
+    ): Promise<AcknowledgeAcpAgentUpdateResponse> => {
+      const store = new AcpAgentStore(getAppStateDb());
+      const record = isAcpBackendId(request.backendId)
+        ? store.getInstalledAgent(request.backendId)
+        : undefined;
+      if (
+        !record?.update
+        || record.update.status !== "available"
+        || record.update.latestVersion !== request.latestVersion
+      ) {
+        return { applied: false };
+      }
+      const now = Date.now();
+      const update = request.action === "dismiss"
+        ? {
+            ...record.update,
+            dismissedAt: now,
+            snoozedUntil: undefined,
+          }
+        : {
+            ...record.update,
+            dismissedAt: undefined,
+            snoozedUntil: now + ACP_UPDATE_SNOOZE_MS,
+          };
+      store.upsertInstalledAgent({ ...record, update });
+      return { applied: true, update };
+    },
+  );
+
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.handle(
     SETTINGS_READ_CHANNEL,
@@ -1205,6 +1248,7 @@ export function registerSettingsIpcHandlers(
 export function disposeSettingsIpcHandlers(): void {
   codexLoginManager.dispose();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
+  ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REPLACE_SECRET_CHANNEL);

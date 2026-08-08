@@ -1281,6 +1281,80 @@ describe("settings ipc", () => {
     }
   });
 
+  it("persists a version-keyed Grok update acknowledgement", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import(
+      "../state/app-state"
+    );
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    initializeAppState();
+    try {
+      const store = new AcpAgentStore(getAppStateDb());
+      store.upsertInstalledAgent({
+        backendId: "acp:grok",
+        registryId: "grok",
+        name: "Grok",
+        version: "0.2.118",
+        distributionKind: "local",
+        distributionSource: "grok agent stdio",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-grok-cli",
+        installedAt: 100,
+        updatedAt: 100,
+        update: {
+          status: "available",
+          checkedAt: 200,
+          currentVersion: "0.2.118",
+          latestVersion: "1.0.0",
+        },
+      });
+      registerSettingsIpcHandlers(service);
+
+      await expect(handlers.get(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL)?.(
+        {},
+        {
+          action: "dismiss",
+          backendId: "acp:grok",
+          latestVersion: "0.2.119",
+        },
+      )).resolves.toEqual({ applied: false });
+      const response = await handlers.get(
+        ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
+      )?.(
+        {},
+        {
+          action: "snooze",
+          backendId: "acp:grok",
+          latestVersion: "1.0.0",
+        },
+      ) as { applied: boolean; update: { snoozedUntil?: number } };
+
+      expect(response.applied).toBe(true);
+      expect(response.update.snoozedUntil).toBeGreaterThan(Date.now());
+      expect(
+        store.getInstalledAgent("acp:grok")?.update?.snoozedUntil,
+      ).toBe(response.update.snoozedUntil);
+    } finally {
+      disposeAppState();
+    }
+  });
+
   // The wizard PR (#491) calls this IPC the moment the operator picks
   // a Codex profile model. The handler must (1) persist the wizard
   // signal idempotently, (2) fire the same thread-list prefetch the

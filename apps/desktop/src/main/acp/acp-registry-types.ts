@@ -1,4 +1,5 @@
 import type {
+  AcpAgentUpdateStatus,
   AcpAgentInstance,
   AcpBackendId,
   BackendAcpAuthStatus,
@@ -116,4 +117,6 @@ export type AcpInstalledAgentRecord = {
   /** Detected provider-name collisions that must not be launched. */
   incompatibleInstances?: AcpAgentInstance[];
   activeCommand?: string;
+  update?: AcpAgentUpdateStatus;
+  updateCommand?: string;
 };
