@@ -1324,20 +1324,34 @@ describe("Tangerine Terminal theme contract", () => {
     // The tint is the popover language; the bar + border + row-active
     // fill stays reserved for `.thread-row.is-selected`, which marks a
     // persistent selection rather than a transient "Enter lands here".
-    expect(css).toMatch(
-      /\.composer__autocomplete-option:hover,\s*\.composer__autocomplete-option\.is-active\s*\{[\s\S]*?background:\s*var\(--accent-soft\);[\s\S]*?color:\s*var\(--accent-bright\);[\s\S]*?\}/
-    );
+    const sharedHighlight = css.match(
+      /\.composer__autocomplete-option:hover:not\(:disabled\),\s*\.composer__autocomplete-option\.is-active\s*\{(?<body>[^}]*)\}/
+    )?.groups?.body;
+    expect(sharedHighlight).toBeTruthy();
+    expect(sharedHighlight).toContain("background: var(--accent-soft);");
+    expect(sharedHighlight).toContain("color: var(--accent-bright);");
     // No per-picker override may reintroduce a second highlight: not the
     // accent bar, and not the thread-row fill/outline pair.
     expect(css).not.toMatch(
       /\.composer__autocomplete-option(?:[^{]*)\.is-active(?:[^{]*)::before\s*\{/
     );
-    const sharedHighlight = extractRuleBody(
-      css,
-      ".composer__autocomplete-option:hover,\n.composer__autocomplete-option.is-active",
-    );
     expect(sharedHighlight).not.toContain("var(--bg-row-active)");
     expect(sharedHighlight).not.toContain("var(--accent-border)");
+  });
+
+  it("does not let a disabled autocomplete row hover into the accent tint", () => {
+    // `.composer__autocomplete-option:disabled` sits ~1200 lines earlier
+    // with identical specificity, so it loses on source order. Without
+    // the guard, hovering a disabled row (the remote-federation "Add
+    // directory… / Add file…" actions) paints it in full accent and
+    // overrides its muted disabled color — the row looks live. The
+    // sibling pickers guard the same way.
+    expect(css).toContain(
+      ".composer__autocomplete-option:hover:not(:disabled),",
+    );
+    expect(css).not.toMatch(
+      /^\.composer__autocomplete-option:hover\s*[,{]/m
+    );
   });
 
   it("keeps the autocomplete typed-run highlight legible on the tinted row", () => {

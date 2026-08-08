@@ -20420,8 +20420,16 @@ a.transcript-message__messaging-origin:focus-visible {
    "which row would Enter take" cue is an accent tint, NOT the thread-row
    selection language (left bar + border + --bg-row-active) — that one
    marks a persistent selection you navigated to and can leave. Keeping
-   the two apart is what stops the accent from meaning two things. */
-.composer__autocomplete-option:hover,
+   the two apart is what stops the accent from meaning two things.
+
+   `:not(:disabled)` matters here and is not decoration. The disabled
+   rule further up the file has the same specificity and loses on source
+   order, so an unguarded hover would light a disabled row — the remote
+   "Add directory… / Add file…" actions — in full accent and override
+   their muted disabled color. `.reference-picker__row` guards for the
+   same reason. `.is-active` needs no guard: disabled action rows are
+   not in the keyboard index. */
+.composer__autocomplete-option:hover:not(:disabled),
 .composer__autocomplete-option.is-active {
   background: var(--accent-soft);
   color: var(--accent-bright);
@@ -20494,12 +20502,12 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-primary);
 }
 
-/* Outline-only, like every other badge here. A filled chip is darker
-   than the accent tint behind it, so on the active row it reads as a
-   hole punched in the highlight. */
-.composer__autocomplete-source--provider {
-  background: transparent;
-}
+/* Provider badges take the base treatment — outline-only, no fill. They
+   used to carry `background: var(--bg-panel)`, which is darker than the
+   accent tint behind it and read as a hole punched in the highlighted
+   row. `--pwragent` above is the only variant that deviates from base,
+   so there is deliberately no `--provider` rule; the dynamic
+   `--${command.source}` class in Composer.tsx still emits it as a hook. */
 
 .composer__autocomplete-meta {
   color: var(--text-secondary);
