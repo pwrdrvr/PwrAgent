@@ -127,7 +127,11 @@ export async function hydrateFederatedThreadMessageOrigins(params: {
         instanceLabel: instance?.label ?? sourceGroup.fallbackInstanceLabel,
         celestialIcon:
           instance?.celestialIcon ?? sourceGroup.fallbackCelestialIcon,
-        title: resolved?.thread.title || sourceGroup.fallbackTitle,
+        title:
+          resolved?.thread.titleSource === "fallback"
+          && sourceGroup.fallbackTitle
+            ? sourceGroup.fallbackTitle
+            : resolved?.thread.title || sourceGroup.fallbackTitle,
       }));
     }),
   );

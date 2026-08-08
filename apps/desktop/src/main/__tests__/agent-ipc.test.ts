@@ -320,6 +320,7 @@ const federationMock = vi.hoisted(() => {
   return {
     remoteBackend,
     runtime: {
+      hydrateLiveThreadMessageOrigin: vi.fn((event: AgentEvent) => event),
       remoteBackend: vi.fn(() => remoteBackend),
       rendererWantsRemoteEvent: vi.fn(() => true),
       setAgentEventPublisher: vi.fn(),
@@ -405,6 +406,10 @@ describe("agent ipc", () => {
     registry.cancelThreadPrAutoDispatch.mockClear();
     registry.sendThreadPrAutoDispatchNow.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.hydrateLiveThreadMessageOrigin.mockReset();
+    federationMock.runtime.hydrateLiveThreadMessageOrigin.mockImplementation(
+      (event: AgentEvent) => event,
+    );
     federationMock.runtime.rendererWantsRemoteEvent.mockReset();
     federationMock.runtime.rendererWantsRemoteEvent.mockReturnValue(true);
     federationMock.runtime.setAgentEventPublisher.mockClear();
@@ -997,6 +1002,82 @@ describe("agent ipc", () => {
     expect(ownerSend).toHaveBeenCalledTimes(1);
     expect(localSend).not.toHaveBeenCalled();
     expect(unrelatedSend).not.toHaveBeenCalled();
+  });
+
+  it("hydrates live message provenance before broadcasting it", async () => {
+    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
+    federationMock.runtime.hydrateLiveThreadMessageOrigin.mockImplementation(
+      (event: AgentEvent) => ({
+        ...event,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "user-message-1",
+              type: "userMessage",
+              origin: {
+                kind: "agent",
+                sourceThread: {
+                  backend: "codex",
+                  instanceId: "source_one",
+                  instanceLabel: "Source Mac",
+                  celestialIcon: "moon",
+                  threadId: "source-thread",
+                  title: "Source thread",
+                },
+              },
+              content: [{ type: "text", text: "Remote result" }],
+            },
+          },
+        },
+      } as AgentEvent),
+    );
+
+    broadcastAgentEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "user-message-1",
+            type: "userMessage",
+            origin: {
+              kind: "agent",
+              sourceThread: {
+                backend: "codex",
+                instanceId: "source_one",
+                threadId: "source-thread",
+                title: "Source thread",
+              },
+            },
+            content: [{ type: "text", text: "Remote result" }],
+          },
+        },
+      },
+    } as AgentEvent);
+
+    expect(send).toHaveBeenCalledWith(
+      AGENT_EVENT_CHANNEL,
+      expect.objectContaining({
+        notification: expect.objectContaining({
+          params: expect.objectContaining({
+            item: expect.objectContaining({
+              origin: expect.objectContaining({
+                sourceThread: expect.objectContaining({
+                  instanceLabel: "Source Mac",
+                  celestialIcon: "moon",
+                }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
   });
 
   it("caps oversized live agent event strings before broadcasting to renderer subscribers", async () => {
