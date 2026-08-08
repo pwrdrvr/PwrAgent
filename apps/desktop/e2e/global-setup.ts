@@ -39,11 +39,12 @@ import { fileURLToPath } from "node:url";
 import { describeCanaryFailure } from "./canary-report";
 import {
   closeElectronApplication,
+  DESKTOP_MAIN_ENTRY,
   launchElectronApp,
+  withTimeout,
 } from "./fixtures/electron-app";
 
 const setupDir = path.dirname(fileURLToPath(import.meta.url));
-const MAIN_ENTRY = path.resolve(setupDir, "../out/main/index.js");
 const SMOKE_FIXTURE = path.resolve(
   setupDir,
   "fixtures/smoke/replay.fixture.json",
@@ -59,25 +60,38 @@ const SMOKE_FIXTURE = path.resolve(
 const CANARY_TIMEOUT_MS = 60_000;
 
 export default async function globalSetup(): Promise<void> {
-  if (!existsSync(MAIN_ENTRY)) {
+  if (!existsSync(DESKTOP_MAIN_ENTRY)) {
     // `playwright test` invoked without a build. The specs report that far
     // more clearly than a canary can, so stay out of the way.
     return;
   }
 
-  let timer: NodeJS.Timeout | undefined;
+  let settled = false;
   let launched: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+
+  const launching = launchElectronApp({ fixturePath: SMOKE_FIXTURE });
+  // A launch that lands AFTER we have given up still owns a real process. Left
+  // alone it becomes an orphan on a persistent runner — the very thing that
+  // makes the next job's guest suspect. `withTimeout` already swallows the
+  // late rejection (an unhandled one can abort the Playwright process), so
+  // this only has to deal with a late success.
+  void launching.then(
+    (late) => {
+      if (settled) {
+        void closeElectronApplication(late.electronApp).catch(() => undefined);
+      }
+    },
+    () => undefined,
+  );
+
   try {
-    launched = await Promise.race([
-      launchElectronApp({ fixturePath: SMOKE_FIXTURE }),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`timed out after ${CANARY_TIMEOUT_MS}ms`)),
-          CANARY_TIMEOUT_MS,
-        );
-      }),
-    ]);
+    launched = await withTimeout(
+      launching,
+      CANARY_TIMEOUT_MS,
+      `timed out after ${CANARY_TIMEOUT_MS}ms`,
+    );
   } catch (error) {
+    settled = true;
     throw new Error(
       describeCanaryFailure({
         timeoutMs: CANARY_TIMEOUT_MS,
@@ -86,7 +100,7 @@ export default async function globalSetup(): Promise<void> {
       }),
     );
   } finally {
-    if (timer) clearTimeout(timer);
+    settled = true;
     if (launched) {
       // Never a gate, and never awaited unbounded. This app's graceful close
       // routinely does not resolve — the shared helper bounds each step and

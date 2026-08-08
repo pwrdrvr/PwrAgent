@@ -16,6 +16,17 @@ import {
 } from "../../src/main/settings/desktop-secret-store";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The built main-process entry every E2E launch runs. Exported so callers
+ * that need to check for a build (the pre-flight canary) cannot drift from
+ * the path the harness actually launches — a stale copy would silently turn
+ * such a check into a no-op that reports success.
+ */
+export const DESKTOP_MAIN_ENTRY = path.resolve(
+  fixtureDir,
+  "../../out/main/index.js",
+);
 const ELECTRON_EVALUATE_QUIT_TIMEOUT_MS = 1_000;
 const ELECTRON_CLOSE_TIMEOUT_MS = 1_000;
 const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
@@ -62,7 +73,7 @@ type LaunchResult = {
   close: () => Promise<void>;
 };
 
-export async function launchElectronApp(params: {
+type LaunchElectronAppParams = {
   /** Path to a replay-driver fixture JSON. Required for tests that
    *  exercise thread replay (most specs); omit it for tests that
    *  only need wizard / pre-thread UI (set `requiresReplayDriver:
@@ -129,7 +140,11 @@ export async function launchElectronApp(params: {
    * `fixturePath`) — the replay driver isn't needed pre-thread.
    */
   requiresReplayDriver?: boolean;
-}): Promise<LaunchResult> {
+};
+
+export async function launchElectronApp(
+  params: LaunchElectronAppParams,
+): Promise<LaunchResult> {
   const homeRoot =
     params.homeRoot ??
     await mkdtemp(path.join(os.tmpdir(), "pwragent-desktop-e2e-home-"));
@@ -208,7 +223,7 @@ export async function launchElectronApp(params: {
 
   const electronApp = await electron.launch({
     args: [
-      path.resolve(fixtureDir, "../../out/main/index.js"),
+      DESKTOP_MAIN_ENTRY,
       // Hardware video codecs leak kernel objects inside a
       // Virtualization.framework guest (the Tart macOS VMs): every
       // VideoToolbox init creates an
@@ -228,6 +243,25 @@ export async function launchElectronApp(params: {
     cwd: path.resolve(fixtureDir, "../.."),
     env,
   });
+  // Everything from here on can throw on a sick guest — `firstWindow()` is
+  // the observed one: it never returns when the window layer is wedged. The
+  // launched process is ours the moment `electron.launch()` resolves, so a
+  // failure past this point has to close it rather than leave an orphan for
+  // the next job on a persistent runner to inherit.
+  try {
+    return await finishElectronLaunch({ electronApp, homeRoot, params });
+  } catch (error) {
+    await closeElectronApplication(electronApp).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function finishElectronLaunch(args: {
+  electronApp: ElectronApplication;
+  homeRoot: string;
+  params: LaunchElectronAppParams;
+}): Promise<LaunchResult> {
+  const { electronApp, homeRoot, params } = args;
   const window = await electronApp.firstWindow();
 
   const requiresReplayDriver = params.requiresReplayDriver ?? true;
