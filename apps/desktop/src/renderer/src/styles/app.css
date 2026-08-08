@@ -10005,6 +10005,11 @@ textarea,
   color: var(--text-primary);
 }
 
+.star-map__layout-option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Action row in the View popover ("Reset view"). Reads as the layout
    switch's sibling rather than a new control species. */
 .star-map__view-action {
