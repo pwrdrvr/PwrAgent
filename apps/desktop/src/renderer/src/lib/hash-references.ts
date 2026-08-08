@@ -35,11 +35,18 @@ export function findHashReferenceTrigger(
     return undefined;
   }
 
+  const query = match[1] ?? "";
+  // A numeric hash is a pull-request query, so the first whitespace ends
+  // autocomplete. Thread-title queries may still span spaces.
+  if (/^\d{1,7}\s/.test(query)) {
+    return undefined;
+  }
+
   const start = prefix.length - match[0].length + match[0].lastIndexOf("#");
   return {
     start,
     end: caret,
-    query: match[1] ?? "",
+    query,
   };
 }
 
