@@ -269,3 +269,8 @@ Remote transcript reads require `thread_detail`, remote
 mutations require `turn_control`, remote messaging attachments require
 `messaging_route`, and all exact-thread ownership resolution requires
 `thread_navigation`.
+
+Once a messaging surface is attached to a remote thread, its status card and
+subsequent backend-driven refreshes read navigation state from that owning
+instance. The gateway must not render a remote binding from its local thread
+snapshot or silently fall back to a same-shaped local thread.

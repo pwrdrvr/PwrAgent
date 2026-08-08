@@ -1224,6 +1224,7 @@ export class MessagingController {
       await this.refreshStatusSurfacesForBackend(
         event.backend,
         event.notification.method,
+        event.federationTarget,
       );
       return;
     }
@@ -1932,9 +1933,12 @@ export class MessagingController {
   private async refreshStatusSurfacesForBackend(
     backend: AppServerBackendKind,
     reason: string,
+    federationTarget?: FederationTarget,
   ): Promise<void> {
     const bindings = this.filterBindingsForChannel(
       await this.options.store.findActiveBindingsForBackend({ backend }),
+    ).filter((binding) =>
+      bindingMatchesFederationTarget(binding, federationTarget)
     );
     const renderableBindings = bindings.filter(
       (binding) => binding.statusSurface || binding.pinnedStatusSurface,
@@ -1944,6 +1948,7 @@ export class MessagingController {
     }
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
+      ...(federationTarget ? { federationTarget } : {}),
     });
     for (const binding of renderableBindings) {
       try {
@@ -5139,6 +5144,7 @@ export class MessagingController {
     // backend calls.
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
+      ...(federationTarget ? { federationTarget } : {}),
     });
     for (const binding of renderableBindings) {
       try {
@@ -13348,10 +13354,12 @@ export class MessagingController {
       });
       return await this.options.store.getBinding(binding.id) ?? binding;
     }
+    const federationTarget = federationTargetForBinding(binding);
     const snapshot =
       navigation ??
       (await this.options.backend.getNavigationSnapshot({
         backend: "all",
+        ...(federationTarget ? { federationTarget } : {}),
       }));
     const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
       binding,
@@ -13359,7 +13367,7 @@ export class MessagingController {
     );
     const backendSummary = await this.getBackendSummary(
       binding.backend,
-      federationTargetForBinding(binding),
+      federationTarget,
     );
     const intent = buildBindingStatusIntent({
       id: this.newIntentId("status"),
