@@ -24,6 +24,7 @@ import {
   moveDirectoryKey,
   moveThreadKey,
   parseThreadIdentityKey,
+  resolveThreadParentKey,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import {
@@ -532,10 +533,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
     let topLevelThread = selectedThread;
     const visited = new Set<string>();
     while (topLevelThread.parentThreadId) {
-      const parentKey = buildThreadIdentityKey(
-        topLevelThread.source,
-        topLevelThread.parentThreadId,
-      );
+      const parentKey = resolveThreadParentKey(topLevelThread, threadsByKey);
+      if (!parentKey) {
+        break;
+      }
       if (visited.has(parentKey) || !directoryThreadKeys.has(parentKey)) {
         break;
       }
@@ -566,9 +567,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
         if (!thread.parentThreadId) {
           return true;
         }
-        return !directoryThreadKeys.has(
-          buildThreadIdentityKey(thread.source, thread.parentThreadId),
-        );
+        const parentKey = resolveThreadParentKey(thread, threadsByKey);
+        return !parentKey || !directoryThreadKeys.has(parentKey);
       })
       .filter((thread) => !isPinnedThread(thread));
     const topLevelThreadKey = buildThreadIdentityKey(
@@ -660,17 +660,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const childThreadsByParentKey = new Map<string, NavigationThreadSummary[]>();
     for (const thread of visibleThreads) {
       if (!thread.parentThreadId) continue;
-      const parentKey = buildThreadIdentityKey(thread.source, thread.parentThreadId);
-      if (!directoryThreadKeys.has(parentKey)) continue;
+      const parentKey = resolveThreadParentKey(thread, threadsByKey);
+      if (!parentKey || !directoryThreadKeys.has(parentKey)) continue;
       const children = childThreadsByParentKey.get(parentKey) ?? [];
       children.push(thread);
       childThreadsByParentKey.set(parentKey, children);
     }
     const topLevelVisibleThreads = visibleThreads.filter((thread) => {
       if (!thread.parentThreadId) return true;
-      return !directoryThreadKeys.has(
-        buildThreadIdentityKey(thread.source, thread.parentThreadId),
-      );
+      const parentKey = resolveThreadParentKey(thread, threadsByKey);
+      return !parentKey || !directoryThreadKeys.has(parentKey);
     });
     const renderStaticSubthreads = (parent: NavigationThreadSummary): ReactElement | null => {
       const parentKey = buildThreadIdentityKey(parent.source, parent.id);
@@ -735,7 +734,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 const draggedThread = draggedSubthreadKey
                   ? threadsByKey.get(draggedSubthreadKey)
                   : undefined;
-                if (!draggedThread || draggedThread.parentThreadId !== parent.id) {
+                if (
+                  !draggedThread
+                  || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
+                ) {
                   event.dataTransfer.dropEffect = "none";
                   setSubthreadDropIndicator(undefined);
                   return;
@@ -765,7 +767,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 const draggedThread = draggedKey
                   ? threadsByKey.get(draggedKey)
                   : undefined;
-                if (!draggedThread || draggedThread.parentThreadId !== parent.id) {
+                if (
+                  !draggedThread
+                  || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
+                ) {
                   return;
                 }
                 const nextKeys = moveThreadKey(

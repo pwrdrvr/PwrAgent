@@ -9095,6 +9095,19 @@ export class DesktopBackendRegistry {
     if (!session) {
       throw new Error(`ACP thread not found: ${params.threadId}`);
     }
+    let activeThreads: AppServerThreadSummary[] = [];
+    try {
+      activeThreads = await this.listThreads({
+        archived: false,
+        callerReason: "archive-cleanup",
+      });
+    } catch (error) {
+      backendRegistryLog.warn("ACP archive child lookup failed", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const archivedAt = Date.now();
     this.acpBackend.upsertSession({
       ...session,
@@ -9107,6 +9120,19 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       origin: "thread-archive",
     });
+    try {
+      await this.ungroupChildrenOfArchivedThread({
+        backend: params.backend,
+        activeThreads,
+        parentThreadId: params.threadId,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("ACP archive child ungrouping failed", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return {
       backend: params.backend,
       threadId: params.threadId,
@@ -10145,6 +10171,7 @@ export class DesktopBackendRegistry {
     branchName?: string;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
     parentThreadId?: string;
+    parentThreadBackend?: AppServerBackendKind;
     prAutoDispatchEnabled?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
@@ -10159,6 +10186,7 @@ export class DesktopBackendRegistry {
       branchName,
       requiredWorkMode,
       parentThreadId,
+      parentThreadBackend,
       prAutoDispatchEnabled,
       mcpConnectionIds,
       ...request
@@ -10514,6 +10542,7 @@ export class DesktopBackendRegistry {
         backend,
         threadId: result.threadId,
         parentThreadId,
+        parentThreadBackend,
       });
       await this.emit({
         backend,
@@ -10522,6 +10551,7 @@ export class DesktopBackendRegistry {
           params: {
             threadId: result.threadId,
             parentThreadId,
+            parentThreadBackend,
           },
         },
       });
@@ -10826,6 +10856,7 @@ export class DesktopBackendRegistry {
           backend,
           threadId: result.threadId,
           parentThreadId: request.parentThreadId,
+          parentThreadBackend: request.parentThreadBackend,
         });
         await this.emit({
           backend,
@@ -10834,6 +10865,7 @@ export class DesktopBackendRegistry {
             params: {
               threadId: result.threadId,
               parentThreadId: request.parentThreadId,
+              parentThreadBackend: request.parentThreadBackend,
             },
           },
         });
@@ -14841,6 +14873,7 @@ export class DesktopBackendRegistry {
 
   private async ensureHandoffTrustedDirectoryLaunchpad(params: {
     cwd: string;
+    parentThreadBackend: AppServerBackendKind;
     preferredBackend: AppServerBackendKind;
     parentThreadId: string;
     parentThreadTitle?: string;
@@ -14855,6 +14888,7 @@ export class DesktopBackendRegistry {
       directoryPath,
       currentBranch: await readCurrentGitBranch(directoryPath).catch(() => undefined),
       parentThreadId: params.parentThreadId,
+      parentThreadBackend: params.parentThreadBackend,
       parentThreadTitle: params.parentThreadTitle,
       preferredBackend: params.preferredBackend,
       registeredAt: Date.now(),
@@ -14910,6 +14944,7 @@ export class DesktopBackendRegistry {
 
     await this.ensureHandoffTrustedDirectoryLaunchpad({
       cwd: params.cwd,
+      parentThreadBackend: params.backend,
       preferredBackend: params.backend,
       parentThreadId: params.sourceThreadId,
       parentThreadTitle: params.sourceThread?.title,
@@ -14950,6 +14985,8 @@ export class DesktopBackendRegistry {
       };
       const requestParentThreadId =
         request.parentThreadId ?? normalizedExisting.parentThreadId;
+      const requestParentThreadBackend =
+        request.parentThreadBackend ?? normalizedExisting.parentThreadBackend;
       const requestParentThreadTitle =
         request.parentThreadTitle ?? normalizedExisting.parentThreadTitle;
       const identityChanged =
@@ -14959,6 +14996,7 @@ export class DesktopBackendRegistry {
       const parentChanged =
         request.parentThreadId !== undefined &&
         (normalizedExisting.parentThreadId !== request.parentThreadId ||
+          normalizedExisting.parentThreadBackend !== request.parentThreadBackend ||
           normalizedExisting.parentThreadTitle !== request.parentThreadTitle);
 
       if (isEmptyDirectoryLaunchpadDraft(existing)) {
@@ -14979,6 +15017,7 @@ export class DesktopBackendRegistry {
           workMode: defaultLaunchpadWorkMode(request, defaults),
           branchName: existing.branchName ?? request.currentBranch,
           parentThreadId: requestParentThreadId,
+          parentThreadBackend: requestParentThreadBackend,
           parentThreadTitle: requestParentThreadTitle,
           registeredAt,
           updatedAt: Date.now(),
@@ -15011,6 +15050,7 @@ export class DesktopBackendRegistry {
               directoryLabel: request.directoryLabel,
               directoryPath: request.directoryPath,
               parentThreadId: requestParentThreadId,
+              parentThreadBackend: requestParentThreadBackend,
               parentThreadTitle: requestParentThreadTitle,
               registeredAt,
               updatedAt: Date.now(),
@@ -15046,6 +15086,7 @@ export class DesktopBackendRegistry {
       workMode: defaultLaunchpadWorkMode(request, defaults),
       branchName: request.currentBranch,
       parentThreadId: request.parentThreadId,
+      parentThreadBackend: request.parentThreadBackend,
       parentThreadTitle: request.parentThreadTitle,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -15834,7 +15875,9 @@ export class DesktopBackendRegistry {
       acpRuntime: launchpad.acpRuntime,
       codexEnvironmentRuntime,
       directoryKey: launchpad.directoryKey,
-      parentThreadId: request.parentThreadId,
+      parentThreadId: request.parentThreadId ?? launchpad.parentThreadId,
+      parentThreadBackend:
+        request.parentThreadBackend ?? launchpad.parentThreadBackend,
     });
     const linkedDirectory = linkedDirectories?.[0];
     if (linkedDirectory) {
@@ -20187,11 +20230,13 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): Promise<ArchiveCleanupMetadata> {
     const activeThreads = await this.listThreads({
-      backend: params.backend,
       archived: false,
       callerReason: "archive-cleanup",
     });
-    const activeThread = activeThreads.find((thread) => thread.id === params.threadId);
+    const activeThread = activeThreads.find(
+      (thread) =>
+        thread.source === params.backend && thread.id === params.threadId,
+    );
     let archivedThreads: AppServerThreadSummary[] = [];
     try {
       archivedThreads = await this.listThreads({
@@ -20602,25 +20647,59 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    const activeThreadIds = params.activeThreads
-      .filter((thread) => thread.source === params.backend)
-      .map((thread) => thread.id);
-    const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
-      backend: params.backend,
-      threadIds: activeThreadIds,
-    });
-    const childThreadIds = activeThreadIds.filter(
-      (threadId) =>
-        overlaysByThreadId[threadId]?.parentThreadId === params.parentThreadId,
+    const activeThreadsByBackend = new Map<
+      AppServerBackendKind,
+      AppServerThreadSummary[]
+    >();
+    for (const thread of params.activeThreads) {
+      const backendThreads = activeThreadsByBackend.get(thread.source) ?? [];
+      backendThreads.push(thread);
+      activeThreadsByBackend.set(thread.source, backendThreads);
+    }
+    const childThreads: Array<{
+      backend: AppServerBackendKind;
+      threadId: string;
+    }> = [];
+    const legacyParentMatches = params.activeThreads.filter(
+      (thread) => thread.id === params.parentThreadId,
     );
-    if (childThreadIds.length === 0) {
+    for (const [backend, threads] of activeThreadsByBackend) {
+      const threadIds = threads.map((thread) => thread.id);
+      const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
+        backend,
+        threadIds,
+      });
+      for (const threadId of threadIds) {
+        const overlay = overlaysByThreadId[threadId];
+        if (overlay?.parentThreadId !== params.parentThreadId) {
+          continue;
+        }
+        if (overlay.parentThreadBackend) {
+          if (overlay.parentThreadBackend === params.backend) {
+            childThreads.push({ backend, threadId });
+          }
+          continue;
+        }
+        if (backend === params.backend) {
+          childThreads.push({ backend, threadId });
+          continue;
+        }
+        if (
+          legacyParentMatches.length === 1
+          && legacyParentMatches[0]?.source === params.backend
+        ) {
+          childThreads.push({ backend, threadId });
+        }
+      }
+    }
+    if (childThreads.length === 0) {
       return;
     }
 
     await Promise.all(
-      childThreadIds.map((threadId) =>
+      childThreads.map(({ backend, threadId }) =>
         setThreadParent.call(this.overlayStore, {
-          backend: params.backend,
+          backend,
           threadId,
           parentThreadId: undefined,
         }),
@@ -21912,32 +21991,43 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async resolveHandoffGroupParentThreadId(params: {
+  private async resolveHandoffGroupParentThreadRef(params: {
     backend: AppServerBackendKind;
     sourceOverlay: ThreadOverlayState;
     sourceThreadId: string;
-  }): Promise<string> {
+  }): Promise<{ backend: AppServerBackendKind; threadId: string }> {
     const directParentThreadId = params.sourceOverlay.parentThreadId?.trim();
     if (!directParentThreadId) {
-      return params.sourceThreadId;
+      return { backend: params.backend, threadId: params.sourceThreadId };
     }
 
     let parentThreadId = directParentThreadId;
-    const seen = new Set([params.sourceThreadId]);
-    while (!seen.has(parentThreadId)) {
-      seen.add(parentThreadId);
+    let parentBackend =
+      params.sourceOverlay.parentThreadBackend ?? params.backend;
+    const directParentBackend = parentBackend;
+    const seen = new Set([
+      buildThreadIdentityKey(params.backend, params.sourceThreadId),
+    ]);
+    let parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
+    while (!seen.has(parentKey)) {
+      seen.add(parentKey);
       const parentOverlay = await this.overlayStore.getThreadOverlayState({
-        backend: params.backend,
+        backend: parentBackend,
         threadId: parentThreadId,
       });
       const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
       if (!nextParentThreadId) {
-        return parentThreadId;
+        return { backend: parentBackend, threadId: parentThreadId };
       }
       parentThreadId = nextParentThreadId;
+      parentBackend = parentOverlay?.parentThreadBackend ?? parentBackend;
+      parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
     }
 
-    return directParentThreadId;
+    return {
+      backend: directParentBackend,
+      threadId: directParentThreadId,
+    };
   }
 
   private startPendingThreadWorkspaceMove(
@@ -23500,6 +23590,7 @@ export class DesktopBackendRegistry {
       }
       await this.ensureHandoffTrustedDirectoryLaunchpad({
         cwd: requestedCwd,
+        parentThreadBackend: sourceBackend,
         preferredBackend: backend,
         parentThreadId: sourceThreadId,
         parentThreadTitle: sourceThread?.title,
@@ -23619,7 +23710,6 @@ export class DesktopBackendRegistry {
           });
     const groupingMode: HandoffTaskGroupingMode =
       requestedGroupingMode === "subthread" &&
-      backend === sourceBackend &&
       sameHandoffProjectBoundary(callerProjectBoundary, childProjectBoundary)
         ? "subthread"
         : "none";
@@ -23627,7 +23717,7 @@ export class DesktopBackendRegistry {
       this.updatePendingThreadHandoff(handoffId, {
         groupingMode,
         message:
-          "Requested subthread grouping crosses a backend or project boundary, so the child thread will be created ungrouped.",
+          "Requested subthread grouping crosses a project boundary, so the child thread will be created ungrouped.",
       });
       if (workspaceMode === "same_workspace") {
         const message =
@@ -23636,14 +23726,16 @@ export class DesktopBackendRegistry {
         return threadOrchestrationFailure("invalid_arguments", message);
       }
     }
-    const groupedParentThreadId =
+    const groupedParentThread =
       groupingMode === "subthread"
-        ? await this.resolveHandoffGroupParentThreadId({
+        ? await this.resolveHandoffGroupParentThreadRef({
             backend: sourceBackend,
             sourceOverlay,
             sourceThreadId,
           })
         : undefined;
+    const groupedParentThreadId = groupedParentThread?.threadId;
+    const groupedParentBackend = groupedParentThread?.backend;
 
     let threadId: string;
     let createdLinkedDirectory: LinkedDirectorySummary | undefined;
@@ -23668,7 +23760,10 @@ export class DesktopBackendRegistry {
           backend,
           sourceThreadId,
           ...(groupedParentThreadId
-            ? { parentThreadId: groupedParentThreadId }
+            ? {
+                parentThreadId: groupedParentThreadId,
+                parentThreadBackend: groupedParentBackend,
+              }
             : {}),
           executionMode,
           directoryLabel:
@@ -23715,6 +23810,7 @@ export class DesktopBackendRegistry {
           sandbox: inheritedSettings.sandbox,
           codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
           parentThreadId: groupedParentThreadId,
+          parentThreadBackend: groupedParentBackend,
         });
         threadId = started.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
@@ -23724,7 +23820,7 @@ export class DesktopBackendRegistry {
       }
       if (groupedParentThreadId && this.overlayStore.updateSubthreadOrder) {
         const parentOverlay = await this.overlayStore.getThreadOverlayState({
-          backend,
+          backend: groupedParentBackend ?? backend,
           threadId: groupedParentThreadId,
         });
         const nextOrder = insertSubthreadIdAfter(
@@ -23736,7 +23832,7 @@ export class DesktopBackendRegistry {
           threadId,
         );
         await this.overlayStore.updateSubthreadOrder({
-          backend,
+          backend: groupedParentBackend ?? backend,
           parentThreadId: groupedParentThreadId,
           threadIds: nextOrder,
         });

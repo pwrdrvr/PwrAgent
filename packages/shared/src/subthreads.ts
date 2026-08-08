@@ -1,7 +1,51 @@
-import type { NavigationThreadSummary } from "./contracts/navigation";
+import {
+  buildThreadIdentityKey,
+  type NavigationThreadSummary,
+} from "./contracts/navigation";
 
 type SubthreadParent = Pick<NavigationThreadSummary, "subthreadOrder">;
 type SubthreadChild = Pick<NavigationThreadSummary, "id" | "createdAt">;
+type ParentLinkedThread = Pick<
+  NavigationThreadSummary,
+  "id" | "parentThreadBackend" | "parentThreadId" | "source"
+>;
+
+/**
+ * Resolve a child's parent identity across providers. New relationships carry
+ * `parentThreadBackend`; older persisted cross-provider links only have the
+ * parent id, so they fall back to a unique id match after the historical
+ * same-provider lookup. An ambiguous legacy id stays top-level rather than
+ * attaching to the wrong provider's thread.
+ */
+export function resolveThreadParentKey<T extends ParentLinkedThread>(
+  thread: T,
+  threadsByKey: ReadonlyMap<string, T>,
+): string | undefined {
+  const parentThreadId = thread.parentThreadId?.trim();
+  if (!parentThreadId) {
+    return undefined;
+  }
+
+  const explicitKey = buildThreadIdentityKey(
+    thread.parentThreadBackend ?? thread.source,
+    parentThreadId,
+  );
+  if (threadsByKey.has(explicitKey) || thread.parentThreadBackend) {
+    return explicitKey;
+  }
+
+  let legacyMatch: string | undefined;
+  for (const [threadKey, candidate] of threadsByKey) {
+    if (candidate.id !== parentThreadId) {
+      continue;
+    }
+    if (legacyMatch) {
+      return undefined;
+    }
+    legacyMatch = threadKey;
+  }
+  return legacyMatch;
+}
 
 /**
  * Order a parent's child threads for display. Children explicitly listed in the

@@ -6014,8 +6014,10 @@ describe("useThreadNavigation", () => {
 
     expect(forkThread).toHaveBeenCalledWith({
       backend: "codex",
+      federationTarget: undefined,
       sourceThreadId: "thread-parent",
       parentThreadId: "thread-parent",
+      parentThreadBackend: "codex",
       executionMode: "default",
       directoryKind: "directory",
       directoryLabel: "app",
@@ -6030,6 +6032,7 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread).toMatchObject({
       id: "thread-fork",
       parentThreadId: "thread-parent",
+      parentThreadBackend: "codex",
       gitBranch: "HEAD",
       observedGitBranch: "HEAD",
       linkedDirectories: [
@@ -6317,6 +6320,7 @@ describe("useThreadNavigation", () => {
       directoryPath: "/repo/app",
       gitStatusSourcePath: "/repo/app",
       parentThreadId: "thread-parent",
+      parentThreadBackend: "codex",
       parentThreadTitle: "Local parent",
       preferredBackend: "codex",
     });
@@ -6329,6 +6333,7 @@ describe("useThreadNavigation", () => {
         directoryLabel: "app",
         directoryPath: "/repo/app",
         parentThreadId: "thread-parent",
+        parentThreadBackend: "codex",
         parentThreadTitle: "Local parent",
       },
     });
@@ -6337,6 +6342,7 @@ describe("useThreadNavigation", () => {
     );
     expect(result.current.selectedLaunchpad).toMatchObject({
       parentThreadId: "thread-parent",
+      parentThreadBackend: "codex",
       parentThreadTitle: "Local parent",
     });
   });
@@ -7381,6 +7387,7 @@ describe("useThreadNavigation", () => {
       directoryPath: "/repo/app/.worktrees/parent/app",
       gitStatusSourcePath: "/repo/app",
       parentThreadId: "thread-parent",
+      parentThreadBackend: "codex",
       parentThreadTitle: "Worktree parent",
       preferredBackend: "codex",
     });
@@ -7391,6 +7398,7 @@ describe("useThreadNavigation", () => {
         directoryPath: "/repo/app/.worktrees/parent/app",
         branchName: "feature/parent",
         parentThreadId: "thread-parent",
+        parentThreadBackend: "codex",
       }),
     });
     expect(result.current.selectedLaunchpad).toMatchObject({
@@ -7398,6 +7406,7 @@ describe("useThreadNavigation", () => {
       workMode: "local",
       branchName: "feature/parent",
       parentThreadId: "thread-parent",
+      parentThreadBackend: "codex",
       parentThreadTitle: "Worktree parent",
     });
   });

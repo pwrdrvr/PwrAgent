@@ -952,6 +952,88 @@ describe("Sidebar", () => {
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(sharedThread, true);
   });
 
+  it("groups a Codex child under its pinned ACP parent in Inbox", () => {
+    const parentThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "kimi-parent",
+      title: "Federation migration parent",
+      source: "acp:kimi",
+      pinnedRank: "1024",
+    };
+    const childThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "codex-child",
+      title: "Federation migration child",
+      parentThreadId: parentThread.id,
+    };
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[childThread, parentThread]}
+        loading={false}
+        selectedItemKey="codex:codex-child"
+        threads={[childThread, parentThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const childButton = screen.getByRole("button", {
+      name: "Federation migration child",
+    });
+    expect(container.querySelector(".subthread-list")).toContainElement(
+      threadCard(childButton),
+    );
+  });
+
+  it("groups a Codex child under its pinned ACP parent in Directories", () => {
+    const parentThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "kimi-parent",
+      title: "Federation directory parent",
+      source: "acp:kimi",
+      pinnedRank: "1024",
+    };
+    const childThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "codex-child",
+      title: "Federation directory child",
+      parentThreadId: parentThread.id,
+    };
+    const directory: NavigationDirectorySummary = {
+      ...directories[0]!,
+      threadKeys: ["acp%3Akimi:kimi-parent", "codex:codex-child"],
+    };
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[directory]}
+        inboxThreads={[childThread, parentThread]}
+        loading={false}
+        selectedItemKey="codex:codex-child"
+        threads={[childThread, parentThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const childButton = screen.getByRole("button", {
+      name: "Federation directory child",
+    });
+    expect(container.querySelector(".subthread-list")).toContainElement(
+      threadCard(childButton),
+    );
+  });
+
   it("keeps native Codex workers in an on-demand sub-agent disclosure", () => {
     const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
     Object.defineProperty(window, "pwragent", {

@@ -1669,6 +1669,7 @@ export type AppServerNotification =
       params: {
         threadId: string;
         parentThreadId: string;
+        parentThreadBackend?: AppServerBackendKind;
       };
     }
   | {

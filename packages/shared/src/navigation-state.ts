@@ -162,33 +162,45 @@ function resolveNavigationExecutionMode(params: {
   );
 }
 
-function resolveNavigationParentThreadId(params: {
+function resolveNavigationParentThread(params: {
   overlay?: ThreadOverlayState;
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
   source: AppServerThreadSummary["source"];
   threadId: string;
-}): string | undefined {
+}): Pick<NavigationThreadSummary, "parentThreadBackend" | "parentThreadId"> {
   const directParentThreadId = params.overlay?.parentThreadId?.trim();
   if (!directParentThreadId) {
-    return undefined;
+    return {};
   }
 
   let parentThreadId = directParentThreadId;
-  const seen = new Set([params.threadId]);
-  while (!seen.has(parentThreadId)) {
-    seen.add(parentThreadId);
+  const directParentThreadBackend = params.overlay?.parentThreadBackend;
+  let parentThreadBackend = directParentThreadBackend ?? params.source;
+  const seen = new Set([buildThreadIdentityKey(params.source, params.threadId)]);
+  let parentKey = buildThreadIdentityKey(parentThreadBackend, parentThreadId);
+  while (!seen.has(parentKey)) {
+    seen.add(parentKey);
     const parentOverlay =
-      params.overlayByThreadKey[
-        buildThreadIdentityKey(params.source, parentThreadId)
-      ];
+      params.overlayByThreadKey[parentKey];
     const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
     if (!nextParentThreadId) {
-      return parentThreadId;
+      return {
+        ...(directParentThreadBackend ? { parentThreadBackend } : {}),
+        parentThreadId,
+      };
     }
     parentThreadId = nextParentThreadId;
+    parentThreadBackend =
+      parentOverlay?.parentThreadBackend ?? parentThreadBackend;
+    parentKey = buildThreadIdentityKey(parentThreadBackend, parentThreadId);
   }
 
-  return directParentThreadId;
+  return {
+    ...(directParentThreadBackend
+      ? { parentThreadBackend: directParentThreadBackend }
+      : {}),
+    parentThreadId: directParentThreadId,
+  };
 }
 
 export function materializeNavigationThreads(params: {
@@ -217,7 +229,7 @@ export function materializeNavigationThreads(params: {
     ]);
     const gitBranch = resolveNavigationGitBranch({ overlay, thread });
     const observedGitBranch = resolveNavigationObservedBranch({ overlay, thread });
-    const parentThreadId = resolveNavigationParentThreadId({
+    const parentThread = resolveNavigationParentThread({
       overlay,
       overlayByThreadKey: params.overlayByThreadKey,
       source: thread.source,
@@ -256,7 +268,7 @@ export function materializeNavigationThreads(params: {
       subAgents: overlay?.subAgents ?? [],
       scheduledStart: overlay?.scheduledStart,
       pinnedRank: overlay?.pinnedRank,
-      parentThreadId,
+      ...parentThread,
       forkSourceThreadId: overlay?.forkSourceThreadId,
       subthreadOrder: overlay?.subthreadOrder,
       subthreadsCollapsed: overlay?.subthreadsCollapsed,
@@ -555,6 +567,7 @@ export function buildNavigationSnapshotHash(params: {
       reactions: thread.reactions ?? [],
       pinnedRank: thread.pinnedRank ?? null,
       parentThreadId: thread.parentThreadId ?? null,
+      parentThreadBackend: thread.parentThreadBackend ?? null,
       forkSourceThreadId: thread.forkSourceThreadId ?? null,
       subthreadOrder: thread.subthreadOrder ?? [],
       subthreadsCollapsed: thread.subthreadsCollapsed ?? null,
