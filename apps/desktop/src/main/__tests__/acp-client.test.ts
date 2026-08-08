@@ -3122,6 +3122,85 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
+  it("accepts a cancelled fire-and-forget prompt without assistant output", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const errors: unknown[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+      onPromptError: ({ error }) => {
+        errors.push(error);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+      turnId: "turn-1",
+    });
+    promptResponse.resolve({ stopReason: "cancelled" });
+
+    await vi.waitFor(() => {
+      expect(store.getSession("acp:kimi", session.sessionId)?.status).toBe(
+        "idle",
+      );
+    });
+    expect(errors).toEqual([]);
+    expect(
+      store.getSession("acp:kimi", session.sessionId)?.lastError,
+    ).toBeUndefined();
+    expect(
+      client.readReplay(session.sessionId).entries.some(
+        (entry) => entry.type === "activity" && entry.summary === "Turn failed",
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts a cancelled awaited prompt without assistant output", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const promptPromise = client.prompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+    });
+    promptResponse.resolve({ stopReason: "cancelled" });
+
+    await expect(promptPromise).resolves.toEqual({
+      sessionId: session.sessionId,
+      turnId: `pending:${session.sessionId}:1000`,
+    });
+    expect(store.getSession("acp:kimi", session.sessionId)).toMatchObject({
+      status: "idle",
+    });
+    expect(
+      store.getSession("acp:kimi", session.sessionId)?.lastError,
+    ).toBeUndefined();
+  });
+
   it("accepts an ACP response delivered only by a terminal update", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({

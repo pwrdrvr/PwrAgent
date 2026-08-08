@@ -448,7 +448,7 @@ export class AcpAgentClient {
         ACP_PROMPT_REQUEST_TIMEOUT_MS,
       );
       result = await promptRequest;
-      this.assertPromptProducedResponse(params.sessionId);
+      this.assertPromptProducedResponse(params.sessionId, result);
     } catch (error) {
       this.finishTrackedTurn(params.sessionId, this.now());
       this.recordPromptFailure(params.sessionId, turnId, error);
@@ -577,8 +577,8 @@ export class AcpAgentClient {
       ACP_PROMPT_REQUEST_TIMEOUT_MS,
     );
     void promptRequest
-      .then(() => {
-        this.assertPromptProducedResponse(params.sessionId);
+      .then((result) => {
+        this.assertPromptProducedResponse(params.sessionId, result);
         const receivedAt = this.now();
         const finished = this.finishTrackedTurn(params.sessionId, receivedAt);
         this.appendHistoryUpdate(params.sessionId, receivedAt, {
@@ -1345,7 +1345,17 @@ export class AcpAgentClient {
     };
   }
 
-  private assertPromptProducedResponse(sessionId: string): void {
+  private assertPromptProducedResponse(
+    sessionId: string,
+    result: unknown,
+  ): void {
+    const resultRecord = asRecord(result);
+    if (
+      resultRecord?.stopReason === "cancelled"
+      || resultRecord?.stop_reason === "cancelled"
+    ) {
+      return;
+    }
     const activeTurn = this.activeTurns.get(sessionId);
     if (activeTurn?.assistantText.trim()) {
       return;
