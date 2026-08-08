@@ -69,6 +69,11 @@ const INLINE_CHEVRONS: Array<{ name: string; collapsed: string; expanded: string
     collapsed: '.live-work-rail__file-toggle[aria-expanded="false"] .live-work-rail__chevron',
     expanded: '.live-work-rail__file-toggle[aria-expanded="true"] .live-work-rail__chevron',
   },
+  {
+    name: "unpublished commit toggle",
+    collapsed: '.unpublished-commit__toggle[aria-expanded="false"] .live-work-rail__chevron',
+    expanded: '.unpublished-commit__toggle[aria-expanded="true"] .live-work-rail__chevron',
+  },
 ];
 
 // The base element rule that paints each unfilled chevron's "V" shape.
@@ -112,6 +117,42 @@ describe("chevron disclosure direction contract", () => {
     // rotate(225deg). The unified language never does; guard against it
     // creeping back in on any selector.
     expect(css).not.toContain("rotate(225deg)");
+  });
+
+  // The list above only covers chevrons somebody remembered to add. The
+  // unpublished-commit toggle shipped with rotate(0deg)/rotate(-90deg) — a
+  // right-angle elbow rather than a chevron, in both states — precisely
+  // because it was never enumerated here. This sweep needs no maintenance:
+  // any aria-expanded chevron rule that rotates its glyph is held to the
+  // language whether or not it appears in INLINE_CHEVRONS.
+  it("holds EVERY aria-expanded chevron rule to -45/45, enumerated or not", () => {
+    // Strip comments first: a rule's leading comment can otherwise carry
+    // "chevron" or a rotate() into the match and skew the selector.
+    const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const rules = stripped.matchAll(/(?:^|\n)([^{}\n][^{}]*?)\{([^{}]*)\}/g);
+    const offenders: string[] = [];
+    let checked = 0;
+
+    for (const rule of rules) {
+      const selector = rule[1].trim().replace(/\s+/g, " ");
+      const body = rule[2];
+      const state = selector.match(/aria-expanded="(true|false)"/);
+      if (!selector.includes("chevron") || !state || !/transform\s*:/.test(body)) {
+        continue;
+      }
+      checked += 1;
+      const want = state[1] === "true" ? "rotate(45deg)" : "rotate(-45deg)";
+      const rotations = body.match(/rotate\([^)]*\)/g) ?? [];
+      if (rotations.length !== 1 || rotations[0] !== want) {
+        offenders.push(`${selector} => ${rotations.join(", ") || "(no rotate)"}, want ${want}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+    // Guard the sweep itself: a regex that silently stops matching would
+    // otherwise pass vacuously forever. 11 such rules exist as of this
+    // commit; the floor only has to prove the scan still finds them.
+    expect(checked).toBeGreaterThanOrEqual(10);
   });
 
   it("keeps the sidebar thread-tree as a deliberate FILLED-triangle exception", () => {

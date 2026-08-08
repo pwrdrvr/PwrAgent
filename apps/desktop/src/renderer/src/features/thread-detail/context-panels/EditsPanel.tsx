@@ -648,12 +648,13 @@ function UnpublishedCommitSection(props: {
           onClick={() => setExpanded((current) => !current)}
         >
           <span className="live-work-rail__chevron" aria-hidden="true" />
-          <span className="unpublished-commit__identity">
-            <span className="unpublished-commit__subject">
-              {props.commit.subject}
-            </span>
-            <span className="unpublished-commit__sha">{props.commit.shortSha}</span>
+          {/* Direct children of the toggle: it is a two-row grid that places
+              the chevron on the subject line and tucks the sha under it. An
+              identity wrapper here would collapse both back onto one row. */}
+          <span className="unpublished-commit__subject">
+            {props.commit.subject}
           </span>
+          <span className="unpublished-commit__sha">{props.commit.shortSha}</span>
         </button>
         <DiffStat
           additions={props.commit.additions}
