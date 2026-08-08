@@ -19,6 +19,70 @@ export type HashReferenceCandidates = {
 
 const THREAD_CANDIDATE_LIMIT = 8;
 const PULL_REQUEST_CANDIDATE_LIMIT = 6;
+const THREAD_LABEL_LENGTH_LIMIT = 72;
+const THREAD_TOOLTIP_LENGTH_LIMIT = 300;
+
+/** Collapse a free-text thread title onto one line. */
+export function collapseHashReferenceWhitespace(
+  value: string | undefined,
+): string {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function truncateAtWordBoundary(value: string, limit: number): string {
+  if (value.length <= limit) {
+    return value;
+  }
+
+  const breakWindow = value.slice(0, limit + 1);
+  const wordBreak = breakWindow.lastIndexOf(" ");
+  const truncated =
+    wordBreak >= Math.floor(limit / 2)
+      ? value.slice(0, wordBreak)
+      : value.slice(0, limit);
+  return `${truncated.replace(/[\s,;:.-]+$/, "")}…`;
+}
+
+/**
+ * A thread title is free text, and nothing guarantees it is short: a
+ * provider that never derived a name leaves the operator's entire first
+ * prompt — paragraphs, newlines and all — as the title. The `#` popover
+ * renders one row per candidate inside a ~320px list, so an unbounded
+ * title wraps until it is the only row the operator can see. Collapse to
+ * a single line and cut at a word boundary.
+ *
+ * This is the label for every surface that names a referenced thread —
+ * the popover row, the composer chip, and the `[title](pwragent://…)`
+ * markdown the agent receives. Apply it wherever a token is minted, not
+ * just at the picker: a draft restore rebuilds tokens from the live
+ * thread summary rather than from the saved link text, so a formatter
+ * that skips that path is undone by the next restore.
+ */
+export function formatHashReferenceThreadLabel(
+  thread: Pick<NavigationThreadSummary, "id" | "title">,
+): string {
+  const collapsed = collapseHashReferenceWhitespace(thread.title);
+  if (!collapsed) {
+    return thread.id;
+  }
+  return truncateAtWordBoundary(collapsed, THREAD_LABEL_LENGTH_LIMIT);
+}
+
+/**
+ * The hover text behind a clamped row. Longer than the label — the point
+ * is to recover what the ellipsis hid — but still bounded, because a
+ * native tooltip carrying a whole pasted prompt is its own unreadable
+ * wall of text.
+ */
+export function formatHashReferenceThreadTooltip(
+  thread: Pick<NavigationThreadSummary, "id" | "title">,
+): string {
+  const collapsed = collapseHashReferenceWhitespace(thread.title);
+  if (!collapsed) {
+    return thread.id;
+  }
+  return truncateAtWordBoundary(collapsed, THREAD_TOOLTIP_LENGTH_LIMIT);
+}
 
 /**
  * Match a composer `#` reference from the trigger through the caret. Thread
