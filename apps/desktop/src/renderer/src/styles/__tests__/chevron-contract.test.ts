@@ -80,10 +80,81 @@ const INLINE_CHEVRONS: Array<{ name: string; collapsed: string; expanded: string
 const UNFILLED_BASE_RULES = [
   ".transcript-activity__chevron",
   ".transcript-work-phase-group__chevron",
+  ".transcript-monitor-result__chevron",
   ".directory-row__chevron",
   ".settings-section__chevron::before",
   ".live-work-rail__chevron",
 ];
+
+// Every chevron that sits DIRECTLY in a flex toggle needs a shrink guard: the
+// label beside it can only shrink so far, so past that the flex algorithm eats
+// the glyph itself. `.live-work-rail__chevron` shipped without one and
+// collapsed to 7.1px at a 240px rail and 5.4px at 200px, while the file rows
+// (a grid, immune to flex shrink) stayed 8px -- two sizes of chevron in one
+// column. `.settings-section__chevron` is the odd one out: the guard belongs on
+// that host span, a fixed 16x16 inline-flex box, and NOT on the ::before that
+// paints the V, which a fixed-size host can never squeeze.
+const SHRINK_GUARDED_CHEVRONS = [
+  ".transcript-activity__chevron",
+  ".transcript-work-phase-group__chevron",
+  ".transcript-monitor-result__chevron",
+  ".directory-row__chevron",
+  ".settings-section__chevron",
+  ".live-work-rail__chevron",
+];
+
+/** Collapse whitespace so a CSS selector wrapped across lines still compares. */
+function normalizeSelector(selector: string): string {
+  return selector.trim().replace(/\s+/g, " ");
+}
+
+/** The single rotate() a chevron rule applies, or undefined if it applies none. */
+function rotationOf(body: string): string | undefined {
+  const rotations = body.match(/rotate\([^)]*\)/g) ?? [];
+  return rotations.length === 1 ? rotations[0] : undefined;
+}
+
+type SweptRule = {
+  selector: string;
+  /** Selector with the state normalized out, so both states of one toggle pair up. */
+  pairKey: string;
+  state: "true" | "false";
+  /** The chevron class the rule targets, e.g. ".live-work-rail__chevron". */
+  chevron: string;
+  rotations: string[];
+};
+
+/**
+ * Every `aria-expanded` chevron rule in app.css that rotates its glyph,
+ * whether or not anyone remembered to enumerate it above. Matches rules
+ * nested inside `@media` / `@supports` too, since their selectors still
+ * start on their own line.
+ */
+function sweepStateRules(): SweptRule[] {
+  // Strip comments first: a rule's leading comment can otherwise carry
+  // "chevron" or a rotate() into the match and skew the selector.
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const swept: SweptRule[] = [];
+
+  for (const rule of stripped.matchAll(/(?:^|\n)([^{}\n][^{}]*?)\{([^{}]*)\}/g)) {
+    const selector = normalizeSelector(rule[1]);
+    const body = rule[2];
+    const state = selector.match(/aria-expanded="(true|false)"/);
+    if (!selector.includes("chevron") || !state || !/transform\s*:/.test(body)) {
+      continue;
+    }
+    const chevrons = selector.match(/\.[\w-]*chevron[\w-]*/g) ?? [];
+    swept.push({
+      selector,
+      pairKey: selector.replace(/aria-expanded="(true|false)"/, "aria-expanded"),
+      state: state[1] as "true" | "false",
+      chevron: chevrons[chevrons.length - 1] ?? "",
+      rotations: body.match(/rotate\([^)]*\)/g) ?? [],
+    });
+  }
+
+  return swept;
+}
 
 describe("chevron disclosure direction contract", () => {
   it.each(INLINE_CHEVRONS)(
@@ -122,37 +193,74 @@ describe("chevron disclosure direction contract", () => {
   // The list above only covers chevrons somebody remembered to add. The
   // unpublished-commit toggle shipped with rotate(0deg)/rotate(-90deg) — a
   // right-angle elbow rather than a chevron, in both states — precisely
-  // because it was never enumerated here. This sweep needs no maintenance:
-  // any aria-expanded chevron rule that rotates its glyph is held to the
-  // language whether or not it appears in INLINE_CHEVRONS.
-  it("holds EVERY aria-expanded chevron rule to -45/45, enumerated or not", () => {
-    // Strip comments first: a rule's leading comment can otherwise carry
-    // "chevron" or a rotate() into the match and skew the selector.
-    const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
-    const rules = stripped.matchAll(/(?:^|\n)([^{}\n][^{}]*?)\{([^{}]*)\}/g);
-    const offenders: string[] = [];
-    let checked = 0;
+  // because it was never enumerated here. The two sweeps below need no
+  // per-selector maintenance.
+  it("points every aria-expanded chevron rule the right way, enumerated or not", () => {
+    const offenders = sweepStateRules()
+      .map((rule) => {
+        const want = rule.state === "true" ? "rotate(45deg)" : "rotate(-45deg)";
+        return rotationOf(rule.rotations.join(" ")) === want
+          ? undefined
+          : `${rule.selector} => ${rule.rotations.join(", ") || "(no rotate)"}, want ${want}`;
+      })
+      .filter(Boolean);
 
-    for (const rule of rules) {
-      const selector = rule[1].trim().replace(/\s+/g, " ");
-      const body = rule[2];
-      const state = selector.match(/aria-expanded="(true|false)"/);
-      if (!selector.includes("chevron") || !state || !/transform\s*:/.test(body)) {
-        continue;
+    expect(offenders).toEqual([]);
+  });
+
+  // Direction alone is not enough: a toggle can be pointed correctly in the
+  // one state it declares and still never MOVE, which is how the
+  // edited-file-groups header once sat stuck pointing down in both states
+  // (see the comment above its rotation hooks in app.css). Most chevrons
+  // declare only one state and inherit the other from the base rule, so the
+  // check is that base + declared covers both directions — not that both
+  // aria-expanded rules exist.
+  it("leaves no aria-expanded chevron stuck in one direction", () => {
+    const byPair = new Map<string, SweptRule[]>();
+    for (const rule of sweepStateRules()) {
+      byPair.set(rule.pairKey, [...(byPair.get(rule.pairKey) ?? []), rule]);
+    }
+
+    const stuck: string[] = [];
+    for (const [pairKey, rules] of byPair) {
+      const covered = new Set(
+        rules.map((rule) => rotationOf(rule.rotations.join(" "))).filter(Boolean)
+      );
+      // The state the toggle does not declare falls through to the base rule.
+      const base = rotationOf(ruleBody(rules[0].chevron));
+      if (base) {
+        covered.add(base);
       }
-      checked += 1;
-      const want = state[1] === "true" ? "rotate(45deg)" : "rotate(-45deg)";
-      const rotations = body.match(/rotate\([^)]*\)/g) ?? [];
-      if (rotations.length !== 1 || rotations[0] !== want) {
-        offenders.push(`${selector} => ${rotations.join(", ") || "(no rotate)"}, want ${want}`);
+      if (!covered.has("rotate(-45deg)") || !covered.has("rotate(45deg)")) {
+        stuck.push(`${pairKey} only ever reaches ${[...covered].join(", ") || "(nothing)"}`);
       }
     }
 
-    expect(offenders).toEqual([]);
-    // Guard the sweep itself: a regex that silently stops matching would
-    // otherwise pass vacuously forever. 11 such rules exist as of this
-    // commit; the floor only has to prove the scan still finds them.
-    expect(checked).toBeGreaterThanOrEqual(10);
+    expect(stuck).toEqual([]);
+  });
+
+  // Guards both sweeps against passing vacuously: a regex that silently stops
+  // matching would otherwise look green forever. Tied to the enumerated list
+  // rather than a hardcoded count, so it stays honest as rows come and go.
+  it("visits every aria-expanded selector the enumerated list names", () => {
+    const visited = new Set(sweepStateRules().map((rule) => rule.selector));
+    const enumerated = INLINE_CHEVRONS.flatMap(({ collapsed, expanded }) => [
+      collapsed,
+      expanded,
+    ])
+      .filter((selector) => selector.includes("aria-expanded"))
+      .map(normalizeSelector);
+
+    expect(enumerated.length).toBeGreaterThan(0);
+    expect([...visited]).toEqual(expect.arrayContaining(enumerated));
+  });
+
+  // A CSS-only sweep cannot see a toggle that has NO rotation rule at all —
+  // that lives in TSX. The render-side counterpart is
+  // features/thread-detail/__tests__/chevron-placement.test.tsx and the
+  // ThreadContextPanel commit-toggle structure test.
+  it.each(SHRINK_GUARDED_CHEVRONS)("%s cannot be squeezed by a flex toggle", (selector) => {
+    expect(ruleBody(selector)).toMatch(/flex:\s*0 0 auto/);
   });
 
   it("keeps the sidebar thread-tree as a deliberate FILLED-triangle exception", () => {
