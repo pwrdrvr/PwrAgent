@@ -130,7 +130,10 @@ export function AppNoticeToast(props: {
           <p className="app-notice-toast__detail">{props.notice.detail}</p>
         ) : null}
       </div>
-      <div className="app-notice-toast__actions">
+      <div
+        className="app-notice-toast__actions"
+        data-custom-actions={customActions.length > 0 ? "true" : undefined}
+      >
         {customActions.length > 0
           ? customActions.map((action) => (
               <button

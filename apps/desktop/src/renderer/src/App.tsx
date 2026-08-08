@@ -94,6 +94,7 @@ import {
 } from "./features/notifications/app-notice-state";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
+import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
@@ -450,6 +451,17 @@ function DesktopAppShell(props: {
       type: "dismiss-prefix",
       prefix: `messaging-platform-error:${platform}:`,
     });
+  }, [showAppNotice]);
+  const syncGrokCliUpdateNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    dispatchAppNotice({
+      type: "dismiss-prefix",
+      prefix: "acp-update:acp:grok:",
+    });
+    if (notice) {
+      showAppNotice(notice);
+    }
   }, [showAppNotice]);
 
   useEffect(() => {
@@ -2236,6 +2248,10 @@ function DesktopAppShell(props: {
         <MessagingErrorNotices
           desktopApi={desktopApi}
           onNoticeChanged={syncMessagingErrorNotice}
+        />
+        <GrokCliUpdateNotice
+          desktopApi={desktopApi}
+          onNoticeChanged={syncGrokCliUpdateNotice}
         />
         <AppNoticeStack
           desktopApi={desktopApi}
