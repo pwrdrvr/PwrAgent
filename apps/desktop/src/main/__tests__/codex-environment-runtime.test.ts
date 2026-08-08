@@ -11,6 +11,7 @@ import {
   startLocalCodexEnvironmentAction,
   stopCodexEnvironmentDetachedCommand,
 } from "../app-server/codex-environment-runtime";
+import { WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
 
 const mainLogEntries = vi.hoisted(
@@ -51,6 +52,22 @@ const isWindows = process.platform === "win32";
 function spawnableShell(posixShell: string): string {
   return isWindows ? resolveWindowsBashShell() : posixShell;
 }
+
+/**
+ * Detach-mode commands launch through the Windows Job wrapper on win32, whose
+ * cold start (first PowerShell host + per-launch C# helper compile) is allowed
+ * up to `WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS` (28s) by design — hosted CI has
+ * taken 16.7s to enter the wrapper and 7.1s to compile its helper while still
+ * making journaled forward progress (see
+ * docs/solutions/2026-08-06-windows-vitest-process-isolation.md). These tests'
+ * explicit 15s timeouts predate the wrapper: they widened POSIX's 5s default,
+ * but on Windows they silently narrowed the workspace's 30s test contract to
+ * half the documented startup allowance, so whichever detach test launched
+ * first paid the cold start and timed out. Grant the same 30s contract the
+ * wrapper's own live-launch tests use; POSIX has no job wrapper and keeps the
+ * snug 15s.
+ */
+const DETACHED_ACTION_TEST_TIMEOUT_MS = isWindows ? 30_000 : 15_000;
 
 describe("codex environment runtime", () => {
   afterEach(() => {
@@ -121,7 +138,7 @@ describe("codex environment runtime", () => {
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  }, 15_000);
+  }, DETACHED_ACTION_TEST_TIMEOUT_MS);
 
   it("captures detached stdout and stderr in arrival order", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-output-order-"));
@@ -170,7 +187,7 @@ describe("codex environment runtime", () => {
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  }, 15_000);
+  }, DETACHED_ACTION_TEST_TIMEOUT_MS);
 
   it("stops a detached action process tree by run id", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-stop-"));
@@ -203,13 +220,17 @@ describe("codex environment runtime", () => {
         },
       );
 
+      // The run registers only after the Windows Job becomes ready, so this
+      // poll must honor the same cold-start allowance as the test timeout.
+      // The helper's 10s default would reintroduce the narrowed contract
+      // whenever this test is the first detach launch to pay the cold start.
       await expectEventually(async () => {
         const result = stopCodexEnvironmentDetachedCommand(runId, "stop");
         if (!result.found) {
           throw new Error("Detached process is not registered yet");
         }
         return result;
-      });
+      }, isWindows ? WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS : 10_000);
 
       if (isWindows) {
         const exit = await detachedExit;
@@ -225,7 +246,7 @@ describe("codex environment runtime", () => {
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  }, 15_000);
+  }, DETACHED_ACTION_TEST_TIMEOUT_MS);
 
   /**
    * Regression: only the Run-button path passed an owner, so an action started
@@ -309,7 +330,7 @@ describe("codex environment runtime", () => {
       }
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  }, 15_000);
+  }, DETACHED_ACTION_TEST_TIMEOUT_MS);
 
   it("strips parent Electron runtime variables from detached actions", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-electron-"));
@@ -873,7 +894,7 @@ describe("codex environment runtime", () => {
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  }, 15_000);
+  }, DETACHED_ACTION_TEST_TIMEOUT_MS);
 
   it("reuses cached shell hydration when setup is disabled", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-cache-"));
