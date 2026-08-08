@@ -349,6 +349,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
       });
     };
   }, [eventSubscriptionsJson, props.desktopApi]);
+  /**
+   * Instances the view option is suppressing. Their threads are never
+   * fetched — `useStarMapThreads` only sees the filtered peer list — so
+   * an empty map caused by this setting cannot be detected by counting
+   * threads. The count of hidden bodies is what we can honestly report.
+   */
+  const hiddenInstanceCount = useMemo(() => {
+    if (!preferences.hideOfflineInstances) return 0;
+    return (health?.peers ?? []).filter(
+      (peer) => peer.status !== "revoked" && peer.status !== "connected",
+    ).length;
+  }, [health, preferences.hideOfflineInstances]);
+
   const remote = useStarMapThreads({
     desktopApi: props.desktopApi,
     peers,
@@ -463,6 +476,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const clearFilters = useCallback(() => {
     setFilterSelection({});
     writeStoredFilterSelection({});
+  }, []);
+
+  const showOfflineInstances = useCallback(() => {
+    setPreferences((current) => {
+      const next = { ...current, hideOfflineInstances: false };
+      writeStoredPreferences(next);
+      return next;
+    });
   }, []);
 
   // Chip counts answer "how many cards is this chip about", measured
@@ -1389,16 +1410,45 @@ export function StarMapScreen(props: StarMapScreenProps) {
           onResetView={panZoomMode ? resetView : undefined}
         />
       </div>
-      {matchedThreadCount === 0 && hasFilterSelection ? (
+      {/* Two different settings can empty the map, and a blank star field
+          looks identical either way. Name whichever one is responsible —
+          and say nothing at all when the fleet is simply idle, because
+          blaming a setting the operator did not touch is worse than
+          silence. */}
+      {matchedThreadCount === 0 && (hasFilterSelection || hiddenInstanceCount > 0) ? (
         <div className="star-map__empty" role="status">
-          <p className="star-map__empty-title">No threads match these filters</p>
-          <button
-            type="button"
-            className="star-map__empty-action"
-            onClick={clearFilters}
-          >
-            Clear filters
-          </button>
+          <p className="star-map__empty-title">
+            {hasFilterSelection
+              ? "No threads match these filters"
+              : "No threads on the visible instances"}
+          </p>
+          {hiddenInstanceCount > 0 ? (
+            <p className="star-map__empty-detail">
+              {hiddenInstanceCount === 1
+                ? "1 offline instance is hidden"
+                : `${hiddenInstanceCount} offline instances are hidden`}
+            </p>
+          ) : null}
+          <span className="star-map__empty-actions">
+            {hasFilterSelection ? (
+              <button
+                type="button"
+                className="star-map__empty-action"
+                onClick={clearFilters}
+              >
+                Clear filters
+              </button>
+            ) : null}
+            {hiddenInstanceCount > 0 ? (
+              <button
+                type="button"
+                className="star-map__empty-action"
+                onClick={showOfflineInstances}
+              >
+                Show offline instances
+              </button>
+            ) : null}
+          </span>
         </div>
       ) : null}
       <div className="star-map__filters" role="group" aria-label="Thread filters">

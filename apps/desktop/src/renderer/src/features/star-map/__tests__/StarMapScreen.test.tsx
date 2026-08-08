@@ -978,4 +978,82 @@ describe("StarMapScreen", () => {
     );
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  it("names hidden instances when they are what emptied the map", async () => {
+    // Hidden peers are never fetched, so their threads cannot be counted.
+    // Without naming the setting, the map looks identical to an idle
+    // fleet — the same ambiguity the filter message exists to remove.
+    window.localStorage.setItem(
+      "pwragent.starMap.viewPreferences",
+      JSON.stringify({ hideOfflineInstances: true }),
+    );
+    const desktopApi = {
+      readFederationHealth: vi.fn(async () => ({
+        health: {
+          enabled: true,
+          role: "gateway" as const,
+          status: "listening" as const,
+          instanceId: "pwr_local",
+          localCelestialIcon: "sun" as const,
+          localLabel: "Harold-MBP-M5-Max",
+          localProfileName: "default",
+          peers: [
+            {
+              id: "pwr_peer",
+              label: "M4 Mini",
+              role: "client" as const,
+              status: "disconnected" as const,
+              capabilities: [],
+            },
+          ],
+        },
+      })),
+      onAgentEvent: vi.fn(() => () => undefined),
+    } as unknown as DesktopApi;
+
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toMatch(/No threads on the visible instances/);
+    expect(status.textContent).toMatch(/1 offline instance is hidden/);
+
+    fireEvent.click(
+      within(status).getByRole("button", { name: "Show offline instances" }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+  });
+
+  it("stays silent when an idle fleet is genuinely empty", async () => {
+    // No filters, nothing hidden — there is no setting to blame, and
+    // inventing one would be worse than saying nothing.
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[]}
+        sessionKeys={{}}
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance/ }),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
 });

@@ -9135,10 +9135,15 @@ textarea,
   /* Calmer at rest than it was: the cards are the content and the bodies
      are organisation, so the bodies must not out-shout them. The glow
      comes back up on hover, where it is answering the pointer rather
-     than competing for it. */
+     than competing for it.
+
+     Opacity carries the whole reduction (~0.69 of the former) and the
+     accent share stays put. Dropping both together compounded to 44% of
+     the original intensity, which risks trading "calm" for "cannot find
+     my instances" — the opposite failure. */
   background: radial-gradient(
     circle,
-    color-mix(in srgb, var(--accent) 11%, transparent),
+    color-mix(in srgb, var(--accent) 17%, transparent),
     transparent 70%
   );
   opacity: 0.55;
@@ -10111,7 +10116,7 @@ textarea,
   z-index: 20;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 18px 22px;
   transform: translate(-50%, -50%);
   border: 1px solid var(--border-subtle);
@@ -10124,6 +10129,18 @@ textarea,
   margin: 0;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.star-map__empty-detail {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.star-map__empty-actions {
+  display: inline-flex;
+  gap: 8px;
+  margin-top: 2px;
 }
 
 .star-map__empty-action {
