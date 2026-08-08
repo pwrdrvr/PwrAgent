@@ -166,6 +166,104 @@ describe("federation transport", () => {
     expect(server?.closePeer("client_one")).toBe(false);
   });
 
+  it("reports envelope wire bytes to both ends' transfer taps", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const gatewayTransfers: Array<{
+      peerId: string;
+      direction: "sent" | "received";
+      byteCount: number;
+    }> = [];
+    const clientTransfers: Array<{
+      direction: "sent" | "received";
+      byteCount: number;
+    }> = [];
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-transfer",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      onEnvelope: (envelope, connection) => {
+        connection.sendEnvelope({
+          id: "response-transfer",
+          kind: "response",
+          requestId: envelope.id,
+          protocolVersion: 1,
+          sourceInstanceId: "gateway_one",
+          targetInstanceId: connection.peerId,
+          createdAt: 2_000,
+          result: { ok: true },
+        });
+      },
+      onEnvelopeTransfer: (info) => gatewayTransfers.push(info),
+    });
+    const { url } = await server.start();
+
+    const reply = new Promise<FederationProtocolEnvelope>((resolve) => {
+      void connectFederationClient({
+        url,
+        mode: "enroll",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        peerInstanceId: "client_one",
+        privateKeyPem: clientKeyPair.privateKeyPem,
+        publicKeyPem: clientKeyPair.publicKeyPem,
+        capabilities: ["remote_window"],
+        inviteToken: invite.token,
+        label: "Client",
+        role: "client",
+        onEnvelope: resolve,
+        onEnvelopeTransfer: (info) => clientTransfers.push(info),
+      }).then((client) => {
+        client.sendEnvelope({
+          id: "request-transfer",
+          kind: "request",
+          method: "thread.list",
+          params: {},
+          protocolVersion: 1,
+          sourceInstanceId: "client_one",
+          targetInstanceId: "gateway_one",
+          createdAt: 1_000,
+        });
+      });
+    });
+    await expect(reply).resolves.toMatchObject({
+      kind: "response",
+      requestId: "request-transfer",
+    });
+
+    // Envelope frames only — the auth exchange fires no taps, so one
+    // round-trip is exactly two events per side.
+    expect(gatewayTransfers).toHaveLength(2);
+    expect(clientTransfers).toHaveLength(2);
+    const [gatewayReceived, gatewaySent] = gatewayTransfers;
+    const [clientSent, clientReceived] = clientTransfers;
+    expect(gatewayReceived).toMatchObject({
+      peerId: "client_one",
+      direction: "received",
+    });
+    expect(gatewaySent).toMatchObject({
+      peerId: "client_one",
+      direction: "sent",
+    });
+    expect(clientSent.direction).toBe("sent");
+    expect(clientReceived.direction).toBe("received");
+    // Both ends count the same wire frames, so the figures agree — the
+    // property that makes a local ledger a truthful transfer monitor.
+    expect(gatewayReceived.byteCount).toBe(clientSent.byteCount);
+    expect(clientReceived.byteCount).toBe(gatewaySent.byteCount);
+    expect(clientSent.byteCount).toBeGreaterThan(0);
+    expect(gatewaySent.byteCount).toBeGreaterThan(0);
+  });
+
   it("evicts a duplicated peer id with close code 4001 and audits the replacement", async () => {
     const clientKeyPair = generateFederationIdentityKeyPair();
     let firstClose: { code: number; reason: string } | undefined;

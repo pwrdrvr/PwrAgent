@@ -129,6 +129,58 @@ export type FederationHostInfo = {
   machineId?: string;
 };
 
+/**
+ * Live load reading sampled on the owning instance at answer time.
+ * Deliberately a sibling of {@link FederationHostInfo}, not an extension:
+ * host facts are static and advertised on handshake, load is queried on
+ * demand (`backend.getLoadStatus`) and never gossiped. Instances sharing
+ * `FederationHostInfo.machineId` run on the same hardware and report the
+ * same underlying load — dedupe by machineId when aggregating.
+ * `loadAvg*` are 0 on Windows (Node's `os.loadavg()` contract);
+ * `diskFreeBytes` measures the volume holding the PwrAgent root and is
+ * omitted when the read fails.
+ */
+export type FederationLoadStatus = {
+  loadAvg1: number;
+  loadAvg5: number;
+  loadAvg15: number;
+  /**
+   * `os.freemem()` — truly free pages only. macOS/Linux keep reclaimable
+   * page cache out of this figure, so it understates what's actually
+   * available to new work; treat "low" thresholds generously on those
+   * platforms rather than alarming on a healthy, cache-warm box.
+   */
+  availableMemoryBytes: number;
+  /** Live counterpart of the handshake snapshot `FederationHostInfo.diskFreeBytes`. */
+  diskFreeBytes?: number;
+  sampledAt: number;
+};
+
+/**
+ * Locally observed wire-transfer counters for one directly connected
+ * peer socket. Not a protocol field — each side counts the envelope
+ * frames it sends and receives on its own transport (after encryption,
+ * so compression changes show up here as real wire savings), and the
+ * counters live only in the observing process: they start at first
+ * activity and reset on app restart, never persisted or gossiped.
+ *
+ * On a gateway the counters attribute per peer socket, including
+ * relayed sibling traffic on both legs. On a client, all remote
+ * traffic rides the single gateway socket and lands on the gateway's
+ * row. Handshake/auth frames and WebSocket keepalives are not counted.
+ */
+export type FederationTransferStats = {
+  /** Wire bytes of envelope frames sent to the peer. */
+  bytesSent: number;
+  /** Wire bytes of envelope frames received from the peer. */
+  bytesReceived: number;
+  envelopesSent: number;
+  envelopesReceived: number;
+  /** When counting began (first observed activity in this process). */
+  since: number;
+  lastActivityAt: number;
+};
+
 export type FederationPeerSummary = {
   id: FederationPeerId;
   label: string;
@@ -148,6 +200,13 @@ export type FederationPeerSummary = {
    */
   notes?: string;
   host?: FederationHostInfo;
+  /**
+   * This instance's locally counted wire transfer with the peer.
+   * Attached only on health/diagnostics reads — never advertised in
+   * the peer directory, because the numbers describe the observer's
+   * own socket, not the peer.
+   */
+  transfer?: FederationTransferStats;
   lastConnectedAt?: number;
   lastActivityAt?: number;
   revokedAt?: number;
@@ -324,6 +383,26 @@ export type ReadFederationHealthRequest = Record<string, never>;
 
 export type ReadFederationHealthResponse = {
   health: FederationHealthStatus;
+};
+
+/**
+ * Renderer poll for one instance's live load (Star Map health
+ * indicators). An omitted `instanceId` — or the local instance's own id —
+ * samples locally; a remote id rides the `backend.getLoadStatus`
+ * federation RPC.
+ */
+export type ReadFederationInstanceLoadRequest = {
+  instanceId?: FederationInstanceId;
+};
+
+/**
+ * `load` is absent when the peer is not connected, has not granted
+ * `thread_navigation`, or did not answer within the short load-query
+ * timeout. A polling health surface degrades to "no indicator" — this
+ * response never carries an error.
+ */
+export type ReadFederationInstanceLoadResponse = {
+  load?: FederationLoadStatus;
 };
 
 export type FederationTailscaleMode = "serve" | "funnel";

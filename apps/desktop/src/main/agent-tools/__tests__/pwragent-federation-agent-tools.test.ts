@@ -26,6 +26,7 @@ describe("pwragent federation agent tools", () => {
                 query: expect.objectContaining({ type: "string" }),
                 limit: expect.objectContaining({ minimum: 1, maximum: 100 }),
                 cursor: expect.objectContaining({ type: "string" }),
+                includeLoad: expect.objectContaining({ type: "boolean" }),
               }),
             }),
           }),
@@ -212,7 +213,7 @@ describe("pwragent federation agent tools", () => {
         callId: "call-1",
         namespace: "pwragent",
         tool: "list_federation_instances",
-        arguments: { query: " linux ", limit: 10 },
+        arguments: { query: " linux ", limit: 10, includeLoad: true },
       },
     });
 
@@ -224,8 +225,28 @@ describe("pwragent federation agent tools", () => {
         callId: "call-1",
         turnId: "turn-1",
       },
-      args: { query: "linux", limit: 10 },
+      args: { query: "linux", limit: 10, includeLoad: true },
     });
+  });
+
+  it("rejects a non-boolean includeLoad before dispatching list_federation_instances", async () => {
+    const handler = vi.fn();
+    const router = buildPwrAgentFederationToolRouter(handler);
+
+    const response = await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: "pwragent",
+        tool: "list_federation_instances",
+        arguments: { includeLoad: "yes" },
+      },
+    });
+
+    expect(response).toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it("rejects an out-of-range limit before dispatching search_federation_threads", async () => {

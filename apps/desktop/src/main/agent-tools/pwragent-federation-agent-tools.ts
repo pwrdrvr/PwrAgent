@@ -93,7 +93,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "list_federation_instances":
-      return "List the PwrAgent instances this app can reach: the local instance plus any federated peers, each with its id, display label, celestial icon, operator-written purpose notes, connection status, capabilities, an isLocal flag, and host facts (OS platform/version, hostname, CPU architecture and count, total RAM, free disk, machineId). Use this first when the user wants work routed to a particular machine ('on the studio Mac', 'on the rack mini') or for 'find me a place to run this' requests — purpose notes describe intent, host facts describe capability. Instances sharing the same host.machineId are profiles on one physical machine and compete for the same CPUs/RAM — never sum their capacity. Disk/host figures are snapshots from the last handshake, not live readings. Results are paged: at most `limit` rows (default 25) per call, with nextCursor and totalCount when more remain; pass nextCursor back promptly (tokens expire after about a minute), or better, use `query` to filter by label, notes, profile, hostname, platform, or architecture instead of paging through a large fleet. Works with federation disabled too: the result is then just the local instance, so there is no need to check whether federation is configured before calling. Only instances with status connected (or the local instance) can accept new work.";
+      return "List the PwrAgent instances this app can reach: the local instance plus any federated peers, each with its id, display label, celestial icon, operator-written purpose notes, connection status, capabilities, an isLocal flag, and host facts (OS platform/version, hostname, CPU architecture and count, total RAM, free disk, machineId). Use this first when the user wants work routed to a particular machine ('on the studio Mac', 'on the rack mini') or for 'find me a place to run this' requests — purpose notes describe intent, host facts describe capability. Instances sharing the same host.machineId are profiles on one physical machine and compete for the same CPUs/RAM — never sum their capacity. Disk/host figures are snapshots from the last handshake, not live readings. For live readings, pass includeLoad: true to attach a `load` sibling next to `host` (1/5/15-minute CPU load averages, available RAM bytes, free disk bytes, sampledAt) fetched from each reachable instance with a short per-peer timeout — instances that fail to answer in time simply omit `load`. Load is per machine, not per instance: rows sharing host.machineId report the same underlying load, so dedupe by machineId when aggregating load for placement decisions. Results are paged: at most `limit` rows (default 25) per call, with nextCursor and totalCount when more remain; pass nextCursor back promptly (tokens expire after about a minute), or better, use `query` to filter by label, notes, profile, hostname, platform, or architecture instead of paging through a large fleet. Works with federation disabled too: the result is then just the local instance, so there is no need to check whether federation is configured before calling. Only instances with status connected (or the local instance) can accept new work.";
     case "list_instance_projects":
       return "List the projects/directories available on one PwrAgent instance, local or remote. Pass an instanceId from list_federation_instances. Each project row carries the key to pass to create_instance_thread as projectKey, plus its label, filesystem path, and whether a launchpad (per-project environment, model, and execution-mode presets) is configured. Use this to find the project the user is talking about on the chosen instance before creating a thread there.";
     case "create_instance_thread":
@@ -127,6 +127,11 @@ function inputSchemaForOperation(
             type: "string",
             description:
               "Continuation token from a previous truncated result. Tokens expire after about a minute; on an expired-cursor error, call again without a cursor.",
+          },
+          includeLoad: {
+            type: "boolean",
+            description:
+              "When true, attach a live `load` block (CPU load averages, available RAM, free disk, sampledAt) to each reachable instance via a short-timeout on-demand query. Instances that fail to answer in time omit `load`. Rows sharing host.machineId report the same underlying load — dedupe by machineId when aggregating.",
           },
         },
       };
@@ -263,7 +268,7 @@ function invalidArgumentsMessageForOperation(
 ): string {
   switch (operation) {
     case "list_federation_instances":
-      return "list_federation_instances accepts an optional non-empty query, an integer limit between 1 and 100, and an optional non-empty cursor.";
+      return "list_federation_instances accepts an optional non-empty query, an integer limit between 1 and 100, an optional non-empty cursor, and an optional boolean includeLoad.";
     case "list_instance_projects":
       return "list_instance_projects requires a non-empty instanceId string.";
     case "create_instance_thread":
@@ -293,12 +298,19 @@ function normalizeListFederationInstancesArgs(
     }
     limit = args.limit;
   }
+  if (
+    args.includeLoad !== undefined
+    && typeof args.includeLoad !== "boolean"
+  ) {
+    return undefined;
+  }
   const query = readTrimmedString(args.query);
   const cursor = readTrimmedString(args.cursor);
   return {
     ...(query ? { query } : {}),
     ...(limit !== undefined ? { limit } : {}),
     ...(cursor ? { cursor } : {}),
+    ...(args.includeLoad === true ? { includeLoad: true } : {}),
   };
 }
 

@@ -2,6 +2,8 @@ export const APP_SERVER_LIST_THREADS_CHANNEL = "app-server:list-threads";
 export const THREAD_SEARCH_CHANNEL = "thread-search:search";
 export const FEDERATION_OPEN_WINDOW_CHANNEL = "federation:open-window";
 export const FEDERATION_GET_HEALTH_CHANNEL = "federation:get-health";
+export const FEDERATION_READ_INSTANCE_LOAD_CHANNEL =
+  "federation:read-instance-load";
 export const FEDERATION_GET_DIAGNOSTICS_CHANNEL = "federation:get-diagnostics";
 export const FEDERATION_GENERATE_INVITE_CHANNEL = "federation:generate-invite";
 export const FEDERATION_IMPORT_INVITE_CHANNEL = "federation:import-invite";

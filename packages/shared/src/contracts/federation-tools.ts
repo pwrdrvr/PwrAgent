@@ -6,6 +6,7 @@ import type {
   FederationHostInfo,
   FederationInstanceId,
   FederationInstanceRole,
+  FederationLoadStatus,
 } from "./federation";
 import type {
   DirectorySummaryKind,
@@ -70,6 +71,13 @@ export type FederationInstanceDescriptor = {
    * capacity must not be summed.
    */
   host?: FederationHostInfo;
+  /**
+   * Live load reading, present only when the caller asked for it via
+   * `includeLoad` AND the instance answered within the short load-query
+   * timeout. Instances sharing `host.machineId` report the same
+   * underlying load — dedupe by machineId when aggregating.
+   */
+  load?: FederationLoadStatus;
   unavailableReason?: string;
 };
 
@@ -84,6 +92,14 @@ export type ListFederationInstancesToolArgs = {
   limit?: number;
   /** Continuation token from a previous truncated result. Short-lived. */
   cursor?: string;
+  /**
+   * When true, attach a live `load` block (CPU load averages, available
+   * RAM, free disk) to each reachable instance via a short-timeout
+   * on-demand query. Instances that fail to answer in time simply omit
+   * `load`. Continuation pages reuse the loads sampled when the listing
+   * was built.
+   */
+  includeLoad?: boolean;
 };
 
 export type ListFederationInstancesResult = {

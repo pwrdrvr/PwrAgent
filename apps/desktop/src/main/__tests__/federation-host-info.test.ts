@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectFederationHostInfo,
+  collectFederationLoadStatus,
   readOrCreateFederationMachineId,
 } from "../federation/federation-host-info";
 
@@ -60,5 +61,30 @@ describe("federation host info", () => {
     expect((await collectFederationHostInfo({ rootDir })).machineId).toBe(
       host.machineId,
     );
+  });
+
+  it("samples a live load reading against the PwrAgent root's volume", async () => {
+    const rootDir = makeRoot();
+    const before = Date.now();
+
+    const load = await collectFederationLoadStatus({ rootDir });
+
+    // loadAvg* are 0 on Windows by Node contract, so only pin non-negative.
+    expect(load.loadAvg1).toBeGreaterThanOrEqual(0);
+    expect(load.loadAvg5).toBeGreaterThanOrEqual(0);
+    expect(load.loadAvg15).toBeGreaterThanOrEqual(0);
+    expect(load.availableMemoryBytes).toBeGreaterThan(0);
+    expect(load.diskFreeBytes).toBeGreaterThan(0);
+    expect(load.sampledAt).toBeGreaterThanOrEqual(before);
+    expect(load.sampledAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("omits diskFreeBytes when the root's volume cannot be read", async () => {
+    const load = await collectFederationLoadStatus({
+      rootDir: path.join(makeRoot(), "does-not-exist"),
+    });
+
+    expect(load.diskFreeBytes).toBeUndefined();
+    expect(load.availableMemoryBytes).toBeGreaterThan(0);
   });
 });

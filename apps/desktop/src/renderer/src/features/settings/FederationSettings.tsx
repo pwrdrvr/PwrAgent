@@ -15,6 +15,7 @@ import type {
   FederationPinImpactScope,
   FederationTailscaleMode,
   FederationTailscaleStatus,
+  FederationTransferStats,
   ReadFederationPinImpactResponse,
 } from "@pwragent/shared";
 import {
@@ -28,6 +29,7 @@ import { CelestialIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
 import { formatRunningDurationMs } from "../../lib/format-duration";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -58,6 +60,7 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  const transferTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const [tailscaleStatus, setTailscaleStatus] = useState<FederationTailscaleStatus>();
   const [tailscaleLoading, setTailscaleLoading] = useState(false);
   const [tailscaleConfiguring, setTailscaleConfiguring] =
@@ -1077,6 +1080,26 @@ export function FederationSettings(props: FederationSettingsProps) {
                   && peer.lastActivityAt !== peer.lastConnectedAt ? (
                     <span>Last activity {formatTimestamp(peer.lastActivityAt)}</span>
                   ) : null}
+                  {peer.transfer ? (
+                    // role="img" + aria-label mirrors the sidebar's unpushed
+                    // chip: screen readers get worded directions instead of
+                    // "up arrow"; the hover tooltip carries the precise
+                    // envelope count and start time off the visible line.
+                    <span
+                      role="img"
+                      aria-label={formatTransferDetail(peer.transfer)}
+                      onMouseEnter={(event) =>
+                        transferTooltip.show(
+                          event.currentTarget,
+                          formatTransferDetail(peer.transfer!),
+                        )
+                      }
+                      onMouseLeave={transferTooltip.hide}
+                    >
+                      Transferred ↑ {formatByteCount(peer.transfer.bytesSent)} ·
+                      ↓ {formatByteCount(peer.transfer.bytesReceived)}
+                    </span>
+                  ) : null}
                   <span>
                     Available: {formatFederationCapabilities(peer.capabilities)}
                   </span>
@@ -1181,6 +1204,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             ))}
           </dl>
         )}
+        {transferTooltip.tooltipNode}
       </SettingsSection>
 
       <SettingsSection
@@ -1625,6 +1649,39 @@ function diagnosticEventLabel(kind: FederationDiagnosticEvent["kind"]): string {
 
 function formatTimestamp(value: number): string {
   return new Date(value).toLocaleString();
+}
+
+/**
+ * Wire-transfer figure for the peer rows: whole bytes/KB below 1 MB,
+ * then one decimal only while the leading digits are scarce (below 10
+ * of the unit) — "5.2 MB" carries signal, "200.0 MB" is just noise —
+ * so a 200 MB replay habit and a post-compression 40 MB read as
+ * obviously different at a glance.
+ */
+function formatByteCount(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  const mb = value / (1024 * 1024);
+  if (mb < 1024) {
+    return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
+  }
+  const gb = mb / 1024;
+  return gb < 10 ? `${gb.toFixed(1)} GB` : `${Math.round(gb)} GB`;
+}
+
+/**
+ * Worded long form for the transfer line's tooltip and aria-label:
+ * screen readers get "sent/received" instead of arrow glyphs, and the
+ * envelope count + counting start time live here instead of stretching
+ * the visible row.
+ */
+function formatTransferDetail(transfer: FederationTransferStats): string {
+  const envelopes = (
+    transfer.envelopesSent + transfer.envelopesReceived
+  ).toLocaleString();
+  return `Sent ${formatByteCount(transfer.bytesSent)}, received ${formatByteCount(
+    transfer.bytesReceived,
+  )} across ${envelopes} envelopes since ${formatTimestamp(transfer.since)}`;
 }
 
 function parseFederationListenPort(value: string): number {
