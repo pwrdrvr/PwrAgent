@@ -4580,14 +4580,36 @@ describe("DesktopBackendRegistry", () => {
         completedAt: 3_000,
       },
     };
-    const usageActivity = {
+    const monitorUsageActivity = {
       type: "activity" as const,
-      id: "live-turn-usage-review-turn-1",
+      id: "monitor-usage-review-turn-1",
       summary:
         "Monitor usage: 50,310 uncached in · 509,952 cached · 9,959 out (8,762 reasoning) · $0.32 list price",
       status: "completed" as const,
       createdAt: 3_001,
       turn: { id: "review-turn-1", status: "completed" as const },
+      details: [],
+    };
+    // Turn-scope usage is persisted for ACP threads too. Merging it would
+    // also drag in the supersede rule that removes each turn's "Latest
+    // request usage" line, which is a transcript change for every ACP thread
+    // and not part of making managed review work.
+    const turnUsageActivity = {
+      type: "activity" as const,
+      id: "live-turn-usage-chat-turn-9",
+      summary: "Turn usage: 1,000 uncached in · 0 cached · 10 out",
+      status: "completed" as const,
+      createdAt: 3_500,
+      turn: { id: "chat-turn-9", status: "completed" as const },
+      details: [],
+    };
+    const latestRequestActivity = {
+      type: "activity" as const,
+      id: "live-token-usage-chat-turn-9",
+      summary: "Latest request usage: 1,000 uncached in · 0 cached · 10 out",
+      status: "completed" as const,
+      createdAt: 3_600,
+      turn: { id: "chat-turn-9", status: "completed" as const },
       details: [],
     };
     const { registry } = createKimiAcpRegistry({
@@ -4600,7 +4622,10 @@ describe("DesktopBackendRegistry", () => {
             executionMode: "default",
             extraLinkedDirectories: [],
             managedReviewEntries: [startedEntry, resultEntry],
-            immutableUsageActivities: [usageActivity],
+            immutableUsageActivities: [
+              monitorUsageActivity,
+              turnUsageActivity,
+            ],
           },
         },
       }),
@@ -4625,6 +4650,7 @@ describe("DesktopBackendRegistry", () => {
             text: "Can you summarize the review results for me?",
             createdAt: 4_000,
           },
+          latestRequestActivity,
         ],
         messages: [],
         pagination: { supportsPagination: false, hasPreviousPage: false },
@@ -4642,8 +4668,11 @@ describe("DesktopBackendRegistry", () => {
     expect(response.replay.entries.map((entry) => entry.id)).toEqual([
       startedEntry.id,
       resultEntry.id,
-      usageActivity.id,
+      monitorUsageActivity.id,
       "user-1",
+      // Untouched: no turn-scope usage spliced in, and the turn's live
+      // "Latest request usage" line is not superseded away.
+      latestRequestActivity.id,
     ]);
 
     await registry.close();

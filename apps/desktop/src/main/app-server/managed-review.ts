@@ -59,12 +59,10 @@ export function parseManagedReviewOutput(
   if (!record) {
     return undefined;
   }
-  const overallCorrectness = normalizeOverallCorrectness(
-    record.overall_correctness,
-  );
   if (
     !Array.isArray(record.findings)
-    || overallCorrectness === undefined
+    || typeof record.overall_correctness !== "string"
+    || !record.overall_correctness.trim()
     || typeof record.overall_explanation !== "string"
     || typeof record.overall_confidence_score !== "number"
   ) {
@@ -109,7 +107,10 @@ export function parseManagedReviewOutput(
 
   return {
     findings,
-    overall_correctness: overallCorrectness,
+    overall_correctness: normalizeOverallCorrectness(
+      record.overall_correctness,
+      findings,
+    ),
     overall_explanation: record.overall_explanation,
     overall_confidence_score: record.overall_confidence_score,
   };
@@ -146,22 +147,37 @@ function readReviewArtifactObject(
 /**
  * Codex review/start answers with exactly the two documented phrases. Other
  * agents paraphrase — Grok Build reports "patch has issues" — and an artifact
- * with real findings is worth more than the exact wording, so anything that is
- * not an affirmative "correct" reading collapses to "patch is incorrect".
+ * with real findings is worth more than the exact wording.
+ *
+ * Both directions have to be read, not just the negative one: the renderer
+ * paints anything that is not "patch is correct" as a red "Patch needs work"
+ * badge, so mapping an unrecognized-but-clean verdict to incorrect puts that
+ * badge next to a "0 findings" badge. When the wording says nothing either
+ * way, the findings list is the more trustworthy signal.
  */
 function normalizeOverallCorrectness(
-  value: unknown,
-): AppServerReviewOutput["overall_correctness"] | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
+  value: string,
+  findings: AppServerReviewOutput["findings"],
+): AppServerReviewOutput["overall_correctness"] {
   const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
+  const negation = String.raw`\b(no|not|without|zero|free of)\b[^.]{0,20}?`;
+  const fault = String.raw`\b(incorrect|issues?|problems?|bugs?|defects?)\b`;
+  const clean = String.raw`\b(correct|fine|good|ok|okay)\b`;
+  // "no issues found" names the fault word to deny it; "not correct" does the
+  // same to the clean word. Check both denials before either bare match.
+  if (new RegExp(negation + fault).test(normalized)) {
+    return "patch is correct";
   }
-  return normalized === "patch is correct"
-    ? "patch is correct"
-    : "patch is incorrect";
+  if (new RegExp(negation + clean).test(normalized)) {
+    return "patch is incorrect";
+  }
+  if (new RegExp(fault).test(normalized)) {
+    return "patch is incorrect";
+  }
+  if (new RegExp(clean).test(normalized)) {
+    return "patch is correct";
+  }
+  return findings.length > 0 ? "patch is incorrect" : "patch is correct";
 }
 
 export function formatManagedReviewOutput(

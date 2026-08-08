@@ -1465,6 +1465,40 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("hides a review context block split across two chunks", () => {
+    // Grok echoed the whole block in one chunk, but nothing in ACP guarantees
+    // that. A chunk carrying only the tail of the block would otherwise miss
+    // the open marker and render the artifact remnant plus the close marker.
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content:
+          "[PwrAgent review sub-agent results — context for this turn]\n\nNo blocking",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content:
+          " findings.\n\n[End PwrAgent review sub-agent results]\n\nSummarize.",
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "Summarize.",
+      }),
+    ]);
+  });
+
   it("extracts the ACP session_info_update title", () => {
     // ACP's own session metadata update (SessionUpdate::SessionInfoUpdate)
     // carries `title` and `updatedAt` and nothing else. Grok Build sends it

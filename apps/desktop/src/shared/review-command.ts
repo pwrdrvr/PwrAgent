@@ -36,13 +36,23 @@ export const MANAGED_REVIEW_CONTEXT_CLOSE_MARKER =
  * Removes the wrapped review-context block from prompt text meant for display.
  * Returns the remaining operator-authored text, or an empty string when the
  * block was the whole message.
+ *
+ * Handles a block split across streamed chunks in either direction: a chunk
+ * holding only the opening half drops its whole tail, and a chunk holding only
+ * the closing half drops everything up to and including the close marker.
+ * Without the second case the artifact's tail renders as a user message.
  */
 export function stripManagedReviewContextBlock(value: string): string {
   const start = value.indexOf(MANAGED_REVIEW_CONTEXT_OPEN_MARKER);
+  const closeAt = value.indexOf(
+    MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
+    start === -1 ? 0 : start,
+  );
   if (start === -1) {
-    return value;
+    return closeAt === -1
+      ? value
+      : value.slice(closeAt + MANAGED_REVIEW_CONTEXT_CLOSE_MARKER.length).trim();
   }
-  const closeAt = value.indexOf(MANAGED_REVIEW_CONTEXT_CLOSE_MARKER, start);
   // An unterminated block means the whole tail is review context — a truncated
   // or still-streaming echo. Dropping it beats rendering half an artifact.
   const end =

@@ -8079,10 +8079,17 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
     });
     // A managed review runs in a hidden child session, so its transcript
-    // entries and usage activities live in this thread's overlay rather than
-    // in the provider's rollout. Splice them back in on the same terms as the
+    // entries and its usage line live in this thread's overlay rather than in
+    // the provider's rollout. Splice them back in on the same terms as the
     // Codex path: only for a live, turn-bearing read, never into an older
     // pagination page.
+    //
+    // Only monitor-scope usage is merged here. Turn-scope usage is persisted
+    // for ACP threads too, but merging it would also apply the Codex
+    // supersede rule that drops each turn's "Latest request usage" line — a
+    // transcript change for every ACP thread, well beyond managed review.
+    // Replaying turn-scope usage for ACP is worth doing deliberately, with
+    // its own tests; it is not this change.
     const appendTranscriptOverlays =
       !request.before && request.includeTurns !== false;
     const replayWithTranscriptOverlays = appendTranscriptOverlays
@@ -8091,7 +8098,9 @@ export class DesktopBackendRegistry {
             replay,
             entries: overlay?.managedReviewEntries,
           }),
-          activities: overlay?.immutableUsageActivities,
+          activities: overlay?.immutableUsageActivities?.filter(
+            (activity) => usageActivityScope(activity) === "monitor",
+          ),
         })
       : replay;
     const messageIds = [

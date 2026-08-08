@@ -101,6 +101,73 @@ describe("managed review", () => {
     });
   });
 
+  describe("overall_correctness paraphrases", () => {
+    function parseWith(params: {
+      correctness: unknown;
+      withFinding?: boolean;
+    }) {
+      return parseManagedReviewOutput(JSON.stringify({
+        findings: params.withFinding
+          ? [{
+              title: "Off-by-one",
+              body: "The loop reads one past the end.",
+              confidence_score: 0.8,
+              code_location: {
+                absolute_file_path: "/repo/loop.ts",
+                line_range: { start: 1, end: 2 },
+              },
+            }]
+          : [],
+        overall_correctness: params.correctness,
+        overall_explanation: "…",
+        overall_confidence_score: 0.5,
+      }));
+    }
+
+    // The renderer paints anything that is not "patch is correct" as a red
+    // "Patch needs work" badge, so a clean review paraphrased as "no issues
+    // found" must not collapse to incorrect — that badge next to "0 findings"
+    // is worse than no structured output at all.
+    it.each([
+      "patch is correct",
+      "Patch Is Correct",
+      "correct",
+      "looks correct",
+      "no issues found",
+    ])("reads %j as correct", (correctness) => {
+      expect(parseWith({ correctness })?.overall_correctness).toBe(
+        "patch is correct",
+      );
+    });
+
+    it.each([
+      "patch is incorrect",
+      "patch has issues",
+      "incorrect",
+      "there are problems with this patch",
+      "patch is not correct",
+    ])("reads %j as incorrect", (correctness) => {
+      expect(parseWith({ correctness })?.overall_correctness).toBe(
+        "patch is incorrect",
+      );
+    });
+
+    it("breaks an unreadable phrase on whether findings were reported", () => {
+      expect(parseWith({ correctness: "¯\\_(ツ)_/¯" })?.overall_correctness)
+        .toBe("patch is correct");
+      expect(
+        parseWith({ correctness: "¯\\_(ツ)_/¯", withFinding: true })
+          ?.overall_correctness,
+      ).toBe("patch is incorrect");
+    });
+
+    it("still rejects an artifact with no correctness verdict at all", () => {
+      expect(parseWith({ correctness: undefined })).toBeUndefined();
+      expect(parseWith({ correctness: "   " })).toBeUndefined();
+      expect(parseWith({ correctness: 3 })).toBeUndefined();
+    });
+  });
+
   it("names the accepted overall_correctness values in the prompt", () => {
     const prompt = buildManagedReviewPrompt({ type: "uncommittedChanges" });
 
