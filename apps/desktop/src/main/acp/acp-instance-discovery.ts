@@ -16,6 +16,8 @@ import {
   type DiscoveredAcpAgentGroup,
   type LocalAcpDiscoveryOptions,
 } from "@pwrdrvr/agent-acp";
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import type {
   AcpAgentInstance,
   AcpAgentPreference,
@@ -24,10 +26,14 @@ import type {
 import { resolveActiveAcpInstance } from "./acp-instance-resolver.js";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
 import { normalizeAcpLaunchDescriptor } from "./acp-launch-descriptor.js";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 import type {
   AcpInstalledAgentRecord,
   AcpRegistryAgent,
 } from "./acp-registry-types.js";
+
+const execFile = promisify(execFileCallback);
+const ACP_IDENTITY_PROBE_TIMEOUT_MS = 2_000;
 
 // Qwen Code 0.21 still supports `--acp`, but no longer advertises that hidden
 // flag in `qwen --help`. The upstream strategy's `--acp` text match therefore
@@ -50,6 +56,8 @@ const ACP_DISCOVERY_STRATEGIES = BUILT_IN_ACP_STRATEGIES.map((strategy) =>
 export type AcpInstanceDiscovery = {
   /** Every installed instance, in candidate order (override → PATH → fallback). */
   instances: AcpAgentInstance[];
+  /** Detected command collisions that are intentionally excluded. */
+  incompatibleInstances?: AcpAgentInstance[];
   /** The instance command currently in effect (override → picked → first). */
   activeCommand?: string;
 };
@@ -67,6 +75,12 @@ export type DiscoverAcpAgentInstancesOptions = {
   discover?: (
     options?: LocalAcpDiscoveryOptions,
   ) => Promise<DiscoveredAcpAgentGroup[]>;
+  /** Injectable raw version-output probe used to distinguish products that
+   *  share one command name (currently legacy Python kimi-cli vs Kimi Code). */
+  readVersionOutput?: (
+    command: string,
+    env: NodeJS.ProcessEnv,
+  ) => Promise<string | undefined>;
 };
 
 /**
@@ -100,20 +114,22 @@ export async function discoverAcpAgentInstances(
 
   const byRegistryId = new Map<string, AcpInstanceDiscovery>();
   for (const group of groups) {
-    const instances: AcpAgentInstance[] = group.instances.map((instance) => ({
-      command: instance.command,
-      ...(instance.version !== undefined ? { version: instance.version } : {}),
-      source: instance.source,
-    }));
-    if (instances.length === 0) {
+    const classified = await classifyGroupInstances(group, options);
+    if (
+      classified.instances.length === 0
+      && classified.incompatibleInstances.length === 0
+    ) {
       continue;
     }
     const active = resolveActiveAcpInstance(
-      instances,
+      classified.instances,
       preferences[group.strategyId],
     );
     byRegistryId.set(group.strategyId, {
-      instances,
+      instances: classified.instances,
+      ...(classified.incompatibleInstances.length > 0
+        ? { incompatibleInstances: classified.incompatibleInstances }
+        : {}),
       ...(active !== undefined ? { activeCommand: active.command } : {}),
     });
   }
@@ -153,19 +169,30 @@ export async function discoverLocalAcpAgentRecords(
 
   const records: AcpInstalledAgentRecord[] = [];
   for (const group of groups) {
-    const instances: AcpAgentInstance[] = group.instances.map((instance) => ({
-      command: instance.command,
-      ...(instance.version !== undefined ? { version: instance.version } : {}),
-      source: instance.source,
-    }));
-    if (instances.length === 0) {
+    const classified = await classifyGroupInstances(group, options);
+    if (
+      classified.instances.length === 0
+      && classified.incompatibleInstances.length === 0
+    ) {
       continue;
     }
     const active = resolveActiveAcpInstance(
-      instances,
+      classified.instances,
       preferences[group.strategyId],
     );
     if (active === undefined) {
+      if (
+        group.strategyId === "kimi"
+        && classified.incompatibleInstances.length > 0
+      ) {
+        records.push(
+          legacyKimiUnavailableRecord({
+            group,
+            incompatibleInstances: classified.incompatibleInstances,
+            now,
+          }),
+        );
+      }
       continue;
     }
     const backendId = group.backendId as AcpBackendId;
@@ -209,11 +236,137 @@ export async function discoverLocalAcpAgentRecords(
       capabilities: acpAgentCapabilitiesForRegistryId(group.strategyId),
       launchDescriptor,
       registryAgent,
-      instances,
+      instances: classified.instances,
+      ...(classified.incompatibleInstances.length > 0
+        ? { incompatibleInstances: classified.incompatibleInstances }
+        : {}),
       activeCommand: active.command,
     });
   }
   return records;
+}
+
+async function classifyGroupInstances(
+  group: DiscoveredAcpAgentGroup,
+  options: DiscoverAcpAgentInstancesOptions | undefined,
+): Promise<{
+  instances: AcpAgentInstance[];
+  incompatibleInstances: AcpAgentInstance[];
+}> {
+  const mapped = group.instances.map((instance) => ({
+    command: instance.command,
+    ...(instance.version !== undefined ? { version: instance.version } : {}),
+    source: instance.source,
+  }));
+  if (group.strategyId !== "kimi") {
+    return { instances: mapped, incompatibleInstances: [] };
+  }
+
+  const env = buildPwrAgentChildProcessEnv(options?.env ?? process.env);
+  const readVersionOutput = options?.readVersionOutput ?? defaultReadVersionOutput;
+  const classifications = await Promise.all(
+    mapped.map(async (instance) => {
+      let output: string | undefined;
+      try {
+        output = await readVersionOutput(instance.command, env);
+      } catch {
+        // The discovery kit already proved the command runnable. If this
+        // identity-only second probe races an install change, retain the parsed
+        // version fallback below instead of dropping a possibly valid agent.
+      }
+      return {
+        instance,
+        legacy: isLegacyPythonKimiCli({ output, version: instance.version }),
+      };
+    }),
+  );
+  return {
+    instances: classifications
+      .filter((entry) => !entry.legacy)
+      .map((entry) => entry.instance),
+    incompatibleInstances: classifications
+      .filter((entry) => entry.legacy)
+      .map((entry) => entry.instance),
+  };
+}
+
+export function isLegacyPythonKimiCli(params: {
+  output?: string;
+  version?: string;
+}): boolean {
+  const output = params.output?.trim() ?? "";
+  if (/^kimi-code(?:\.exe)?\s+v?\d/i.test(output)) {
+    return false;
+  }
+  if (
+    /python version\s*:/i.test(output)
+    || /^kimi(?:-cli)?(?:\s+version\s*:|,\s*version)\s*v?\d/i.test(output)
+  ) {
+    return true;
+  }
+
+  // The current TypeScript Kimi Code line is 0.x; the deprecated Python
+  // kimi-cli line is 1.x. This fallback covers wrappers that suppress the
+  // product prefix while preserving the parsed discovery version.
+  const major = Number.parseInt(params.version?.split(".")[0] ?? "", 10);
+  return Number.isFinite(major) && major >= 1;
+}
+
+async function defaultReadVersionOutput(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const result = await execFile(command, ["--version"], {
+    env,
+    timeout: ACP_IDENTITY_PROBE_TIMEOUT_MS,
+  });
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
+  return output || undefined;
+}
+
+function legacyKimiUnavailableRecord(params: {
+  group: DiscoveredAcpAgentGroup;
+  incompatibleInstances: AcpAgentInstance[];
+  now: number;
+}): AcpInstalledAgentRecord {
+  const active = params.incompatibleInstances[0];
+  const strategy = strategyById(params.group.strategyId);
+  const versionLabel = active?.version ? ` v${active.version}` : "";
+  const commandLabel = active?.command ? ` at ${active.command}` : "";
+  const registryAgent: AcpRegistryAgent = {
+    id: params.group.strategyId,
+    backendId: params.group.backendId as AcpBackendId,
+    name: params.group.name,
+    ...(active?.version !== undefined ? { version: active.version } : {}),
+    authors: strategy?.authors ?? [],
+    ...(strategy?.license !== undefined ? { license: strategy.license } : {}),
+    ...(strategy?.repositoryUrl !== undefined
+      ? { repositoryUrl: strategy.repositoryUrl }
+      : {}),
+    distributions: [],
+    distributionKinds: ["local"],
+    auth: { required: false, methods: ["agent-managed"] },
+    raw: { source: "legacy-local-cli" },
+  };
+  return {
+    backendId: params.group.backendId as AcpBackendId,
+    registryId: params.group.strategyId,
+    name: params.group.name,
+    ...(active?.version !== undefined ? { version: active.version } : {}),
+    distributionKind: "local",
+    distributionSource: `${active?.command ?? "kimi"} (legacy kimi-cli ignored)`,
+    installStatus: "unavailable",
+    authStatus: "not-required",
+    verificationStatus: "not-applicable",
+    allowlistRuleId: "local-kimi-cli",
+    installedAt: params.now,
+    updatedAt: params.now,
+    lastError: `Legacy Python kimi-cli${versionLabel} was found${commandLabel} and was ignored. PwrAgent requires the current Kimi Code CLI. Install Kimi Code, then refresh discovery.`,
+    capabilities: acpAgentCapabilitiesForRegistryId(params.group.strategyId),
+    registryAgent,
+    instances: [],
+    incompatibleInstances: params.incompatibleInstances,
+  };
 }
 
 function strategiesForEnabledRegistryIds(

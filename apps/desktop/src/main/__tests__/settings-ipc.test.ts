@@ -901,6 +901,74 @@ describe("settings ipc", () => {
     }
   });
 
+  it("persists legacy Kimi diagnostics without probing or retaining models", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const legacyPath = "/Users/me/.local/bin/kimi";
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
+      {
+        backendId: "acp:kimi",
+        registryId: "kimi",
+        name: "Kimi Code CLI",
+        version: "1.46.0",
+        distributionKind: "local",
+        distributionSource: `${legacyPath} (legacy kimi-cli ignored)`,
+        installStatus: "unavailable",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-kimi-cli",
+        installedAt: 1234,
+        updatedAt: 1234,
+        lastError: "Legacy Python kimi-cli was found and ignored.",
+        instances: [],
+        incompatibleInstances: [
+          { command: legacyPath, version: "1.46.0", source: "path" },
+        ],
+      },
+    ]);
+    const { initializeAppState, disposeAppState } = await import(
+      "../state/app-state"
+    );
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState("bootstrap");
+    try {
+      registerSettingsIpcHandlers(service);
+      const refreshed = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: true },
+      )) as { entries?: Array<Record<string, unknown>> } | undefined;
+      expect(refreshed?.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            backendId: "acp:kimi",
+            installed: false,
+            installStatus: "unavailable",
+            runtime: undefined,
+            incompatibleInstances: [
+              expect.objectContaining({ command: legacyPath }),
+            ],
+          }),
+        ]),
+      );
+      expect(
+        acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities,
+      ).not.toHaveBeenCalled();
+    } finally {
+      disposeAppState();
+    }
+  });
+
   it("passes configured ACP CLI overrides to explicit local discovery refreshes", async () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),

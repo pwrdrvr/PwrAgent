@@ -23,6 +23,7 @@ import {
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
 const PROCESS_CLOSE_TIMEOUT_MS = 5_000;
 const PROCESS_FORCE_CLOSE_TIMEOUT_MS = 5_000;
+const STDERR_PREVIEW_LIMIT = 4_000;
 
 const acpTransportLog = getMainLogger("pwragent:acp-transport");
 
@@ -178,6 +179,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
   private closed = false;
   private closePromise?: Promise<void>;
   private lifecycleGeneration = 0;
+  private stderrPreview = "";
 
   constructor(
     private readonly options: {
@@ -202,6 +204,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       return;
     }
     const generation = ++this.lifecycleGeneration;
+    this.stderrPreview = "";
 
     const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
     const env = buildPwrAgentChildProcessEnv(
@@ -250,7 +253,9 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       this.messageHandler(line);
     });
 
-    child.stderr.on("data", () => undefined);
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      this.stderrPreview = appendStderrPreview(this.stderrPreview, String(chunk));
+    });
     child.on("error", (error: Error) => {
       if (this.childProcess === child && child.pid === undefined) {
         this.childProcess = null;
@@ -261,7 +266,18 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       if (this.childProcess === child) {
         this.childProcess = null;
       }
-      this.closeHandler();
+      if (this.closed || generation !== this.lifecycleGeneration) {
+        this.closeHandler();
+        return;
+      }
+      this.closeHandler(
+        unexpectedAcpExitError({
+          code: child.exitCode,
+          descriptor,
+          signal: child.signalCode,
+          stderr: this.stderrPreview,
+        }),
+      );
     });
   }
 
@@ -294,6 +310,54 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     }
     child.stdin.write(`${message}\n`);
   }
+}
+
+function appendStderrPreview(current: string, chunk: string): string {
+  const combined = `${current}${chunk}`;
+  return combined.length <= STDERR_PREVIEW_LIMIT
+    ? combined
+    : combined.slice(combined.length - STDERR_PREVIEW_LIMIT);
+}
+
+function unexpectedAcpExitError(params: {
+  code: number | null;
+  descriptor: AcpLaunchDescriptor;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+}): Error {
+  const agent =
+    params.descriptor.registryId === "kimi"
+      ? "Kimi"
+      : params.descriptor.registryId;
+  const exit = params.signal
+    ? `signal ${params.signal}`
+    : `code ${params.code ?? "unknown"}`;
+  const stderr = stripAnsiControlSequences(params.stderr).trim();
+  return new Error(
+    `${agent} ACP agent exited unexpectedly (${exit})${
+      stderr ? `: ${stderr}` : "."
+    }`,
+  );
+}
+
+function stripAnsiControlSequences(value: string): string {
+  let output = "";
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) !== 27 || value[index + 1] !== "[") {
+      output += value[index];
+      continue;
+    }
+
+    index += 2;
+    while (index < value.length) {
+      const code = value.charCodeAt(index);
+      if (code >= 0x40 && code <= 0x7e) {
+        break;
+      }
+      index += 1;
+    }
+  }
+  return output;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

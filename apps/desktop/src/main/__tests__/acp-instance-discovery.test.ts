@@ -5,6 +5,7 @@ import { resolveActiveAcpInstance } from "../acp/acp-instance-resolver";
 import {
   discoverAcpAgentInstances,
   discoverLocalAcpAgentRecords,
+  isLegacyPythonKimiCli,
 } from "../acp/acp-instance-discovery";
 
 function instance(
@@ -188,6 +189,87 @@ describe("discoverAcpAgentInstances", () => {
 });
 
 describe("discoverLocalAcpAgentRecords", () => {
+  it("distinguishes the legacy Python CLI from current Kimi Code output", () => {
+    expect(
+      isLegacyPythonKimiCli({
+        output: "kimi, version 1.46.0",
+        version: "1.46.0",
+      }),
+    ).toBe(true);
+    expect(
+      isLegacyPythonKimiCli({
+        output: "kimi-cli version: 1.49.0\npython version: 3.13.7",
+        version: "1.49.0",
+      }),
+    ).toBe(true);
+    expect(
+      isLegacyPythonKimiCli({
+        output: "kimi-code 0.30.0",
+        version: "0.30.0",
+      }),
+    ).toBe(false);
+    expect(
+      isLegacyPythonKimiCli({
+        output: "0.34.0",
+        version: "0.34.0",
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores legacy Kimi on PATH and selects a side-by-side Kimi Code install", async () => {
+    const legacy = "/Users/me/.local/bin/kimi";
+    const current = "/Users/me/.kimi-code/bin/kimi";
+    const discover = vi.fn(async () => [
+      group("kimi", [
+        instance(legacy, "path", "1.46.0"),
+        instance(current, "fallback", "0.30.0"),
+      ]),
+    ]);
+
+    const [record, ...rest] = await discoverLocalAcpAgentRecords({
+      discover,
+      readVersionOutput: async (command) =>
+        command === legacy ? "kimi, version 1.46.0" : "kimi-code 0.30.0",
+    });
+
+    expect(rest).toHaveLength(0);
+    expect(record).toMatchObject({
+      installStatus: "installed",
+      version: "0.30.0",
+      activeCommand: current,
+      instances: [expect.objectContaining({ command: current })],
+      incompatibleInstances: [expect.objectContaining({ command: legacy })],
+      launchDescriptor: { command: current },
+    });
+  });
+
+  it("persists a non-launchable diagnostic when only legacy Python kimi-cli exists", async () => {
+    const legacy = "/Users/me/.local/bin/kimi";
+    const discover = vi.fn(async () => [
+      group("kimi", [instance(legacy, "path", "1.46.0")]),
+    ]);
+
+    const [record, ...rest] = await discoverLocalAcpAgentRecords({
+      discover,
+      now: () => 4242,
+      readVersionOutput: async () => "kimi, version 1.46.0",
+    });
+
+    expect(rest).toHaveLength(0);
+    expect(record).toMatchObject({
+      backendId: "acp:kimi",
+      installStatus: "unavailable",
+      installedAt: 4242,
+      instances: [],
+      incompatibleInstances: [expect.objectContaining({ command: legacy })],
+      lastError: expect.stringContaining(
+        "Legacy Python kimi-cli v1.46.0 was found",
+      ),
+    });
+    expect(record).not.toHaveProperty("launchDescriptor");
+    expect(record).not.toHaveProperty("runtimeCapabilities");
+  });
+
   it("builds installed-agent records with a resolved launch descriptor", async () => {
     const discover = vi.fn(async () => [
       group("qwen", [

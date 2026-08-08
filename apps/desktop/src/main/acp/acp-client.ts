@@ -450,6 +450,7 @@ export class AcpAgentClient {
         ACP_PROMPT_REQUEST_TIMEOUT_MS,
       );
       result = await promptRequest;
+      this.assertPromptProducedResponse(params.sessionId, result);
     } catch (error) {
       this.finishTrackedTurn(params.sessionId, this.now());
       this.recordPromptFailure(params.sessionId, turnId, error);
@@ -578,7 +579,8 @@ export class AcpAgentClient {
       ACP_PROMPT_REQUEST_TIMEOUT_MS,
     );
     void promptRequest
-      .then(() => {
+      .then((result) => {
+        this.assertPromptProducedResponse(params.sessionId, result);
         const receivedAt = this.now();
         const finished = this.finishTrackedTurn(params.sessionId, receivedAt);
         this.appendHistoryUpdate(params.sessionId, receivedAt, {
@@ -958,6 +960,16 @@ export class AcpAgentClient {
       if (updateKind === "agent_message_chunk") {
         activeTurn.assistantText += text;
       }
+    } else if (
+      activeTurn
+      && text
+      && !activeTurn.assistantText.trim()
+      && (updateKind === "turn_finished" || updateKind === "turn_completed")
+    ) {
+      // Some ACP agents send the final answer only on the terminal update
+      // instead of streaming agent_message_chunk events. Preserve that valid
+      // response before the session/prompt result is checked for silence.
+      activeTurn.assistantText = text;
     } else if (
       !isAssistantTextUpdate
       && activeTurn
@@ -1347,6 +1359,36 @@ export class AcpAgentClient {
       replay,
       turnId: activeTurn?.turnId,
     };
+  }
+
+  private assertPromptProducedResponse(
+    sessionId: string,
+    result: unknown,
+  ): void {
+    const resultRecord = asRecord(result);
+    if (
+      resultRecord?.stopReason === "cancelled"
+      || resultRecord?.stop_reason === "cancelled"
+    ) {
+      return;
+    }
+    const activeTurn = this.activeTurns.get(sessionId);
+    if (activeTurn?.assistantText.trim()) {
+      return;
+    }
+
+    const displayName = this.options.agentDisplayName?.trim() || "ACP agent";
+    const version = this.runtimeCapabilities?.agentInfo?.version?.trim();
+    if (this.options.backendId === "acp:kimi") {
+      throw new Error(
+        `${displayName} ended the turn without a response.${
+          version ? ` Kimi Code CLI ${version}` : " This Kimi Code CLI"
+        } may be out of date or incompatible with the selected model. Update Kimi, refresh the model catalog, and try again.`,
+      );
+    }
+    throw new Error(
+      `${displayName} ended the turn without a response. Refresh the provider model catalog and try again.`,
+    );
   }
 
   private recordPromptFailure(

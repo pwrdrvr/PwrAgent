@@ -269,6 +269,10 @@ export type AcpAgentSettingsEntry = {
   // the one currently in effect, the user's enable toggle, and their path
   // preference. Populated from the kit's `discoverLocalAcpAgentInstances`.
   instances?: AcpAgentInstance[];
+  /** Executables that matched the provider command but belong to an
+   *  unsupported predecessor product. They are shown for remediation but are
+   *  never eligible for launch or model discovery. */
+  incompatibleInstances?: AcpAgentInstance[];
   activeCommand?: string;
   enabled?: boolean;
   preference?: AcpAgentPreference;
