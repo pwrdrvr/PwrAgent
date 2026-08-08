@@ -1429,6 +1429,86 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("updates known tool progress without splitting a streaming assistant message", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "background-tool",
+        title: "Background check",
+        status: "in_progress",
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: { sessionUpdate: "agent_message_chunk", content: "Before " },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "background-tool",
+        title: "Background check",
+        status: "completed",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1003,
+      update: { sessionUpdate: "agent_message_chunk", content: "after" },
+    });
+
+    expect(
+      replay.entries.filter((entry) => entry.type === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        id: "assistant:session-1:0",
+        role: "assistant",
+        text: "Before after",
+      }),
+    ]);
+  });
+
+  it("splits assistant messages around a standalone tool update", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "agent_message_chunk", content: "Before" },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "standalone-tool",
+        title: "Standalone check",
+        status: "completed",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: { sessionUpdate: "agent_message_chunk", content: "After" },
+    });
+
+    expect(
+      replay.entries.map((entry) =>
+        entry.type === "message" ? `${entry.id}:${entry.text}` : entry.type
+      ),
+    ).toEqual([
+      "assistant:session-1:0:Before",
+      "activity",
+      "assistant:session-1:1:After",
+    ]);
+  });
+
   it("treats Grok turn_completed as an idempotent turn finish", () => {
     const normalizer = new AcpSessionReplayNormalizer();
     normalizer.recordUserPrompt({

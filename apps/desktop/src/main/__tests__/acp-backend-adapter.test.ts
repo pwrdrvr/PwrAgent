@@ -717,7 +717,7 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
-  it("emits Grok thoughts as transient messages instead of replayable text", async () => {
+  it("does not emit Grok thoughts as live or replayable text", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();
     const events: AgentEvent[] = [];
@@ -833,66 +833,10 @@ describe("AcpBackendAdapter", () => {
       expect(
         events
           .filter(
-            (event) =>
-              event.notification.method === "item/transientMessage/updated" ||
-              event.notification.method === "item/agentMessage/delta",
+            (event) => event.notification.method === "item/agentMessage/delta",
           )
           .map((event) => event.notification),
       ).toEqual([
-        {
-          method: "item/transientMessage/updated",
-          params: {
-            threadId: session.sessionId,
-            turnId: "turn-1",
-            itemId: "transient-thought:turn-1",
-            role: "assistant",
-            text: "The",
-            phase: "commentary",
-          },
-        },
-        {
-          method: "item/transientMessage/updated",
-          params: {
-            threadId: session.sessionId,
-            turnId: "turn-1",
-            itemId: "transient-thought:turn-1",
-            role: "assistant",
-            text: "The code",
-            phase: "commentary",
-          },
-        },
-        {
-          method: "item/transientMessage/updated",
-          params: {
-            threadId: session.sessionId,
-            turnId: "turn-1",
-            itemId: "transient-thought:turn-1",
-            role: "assistant",
-            text: "The code seems",
-            phase: "commentary",
-          },
-        },
-        ...[
-          "The code seems to",
-          "The code seems to be",
-          "The code seems to be over",
-          "The code seems to be over here",
-          "The code seems to be over here.",
-          "So",
-          "So the",
-          "So the key",
-          "So the key logic is:",
-        ].map((text) => ({
-          method: "item/transientMessage/updated" as const,
-          params: {
-            threadId: session.sessionId,
-            turnId: "turn-1",
-            itemId: "transient-thought:turn-1",
-            role: "assistant" as const,
-            text,
-            phase: "commentary" as const,
-          },
-        })),
         {
           method: "item/agentMessage/delta",
           params: {
@@ -905,6 +849,12 @@ describe("AcpBackendAdapter", () => {
         },
       ]);
     });
+    expect(
+      events.filter(
+        (event) =>
+          event.notification.method === "item/transientMessage/updated",
+      ),
+    ).toEqual([]);
     expect(
       events.filter(
         (event) =>
