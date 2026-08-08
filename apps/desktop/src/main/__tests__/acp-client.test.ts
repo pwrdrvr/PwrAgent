@@ -2919,7 +2919,7 @@ describe("AcpAgentClient", () => {
     expect(client.readReplay(session.sessionId).entries).toEqual([]);
   });
 
-  it("preserves a Grok assistant stream across non-boundary vendor updates", async () => {
+  it("distinguishes known tool progress from standalone tool updates", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({
       "session/prompt": promptResponse.promise,
@@ -2951,6 +2951,16 @@ describe("AcpAgentClient", () => {
       method: "_x.ai/session_notification",
       sessionId: session.sessionId,
       update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "background-tool",
+        title: "Background check",
+        status: "in_progress",
+      },
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
         sessionUpdate: "agent_message_chunk",
         content: "Before ",
       },
@@ -2959,7 +2969,6 @@ describe("AcpAgentClient", () => {
       "tool_call_delta_chunk",
       "pending_interaction",
       "interaction_resolved",
-      "tool_call_update",
     ]) {
       transport.emitVendorNotification({
         method: "_x.ai/session_notification",
@@ -2971,14 +2980,43 @@ describe("AcpAgentClient", () => {
       method: "_x.ai/session_notification",
       sessionId: session.sessionId,
       update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "background-tool",
+        title: "Background check",
+        status: "completed",
+      },
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
         sessionUpdate: "agent_message_chunk",
         content: "after",
+      },
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "standalone-tool",
+        title: "Standalone check",
+        status: "completed",
+      },
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: "Later",
       },
     });
 
     expect(assistantMessageItemIds).toEqual([
       "assistant:turn-1:0",
       "assistant:turn-1:0",
+      "assistant:turn-1:1",
     ]);
     expect(
       client
@@ -2994,6 +3032,11 @@ describe("AcpAgentClient", () => {
         type: "message",
         role: "assistant",
         text: "Before after",
+      }),
+      expect.objectContaining({
+        type: "message",
+        role: "assistant",
+        text: "Later",
       }),
     ]);
 

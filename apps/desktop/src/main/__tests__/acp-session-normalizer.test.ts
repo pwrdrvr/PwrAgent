@@ -1429,17 +1429,27 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
-  it("updates tool progress without splitting a streaming assistant message", () => {
+  it("updates known tool progress without splitting a streaming assistant message", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
     normalizer.apply({
       sessionId: "session-1",
       receivedAt: 1000,
-      update: { sessionUpdate: "agent_message_chunk", content: "Before " },
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "background-tool",
+        title: "Background check",
+        status: "in_progress",
+      },
     });
     normalizer.apply({
       sessionId: "session-1",
       receivedAt: 1001,
+      update: { sessionUpdate: "agent_message_chunk", content: "Before " },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
       update: {
         sessionUpdate: "tool_call_update",
         toolCallId: "background-tool",
@@ -1449,7 +1459,7 @@ describe("AcpSessionReplayNormalizer", () => {
     });
     const replay = normalizer.apply({
       sessionId: "session-1",
-      receivedAt: 1002,
+      receivedAt: 1003,
       update: { sessionUpdate: "agent_message_chunk", content: "after" },
     });
 
@@ -1461,6 +1471,41 @@ describe("AcpSessionReplayNormalizer", () => {
         role: "assistant",
         text: "Before after",
       }),
+    ]);
+  });
+
+  it("splits assistant messages around a standalone tool update", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "agent_message_chunk", content: "Before" },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "standalone-tool",
+        title: "Standalone check",
+        status: "completed",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: { sessionUpdate: "agent_message_chunk", content: "After" },
+    });
+
+    expect(
+      replay.entries.map((entry) =>
+        entry.type === "message" ? `${entry.id}:${entry.text}` : entry.type
+      ),
+    ).toEqual([
+      "assistant:session-1:0:Before",
+      "activity",
+      "assistant:session-1:1:After",
     ]);
   });
 
