@@ -1273,6 +1273,28 @@ function updateDirectoryThreadsCollapsedInSnapshot(
   return changed ? { ...snapshot, directories } : snapshot;
 }
 
+function applyDirectoryThreadsCollapsedOverrides(
+  snapshot: NavigationSnapshot,
+  overrides: ReadonlyMap<string, boolean>,
+): NavigationSnapshot {
+  let changed = false;
+  const directories = snapshot.directories.map((directory) => {
+    const collapsed = overrides.get(directory.key);
+    if (
+      collapsed === undefined
+      || directory.directoryThreadsCollapsed === collapsed
+    ) {
+      return directory;
+    }
+    changed = true;
+    return {
+      ...directory,
+      directoryThreadsCollapsed: collapsed,
+    };
+  });
+  return changed ? { ...snapshot, directories, unchanged: false } : snapshot;
+}
+
 function markThreadsSeenInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: Array<{
@@ -2723,6 +2745,9 @@ export function useThreadNavigation(
   const lastFocusRefreshCompletedAtRef = useRef(0);
   const remoteRecoveryAttemptRef = useRef(0);
   const remotePeerDisconnectedRef = useRef(false);
+  const remoteDirectoryThreadsCollapsedOverridesRef = useRef(
+    new Map<string, boolean>(),
+  );
   const lastNavigationActivityAtRef = useRef(Date.now());
   const backgroundRefreshIdleRef = useRef(false);
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
@@ -2850,10 +2875,35 @@ export function useThreadNavigation(
           threadCount: snapshot.threads.length,
           unchanged: Boolean(snapshot.unchanged),
         });
-        const response = removeThreadKeysFromSnapshot(
+        const filteredResponse = removeThreadKeysFromSnapshot(
           snapshot,
           suppressedArchivedThreadKeysRef.current
         );
+        if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+          // A remote window adopts its first snapshot as a baseline, then
+          // owns the disclosure for the rest of the window lifetime. This
+          // also seeds preferences restored by the viewer-side SQLite
+          // overlay before owner events can race them.
+          for (const directory of filteredResponse.directories) {
+            if (
+              !remoteDirectoryThreadsCollapsedOverridesRef.current.has(
+                directory.key,
+              )
+            ) {
+              remoteDirectoryThreadsCollapsedOverridesRef.current.set(
+                directory.key,
+                directory.directoryThreadsCollapsed === true,
+              );
+            }
+          }
+        }
+        const response = federationTarget
+          && isRemoteFederationTarget(federationTarget)
+          ? applyDirectoryThreadsCollapsedOverrides(
+              filteredResponse,
+              remoteDirectoryThreadsCollapsedOverridesRef.current,
+            )
+          : filteredResponse;
         const optimisticSelection = preferredOptimisticThread ?? optimisticThreadRef.current;
         const optimisticThreadKey = optimisticSelection
           ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
@@ -4010,13 +4060,17 @@ export function useThreadNavigation(
           directoryKey: string;
           collapsed: boolean;
         };
+        const viewerCollapsed = windowTarget
+          && isRemoteFederationTarget(windowTarget)
+          ? remoteDirectoryThreadsCollapsedOverridesRef.current.get(directoryKey)
+          : undefined;
         setState((current) => ({
           ...current,
           response: updateDirectoryThreadsCollapsedInSnapshot(
             current.response,
             {
               directoryKey,
-              collapsed,
+              collapsed: viewerCollapsed ?? collapsed,
             },
           ),
         }));
@@ -6450,6 +6504,14 @@ export function useThreadNavigation(
         return;
       }
 
+      const federationTarget = readRendererFederationTarget();
+      if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+        remoteDirectoryThreadsCollapsedOverridesRef.current.set(
+          directory.key,
+          collapsed,
+        );
+      }
+
       setState((current) => ({
         ...current,
         response: updateDirectoryThreadsCollapsedInSnapshot(
@@ -6465,6 +6527,7 @@ export function useThreadNavigation(
         const result = await setDirectoryThreadsCollapsedRequest({
           directoryKey: directory.key,
           collapsed,
+          ...(federationTarget ? { federationTarget } : {}),
         });
         setState((current) => ({
           ...current,
@@ -6477,6 +6540,11 @@ export function useThreadNavigation(
           ),
         }));
       } catch {
+        if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+          remoteDirectoryThreadsCollapsedOverridesRef.current.delete(
+            directory.key,
+          );
+        }
         await refresh();
       }
     },

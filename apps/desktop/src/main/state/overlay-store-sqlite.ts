@@ -2628,6 +2628,62 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  /**
+   * Persist a remote window's disclosure locally without changing either the
+   * owning instance's overlay or this viewer's same-path local directory.
+   */
+  async setRemoteDirectoryThreadsCollapsed(params: {
+    instanceId: string;
+    directoryKey: string;
+    collapsed: boolean;
+  }): Promise<DirectoryOverlayState> {
+    const current = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM remote_directory_overlay
+         WHERE instance_id = ? AND directory_key = ?`,
+      )
+      .get(params.instanceId, params.directoryKey) as
+        | { payload: string }
+        | undefined;
+    const nextState: DirectoryOverlayState = {
+      ...(current
+        ? JSON.parse(current.payload) as DirectoryOverlayState
+        : {}),
+      directoryKey: params.directoryKey,
+      directoryThreadsCollapsed: params.collapsed,
+    };
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO remote_directory_overlay(
+           instance_id,
+           directory_key,
+           payload
+         ) VALUES (?, ?, ?)`,
+      )
+      .run(params.instanceId, params.directoryKey, JSON.stringify(nextState));
+    return nextState;
+  }
+
+  async readRemoteDirectoryOverlays(params: {
+    instanceId: string;
+  }): Promise<Record<string, DirectoryOverlayState>> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT directory_key, payload FROM remote_directory_overlay
+         WHERE instance_id = ?`,
+      )
+      .all(params.instanceId) as Array<{
+        directory_key: string;
+        payload: string;
+      }>;
+    return Object.fromEntries(
+      rows.map((row) => [
+        row.directory_key,
+        JSON.parse(row.payload) as DirectoryOverlayState,
+      ]),
+    );
+  }
+
   async getDirectoryOverlayState(params: {
     directoryKey: string;
   }): Promise<DirectoryOverlayState | undefined> {
@@ -6286,6 +6342,8 @@ export type OverlayStoreLike = Pick<
   | "setDirectoryPin"
   | "reorderDirectoryPins"
   | "setDirectoryThreadsCollapsed"
+  | "setRemoteDirectoryThreadsCollapsed"
+  | "readRemoteDirectoryOverlays"
   | "getDirectoryOverlayState"
   | "readAllDirectoryOverlays"
   | "setThreadPullRequests"

@@ -1856,21 +1856,25 @@ class DesktopAppServerService {
     request: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const federationTarget = request.federationTarget;
       const cacheKey = getRemoteNavigationSnapshotCacheKey({
         ...request,
-        federationTarget: request.federationTarget,
+        federationTarget,
       });
       try {
         const snapshot = await getDesktopFederationRuntime()
           .remoteNavigationSnapshot(
-            request.federationTarget,
+            federationTarget,
             {
               backend: request.backend === "all" ? undefined : request.backend,
               filter: request.filter,
             },
           );
         this.remoteNavigationSnapshotCache.set(cacheKey, snapshot);
-        return snapshot;
+        return await this.applyRemoteDirectoryViewerOverlays(
+          snapshot,
+          federationTarget.instanceId,
+        );
       } catch (error) {
         if (!isFederationPeerUnavailableError(error)) {
           throw error;
@@ -1889,21 +1893,24 @@ class DesktopAppServerService {
             executionMode: "default",
           },
         };
-        return {
-          ...fallback,
-          unchanged: false,
-          threads: fallback.threads.map((thread) =>
-            thread.federation
-              ? {
-                  ...thread,
-                  federation: {
-                    ...thread.federation,
-                    peerStatus: "disconnected",
-                  },
-                }
-              : thread,
-          ),
-        };
+        return await this.applyRemoteDirectoryViewerOverlays(
+          {
+            ...fallback,
+            unchanged: false,
+            threads: fallback.threads.map((thread) =>
+              thread.federation
+                ? {
+                    ...thread,
+                    federation: {
+                      ...thread.federation,
+                      peerStatus: "disconnected",
+                    },
+                  }
+                : thread,
+            ),
+          },
+          federationTarget.instanceId,
+        );
       }
     }
     const backend: AppServerBackendScope = request.backend ?? "all";
@@ -2044,6 +2051,38 @@ class DesktopAppServerService {
         && !primaryGitRepositoriesChanged
         && !remotePins.changed,
     };
+  }
+
+  private async applyRemoteDirectoryViewerOverlays(
+    snapshot: NavigationSnapshot,
+    instanceId: string,
+  ): Promise<NavigationSnapshot> {
+    const overlays = await this.getOverlayStore().readRemoteDirectoryOverlays({
+      instanceId,
+    });
+    let changed = false;
+    const directories = snapshot.directories.map((directory) => {
+      const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
+      if (
+        collapsed === undefined
+        || directory.directoryThreadsCollapsed === collapsed
+      ) {
+        return directory;
+      }
+      changed = true;
+      return {
+        ...directory,
+        directoryThreadsCollapsed: collapsed,
+      };
+    });
+    return changed
+      ? {
+          ...snapshot,
+          directories,
+          // The owner's unchanged hash does not include viewer-local state.
+          unchanged: false,
+        }
+      : snapshot;
   }
 
   /**
@@ -6215,6 +6254,28 @@ class DesktopAppServerService {
     request: SetDirectoryThreadsCollapsedRequest,
   ): Promise<SetDirectoryThreadsCollapsedResponse> {
     rejectNonUserDirectoryKey(request.directoryKey);
+
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const overlay = await this.getOverlayStore()
+        .setRemoteDirectoryThreadsCollapsed({
+          instanceId: request.federationTarget.instanceId,
+          directoryKey: request.directoryKey,
+          collapsed: request.collapsed,
+        });
+      const collapsed = overlay.directoryThreadsCollapsed === true;
+      logDebug("setDirectoryThreadsCollapsed:remote-viewer", {
+        instanceId: request.federationTarget.instanceId,
+        directoryKey: request.directoryKey,
+        collapsed,
+      });
+      return {
+        directoryKey: request.directoryKey,
+        collapsed,
+      };
+    }
 
     const overlay = await this.getOverlayStore().setDirectoryThreadsCollapsed({
       directoryKey: request.directoryKey,

@@ -334,6 +334,24 @@ const setThreadPinOverlay = vi.fn(
     pinnedRank: params.pinnedRank ?? undefined,
   }),
 );
+const setDirectoryThreadsCollapsedOverlay = vi.fn(async (params: {
+  directoryKey: string;
+  collapsed: boolean;
+}) => ({
+  directoryKey: params.directoryKey,
+  directoryThreadsCollapsed: params.collapsed,
+}));
+const setRemoteDirectoryThreadsCollapsedOverlay = vi.fn(async (params: {
+  instanceId: string;
+  directoryKey: string;
+  collapsed: boolean;
+}) => ({
+  directoryKey: params.directoryKey,
+  directoryThreadsCollapsed: params.collapsed,
+}));
+const readRemoteDirectoryOverlays = vi.fn(async (): Promise<
+  Record<string, { directoryKey: string; directoryThreadsCollapsed?: boolean }>
+> => ({}));
 const listPinnedThreadOverlayRanks = vi.fn(
   async (): Promise<Array<{ pinnedRank: string; parentThreadId?: string }>> => [],
 );
@@ -801,6 +819,10 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     setRemoteThreadLocalPin,
     setThreadReaction: setThreadReactionOverlay,
     setThreadPin: setThreadPinOverlay,
+    setDirectoryThreadsCollapsed: setDirectoryThreadsCollapsedOverlay,
+    setRemoteDirectoryThreadsCollapsed:
+      setRemoteDirectoryThreadsCollapsedOverlay,
+    readRemoteDirectoryOverlays,
     listPinnedThreadOverlayRanks,
     reorderThreadPins: reorderThreadPinsStore,
   }),
@@ -964,6 +986,10 @@ describe("app server ipc", () => {
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
     setThreadReactionOverlay.mockClear();
+    setDirectoryThreadsCollapsedOverlay.mockClear();
+    setRemoteDirectoryThreadsCollapsedOverlay.mockClear();
+    readRemoteDirectoryOverlays.mockReset();
+    readRemoteDirectoryOverlays.mockResolvedValue({});
     registerDirectoryFromDiskService.mockClear();
     addLinkedDirectory.mockClear();
     removeLinkedDirectory.mockClear();
@@ -1744,6 +1770,87 @@ describe("app server ipc", () => {
         federation: { peerStatus: "disconnected" },
       }],
     });
+  });
+
+  it("overlays viewer-owned directory disclosure state on remote snapshots", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "peer_navigation_preferences",
+    };
+    const directoryKey = "directory:/Users/remote/repos/PwrAgent";
+    readRemoteDirectoryOverlays.mockResolvedValueOnce({
+      [directoryKey]: {
+        directoryKey,
+        directoryThreadsCollapsed: true,
+      },
+    });
+    federationMock.runtime.remoteNavigationSnapshot.mockResolvedValueOnce({
+      backend: "all",
+      fetchedAt: 1_000,
+      federationTarget,
+      unchanged: true,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [{
+        key: directoryKey,
+        kind: "directory",
+        label: "PwrAgent",
+        path: "/Users/remote/repos/PwrAgent",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        directoryThreadsCollapsed: false,
+      }],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+
+    registerAppServerIpcHandlers();
+    const snapshot = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {
+      federationTarget,
+    }) as {
+      unchanged: boolean;
+      directories: Array<{ directoryThreadsCollapsed?: boolean }>;
+    };
+
+    expect(readRemoteDirectoryOverlays).toHaveBeenCalledWith({
+      instanceId: federationTarget.instanceId,
+    });
+    expect(snapshot.directories[0]?.directoryThreadsCollapsed).toBe(true);
+    expect(snapshot.unchanged).toBe(false);
+  });
+
+  it("stores a remote directory disclosure on the viewer without publishing it", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "peer_navigation_preferences",
+    };
+    const directoryKey = "directory:/Users/remote/repos/PwrAgent";
+
+    registerAppServerIpcHandlers();
+    const response = await handlers.get(
+      NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
+    )?.({}, {
+      directoryKey,
+      collapsed: true,
+      federationTarget,
+    });
+
+    expect(setRemoteDirectoryThreadsCollapsedOverlay).toHaveBeenCalledWith({
+      instanceId: federationTarget.instanceId,
+      directoryKey,
+      collapsed: true,
+    });
+    expect(setDirectoryThreadsCollapsedOverlay).not.toHaveBeenCalled();
+    expect(publishLocalEvent).not.toHaveBeenCalled();
+    expect(response).toEqual({ directoryKey, collapsed: true });
   });
 
   it("keeps unexpected remote navigation failures actionable", async () => {

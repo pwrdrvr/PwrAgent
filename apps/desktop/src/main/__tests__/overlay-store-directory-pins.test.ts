@@ -92,6 +92,37 @@ describe("SqliteOverlayStore — directory pins", () => {
     });
   });
 
+  it("keeps remote-viewer disclosures separate from local and other peers", async () => {
+    const directoryKey = "directory:/Users/me/code/PwrAgent";
+    await store.setDirectoryThreadsCollapsed({
+      directoryKey,
+      collapsed: false,
+    });
+    await store.setRemoteDirectoryThreadsCollapsed({
+      instanceId: "peer-m2",
+      directoryKey,
+      collapsed: true,
+    });
+    await store.setRemoteDirectoryThreadsCollapsed({
+      instanceId: "peer-studio",
+      directoryKey,
+      collapsed: false,
+    });
+
+    await expect(store.getDirectoryOverlayState({ directoryKey }))
+      .resolves.toMatchObject({ directoryThreadsCollapsed: false });
+    await expect(
+      store.readRemoteDirectoryOverlays({ instanceId: "peer-m2" }),
+    ).resolves.toMatchObject({
+      [directoryKey]: { directoryThreadsCollapsed: true },
+    });
+    await expect(
+      store.readRemoteDirectoryOverlays({ instanceId: "peer-studio" }),
+    ).resolves.toMatchObject({
+      [directoryKey]: { directoryThreadsCollapsed: false },
+    });
+  });
+
   it("returns undefined for a directoryKey with no overlay row", async () => {
     await expect(
       store.getDirectoryOverlayState({
