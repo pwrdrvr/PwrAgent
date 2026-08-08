@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  buildThreadIdentityKey,
   isToolManagedWorktreePath,
   type AppServerThreadSummary,
 } from "@pwragent/shared";
@@ -688,7 +689,7 @@ function resolveArchiveTimestamp(
 }
 
 function buildArchivedThreadKey(thread: AppServerThreadSummary): string {
-  return `${thread.source}:${thread.id}`;
+  return buildThreadIdentityKey(thread.source, thread.id);
 }
 
 function formatTimestamp(timestamp: number): string {

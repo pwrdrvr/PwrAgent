@@ -30,6 +30,7 @@ import type {
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
 } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import type {
   MessagingBindingRecord,
   MessagingAdapterAuthorizationUpdate,
@@ -2517,7 +2518,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     if (!this.options.backendBridge.readThreadAgentMetadata) {
       return undefined;
     }
-    const key = `${backend}:${threadId}`;
+    const key = buildThreadIdentityKey(backend, threadId);
     const now = Date.now();
     const cached = this.rejectedRouteAgentNameCache.get(key);
     if (cached && cached.expiresAt > now) {

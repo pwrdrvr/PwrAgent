@@ -16,7 +16,10 @@ import type {
   ResetMessagingToolUpdateBindingsResponse,
   ThreadAgentMetadata,
 } from "@pwragent/shared";
-import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  normalizeMessagingBindingTargetKind,
+} from "@pwragent/shared";
 import type {
   MessagingDefaultAgentAssignmentRecord,
   MessagingDefaultAgentScope,
@@ -426,7 +429,7 @@ function requireText(value: string, label: string): string {
 }
 
 function threadKey(backend: AppServerBackendKind, threadId: string): string {
-  return `${backend}:${threadId}`;
+  return buildThreadIdentityKey(backend, threadId);
 }
 
 function formatBackendLabel(backend: AppServerBackendKind): string {

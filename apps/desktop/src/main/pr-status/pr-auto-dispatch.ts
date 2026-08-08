@@ -12,6 +12,7 @@ import type {
 } from "@pwragent/shared";
 import {
   buildPullRequestStatusKey,
+  buildThreadIdentityKey,
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
@@ -705,7 +706,7 @@ export class PrAutoDispatchCoordinator {
     backend: AppServerBackendKind;
     threadId: string;
   }): string {
-    return `${params.backend}:${params.threadId}`;
+    return buildThreadIdentityKey(params.backend, params.threadId);
   }
 
   private now(): number {

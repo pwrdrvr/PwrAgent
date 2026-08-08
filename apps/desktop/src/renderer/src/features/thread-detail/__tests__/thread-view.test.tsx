@@ -5176,6 +5176,58 @@ describe("ThreadView", () => {
     }
   });
 
+  it("accepts branch drift results for ACP thread identities", async () => {
+    const checkThreadBranchDrift = vi.fn(async () => ({
+      backend: "acp:grok" as const,
+      threadId: "grok-thread-branch",
+      checkedAt: Date.now(),
+      expectedBranch: "feature/old",
+      observedBranch: "main",
+      drifted: true,
+    }));
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ checkThreadBranchDrift }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "grok-thread-branch",
+          title: "Grok branch drift",
+          titleSource: "explicit",
+          source: "acp:grok",
+          gitBranch: "feature/old",
+          observedGitBranch: "feature/old",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        onRefreshNavigation={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: "Thread branch changed" }),
+    ).toHaveTextContent(/Worktree is on\s*main/);
+    expect(checkThreadBranchDrift).toHaveBeenCalledWith({
+      backend: "acp:grok",
+      expectedBranch: "feature/old",
+      federationTarget: undefined,
+      threadId: "grok-thread-branch",
+    });
+  });
+
   it("allows a remote send when an older owner lacks branch drift RPC", async () => {
     const checkThreadBranchDrift = vi.fn(async () => {
       throw Object.assign(new Error(

@@ -7,6 +7,7 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 
 export type ThreadTurnQueueOrigin =
   | "manual"
@@ -362,7 +363,7 @@ export class ThreadTurnQueue {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
   }): string {
-    return `${params.backend}:${params.threadId}`;
+    return buildThreadIdentityKey(params.backend, params.threadId);
   }
 
   private async emit(event: ThreadTurnQueueLifecycleEvent): Promise<void> {

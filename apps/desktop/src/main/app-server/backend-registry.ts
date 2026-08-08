@@ -5273,7 +5273,7 @@ function buildTitleGenerationKey(
   backend: AppServerBackendKind,
   threadId: string,
 ): string {
-  return `${backend}:${threadId}`;
+  return buildThreadIdentityKey(backend, threadId);
 }
 
 function titleHelperSubAgentId(
@@ -6461,7 +6461,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
   /**
-   * Best-effort cache of thread labels keyed by `${backend}:${threadId}`, used
+   * Best-effort cache of thread labels keyed by `buildThreadIdentityKey`, used
    * only to label native attention/terminal notifications so multiple
    * background turns are distinguishable. Populated from `thread/started` and
    * `thread/name/updated` notifications as they fan out through `emit()`.
@@ -6584,7 +6584,7 @@ export class DesktopBackendRegistry {
    * codexEnvironmentRuntime. Concurrent Run-button clicks and
    * concurrent detached-child exit/output callbacks all funnel through
    * this so two simultaneous overlay writes can't clobber each other.
-   * Keyed by `${backend}:${threadId}`. Implementation details and
+   * Keyed by `buildThreadIdentityKey`. Implementation details and
    * failure-poisoning semantics live in PerKeyAsyncLock.
    */
   private readonly codexEnvironmentRuntimeLocks = new PerKeyAsyncLock();
@@ -8758,7 +8758,7 @@ export class DesktopBackendRegistry {
   }
 
   private buildAcpRuntimeQueueKey(backend: AcpBackendId, threadId: string): string {
-    return `${backend}:${threadId}`;
+    return buildThreadIdentityKey(backend, threadId);
   }
 
   private readAcpRuntimeOptionValue(
@@ -15777,7 +15777,7 @@ export class DesktopBackendRegistry {
     task: () => Promise<T>,
   ): Promise<T> {
     return this.codexEnvironmentRuntimeLocks.run(
-      `${backend}:${threadId}`,
+      buildThreadIdentityKey(backend, threadId),
       task,
     );
   }
@@ -17987,7 +17987,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
   }): string {
-    return `${params.backend}:${params.threadId}`;
+    return buildThreadIdentityKey(params.backend, params.threadId);
   }
 
   private async runMessagingCleanupForArchivedThread(params: {
@@ -27170,7 +27170,7 @@ export class DesktopBackendRegistry {
         const trimmed = threadName.trim();
         if (trimmed) {
           this.notificationThreadTitles.set(
-            `${event.backend}:${threadId}`,
+            buildThreadIdentityKey(event.backend, threadId),
             trimmed,
           );
         }
@@ -27203,7 +27203,7 @@ export class DesktopBackendRegistry {
       (typeof record.title === "string" ? record.title : undefined) ??
       (typeof record.name === "string" ? record.name : undefined);
     const trimmed = candidate?.trim();
-    const key = `${backend}:${threadId}`;
+    const key = buildThreadIdentityKey(backend, threadId);
     if (trimmed) {
       this.notificationThreadTitles.set(key, trimmed);
     }
@@ -27217,7 +27217,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
   ): string | undefined {
-    const key = `${backend}:${threadId}`;
+    const key = buildThreadIdentityKey(backend, threadId);
     const projectLabel = this.notificationThreadProjectLabels.get(key);
     const threadTitle = this.notificationThreadTitles.get(key);
     if (projectLabel && threadTitle) {
@@ -27271,7 +27271,7 @@ export class DesktopBackendRegistry {
       ? "PwrAgent input needed"
       : "PwrAgent approval needed";
     const threadTitle = this.notificationThreadTitles.get(
-      `${event.backend}:${threadId}`,
+      buildThreadIdentityKey(event.backend, threadId),
     );
     const approvalRequest = this.isApprovalAttentionNotification(event.notification)
       ? event.notification

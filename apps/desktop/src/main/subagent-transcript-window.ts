@@ -1,5 +1,8 @@
 import { BrowserWindow } from "electron";
-import type { OpenSubAgentTranscriptWindowRequest } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  type OpenSubAgentTranscriptWindowRequest,
+} from "@pwragent/shared";
 import { getMainLogger } from "./log";
 import {
   applyWindowSecurityHardening,
@@ -54,7 +57,7 @@ export function showSubAgentTranscriptWindow(
     throw new Error("Sub-agent transcript requires a thread id.");
   }
   const title = request.title.trim() || "Sub-agent transcript";
-  const windowKey = `${request.backend}:${threadId}`;
+  const windowKey = buildThreadIdentityKey(request.backend, threadId);
   const current = transcriptWindows.get(windowKey);
   if (current && !current.isDestroyed()) {
     positionWindowForSourceDisplay(current, source);

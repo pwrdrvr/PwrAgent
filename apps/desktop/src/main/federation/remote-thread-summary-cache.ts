@@ -10,6 +10,7 @@ import type {
   RemoteThreadPin,
 } from "@pwragent/shared";
 import {
+  buildThreadIdentityKey,
   threadHasExactPrNumberMatch,
   threadMatchesQuery,
 } from "@pwragent/shared";
@@ -266,10 +267,16 @@ export class RemoteThreadSummaryCache {
         fetchFailed = this.refreshFailures.has(instanceId);
       }
       const servedByKey = new Map(
-        (served ?? []).map((thread) => [`${thread.source}:${thread.id}`, thread]),
+        (served ?? []).map((thread) => [
+          buildThreadIdentityKey(thread.source, thread.id),
+          thread,
+        ]),
       );
       for (const pin of group) {
-        const threadKey = `${pin.ref.backend}:${pin.ref.threadId}`;
+        const threadKey = buildThreadIdentityKey(
+          pin.ref.backend,
+          pin.ref.threadId,
+        );
         const servedThread = servedByKey.get(threadKey);
         if (servedThread) {
           threads.push(
@@ -375,10 +382,12 @@ export class RemoteThreadSummaryCache {
     fresh: readonly NavigationThreadSummary[],
   ): Promise<boolean> {
     const freshKeys = new Set(
-      fresh.map((thread) => `${thread.source}:${thread.id}`),
+      fresh.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
     );
     const missing = pins.filter(
-      (pin) => !freshKeys.has(`${pin.ref.backend}:${pin.ref.threadId}`),
+      (pin) => !freshKeys.has(
+        buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId),
+      ),
     );
     if (missing.length === 0) {
       return false;
@@ -392,7 +401,9 @@ export class RemoteThreadSummaryCache {
         const candidateKeys = new Set(
           missing
             .filter((pin) => pin.ref.backend === backend)
-            .map((pin) => `${pin.ref.backend}:${pin.ref.threadId}`),
+            .map((pin) =>
+              buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId)
+            ),
         );
         try {
           const keys = await this.archivedThreadKeysForPeer(
@@ -557,7 +568,9 @@ export class RemoteThreadSummaryCache {
       `Remote archived threads timed out after ${Math.round(timeoutMs / 1000)}s.`,
     );
     const threadKeys = new Set(
-      archivedThreads.map((thread) => `${thread.source}:${thread.id}`),
+      archivedThreads.map((thread) =>
+        buildThreadIdentityKey(thread.source, thread.id)
+      ),
     );
     if (this.generationFor(target.instanceId) !== generation) {
       return new Set();

@@ -1804,7 +1804,7 @@ export function ThreadView(props: ThreadViewProps) {
       expectedBranch,
       observedBranch,
       reason,
-      threadKey: `${thread.source}:${thread.id}`,
+      threadKey: buildThreadIdentityKey(thread.source, thread.id),
     });
     return true;
   };
@@ -1835,7 +1835,7 @@ export function ThreadView(props: ThreadViewProps) {
     if (!thread?.gitBranch || !props.desktopApi?.checkThreadBranchDrift) {
       return false;
     }
-    const startedThreadKey = `${thread.source}:${thread.id}`;
+    const startedThreadKey = buildThreadIdentityKey(thread.source, thread.id);
 
     try {
       const result = await props.desktopApi.checkThreadBranchDrift({
@@ -1991,7 +1991,9 @@ export function ThreadView(props: ThreadViewProps) {
     ) {
       if (thread) {
         setBranchDriftDialog((current) =>
-          current?.threadKey === `${thread.source}:${thread.id}` ? undefined : current,
+          current?.threadKey === buildThreadIdentityKey(thread.source, thread.id)
+            ? undefined
+            : current,
         );
       }
       return;
