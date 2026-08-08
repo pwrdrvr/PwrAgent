@@ -2,10 +2,7 @@ import {
   buildThreadIdentityKey,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
-import {
-  isOpenPullRequest,
-  type StarMapAgentFilter,
-} from "./star-map-preferences";
+import { isOpenPullRequest } from "./star-map-preferences";
 
 export const STAR_MAP_ATTENTION_CATEGORIES = [
   "unread",
@@ -71,105 +68,3 @@ export function isAgentThread(thread: NavigationThreadSummary): boolean {
   return thread.agent !== undefined;
 }
 
-/**
- * Agent participation is a different axis from attention: the attention
- * chips OR together (a card shows if *any* enabled category claims it),
- * so an "Agent" category could only ever add cards. Include/exclude has to
- * narrow the result, so it applies as an AND on top.
- */
-export function matchesAgentFilter(
-  thread: NavigationThreadSummary,
-  filter: StarMapAgentFilter,
-): boolean {
-  if (filter === "all") return true;
-  return filter === "only" ? isAgentThread(thread) : !isAgentThread(thread);
-}
-
-/**
- * Threads that need attention, filtered to the enabled categories, ordered
- * by recent activity. Archived threads never surface on the map.
- */
-export function selectAttentionThreads(params: {
-  threads: readonly NavigationThreadSummary[];
-  enabled: ReadonlySet<StarMapAttentionCategory>;
-  sessionKeys?: StarMapSessionKeys;
-  agentFilter?: StarMapAgentFilter;
-}): NavigationThreadSummary[] {
-  const agentFilter = params.agentFilter ?? "all";
-  return params.threads
-    .filter((thread) => thread.archivedAt === undefined)
-    .filter((thread) => matchesAgentFilter(thread, agentFilter))
-    .filter((thread) =>
-      threadAttentionCategories(thread, params.sessionKeys).some((category) =>
-        params.enabled.has(category),
-      ),
-    )
-    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-}
-
-/**
- * How many cards the agent chip is holding back right now — the ones the
- * attention filters would otherwise show but this filter is excluding.
- * Zero means flipping it changes nothing on screen.
- */
-export function countAgentFilterImpact(params: {
-  threads: readonly NavigationThreadSummary[];
-  enabled: ReadonlySet<StarMapAttentionCategory>;
-  sessionKeys?: StarMapSessionKeys;
-  agentFilter: StarMapAgentFilter;
-}): number {
-  return params.threads.filter(
-    (thread) =>
-      thread.archivedAt === undefined
-      && !matchesAgentFilter(thread, params.agentFilter)
-      && threadAttentionCategories(thread, params.sessionKeys).some((category) =>
-        params.enabled.has(category),
-      ),
-  ).length;
-}
-
-/**
- * How many cards each filter chip is responsible for right now: for an
- * enabled category, the threads that would DISAPPEAR if it were switched
- * off (it is their only enabled reason); for a disabled category, the
- * threads that would APPEAR if it were switched on (nothing else in the
- * enabled set currently claims them). Either way the number answers "how
- * many cards does flipping this change".
- */
-export function countFilterImpact(params: {
-  threads: readonly NavigationThreadSummary[];
-  enabled: ReadonlySet<StarMapAttentionCategory>;
-  sessionKeys?: StarMapSessionKeys;
-}): Record<StarMapAttentionCategory, number> {
-  const counts = Object.fromEntries(
-    STAR_MAP_ATTENTION_CATEGORIES.map((category) => [category, 0]),
-  ) as Record<StarMapAttentionCategory, number>;
-  for (const thread of params.threads) {
-    if (thread.archivedAt !== undefined) continue;
-    const categories = threadAttentionCategories(thread, params.sessionKeys);
-    const enabledMatches = categories.filter((category) =>
-      params.enabled.has(category),
-    );
-    for (const category of categories) {
-      if (params.enabled.has(category)) {
-        // Removing this chip only drops the card when nothing else keeps it.
-        if (enabledMatches.length === 1) counts[category] += 1;
-      } else if (enabledMatches.length === 0) {
-        counts[category] += 1;
-      }
-    }
-  }
-  return counts;
-}
-
-export function addFilterImpactCounts(
-  left: Record<StarMapAttentionCategory, number>,
-  right: Record<StarMapAttentionCategory, number>,
-): Record<StarMapAttentionCategory, number> {
-  return Object.fromEntries(
-    STAR_MAP_ATTENTION_CATEGORIES.map((category) => [
-      category,
-      left[category] + right[category],
-    ]),
-  ) as Record<StarMapAttentionCategory, number>;
-}
