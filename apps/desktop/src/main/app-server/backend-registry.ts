@@ -12057,9 +12057,14 @@ export class DesktopBackendRegistry {
         // review as a managed child so both thread/start and turn/start are
         // explicitly rooted in the selected project.
         managedMode ||= usesSelectedSecondaryWorkspace;
-        if (usesSelectedSecondaryWorkspace) {
-          // The persisted environment belongs to the parent workspace and can
-          // contain cwd-specific PATH, VIRTUAL_ENV, or remote runtime state.
+        if (
+          usesSelectedSecondaryWorkspace
+          && codexEnvironmentRuntime?.executionTarget !== "remote"
+        ) {
+          // A persisted local environment can contain cwd-specific PATH or
+          // VIRTUAL_ENV hydration from the parent workspace. Remote runtimes
+          // must retain their environment ID so Codex routes the selected cwd
+          // to the same host.
           codexEnvironmentRuntime = undefined;
         }
       } else if (acpManagedMode) {

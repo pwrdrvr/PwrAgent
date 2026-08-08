@@ -18364,6 +18364,73 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("preserves remote environment routing for selected secondary project reviews", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/start", "turn/start", "review/start"],
+      },
+      startThreadResult: { threadId: "remote-project-review" },
+    });
+    const remoteRuntime: CodexThreadEnvironmentRuntime = {
+      environmentId: "remote-env",
+      environmentName: "Remote environment",
+      executionTarget: "remote",
+      cwd: "/remote/primary",
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-parent": {
+            backend: "codex",
+            threadId: "thread-parent",
+            codexEnvironmentRuntime: remoteRuntime,
+            executionMode: "full-access",
+            extraLinkedDirectories: [
+              {
+                id: "/remote/primary",
+                kind: "local",
+                label: "primary",
+                path: "/remote/primary",
+              },
+              {
+                id: "/remote/selected",
+                kind: "local",
+                label: "selected",
+                path: "/remote/selected",
+              },
+            ],
+          },
+        },
+      }),
+      resolveManagedReviewEnabled: () => false,
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "origin/main" },
+      delivery: "inline",
+      cwd: "/remote/selected",
+    });
+
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      cwd: "/remote/selected",
+      codexEnvironmentRuntime: remoteRuntime,
+      ephemeral: true,
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "remote-project-review",
+      cwd: "/remote/selected",
+      codexEnvironmentRuntime: remoteRuntime,
+    });
+
+    await registry.close();
+  });
+
   it("rejects Codex reviews with a selected model that is not in the discovered model list", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
