@@ -18,6 +18,40 @@ export function formatReviewCommand(target: AppServerReviewTarget): string {
   return `/review --custom ${target.instructions}`;
 }
 
+/**
+ * Delimiters wrapping the managed-review artifact that PwrAgent prepends to the
+ * next prompt after a review finishes. The agent needs the text in its context
+ * window; the operator does not need to read it in the transcript, and ACP
+ * agents echo every prompt back as a `user_message_chunk`. Both the writer
+ * (`buildManagedReviewContextInput`) and the transcript filter
+ * (`stripManagedReviewContextBlock`) key off these exact strings — change one
+ * and the block starts rendering as a user message again.
+ */
+export const MANAGED_REVIEW_CONTEXT_OPEN_MARKER =
+  "[PwrAgent review sub-agent results — context for this turn]";
+export const MANAGED_REVIEW_CONTEXT_CLOSE_MARKER =
+  "[End PwrAgent review sub-agent results]";
+
+/**
+ * Removes the wrapped review-context block from prompt text meant for display.
+ * Returns the remaining operator-authored text, or an empty string when the
+ * block was the whole message.
+ */
+export function stripManagedReviewContextBlock(value: string): string {
+  const start = value.indexOf(MANAGED_REVIEW_CONTEXT_OPEN_MARKER);
+  if (start === -1) {
+    return value;
+  }
+  const closeAt = value.indexOf(MANAGED_REVIEW_CONTEXT_CLOSE_MARKER, start);
+  // An unterminated block means the whole tail is review context — a truncated
+  // or still-streaming echo. Dropping it beats rendering half an artifact.
+  const end =
+    closeAt === -1
+      ? value.length
+      : closeAt + MANAGED_REVIEW_CONTEXT_CLOSE_MARKER.length;
+  return `${value.slice(0, start)}${value.slice(end)}`.trim();
+}
+
 export function normalizeReviewDisplayText(value: string): string {
   const normalized = value.trim().replace(/\s+/g, " ");
   if (!normalized) {

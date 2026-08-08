@@ -2106,6 +2106,9 @@ function createKimiAcpRegistry(options?: {
   gitWorkspaceHandoffService?: unknown;
   worktreeArchiveService?: WorktreeArchiveService;
   runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+  threadTitleGenerationService?: NonNullable<
+    ConstructorParameters<typeof DesktopBackendRegistry>[0]
+  >["threadTitleGenerationService"];
   acpWorktreeRepositoryResolver?: (
     cwd: string,
   ) => Promise<LinkedDirectorySummary | undefined>;
@@ -2192,6 +2195,9 @@ function createKimiAcpRegistry(options?: {
       options?.gitWorkspaceHandoffService as never,
     worktreeArchiveService: options?.worktreeArchiveService,
     acpWorktreeRepositoryResolver: options?.acpWorktreeRepositoryResolver,
+    ...(options?.threadTitleGenerationService
+      ? { threadTitleGenerationService: options.threadTitleGenerationService }
+      : {}),
   });
   return {
     acpBackendId,
@@ -4536,6 +4542,187 @@ describe("DesktopBackendRegistry", () => {
 
     await registry.close();
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays managed review entries when reading ACP threads", async () => {
+    // A managed review writes its "started" and "result" entries into the
+    // thread overlay, not into the provider's own rollout. readThread's Codex
+    // path merges them back into the transcript; the ACP path returned early
+    // and never did, so a Grok review left no trace in the thread at all.
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const threadId = "grok-review-parent";
+    const startedEntry = {
+      type: "review" as const,
+      id: "managed-review:review-turn-1:started",
+      review: "Review changes against main",
+      displayText: "Review changes against main",
+      createdAt: 2_000,
+      turn: {
+        id: "review-turn-1",
+        status: "in_progress" as const,
+        startedAt: 2_000,
+      },
+    };
+    const resultEntry = {
+      type: "review" as const,
+      id: "managed-review:review-turn-1:result",
+      review: "No blocking findings.\n\nNo findings.",
+      createdAt: 3_000,
+      output: {
+        findings: [],
+        overall_correctness: "patch is correct" as const,
+        overall_explanation: "No blocking findings.",
+        overall_confidence_score: 0.96,
+      },
+      turn: {
+        id: "review-turn-1",
+        status: "completed" as const,
+        completedAt: 3_000,
+      },
+    };
+    const usageActivity = {
+      type: "activity" as const,
+      id: "live-turn-usage-review-turn-1",
+      summary:
+        "Monitor usage: 50,310 uncached in · 509,952 cached · 9,959 out (8,762 reasoning) · $0.32 list price",
+      status: "completed" as const,
+      createdAt: 3_001,
+      turn: { id: "review-turn-1", status: "completed" as const },
+      details: [],
+    };
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          [`${acpBackendId}:${threadId}`]: {
+            backend: acpBackendId,
+            threadId,
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            managedReviewEntries: [startedEntry, resultEntry],
+            immutableUsageActivities: [usageActivity],
+          },
+        },
+      }),
+      sessionId: threadId,
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: threadId,
+          title: "ACP session",
+          createdAt: 1_000,
+          updatedAt: 4_000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "user-1",
+            role: "user",
+            text: "Can you summarize the review results for me?",
+            createdAt: 4_000,
+          },
+        ],
+        messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+        threadStatus: "idle",
+      },
+    });
+
+    const response = await registry.readThread({
+      backend: acpBackendId,
+      threadId,
+    });
+
+    expect(response.replay.entries.filter((entry) => entry.type === "review"))
+      .toEqual([startedEntry, resultEntry]);
+    expect(response.replay.entries.map((entry) => entry.id)).toEqual([
+      startedEntry.id,
+      resultEntry.id,
+      usageActivity.id,
+      "user-1",
+    ]);
+
+    await registry.close();
+  });
+
+  it("keeps managed review entries out of ACP pagination pages", async () => {
+    // Older pages are a window into durable provider history. Splicing the
+    // overlay's review entries into every page would duplicate them above
+    // whatever slice the operator scrolled back to.
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const threadId = "grok-review-parent-paged";
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          [`${acpBackendId}:${threadId}`]: {
+            backend: acpBackendId,
+            threadId,
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            managedReviewEntries: [
+              {
+                type: "review",
+                id: "managed-review:review-turn-1:started",
+                review: "Review changes against main",
+                displayText: "Review changes against main",
+                createdAt: 2_000,
+              },
+            ],
+          },
+        },
+      }),
+      sessionId: threadId,
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: threadId,
+          title: "ACP session",
+          createdAt: 1_000,
+          updatedAt: 4_000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "user-1",
+            role: "user",
+            text: "Older page entry",
+            createdAt: 1_500,
+          },
+        ],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: true },
+        threadStatus: "idle",
+      },
+    });
+
+    const paged = await registry.readThread({
+      backend: acpBackendId,
+      threadId,
+      before: "user-2",
+    });
+    const viewOnly = await registry.readThread({
+      backend: acpBackendId,
+      threadId,
+      includeTurns: false,
+    });
+
+    expect(paged.replay.entries.some((entry) => entry.type === "review")).toBe(
+      false,
+    );
+    expect(
+      viewOnly.replay.entries.some((entry) => entry.type === "review"),
+    ).toBe(false);
+
+    await registry.close();
   });
 
   it("includes persisted pricing when reading ACP threads", async () => {
@@ -11351,6 +11538,107 @@ command = "pnpm grok"
       fastMode: true,
       prAutoDispatchEnabled: true,
     });
+
+    await registry.close();
+  });
+
+  it("names a thread launched straight into a review", async () => {
+    // A /review launch never calls startTurn, so the thread was born with no
+    // user prompt for the title generator to work from and kept its fallback
+    // name forever. Synthesize a prompt from what the review already knows:
+    // the repository, the branch, and the review target.
+    const titleService = {
+      generateTitle: vi.fn(async (_params: { userPrompt: string }) => ({
+        status: "generated" as const,
+        title: "Review app against main",
+      })),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/start", "thread/name/set", "review/start"],
+      },
+      threads: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/app",
+      reviewTarget: { type: "baseBranch", branch: "main" },
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        branchName: "agent/fix-remote-thread-project-home",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "/review main",
+        workMode: "local",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      userPrompt: expect.stringContaining("Review changes against main"),
+    });
+    const userPrompt =
+      titleService.generateTitle.mock.calls[0]?.[0].userPrompt ?? "";
+    expect(userPrompt).toContain("app");
+    expect(userPrompt).toContain("agent/fix-remote-thread-project-home");
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-1",
+      name: "Review app against main",
+    });
+
+    await registry.close();
+  });
+
+  it("names a Grok thread launched straight into a managed review", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Review commit abc1234",
+      })),
+    };
+    const { registry, sessions } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: "grok-review-launch",
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/PwrAgnt",
+      reviewTarget: { type: "commit", sha: "abc1234", title: "Fix homing" },
+      launchpad: {
+        directoryKey: "directory:/repo/PwrAgnt",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgnt",
+        directoryPath: "/repo/PwrAgnt",
+        backend: acpBackendId,
+        executionMode: "default",
+        prompt: "/review --commit abc1234",
+        workMode: "local",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    await waitForCondition(() => titleService.generateTitle.mock.calls.length > 0);
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: "grok-review-launch",
+      userPrompt: expect.stringContaining("Review commit abc1234 (Fix homing)"),
+    });
+    expect(sessions.some((session) => session.hidden)).toBe(true);
 
     await registry.close();
   });

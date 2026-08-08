@@ -2348,6 +2348,38 @@ function reviewTaskLabel(target: StartReviewRequest["target"]): string {
   }
 }
 
+/**
+ * A thread launched straight from `/review` never runs a user turn, so the
+ * title generator has no prompt to name it from and the thread keeps its
+ * backend fallback ("ACP session", "New thread") forever. Synthesize the
+ * prompt from what the launch already knows — the review target plus the
+ * repository and branch it runs against — so the generated name reads like
+ * "Review remote thread homing against main" rather than a generic placeholder.
+ */
+function reviewThreadTitlePrompt(params: {
+  branchName?: string;
+  directoryLabel?: string;
+  target: StartReviewRequest["target"];
+}): string {
+  const target = params.target;
+  const lines = [
+    `Starting a code review: ${
+      target.type === "commit"
+        ? `Review commit ${target.sha}${target.title ? ` (${target.title})` : ""}`
+        : reviewTaskLabel(target)
+    }.`,
+  ];
+  const repository = params.directoryLabel?.trim();
+  if (repository) {
+    lines.push(`Repository: ${repository}.`);
+  }
+  const branch = params.branchName?.trim();
+  if (branch) {
+    lines.push(`Working branch: ${branch}.`);
+  }
+  return lines.join(" ");
+}
+
 function parseThreadTurnKeyBody(
   body: string,
 ): { threadId: string; turnId: string } | undefined {
@@ -8046,11 +8078,27 @@ export class DesktopBackendRegistry {
       backend,
       threadId: request.threadId,
     });
+    // A managed review runs in a hidden child session, so its transcript
+    // entries and usage activities live in this thread's overlay rather than
+    // in the provider's rollout. Splice them back in on the same terms as the
+    // Codex path: only for a live, turn-bearing read, never into an older
+    // pagination page.
+    const appendTranscriptOverlays =
+      !request.before && request.includeTurns !== false;
+    const replayWithTranscriptOverlays = appendTranscriptOverlays
+      ? mergeImmutableUsageActivities({
+          replay: mergeManagedReviewEntries({
+            replay,
+            entries: overlay?.managedReviewEntries,
+          }),
+          activities: overlay?.immutableUsageActivities,
+        })
+      : replay;
     const messageIds = [
-      ...replay.entries.flatMap((entry) =>
+      ...replayWithTranscriptOverlays.entries.flatMap((entry) =>
         entry.type === "message" && entry.role === "user" ? [entry.id] : [],
       ),
-      ...replay.messages.flatMap((message) =>
+      ...replayWithTranscriptOverlays.messages.flatMap((message) =>
         message.role === "user" ? [message.id] : [],
       ),
     ];
@@ -8064,11 +8112,11 @@ export class DesktopBackendRegistry {
         : {};
     const messageOrigins = inferLegacyTaskMonitorMessageOrigins({
       origins: persistedMessageOrigins,
-      replay,
+      replay: replayWithTranscriptOverlays,
       subAgents: overlay?.subAgents,
     });
     const replayWithMessageOrigins = mergeThreadMessageOrigins(
-      replay,
+      replayWithTranscriptOverlays,
       messageOrigins,
     );
     const pricing =
@@ -16091,7 +16139,16 @@ export class DesktopBackendRegistry {
         this.scheduleThreadTitleGeneration({
           backend: launchpad.backend,
           threadId: startThreadResponse.threadId,
-          input,
+          input: request.reviewTarget
+            ? [{
+                type: "text",
+                text: reviewThreadTitlePrompt({
+                  branchName: launchpad.branchName,
+                  directoryLabel: launchpad.directoryLabel,
+                  target: request.reviewTarget,
+                }),
+              }]
+            : input,
         });
       } catch (error) {
         await this.overlayStore.setThreadScheduledStart({
@@ -16118,6 +16175,20 @@ export class DesktopBackendRegistry {
           fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
         });
         turnId = reviewResponse.turnId;
+        // A review is the thread's whole first turn. Nothing else will supply
+        // a prompt to name it from, so name it from the review target here.
+        this.scheduleThreadTitleGeneration({
+          backend: launchpad.backend,
+          threadId: startThreadResponse.threadId,
+          input: [{
+            type: "text",
+            text: reviewThreadTitlePrompt({
+              branchName: launchpad.branchName,
+              directoryLabel: launchpad.directoryLabel,
+              target: request.reviewTarget,
+            }),
+          }],
+        });
       } catch (error) {
         turnStartFailure = {
           message: error instanceof Error ? error.message : String(error),

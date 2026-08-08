@@ -1,0 +1,219 @@
+{
+  "source": "Captured from a live Grok Build (grok-4.5-build) PwrAgent /review run on 2026-08-08. Absolute paths and the operator home directory are rewritten; no credentials were present in the capture.",
+  "parentSessionId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9",
+  "reviewSessionId": "019fe2e2-4146-7561-b3cc-321d736935e8",
+  "reviewPrompt": "Perform a code review. Focus on concrete correctness regressions introduced by the requested changes. Do not modify files.\n\nReview the current checkout against base branch 'main'. Find the merge base and inspect the resulting diff.\n\nReturn only one JSON object with this exact top-level shape:\n{\"findings\":[],\"overall_correctness\":\"patch is correct\",\"overall_explanation\":\"...\",\"overall_confidence_score\":0.0}\nEach finding must contain title, body, confidence_score, optional priority (0-3), and code_location with absolute_file_path plus line_range.start/end.\nDo not wrap the JSON in Markdown fences and do not include prose outside it.",
+  "reviewAgentMessageChunks": [
+    "I'll review this branch against `main` by finding the merge base and inspecting the full diff for correctness regressions.",
+    "I'll inspect path normalization, call sites, and how `projectKey` / `linkedDirectories` are typed and used.",
+    "Checking one more edge case: whether `projectKey` is ever separator-normalized before matching.",
+    "{\"findings\":[{\"title\":\"Path separator normalization is wrong and can skip primary-project matching\",\"body\":\"normalizeFederatedPath uses replace(/\\\\\\\\/g, \\\"/\\\"), which only rewrites double-backslash sequences. Single Windows separators (\\\\) are left intact. The intended helper (and the near-identical normalizePath in backend-registry) uses replace(/\\\\/g, \\\"/\\\").\\n\\nlinkedDirectoryMatchesProjectKey relies on this normalization to decide whether projectKey identifies a linked directory. If projectKey and path/worktreePath differ only by separator style (common when one side was previously normalized with /\\\\/g and the other still carries raw Windows paths), the primary match fails, primaryProjectDirectory stays undefined, and the code falls back to local-before-worktree ordering—the exact mis-homing this patch is meant to fix. Equal same-separator paths still match, so the regression is conditional, but the helper as written does not implement the normalization it claims.\",\"confidence_score\":0.93,\"priority\":1,\"code_location\":{\"absolute_file_path\":\"/workspaces/wt/PwrAgnt/apps/desktop/src/main/ipc/app-server.ts\",\"line_range\":{\"start\":611,\"end\":614}}},{\"title\":\"findRemoteHomeDirectoryIndex lost null-safe linkedDirectories handling\",\"body\":\"Previously the second argument was linkedDirectories | undefined and was always expanded as [...(linkedDirectories ?? [])]. The new path reads thread.linkedDirectories with no fallback before .find and the spread/sort.\\n\\nNavigationThreadSummary types require linkedDirectories, but pin payloads are JSON-cast summaries (targetPin.summary / request.summary). A partial or older cached summary with projectKey set and missing linkedDirectories now throws TypeError inside findRemoteHomeDirectoryIndex instead of returning undefined. That can break addRemoteThreadPin visibility ranking (and attachRemoteThreadsToLocalDirectories if a remote row is similarly incomplete) where the old code degraded safely.\",\"confidence_score\":0.72,\"priority\":2,\"code_location\":{\"absolute_file_path\":\"/workspaces/wt/PwrAgnt/apps/desktop/src/main/ipc/app-server.ts\",\"line_range\":{\"start\":570,\"end\":583}}}],\"overall_correctness\":\"patch has issues\",\"overall_explanation\":\"The core fix is sound for the reported bug: when projectKey identifies a linked directory, that primary project is preferred over local-kind secondary links, and the new unit test covers the PwrAgent worktree + PwrSuiteLab local case. No broader architectural regressions stand out in the small diff. However, the new path-equality helper uses an incorrect backslash regex, so primary-project selection can silently fall back to the old wrong ordering when separators differ; null-safety around linkedDirectories was also weakened relative to the previous ?? [] path.\",\"overall_confidence_score\":0.86}"
+  ],
+  "reviewTurnCompleted": {
+    "sessionUpdate": "turn_completed",
+    "prompt_id": "82d073ef-3244-4a06-92eb-5012cc89cecd",
+    "stop_reason": "end_turn",
+    "usage": {
+      "inputTokens": 560262,
+      "outputTokens": 9959,
+      "totalTokens": 570221,
+      "cachedReadTokens": 509952,
+      "cacheCreationTokens": 0,
+      "reasoningTokens": 8762,
+      "modelCalls": 13,
+      "apiDurationMs": 162306,
+      "costUsdTicks": 3133596000,
+      "modelUsage": {
+        "grok-4.5-build": {
+          "inputTokens": 560262,
+          "outputTokens": 9959,
+          "totalTokens": 570221,
+          "cachedReadTokens": 509952,
+          "cacheCreationTokens": 0,
+          "reasoningTokens": 8762,
+          "modelCalls": 13,
+          "apiDurationMs": 162306,
+          "costUsdTicks": 3133596000
+        }
+      },
+      "numTurns": 13
+    }
+  },
+  "parentUpdates": [
+    {
+      "method": "_x.ai/session/update",
+      "params": {
+        "sessionId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9",
+        "update": {
+          "sessionUpdate": "turn_completed",
+          "prompt_id": "919afcda-d40d-411e-a729-5a94b0ed94ae",
+          "stop_reason": "end_turn"
+        },
+        "_meta": {
+          "eventId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9-5792",
+          "agentTimestampMs": 1786217906438
+        }
+      }
+    },
+    {
+      "method": "session/update",
+      "params": {
+        "sessionId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9",
+        "update": {
+          "sessionUpdate": "user_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "/always-approve on"
+          },
+          "_meta": {
+            "hostTurn": true
+          }
+        },
+        "_meta": {
+          "eventId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9-5791",
+          "agentTimestampMs": 1786217906438
+        }
+      }
+    },
+    {
+      "method": "session/update",
+      "params": {
+        "sessionId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9",
+        "update": {
+          "sessionUpdate": "user_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "[PwrAgent review sub-agent results — context for this turn]\n\nI'll review this branch against `main` by finding the merge base and inspecting the full diff for correctness regressions.I'll inspect path normalization, call sites, and how `projectKey` / `linkedDirectories` are typed and used.Checking one more edge case: whether `projectKey` is ever separator-normalized before matching.{\"findings\":[{\"title\":\"Path separator normalization is wrong and can skip primary-project matching\",\"body\":\"normalizeFederatedPath uses replace(/\\\\\\\\/g, \\\"/\\\"), which only rewrites double-backslash sequences. Single Windows separators (\\\\) are left intact. The intended helper (and the near-identical normalizePath in backend-registry) uses replace(/\\\\/g, \\\"/\\\").\\n\\nlinkedDirectoryMatchesProjectKey relies on this normalization to decide whether projectKey identifies a linked directory. If projectKey and path/worktreePath differ only by separator style (common when one side was previously normalized with /\\\\/g and the other still carries raw Windows paths), the primary match fails, primaryProjectDirectory stays undefined, and the code falls back to local-before-worktree ordering—the exact mis-homing this patch is meant to fix. Equal same-separator paths still match, so the regression is conditional, but the helper as written does not implement the normalization it claims.\",\"confidence_score\":0.93,\"priority\":1,\"code_location\":{\"absolute_file_path\":\"/workspaces/wt/PwrAgnt/apps/desktop/src/main/ipc/app-server.ts\",\"line_range\":{\"start\":611,\"end\":614}}},{\"title\":\"findRemoteHomeDirectoryIndex lost null-safe linkedDirectories handling\",\"body\":\"Previously the second argument was linkedDirectories | undefined and was always expanded as [...(linkedDirectories ?? [])]. The new path reads thread.linkedDirectories with no fallback before .find and the spread/sort.\\n\\nNavigationThreadSummary types require linkedDirectories, but pin payloads are JSON-cast summaries (targetPin.summary / request.summary). A partial or older cached summary with projectKey set and missing linkedDirectories now throws TypeError inside findRemoteHomeDirectoryIndex instead of returning undefined. That can break addRemoteThreadPin visibility ranking (and attachRemoteThreadsToLocalDirectories if a remote row is similarly incomplete) where the old code degraded safely.\",\"confidence_score\":0.72,\"priority\":2,\"code_location\":{\"absolute_file_path\":\"/workspaces/wt/PwrAgnt/apps/desktop/src/main/ipc/app-server.ts\",\"line_range\":{\"start\":570,\"end\":583}}}],\"overall_correctness\":\"patch has issues\",\"overall_explanation\":\"The core fix is sound for the reported bug: when projectKey identifies a linked directory, that primary project is preferred over local-kind secondary links, and the new unit test covers the PwrAgent worktree + PwrSuiteLab local case. No broader architectural regressions stand out in the small diff. However, the new path-equality helper uses an incorrect backslash regex, so primary-project selection can silently fall back to the old wrong ordering when separators differ; null-safety around linkedDirectories was also weakened relative to the previous ?? [] path.\",\"overall_confidence_score\":0.86}\n\n[End PwrAgent review sub-agent results]"
+          },
+          "_meta": {
+            "modelId": "grok-4.5",
+            "promptIndex": 0
+          }
+        },
+        "_meta": {
+          "eventId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9-6915",
+          "agentTimestampMs": 1786218260077
+        }
+      }
+    },
+    {
+      "method": "session/update",
+      "params": {
+        "sessionId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9",
+        "update": {
+          "sessionUpdate": "user_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Can you summarize the review results for me?"
+          },
+          "_meta": {
+            "modelId": "grok-4.5",
+            "promptIndex": 0
+          }
+        },
+        "_meta": {
+          "eventId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9-6916",
+          "agentTimestampMs": 1786218260077
+        }
+      }
+    },
+    {
+      "method": "session/update",
+      "params": {
+        "sessionId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9",
+        "update": {
+          "sessionUpdate": "agent_thought_chunk",
+          "content": {
+            "type": "text",
+            "text": "The user wants me to summarize the review results that were provided in the message. This is a straightforward summarization task - I don't need to dig into the code or make changes. Let me synthesize..."
+          }
+        },
+        "_meta": {
+          "totalTokens": 9785,
+          "eventId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9-6958",
+          "agentTimestampMs": 1786218261445,
+          "promptId": "fa8b29ac-a5ab-4c03-8758-1263662f5335",
+          "streamStartMs": 1786218260523,
+          "turnStartMs": 1786218260122,
+          "updateType": "AgentThoughtChunk",
+          "chunkId": 39
+        }
+      }
+    },
+    {
+      "method": "session/update",
+      "params": {
+        "sessionId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "## Review summary\n\n**Overall:** The patch is directionally right for the remote-thread home bug, but the reviewer marked it as **having issues** (confidence ~0.86). The main risk is a broken path-separator helper that can undo the fix on Windows-style paths.\n\n### What’s solid\n- Preferring the **primary project** (`projectKey`) over local-kind secondary links is the right approach.\n- The unit test covers the intended case (PwrAgent worktree + PwrSuiteLab local).\n- No broader architectural problems in the small diff.\n\n### Finding 1 — Path normalization is wrong (priority 1, high confidence)\nIn `app-server.ts`, `normalizeFederatedPath` uses `replace(/\\\\\\\\/g, \"/\")`, which only rewrites **double** backslashes. It should use `replace(/\\\\/g, \"/\")` (single `\\`), matching the existing `normalizePath` in backend-registry.\n\n**Impact:** If `projectKey` and a linked path differ only by separator style (`\\` vs `/`), primary matching fails, `primaryProjectDirectory` stays undefined, and the code falls back to the old local-before-worktree order — the bug this branch is meant to fix.\n\n### Finding 2 — Weaker null-safety on `linkedDirectories` (priority 2, medium confidence)\n`findRemoteHomeDirectoryIndex` now reads `thread.linkedDirectories` without a `?? []` fallback.\n\n**Impact:** Typed summaries always have the field, but pin/attach payloads are JSON-cast. A partial summary with `projectKey` and missing `linkedDirectories` can throw instead of degrading safely, which could break pin ranking / attach paths.\n\n### Bottom line\nFix the regex (must-do). Restore optional `linkedDirectories` handling (should-do). After that, the core primary-project preference looks good."
+          }
+        },
+        "_meta": {
+          "totalTokens": 9785,
+          "eventId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9-7389",
+          "agentTimestampMs": 1786218266523,
+          "promptId": "fa8b29ac-a5ab-4c03-8758-1263662f5335",
+          "streamStartMs": 1786218260523,
+          "turnStartMs": 1786218260122,
+          "updateType": "AgentMessageChunk",
+          "chunkId": 427
+        }
+      }
+    },
+    {
+      "method": "_x.ai/session/update",
+      "params": {
+        "sessionId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9",
+        "update": {
+          "sessionUpdate": "turn_completed",
+          "prompt_id": "fa8b29ac-a5ab-4c03-8758-1263662f5335",
+          "stop_reason": "end_turn",
+          "usage": {
+            "inputTokens": 19988,
+            "outputTokens": 445,
+            "totalTokens": 20433,
+            "cachedReadTokens": 11264,
+            "cacheCreationTokens": 0,
+            "reasoningTokens": 53,
+            "modelCalls": 1,
+            "apiDurationMs": 6435,
+            "costUsdTicks": 234972000,
+            "modelUsage": {
+              "grok-4.5-build": {
+                "inputTokens": 19988,
+                "outputTokens": 445,
+                "totalTokens": 20433,
+                "cachedReadTokens": 11264,
+                "cacheCreationTokens": 0,
+                "reasoningTokens": 53,
+                "modelCalls": 1,
+                "apiDurationMs": 6435,
+                "costUsdTicks": 234972000
+              }
+            },
+            "numTurns": 1
+          }
+        },
+        "_meta": {
+          "eventId": "019fe2e2-3c86-7a50-b806-7f689c7b48b9-7391",
+          "agentTimestampMs": 1786218266561
+        }
+      }
+    }
+  ],
+  "liveOnlyUpdates": {
+    "note": "Grok marks these transient — they reach the client over the wire but are never written to updates.jsonl, so they are reconstructed here from the grok-build shapes (xai-grok-shell session/summary.rs and extensions/notification.rs) that produced the transcript entries in the bug report.",
+    "sessionInfoUpdate": {
+      "sessionUpdate": "session_info_update",
+      "title": "Summarize path normalization review findings"
+    },
+    "lastTurnSummary": {
+      "sessionUpdate": "last_turn_summary",
+      "summary": "Summarized the review findings",
+      "prompt_id": "919afcda-d40d-411e-a729-5a94b0ed94ae"
+    }
+  }
+}
