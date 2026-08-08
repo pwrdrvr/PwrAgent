@@ -245,7 +245,10 @@ function handleRequest(request) {
     const threadId = nextThreadId();
     return {
       thread: minimalThread(threadId, params),
-      model: "gpt-5",
+      model:
+        typeof params.model === "string" && params.model.trim()
+          ? params.model.trim()
+          : "gpt-5.5",
       modelProvider: "openai",
       serviceTier: null,
       cwd:
@@ -285,13 +288,24 @@ function handleRequest(request) {
     return { data: [] };
   }
   if (method === "model/list") {
+    // The desktop can carry its current Codex launchpad default into the new
+    // thread, then validates that same model again before review/start. Keep
+    // the fake catalog aligned with the production default while retaining a
+    // legacy option for tests that select it explicitly.
     return {
       data: [
         {
-          id: "gpt-5",
-          model: "gpt-5",
+          id: "gpt-5.5",
+          model: "gpt-5.5",
           isDefault: true,
           default: true,
+          supportsReasoning: true,
+        },
+        {
+          id: "gpt-5",
+          model: "gpt-5",
+          isDefault: false,
+          default: false,
           supportsReasoning: true,
         },
       ],
