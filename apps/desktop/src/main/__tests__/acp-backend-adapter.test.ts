@@ -61,6 +61,19 @@ describe("describeInstalledAcpBackend", () => {
     expect(backend.methods).toContain("session/load");
   });
 
+  it("advertises managed review for Kimi but not other ACP providers", () => {
+    const kimi = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:kimi" as AcpBackendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+    });
+    const gemini = describeInstalledAcpBackend(buildInstalledAgent());
+
+    expect(kimi.capabilities.startReview).toBe(true);
+    expect(gemini.capabilities.startReview).toBe(false);
+  });
+
   it("advertises Grok 4.5 reasoning efforts in launchpad options", () => {
     const backend = describeInstalledAcpBackend({
       ...buildInstalledAgent(),

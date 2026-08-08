@@ -1,23 +1,29 @@
 export type AcpAgentCapabilities = {
   liveWorkspaceHandoff: boolean;
+  managedReview: boolean;
 };
 
 const DEFAULT_ACP_AGENT_CAPABILITIES: AcpAgentCapabilities = {
   liveWorkspaceHandoff: false,
+  managedReview: false,
 };
 
 const ACP_AGENT_CAPABILITY_CATALOG: Record<string, AcpAgentCapabilities> = {
   gemini: {
     liveWorkspaceHandoff: false,
+    managedReview: false,
   },
   kimi: {
     liveWorkspaceHandoff: false,
+    managedReview: true,
   },
   grok: {
     liveWorkspaceHandoff: false,
+    managedReview: false,
   },
   qwen: {
     liveWorkspaceHandoff: false,
+    managedReview: false,
   },
 };
 

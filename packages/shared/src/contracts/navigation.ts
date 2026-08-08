@@ -1653,6 +1653,12 @@ export type ThreadOverlayState = {
    * threads are intentionally ephemeral.
    */
   managedReviewEntries?: AppServerThreadReviewEntry[];
+  /**
+   * Managed-review result entry ids that still need to be supplied to the
+   * parent ACP agent. The review text remains in `managedReviewEntries`; this
+   * list is only durable delivery metadata.
+   */
+  pendingManagedReviewContextEntryIds?: string[];
   /** Durable delegated sub-agent/task-monitor summaries for this thread. */
   subAgents?: ThreadSubAgentSummary[];
   /** Durable origin metadata for threads created by an Agent handoff tool. */

@@ -592,6 +592,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
           immutableUsageActivities: current?.immutableUsageActivities,
           managedReviewEntries: current?.managedReviewEntries,
+          pendingManagedReviewContextEntryIds:
+            current?.pendingManagedReviewContextEntryIds,
           subAgents: current?.subAgents,
           handoffOrigin: current?.handoffOrigin,
           lastSeenAt: params.fetchedAt,
@@ -930,6 +932,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     entry: NonNullable<ThreadOverlayState["managedReviewEntries"]>[number];
+    pendingContext?: boolean;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey) ?? {
@@ -951,6 +954,42 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const nextState: ThreadOverlayState = {
       ...current,
       managedReviewEntries: nextEntries.slice(-MAX_MANAGED_REVIEW_ENTRIES),
+    };
+    const retainedEntryIds = new Set(
+      nextState.managedReviewEntries?.map((entry) => entry.id) ?? [],
+    );
+    const pendingContextEntryIds = [
+      ...(current.pendingManagedReviewContextEntryIds ?? []),
+      ...(params.pendingContext ? [params.entry.id] : []),
+    ].filter(
+      (id, index, ids) =>
+        retainedEntryIds.has(id) && ids.indexOf(id) === index,
+    );
+    nextState.pendingManagedReviewContextEntryIds =
+      pendingContextEntryIds.length > 0
+        ? pendingContextEntryIds
+        : undefined;
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async consumeManagedReviewContexts(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    entryIds: string[];
+  }): Promise<ThreadOverlayState | undefined> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey);
+    if (!current || params.entryIds.length === 0) {
+      return current;
+    }
+    const consumed = new Set(params.entryIds);
+    const remaining = (current.pendingManagedReviewContextEntryIds ?? [])
+      .filter((id) => !consumed.has(id));
+    const nextState: ThreadOverlayState = {
+      ...current,
+      pendingManagedReviewContextEntryIds:
+        remaining.length > 0 ? remaining : undefined,
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -6224,6 +6263,7 @@ export type OverlayStoreLike = Pick<
   | "setAcpWorktreeDirectory"
   | "persistThreadUsageActivity"
   | "upsertManagedReviewEntry"
+  | "consumeManagedReviewContexts"
   | "upsertThreadUsageLine"
   | "readThreadPricing"
   | "upsertThreadToolInvocation"

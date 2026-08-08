@@ -517,6 +517,30 @@ describe("MessagingController", () => {
     });
   });
 
+  it("submits reviews for Kimi when managed review is advertised", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildKimiRuntimeBackendSummary()],
+      }),
+    });
+    await bindThreadToBackend(harness, "acp:kimi");
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review main"));
+
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "acp:kimi",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Review started",
+    });
+  });
+
   it("rejects review when Codex does not advertise review/start", async () => {
     const harness = await createHarness({
       listBackends: async (): Promise<ListBackendsResponse> => ({

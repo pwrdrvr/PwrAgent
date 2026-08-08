@@ -293,7 +293,9 @@ function hashString(value: string): string {
   return hash.toString(16);
 }
 
-export function buildAcpCapabilities(): BackendCapabilities {
+export function buildAcpCapabilities(
+  agentCapabilities?: AcpAgentCapabilities,
+): BackendCapabilities {
   return {
     listThreads: true,
     createThread: true,
@@ -305,7 +307,7 @@ export function buildAcpCapabilities(): BackendCapabilities {
     renameThread: true,
     readThread: true,
     startTurn: true,
-    startReview: false,
+    startReview: agentCapabilities?.managedReview === true,
     interruptTurn: true,
     steerTurn: false,
     transcriptPagination: false,
@@ -358,7 +360,7 @@ export function describeInstalledAcpBackend(
       "session/prompt",
       "session/cancel",
     ],
-    capabilities: buildAcpCapabilities(),
+    capabilities: buildAcpCapabilities(effectiveAcpAgentCapabilities(agent)),
     executionModes: buildAcpExecutionModes(agent, available, unavailableReason),
     launchpadOptions: buildAcpLaunchpadOptions(
       runtimeCapabilities,
@@ -407,9 +409,10 @@ function isLegacyKimiInstalledRecord(agent: AcpInstalledAgentRecord): boolean {
 function effectiveAcpAgentCapabilities(
   agent: AcpInstalledAgentRecord,
 ): AcpAgentCapabilities {
-  const configured =
-    agent.capabilities ??
-    acpAgentCapabilitiesForRegistryId(agent.registryId);
+  const configured = {
+    ...acpAgentCapabilitiesForRegistryId(agent.registryId),
+    ...agent.capabilities,
+  };
   return {
     ...configured,
     liveWorkspaceHandoff:
@@ -1614,6 +1617,11 @@ export class AcpBackendAdapter {
   async supportsLiveWorkspaceHandoff(backend: AcpBackendId): Promise<boolean> {
     const agent = await this.resolveInstalledAgent(backend);
     return effectiveAcpAgentCapabilities(agent).liveWorkspaceHandoff;
+  }
+
+  supportsManagedReview(backend: AcpBackendId): boolean {
+    const agent = this.getInstalledAgent(backend);
+    return Boolean(agent && effectiveAcpAgentCapabilities(agent).managedReview);
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
