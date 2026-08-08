@@ -278,6 +278,8 @@ describe("TranscriptList", () => {
                 sourceThread: {
                   backend: "codex",
                   instanceId: "pwr_remote",
+                  instanceLabel: "Harold-MBP-2018",
+                  celestialIcon: "moon",
                   threadId: sourceThreadId,
                   title: "Cloudflare Tunnel connector audit",
                 },
@@ -297,6 +299,9 @@ describe("TranscriptList", () => {
     expect(screen.queryByRole("button", {
       name: `Open thread ${sourceThreadId}`,
     })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Runs on Harold-MBP-2018")).toHaveTextContent(
+      "Harold-MBP-2018",
+    );
   });
 
   it("attributes monitor handoffs and keeps their raw payload collapsed", () => {

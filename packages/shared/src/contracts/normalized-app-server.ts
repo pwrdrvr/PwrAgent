@@ -4,7 +4,7 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
 } from "./messaging";
-import type { CelestialIconAssignment } from "./celestial";
+import type { CelestialIconAssignment, CelestialIconId } from "./celestial";
 import type { StarMapArrangementEntry, StarMapIntakePhase } from "./star-map";
 import type {
   FederationConnectionState,
@@ -422,6 +422,10 @@ export type AppServerThreadMessageOrigin = {
     backend: AppServerBackendKind;
     /** Durable owner identity when the source thread belongs to another instance. */
     instanceId?: FederationInstanceId;
+    /** Hydrated owner label so provenance stays useful without mounting the source thread. */
+    instanceLabel?: string;
+    /** Hydrated owner identity icon, matching remote thread rows. */
+    celestialIcon?: CelestialIconId;
     threadId: ThreadIdentifier;
     title?: string;
   };

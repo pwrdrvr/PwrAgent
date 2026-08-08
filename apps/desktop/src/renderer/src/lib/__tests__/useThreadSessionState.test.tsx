@@ -905,6 +905,8 @@ describe("useThreadSessionState", () => {
                 sourceThread: {
                   backend: "codex",
                   instanceId: "pwr_source",
+                  instanceLabel: "Source Mac",
+                  celestialIcon: "moon",
                   threadId: "parent-thread",
                   title: "Parent thread",
                 },
@@ -943,6 +945,8 @@ describe("useThreadSessionState", () => {
           sourceThread: {
             backend: "codex",
             instanceId: "pwr_source",
+            instanceLabel: "Source Mac",
+            celestialIcon: "moon",
             threadId: "parent-thread",
             title: "Parent thread",
           },

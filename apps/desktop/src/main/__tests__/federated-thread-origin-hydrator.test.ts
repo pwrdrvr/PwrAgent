@@ -89,11 +89,17 @@ describe("federated thread origin hydration", () => {
         source: "codex" as const,
       },
     }));
+    const resolveInstance = vi.fn((instanceId: string) =>
+      instanceId === "owner_one"
+        ? { label: "Owner Mac", celestialIcon: "moon" as const }
+        : { label: "Viewer Mac", celestialIcon: "sun" as const }
+    );
 
     const hydrated = await hydrateFederatedThreadMessageOrigins({
       localInstanceId: "viewer_one",
       ownerInstanceId: "owner_one",
       response,
+      resolveInstance,
       resolveThread,
     });
 
@@ -104,6 +110,8 @@ describe("federated thread origin hydration", () => {
           sourceThread: {
             backend: "codex",
             instanceId: "owner_one",
+            instanceLabel: "Owner Mac",
+            celestialIcon: "moon",
             threadId: "remote-parent",
             title: "Remote pagination audit",
           },
@@ -124,6 +132,8 @@ describe("federated thread origin hydration", () => {
         origin: {
           sourceThread: {
             instanceId: "owner_one",
+            instanceLabel: "Owner Mac",
+            celestialIcon: "moon",
             title: "Remote pagination audit",
           },
         },
@@ -179,6 +189,10 @@ describe("federated thread origin hydration", () => {
       localInstanceId: "viewer_one",
       ownerInstanceId: "viewer_one",
       response,
+      resolveInstance: () => ({
+        label: "Remote Mac",
+        celestialIcon: "ringed-planet",
+      }),
       resolveThread,
     });
 
@@ -193,6 +207,8 @@ describe("federated thread origin hydration", () => {
         sourceThread: {
           backend: "codex",
           instanceId: "remote_one",
+          instanceLabel: "Remote Mac",
+          celestialIcon: "ringed-planet",
           threadId: "legacy-remote-parent",
           title: "Remote parent thread",
         },
@@ -216,6 +232,8 @@ describe("federated thread origin hydration", () => {
             sourceThread: {
               backend: "codex",
               instanceId: "remote_one",
+              instanceLabel: "Remembered Remote Mac",
+              celestialIcon: "moon",
               threadId: "remote-parent",
             },
           },
@@ -248,6 +266,9 @@ describe("federated thread origin hydration", () => {
       localInstanceId: "viewer_one",
       ownerInstanceId: "owner_one",
       response,
+      resolveInstance: () => {
+        throw new Error("peer metadata unavailable");
+      },
       resolveThread,
     });
 
@@ -256,6 +277,8 @@ describe("federated thread origin hydration", () => {
       origin: {
         sourceThread: {
           instanceId: "remote_one",
+          instanceLabel: "Remembered Remote Mac",
+          celestialIcon: "moon",
           threadId: "remote-parent",
           title: "Remote parent fallback",
         },
@@ -265,6 +288,8 @@ describe("federated thread origin hydration", () => {
       origin: {
         sourceThread: {
           instanceId: "remote_one",
+          instanceLabel: "Remembered Remote Mac",
+          celestialIcon: "moon",
           threadId: "remote-parent",
           title: "Remote parent fallback",
         },

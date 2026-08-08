@@ -1246,6 +1246,29 @@ export class DesktopFederationRuntime {
       localInstanceId: this.ensureLocalInstanceId(),
       ownerInstanceId,
       response,
+      resolveInstance: (instanceId) => {
+        let visible: FederationPeerSummary[] = [];
+        try {
+          visible = this.visiblePeers();
+        } catch {
+          // Early boot tests may not have initialized the app-state DB yet.
+        }
+        let peer = visible.find((candidate) => candidate.id === instanceId);
+        if (!peer) {
+          try {
+            peer = this.store().getPeer(instanceId);
+          } catch {
+            // A source id remains actionable even when peer metadata is gone.
+          }
+        }
+        return peer
+          ? {
+              label: formatFederationPeerDisplayLabel(peer, visible),
+              celestialIcon:
+                this.celestialIconFor(instanceId) ?? peer.celestialIcon,
+            }
+          : undefined;
+      },
       resolveThread: async (source) => {
         const resolveOnInstance = async (instanceId: FederationInstanceId) => {
           if (instanceId === this.ensureLocalInstanceId()) {

@@ -23,6 +23,7 @@ import type {
   MessagingConversationKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
+import { isCelestialIconId } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import {
@@ -3175,6 +3176,12 @@ function threadMessageOriginFromUnknown(
       backend: sourceRecord.backend as AppServerBackendKind,
       ...(typeof sourceRecord.instanceId === "string"
         ? { instanceId: sourceRecord.instanceId }
+        : {}),
+      ...(typeof sourceRecord.instanceLabel === "string"
+        ? { instanceLabel: sourceRecord.instanceLabel }
+        : {}),
+      ...(isCelestialIconId(sourceRecord.celestialIcon)
+        ? { celestialIcon: sourceRecord.celestialIcon }
         : {}),
       threadId: sourceRecord.threadId,
       ...(typeof sourceRecord.title === "string"

@@ -634,10 +634,13 @@ export function registerFederationBackendHandlers(params: {
               messageOrigin: {
                 ...messageOrigin,
                 sourceThread: {
-                  ...sourceThread,
-                  // The authenticated envelope sender is authoritative. Do
-                  // not accept a caller-supplied provenance owner here.
+                  backend: sourceThread.backend,
+                  // The authenticated envelope sender is authoritative. Peer
+                  // label/icon metadata is hydrated locally and must not be
+                  // accepted from the caller either.
                   instanceId: envelope.sourceInstanceId,
+                  threadId: sourceThread.threadId,
+                  ...(sourceThread.title ? { title: sourceThread.title } : {}),
                 },
               },
             }

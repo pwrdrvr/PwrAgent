@@ -1876,7 +1876,13 @@ describe("federation backend bridge", () => {
           input: [{ type: "text", text: "ship it" }],
           messageOrigin: {
             kind: "agent",
-            sourceThread: { backend: "codex", threadId: "source-thread" },
+            sourceThread: {
+              backend: "codex",
+              instanceId: "spoofed_instance",
+              instanceLabel: "Spoofed Mac",
+              celestialIcon: "black-hole",
+              threadId: "source-thread",
+            },
           },
         },
         protocolVersion: 1,
