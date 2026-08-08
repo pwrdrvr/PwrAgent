@@ -1534,6 +1534,34 @@ describe("AcpSessionReplayNormalizer", () => {
     ).toBe(false);
   });
 
+  it("keeps Grok last_turn_summary out of the transcript and turn lifecycle", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    normalizer.recordUserPrompt({
+      sessionId: "session-1",
+      prompt: "Inspect this",
+      turnId: "turn-1",
+      receivedAt: 1000,
+      waitingForAgent: true,
+    });
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "last_turn_summary",
+        summary: "Inspection complete",
+      },
+    });
+
+    expect(replay.threadStatus).toBe("active");
+    expect(replay.entries).toHaveLength(2);
+    expect(
+      replay.entries.some(
+        (entry) => entry.type === "activity" && entry.summary.startsWith("ACP update:"),
+      ),
+    ).toBe(false);
+  });
+
   it("records thought chunks as assistant response messages", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
