@@ -3,6 +3,8 @@ import type { AcpAgentSettingsEntry } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
+export const GROK_BUILD_UPDATE_URL = "https://x.ai/build";
+
 export function GrokCliUpdateNotice(props: {
   desktopApi?: DesktopApi;
   now?: () => number;
@@ -65,9 +67,8 @@ export function GrokCliUpdateNotice(props: {
   const notice = useMemo(() => buildGrokCliUpdateNotice({
     entry,
     now: clock,
-    platform: desktopApi?.platform,
-    onCopy: (command) => {
-      void desktopApi?.copyText?.(command);
+    onOpenUpdatePage: (url) => {
+      window.open(url, "_blank", "noopener,noreferrer");
     },
     onDismiss: () => {
       void acknowledge("dismiss");
@@ -75,7 +76,7 @@ export function GrokCliUpdateNotice(props: {
     onSnooze: () => {
       void acknowledge("snooze");
     },
-  }), [acknowledge, clock, desktopApi, entry]);
+  }), [acknowledge, clock, entry]);
 
   useEffect(() => {
     onNoticeChanged(notice);
@@ -87,8 +88,7 @@ export function GrokCliUpdateNotice(props: {
 export function buildGrokCliUpdateNotice(params: {
   entry?: AcpAgentSettingsEntry;
   now: number;
-  platform?: string;
-  onCopy: (command: string) => void;
+  onOpenUpdatePage: (url: string) => void;
   onDismiss: () => void;
   onSnooze: () => void;
 }): AppNoticeToastNotice | undefined {
@@ -102,40 +102,21 @@ export function buildGrokCliUpdateNotice(params: {
   ) {
     return undefined;
   }
-  const command = buildGrokCliUpdateCommand(
-    params.entry.activeCommand,
-    params.platform,
-  );
   return {
     id: `acp-update:acp:grok:${update.latestVersion}`,
     autoDismiss: false,
     title: "Grok update available",
     message: `Grok ${update.latestVersion} is available; ${update.currentVersion} is installed.`,
-    detail: `Run ${command} in a terminal, then restart active Grok sessions.`,
-    copyText: command,
+    detail: "Update Grok from x.ai/build, then restart active Grok sessions.",
     tone: "warning",
     actions: [
       {
-        label: "Copy command",
-        onClick: () => params.onCopy(command),
+        label: "Open update page",
+        onClick: () => params.onOpenUpdatePage(GROK_BUILD_UPDATE_URL),
         tone: "primary",
       },
       { label: "Tomorrow", onClick: params.onSnooze },
       { label: "Dismiss version", onClick: params.onDismiss },
     ],
   };
-}
-
-export function buildGrokCliUpdateCommand(
-  activeCommand: string | undefined,
-  platform: string | undefined,
-): string {
-  const executable = activeCommand?.trim() || "grok";
-  if (/^[A-Za-z0-9_./:@%+,=\\-]+$/.test(executable)) {
-    return `${executable} update`;
-  }
-  if (platform === "win32") {
-    return `& '${executable.replace(/'/g, "''")}' update`;
-  }
-  return `'${executable.replace(/'/g, "'\\''")}' update`;
 }
