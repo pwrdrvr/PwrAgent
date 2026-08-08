@@ -3071,6 +3071,65 @@ describe("ThreadContextPanel", () => {
     });
   });
 
+  // `.unpublished-commit__toggle` is a two-row grid — "chevron subject" over
+  // ".  sha" — which is what puts the chevron on the SUBJECT line instead of
+  // floating it between the two lines. Grid areas only resolve for DIRECT
+  // children, so wrapping subject + sha in an identity span (which is how this
+  // markup originally read) silently collapses both back onto one row with no
+  // other symptom. Nothing else in the suite would notice.
+  it("keeps the commit toggle's chevron, subject, and sha as direct grid children", async () => {
+    const listWorktreeUnpublishedCommits = vi.fn(async () => ({
+      commits: [
+        {
+          sha: "b6f2bd748f6d69e39a0aa388060dcb118640925f",
+          shortSha: "b6f2bd748",
+          subject: "test(desktop): vendor ACP SDK fix fixture",
+          additions: 19,
+          removals: 20,
+          files: [],
+          totalFiles: 0,
+          filesTruncated: false,
+        },
+      ],
+      totalCommits: 1,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    }));
+
+    const { container } = renderPanel({
+      activeTab: "edits",
+      desktopApi: { listWorktreeUnpublishedCommits },
+      pinned: true,
+      thread: {
+        ...baseThread,
+        linkedDirectories: [
+          {
+            id: "linked-worktree",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/repo",
+            worktreePath: "/repo/.worktrees/thread-1",
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector(".unpublished-commit__toggle")).not.toBeNull();
+    });
+
+    const toggle = container.querySelector(".unpublished-commit__toggle") as HTMLElement;
+    const children = [...toggle.children];
+    expect(children.map((child) => child.className)).toEqual([
+      "live-work-rail__chevron",
+      "unpublished-commit__subject",
+      "unpublished-commit__sha",
+    ]);
+    expect(children[1]?.textContent).toBe("test(desktop): vendor ACP SDK fix fixture");
+    expect(children[2]?.textContent).toBe("b6f2bd748");
+  });
+
   it("renders accumulated edit groups on the Edits tab and toggles the dock", () => {
     const groups = collectEditedFileGroups({
       entries: [

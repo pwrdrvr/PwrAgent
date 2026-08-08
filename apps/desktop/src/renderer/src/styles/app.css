@@ -13362,6 +13362,14 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .live-work-rail__chevron {
   display: inline-block;
+  /* Never let a narrow rail squeeze the glyph: this chevron sits in flex
+     toggles whose label can only shrink so far, so without a shrink guard the
+     8px box collapsed (7.1px at a 240px rail, 5.4px at 200px) while the file
+     rows -- a grid, immune to flex shrink -- stayed 8px, leaving two sizes of
+     chevron stacked in one column. Every sibling chevron in the family
+     (.transcript-activity__chevron, .transcript-work-phase-group__chevron,
+     .directory-row__chevron) already carries this; the canonical one did not. */
+  flex: 0 0 auto;
   width: 8px;
   height: 8px;
   border-right: 1.5px solid currentColor;
@@ -13909,32 +13917,56 @@ a.transcript-message__messaging-origin:focus-visible {
   margin: 8px 0 10px;
 }
 
+/* Nested-child guide + indent, following `.subthread-list` (the app's other
+   nested-disclosure list): ONE continuous hairline for the whole list rather
+   than a segment per child, plus a real indent.
+   The 4px row gap used to chop a per-commit border into dashes, and the 4px
+   indent that came with it left the three disclosure levels 1px and 4px apart
+   -- visually flush, so the commits read as siblings of their own group
+   header. The indent below restores an even 14px (chevron 8px + toggle gap
+   6px) step per level, which is what puts a child's chevron directly under
+   its parent's label:
+     group chevron 18px -> commit chevron 32px -> file chevron 46px.
+   10px margin also drops the hairline on the group chevron's center (18 + 4),
+   so the guide descends from the control it belongs to. */
 .unpublished-commits__list {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-top: 4px;
+  margin-left: 10px;
+  padding-left: 7px;
+  border-left: 1px solid var(--border-subtle);
 }
 
 .unpublished-commit {
   min-width: 0;
-  border-left: 1px solid var(--border-subtle);
-  padding-left: 4px;
 }
 
 .unpublished-commit__header {
   display: flex;
-  align-items: center;
+  /* Top-aligned, not centered: the toggle is two lines (subject over sha) and
+     the diff-stat belongs on the subject line, not floating between them. */
+  align-items: flex-start;
   gap: 6px;
   min-width: 0;
   padding: 4px 2px;
 }
 
+/* Two rows -- subject, then the sha indented under it -- so the chevron
+   centers on the SUBJECT line it discloses. As a two-line flex column this
+   centered the chevron across BOTH lines, leaving it aligned with neither.
+   Same summary-over-metadata shape as `.edited-file-groups__group-header`. */
 .unpublished-commit__toggle {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "chevron subject"
+    ".       sha";
   flex: 1 1 auto;
   align-items: center;
-  gap: 6px;
+  column-gap: 6px;
+  row-gap: 1px;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -13943,6 +13975,10 @@ a.transcript-message__messaging-origin:focus-visible {
   cursor: pointer;
   font: inherit;
   text-align: left;
+}
+
+.unpublished-commit__toggle .live-work-rail__chevron {
+  grid-area: chevron;
 }
 
 .unpublished-commit__toggle:hover {
@@ -13955,28 +13991,32 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: 1px;
 }
 
+/* Shared disclosure language (see .live-work-rail__chevron): right when
+   collapsed, down when expanded. These rotations were 0deg/-90deg, which
+   points the two borders of the glyph at a right angle instead of a chevron
+   -- an elbow, not an arrow -- and the two states were near-indistinguishable
+   at 8px, so the control read as decoration rather than as open/closed. */
 .unpublished-commit__toggle[aria-expanded="false"] .live-work-rail__chevron {
-  transform: rotate(-90deg);
+  transform: rotate(-45deg);
 }
 
 .unpublished-commit__toggle[aria-expanded="true"] .live-work-rail__chevron {
-  transform: rotate(0deg);
-}
-
-.unpublished-commit__identity {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-width: 0;
+  transform: rotate(45deg);
 }
 
 .unpublished-commit__subject {
+  grid-area: subject;
   overflow: hidden;
   color: var(--text-primary);
   font-size: 12px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.unpublished-commit__sha {
+  grid-area: sha;
+  justify-self: start;
 }
 
 .unpublished-commit__sha,
@@ -13990,8 +14030,12 @@ a.transcript-message__messaging-origin:focus-visible {
   flex: 0 0 auto;
 }
 
+/* One more 14px step, so a commit's files sit under its subject (chevron at
+   46px) instead of 4px off the commit's own chevron. 10px here + the file
+   toggle's own 6px inset = the step. */
 .unpublished-commit .live-work-rail__file-list {
   margin-top: 2px;
+  padding-left: 10px;
 }
 
 .other-changes__truncated,
