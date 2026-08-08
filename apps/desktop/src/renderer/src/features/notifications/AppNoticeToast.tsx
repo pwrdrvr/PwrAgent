@@ -133,6 +133,7 @@ export function AppNoticeToast(props: {
         {props.notice.threadLink && props.onOpenThread ? (
           <div className="app-notice-toast__thread-link">
             <ThreadChip
+              contextMenuClassName="app-notice-toast__thread-menu"
               fallbackLabel={props.notice.detail}
               link={props.notice.threadLink}
               onOpen={props.onOpenThread}

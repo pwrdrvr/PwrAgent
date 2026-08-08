@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { AppNoticeToastNotice } from "../AppNoticeToast";
-import { resolveBackendErrorNotice } from "../backend-error-notice";
+import {
+  resolveBackendErrorNotice,
+  type BackendErrorSignal,
+} from "../backend-error-notice";
 
 describe("resolveBackendErrorNotice", () => {
   const invalidIdFailure =
@@ -228,5 +231,39 @@ describe("resolveBackendErrorNotice", () => {
       undefined,
     );
     expect(a?.id).not.toBe(b?.id);
+  });
+
+  it("preserves remote federation identity for every backend error path", () => {
+    const base = {
+      instanceId: "remote-gateway",
+      threadId: "thread-1",
+      threadLabel: "Remote thread",
+    };
+    const signals: BackendErrorSignal[] = [
+      {
+        ...base,
+        kind: "turn-failed",
+        backend: "codex",
+        errorMessage: "turn failed",
+        turnId: "turn-1",
+      },
+      {
+        ...base,
+        kind: "codex-invalid-id-recovery",
+        failureMessage: invalidIdFailure,
+        status: "failed",
+        turnId: "turn-1",
+      },
+      {
+        ...base,
+        kind: "system-error",
+        backend: "codex",
+      },
+    ];
+
+    for (const signal of signals) {
+      expect(resolveBackendErrorNotice(signal, undefined)?.threadLink)
+        .toMatchObject({ instanceId: "remote-gateway" });
+    }
   });
 });

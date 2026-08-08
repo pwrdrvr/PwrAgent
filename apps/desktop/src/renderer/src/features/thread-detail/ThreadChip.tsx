@@ -19,6 +19,7 @@ type ThreadChipProps = {
    */
   fallbackLabel?: string;
   link: ResolvedThreadLink;
+  contextMenuClassName?: string;
   onOpen: (link: ResolvedThreadLink) => void;
 };
 
@@ -88,6 +89,7 @@ export function ThreadChip(props: ThreadChipProps) {
       {tooltipController.tooltipNode}
       {contextMenuPosition && contextMenuInvokerRef.current ? (
         <ChipContextMenu
+          className={props.contextMenuClassName}
           items={threadCopyTargets(link, label)}
           position={contextMenuPosition}
           returnFocusTo={contextMenuInvokerRef.current}

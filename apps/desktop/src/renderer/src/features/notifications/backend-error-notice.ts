@@ -1,4 +1,7 @@
-import type { AppServerBackendKind } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  FederationInstanceId,
+} from "@pwragent/shared";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 /**
@@ -16,6 +19,7 @@ export type BackendErrorSignal =
       turnId: string;
       failureMessage: string;
       recoveryError?: string;
+      instanceId?: FederationInstanceId;
       threadLabel: string;
     }
   | {
@@ -24,11 +28,13 @@ export type BackendErrorSignal =
       threadId: string;
       turnId: string;
       errorMessage: string;
+      instanceId?: FederationInstanceId;
       threadLabel: string;
     }
   | {
       kind: "system-error";
       backend: AppServerBackendKind;
+      instanceId?: FederationInstanceId;
       threadId: string;
       threadLabel: string;
     };
@@ -56,6 +62,7 @@ export function resolveBackendErrorNotice(
       message: signal.failureMessage,
       threadLink: {
         backend: "codex" as const,
+        ...(signal.instanceId ? { instanceId: signal.instanceId } : {}),
         threadId: signal.threadId,
         title: signal.threadLabel,
       },
@@ -108,6 +115,7 @@ export function resolveBackendErrorNotice(
       detail: signal.threadLabel,
       threadLink: {
         backend: signal.backend,
+        ...(signal.instanceId ? { instanceId: signal.instanceId } : {}),
         threadId: signal.threadId,
         title: signal.threadLabel,
       },
@@ -142,6 +150,7 @@ export function resolveBackendErrorNotice(
     detail: signal.threadLabel,
     threadLink: {
       backend: signal.backend,
+      ...(signal.instanceId ? { instanceId: signal.instanceId } : {}),
       threadId: signal.threadId,
       title: signal.threadLabel,
     },

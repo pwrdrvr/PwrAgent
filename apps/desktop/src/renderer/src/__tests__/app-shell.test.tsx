@@ -391,6 +391,7 @@ describe("App", () => {
     expected,
   }) => {
     const agentEventListeners = new Set<(event: AgentEvent) => void>();
+    const copyText = vi.fn(async () => undefined);
     if (rendererTarget) {
       (window as typeof window & {
         __pwragentFederationTarget?: unknown;
@@ -399,6 +400,7 @@ describe("App", () => {
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
+        copyText,
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
           fetchedAt: Date.now(),
@@ -443,6 +445,18 @@ describe("App", () => {
 
     expect(screen.getByText("Turn failed")).toBeInTheDocument();
     expect(screen.getByText("1 of 3")).toBeInTheDocument();
+    if (rendererTarget?.scope === "remote") {
+      fireEvent.contextMenu(screen.getByRole("button", {
+        name: "Open thread Codex thread",
+      }));
+      fireEvent.click(screen.getByRole("menuitem", {
+        name: "Copy Thread Link",
+      }));
+      expect(copyText).toHaveBeenCalledWith(
+        "pwragent://thread/turn-failure-thread?backend=codex"
+        + "&instanceId=remote-gateway",
+      );
+    }
     fireEvent.click(screen.getByRole("button", { name: "Next notice" }));
     expect(screen.getByText("Codex repair failed")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Next notice" }));

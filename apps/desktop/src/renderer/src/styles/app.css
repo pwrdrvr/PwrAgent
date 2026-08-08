@@ -5728,6 +5728,10 @@ textarea,
   margin-top: 8px;
 }
 
+.app-notice-toast__thread-menu {
+  z-index: 90;
+}
+
 .app-notice-toast__status {
   display: flex;
   align-items: flex-start;
