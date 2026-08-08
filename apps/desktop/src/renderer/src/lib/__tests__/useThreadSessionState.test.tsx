@@ -6924,6 +6924,148 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeTurnId).toBeUndefined();
   });
 
+  it("rechecks a selected thinking thread when idle has no terminal event", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+        threadStatus: "active",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+        threadStatus: "idle",
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          threadStatus: "active" as const,
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+      result.current.setPendingStatusText("Thinking");
+    });
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "thread/status/changed",
+            params: {
+              threadId: "thread-1",
+              status: { type: "idle" },
+            },
+          },
+        });
+      });
+
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_501);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(readThread).toHaveBeenCalledTimes(2);
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears renderer-owned thinking for an unfocused thread that remains idle", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const readThread = vi.fn(async ({ threadId }) =>
+      readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+        threadId,
+        threadStatus: "idle",
+      })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ currentThread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: currentThread,
+        }),
+      {
+        initialProps: {
+          currentThread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitForThreadHydration(result);
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+      result.current.setPendingStatusText("Thinking");
+    });
+    rerender({
+      currentThread: buildThread({ id: "thread-2", updatedAt: 2_000 }),
+    });
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "thread/status/changed",
+            params: {
+              threadId: "thread-1",
+              status: { type: "idle" },
+            },
+          },
+        });
+      });
+
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+      act(() => {
+        vi.advanceTimersByTime(1_501);
+      });
+
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+      expect(readThread).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows a transcript status when context compaction starts", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

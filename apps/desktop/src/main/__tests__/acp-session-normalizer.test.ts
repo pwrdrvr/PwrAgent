@@ -1407,6 +1407,7 @@ describe("AcpSessionReplayNormalizer", () => {
       "tool_call_delta_chunk",
       "pending_interaction",
       "interaction_resolved",
+      "response_completed",
     ]) {
       normalizer.apply({
         sessionId: "session-1",
@@ -1598,6 +1599,14 @@ describe("AcpSessionReplayNormalizer", () => {
       {
         sessionUpdate: "interaction_resolved",
         tool_call_id: "grep-1",
+      },
+      {
+        sessionUpdate: "response_completed",
+        usage: {
+          input_tokens: 1_200,
+          output_tokens: 50,
+          reasoning_tokens: 10,
+        },
       },
       {
         sessionUpdate: "model_changed",

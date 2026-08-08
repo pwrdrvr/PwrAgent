@@ -4252,6 +4252,62 @@ export function useThreadSessionState(params: {
   }, [loadLatest, sessions, thread, threadKey, updateSession]);
 
   useEffect(() => {
+    const timers = Object.entries(sessions).flatMap(
+      ([sessionThreadKey, session]) => {
+        if (
+          sessionThreadKey === threadKey
+          || typeof session.staleThinkingRecheckAt !== "number"
+        ) {
+          return [];
+        }
+
+        const recheckAt = session.staleThinkingRecheckAt;
+        return [
+          setTimeout(() => {
+            updateSession(sessionThreadKey, (current) => {
+              if (
+                current.staleThinkingRecheckAt !== recheckAt
+                || current.backendReportedActive
+                || hasPendingInteraction(current)
+              ) {
+                return current;
+              }
+
+              // Unfocused threads do not have a NavigationThreadSummary to
+              // feed through loadLatest(). Once the backend has remained idle
+              // for the completion grace, clear only renderer-owned live
+              // state. Durable transcript entries hydrate when the thread is
+              // next selected.
+              const settled = settleTransientMessage(current);
+              return {
+                ...settled,
+                activeTurnId: undefined,
+                activeTurnStartedAt: undefined,
+                backendReportedActive: false,
+                completionHydrationRetries: 0,
+                expectOwnUpdate: false,
+                needsHydrationAfterCompletion: false,
+                optimisticEntries: settled.optimisticEntries.filter(
+                  (entry) => !isLiveOptimisticEntry(entry)
+                ),
+                pendingAssistantMessage: undefined,
+                pendingStatusText: undefined,
+                staleThinkingRecheckAt: undefined,
+              };
+            });
+          }, Math.max(0, recheckAt - Date.now()) + 1),
+        ];
+      }
+    );
+
+    return () => {
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+    };
+  }, [sessions, threadKey, updateSession]);
+
+  useEffect(() => {
     if (!desktopApi?.onAgentEvent) {
       return;
     }
@@ -5198,11 +5254,15 @@ export function useThreadSessionState(params: {
           }
 
           if (statusType === "idle") {
-            if (current.activeTurnId || current.pendingStatusText) {
+            const shouldRecheckStaleThinking =
+              hasThinkingState(current) && !hasPendingInteraction(current);
+            if (shouldRecheckStaleThinking) {
               return {
                 ...current,
                 backendReportedActive: false,
                 lastTouchedAt: nextLastTouchedAt,
+                staleThinkingRecheckAt:
+                  nextLastTouchedAt + OWN_UPDATE_IDLE_GRACE_MS,
               };
             }
 

@@ -52,6 +52,7 @@ export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
     kind === "tool_call_delta_chunk"
     || kind === "pending_interaction"
     || kind === "interaction_resolved"
+    || kind === "response_completed"
   );
 }
 
