@@ -11945,6 +11945,7 @@ export class DesktopBackendRegistry {
     let result: { threadId: string; reviewThreadId: string; turnId: string };
     let overlay: ThreadOverlayState | undefined;
     let cwd: string | undefined;
+    let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -11957,6 +11958,7 @@ export class DesktopBackendRegistry {
             })
           : undefined;
       if (params.backend === "codex") {
+        codexEnvironmentRuntime = overlay?.codexEnvironmentRuntime;
         const threadCwd = await this.resolveThreadEnvironmentCwd(
           params.backend,
           params.threadId,
@@ -11970,14 +11972,20 @@ export class DesktopBackendRegistry {
         const normalizedThreadCwd = normalizeLinkedDirectoryIdentityPath(
           threadCwd,
         );
+        const usesSelectedSecondaryWorkspace = Boolean(
+          normalizedRequestedCwd
+          && normalizedRequestedCwd !== normalizedThreadCwd,
+        );
         // Codex review/start has no cwd field. When the operator selects a
         // linked project other than the parent thread's workspace, start the
         // review as a managed child so both thread/start and turn/start are
         // explicitly rooted in the selected project.
-        managedMode = managedReviewExperiment || Boolean(
-          normalizedRequestedCwd
-          && normalizedRequestedCwd !== normalizedThreadCwd,
-        );
+        managedMode = managedReviewExperiment || usesSelectedSecondaryWorkspace;
+        if (usesSelectedSecondaryWorkspace) {
+          // The persisted environment belongs to the parent workspace and can
+          // contain cwd-specific PATH, VIRTUAL_ENV, or remote runtime state.
+          codexEnvironmentRuntime = undefined;
+        }
       }
       const requestedModelSettings: ModelSettings = managedMode
         ? {
@@ -12006,8 +12014,8 @@ export class DesktopBackendRegistry {
           delivery: params.delivery ?? "inline",
           ...modelSettings,
           ...(cwd ? { cwd } : {}),
-          ...(overlay?.codexEnvironmentRuntime
-            ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+          ...(codexEnvironmentRuntime
+            ? { codexEnvironmentRuntime }
             : {}),
         });
       };
@@ -12015,6 +12023,7 @@ export class DesktopBackendRegistry {
       result = managedMode
         ? await this.startManagedReviewChild({
             cwd,
+            codexEnvironmentRuntime,
             modelSettings,
             overlay,
             parentThreadId: params.threadId,
@@ -12104,6 +12113,7 @@ export class DesktopBackendRegistry {
   }
 
   private async startManagedReviewChild(params: {
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     cwd?: string;
     modelSettings: ModelSettings;
     overlay?: ThreadOverlayState;
@@ -12123,8 +12133,8 @@ export class DesktopBackendRegistry {
       ephemeral: true,
       sandbox: modeSettings.sandbox,
       ...params.modelSettings,
-      ...(params.overlay?.codexEnvironmentRuntime
-        ? { codexEnvironmentRuntime: params.overlay.codexEnvironmentRuntime }
+      ...(params.codexEnvironmentRuntime
+        ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
         : {}),
     });
     this.reservedCodexStartThreadIds.add(thread.threadId);
@@ -12136,8 +12146,8 @@ export class DesktopBackendRegistry {
         approvalPolicy: modeSettings.approvalPolicy,
         sandbox: modeSettings.sandbox,
         ...params.modelSettings,
-        ...(params.overlay?.codexEnvironmentRuntime
-          ? { codexEnvironmentRuntime: params.overlay.codexEnvironmentRuntime }
+        ...(params.codexEnvironmentRuntime
+          ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
           : {}),
       });
       this.activeTurnKeys.add(

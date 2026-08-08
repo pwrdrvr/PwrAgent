@@ -18241,6 +18241,15 @@ command = "pnpm dev"
           "codex:thread-parent": {
             backend: "codex",
             threadId: "thread-parent",
+            codexEnvironmentRuntime: {
+              environmentId: "primary-env",
+              environmentName: "Primary environment",
+              executionTarget: "local",
+              shellEnvironment: {
+                PATH: "/worktrees/primary/.venv/bin:/usr/bin",
+                VIRTUAL_ENV: "/worktrees/primary/.venv",
+              },
+            },
             executionMode: "full-access",
             extraLinkedDirectories: [
               {
@@ -18282,10 +18291,16 @@ command = "pnpm dev"
       cwd: "/repo/selected",
       ephemeral: true,
     });
+    expect(
+      codexClient.lastStartThreadParams?.codexEnvironmentRuntime,
+    ).toBeUndefined();
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "selected-project-review",
       cwd: "/repo/selected",
     });
+    expect(
+      codexClient.lastStartTurnParams?.codexEnvironmentRuntime,
+    ).toBeUndefined();
     expect(codexClient.lastStartTurnParams?.input[0]).toMatchObject({
       type: "text",
       text: expect.stringContaining("against base branch 'origin/main'"),
