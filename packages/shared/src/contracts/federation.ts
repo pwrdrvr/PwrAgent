@@ -682,7 +682,5 @@ export function federationTargetKey(target: FederationTarget): string {
 }
 
 export function federatedThreadIdentityKey(ref: FederatedThreadRef): string {
-  return `${federationTargetKey(ref.target)}:${encodeURIComponent(
-    ref.backend,
-  )}:${ref.threadId}`;
+  return `${federationTargetKey(ref.target)}:${ref.backend}:${ref.threadId}`;
 }

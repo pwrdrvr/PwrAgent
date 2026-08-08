@@ -60,6 +60,7 @@ import {
   estimateTokenUsageCost,
   isAcpBackendId,
   isRemoteFederationTarget,
+  normalizeThreadIdentityKey,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
   resolveOpenAiPricingServiceTier,
@@ -2700,7 +2701,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .all() as { payload: string }[];
     return rows
       .map((row) => JSON.parse(row.payload) as unknown)
-      .filter(isStarMapArrangementEntry);
+      .filter(isStarMapArrangementEntry)
+      .map(normalizeStarMapArrangementEntry);
   }
 
   /**
@@ -2720,7 +2722,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         `INSERT OR REPLACE INTO star_map_arrangement(entry_key, payload)
          VALUES (?, ?)`,
       );
-      for (const entry of incoming) {
+      for (const rawEntry of incoming) {
+        const entry = normalizeStarMapArrangementEntry(rawEntry);
         if (!isStarMapArrangementEntry(entry)) continue;
         const key = starMapArrangementEntryKey(entry);
         const row = select.get(key) as { payload: string } | undefined;
@@ -6205,6 +6208,15 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
     usageLineId: row.usage_line_id,
     ...(row.usage_turn_id ? { usageTurnId: row.usage_turn_id } : {}),
   };
+}
+
+function normalizeStarMapArrangementEntry(
+  entry: StarMapArrangementEntry,
+): StarMapArrangementEntry {
+  const threadKey = normalizeThreadIdentityKey(entry.threadKey);
+  return threadKey && threadKey !== entry.threadKey
+    ? { ...entry, threadKey }
+    : entry;
 }
 
 function threadToolInvocationFromRow(

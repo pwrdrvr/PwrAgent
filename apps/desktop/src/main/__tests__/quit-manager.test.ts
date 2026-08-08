@@ -408,7 +408,7 @@ describe("buildQuitBlockerSnapshot", () => {
 
     const snapshot = buildQuitBlockerSnapshot({
       inProgressThreads: { count: 1, threadIds: ["codex:thread-turn"] },
-      terminalSessions: { count: 1, threadKeys: ["acp%3Agrok:thread-term"] },
+      terminalSessions: { count: 1, threadKeys: ["acp:grok:thread-term"] },
       actionRuns: [
         {
           runId: "run-1",
@@ -436,7 +436,7 @@ describe("buildQuitBlockerSnapshot", () => {
         kind: "terminal",
         backend: "acp:grok",
         threadId: "thread-term",
-        threadKey: "acp%3Agrok:thread-term",
+        threadKey: "acp:grok:thread-term",
       },
       {
         kind: "action",

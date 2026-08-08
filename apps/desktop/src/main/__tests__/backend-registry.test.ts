@@ -15784,12 +15784,11 @@ command = "pnpm dev"
       },
     });
 
-    // Canonical thread-identity keys: the ACP backend kind ("acp:grok") is
-    // URI-encoded so the quit dialog can split backend from thread id and link
-    // to the thread.
+    // Thread-identity keys keep the ACP backend kind intact and the shared
+    // parser recognizes the registry-id boundary before the thread id.
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 2,
-      threadIds: ["acp%3Agrok:acp-thread-1", "codex:thread-1"],
+      threadIds: ["acp:grok:acp-thread-1", "codex:thread-1"],
     });
 
     await registry.close();
@@ -29070,7 +29069,7 @@ script = "printf setup"
         threadId: "remote-acp-session",
         turnId: "remote-acp-turn",
         threadUrl:
-          "pwragent://thread/remote-acp-session?backend=acp%3Akimi&instanceId=pwr_studio",
+          "pwragent://thread/remote-acp-session?backend=acp:kimi&instanceId=pwr_studio",
       },
     });
     expect(startPrompt).not.toHaveBeenCalled();

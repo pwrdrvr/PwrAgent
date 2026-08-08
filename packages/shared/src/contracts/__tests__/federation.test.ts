@@ -44,7 +44,7 @@ describe("federation contracts", () => {
     expect(ref.backend).toBe("acp:gemini");
     expect(federationTargetKey(ref.target)).toBe("remote:mac-studio_home");
     expect(federatedThreadIdentityKey(ref)).toBe(
-      "remote:mac-studio_home:acp%3Agemini:thread:with:colon",
+      "remote:mac-studio_home:acp:gemini:thread:with:colon",
     );
   });
 

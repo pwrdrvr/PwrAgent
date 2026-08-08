@@ -82,6 +82,7 @@ import {
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
   mergeCelestialIconAssignments,
+  normalizeNavigationSnapshotThreadKeys,
   pickCelestialIcon,
   resolveThreadTerminalCwd,
   type AppServerListSkillsRequest,
@@ -1475,10 +1476,12 @@ export class DesktopFederationRuntime {
     request: { backend?: AppServerListThreadsRequest["backend"]; filter?: string },
   ): Promise<NavigationSnapshot> {
     const backend = this.remoteBackend(target);
-    const response = await backend.getNavigationSnapshot({
-      backend: request.backend,
-      filter: request.filter,
-    });
+    const response = normalizeNavigationSnapshotThreadKeys(
+      await backend.getNavigationSnapshot({
+        backend: request.backend,
+        filter: request.filter,
+      }),
+    );
     // visiblePeers reads the app-state db (local instance id); during
     // early boot or in store-injected test harnesses that db may be
     // absent — fall back to the bare store record (mirrors the menu's

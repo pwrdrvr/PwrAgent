@@ -33,7 +33,7 @@ describe("buildThreadUrl", () => {
       backend: "acp:claude-code",
     });
 
-    expect(url).toBe("pwragent://thread/019f5d79?backend=acp%3Aclaude-code");
+    expect(url).toBe("pwragent://thread/019f5d79?backend=acp:claude-code");
     expect(parseThreadUrl(url)?.backend).toBe("acp:claude-code");
   });
 });

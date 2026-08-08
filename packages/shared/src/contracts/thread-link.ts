@@ -75,7 +75,7 @@ export function isThreadLinkId(value: string): boolean {
 export function buildThreadUrl(ref: ThreadLinkRef): string {
   const query: string[] = [];
   if (ref.backend) {
-    query.push(`backend=${encodeURIComponent(ref.backend)}`);
+    query.push(`backend=${encodeQueryValue(ref.backend)}`);
   }
   if (ref.instanceId) {
     query.push(`instanceId=${encodeURIComponent(ref.instanceId)}`);
@@ -86,6 +86,13 @@ export function buildThreadUrl(ref: ThreadLinkRef): string {
 
   const base = `${THREAD_URL_PREFIX}${encodeURIComponent(ref.threadId)}`;
   return query.length > 0 ? `${base}?${query.join("&")}` : base;
+}
+
+function encodeQueryValue(value: string): string {
+  // Colons are valid inside query values and ACP backend ids use one as part
+  // of their public identity (`acp:grok`). Keep it readable instead of
+  // leaking `%3A` into copied PwrAgent thread links.
+  return encodeURIComponent(value).replace(/%3A/giu, ":");
 }
 
 export function parseThreadUrl(value: string): ThreadLinkRef | undefined {

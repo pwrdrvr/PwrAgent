@@ -1007,7 +1007,7 @@ describe("Sidebar", () => {
     };
     const directory: NavigationDirectorySummary = {
       ...directories[0]!,
-      threadKeys: ["acp%3Akimi:kimi-parent", "codex:codex-child"],
+      threadKeys: ["acp:kimi:kimi-parent", "codex:codex-child"],
     };
 
     const { container } = render(
@@ -3831,7 +3831,7 @@ describe("Sidebar", () => {
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
-        selectedItemKey="acp%3Agemini:session-1"
+        selectedItemKey="acp:gemini:session-1"
         threads={[acpThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}

@@ -132,7 +132,7 @@ describe("buildDirectorySummaries", () => {
     ]);
   });
 
-  it("uses escaped dynamic backend ids in directory thread keys", () => {
+  it("keeps dynamic backend ids intact in directory thread keys", () => {
     const directories = buildDirectorySummaries({
       threads: [
         buildThread({
@@ -150,7 +150,7 @@ describe("buildDirectorySummaries", () => {
       ],
     });
 
-    expect(directories[0]?.threadKeys).toEqual(["acp%3Agemini:thread-1"]);
+    expect(directories[0]?.threadKeys).toEqual(["acp:gemini:thread-1"]);
   });
 
   it("orders directory threads by creation time instead of last update time", () => {

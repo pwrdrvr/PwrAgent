@@ -125,13 +125,13 @@ describe("quit dialog row links", () => {
       kind: "terminal",
       backend: "acp:grok",
       threadId: "thread-2",
-      threadKey: "acp%3Agrok:thread-2",
+      threadKey: "acp:grok:thread-2",
     };
 
     const parsed = parseQuitItemAction(formatQuitItemAction(item));
 
     expect(parsed).toEqual({
-      threadKey: "acp%3Agrok:thread-2",
+      threadKey: "acp:grok:thread-2",
       kind: "terminal",
     });
     // And the key the dialog hands back still resolves to the real backend.

@@ -14,6 +14,7 @@ import type {
 import {
   buildThreadIdentityKey,
   isAppServerBackendKind,
+  normalizeThreadIdentityKey,
 } from "@pwragent/shared";
 
 export const CURRENT_OVERLAY_STORE_VERSION = 6;
@@ -61,7 +62,9 @@ function migrateBackendState(
   }
 
   const knownThreadKeys = Array.isArray(record.knownThreadKeys)
-    ? (record.knownThreadKeys as string[])
+    ? (record.knownThreadKeys as string[]).map((threadKey) =>
+        normalizeThreadIdentityKey(threadKey) ?? threadKey
+      )
     : Array.isArray(record.knownThreadIds)
       ? (record.knownThreadIds as string[]).map((threadId) =>
           scope === "all" ? threadId : buildThreadIdentityKey(scope, threadId),

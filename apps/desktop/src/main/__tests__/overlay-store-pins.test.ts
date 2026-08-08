@@ -66,12 +66,12 @@ describe("SqliteOverlayStore — thread pins", () => {
     // interleaved in any order, with strictly increasing ranks assigned by the
     // single global position — no per-backend rank collisions.
     const ranks = await store.reorderThreadPins({
-      threadKeys: ["codex:c1", "acp%3Agemini:g1", "codex:c2"],
+      threadKeys: ["codex:c1", "acp:gemini:g1", "codex:c2"],
     });
 
     expect(ranks).toEqual({
       "codex:c1": "1024",
-      "acp%3Agemini:g1": "2048",
+      "acp:gemini:g1": "2048",
       "codex:c2": "3072",
     });
     await expect(
@@ -127,7 +127,7 @@ describe("SqliteOverlayStore — thread pins", () => {
     }
   });
 
-  it("persists dynamic ACP backend pin state with an escaped thread key", async () => {
+  it("persists dynamic ACP backend pin state with an intact backend id", async () => {
     await store.setThreadPin({
       backend: "acp:gemini",
       threadId: "thread-1",
@@ -144,7 +144,7 @@ describe("SqliteOverlayStore — thread pins", () => {
     const rows = stateDb.raw.prepare("SELECT thread_id FROM threads").all() as Array<{
       thread_id: string;
     }>;
-    expect(rows.map((row) => row.thread_id)).toEqual(["acp%3Agemini:thread-1"]);
+    expect(rows.map((row) => row.thread_id)).toEqual(["acp:gemini:thread-1"]);
   });
 
   it("persists sub-thread parent, order, and collapsed state", async () => {
