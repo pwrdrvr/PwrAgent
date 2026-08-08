@@ -229,7 +229,7 @@ describe("federation agent tools service", () => {
       loadAvg5: 0.4,
       loadAvg15: 0.3,
       availableMemoryBytes: 32_000_000_000,
-      freeDiskBytes: 400_000_000_000,
+      diskFreeBytes: 400_000_000_000,
       sampledAt: 1_000,
     };
     const studioLoad: FederationLoadStatus = {

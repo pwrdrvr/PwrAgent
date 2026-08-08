@@ -137,15 +137,22 @@ export type FederationHostInfo = {
  * `FederationHostInfo.machineId` run on the same hardware and report the
  * same underlying load — dedupe by machineId when aggregating.
  * `loadAvg*` are 0 on Windows (Node's `os.loadavg()` contract);
- * `freeDiskBytes` measures the volume holding the PwrAgent root and is
+ * `diskFreeBytes` measures the volume holding the PwrAgent root and is
  * omitted when the read fails.
  */
 export type FederationLoadStatus = {
   loadAvg1: number;
   loadAvg5: number;
   loadAvg15: number;
+  /**
+   * `os.freemem()` — truly free pages only. macOS/Linux keep reclaimable
+   * page cache out of this figure, so it understates what's actually
+   * available to new work; treat "low" thresholds generously on those
+   * platforms rather than alarming on a healthy, cache-warm box.
+   */
   availableMemoryBytes: number;
-  freeDiskBytes?: number;
+  /** Live counterpart of the handshake snapshot `FederationHostInfo.diskFreeBytes`. */
+  diskFreeBytes?: number;
   sampledAt: number;
 };
 

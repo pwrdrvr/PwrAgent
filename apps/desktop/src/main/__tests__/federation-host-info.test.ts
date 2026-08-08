@@ -74,17 +74,17 @@ describe("federation host info", () => {
     expect(load.loadAvg5).toBeGreaterThanOrEqual(0);
     expect(load.loadAvg15).toBeGreaterThanOrEqual(0);
     expect(load.availableMemoryBytes).toBeGreaterThan(0);
-    expect(load.freeDiskBytes).toBeGreaterThan(0);
+    expect(load.diskFreeBytes).toBeGreaterThan(0);
     expect(load.sampledAt).toBeGreaterThanOrEqual(before);
     expect(load.sampledAt).toBeLessThanOrEqual(Date.now());
   });
 
-  it("omits freeDiskBytes when the root's volume cannot be read", async () => {
+  it("omits diskFreeBytes when the root's volume cannot be read", async () => {
     const load = await collectFederationLoadStatus({
       rootDir: path.join(makeRoot(), "does-not-exist"),
     });
 
-    expect(load.freeDiskBytes).toBeUndefined();
+    expect(load.diskFreeBytes).toBeUndefined();
     expect(load.availableMemoryBytes).toBeGreaterThan(0);
   });
 });

@@ -82,7 +82,7 @@ export async function collectFederationHostInfo(options?: {
  * Live load reading, sampled at call time — the on-demand counterpart to
  * {@link collectFederationHostInfo}'s static facts. Served by the
  * `backend.getLoadStatus` federation RPC and never gossiped. `loadAvg*`
- * are 0 on Windows (Node's `os.loadavg()` contract); `freeDiskBytes`
+ * are 0 on Windows (Node's `os.loadavg()` contract); `diskFreeBytes`
  * measures the volume holding the PwrAgent root and is omitted when the
  * read fails.
  */
@@ -91,19 +91,19 @@ export async function collectFederationLoadStatus(options?: {
 }): Promise<FederationLoadStatus> {
   const rootDir = options?.rootDir ?? resolvePwragentRoot();
   const [loadAvg1, loadAvg5, loadAvg15] = os.loadavg();
-  let freeDiskBytes: number | undefined;
+  let diskFreeBytes: number | undefined;
   try {
     const stats = await fs.statfs(rootDir);
-    freeDiskBytes = stats.bavail * stats.bsize;
+    diskFreeBytes = stats.bavail * stats.bsize;
   } catch {
-    freeDiskBytes = undefined;
+    diskFreeBytes = undefined;
   }
   return {
     loadAvg1,
     loadAvg5,
     loadAvg15,
     availableMemoryBytes: os.freemem(),
-    ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}),
+    ...(diskFreeBytes !== undefined ? { diskFreeBytes } : {}),
     sampledAt: Date.now(),
   };
 }

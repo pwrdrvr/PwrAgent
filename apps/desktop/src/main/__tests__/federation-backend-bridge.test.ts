@@ -172,7 +172,7 @@ describe("federation backend bridge", () => {
         loadAvg5: 1.75,
         loadAvg15: 1.5,
         availableMemoryBytes: 8_000_000_000,
-        freeDiskBytes: 250_000_000_000,
+        diskFreeBytes: 250_000_000_000,
         sampledAt: 1_050,
       },
     });

@@ -32,7 +32,7 @@ One simple query RPC, no gossip, no caching layer:
     loadAvg5: number;
     loadAvg15: number;
     availableMemoryBytes: number; // os.freemem()
-    freeDiskBytes?: number;       // fs.statfs on the PwrAgent root; omitted on failure
+    diskFreeBytes?: number;       // fs.statfs on the PwrAgent root; omitted on failure
     sampledAt: number;
   };
   ```
