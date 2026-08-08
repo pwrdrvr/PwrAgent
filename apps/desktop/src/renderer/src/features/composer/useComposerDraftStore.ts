@@ -26,6 +26,8 @@ export type ComposerQueuedTurnSnapshot = {
   backendQueuePending?: boolean;
   /** Main-process FIFO entry once the renderer has handed off dispatch ownership. */
   queueEntryId?: string;
+  /** Owner-clock creation time used to reject older navigation snapshots. */
+  queueEntryCreatedAt?: number;
   /** Durable main-process scheduled action represented by this renderer chip. */
   scheduledActionId?: string;
   /** Terminal scheduled action converted into a locally recoverable draft. */

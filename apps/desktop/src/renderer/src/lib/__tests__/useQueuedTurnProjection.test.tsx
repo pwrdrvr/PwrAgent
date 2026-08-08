@@ -19,7 +19,7 @@ function buildThread(
 }
 
 describe("useQueuedTurnProjection", () => {
-  it("keeps an acknowledged local queue entry until a snapshot observes it", () => {
+  it("orders queue absence against the owner snapshot timestamp", () => {
     const { result: storeResult } = renderHook(() => useComposerDraftStore());
     const store = storeResult.current;
     const scopeKey = "thread:codex:thread-1";
@@ -27,6 +27,7 @@ describe("useQueuedTurnProjection", () => {
       {
         id: "local-acknowledged",
         queueEntryId: "entry-1",
+        queueEntryCreatedAt: 2_000,
         text: "wait for admission",
         imageAttachments: [],
         fileAttachments: [],
@@ -34,14 +35,19 @@ describe("useQueuedTurnProjection", () => {
     ]);
 
     const projection = renderHook(
-      (props: { threads: NavigationThreadSummary[] }) =>
+      (props: {
+        snapshotFetchedAt: number;
+        threads: NavigationThreadSummary[];
+      }) =>
         useQueuedTurnProjection({
           composerDraftStore: store,
+          snapshotFetchedAt: props.snapshotFetchedAt,
           threads: props.threads,
         }),
       {
         initialProps: {
           // This navigation snapshot predates the queue acknowledgement.
+          snapshotFetchedAt: 1_000,
           threads: [buildThread([])],
         },
       },
@@ -50,19 +56,9 @@ describe("useQueuedTurnProjection", () => {
     expect(store.getQueuedTurn(scopeKey)?.id).toBe("local-acknowledged");
 
     projection.rerender({
-      threads: [
-        buildThread([
-          {
-            queueEntryId: "entry-1",
-            origin: "manual",
-            displayText: "wait for admission",
-            createdAt: 1_000,
-            position: 0,
-          },
-        ]),
-      ],
+      snapshotFetchedAt: 3_000,
+      threads: [buildThread([])],
     });
-    projection.rerender({ threads: [buildThread([])] });
 
     expect(store.getQueuedTurn(scopeKey)).toBeUndefined();
   });
@@ -94,6 +90,7 @@ describe("useQueuedTurnProjection", () => {
       (props: { threads: NavigationThreadSummary[] }) =>
         useQueuedTurnProjection({
           composerDraftStore: store,
+          snapshotFetchedAt: 2_000,
           threads: props.threads,
         }),
       {

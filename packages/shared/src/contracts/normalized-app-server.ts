@@ -1589,6 +1589,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         queueEntryId: string;
+        /** Owner-clock creation time for ordering against navigation snapshots. */
+        queueEntryCreatedAt?: number;
         origin: "manual" | "automation" | "messaging" | "scheduled";
         status: "queued" | "started" | "failed" | "cancelled" | "terminal";
         /**

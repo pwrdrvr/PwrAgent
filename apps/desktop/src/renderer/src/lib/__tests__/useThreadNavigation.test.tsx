@@ -6,6 +6,7 @@ import {
   shortenDerivedThreadTitle,
 } from "@pwragent/shared";
 import type {
+  AgentEvent,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
@@ -8735,6 +8736,82 @@ describe("useThreadNavigation", () => {
     expect(
       result.current.selectedThread?.messagingBindings?.[0]?.platform,
     ).toBe("discord");
+  });
+
+  it("reconciles queued turns when the backend thread timestamp is unchanged", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    let navigationCallCount = 0;
+    const getNavigationSnapshot = vi.fn(async () => {
+      navigationCallCount += 1;
+      return {
+        backend: "all" as const,
+        fetchedAt: 1_000 + navigationCallCount,
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [
+          {
+            id: "thread-1",
+            title: "Queued thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+            updatedAt: 1_000,
+            queuedTurns: navigationCallCount === 1
+              ? undefined
+              : [
+                  {
+                    queueEntryId: "queue-1",
+                    origin: "manual" as const,
+                    displayText: "Queued reply",
+                    createdAt: 1_000,
+                    position: 0,
+                  },
+                ],
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      };
+    });
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => expect(result.current.selectedThread?.id).toBe("thread-1"));
+    expect(result.current.selectedThread?.queuedTurns).toBeUndefined();
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              threadId: "thread-1",
+              queueEntryId: "queue-1",
+              queueEntryCreatedAt: 1_000,
+              origin: "manual",
+              status: "queued",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.queuedTurns?.[0]?.queueEntryId).toBe(
+        "queue-1",
+      );
+    });
   });
 
   it("keeps the public refresh callback stable across navigation renders", async () => {

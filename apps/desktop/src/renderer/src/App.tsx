@@ -1067,6 +1067,7 @@ function DesktopAppShell(props: {
   );
   useQueuedTurnProjection({
     composerDraftStore,
+    snapshotFetchedAt: navigation.snapshot?.fetchedAt,
     threads: navigation.threads,
   });
   const scheduledActionProjectionSources = useMemo(

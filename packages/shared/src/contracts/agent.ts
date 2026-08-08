@@ -240,6 +240,11 @@ export type StartTurnRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
+  /**
+   * Renderer-reserved FIFO identity. Lets queue lifecycle events correlate a
+   * locally projected draft even when admission races ahead of the IPC reply.
+   */
+  queueEntryId?: string;
   input: AppServerTurnInputItem[];
   executionMode?: ThreadExecutionMode;
   approvalPolicy?: string;
@@ -258,6 +263,8 @@ export type StartTurnResponse = {
   turnId: string;
   queueStatus?: "started" | "queued";
   queueEntryId?: string;
+  /** Owner-clock creation time for ordering queue state against snapshots. */
+  queueEntryCreatedAt?: number;
 };
 
 export type CancelQueuedTurnRequest = {

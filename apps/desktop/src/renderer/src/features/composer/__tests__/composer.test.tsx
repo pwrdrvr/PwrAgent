@@ -5,6 +5,7 @@ import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
   type BackendSummary,
+  type AgentEvent,
   type CompactThreadRequest,
   type ComposerDraftRecoveryCandidate,
   type CreateScheduledThreadActionRequest,
@@ -6019,6 +6020,86 @@ describe("Composer", () => {
 
     unmount();
     expect(startTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles queue admission that arrives before the enqueue response", async () => {
+    const draftStore = createComposerDraftStore();
+    const startTurnDeferred = createDeferred<StartTurnResponse>();
+    const startTurn = vi.fn(
+      (_request: StartTurnRequest) => startTurnDeferred.promise,
+    );
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        desktopApi={{
+          onAgentEvent: (listener) => {
+            agentEventHandler = listener;
+            return () => undefined;
+          },
+          startTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Admit before acknowledgement" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+    const request = startTurn.mock.calls[0]?.[0];
+    expect(request).toBeDefined();
+    if (!request) throw new Error("Expected a queued turn request.");
+    const scopeKey = "thread:codex:thread-1";
+    const queued = draftStore.getQueuedTurn(scopeKey);
+    expect(request.queueEntryId).toBe(queued?.id);
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "thread-1",
+            queueEntryId: request.queueEntryId!,
+            queueEntryCreatedAt: 2_000,
+            origin: "manual",
+            status: "started",
+            turnId: "turn-2",
+          },
+        },
+      });
+    });
+    expect(draftStore.getQueuedTurn(scopeKey)).toBeUndefined();
+
+    await act(async () => {
+      startTurnDeferred.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: request.queueEntryId!,
+        queueStatus: "queued",
+        queueEntryId: request.queueEntryId!,
+        queueEntryCreatedAt: 2_000,
+      });
+      await startTurnDeferred.promise;
+    });
+
+    expect(draftStore.getQueuedTurn(scopeKey)).toBeUndefined();
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
   });
 
   it("keeps a delayed backend queue acknowledgement scoped to its thread", async () => {
