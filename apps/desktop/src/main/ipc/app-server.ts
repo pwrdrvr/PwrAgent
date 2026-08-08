@@ -1255,7 +1255,6 @@ function pullRequestStatusFreshness(
 
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
-  private focusedDiffServiceModel: string | undefined;
   private prFetcher: GithubPrFetcher | undefined;
   private readonly pendingNavigationSnapshots = new Map<
     string,
@@ -6723,7 +6722,7 @@ class DesktopAppServerService {
     // user has it disabled, never call the focused-diff service — return
     // the synthetic "full" response that the renderer treats as
     // "render every hunk, hide nothing". This is the diff-eliding gate
-    // that keeps us from sending unsolicited xAI requests.
+    // that keeps us from sending unsolicited structured-generation requests.
     //
     // PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE bypasses the gate so E2Es that
     // exercise the focused-diff path keep working with the default-off
@@ -6757,9 +6756,7 @@ class DesktopAppServerService {
       };
     }
 
-    const response = await this.getFocusedDiffService(
-      condensation.model.value === "auto" ? undefined : condensation.model.value,
-    ).analyze(request);
+    const response = await this.getFocusedDiffService().analyze(request);
 
     logDebug("analyzeFocusedDiff", {
       filePath: request.filePath ?? null,
@@ -6767,7 +6764,6 @@ class DesktopAppServerService {
       mode: response.mode,
       source: response.source,
       hiddenHunkCount: response.hiddenHunkCount,
-      condensationModel: condensation.model.value,
     });
 
     return response;
@@ -6775,7 +6771,6 @@ class DesktopAppServerService {
 
   async close(): Promise<void> {
     this.focusedDiffService = null;
-    this.focusedDiffServiceModel = undefined;
     this.prFetcher = undefined;
     this.prPollingScheduler?.stop();
     this.prPollingScheduler = undefined;
@@ -6889,22 +6884,22 @@ class DesktopAppServerService {
     return this.prStatusWatchCoordinator;
   }
 
-  private getFocusedDiffService(modelOverride?: string): FocusedDiffService {
-    if (
-      this.focusedDiffService
-      && this.focusedDiffServiceModel === modelOverride
-    ) {
+  private getFocusedDiffService(): FocusedDiffService {
+    if (this.focusedDiffService) {
       return this.focusedDiffService;
     }
 
     this.focusedDiffService = new FocusedDiffService({
       client: {
-        generateObject: async (request) =>
-          await getDesktopBackendRegistry().generateGrokObject(request),
+        generateObject: async (request) => {
+          const result = await getDesktopBackendRegistry().generateStructuredObject(request);
+          if (result.status !== "ok") {
+            throw new Error(result.reason);
+          }
+          return { object: result.object };
+        },
       },
-      ...(modelOverride ? { model: modelOverride } : {}),
     });
-    this.focusedDiffServiceModel = modelOverride;
     return this.focusedDiffService;
   }
 }

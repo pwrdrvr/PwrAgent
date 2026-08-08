@@ -283,7 +283,7 @@ describe("messaging resume browser", () => {
             id: "thread-eksfk3v0",
             title: "Messaging - Streaming Responses",
             titleSource: "explicit",
-            source: "grok",
+            source: "acp:grok",
             projectKey: "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
             linkedDirectories: [
               {
@@ -306,7 +306,7 @@ describe("messaging resume browser", () => {
             kind: "directory",
             label: "PwrAgent",
             path: "/repo/pwragent",
-            threadKeys: ["grok:thread-eksfk3v0"],
+            threadKeys: ["acp%3Agrok:thread-eksfk3v0"],
             needsAttentionCount: 0,
             latestUpdatedAt: 1000,
           },
@@ -334,7 +334,7 @@ describe("messaging resume browser", () => {
             id: "thread-eksfk3v0",
             title: "Messaging - Streaming Responses",
             titleSource: "explicit",
-            source: "grok",
+            source: "acp:grok",
             projectKey: "/repo/pwragent/.worktrees/launchpad-pwragent-main-moohzbj1",
             linkedDirectories: [
               {
@@ -357,7 +357,7 @@ describe("messaging resume browser", () => {
             kind: "directory",
             label: "PwrAgent",
             path: "/repo/pwragent",
-            threadKeys: ["grok:thread-eksfk3v0"],
+            threadKeys: ["acp%3Agrok:thread-eksfk3v0"],
             needsAttentionCount: 0,
             latestUpdatedAt: 1000,
           },

@@ -36,7 +36,7 @@ export type ReplayStep = ReplayResponseStep | ReplayNotificationStep | ReplayReq
 
 export type ReplayFixture = {
   metadata: {
-    backend: "codex" | "grok";
+    backend: "codex";
     scenario: string;
     sourceCaptureId?: string;
     threadId?: string;

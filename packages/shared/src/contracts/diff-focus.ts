@@ -38,7 +38,7 @@ export type FocusedDiffAnalysisMode = "fallback" | "focused" | "full";
 
 export type FocusedDiffAnalysisSource =
   | "cache"
-  | "grok"
+  | "backend"
   | "heuristic"
   | "ineligible"
   /** The diff condensation experimental setting is off. */

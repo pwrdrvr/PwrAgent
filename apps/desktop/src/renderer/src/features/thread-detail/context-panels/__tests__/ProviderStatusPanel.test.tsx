@@ -44,8 +44,8 @@ const codexBackend: BackendSummary = {
 };
 
 const grokBackend: BackendSummary = {
-  kind: "grok",
-  label: "Grok app server",
+  kind: "acp:grok",
+  label: "Grok",
   available: false,
   methods: [],
   capabilities: {
@@ -63,7 +63,7 @@ const grokBackend: BackendSummary = {
     multiDirectoryThreads: false,
   },
   executionModes: [],
-  unavailableReason: "XAI_API_KEY is not set",
+  unavailableReason: "Grok CLI is not installed",
 };
 
 const kimiBackend: BackendSummary = {
@@ -135,8 +135,8 @@ describe("ProviderStatusPanel", () => {
   it("shows the unavailable reason for an offline backend", () => {
     render(<ProviderStatusPanel backends={[grokBackend]} />);
 
-    expect(screen.getByText("Grok app server")).toBeInTheDocument();
-    expect(screen.getByText("XAI_API_KEY is not set")).toBeInTheDocument();
+    expect(screen.getByText("Grok")).toBeInTheDocument();
+    expect(screen.getByText("Grok CLI is not installed")).toBeInTheDocument();
   });
 
   it("shows ACP runtime and authentication metadata without a limits API", () => {

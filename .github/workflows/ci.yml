@@ -93,10 +93,7 @@ jobs:
     name: Install Dependencies
     runs-on: ubuntu-latest
     needs: changes
-    if: >-
-      needs.changes.outputs.code_impacting == 'true' ||
-      (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'ci:live-agent-core'))
+    if: needs.changes.outputs.code_impacting == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -158,7 +155,7 @@ jobs:
         run: |
           pnpm exec depcruise --config .dependency-cruiser.cjs \
             --output-type json --output-to cruise-result.json \
-            packages/ apps/desktop/src/ apps/grok-app-server/src/
+            packages/ apps/desktop/src/
           pnpm exec depcruise-fmt --exit-code cruise-result.json
 
       - name: Boundary violation summary
@@ -314,8 +311,6 @@ jobs:
         run: >-
           pnpm exec vitest run --config vitest.workspace.ts
           --project desktop-renderer
-          --project agent-core
-          --project grok-app-server
           --project messaging
           --project shared
 
@@ -497,73 +492,3 @@ jobs:
             apps/desktop/playwright-report/
             apps/desktop/test-results/
           retention-days: 30
-
-  live-agent-core:
-    name: Live Agent Core
-    if: >-
-      github.event_name == 'pull_request' &&
-      (needs.changes.outputs.code_impacting == 'true' ||
-       contains(github.event.pull_request.labels.*.name, 'ci:live-agent-core'))
-    runs-on: ubuntu-latest
-    needs: [changes, install-deps]
-    timeout-minutes: 10
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        timeout-minutes: 10
-        with:
-          fetch-depth: 0
-
-      - name: Detect live agent-core inputs
-        id: changes
-        shell: bash
-        timeout-minutes: 10
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          FORCE_LIVE_AGENT_CORE: ${{ contains(github.event.pull_request.labels.*.name, 'ci:live-agent-core') }}
-        run: |
-          set -euo pipefail
-          live_agent_core_label="ci:live-agent-core"
-
-          relevant=false
-          matched_path=""
-          if [[ "$EVENT_NAME" == "pull_request" && "$FORCE_LIVE_AGENT_CORE" == "true" ]]; then
-            relevant=true
-            matched_path="pull request label present: $live_agent_core_label"
-          fi
-
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-
-          if [[ "$relevant" == "true" ]]; then
-            echo "Live agent-core input changed: $matched_path"
-            echo "Live agent-core inputs changed; running live smoke test."
-          else
-            {
-              echo "### Live Agent Core"
-              echo
-              echo "Skipped live agent-core smoke test because the \`$live_agent_core_label\` PR label is not present."
-              echo
-              echo "Add \`$live_agent_core_label\` and rerun CI when live provider coverage is needed."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Install Node.js and dependencies
-        if: steps.changes.outputs.relevant == 'true'
-        uses: pwrdrvr/configure-nodejs@v1
-        timeout-minutes: 10
-        with:
-          node-version: 24.x
-
-      - name: Install ripgrep
-        if: steps.changes.outputs.relevant == 'true'
-        uses: ./.github/actions/install-ripgrep
-        timeout-minutes: 5
-
-      - name: Live agent-core smoke and tool coverage
-        if: steps.changes.outputs.relevant == 'true'
-        timeout-minutes: 10
-        env:
-          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
-          XAI_BASE_URL: https://api.x.ai/v1
-          GROK_MODEL: grok-4.20-reasoning
-        run: pnpm --filter @pwragent/agent-core test:live

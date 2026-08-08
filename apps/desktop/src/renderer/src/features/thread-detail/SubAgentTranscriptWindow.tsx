@@ -304,5 +304,5 @@ function subAgentTranscriptTargetFromHash(): SubAgentTranscriptTarget | undefine
 }
 
 function isAppServerBackendKind(value: string): value is AppServerBackendKind {
-  return value === "codex" || value === "grok" || value.startsWith("acp:");
+  return value === "codex" || value.startsWith("acp:");
 }

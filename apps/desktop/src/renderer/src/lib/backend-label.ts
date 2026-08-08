@@ -32,12 +32,7 @@ export function formatBackendLabel(
   if (backend === "acp:kimi") {
     return "Kimi";
   }
-  // The "Grok" chip is reserved for the Grok CLI ACP backend. The
-  // legacy direct-xAI agent-core backend is rendered as
-  // "AgentCore - Grok" in its own branch below — see
-  // `feat(desktop): add Grok CLI ACP backend` (PR #579) and
-  // backend-registry.ts:listBackends for the experimental-flag gating
-  // (the agent-core backend is omitted entirely when the flag is off).
+  // Grok is an ACP backend backed by the installed Grok CLI.
   if (backend === "acp:grok") {
     return "Grok";
   }
@@ -50,9 +45,6 @@ export function formatBackendLabel(
   }
   if (backend === "codex") {
     return "OpenAI";
-  }
-  if (backend === "grok") {
-    return "AgentCore - Grok";
   }
   if (backend.startsWith("acp:")) {
     const registryId = backend.slice("acp:".length);

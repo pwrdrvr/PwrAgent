@@ -1484,7 +1484,7 @@ describe("DesktopSettingsService", () => {
     });
   });
 
-  it("applies env overrides above TOML and keeps the Grok API key in keychain", async () => {
+  it("applies env overrides above TOML", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(
@@ -1502,9 +1502,6 @@ describe("DesktopSettingsService", () => {
       ].join("\n"),
       "utf8",
     );
-    const secretStore = new MemoryDesktopSecretStore();
-    await secretStore.setSecret("grokApiKey", "xai-keychain");
-
     const service = new DesktopSettingsService({
       configPath,
       env: {
@@ -1515,9 +1512,8 @@ describe("DesktopSettingsService", () => {
         PWRAGENT_MESSAGING_TELEGRAM_AUTHORIZED_USER_IDS: "222222222,333333333",
         PWRAGENT_CODEX_COMMAND: "codex-env",
         PWRAGENT_GH_COMMAND: "/custom/bin/gh",
-        XAI_API_KEY: "xai-env",
       },
-      secretStore,
+      secretStore: new MemoryDesktopSecretStore(),
     });
 
     const snapshot = await service.readSettings();
@@ -1558,12 +1554,6 @@ describe("DesktopSettingsService", () => {
       value: "/custom/bin/gh",
       source: "env",
     });
-    expect(snapshot.models.grok.apiKey).toMatchObject({
-      configured: true,
-      source: "keychain",
-      writable: true,
-    });
-    expect(await service.resolveGrokApiKey()).toBe("xai-keychain");
     expect(service.resolveCodexCommandPreference()).toBe("codex-env");
     expect(service.resolveGhCommandPreference()).toBe("/custom/bin/gh");
   });
@@ -1575,7 +1565,7 @@ describe("DesktopSettingsService", () => {
     const getSecretSync = vi.fn(() => {
       throw new Error("secret values should not be decrypted for settings snapshots");
     });
-    const hasSecret = vi.fn(async (name) => name === "grokApiKey");
+    const hasSecret = vi.fn(async (name) => name === "telegramBotToken");
     const secretStore: DesktopSecretStore = {
       describe: () => ({
         available: true,
@@ -1596,12 +1586,12 @@ describe("DesktopSettingsService", () => {
 
     const snapshot = await service.readSettings();
 
-    expect(snapshot.models.grok.apiKey).toMatchObject({
+    expect(snapshot.messaging.telegram.botToken).toMatchObject({
       configured: true,
       source: "keychain",
       writable: true,
     });
-    expect(hasSecret).toHaveBeenCalledWith("grokApiKey");
+    expect(hasSecret).toHaveBeenCalledWith("telegramBotToken");
     expect(getSecret).not.toHaveBeenCalled();
     expect(getSecretSync).not.toHaveBeenCalled();
   });
@@ -2000,18 +1990,18 @@ describe("DesktopSettingsService", () => {
     const snapshot = await service.readSettings();
 
     expect(snapshot.secretStorage.available).toBe(false);
-    expect(snapshot.models.grok.apiKey).toMatchObject({
+    expect(snapshot.messaging.telegram.botToken).toMatchObject({
       configured: false,
       source: "unset",
       writable: false,
       unavailableReason: "No secure backend",
     });
-    await expect(service.replaceSecret("grokApiKey", "xai-secret")).rejects.toThrow(
+    await expect(service.replaceSecret("telegramBotToken", "bot-secret")).rejects.toThrow(
       "No secure backend",
     );
   });
 
-  it("defaults diff condensation to disabled / auto and round-trips a custom value", async () => {
+  it("defaults diff condensation to disabled and persists the toggle", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -2023,31 +2013,27 @@ describe("DesktopSettingsService", () => {
     const initial = await service.readSettings();
     expect(initial.experimental.diffCondensation).toEqual({
       enabled: { value: false, source: "default" },
-      model: { value: "auto", source: "default" },
     });
 
     await service.writeConfigPatch({
       experimental: {
-        diffCondensation: { enabled: true, model: "grok-3" },
+        diffCondensation: { enabled: true },
       },
     });
 
     const updated = await service.readSettings();
     expect(updated.experimental.diffCondensation).toEqual({
       enabled: { value: true, source: "config" },
-      model: { value: "grok-3", source: "config" },
     });
 
     await service.writeConfigPatch({
       experimental: {
-        diffCondensation: { model: "auto" },
+        diffCondensation: { enabled: false },
       },
     });
 
     const reverted = await service.readSettings();
-    expect(reverted.experimental.diffCondensation.model.value).toBe("auto");
-    // enabled stays true because the patch only updated model
-    expect(reverted.experimental.diffCondensation.enabled.value).toBe(true);
+    expect(reverted.experimental.diffCondensation.enabled.value).toBe(false);
   });
 
   it("defaults Full Access risk warning dismissal to false and persists it", async () => {

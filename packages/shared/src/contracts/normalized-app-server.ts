@@ -18,7 +18,7 @@ import type {
 } from "./navigation";
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "../token-usage-pricing";
 
-export type AppServerBuiltinBackendKind = "codex" | "grok";
+export type AppServerBuiltinBackendKind = "codex";
 export type AcpBackendId = `acp:${string}`;
 export type AppServerBackendKind = AppServerBuiltinBackendKind | AcpBackendId;
 export type AppServerBackendScope = AppServerBackendKind | "all";

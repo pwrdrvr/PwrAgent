@@ -12,13 +12,13 @@ import {
   summarizeHunksForFocus
 } from "../../shared/diff-focus";
 import {
-  XaiEphemeralObjectCaller,
-  type XaiAiSdkObjectResult,
-  type XaiObjectClientLike,
+  EphemeralObjectCaller,
+  type EphemeralObjectResult,
+  type ObjectClientLike,
 } from "../app-server/ephemeral-object-call";
 
 const FOCUSED_DIFF_PROMPT_VERSION = "focused-diff-v1";
-const FOCUSED_DIFF_MODEL = "grok-4-1-fast-reasoning";
+const FOCUSED_DIFF_CODEX_MODEL = "gpt-5.6-luna";
 const FOCUSED_DIFF_TIMEOUT_MS = 5_000;
 const MIN_HIDE_CONFIDENCE = 0.8;
 const FOCUSED_DIFF_TEST_RESPONSE_ENV = "PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE";
@@ -72,24 +72,21 @@ const FOCUSED_DIFF_SYSTEM_PROMPT = [
 ].join("\n");
 
 type FocusedDiffServiceOptions = {
-  client?: XaiObjectClientLike;
-  model?: string;
+  client?: ObjectClientLike;
   promptVersion?: string;
   timeoutMs?: number;
 };
 
 export class FocusedDiffService {
   private readonly cache = new Map<string, FocusedDiffAnalysisResponse>();
-  private readonly objectCaller: XaiEphemeralObjectCaller;
-  private readonly configuredModel?: string;
+  private readonly objectCaller: EphemeralObjectCaller;
   private readonly promptVersion: string;
   private readonly timeoutMs: number;
 
   constructor(options: FocusedDiffServiceOptions = {}) {
-    this.configuredModel = options.model?.trim() || undefined;
     this.promptVersion = options.promptVersion?.trim() || FOCUSED_DIFF_PROMPT_VERSION;
     this.timeoutMs = options.timeoutMs ?? FOCUSED_DIFF_TIMEOUT_MS;
-    this.objectCaller = new XaiEphemeralObjectCaller({
+    this.objectCaller = new EphemeralObjectCaller({
       client: options.client,
     });
   }
@@ -141,7 +138,7 @@ export class FocusedDiffService {
       const result = normalizeFocusedDiffResult(response, parsed.hunks.length);
       const analysis: FocusedDiffAnalysisResponse = {
         mode: result.hiddenHunkIndices.length > 0 ? "focused" : "fallback",
-        source: "grok",
+        source: "backend",
         hiddenHunkIndices: result.hiddenHunkIndices,
         hiddenHunkCount: result.hiddenHunkIndices.length,
         decisions: result.decisions,
@@ -153,7 +150,7 @@ export class FocusedDiffService {
     } catch (error) {
       return this.buildFallbackResponse(
         decisions,
-        error instanceof Error ? error.message : "grok_request_failed"
+        error instanceof Error ? error.message : "structured_generation_failed"
       );
     }
   }
@@ -172,20 +169,16 @@ export class FocusedDiffService {
     };
   }
 
-  private getModel(): string {
-    return this.configuredModel ?? FOCUSED_DIFF_MODEL;
-  }
-
   private async requestFocusedDiffDecision(
     filePath: string | undefined,
     hunks: FocusedDiffHunkSummary[]
-  ): Promise<XaiAiSdkObjectResult> {
+  ): Promise<EphemeralObjectResult> {
+    // Diff condensation is deliberately Codex-only. The explicit backend keeps
+    // GPT-5.6 Luna selected even when an ACP provider is the launchpad default;
+    // an unavailable Codex backend returns the full-diff fallback below.
     const result = await this.objectCaller.generateObject({
-      model: this.getModel(),
-      promptCacheKey: this.promptVersion,
-      headers: {
-        "x-grok-conv-id": this.promptVersion
-      },
+      backend: "codex",
+      model: FOCUSED_DIFF_CODEX_MODEL,
       timeoutMs: this.timeoutMs,
       schema: FOCUSED_DIFF_RESPONSE_SCHEMA,
       schemaName: "focused_diff_hunk_decisions",
@@ -200,12 +193,16 @@ export class FocusedDiffService {
       return result.response;
     }
 
-    throw new Error(result.status === "unavailable" ? "grok_unavailable" : result.reason);
+    throw new Error(
+      result.status === "unavailable"
+        ? "structured_generation_unavailable"
+        : result.reason,
+    );
   }
 }
 
 function normalizeFocusedDiffResult(
-  response: XaiAiSdkObjectResult,
+  response: EphemeralObjectResult,
   hunkCount: number
 ): { decisions: FocusedDiffHunkDecision[]; hiddenHunkIndices: number[] } {
   const parsed = response.object;

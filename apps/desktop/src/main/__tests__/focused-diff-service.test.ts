@@ -121,7 +121,7 @@ describe("FocusedDiffService", () => {
 
     expect(response).toMatchObject({
       mode: "focused",
-      source: "grok",
+      source: "backend",
       hiddenHunkIndices: [1],
       hiddenHunkCount: 1,
       cachedTokens: 128
@@ -131,6 +131,15 @@ describe("FocusedDiffService", () => {
       disposition: "hide",
       reasonCode: "comment_only"
     });
+    expect(client.generateObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        model: "gpt-5.6-luna",
+        system: expect.stringContaining(
+          "Show hunks when they alter logic, data flow, behavior",
+        ),
+      }),
+    );
   });
 
   it("reuses cached analysis for the same diff", async () => {
@@ -154,12 +163,12 @@ describe("FocusedDiffService", () => {
     const first = await service.analyze(makeRequest());
     const second = await service.analyze(makeRequest());
 
-    expect(first.source).toBe("grok");
+    expect(first.source).toBe("backend");
     expect(second.source).toBe("cache");
     expect(client.generateObject).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back when Grok returns invalid JSON", async () => {
+  it("falls back when structured generation returns invalid JSON", async () => {
     const client = {
       generateObject: vi.fn(async () => {
         throw new Error("invalid structured diff response: Unexpected token");
@@ -209,7 +218,7 @@ describe("FocusedDiffService", () => {
     });
     expect(second).toMatchObject({
       mode: "focused",
-      source: "grok",
+      source: "backend",
       hiddenHunkIndices: [1]
     });
     expect(client.generateObject).toHaveBeenCalledTimes(2);

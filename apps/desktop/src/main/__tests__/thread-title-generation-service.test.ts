@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerBackendKind } from "@pwragent/shared";
 import {
-  DEFAULT_GROK_THREAD_TITLE_MODEL,
-  GrokThreadTitleGenerator,
-  THREAD_TITLE_PROMPT_VERSION,
   ThreadTitleGenerationService,
   type ThreadTitleGenerator,
 } from "../app-server/thread-title-generation-service";
@@ -360,57 +357,16 @@ describe("ThreadTitleGenerationService", () => {
   });
 
   it("returns unavailable when a backend generator is absent", async () => {
-    const service = new ThreadTitleGenerationService({
-      generators: { grok: undefined },
-    });
+    const service = new ThreadTitleGenerationService();
 
     await expect(
       service.generateTitle({
-        backend: "grok",
+        backend: "acp:grok",
         userPrompt: "Name this thread",
       })
     ).resolves.toEqual({
       status: "unavailable",
-      reason: "grok_title_generator_unavailable",
+      reason: "acp:grok_title_generator_unavailable",
     });
-  });
-});
-
-describe("GrokThreadTitleGenerator", () => {
-  it("calls xAI with the fast non-reasoning title model", async () => {
-    const client = {
-      generateObject: vi.fn(async () => ({
-        object: { title: "Thread naming" },
-        cachedTokens: 8,
-      })),
-    };
-    const generator = new GrokThreadTitleGenerator({ client });
-
-    await expect(
-      generator.generateTitle({
-        backend: "grok",
-        prompt: "Name this thread",
-        promptVersion: THREAD_TITLE_PROMPT_VERSION,
-        schema: { type: "object" },
-        schemaName: "thread_title",
-        timeoutMs: 5_000,
-      })
-    ).resolves.toEqual({
-      status: "ok",
-      object: { title: "Thread naming" },
-      cachedTokens: 8,
-      model: DEFAULT_GROK_THREAD_TITLE_MODEL,
-    });
-
-    expect(client.generateObject).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: DEFAULT_GROK_THREAD_TITLE_MODEL,
-        promptCacheKey: THREAD_TITLE_PROMPT_VERSION,
-        schemaName: "thread_title",
-        headers: {
-          "x-grok-conv-id": THREAD_TITLE_PROMPT_VERSION,
-        },
-      })
-    );
   });
 });

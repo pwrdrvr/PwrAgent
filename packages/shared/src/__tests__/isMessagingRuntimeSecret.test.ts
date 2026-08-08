@@ -28,7 +28,6 @@ describe("isMessagingRuntimeSecret", () => {
     { name: "feishuVerificationToken", expected: true },
     { name: "lineChannelAccessToken", expected: true },
     { name: "lineChannelSecret", expected: true },
-    { name: "grokApiKey", expected: false },
     { name: "federationInstancePrivateKey", expected: false },
     { name: "federationCloudflareClientCertificate", expected: false },
     { name: "federationCloudflareClientPrivateKey", expected: false },

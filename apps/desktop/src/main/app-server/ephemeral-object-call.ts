@@ -1,12 +1,11 @@
-export type XaiAiSdkObjectResult = {
+export type EphemeralObjectResult = {
   object: unknown;
   cachedTokens?: number;
 };
 
-export type XaiEphemeralObjectCallRequest = {
+export type EphemeralObjectCallRequest = {
+  backend?: "codex";
   model?: string;
-  promptCacheKey?: string;
-  headers?: Record<string, string>;
   schema: Record<string, unknown>;
   schemaName?: string;
   system: string;
@@ -14,16 +13,16 @@ export type XaiEphemeralObjectCallRequest = {
   timeoutMs?: number;
 };
 
-export type XaiObjectClientLike = {
+export type ObjectClientLike = {
   generateObject(
-    request: XaiEphemeralObjectCallRequest,
-  ): Promise<XaiAiSdkObjectResult>;
+    request: EphemeralObjectCallRequest,
+  ): Promise<EphemeralObjectResult>;
 };
 
-export type XaiEphemeralObjectCallResult =
+export type EphemeralObjectCallResult =
   | {
       status: "ok";
-      response: XaiAiSdkObjectResult;
+      response: EphemeralObjectResult;
     }
   | {
       status: "unavailable";
@@ -34,33 +33,32 @@ export type XaiEphemeralObjectCallResult =
       reason: string;
     };
 
-export type XaiEphemeralObjectCallerOptions = {
-  client?: XaiObjectClientLike;
+export type EphemeralObjectCallerOptions = {
+  client?: ObjectClientLike;
 };
 
-export class XaiEphemeralObjectCaller {
-  private readonly configuredClient?: XaiObjectClientLike;
+export class EphemeralObjectCaller {
+  private readonly configuredClient?: ObjectClientLike;
 
-  constructor(options: XaiEphemeralObjectCallerOptions = {}) {
+  constructor(options: EphemeralObjectCallerOptions = {}) {
     this.configuredClient = options.client;
   }
 
   async generateObject(
-    request: XaiEphemeralObjectCallRequest
-  ): Promise<XaiEphemeralObjectCallResult> {
+    request: EphemeralObjectCallRequest
+  ): Promise<EphemeralObjectCallResult> {
     const client = this.configuredClient;
     if (!client) {
       return {
         status: "unavailable",
-        reason: "xai_unavailable",
+        reason: "structured_generation_unavailable",
       };
     }
 
     try {
       const response = await client.generateObject({
-        model: request.model?.trim() || undefined,
-        promptCacheKey: request.promptCacheKey,
-        headers: request.headers,
+        backend: request.backend,
+        model: request.model,
         schema: request.schema,
         schemaName: request.schemaName,
         system: request.system,

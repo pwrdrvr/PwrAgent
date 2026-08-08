@@ -1347,7 +1347,7 @@ describe("MessagingController", () => {
       {
         ...navigation.threads[0]!,
         id: "grok-agent",
-        source: "grok",
+        source: "acp:grok",
         title: "Grok Agent",
         agent: {
           name: "Grok Agent",
@@ -1363,7 +1363,7 @@ describe("MessagingController", () => {
         buildBackendSummary(),
         buildAcpHttpMcpBackendSummary(),
         buildAcpRuntimeBackendSummary(),
-        buildBackendSummary({ kind: "grok" }),
+        buildBackendSummary({ kind: "acp:grok" }),
       ],
     });
     const harness = await createHarness({ listBackends, navigation });
@@ -7122,7 +7122,7 @@ describe("MessagingController", () => {
     const harness = await createHarness();
     await bindThread(harness);
     await harness.controller.handleBackendEvent({
-      backend: "grok",
+      backend: "acp:grok",
       notification: {
         method: "turn/started",
         params: {
@@ -7138,7 +7138,7 @@ describe("MessagingController", () => {
     harness.delivered.length = 0;
 
     await harness.controller.handleBackendEvent({
-      backend: "grok",
+      backend: "acp:grok",
       notification: {
         method: "item/transientMessage/updated",
         params: {
@@ -9476,7 +9476,7 @@ describe("MessagingController", () => {
             model: "shared-model",
             reasoningEffort: "high",
           },
-          grok: {
+          "acp:grok": {
             codexEnvironmentId: "grok-environment",
             codexEnvironmentExecutionTarget: "local",
             codexEnvironmentActionId: "grok-action",
@@ -9513,7 +9513,7 @@ describe("MessagingController", () => {
             },
           }),
           buildBackendSummary({
-            kind: "grok",
+            kind: "acp:grok",
             label: "Grok",
             launchpadOptions: {
               models: [
@@ -9588,7 +9588,7 @@ describe("MessagingController", () => {
         expect.objectContaining({
           id: "browse:new:set-backend",
           label: "Grok",
-          value: { backend: "grok" },
+          value: { backend: "acp:grok" },
         }),
       ]),
     });
@@ -9596,7 +9596,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:new:set-backend",
-        value: { backend: "grok" },
+        value: { backend: "acp:grok" },
       }),
     );
 
@@ -9605,7 +9605,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Grok Environment\nModel: grok-4.20-reasoning\nReasoning: low",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Grok Environment\nModel: grok-4.20-reasoning\nReasoning: low",
       ),
       actions: expect.arrayContaining([
         expect.objectContaining({
@@ -9623,7 +9623,7 @@ describe("MessagingController", () => {
       directoryKey: "directory:pwragent",
       stickySettingsChanged: true,
       patch: {
-        backend: "grok",
+        backend: "acp:grok",
       },
     });
 
@@ -9650,14 +9650,14 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:new:set-backend",
-        value: { backend: "grok" },
+        value: { backend: "acp:grok" },
       }),
     );
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Default Access\nEnvironment: Grok Environment\nModel: grok-4.20-reasoning\nReasoning: low",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Grok Environment\nModel: grok-4.20-reasoning\nReasoning: low",
       ),
     });
 
@@ -9667,7 +9667,7 @@ describe("MessagingController", () => {
       expect.objectContaining({
         directoryKey: expect.stringMatching(/^messaging:browse:/),
         launchpad: expect.objectContaining({
-          backend: "grok",
+          backend: "acp:grok",
           codexEnvironmentActionId: "grok-action",
           codexEnvironmentExecutionTarget: "local",
           codexEnvironmentId: "grok-environment",
@@ -9679,7 +9679,7 @@ describe("MessagingController", () => {
     );
     expect(harness.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
-        backend: "grok",
+        backend: "acp:grok",
         threadId: "new-thread-1",
         input: [
           {
@@ -9692,7 +9692,7 @@ describe("MessagingController", () => {
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
     ).resolves.toMatchObject({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "new-thread-1",
     });
   });
@@ -10673,7 +10673,7 @@ describe("MessagingController", () => {
       label: "Codex",
     });
     const grokBackend = buildBackendSummary({
-      kind: "grok",
+      kind: "acp:grok",
       label: "Grok",
       launchpadOptions: {
         models: [{ id: "grok-4.20-reasoning", label: "Grok 4.20 Reasoning" }],
@@ -10703,7 +10703,7 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "browse:new:set-backend",
-        value: { backend: "grok" },
+        value: { backend: "acp:grok" },
       }),
     );
     availableBackends = [codexBackend];
@@ -21769,7 +21769,7 @@ function buildBackendSummary(overrides: Partial<BackendSummary> = {}): BackendSu
   const kind = overrides.kind ?? "codex";
   const base: BackendSummary = {
     kind,
-    label: kind === "grok" ? "Grok" : "Codex",
+    label: kind === "acp:grok" ? "Grok" : "Codex",
     available: true,
     methods: [],
     capabilities: {
@@ -21803,8 +21803,8 @@ function buildBackendSummary(overrides: Partial<BackendSummary> = {}): BackendSu
     launchpadOptions: {
       models: [
         {
-          id: kind === "grok" ? "grok-4.20-reasoning" : "gpt-5.3-codex",
-          label: kind === "grok" ? "Grok 4.20 Reasoning" : "GPT-5.3 Codex",
+          id: kind === "acp:grok" ? "grok-4.20-reasoning" : "gpt-5.3-codex",
+          label: kind === "acp:grok" ? "Grok 4.20 Reasoning" : "GPT-5.3 Codex",
         },
       ],
       reasoningEfforts: ["low", "medium", "high"],

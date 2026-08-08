@@ -468,9 +468,8 @@ export type DesktopApi = {
   ) => Promise<GraduateDesktopBootstrapConfigToProfileResponse>;
   /** Write secrets directly to a specific profile's keychain. The
    *  wizard uses this on Finish to graduate in-memory secret values
-   *  (xAI API key, messaging tokens) to the operator's chosen
-   *  profile — avoids stranding them in `.bootstrap/state.db` and
-   *  enables per-profile xAI keys in Multiple mode. */
+   *  (messaging tokens and related credentials) to the operator's chosen
+   *  profile without stranding them in `.bootstrap/state.db`. */
   writeSecretsToProfile?: (
     request: WriteDesktopSecretsToProfileRequest,
   ) => Promise<WriteDesktopSecretsToProfileResponse>;

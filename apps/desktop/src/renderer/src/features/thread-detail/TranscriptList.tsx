@@ -9,6 +9,7 @@ import {
   type ReactElement,
 } from "react";
 import type {
+  AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
@@ -33,6 +34,7 @@ import type {
 import {
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
+  isAppServerBackendKind,
 } from "@pwragent/shared";
 import { injectAutomationCards } from "./automation-card-entries";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
@@ -151,7 +153,7 @@ const LOAD_OLDER_THRESHOLD_PX = 160;
 const EMPTY_SKILLS: AppServerSkillSummary[] = [];
 
 type AutomationThreadTarget = {
-  backend: "codex" | "grok";
+  backend: AppServerBackendKind;
   threadId: string;
 };
 
@@ -171,7 +173,7 @@ function parseThreadIdentity(value: string | undefined): AutomationThreadTarget 
   const separatorIndex = value?.indexOf(":") ?? -1;
   if (!value || separatorIndex <= 0) return undefined;
   const backend = value.slice(0, separatorIndex);
-  if (backend !== "codex" && backend !== "grok") return undefined;
+  if (!isAppServerBackendKind(backend)) return undefined;
   const threadId = value.slice(separatorIndex + 1);
   if (!threadId) return undefined;
   return { backend, threadId };

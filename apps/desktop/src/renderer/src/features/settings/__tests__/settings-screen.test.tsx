@@ -51,7 +51,7 @@ afterEach(() => {
 
 /**
  * The Experimental tab tucks its deprecated features (Diff Condensation,
- * AgentCore - Grok, Live Transcript Event Filtering) inside a collapsed-by-
+ * Live Transcript Event Filtering) inside a collapsed-by-
  * default "Soon to be discontinued" drawer, where they are hidden from the
  * accessibility tree until expanded. Idempotent (checks `aria-expanded`) so
  * it is safe regardless of the drawer's persisted collapse state from a
@@ -177,9 +177,7 @@ function createSnapshot(
       },
       diffCondensation: {
         enabled: { value: false, source: "default" },
-        model: { value: "auto", source: "default" },
       },
-      agentCoreGrok: { value: false, source: "default" },
     },
     imageUploads: {
       pastedImageMaxPatches: { value: 1536, source: "default" },
@@ -389,9 +387,6 @@ function createSnapshot(
             },
           ],
         },
-      },
-      grok: {
-        apiKey: { configured: false, source: "unset", writable: true },
       },
     },
     acpAgents: {
@@ -855,6 +850,11 @@ describe("SettingsScreen", () => {
       }),
     ).not.toBeInTheDocument();
     openDiscontinuedDrawer();
+    expect(
+      screen.getByText(
+        "Send focused-diff hunks to Codex GPT-5.6 Luna to decide which are safe to hide. Disabled by default — every diff renders in full and no structured-generation request fires.",
+      ),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("switch", { name: "Enable diff condensation" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({

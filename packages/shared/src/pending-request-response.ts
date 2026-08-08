@@ -946,7 +946,7 @@ function readDiffRefBackend(
   value: unknown,
 ): AppServerThreadFileDiffRef["backend"] | undefined {
   const backend = readString(value);
-  if (backend === "codex" || backend === "grok" || backend?.startsWith("acp:")) {
+  if (backend === "codex" || backend?.startsWith("acp:")) {
     return backend as AppServerThreadFileDiffRef["backend"];
   }
   return undefined;

@@ -8139,7 +8139,7 @@ describe("useThreadNavigation", () => {
             id: "thread-2",
             title: "Second thread",
             titleSource: "explicit" as const,
-            source: "grok" as const,
+            source: "acp:grok" as const,
             linkedDirectories: [],
             prs: [{ ...initialPr }],
             inbox: { inInbox: true, reason: "new-thread" as const },

@@ -47,7 +47,7 @@
   repository-scoped runner or widen access to the rest of the organization.
 - For manual screenshots of the branch-drift dialog, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`; it opens a replay-backed Electron fixture and waits until you close the app.
 - To regenerate the README screenshots under `docs/assets/screenshots/`, run `pnpm --filter @pwragent/desktop screenshot:readme`. The full walkthrough (spec, fixtures, state-seeding helpers, native capture utilities) lives in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) under "Capturing README Screenshots". macOS Screen Recording permission is required for whichever terminal/IDE runs the spec.
-- When focusing root Vitest runs through `pnpm test`, pass file paths or filters directly, for example `pnpm test packages/agent-core/src/__tests__/overlay-store.test.ts`. Do not insert a standalone `--` before the focus args; `pnpm test -- packages/...` makes Vitest run the full workspace suite.
+- When focusing root Vitest runs through `pnpm test`, pass file paths or filters directly, for example `pnpm test apps/desktop/src/main/__tests__/backend-registry.test.ts`. Do not insert a standalone `--` before the focus args; `pnpm test -- apps/...` makes Vitest run the full workspace suite.
 
 ## Code Formatting & Linting
 
@@ -101,7 +101,7 @@ deliberate. Run ESLint; hand-format; never run Prettier.**
 - Prefer scopes that match the project area being changed:
   - `messaging` for Telegram, Discord, adapters, and messaging integrations.
   - `desktop` for the desktop app itself.
-  - `agent-core` for the coding agent, currently the Grok coding agent.
+  - `agent-core` for coding-agent backend and ACP integration changes.
   - `release` for packaging, signing, notarization, distribution, and auto-update pipeline.
   - `docs` for documentation changes.
   - `tests` for test coverage, fixtures, and test infrastructure.
@@ -125,10 +125,7 @@ deliberate. Run ESLint; hand-format; never run Prettier.**
 - Select a named profile with `PWRAGENT_PROFILE=<name>` (defaults to `default`).
 - Per-profile layout: `~/.pwragent/profiles/<name>/config.toml` (settings), `~/.pwragent/profiles/<name>/state/state.db` (sqlite).
 - Before making a backwards-incompatible TOML config shape change, read [docs/config-file-evolution.md](docs/config-file-evolution.md) and follow its read-fallback, lazy-conversion, legacy-comment, and dual-write rules.
-- Grok app-server config lives at `~/.config/grok-app-server/config.toml` (legacy path, still read).
-- Runtime config keys in the grok config: `xai_api_key`, `grok_model`, `xai_base_url`, `state_root`.
-- Environment variables (`XAI_API_KEY`, `GROK_MODEL`, `XAI_BASE_URL`) still override the toml config.
-- Removed env vars (no longer honored): `PWRAGNT_STATE_ROOT`, `PWRAGNT_CONFIG_PATH`, `GROK_APP_SERVER_STATE_ROOT`.
+- Removed env vars (no longer honored): `PWRAGNT_STATE_ROOT`, `PWRAGNT_CONFIG_PATH`.
 - Multiple instances can share the same profile DB safely (sqlite WAL mode); no lockfile needed.
 
 ### Dev-only env vars
@@ -200,7 +197,7 @@ This repository enforces a strict layered dependency architecture via
 
 The dependency hierarchy (bottom to top):
 - **Leaves** (import nothing internal): `packages/shared`
-- **Mid-tier**: `packages/messaging/interface` (→ shared only), `packages/messaging/providers/*` (→ messaging/interface only), `packages/agent-core` (→ shared only)
+- **Mid-tier**: `packages/messaging/interface` (→ shared only), `packages/messaging/providers/*` (→ messaging/interface only)
 - **Top**: `apps/desktop` (→ any package)
 
 Additional renderer constraint: `apps/desktop/src/renderer/` may only import `@pwragent/shared`. All other package access crosses the IPC bridge via the main process.

@@ -10,48 +10,38 @@ pitch, see [README.md](README.md). For day-to-day development setup, see
 
 PwrAgent is an Electron app whose coding-agent runtimes execute outside
 Electron main. The renderer (React UI) talks to the main process over the
-standard Electron IPC bridge. Electron main launches each backend's app
-server and speaks bidirectional JSON-RPC over stdio.
+standard Electron IPC bridge. Electron main connects to Codex App Server and
+to installed ACP coding-agent CLIs, including Grok Build.
 
 ```mermaid
 graph TB
     User[User]
     Renderer["Renderer<br/>React UI"]
     Main["Main process<br/>Electron"]
-    GrokProcess["Grok app-server child<br/>Node process"]
-    AgentCore["Agent-core<br/>AI SDK / xAI"]
     CodexProcess["Codex app-server<br/>managed process"]
+    ACPAgents["ACP coding-agent CLIs<br/>Grok · Gemini · Kimi · Qwen"]
     Adapters["Messaging adapters<br/>Telegram / Discord / Mattermost / Slack"]
 
     User --> Renderer
     Renderer <-->|IPC bridge| Main
-    Main <-->|JSON-RPC over stdio| GrokProcess
-    GrokProcess --> AgentCore
     Main <-->|JSON-RPC over stdio| CodexProcess
+    Main <-->|ACP over stdio| ACPAgents
     Main <-->|long-poll / WS / HTTP| Adapters
 ```
 
 A few invariants worth knowing up front:
 
-- Neither the renderer nor Electron main imports `@pwragent/agent-core`.
-  The Grok child process is its only application host.
 - The renderer may only import `@pwragent/shared` from the workspace.
   Everything else is gated behind IPC.
-- App-server stdout is protocol-only. Child diagnostics go to stderr so
-  they cannot corrupt JSON-RPC framing.
+- Coding-agent stdout is protocol-only. Child diagnostics go to stderr so
+  they cannot corrupt Codex or ACP framing.
 - One messaging adapter, one controller, one capability profile. See
   [Messaging layer](#messaging-layer) below.
 
-The packaged Grok entrypoint lives inside the signed application archive.
-Electron launches itself with `ELECTRON_RUN_AS_NODE=1` to execute that
-entrypoint on macOS, Windows, and Linux. In development it launches the
-same built entrypoint from the workspace.
-
-Electron may decrypt a profile's xAI API key from `safeStorage`, but passes
-it to the child only through its environment. The key is never included in
-JSON-RPC frames or diagnostic output. The child retains the existing runtime
-precedence: environment variables override Grok config TOML, while desktop
-profile state supplies the default storage root.
+Codex authentication remains Codex-owned. ACP agent authentication and
+conversation storage remain owned by the installed CLI. PwrAgent persists the
+session metadata and desktop overlay state needed to locate and present those
+threads without duplicating full provider transcripts in sqlite.
 
 ## Storage layers
 
@@ -93,33 +83,10 @@ the blob requires the same OS/user/app Keychain context. The app refuses
 to write secrets when Electron reports an unsafe or unavailable
 `safeStorage` backend.
 
-### Agent-core thread storage
-
-Each thread the agent runs persists its own append-only log plus a
-metadata file. This shape is shared with the Codex App Server protocol
-PwrAgent implements.
-
-```mermaid
-graph TB
-    GrokSrv["Grok app-server"]
-    RolloutJSONL[("rollout.jsonl<br/>per thread")]
-    ThreadTOML[("thread.toml<br/>per thread")]
-    GrokConfig[("grok-app-server/config.toml")]
-
-    GrokSrv --> RolloutJSONL
-    GrokSrv --> ThreadTOML
-    GrokSrv --> GrokConfig
-```
-
-`rollout.jsonl` is the source of truth for a thread's history. It is
-append-only by design; replay reconstructs UI state by walking it
-forward. `thread.toml` carries small per-thread metadata (model,
-working directory, approval policy).
-
 ### Protocol captures (dev-only)
 
 For replay tests and debugging, the desktop main process can record
-every JSON-RPC frame crossing the agent-core boundary. Captures are
+protocol traffic from supported replay capture paths. Captures are
 gated behind an environment variable and never run by default.
 
 ```mermaid
@@ -141,8 +108,6 @@ fixture-derivation workflow.
 |---|---|---|
 | Desktop state | `~/.pwragent/profiles/<name>/state/state.db` | Messaging bindings, thread overlay, encrypted secret blobs |
 | Desktop config | `~/.pwragent/profiles/<name>/config.toml` | Desktop settings (messaging, models, worktrees) |
-| Agent-core threads | `~/.pwragent/profiles/<name>/state/grok-app-server/threads/<id>/rollout.jsonl` | Append-only message + replay-item log per thread |
-| Agent-core metadata | `~/.pwragent/profiles/<name>/state/grok-app-server/threads/<id>/thread.toml` | Per-thread config (model, cwd, approval policy) |
 | Protocol captures | `~/.pwragent/profiles/<name>/state/protocol-captures/` | Dev-only JSON-RPC session recordings |
 
 Override the PwrAgent root with `PWRAGENT_HOME=/path/to/root` (useful for
@@ -179,8 +144,7 @@ Three layers, three jobs:
 - **Provider adapters** (`packages/messaging/providers/*`). Each adapter
   is its own package. It translates platform events into generic inbound
   events and renders generic intents into platform-native messages. It
-  cannot import other providers, the desktop app, or the agent-core
-  package.
+  cannot import other providers or the desktop app.
 - **Workflow orchestration** (`apps/desktop/src/main/messaging/`). Turn
   admission, binding lifecycle, picker state machines, audit trails,
   sqlite persistence. Speaks only the generic interface.
@@ -200,15 +164,11 @@ For a hands-on walkthrough when adding a new platform, see
 
 PwrAgent enforces a strict layered dependency architecture via
 [`dependency-cruiser`](.dependency-cruiser.cjs). The hierarchy reads
-bottom to top — leaves at the bottom import nothing else internal. The
-Grok process application hosts agent-core; the desktop deliberately does
-not.
+bottom to top — leaves at the bottom import nothing else internal.
 
 ```mermaid
 graph TB
     DesktopApp["apps/desktop"]
-    GrokApp["apps/grok-app-server"]
-    AgentCore["packages/agent-core"]
     MsgProviders["packages/messaging/providers/*"]
     MsgInterface["packages/messaging/interface"]
     Shared["packages/shared"]
@@ -217,10 +177,8 @@ graph TB
     DesktopApp --> MsgInterface
     DesktopApp --> Shared
     DesktopApp --> CodexProto["@pwrdrvr/codex-app-server-protocol"]
-    GrokApp --> AgentCore
     MsgProviders --> MsgInterface
     MsgInterface --> Shared
-    AgentCore --> Shared
 ```
 
 The rules in [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs) are
@@ -232,9 +190,6 @@ the "Dependency Boundary Enforcement" section of
 Additional renderer constraint: code under
 `apps/desktop/src/renderer/` may only import `@pwragent/shared`. All
 other package access crosses the IPC bridge through the main process.
-An additional error-level rule rejects any desktop import of
-`@pwragent/agent-core`, including relative imports into its source tree.
-
 Run `pnpm lint:boundaries` locally before pushing; CI fails the build on
 any violation.
 
@@ -243,9 +198,7 @@ any violation.
 | Path | What's there |
 |---|---|
 | `apps/desktop` | Electron app — main process, renderer, IPC bridge |
-| `apps/grok-app-server` | Standalone Grok JSON-RPC stdio process and packaged executable |
 | `packages/shared` | Cross-package types: app-server enums, navigation snapshots, thread identifiers |
-| `packages/agent-core` | Agent runtime, Codex App Server protocol implementation, Grok-backed coding agent |
 | `packages/messaging/interface` | Generic messaging types, capability profile, layout helpers |
 | `packages/messaging/providers/telegram` | Telegram adapter (`grammy`) |
 | `packages/messaging/providers/discord` | Discord adapter (`discord.js`) |
@@ -288,8 +241,7 @@ for the Electron/Chromium runtime notice policy.
 ## Cross-references
 
 - [README.md](README.md) — user-facing pitch and quick start
-- [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow, testing,
-  diagnostics, and internal agent-core notes
+- [CONTRIBUTING.md](CONTRIBUTING.md) — development workflow, testing, and diagnostics
 - [CLAUDE.md](CLAUDE.md) — repository conventions and the full
   dependency-boundary policy
 - [docs/messaging-architecture.md](docs/messaging-architecture.md)

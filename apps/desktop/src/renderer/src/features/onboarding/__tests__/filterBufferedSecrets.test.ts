@@ -3,13 +3,11 @@ import { filterBufferedSecrets } from "../filterBufferedSecrets";
 
 describe("filterBufferedSecrets", () => {
   it("strips trailing newlines that clipboard pastes on macOS routinely include", () => {
-    // Reviewer flagged this as B1: a pasted xAI key with a trailing
-    // \n was previously stored verbatim, then Grok auth failed with
-    // a cryptic error. The filter now `.trim()`s before passing the
-    // value to the keychain-write IPC.
+    // Clipboard pastes on macOS routinely include a trailing newline.
+    // The filter trims it before passing the value to keychain-write IPC.
     expect(
-      filterBufferedSecrets({ grokApiKey: "xai-abc123\n" }),
-    ).toEqual({ grokApiKey: "xai-abc123" });
+      filterBufferedSecrets({ mattermostBotToken: "mattermost-token\n" }),
+    ).toEqual({ mattermostBotToken: "mattermost-token" });
   });
 
   it("strips leading + trailing whitespace alike", () => {
@@ -19,12 +17,12 @@ describe("filterBufferedSecrets", () => {
   });
 
   it("drops whitespace-only values entirely (treated as 'no value')", () => {
-    expect(filterBufferedSecrets({ grokApiKey: "   " })).toEqual({});
-    expect(filterBufferedSecrets({ grokApiKey: "\n\t " })).toEqual({});
+    expect(filterBufferedSecrets({ mattermostBotToken: "   " })).toEqual({});
+    expect(filterBufferedSecrets({ mattermostBotToken: "\n\t " })).toEqual({});
   });
 
   it("drops empty-string values", () => {
-    expect(filterBufferedSecrets({ grokApiKey: "" })).toEqual({});
+    expect(filterBufferedSecrets({ mattermostBotToken: "" })).toEqual({});
   });
 
   it("preserves non-string sentinels by dropping them, not throwing", () => {
@@ -32,31 +30,31 @@ describe("filterBufferedSecrets", () => {
     // data. The `Record<string, string>` type is advisory at
     // runtime since renderer state can land here from IPC bridges.
     const messy = {
-      grokApiKey: "valid",
+      mattermostBotToken: "valid",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       telegramBotToken: undefined as any,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       discordBotToken: 123 as any,
     };
-    expect(filterBufferedSecrets(messy)).toEqual({ grokApiKey: "valid" });
+    expect(filterBufferedSecrets(messy)).toEqual({ mattermostBotToken: "valid" });
   });
 
   it("returns a fresh object — input is not mutated", () => {
-    const input = { grokApiKey: " xai " };
+    const input = { mattermostBotToken: " mattermost " };
     const result = filterBufferedSecrets(input);
-    expect(input).toEqual({ grokApiKey: " xai " });
+    expect(input).toEqual({ mattermostBotToken: " mattermost " });
     expect(result).not.toBe(input);
   });
 
   it("passes through multiple valid secrets", () => {
     expect(
       filterBufferedSecrets({
-        grokApiKey: "xai-key",
+        mattermostBotToken: "mattermost-key",
         telegramBotToken: "111:bot",
         slackBotToken: "xoxb-...",
       }),
     ).toEqual({
-      grokApiKey: "xai-key",
+      mattermostBotToken: "mattermost-key",
       telegramBotToken: "111:bot",
       slackBotToken: "xoxb-...",
     });

@@ -186,7 +186,6 @@ declare global {
 export function createReplayClientsFromEnv():
   | {
       codexClient: ReplayRuntimeClient;
-      grokClient: ReplayRuntimeClient;
       defaultBackend: AppServerBackendKind;
     }
   | undefined {
@@ -255,22 +254,10 @@ export function createReplayClientsFromEnv():
 
 function createReplayClients(fixture: ReplayFixture): {
   codexClient: ReplayRuntimeClient;
-  grokClient: ReplayRuntimeClient;
   defaultBackend: AppServerBackendKind;
 } {
-  if (fixture.metadata.backend === "grok") {
-    const grokClient = ReplayClient.fromFixture(fixture);
-
-    return {
-      codexClient: createUnavailableReplayClient("codex", "grok"),
-      grokClient,
-      defaultBackend: "grok",
-    };
-  }
-
   return {
     codexClient: ReplayClient.fromFixture(fixture),
-    grokClient: createUnavailableReplayClient("grok", "codex"),
     defaultBackend: "codex",
   };
 }
@@ -278,7 +265,6 @@ function createReplayClients(fixture: ReplayFixture): {
 function getReplayClient(
   clients: {
     codexClient: ReplayRuntimeClient;
-    grokClient: ReplayRuntimeClient;
     defaultBackend: AppServerBackendKind;
   },
   params: {
@@ -286,8 +272,8 @@ function getReplayClient(
   }
 ): ReplayRuntimeClient {
   const backend = params.backend ?? clients.defaultBackend;
-  if (backend === "grok") {
-    return clients.grokClient;
+  if (backend !== "codex") {
+    throw new Error(`ACP backend ${backend} is not available through app-server replay fixtures`);
   }
 
   return clients.codexClient;
@@ -298,58 +284,4 @@ function loadReplayFixture(filePath: string): ReplayFixture {
   const parsed = JSON.parse(contents) as ReplayFixture;
   validateReplayFixture(parsed);
   return parsed;
-}
-
-function createUnavailableReplayClient(
-  backend: AppServerBackendKind,
-  activeBackend: AppServerBackendKind
-): ReplayRuntimeClient {
-  const message = `Replay fixture backend is ${activeBackend}; ${backend} is unavailable in replay mode.`;
-
-  return {
-    advance: async () => {
-      throw new Error(message);
-    },
-    close: async () => undefined,
-    getPendingRequest: () => undefined,
-    getLastStartTurnParams: () => undefined,
-    getLastStartReviewParams: () => undefined,
-    getLastRenameThreadParams: () => undefined,
-    getInterruptTurnCalls: () => [],
-    getInitializeResult: async () => {
-      throw new Error(message);
-    },
-    listThreads: async () => {
-      throw new Error(message);
-    },
-    listSkills: async () => {
-      throw new Error(message);
-    },
-    listModels: async () => {
-      throw new Error(message);
-    },
-    onNotification: () => () => undefined,
-    onRequest: () => () => undefined,
-    readThread: async () => {
-      throw new Error(message);
-    },
-    startThread: async () => {
-      throw new Error(message);
-    },
-    startTurn: async () => {
-      throw new Error(message);
-    },
-    startReview: async () => {
-      throw new Error(message);
-    },
-    interruptTurn: async () => {
-      throw new Error(message);
-    },
-    renameThread: async () => {
-      throw new Error(message);
-    },
-    respondToPendingRequest: async () => {
-      throw new Error(message);
-    },
-  };
 }

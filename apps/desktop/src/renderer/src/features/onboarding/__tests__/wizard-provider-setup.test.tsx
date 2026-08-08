@@ -235,42 +235,6 @@ describe("SecretFieldRow live-write contract", () => {
       "0000000000:AAEx-fake-telegram-token",
     );
   });
-
-  it("non-runtime secrets (xAI key): buffers but does NOT call replaceSecret", async () => {
-    const onBuffer = vi.fn();
-    const replaceSecret = vi.fn(
-      async (_secret: DesktopSettingsSecretName, _value: string) => true,
-    );
-    const clearSecret = vi.fn(
-      async (_secret: DesktopSettingsSecretName) => true,
-    );
-
-    render(
-      <SecretFieldRow
-        field={{
-          kind: "secret",
-          name: "grokApiKey",
-          label: "xAI API key",
-          placeholder: "xai-…",
-        }}
-        bufferedValue=""
-        onBuffer={onBuffer}
-        replaceSecret={replaceSecret}
-        clearSecret={clearSecret}
-      />,
-    );
-
-    const xaiInput = screen.getByPlaceholderText(/xai-/);
-    fireEvent.change(xaiInput, { target: { value: "xai-test-key-1234" } });
-    fireEvent.click(screen.getByRole("button", { name: /Use this/i }));
-
-    expect(onBuffer).toHaveBeenCalledWith("xai-test-key-1234");
-    // Two microtask flushes to let any async save resolve.
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(replaceSecret).not.toHaveBeenCalled();
-  });
-
   it("messaging secret Clear: calls clearSecret on the runtime AND buffers empty", async () => {
     const onBuffer = vi.fn();
     const replaceSecret = vi.fn(
@@ -307,35 +271,4 @@ describe("SecretFieldRow live-write contract", () => {
     // the buffer (asserted above).
     await Promise.resolve();
     expect(clearSecret).not.toHaveBeenCalled();
-  });
-
-  it("non-runtime secret Clear: buffers empty, never touches clearSecret", async () => {
-    const onBuffer = vi.fn();
-    const replaceSecret = vi.fn(
-      async (_secret: DesktopSettingsSecretName, _value: string) => true,
-    );
-    const clearSecret = vi.fn(
-      async (_secret: DesktopSettingsSecretName) => true,
-    );
-
-    render(
-      <SecretFieldRow
-        field={{
-          kind: "secret",
-          name: "grokApiKey",
-          label: "xAI API key",
-          placeholder: "xai-…",
-        }}
-        bufferedValue="xai-existing"
-        onBuffer={onBuffer}
-        replaceSecret={replaceSecret}
-        clearSecret={clearSecret}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: /^Clear$/i }));
-    expect(onBuffer).toHaveBeenCalledWith("");
-    await Promise.resolve();
-    expect(clearSecret).not.toHaveBeenCalled();
-  });
-});
+  });});

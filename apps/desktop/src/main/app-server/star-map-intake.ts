@@ -14,10 +14,8 @@ import { getDesktopBackendRegistry } from "./backend-registry";
 
 const log = getMainLogger("pwragent:star-map-intake");
 
-const INTAKE_MODEL = "grok-4-1-fast-non-reasoning";
 const INTAKE_TIMEOUT_MS = 20_000;
 const INTAKE_PREFERENCES_MAX_CHARS = 8_000;
-const INTAKE_PROMPT_VERSION = "star-map-intake-v1";
 const MAX_DISAMBIGUATION_CANDIDATES = 8;
 
 const INTAKE_SCHEMA: Record<string, unknown> = {
@@ -93,15 +91,13 @@ function describeDirectory(directory: NavigationDirectorySummary): string {
   return parts.join(" | ");
 }
 
-async function resolveViaGrok(params: {
+async function resolveViaConfiguredBackend(params: {
   text: string;
   preferences?: string;
   directories: NavigationDirectorySummary[];
 }): Promise<IntakeResolution | undefined> {
   try {
-    const result = await getDesktopBackendRegistry().generateGrokObject({
-      model: INTAKE_MODEL,
-      promptCacheKey: INTAKE_PROMPT_VERSION,
+    const result = await getDesktopBackendRegistry().generateStructuredObject({
       timeoutMs: INTAKE_TIMEOUT_MS,
       schema: INTAKE_SCHEMA,
       schemaName: "star_map_intake_resolution",
@@ -124,6 +120,9 @@ async function resolveViaGrok(params: {
         `Task request: ${params.text}`,
       ].join("\n"),
     });
+    if (result.status !== "ok") {
+      throw new Error(result.reason);
+    }
     const object = result.object as {
       title?: unknown;
       directoryKey?: unknown;
@@ -143,7 +142,7 @@ async function resolveViaGrok(params: {
           : 0,
     };
   } catch (error) {
-    log.warn("star map intake grok resolution unavailable", {
+    log.warn("star map intake structured resolution unavailable", {
       error: error instanceof Error ? error.message : String(error),
     });
     return undefined;
@@ -216,7 +215,11 @@ export async function dispatchStarMapIntake(
     }
     if (!directoryKey) {
       const preferences = await readIntakePreferences();
-      const resolved = await resolveViaGrok({ text, preferences, directories });
+      const resolved = await resolveViaConfiguredBackend({
+        text,
+        preferences,
+        directories,
+      });
       if (resolved && resolved.directoryKey && resolved.confidence >= 0.5) {
         directoryKey = resolved.directoryKey;
         title = resolved.title;

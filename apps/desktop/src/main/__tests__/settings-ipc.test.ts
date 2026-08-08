@@ -347,10 +347,7 @@ describe("settings ipc", () => {
       now: () => 20,
     });
     const { registerSettingsIpcHandlers } = await import("../ipc/settings");
-    const {
-      SETTINGS_CLEAR_SECRET_CHANNEL,
-      SETTINGS_WRITE_CONFIG_CHANNEL,
-    } = await import("../../shared/ipc");
+    const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
 
     registerSettingsIpcHandlers(service);
 
@@ -392,14 +389,7 @@ describe("settings ipc", () => {
         },
       },
     );
-    await handlers.get(SETTINGS_CLEAR_SECRET_CHANNEL)?.(
-      {},
-      {
-        secret: "grokApiKey",
-      },
-    );
-
-    expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(2);
+    expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(1);
     expect(invalidateAcpBackendDiscoveryMock).toHaveBeenCalledTimes(1);
   });
 

@@ -29,8 +29,6 @@ export function backendLabel(kind: BackendKind): string {
       return "Kimi";
     case "acp:qwen":
       return "Qwen";
-    case "grok":
-      return "AgentCore - Grok";
     default:
       return kind.startsWith("acp:") ? kind.slice(4) : kind;
   }
