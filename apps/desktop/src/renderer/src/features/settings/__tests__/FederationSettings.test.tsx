@@ -145,6 +145,64 @@ describe("FederationSettings", () => {
     });
   });
 
+  it("shows locally counted wire transfer for peers that have moved bytes", async () => {
+    const health: FederationHealthStatus = {
+      enabled: true,
+      role: "gateway",
+      status: "listening",
+      peers: [
+        {
+          id: "pwr_studio",
+          label: "Studio Mac",
+          role: "client",
+          status: "connected",
+          capabilities: ["thread_navigation"],
+          transfer: {
+            bytesSent: 512_000,
+            bytesReceived: 209_715_200,
+            envelopesSent: 1_200,
+            envelopesReceived: 3_400,
+            since: Date.parse("2026-08-08T09:00:00.000Z"),
+            lastActivityAt: Date.parse("2026-08-08T09:45:00.000Z"),
+          },
+        },
+        {
+          id: "pwr_idle",
+          label: "Idle Mini",
+          role: "client",
+          status: "disconnected",
+          capabilities: [],
+        },
+      ],
+    };
+
+    render(
+      <FederationSettings
+        desktopApi={{
+          readFederationDiagnostics: vi.fn(async () => ({
+            health,
+            events: [],
+          })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByText(/Transferred ↑ 500 KB · ↓ 200\.0 MB across 4600 envelopes/),
+    ).toBeInTheDocument();
+    // A peer with no observed traffic gets no transfer line at all.
+    expect(screen.getAllByText(/Transferred ↑/)).toHaveLength(1);
+  });
+
   it("saves the ordered gateway endpoint list", async () => {
     const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
     render(

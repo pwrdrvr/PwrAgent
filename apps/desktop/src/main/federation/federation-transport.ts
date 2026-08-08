@@ -276,6 +276,16 @@ export type FederationGatewayWebSocketServerOptions = {
     envelope: FederationProtocolEnvelope,
     connection: FederationGatewayConnection,
   ) => void;
+  /**
+   * Wire-byte tap for envelope frames only (handshake/auth frames and
+   * WebSocket keepalives are not reported). `byteCount` is the frame's
+   * post-encryption length — what actually crossed the wire.
+   */
+  onEnvelopeTransfer?: (info: {
+    peerId: FederationInstanceId;
+    direction: "sent" | "received";
+    byteCount: number;
+  }) => void;
 };
 
 export class FederationGatewayWebSocketServer {
@@ -551,7 +561,18 @@ export class FederationGatewayWebSocketServer {
       sessionId,
       capabilities: decision.capabilities,
       sendEnvelope: (envelope) => {
-        sendFrame(socket, { kind: "envelope", envelope }, transport);
+        const byteCount = sendFrame(
+          socket,
+          { kind: "envelope", envelope },
+          transport,
+        );
+        if (byteCount > 0) {
+          this.options.onEnvelopeTransfer?.({
+            peerId: decision.peer.id,
+            direction: "sent",
+            byteCount,
+          });
+        }
       },
       close: (code?: number, reason?: string) => socket.close(code, reason),
       terminate: () => socket.terminate(),
@@ -682,6 +703,11 @@ export class FederationGatewayWebSocketServer {
       }
       if (!next || next.kind !== "envelope") continue;
       this.sessions.heartbeat(sessionId, Date.now());
+      this.options.onEnvelopeTransfer?.({
+        peerId: connection.peerId,
+        direction: "received",
+        byteCount: frame.byteLength,
+      });
       this.options.onEnvelope?.(next.envelope, connection);
     }
   }
@@ -790,6 +816,15 @@ export async function connectFederationClient(params: {
   /** Pinned gateway Noise static public key (raw 32 bytes), from the invite. */
   gatewayNoisePublicKey?: Buffer;
   onEnvelope?: (envelope: FederationProtocolEnvelope) => void;
+  /**
+   * Wire-byte tap for envelope frames only, mirroring the gateway's
+   * `onEnvelopeTransfer`. The peer is implicitly the gateway this
+   * client dialed; the caller attributes accordingly.
+   */
+  onEnvelopeTransfer?: (info: {
+    direction: "sent" | "received";
+    byteCount: number;
+  }) => void;
   /**
    * Called once when the transport ends. `info` carries the WebSocket
    * close code/reason when the peer closed cleanly (e.g. 4001
@@ -1051,6 +1086,10 @@ async function establishFederationClient(
         return;
       }
       if (message?.kind === "envelope") {
+        params.onEnvelopeTransfer?.({
+          direction: "received",
+          byteCount: frame.byteLength,
+        });
         params.onEnvelope?.(message.envelope);
       }
     }
@@ -1063,7 +1102,10 @@ async function establishFederationClient(
     // granting a capability we predate is ignored, not fatal.
     capabilities: knownCapabilities(accepted.capabilities),
     sendEnvelope: (envelope) => {
-      sendFrame(socket, { kind: "envelope", envelope }, transport);
+      const byteCount = sendFrame(socket, { kind: "envelope", envelope }, transport);
+      if (byteCount > 0) {
+        params.onEnvelopeTransfer?.({ direction: "sent", byteCount });
+      }
     },
     close: () => socket.close(),
   };
@@ -1154,14 +1196,22 @@ function waitForOpen(socket: WebSocket): Promise<void> {
   });
 }
 
+/**
+ * Sends one frame and returns its wire byte length (post-encryption),
+ * 0 when the socket was not open. The return value feeds the transfer
+ * taps, which count what actually goes on the wire so payload-format
+ * changes (compression) read as real savings.
+ */
 function sendFrame(
   socket: WebSocket,
   message: FederationSocketMessage,
   transport?: NoiseTransport,
-): void {
-  if (socket.readyState !== WebSocket.OPEN) return;
+): number {
+  if (socket.readyState !== WebSocket.OPEN) return 0;
   const json = Buffer.from(JSON.stringify(message), "utf8");
-  socket.send(transport ? transport.encrypt(json) : json);
+  const wire = transport ? transport.encrypt(json) : json;
+  socket.send(wire);
+  return wire.byteLength;
 }
 
 function closeAfterFrameAuthenticationFailure(socket: WebSocket): void {

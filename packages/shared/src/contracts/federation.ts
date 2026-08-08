@@ -149,6 +149,31 @@ export type FederationLoadStatus = {
   sampledAt: number;
 };
 
+/**
+ * Locally observed wire-transfer counters for one directly connected
+ * peer socket. Not a protocol field — each side counts the envelope
+ * frames it sends and receives on its own transport (after encryption,
+ * so compression changes show up here as real wire savings), and the
+ * counters live only in the observing process: they start at first
+ * activity and reset on app restart, never persisted or gossiped.
+ *
+ * On a gateway the counters attribute per peer socket, including
+ * relayed sibling traffic on both legs. On a client, all remote
+ * traffic rides the single gateway socket and lands on the gateway's
+ * row. Handshake/auth frames and WebSocket keepalives are not counted.
+ */
+export type FederationTransferStats = {
+  /** Wire bytes of envelope frames sent to the peer. */
+  bytesSent: number;
+  /** Wire bytes of envelope frames received from the peer. */
+  bytesReceived: number;
+  envelopesSent: number;
+  envelopesReceived: number;
+  /** When counting began (first observed activity in this process). */
+  since: number;
+  lastActivityAt: number;
+};
+
 export type FederationPeerSummary = {
   id: FederationPeerId;
   label: string;
@@ -168,6 +193,13 @@ export type FederationPeerSummary = {
    */
   notes?: string;
   host?: FederationHostInfo;
+  /**
+   * This instance's locally counted wire transfer with the peer.
+   * Attached only on health/diagnostics reads — never advertised in
+   * the peer directory, because the numbers describe the observer's
+   * own socket, not the peer.
+   */
+  transfer?: FederationTransferStats;
   lastConnectedAt?: number;
   lastActivityAt?: number;
   revokedAt?: number;

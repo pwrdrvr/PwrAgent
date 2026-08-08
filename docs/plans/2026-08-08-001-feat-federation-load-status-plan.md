@@ -91,6 +91,35 @@ One simple query RPC, no gossip, no caching layer:
    dialog. The rendering side (indicator thresholds, visuals) lands on
    the Star Map branch; this branch provides the query surface only.
 
+## Addition (same branch): per-peer wire-transfer counters
+
+Decided with the operator after the load-status round landed: to
+baseline federation bandwidth before an envelope-compression change
+(and verify the change after), each instance counts its own wire
+traffic per directly connected peer. These are **local observations of
+the protocol, not protocol fields** — nothing new crosses the wire:
+
+- `sendFrame`/the envelope receive loops in `federation-transport.ts`
+  report each envelope frame's **post-encryption byte length** through
+  new `onEnvelopeTransfer` taps (gateway per-connection, client
+  per-socket). Handshake/auth frames and WebSocket keepalives are not
+  counted. Counting post-encryption means a compression PR moves these
+  numbers by exactly its real wire savings.
+- A process-local `FederationTransferLedger` in the runtime accumulates
+  `FederationTransferStats` (`bytesSent/bytesReceived`,
+  `envelopesSent/envelopesReceived`, `since`, `lastActivityAt`) per
+  peer, across reconnects, reset only on app restart. Never persisted.
+- `FederationPeerSummary.transfer` carries the snapshot on
+  health/diagnostics reads only — deliberately NOT attached in
+  `visiblePeers()`, which also feeds the gossiped peer directory; the
+  numbers describe the observer's socket, not the peer.
+- Attribution: a gateway sees true per-peer figures (relayed sibling
+  traffic counts on both legs, which is wire-truthful); a client sees
+  everything on the gateway's row because all its remote traffic rides
+  that one socket.
+- Surface: the Settings → Federation peer rows render
+  "Transferred ↑ x · ↓ y across N envelopes since <t>".
+
 ## Non-goals
 
 - No broadcast/gossip of load, no push events, no history/persistence.
@@ -127,4 +156,6 @@ One simple query RPC, no gossip, no caching layer:
 - [x] Sampler + bridge RPC + local backend operation
 - [x] `list_federation_instances` `includeLoad` fan-out
 - [x] Renderer IPC surface for Star Map polling
+- [x] Per-peer wire-transfer counters (transport taps, ledger, health,
+      Settings peer rows)
 - [x] Tests green (lint:eslint, typecheck, lint:boundaries, focused vitest)

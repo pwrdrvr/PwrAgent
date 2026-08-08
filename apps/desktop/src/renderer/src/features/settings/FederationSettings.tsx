@@ -1064,6 +1064,15 @@ export function FederationSettings(props: FederationSettingsProps) {
                   && peer.lastActivityAt !== peer.lastConnectedAt ? (
                     <span>Last activity {formatTimestamp(peer.lastActivityAt)}</span>
                   ) : null}
+                  {peer.transfer ? (
+                    <span>
+                      Transferred ↑ {formatByteCount(peer.transfer.bytesSent)} ·
+                      ↓ {formatByteCount(peer.transfer.bytesReceived)} across{" "}
+                      {peer.transfer.envelopesSent
+                        + peer.transfer.envelopesReceived}{" "}
+                      envelopes since {formatTimestamp(peer.transfer.since)}
+                    </span>
+                  ) : null}
                   <span>
                     Available: {formatFederationCapabilities(peer.capabilities)}
                   </span>
@@ -1612,6 +1621,20 @@ function diagnosticEventLabel(kind: FederationDiagnosticEvent["kind"]): string {
 
 function formatTimestamp(value: number): string {
   return new Date(value).toLocaleString();
+}
+
+/**
+ * Wire-transfer figure for the peer rows: whole bytes/KB below 1 MB,
+ * one decimal from MB up, so a 200 MB replay habit and a post-
+ * compression 40 MB read as obviously different at a glance.
+ */
+function formatByteCount(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function parseFederationListenPort(value: string): number {

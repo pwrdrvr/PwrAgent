@@ -186,6 +186,7 @@ import {
   collectFederationHostInfo,
   collectFederationLoadStatus,
 } from "./federation-host-info";
+import { FederationTransferLedger } from "./federation-transfer-ledger";
 import { RemoteThreadSummaryCache } from "./remote-thread-summary-cache";
 import { hydrateFederatedThreadMessageOrigins } from "./federated-thread-origin-hydrator";
 import {
@@ -571,6 +572,12 @@ export class DesktopFederationRuntime {
     FederationInstanceId,
     number
   >();
+  /**
+   * Per-peer wire counters, fed by the transports' envelope taps.
+   * Deliberately a runtime-lifetime field (not reset in stop/restart):
+   * the operator's baseline-vs-optimized comparison spans reconnects.
+   */
+  private readonly transferLedger = new FederationTransferLedger();
   private gatewayListenerError?: string;
 
   setAgentEventPublisher(publisher: (event: AgentEvent) => void): void {
@@ -806,7 +813,13 @@ export class DesktopFederationRuntime {
     const settings = await getDesktopSettingsService().readSettings();
     const health = buildFederationHealthStatus({
       settings,
-      peers: this.visiblePeers(),
+      // Transfer counters attach here and only here — visiblePeers()
+      // feeds the gossiped peer directory too, and these numbers
+      // describe OUR socket with each peer, not facts about the peer.
+      peers: this.visiblePeers().map((peer) => {
+        const transfer = this.transferLedger.snapshot(peer.id);
+        return transfer ? { ...peer, transfer } : peer;
+      }),
       instanceId: this.ensureLocalInstanceId(),
       listenUrl: this.listenUrl,
       unavailableReason: this.gatewayListenerError,
@@ -1771,6 +1784,7 @@ export class DesktopFederationRuntime {
         },
         onEnvelope: (envelope, connection) =>
           void this.receiveEnvelope(envelope, connection.peerId),
+        onEnvelopeTransfer: (info) => this.transferLedger.record(info),
       });
       try {
         const started = await this.server.start();
@@ -1989,6 +2003,10 @@ export class DesktopFederationRuntime {
       // notes when the operator erases theirs (absent means "old client").
       notes: this.instanceNotes ?? settings.federation.instanceNotes.value.trim(),
       host: this.localHostInfo,
+      // All client traffic rides this one socket, so the counters land
+      // on the gateway's row — including relayed sibling traffic.
+      onEnvelopeTransfer: (info) =>
+        this.transferLedger.record({ ...info, peerId: gatewayInstanceId }),
       role: "client",
       headers: cloudflareAccessEnabled
         ? {
