@@ -11542,7 +11542,14 @@ textarea,
   outline: none;
 }
 
-.transcript-list__items:has(.transcript-list__pending:last-child) {
+/* Trim the bottom over-scroll reserve when the thinking line is the last
+   thing in the transcript. The hook is the listitem wrapper, not
+   `.transcript-list__pending` itself: the pending element is always the
+   only (and therefore last) child of that wrapper, so testing it directly
+   would match even when a questionnaire / MCP prompt / approval card
+   follows. The wrapper is last-of-content in exactly the cases the bare
+   selector used to match. */
+.transcript-list__items:has(.transcript-list__pending-item:last-child) {
   padding-bottom: 4px;
 }
 

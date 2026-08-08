@@ -1452,14 +1452,30 @@ export function TranscriptList(props: TranscriptListProps) {
             );
           })}
           {props.pendingStatusText || props.runningTurnUsageText ? (
-            <div className="transcript-list__pending" role="status">
-              {props.pendingStatusText ? <ThinkingScanner /> : null}
-              {props.pendingStatusText ? <span>{props.pendingStatusText}</span> : null}
-              {props.runningTurnUsageText ? (
-                <span className="transcript-list__pending-usage">
-                  {props.runningTurnUsageText}
-                </span>
-              ) : null}
+            /*
+              The thinking line is a live region (role="status"), and
+              role="status" is not a permitted owned child of the
+              role="list" above — axe's aria-required-children fails the
+              whole list when it sits here bare. The listitem wrapper is
+              the same `display: contents` shim the entries use, so the
+              pending element stays a direct flex child of
+              .transcript-list__content for layout, keeps its position in
+              the DOM (the `:has(...:last-child)` bottom-padding rule in
+              app.css keys off the wrapper), and keeps announcing.
+            */
+            <div
+              className="transcript-list__item transcript-list__pending-item"
+              role="listitem"
+            >
+              <div className="transcript-list__pending" role="status">
+                {props.pendingStatusText ? <ThinkingScanner /> : null}
+                {props.pendingStatusText ? <span>{props.pendingStatusText}</span> : null}
+                {props.runningTurnUsageText ? (
+                  <span className="transcript-list__pending-usage">
+                    {props.runningTurnUsageText}
+                  </span>
+                ) : null}
+              </div>
             </div>
           ) : null}
           {props.pendingUserInput ? (

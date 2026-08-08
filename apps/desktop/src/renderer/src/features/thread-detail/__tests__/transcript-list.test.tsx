@@ -1667,6 +1667,19 @@ describe("TranscriptList", () => {
       "Usage so far: 1,100 uncached in · 1,900 cached · 50 out"
     );
     expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
+    // The scroll container is a role="list", and role="status" is not a
+    // permitted owned element of a list — bare, it fails axe's
+    // aria-required-children for the whole transcript (the a11y gate's
+    // active-thread block covers it end to end). The live region has to
+    // sit inside a listitem wrapper, and that wrapper is what the
+    // bottom-padding rule in app.css keys off, so it also has to be the
+    // last child of the content wrapper when nothing follows it.
+    const pendingItem = screen.getByRole("status").parentElement;
+    expect(pendingItem).toHaveAttribute("role", "listitem");
+    expect(pendingItem).toHaveClass("transcript-list__pending-item");
+    expect(pendingItem).toBe(
+      document.querySelector(".transcript-list__content")?.lastElementChild
+    );
   });
 
   it("renders replayed plan progress inline in the transcript", () => {
