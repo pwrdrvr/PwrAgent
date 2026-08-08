@@ -81,6 +81,148 @@ describe("useThreadSkills", () => {
     });
   });
 
+  it.each([
+    { backend: "acp:grok" as const, directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent" },
+    { backend: "acp:kimi" as const, directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent" },
+    { backend: "codex" as const, directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent" },
+  ])(
+    "loads provider commands for an unborn $backend launchpad draft",
+    async ({ backend, directoryPath }) => {
+      const listSkills = vi.fn(async () => ({
+        backend,
+        fetchedAt: Date.now(),
+        data: [
+          {
+            skills: [],
+            commands: [
+              {
+                name: "compact",
+                description: "Compact this thread's context.",
+                backend,
+                scope: "session" as const,
+                source: "provider" as const,
+              },
+            ],
+          },
+        ],
+      }));
+
+      const { result } = renderHook(() =>
+        useThreadSkills({
+          desktopApi: { listSkills },
+          launchpad: {
+            directoryKey: `directory:${directoryPath}`,
+            directoryKind: "directory",
+            directoryLabel: "PwrAgent",
+            directoryPath,
+            backend,
+            executionMode: "default",
+            prompt: "",
+            workMode: "local",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        })
+      );
+
+      await act(async () => {
+        await result.current.ensureLoaded();
+      });
+
+      expect(listSkills).toHaveBeenCalledWith({
+        backend,
+        cwd: directoryPath,
+        cwds: [directoryPath],
+      });
+
+      await waitFor(() => {
+        expect(result.current.providerCommands.map((command) => command.name)).toEqual([
+          "compact",
+        ]);
+      });
+    },
+  );
+
+  it("requests the base repository path for a worktree-mode launchpad draft", async () => {
+    // `workMode: "worktree"` drafts carry the *source* checkout in
+    // `directoryPath` — the worktree itself does not exist until launch — so
+    // the hook must forward that path unchanged rather than invent one.
+    const listSkills = vi.fn(async () => ({
+      backend: "acp:grok" as const,
+      fetchedAt: Date.now(),
+      data: [{ skills: [], commands: [] }],
+    }));
+
+    const { result } = renderHook(() =>
+      useThreadSkills({
+        desktopApi: { listSkills },
+        launchpad: {
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          backend: "acp:grok",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "feature/x",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      })
+    );
+
+    await act(async () => {
+      await result.current.ensureLoaded();
+    });
+
+    expect(listSkills).toHaveBeenCalledWith({
+      backend: "acp:grok",
+      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      cwds: ["/Users/huntharo/pwrdrvr/PwrAgent"],
+    });
+  });
+
+  it("issues one launchpad skills request across a burst of composer triggers", async () => {
+    const listSkills = vi.fn(async () => ({
+      backend: "acp:grok" as const,
+      fetchedAt: Date.now(),
+      data: [{ skills: [], commands: [] }],
+    }));
+
+    const { result } = renderHook(() =>
+      useThreadSkills({
+        desktopApi: { listSkills },
+        launchpad: {
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: "/repo",
+          backend: "acp:grok",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      })
+    );
+
+    // The composer calls `onEnsureSkillsLoaded` on every keystroke after `/`.
+    await act(async () => {
+      await Promise.all([
+        result.current.ensureLoaded(),
+        result.current.ensureLoaded(),
+        result.current.ensureLoaded(),
+      ]);
+    });
+    await act(async () => {
+      await result.current.ensureLoaded();
+    });
+
+    expect(listSkills).toHaveBeenCalledTimes(1);
+  });
+
   it("loads provider commands for an ACP thread session", async () => {
     const listSkills = vi.fn(async () => ({
       backend: "acp:kimi" as const,

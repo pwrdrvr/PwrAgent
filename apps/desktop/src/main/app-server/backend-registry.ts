@@ -401,6 +401,10 @@ import type {
   WorktreeWorkingStateEntry,
 } from "./git-working-state-service";
 import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
+import {
+  AcpAvailableCommandsStore,
+  type AcpAvailableCommandsStoreLike,
+} from "../acp/acp-available-commands-store";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
@@ -6183,6 +6187,31 @@ class ActiveTurnControlPreconditionError extends Error {
 
 const MAX_ACCEPTED_THREAD_CONTROL_REQUESTS = 512;
 
+/**
+ * How long a command-discovery probe waits for the agent's
+ * `available_commands_update` after `session/new` before giving up. Agents that
+ * advertise commands do so as part of session setup, so this only has to cover
+ * one notification hop — the (much slower) agent process spawn is already
+ * awaited inside `session/new`.
+ */
+const ACP_AVAILABLE_COMMAND_PROBE_TIMEOUT_MS = 5_000;
+/**
+ * Backoff after a probe that produced nothing (agent unavailable, auth
+ * required, or an agent that simply advertises no commands). Without it every
+ * composer focus in that repo would re-spawn the agent to learn the same
+ * nothing.
+ */
+const ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS = 300_000;
+
+/**
+ * Match the forward-slashed directory identifiers
+ * `resolveWorktreeRepositoryDirectory` returns, so a Windows repo keys the same
+ * whether we resolved it through a worktree link or straight from its own path.
+ */
+function toForwardSlashes(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
 function buildSteerRequestKey(params: SteerTurnRequest): string {
   return [
     params.backend,
@@ -6304,6 +6333,21 @@ export class DesktopBackendRegistry {
   private readonly acpWorktreeRepositoryResolver: (
     cwd: string,
   ) => Promise<LinkedDirectorySummary | undefined>;
+  // Launchpad drafts have no ACP session to ask for `availableCommands`, so the
+  // repo's last-observed list is cached here and replayed for them. See
+  // `resolveAcpAvailableCommands` for the read path and
+  // `rememberAcpAvailableCommands` for the write-through.
+  private readonly acpAvailableCommandsStore?: AcpAvailableCommandsStoreLike;
+  private readonly acpAvailableCommandProbeTimeoutMs: number;
+  private readonly acpAvailableCommandProbes = new Map<
+    string,
+    Promise<AppServerAvailableCommandSummary[]>
+  >();
+  private readonly acpAvailableCommandProbeCooldowns = new Map<string, number>();
+  private readonly acpAvailableCommandWaiters = new Map<
+    string,
+    Set<(commands: AppServerAvailableCommandSummary[]) => void>
+  >();
   private readonly messagingStore?: MessagingArchiveCleanupStore | null;
   private messagingArchiveCleaner?: MessagingArchiveCleaner | null;
   private readonly archivedMessagingCleanupInFlight = new Map<
@@ -6646,6 +6690,8 @@ export class DesktopBackendRegistry {
     acpAgentStore?: AcpBackendAdapterOptions["acpAgentStore"];
     acpRolloutStore?: AcpBackendAdapterOptions["acpRolloutStore"];
     acpSessionStore?: AcpSessionStoreLike | null;
+    acpAvailableCommandsStore?: AcpAvailableCommandsStoreLike | null;
+    acpAvailableCommandProbeTimeoutMs?: number;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     isAcpAgentEnabled?: (registryId: string) => boolean;
     createAcpClient?: AcpClientFactory;
@@ -6835,6 +6881,16 @@ export class DesktopBackendRegistry {
     this.acpWorktreeRepositoryResolver =
       options?.acpWorktreeRepositoryResolver ??
       resolveWorktreeRepositoryDirectory;
+    this.acpAvailableCommandsStore =
+      options?.acpAvailableCommandsStore === null
+        ? undefined
+        : options?.acpAvailableCommandsStore ??
+          (isAppStateInitialized()
+            ? new AcpAvailableCommandsStore(getAppStateDb())
+            : undefined);
+    this.acpAvailableCommandProbeTimeoutMs =
+      options?.acpAvailableCommandProbeTimeoutMs
+      ?? ACP_AVAILABLE_COMMAND_PROBE_TIMEOUT_MS;
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     this.gitDirectoryService =
       options?.gitDirectoryService ??
@@ -6898,7 +6954,10 @@ export class DesktopBackendRegistry {
         ? async () => await settingsService.resolveTerminalSpawnEnvAsync()
         : undefined,
       isAcpAgentEnabled: options?.isAcpAgentEnabled,
-      emit: async (event) => await this.emit(event),
+      emit: async (event) => {
+        this.rememberAcpAvailableCommands(event);
+        await this.emit(event);
+      },
       handleServerRequest: async (backend, request) =>
         await this.handleServerRequest(backend, request),
       resolveMcpConnectionServers: async ({ backendId, sessionId }) => {
@@ -7887,6 +7946,289 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Repository key an ACP cwd's commands are cached under.
+   *
+   * A worktree resolves to the checkout it was cut from, so a launchpad sitting
+   * on `/repo` and a born thread running in `/worktrees/ab12/repo` share one
+   * cache row — commands come from the repo's command files, not from the
+   * worktree. `resolveWorktreeRepositoryDirectory` is filesystem-only and never
+   * spawns git; a plain checkout (or an unreadable path) resolves to itself.
+   *
+   * A `workMode: "worktree"` draft is not a special case here: the draft's
+   * `directoryPath` is the *source* checkout it will be cut from, and the
+   * worktree itself is only created later by `prepareLaunchpadWorkspace`. So
+   * the path handed to us already exists and already is the base repo (or a
+   * worktree of it, which resolves back to the base).
+   */
+  private async resolveAcpCommandRepositoryPath(
+    cwd: string,
+  ): Promise<string | undefined> {
+    const trimmed = cwd.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+
+    const resolved = path.resolve(trimmed);
+    try {
+      const directory = await this.acpWorktreeRepositoryResolver(resolved);
+      if (directory?.path) {
+        return directory.path;
+      }
+    } catch (error) {
+      backendRegistryLog.warn("ACP command cache repository resolution failed", {
+        cwd: resolved,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return toForwardSlashes(resolved);
+  }
+
+  private async resolveAcpCommandRepositoryPaths(
+    cwds: Array<string | undefined>,
+  ): Promise<string[]> {
+    const resolved: string[] = [];
+    for (const cwd of cwds) {
+      if (!cwd?.trim()) {
+        continue;
+      }
+      const repositoryPath = await this.resolveAcpCommandRepositoryPath(cwd);
+      if (repositoryPath && !resolved.includes(repositoryPath)) {
+        resolved.push(repositoryPath);
+      }
+    }
+    return resolved;
+  }
+
+  /**
+   * Serve an ACP agent's slash commands for a request with no session behind
+   * it. Cache first (free, and kept fresh by every real session's
+   * write-through); a probe only runs when this agent has never reported
+   * commands for this repo.
+   */
+  private async resolveAcpAvailableCommands(params: {
+    backend: AcpBackendId;
+    cwds: Array<string | undefined>;
+  }): Promise<AppServerAvailableCommandSummary[]> {
+    const repositoryPaths = await this.resolveAcpCommandRepositoryPaths(
+      params.cwds,
+    );
+    let observedRepository = false;
+    for (const repositoryPath of repositoryPaths) {
+      const cached = this.acpAvailableCommandsStore?.get(
+        params.backend,
+        repositoryPath,
+      );
+      if (!cached) {
+        continue;
+      }
+      observedRepository = true;
+      if (cached.commands.length > 0) {
+        return cached.commands;
+      }
+    }
+    if (observedRepository) {
+      // We have watched this agent in this repo and it advertised nothing.
+      // Re-probing would spawn the agent to relearn the same nothing; a real
+      // session's write-through is what corrects this if that ever changes.
+      return [];
+    }
+
+    const probeTarget = repositoryPaths[0];
+    if (!probeTarget) {
+      return [];
+    }
+    return await this.probeAcpAvailableCommands({
+      backend: params.backend,
+      repositoryPath: probeTarget,
+    });
+  }
+
+  /**
+   * Learn an agent's commands for a repo by opening a throwaway session purely
+   * to receive its `available_commands_update`.
+   *
+   * Deduped per (agent, repo) by an in-flight promise, and backed off after an
+   * empty result, so a burst of composer keystrokes can never turn into a burst
+   * of agent process spawns. The renderer's own request dedupe
+   * (`useThreadSkills`) is the first line of defense; this is the second, and
+   * the one that holds across windows.
+   */
+  private async probeAcpAvailableCommands(params: {
+    backend: AcpBackendId;
+    repositoryPath: string;
+  }): Promise<AppServerAvailableCommandSummary[]> {
+    const probeKey = `${params.backend}:${params.repositoryPath}`;
+    const inFlight = this.acpAvailableCommandProbes.get(probeKey);
+    if (inFlight) {
+      return await inFlight;
+    }
+
+    const cooldownUntil =
+      this.acpAvailableCommandProbeCooldowns.get(probeKey) ?? 0;
+    if (this.closed || Date.now() < cooldownUntil) {
+      return [];
+    }
+
+    const probe = this.runAcpAvailableCommandProbe(params).finally(() => {
+      this.acpAvailableCommandProbes.delete(probeKey);
+    });
+    this.acpAvailableCommandProbes.set(probeKey, probe);
+    return await probe;
+  }
+
+  private async runAcpAvailableCommandProbe(params: {
+    backend: AcpBackendId;
+    repositoryPath: string;
+  }): Promise<AppServerAvailableCommandSummary[]> {
+    const probeKey = `${params.backend}:${params.repositoryPath}`;
+    try {
+      const client = await this.acpBackend.getClient(params.backend);
+      const session = await client.startSession({
+        cwd: params.repositoryPath,
+        executionMode: "default",
+        // Hidden keeps the throwaway session out of every thread list, exactly
+        // like the managed review child. `mcpServers: "none"` keeps the probe
+        // from standing up the agent-tool MCP surface for a session that will
+        // never take a prompt.
+        hidden: true,
+        mcpServers: "none",
+        title: "Command discovery",
+      });
+      const commands = await this.awaitAcpAvailableCommands({
+        backend: params.backend,
+        threadId: session.sessionId,
+      });
+      // Persist either outcome. On a hit, the write-through for the same
+      // notification normally already did this, but recording it here keeps the
+      // probe self-contained rather than dependent on that ordering. On a miss,
+      // "this agent advertises nothing here" is itself the answer, and storing
+      // it is what stops the next composer focus from spawning the agent again.
+      this.acpAvailableCommandsStore?.upsert({
+        backendId: params.backend,
+        repositoryPath: params.repositoryPath,
+        commands,
+        observedAt: Date.now(),
+      });
+      if (commands.length > 0) {
+        return commands;
+      }
+    } catch (error) {
+      backendRegistryLog.warn("ACP available-command probe failed", {
+        backend: params.backend,
+        repositoryPath: params.repositoryPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    this.acpAvailableCommandProbeCooldowns.set(
+      probeKey,
+      Date.now() + ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS,
+    );
+    return [];
+  }
+
+  private async awaitAcpAvailableCommands(params: {
+    backend: AcpBackendId;
+    threadId: string;
+  }): Promise<AppServerAvailableCommandSummary[]> {
+    const waiterKey = `${params.backend}:${params.threadId}`;
+    return await new Promise<AppServerAvailableCommandSummary[]>((resolve) => {
+      let settled = false;
+      const settle = (
+        commands: AppServerAvailableCommandSummary[],
+      ): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        const waiters = this.acpAvailableCommandWaiters.get(waiterKey);
+        waiters?.delete(settle);
+        if (waiters && waiters.size === 0) {
+          this.acpAvailableCommandWaiters.delete(waiterKey);
+        }
+        resolve(commands);
+      };
+      const timer = setTimeout(
+        () => settle([]),
+        this.acpAvailableCommandProbeTimeoutMs,
+      );
+      timer.unref?.();
+
+      const waiters =
+        this.acpAvailableCommandWaiters.get(waiterKey) ?? new Set();
+      waiters.add(settle);
+      this.acpAvailableCommandWaiters.set(waiterKey, waiters);
+
+      // The update can land while `session/new` is still resolving, in which
+      // case it is already in the session store and no notification is coming.
+      const observed = this.acpBackend.getSession(
+        params.backend,
+        params.threadId,
+      )?.availableCommands;
+      if (observed?.length) {
+        settle(observed);
+      }
+    });
+  }
+
+  /**
+   * Write-through for every ACP session that reports its slash commands, so a
+   * later launchpad draft in the same repo can be answered without a session.
+   * Fire-and-forget: a cache miss costs a probe, never a failed request.
+   */
+  private rememberAcpAvailableCommands(event: AgentEvent): void {
+    if (
+      event.notification.method !== "thread/availableCommands/updated"
+      || !isAcpBackendId(event.backend)
+    ) {
+      return;
+    }
+
+    const backend = event.backend;
+    const { commands, threadId } = event.notification.params;
+    // An empty update is treated as "no news", not as "this repo has no
+    // commands": agents emit one during session setup before their command
+    // registry is populated, and letting that clobber a good cache would empty
+    // the launchpad menu until the next real session. The probe is the only
+    // path that records an empty list, and only after waiting one out.
+    if (!Array.isArray(commands) || commands.length === 0) {
+      return;
+    }
+
+    for (const waiter of [
+      ...(this.acpAvailableCommandWaiters.get(`${backend}:${threadId}`) ?? []),
+    ]) {
+      waiter(commands);
+    }
+
+    const cwd = this.acpBackend.getSession(backend, threadId)?.cwd;
+    if (!cwd) {
+      return;
+    }
+
+    void this.resolveAcpCommandRepositoryPath(cwd)
+      .then((repositoryPath) => {
+        if (!repositoryPath) {
+          return;
+        }
+        this.acpAvailableCommandsStore?.upsert({
+          backendId: backend,
+          repositoryPath,
+          commands,
+          observedAt: Date.now(),
+        });
+      })
+      .catch((error) => {
+        backendRegistryLog.warn("ACP available-command cache write failed", {
+          backend,
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
   async listSkills(params: {
     backend?: AppServerBackendKind;
     cwd?: string;
@@ -7895,18 +8237,23 @@ export class DesktopBackendRegistry {
   } = {}): Promise<Pick<AppServerListSkillsResponse, "data">> {
     const backend = params.backend ?? "codex";
     if (isAcpBackendId(backend)) {
-      if (!params.threadId) {
-        return { data: [] };
+      const session = params.threadId
+        ? this.acpBackend.getSession(backend, params.threadId)
+        : undefined;
+      const sessionCommands = session?.availableCommands ?? [];
+      if (sessionCommands.length > 0) {
+        return { data: [{ commands: sessionCommands, skills: [] }] };
       }
-      const session = this.acpBackend.getSession(backend, params.threadId);
-      return {
-        data: [
-          {
-            commands: session?.availableCommands ?? [],
-            skills: [],
-          },
-        ],
-      };
+
+      // No live session has reported commands for this request — either it is a
+      // launchpad draft (no thread id at all) or a session that has not yet
+      // advertised. Fall back to what the repo last told us, and probe for it
+      // when we have never seen this repo/agent pair.
+      const commands = await this.resolveAcpAvailableCommands({
+        backend,
+        cwds: [session?.cwd, params.cwd, ...(params.cwds ?? [])],
+      });
+      return { data: [{ commands, skills: [] }] };
     }
 
     const client = this.getClient(backend);

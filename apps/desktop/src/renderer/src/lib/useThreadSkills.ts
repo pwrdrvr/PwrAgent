@@ -58,7 +58,11 @@ export function useThreadSkills(params: {
       };
     }
 
-    if (launchpad?.backend === "codex") {
+    // Every backend, not just Codex: an ACP agent's slash commands are served
+    // from the repo's last-observed list (see the registry's ACP branch of
+    // `listSkills`), so a draft that has never been launched still populates
+    // the `/` menu instead of falling back to PwrAgent's own commands alone.
+    if (launchpad) {
       const cwds = launchpad.directoryPath?.trim() ? [launchpad.directoryPath.trim()] : [];
       return {
         backend: launchpad.backend,
@@ -77,6 +81,23 @@ export function useThreadSkills(params: {
     stateByThreadKeyRef.current = stateByThreadKey;
   }, [stateByThreadKey]);
 
+  // Writes the ref and the React state together. The in-flight guard below is
+  // read synchronously, and the composer fires `ensureLoaded` once per
+  // keystroke after `/` — leaving the ref to catch up in an effect let a burst
+  // of keystrokes issue one request each.
+  const commitState = useCallback(
+    (
+      updater: (
+        current: Record<string, SkillState>,
+      ) => Record<string, SkillState>,
+    ): void => {
+      const next = updater(stateByThreadKeyRef.current);
+      stateByThreadKeyRef.current = next;
+      setStateByThreadKey(next);
+    },
+    [],
+  );
+
   const loadTarget = useCallback(
     async (options: { force?: boolean } = {}): Promise<void> => {
       if (!skillTarget) {
@@ -84,7 +105,7 @@ export function useThreadSkills(params: {
       }
 
       if (!desktopApi?.listSkills) {
-        setStateByThreadKey((current) => ({
+        commitState((current) => ({
           ...current,
           [skillTarget.key]: {
             error: "Desktop bridge is missing listSkills().",
@@ -105,7 +126,7 @@ export function useThreadSkills(params: {
       requestVersionsRef.current[skillTarget.key] = requestVersion;
       const cwds = skillTarget.cwds;
 
-      setStateByThreadKey((current) => ({
+      commitState((current) => ({
         ...current,
         [skillTarget.key]: {
           ...createEmptySkillState(),
@@ -128,7 +149,7 @@ export function useThreadSkills(params: {
           return;
         }
 
-        setStateByThreadKey((current) => ({
+        commitState((current) => ({
           ...current,
           [skillTarget.key]: {
             error: undefined,
@@ -141,7 +162,7 @@ export function useThreadSkills(params: {
           return;
         }
 
-        setStateByThreadKey((current) => ({
+        commitState((current) => ({
           ...current,
           [skillTarget.key]: {
             error: error instanceof Error ? error.message : String(error),
@@ -151,7 +172,7 @@ export function useThreadSkills(params: {
         }));
       }
     },
-    [desktopApi, skillTarget],
+    [commitState, desktopApi, skillTarget],
   );
 
   useEffect(() => {
@@ -212,7 +233,7 @@ export function useThreadSkills(params: {
         : [];
       requestVersionsRef.current[key] =
         (requestVersionsRef.current[key] ?? 0) + 1;
-      setStateByThreadKey((current) => ({
+      commitState((current) => ({
         ...current,
         [key]: {
           error: undefined,
@@ -230,7 +251,7 @@ export function useThreadSkills(params: {
         },
       }));
     });
-  }, [desktopApi, loadTarget, skillTarget, thread]);
+  }, [commitState, desktopApi, loadTarget, skillTarget, thread]);
 
   const ensureLoaded = useCallback(async (): Promise<void> => {
     await loadTarget();

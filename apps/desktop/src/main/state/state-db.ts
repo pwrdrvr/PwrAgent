@@ -10,7 +10,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 49;
+export const CURRENT_STATE_DB_USER_VERSION = 50;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -360,6 +360,28 @@ CREATE TABLE IF NOT EXISTS acp_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_backend_updated
   ON acp_sessions(backend_id, updated_at DESC);
+`;
+
+/**
+ * Last-observed ACP `availableCommands` per (agent, repository root).
+ *
+ * ACP agents only advertise their slash commands over a live session, so a
+ * launchpad draft — which has no session and no thread id — has nothing to ask.
+ * Every session that reports commands writes through here keyed by the repo
+ * root behind its cwd, and launchpad requests read it back. Keying on the
+ * repository (not the worktree) is deliberate: commands are a property of the
+ * checkout's command files, so every worktree of a repo shares one row.
+ */
+const ACP_AVAILABLE_COMMANDS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS acp_available_commands (
+  backend_id      TEXT NOT NULL,
+  repository_path TEXT NOT NULL,
+  observed_at     INTEGER NOT NULL,
+  payload         TEXT NOT NULL,
+  PRIMARY KEY (backend_id, repository_path)
+);
+CREATE INDEX IF NOT EXISTS idx_acp_available_commands_observed
+  ON acp_available_commands(observed_at DESC);
 `;
 
 const AUTOMATION_SCHEMA = `
@@ -1383,6 +1405,14 @@ LEFT JOIN federation_peers
     if ((db.pragma("user_version", { simple: true }) as number) < 49) {
       db.transaction(() => {
         migrateRawThreadIdentityKeysToLegacyStorage(db);
+        db.pragma("user_version = 49");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 50) {
+      db.transaction(() => {
+        // Additive table, no data migration; the same DDL also lives in
+        // `ensureCurrentSchema` so re-instantiated dbs converge.
+        db.exec(ACP_AVAILABLE_COMMANDS_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1715,6 +1745,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
     db.exec(ACP_AGENT_SCHEMA);
     db.exec(ACP_SESSION_SCHEMA);
+    db.exec(ACP_AVAILABLE_COMMANDS_SCHEMA);
     db.exec(AUTOMATION_SCHEMA);
     db.exec(SCHEDULED_THREAD_ACTION_SCHEMA);
     ensureScheduledThreadActionMetadataColumns(db);
