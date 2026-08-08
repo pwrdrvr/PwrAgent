@@ -175,9 +175,15 @@ sleep 2
 kill -KILL $orphan_pids 2>/dev/null || true
 sleep 2
 
+# A SIGKILLed process stays in the table as a zombie until its parent reaps
+# it, and `kill -0` succeeds on zombies. Ask ps for the state instead: an
+# absent pid or a Z state both mean the process is dead and holding nothing.
+# Getting this wrong would fail the job for a leftover that was reaped
+# correctly.
 survivors=""
 for pid in $orphan_pids; do
-  if kill -0 "$pid" 2>/dev/null; then
+  state=$(ps -o state= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)
+  if [[ -n "$state" && "${state:0:1}" != "Z" ]]; then
     survivors="${survivors}${pid} "
   fi
 done
