@@ -13,6 +13,7 @@ import {
   type NavigationThreadSummary,
   type NavigationLaunchpadDraft,
   type StartReviewRequest,
+  type ModelSettingsRecent,
   type SetThreadModelSettingsRequest,
   type StartTurnRequest,
   type StartTurnResponse,
@@ -4974,6 +4975,158 @@ describe("Composer", () => {
         }),
       })
     );
+  });
+
+  it("does not reuse one instance's reviewer recents on another's thread", async () => {
+    const reviewerBackend = (kind: BackendSummary["kind"]): BackendSummary => {
+      const summary = backendSummary(kind, {
+        models: [{ id: "grok-4", label: "grok-4", current: true }],
+      });
+      return {
+        ...summary,
+        capabilities: {
+          ...summary.capabilities,
+          startReview: true,
+          reviewRunner: true,
+        },
+      };
+    };
+    const pending: ((value: { recents: ModelSettingsRecent[] }) => void)[] = [];
+    const listModelSettingsRecents = vi.fn(
+      async () =>
+        await new Promise<{ recents: ModelSettingsRecent[] }>((resolve) => {
+          pending.push(resolve);
+        })
+    );
+    const baseProps = {
+      backends: [reviewerBackend("codex"), reviewerBackend("acp:grok")],
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        listModelSettingsRecents,
+        startReview: vi.fn(),
+      },
+      disabled: false,
+      skills: [],
+    };
+    const openReviewPanel = (label: string): void => {
+      fireEvent.change(screen.getByLabelText(label), {
+        target: { value: "/review" },
+      });
+      fireEvent.keyDown(screen.getByLabelText(label), { key: "Enter" });
+    };
+
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        thread={{
+          id: "thread-1",
+          title: "Remote",
+          titleSource: "explicit",
+          source: "acp:grok",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            ref: { target: { scope: "remote", instanceId: "owner-a" } },
+          },
+        } as never}
+      />
+    );
+
+    openReviewPanel("Reply");
+    expect(listModelSettingsRecents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        federationTarget: { scope: "remote", instanceId: "owner-a" },
+        scope: "review",
+      })
+    );
+    await act(async () => {
+      pending.shift()?.({ recents: [{ backend: "acp:grok", model: "grok-4" }] });
+    });
+    expect(
+      screen.getByRole("button", { name: "Recent reviewer settings" })
+    ).toBeInTheDocument();
+
+    // Same component, different owning instance. The remembered combination
+    // names a model that owner has; it must not carry over while the new
+    // owner's history is still in flight.
+    rerender(
+      <Composer
+        {...baseProps}
+        thread={{
+          id: "thread-2",
+          title: "Local",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+    openReviewPanel("Reply");
+
+    expect(
+      screen.queryByRole("button", { name: "Recent reviewer settings" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the reviewer row on a launchpad, where it cannot be honored", async () => {
+    const reviewerBackend = (kind: BackendSummary["kind"]): BackendSummary => {
+      const summary = backendSummary(kind, {
+        models: [{ id: "m1", label: "M1", current: true }],
+      });
+      return {
+        ...summary,
+        capabilities: {
+          ...summary.capabilities,
+          startReview: true,
+          reviewRunner: true,
+        },
+      };
+    };
+
+    render(
+      <Composer
+        backends={[reviewerBackend("codex"), reviewerBackend("acp:grok")]}
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        directory={{
+          key: "directory:/repo/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/repo/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onMaterializeLaunchpad={vi.fn()}
+        disabled={false}
+        skills={[]}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("New thread"), { key: "Enter" });
+
+    // The launchpad materialize path takes only a review target, so offering
+    // the row here would accept a reviewer and then drop it.
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    expect(
+      within(reviewTarget).queryByRole("button", { name: "Review provider" })
+    ).not.toBeInTheDocument();
   });
 
   it("hides the reviewer row when the owner advertises no review runners", async () => {

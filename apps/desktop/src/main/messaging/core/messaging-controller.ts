@@ -2627,14 +2627,19 @@ export class MessagingController {
     const reviewerEntry = reviewerBackends.find(
       (entry) => entry.backend === reviewerBackendKind,
     );
+    // The inherited case must report the same settings the non-override
+    // submit path resolves, which falls back to the binding's own preferences
+    // when the thread carries none — reading `thread` alone would show
+    // "provider default" and then run with the binding's model.
+    const inheritedSettings = params.reviewer
+      ? undefined
+      : turnSettingsForBinding(params.binding, params.navigation);
     // An un-picked model/effort stays blank rather than guessing the
     // provider's first entry — the review resolves those against the picked
     // provider's own defaults.
-    const reviewerModelId =
-      params.reviewer?.model ?? (params.reviewer ? undefined : thread?.model);
+    const reviewerModelId = params.reviewer?.model ?? inheritedSettings?.model;
     const reviewerEffort =
-      params.reviewer?.reasoningEffort
-      ?? (params.reviewer ? undefined : thread?.reasoningEffort);
+      params.reviewer?.reasoningEffort ?? inheritedSettings?.reasoningEffort;
     const reviewerModelEntry = reviewerEntry?.models.find(
       (model) => model.id === reviewerModelId,
     );
@@ -2884,12 +2889,15 @@ export class MessagingController {
           priority: 10 + index,
           value: { backend: entry.backend },
         })),
+        // Priority sits with Back/Cancel, not with the options: truncation
+        // drops the highest priority number first, and the escape hatch is
+        // the last thing that should go when a profile caps actions.
         ...(params.reviewer
           ? [{
               id: "review:reviewer:inherit",
               label: "Use Thread Default",
               fallbackText: "use thread default",
-              priority: 30,
+              priority: 3,
             }]
           : []),
         backAction,
@@ -2919,7 +2927,7 @@ export class MessagingController {
           id: "review:reviewer:model:default",
           label: "Provider Default",
           fallbackText: "provider default",
-          priority: 30,
+          priority: 3,
         },
         backAction,
         cancelAction,
@@ -2940,7 +2948,7 @@ export class MessagingController {
           id: "review:reviewer:effort:default",
           label: "Provider Default",
           fallbackText: "provider default",
-          priority: 30,
+          priority: 3,
         },
         backAction,
         cancelAction,

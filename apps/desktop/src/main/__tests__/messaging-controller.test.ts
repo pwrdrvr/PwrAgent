@@ -679,6 +679,40 @@ describe("MessagingController", () => {
     expect(request).not.toHaveProperty("reviewBackend");
   });
 
+  it("reports the settings the review would actually inherit", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      model: "gpt-5.2",
+      reasoningEffort: "xhigh",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            capabilities: {
+              ...buildBackendSummary().capabilities,
+              reviewRunner: true,
+            },
+          }),
+        ],
+      }),
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    // Read through the same resolver the non-override submit path uses, so
+    // "(thread default)" cannot claim one thing and run another.
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("gpt-5.2 · xhigh (thread default)"),
+    });
+  });
+
   it("hides the reviewer button when nothing advertises reviewRunner", async () => {
     const harness = await createHarness();
     await bindThread(harness);

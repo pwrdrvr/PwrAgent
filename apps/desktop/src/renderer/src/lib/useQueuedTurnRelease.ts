@@ -333,12 +333,31 @@ export function useQueuedTurnRelease(params: {
             target: reviewCommand.target,
             delivery: "inline",
             ...(reviewCommand.cwd ? { cwd: reviewCommand.cwd } : {}),
-            ...(releaseThread.model ? { model: releaseThread.model } : {}),
-            ...(releaseThread.reasoningEffort
-              ? { reasoningEffort: releaseThread.reasoningEffort }
-              : {}),
-            ...(releaseThread.serviceTier ? { serviceTier: releaseThread.serviceTier } : {}),
-            ...(reviewFastMode !== undefined ? { fastMode: reviewFastMode } : {}),
+            // A reviewer picked when the review was queued replaces the
+            // thread's settings wholesale — its model names an entry in
+            // another provider's catalog.
+            ...(reviewCommand.reviewer
+              ? {
+                  reviewBackend: reviewCommand.reviewer.backend,
+                  ...(reviewCommand.reviewer.model
+                    ? { model: reviewCommand.reviewer.model }
+                    : {}),
+                  ...(reviewCommand.reviewer.reasoningEffort
+                    ? { reasoningEffort: reviewCommand.reviewer.reasoningEffort }
+                    : {}),
+                }
+              : {
+                  ...(releaseThread.model ? { model: releaseThread.model } : {}),
+                  ...(releaseThread.reasoningEffort
+                    ? { reasoningEffort: releaseThread.reasoningEffort }
+                    : {}),
+                  ...(releaseThread.serviceTier
+                    ? { serviceTier: releaseThread.serviceTier }
+                    : {}),
+                  ...(reviewFastMode !== undefined
+                    ? { fastMode: reviewFastMode }
+                    : {}),
+                }),
           });
         } catch (error) {
           restoreQueuedTurn(

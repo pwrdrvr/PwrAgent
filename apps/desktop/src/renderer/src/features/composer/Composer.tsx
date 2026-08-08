@@ -3222,9 +3222,14 @@ export function Composer(props: ComposerProps) {
   }>({ maxHeight: 320, placement: "above" });
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
   const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
-  const [reviewerRecents, setReviewerRecents] = useState<ModelSettingsRecent[]>(
-    [],
-  );
+  // Tagged with the owning instance the same way recent file references are:
+  // a combination remembered on another instance names models that instance
+  // has, so a response that lands after the thread changed must not paint.
+  const [reviewerRecentsState, setReviewerRecentsState] = useState<{
+    authorityKey: string;
+    recents: ModelSettingsRecent[];
+  }>({ authorityKey: "local", recents: [] });
+  const reviewerAuthorityKeyRef = useRef("local");
   const isLaunchpad = Boolean(props.launchpad && props.directory);
   const launchpad = props.launchpad;
   const backend = useMemo(
@@ -5543,6 +5548,7 @@ export function Composer(props: ComposerProps) {
     cwd?: string;
     displayText: string;
     target: AppServerReviewTarget;
+    reviewer?: ModelSettingsRecent;
   }, options?: {
     queueClaimed?: boolean;
     queued?: QueuedTurnDraft;
@@ -5649,9 +5655,19 @@ export function Composer(props: ComposerProps) {
     );
     setActiveOptimisticMessageId(optimisticReviewId);
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
-    // Captured before the panel state clears below, so the picked reviewer
-    // still reaches the request.
-    const submittedReviewer = reviewConfig?.reviewer;
+    // A released queued review carries its own reviewer: the panel is long
+    // closed by then, so reviewConfig is empty and would silently downgrade the
+    // review to the thread's provider. Otherwise take the live panel state,
+    // captured before it clears below.
+    const submittedReviewer = reviewCommand.reviewer ?? reviewConfig?.reviewer;
+    // A queued reviewer already carries resolved values; only the live panel
+    // needs its chips resolved against the picked provider's catalog.
+    const submittedModel = reviewCommand.reviewer
+      ? reviewCommand.reviewer.model
+      : reviewerSelection.model?.id;
+    const submittedReasoningEffort = reviewCommand.reviewer
+      ? reviewCommand.reviewer.reasoningEffort
+      : reviewerSelection.reasoningEffort;
     if (!options?.queued) {
       resetComposerDraftAndState(composerScopeKey);
       setReviewConfig(undefined);
@@ -5668,11 +5684,9 @@ export function Composer(props: ComposerProps) {
         ...(submittedReviewer
           ? {
               reviewBackend: submittedReviewer.backend,
-              ...(reviewerSelection.model?.id
-                ? { model: reviewerSelection.model.id }
-                : {}),
-              ...(reviewerSelection.reasoningEffort
-                ? { reasoningEffort: reviewerSelection.reasoningEffort }
+              ...(submittedModel ? { model: submittedModel } : {}),
+              ...(submittedReasoningEffort
+                ? { reasoningEffort: submittedReasoningEffort }
                 : {}),
             }
           : {
@@ -5703,11 +5717,9 @@ export function Composer(props: ComposerProps) {
           scope: "review",
           recent: {
             backend: submittedReviewer.backend,
-            ...(reviewerSelection.model?.id
-              ? { model: reviewerSelection.model.id }
-              : {}),
-            ...(reviewerSelection.reasoningEffort
-              ? { reasoningEffort: reviewerSelection.reasoningEffort }
+            ...(submittedModel ? { model: submittedModel } : {}),
+            ...(submittedReasoningEffort
+              ? { reasoningEffort: submittedReasoningEffort }
               : {}),
           },
         })?.catch(() => undefined);
@@ -5840,14 +5852,33 @@ export function Composer(props: ComposerProps) {
   const refreshReviewerRecents = async (): Promise<void> => {
     const federationTarget =
       props.thread?.federation?.ref.target ?? rendererFederationTarget;
+    const requestedAuthorityKey = reviewerAuthorityKey;
+    // Clear first so a slow response cannot leave the previous owner's
+    // history on screen while the new one loads.
+    setReviewerRecentsState({
+      authorityKey: requestedAuthorityKey,
+      recents: [],
+    });
     try {
       const response = await props.desktopApi?.listModelSettingsRecents?.({
         ...(federationTarget ? { federationTarget } : {}),
         scope: "review",
       });
-      setReviewerRecents(response?.recents ?? []);
+      if (reviewerAuthorityKeyRef.current !== requestedAuthorityKey) {
+        return;
+      }
+      setReviewerRecentsState({
+        authorityKey: requestedAuthorityKey,
+        recents: response?.recents ?? [],
+      });
     } catch {
-      setReviewerRecents([]);
+      if (reviewerAuthorityKeyRef.current !== requestedAuthorityKey) {
+        return;
+      }
+      setReviewerRecentsState({
+        authorityKey: requestedAuthorityKey,
+        recents: [],
+      });
     }
   };
 
@@ -8924,7 +8955,22 @@ export function Composer(props: ComposerProps) {
       (candidate) =>
         candidate.available && candidate.capabilities.reviewRunner === true
     ) ?? [];
-  const reviewerOverridesSupported = reviewerBackendOptions.length > 0;
+  // Gated on an existing thread: the launchpad's materialize path takes only
+  // a review target (`onMaterializeLaunchpad`), so a reviewer picked there
+  // would be accepted by the UI and then silently dropped on submit.
+  const reviewerOverridesSupported =
+    Boolean(props.thread) && reviewerBackendOptions.length > 0;
+  const reviewerFederationTarget =
+    props.thread?.federation?.ref.target ?? rendererFederationTarget;
+  const reviewerAuthorityKey =
+    reviewerFederationTarget?.scope === "remote"
+      ? `remote:${reviewerFederationTarget.instanceId}`
+      : "local";
+  reviewerAuthorityKeyRef.current = reviewerAuthorityKey;
+  const reviewerRecents =
+    reviewerRecentsState.authorityKey === reviewerAuthorityKey
+      ? reviewerRecentsState.recents
+      : [];
   const reviewerSelection = resolveReviewerSelection({
     backends: props.backends,
     override: reviewConfig?.reviewer,
@@ -8956,9 +9002,15 @@ export function Composer(props: ComposerProps) {
       )
     );
   });
-  const activeReviewerRecentKey = reviewConfig?.reviewer
-    ? formatReviewerRecentLabel(reviewConfig.reviewer, props.backends)
-    : undefined;
+  // Identity is the list position, not the rendered label: the store dedupes
+  // on a wider tuple than the label shows, so two distinct entries can format
+  // identically.
+  const activeReviewerRecentIndex = resolvableReviewerRecents.findIndex(
+    (recent) =>
+      recent.backend === reviewConfig?.reviewer?.backend
+      && recent.model === reviewConfig?.reviewer?.model
+      && recent.reasoningEffort === reviewConfig?.reviewer?.reasoningEffort,
+  );
 
   const patchReviewer = (
     build: (current: ModelSettingsRecent | undefined) => ModelSettingsRecent | undefined,
@@ -10708,13 +10760,11 @@ export function Composer(props: ComposerProps) {
                       }))}
                       value={reviewerSelection.model?.id ?? ""}
                       onChange={(value) => {
-                        patchReviewer((current) => ({
-                          backend:
-                            current?.backend
-                            ?? reviewerSelection.backend
-                            ?? props.thread!.source,
-                          model: value,
-                        }));
+                        patchReviewer((current) => {
+                          const backend =
+                            current?.backend ?? reviewerSelection.backend;
+                          return backend ? { backend, model: value } : current;
+                        });
                       }}
                     />
                   ) : null}
@@ -10728,16 +10778,20 @@ export function Composer(props: ComposerProps) {
                       }))}
                       value={reviewerSelection.reasoningEffort ?? ""}
                       onChange={(value) => {
-                        patchReviewer((current) => ({
-                          backend:
-                            current?.backend
-                            ?? reviewerSelection.backend
-                            ?? props.thread!.source,
-                          ...(reviewerSelection.model?.id
-                            ? { model: reviewerSelection.model.id }
-                            : {}),
-                          reasoningEffort: value,
-                        }));
+                        patchReviewer((current) => {
+                          const backend =
+                            current?.backend ?? reviewerSelection.backend;
+                          if (!backend) {
+                            return current;
+                          }
+                          return {
+                            backend,
+                            ...(reviewerSelection.model?.id
+                              ? { model: reviewerSelection.model.id }
+                              : {}),
+                            reasoningEffort: value,
+                          };
+                        });
                       }}
                     />
                   ) : null}
@@ -10751,25 +10805,22 @@ export function Composer(props: ComposerProps) {
                         // dropdown falls back to the first option whenever the
                         // value matches nothing.
                         { label: "Recent", value: "" },
-                        ...resolvableReviewerRecents.map((recent) => ({
+                        ...resolvableReviewerRecents.map((recent, index) => ({
                           label: formatReviewerRecentLabel(
                             recent,
                             props.backends,
                           ),
-                          value: formatReviewerRecentLabel(
-                            recent,
-                            props.backends,
-                          ),
+                          value: String(index),
                         })),
                       ]}
                       tooltip="Reuse a recent reviewer"
-                      value={activeReviewerRecentKey ?? ""}
+                      value={
+                        activeReviewerRecentIndex >= 0
+                          ? String(activeReviewerRecentIndex)
+                          : ""
+                      }
                       onChange={(value) => {
-                        const picked = resolvableReviewerRecents.find(
-                          (recent) =>
-                            formatReviewerRecentLabel(recent, props.backends)
-                            === value,
-                        );
+                        const picked = resolvableReviewerRecents[Number(value)];
                         if (picked) {
                           patchReviewer(() => picked);
                         }
