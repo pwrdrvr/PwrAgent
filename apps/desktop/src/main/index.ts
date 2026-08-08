@@ -428,7 +428,9 @@ function prewarmInitialThreadList(): void {
     });
 }
 
-function disposeMainProcessResourcesSync(): void {
+function disposeMainProcessResourcesSync(options?: {
+  releaseFederationLease?: boolean;
+}): void {
   if (mainProcessResourcesDisposed) {
     return;
   }
@@ -472,10 +474,16 @@ function disposeMainProcessResourcesSync(): void {
     getExistingRuntimeMessagingLeaseCoordinator() ??
     (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
   runtimeMessagingLeaseCoordinator?.shutdownSync();
-  const runtimeFederationLeaseCoordinator =
-    getExistingRuntimeFederationLeaseCoordinator() ??
-    (isAppStateInitialized() ? getRuntimeFederationLeaseCoordinator() : null);
-  runtimeFederationLeaseCoordinator?.shutdownSync();
+  // On the graceful path the federation lease is released by the shutdown
+  // barrier AFTER the runtime stops, so a replacement instance cannot
+  // acquire it while the old listener is still bound. This sync release
+  // remains only as the exit/crash fallback.
+  if (options?.releaseFederationLease ?? true) {
+    const runtimeFederationLeaseCoordinator =
+      getExistingRuntimeFederationLeaseCoordinator()
+      ?? (isAppStateInitialized() ? getRuntimeFederationLeaseCoordinator() : null);
+    runtimeFederationLeaseCoordinator?.shutdownSync();
+  }
 }
 
 async function closeRendererWindowsBeforeResourceShutdown(
@@ -582,7 +590,15 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
     {
       name: "federation",
       timeoutMs: FEDERATION_SHUTDOWN_TIMEOUT_MS,
-      run: disposeDesktopFederationRuntime,
+      run: async () => {
+        await disposeDesktopFederationRuntime();
+        // Release the profile lease only after the listener is down: a
+        // replacement that acquired while the old socket was still bound
+        // would hit EADDRINUSE, keep the lease, and stay degraded even
+        // after this process exits. The sync dispose paths remain as the
+        // exit/crash fallback for this release.
+        getExistingRuntimeFederationLeaseCoordinator()?.shutdownSync();
+      },
     },
     {
       name: "app-server",
@@ -603,7 +619,7 @@ async function disposeMainProcessResources(source: string): Promise<void> {
     // them first so in-flight renderer work cannot cross the boundary where
     // IPC handlers and their backing stores are disposed.
     await closeRendererWindowsBeforeResourceShutdown(source);
-    disposeMainProcessResourcesSync();
+    disposeMainProcessResourcesSync({ releaseFederationLease: false });
     await runMainProcessShutdownBarrier(source);
     // Keep the scheduler subscribed until the app-server registry is closed.
     // A queued registry entry can otherwise start after its durable lease was

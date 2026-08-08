@@ -203,6 +203,7 @@ import {
   type FederationStartTurnRequest,
 } from "./federation-backend-bridge";
 import {
+  applyFederationLeaseSnapshot,
   buildFederationHealthStatus,
   publicPeerSummary,
 } from "./federation-health";
@@ -866,21 +867,13 @@ export class DesktopFederationRuntime {
       ? getAppStateDb().getMeta("profile_name") || undefined
       : undefined;
     // A live holder elsewhere keeps this instance's federation runtime
-    // stopped; surface that (with the holder's identity) the same way the
-    // messaging lease does, instead of a bare "disconnected".
+    // stopped; surface that (with the holder's identity while it is still
+    // live) the same way the messaging lease does, instead of a bare
+    // "disconnected".
     const federationLeaseSnapshot = isAppStateInitialized()
       ? getExistingRuntimeFederationLeaseCoordinator()?.snapshot()
       : undefined;
-    if (
-      health.enabled
-      && !federationLeaseSnapshot?.leaseHeld
-      && federationLeaseSnapshot?.leaseHolder
-    ) {
-      health.status = "degraded";
-      health.unavailableReason =
-        federationLeaseSnapshot.disabledReason ?? health.unavailableReason;
-      health.leaseHolder = federationLeaseSnapshot.leaseHolder;
-    }
+    applyFederationLeaseSnapshot(health, federationLeaseSnapshot);
     return health;
   }
 
@@ -1723,6 +1716,13 @@ export class DesktopFederationRuntime {
     settings: DesktopSettingsSnapshot,
   ): Promise<void> {
     this.stopping = false;
+    // Startup fence: losing the profile lease mid-startup makes the
+    // heartbeat stop this runtime, which flips `stopping` and bumps
+    // `walkEpoch`. A stale startup continuation must not create or publish
+    // sockets afterwards (the same guard connectToGateway uses per attempt).
+    const startupEpoch = this.walkEpoch;
+    const startupAborted = (): boolean =>
+      this.stopping || this.walkEpoch !== startupEpoch;
 
     const localInstanceId = this.ensureLocalInstanceId();
     const router = new FederationRouter({
@@ -1797,6 +1797,7 @@ export class DesktopFederationRuntime {
 
     const noise =
       await getDesktopSettingsService().getOrCreateFederationNoiseStaticKeyPair();
+    if (startupAborted()) return;
     const noiseStatic = noiseKeyPairFromRawPrivate(
       Buffer.from(noise.privateKeyBase64, "base64"),
     );
@@ -1804,7 +1805,8 @@ export class DesktopFederationRuntime {
     if (mode === "gateway" || mode === "dual") {
       const gatewayIdentity = await getDesktopSettingsService()
         .getOrCreateFederationIdentityKeyPair();
-      this.server = new FederationGatewayWebSocketServer({
+      if (startupAborted()) return;
+      const server = new FederationGatewayWebSocketServer({
         gatewayInstanceId: localInstanceId,
         gatewayPrivateKeyPem: gatewayIdentity.privateKeyPem,
         gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,
@@ -1822,16 +1824,25 @@ export class DesktopFederationRuntime {
         onEnvelope: (envelope, connection) =>
           void this.receiveEnvelope(envelope, connection.peerId),
       });
+      this.server = server;
       try {
-        const started = await this.server.start();
+        const started = await server.start();
+        if (startupAborted()) {
+          // The lease was lost while the listener was binding; tear down
+          // the socket we just created instead of publishing it. stop()
+          // may already have cleared this.server, so go through the local.
+          if (this.server === server) this.server = undefined;
+          await server.stop().catch(() => undefined);
+          return;
+        }
         this.listenUrl = started.url;
         log.info("federation gateway listening", { url: started.url });
       } catch (error) {
         this.gatewayListenerError = redactFederationDiagnostic(
           error instanceof Error ? error.message : String(error),
         );
-        await this.server.stop().catch(() => undefined);
-        this.server = undefined;
+        await server.stop().catch(() => undefined);
+        if (this.server === server) this.server = undefined;
         log.error("federation gateway failed to listen", {
           error: this.gatewayListenerError,
         });

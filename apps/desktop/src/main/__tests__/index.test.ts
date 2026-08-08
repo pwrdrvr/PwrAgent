@@ -1894,6 +1894,32 @@ describe("bootstrapApp", () => {
     expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
   });
 
+  it("stops the federation runtime before releasing its lease on graceful shutdown", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const sigtermHandler = processEventHandlers.get("SIGTERM");
+    expect(sigtermHandler).toBeTypeOf("function");
+    if (!sigtermHandler) {
+      return;
+    }
+
+    sigtermHandler("SIGTERM");
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
+
+    // A replacement instance must not be able to acquire the profile lease
+    // while this process's listener is still bound (EADDRINUSE deadlock).
+    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+    expect(
+      disposeDesktopFederationRuntimeMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      federationLeaseShutdownSyncMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("skips messaging runtime startup when messaging is disabled for the app instance", async () => {
     vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", "1");
     startupProfilerInstance.start.mockResolvedValue();

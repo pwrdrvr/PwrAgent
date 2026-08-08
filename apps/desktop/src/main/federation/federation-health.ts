@@ -6,6 +6,7 @@ import type {
   FederationInstanceRole,
   FederationPeerSummary,
 } from "@pwragent/shared";
+import type { RuntimeFederationLeaseSnapshot } from "../runtime-federation-lease";
 
 export function buildFederationHealthStatus(params: {
   settings: DesktopSettingsSnapshot;
@@ -30,6 +31,34 @@ export function buildFederationHealthStatus(params: {
     unavailableReason: enabled ? params.unavailableReason : undefined,
     peers: params.peers.map(publicPeerSummary),
   };
+}
+
+/**
+ * Overlay the profile lease state onto a health snapshot. Another live
+ * instance holding this profile's federation lease keeps this instance's
+ * runtime deliberately stopped, and it stays stopped after the holder
+ * exits — the lease record (and with it the holder metadata) disappears
+ * while the stop reason does not. Surface the reason either way, with the
+ * holder's identity only while it is still live.
+ */
+export function applyFederationLeaseSnapshot(
+  health: FederationHealthStatus,
+  snapshot: RuntimeFederationLeaseSnapshot | undefined,
+): void {
+  if (
+    !health.enabled
+    || !snapshot
+    || snapshot.leaseHeld
+    || snapshot.disabledReasonKind !== "lease_held"
+  ) {
+    return;
+  }
+  health.status = "degraded";
+  health.unavailableReason =
+    snapshot.disabledReason ?? health.unavailableReason;
+  if (snapshot.leaseHolder) {
+    health.leaseHolder = snapshot.leaseHolder;
+  }
 }
 
 export function publicPeerSummary(peer: FederationPeerSummary): FederationPeerSummary {
