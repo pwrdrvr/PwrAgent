@@ -7,7 +7,9 @@ import {
   closeElectronApplication,
   configureElectronE2eSecretStorageEnv,
   nextRendererViewportRequest,
+  raceTeardownTimeout,
   resolveSeedConfigPath,
+  waitForRendererReady,
 } from "../../../e2e/fixtures/electron-app";
 import { applyDesktopSettingsPatch } from "../settings/desktop-config";
 import {
@@ -200,5 +202,148 @@ describe("Electron E2E onboarding-suppression seed", () => {
         ].join("[\\s\\S]*"),
       ),
     );
+  });
+
+  // Following the production resolvers means inheriting their fallback
+  // to `os.homedir()`. Right for the app; for a fixture it would seed
+  // the operator's real ~/.pwragent, so the harness refuses instead.
+  it("refuses to resolve a seed path when HOME is missing from the launch env", () => {
+    expect(() => resolveSeedConfigPath({} as Record<string, string>)).toThrow(
+      /no HOME[\s\S]*operator's real/,
+    );
+  });
+});
+
+// The pre-launch checks above are the deterministic gate, but they run
+// before Electron exists. These cover what happens once it does.
+describe("Electron E2E renderer readiness", () => {
+  const roots: string[] = [];
+
+  function makeHomeRoot(options?: { bootstrap?: boolean }): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-ready-"));
+    roots.push(root);
+    if (options?.bootstrap) {
+      // Matches `resolveBootstrapProfileDir` — a sibling of `profiles/`.
+      fs.mkdirSync(path.join(root, ".pwragent", ".bootstrap", "state"), {
+        recursive: true,
+      });
+    }
+    return root;
+  }
+
+  /** Minimal stand-ins; `waitForRendererReady` only touches these. */
+  function makeWindow(options?: {
+    overlayAttaches?: boolean;
+    overlayCount?: number;
+  }): { window: Parameters<typeof waitForRendererReady>[0]["window"] } {
+    const pending = new Promise<void>(() => undefined);
+    const window = {
+      waitForLoadState: async () => undefined,
+      locator: () => ({
+        count: async () => options?.overlayCount ?? 0,
+        waitFor: async () =>
+          options?.overlayAttaches ? undefined : await pending,
+      }),
+    };
+    return { window: window as never };
+  }
+
+  function args(overrides: {
+    env: Record<string, string>;
+    window: Parameters<typeof waitForRendererReady>[0]["window"];
+    suppressOnboarding?: boolean;
+  }): Parameters<typeof waitForRendererReady>[0] {
+    return {
+      electronApp: {} as never,
+      env: overrides.env,
+      requiresReplayDriver: false,
+      seedConfigPath: path.join(overrides.env.HOME, "config.toml"),
+      suppressOnboarding: overrides.suppressOnboarding ?? true,
+      window: overrides.window,
+    };
+  }
+
+  afterEach(() => {
+    while (roots.length > 0) {
+      fs.rmSync(roots.pop() as string, { recursive: true, force: true });
+    }
+  });
+
+  // `initializeAppState("bootstrap")` creates `.bootstrap/` during
+  // `app.whenReady()`, before any BrowserWindow exists — which is what
+  // makes this check race-free where watching the DOM is not.
+  it("names the wizard when the app booted into bootstrap mode", async () => {
+    const env = { HOME: makeHomeRoot({ bootstrap: true }) };
+
+    await expect(
+      waitForRendererReady(args({ env, ...makeWindow() })),
+    ).rejects.toThrow(/onboarding wizard is showing[\s\S]*bootstrap mode/);
+  });
+
+  it("passes when no bootstrap profile exists and no overlay is present", async () => {
+    const env = { HOME: makeHomeRoot() };
+
+    await expect(
+      waitForRendererReady(args({ env, ...makeWindow() })),
+    ).resolves.toBeUndefined();
+  });
+
+  it("names the wizard when the overlay wins the race against readiness", async () => {
+    const env = { HOME: makeHomeRoot() };
+    const { window } = makeWindow({ overlayAttaches: true });
+    // Readiness never settles, so only the watcher can resolve this.
+    const stalled = {
+      ...(window as unknown as Record<string, unknown>),
+      waitForLoadState: () => new Promise<void>(() => undefined),
+    };
+
+    await expect(
+      waitForRendererReady(args({ env, window: stalled as never })),
+    ).rejects.toThrow(/onboarding wizard is showing/);
+  });
+
+  it("names the wizard when the overlay is already up once readiness settles", async () => {
+    const env = { HOME: makeHomeRoot() };
+
+    await expect(
+      waitForRendererReady(args({ env, ...makeWindow({ overlayCount: 1 }) })),
+    ).rejects.toThrow(/onboarding wizard is showing/);
+  });
+
+  // Wizard specs want the wizard. None of the above may fire for them.
+  it("skips every onboarding check when suppressOnboarding is false", async () => {
+    const env = { HOME: makeHomeRoot({ bootstrap: true }) };
+
+    await expect(
+      waitForRendererReady(
+        args({
+          env,
+          suppressOnboarding: false,
+          ...makeWindow({ overlayAttaches: true, overlayCount: 1 }),
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+});
+
+// `close()` warns past its budget but must not turn a real cleanup
+// failure into a warning nobody reads.
+describe("Electron E2E teardown budget", () => {
+  it("reports a still-pending teardown as timed out", async () => {
+    await expect(
+      raceTeardownTimeout(new Promise<void>(() => undefined), 5),
+    ).resolves.toBe(true);
+  });
+
+  it("reports a teardown that finished in time as not timed out", async () => {
+    await expect(raceTeardownTimeout(Promise.resolve(), 5_000)).resolves.toBe(
+      false,
+    );
+  });
+
+  it("propagates a teardown failure rather than reporting a timeout", async () => {
+    await expect(
+      raceTeardownTimeout(Promise.reject(new Error("ENOTEMPTY")), 5_000),
+    ).rejects.toThrow("ENOTEMPTY");
   });
 });

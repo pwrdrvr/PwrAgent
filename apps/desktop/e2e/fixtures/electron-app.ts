@@ -10,6 +10,7 @@ import type {
 } from "@pwragent/shared";
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
 import {
+  assertUnreachableProfileBootDecision,
   bootstrapProfileExists,
   PWRAGENT_HOME_ENV,
   PWRAGENT_PROFILE_AUTO_CREATE_ENV,
@@ -44,13 +45,15 @@ const ELECTRON_EVALUATE_QUIT_TIMEOUT_MS = 1_000;
 const ELECTRON_CLOSE_TIMEOUT_MS = 1_000;
 const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
 /**
- * Hard ceiling on everything `close()` does. Playwright's own worker
- * teardown timeout is 30s and is NOT per-test — when it fires, the
- * reported error is `Worker teardown timeout of 30000ms exceeded` with
- * no hint of which app wedged, and the worker is recycled, so the next
- * spec pays a fresh Electron boot too. Bounding teardown here means a
- * single stuck app costs one warning line instead of cascading into
- * every subsequent test in the run.
+ * Hard ceiling on everything `close()` does.
+ *
+ * Specs call `close()` from their own `try`/`finally`, so it spends the
+ * test's budget, not a fixture's: an unbounded stall shows up as the
+ * test timing out at 30s, which replaces whatever the test actually
+ * found with a timeout that names nothing. (Playwright's separate 30s
+ * *worker* teardown timeout is what collects an Electron process no one
+ * closed at all — see the catch in `launchElectronApp`.) 15s leaves room
+ * for a slow force-kill plus `rm` while still failing inside one test.
  */
 const ELECTRON_TEARDOWN_TIMEOUT_MS = 15_000;
 
@@ -146,6 +149,13 @@ type LaunchElectronAppParams = {
    * `<homeRoot>/.pwragent/profiles/default/config.toml` or any other
    * on-disk state the app reads at startup. Everything underneath
    * `<homeRoot>/` is cleaned up on `close()`.
+   *
+   * `default` is right for every caller today, but it is hardcoded here
+   * while the onboarding seed resolves its profile from the launch env
+   * (see `resolveSeedConfigPath`). A spec that also passed
+   * `env.PWRAGENT_PROFILE` would have its hook and the seed writing to
+   * two different profiles — resolve the name the same way if you ever
+   * need that combination.
    */
   preLaunchHook?: (homeRoot: string) => void | Promise<void>;
   /**
@@ -179,13 +189,18 @@ type LaunchElectronAppParams = {
    */
   secretStorage?: "disabled" | "memory";
   /**
-   * Whether to seed `onboarding.completed = true` into the
-   * `default` profile's config.toml before launch. Defaults to
-   * `true` so the wizard doesn't intercept clicks in most specs.
+   * Whether to seed `onboarding.completed = true` into the config.toml
+   * of the profile this launch will actually open — resolved from the
+   * launch environment by `resolveSeedConfigPath`, not assumed to be
+   * `default`. Defaults to `true` so the wizard doesn't intercept
+   * clicks in most specs, and the seed is verified before launch (see
+   * `assertOnboardingSeedTook`).
+   *
    * Wizard specs pass `false` to let the wizard fire — combined
    * with NOT pre-creating any profile dir (skip the appearance
    * seed and any preLaunchHook profile-creation), this lets the
-   * boot decision return `no-profile-configured`.
+   * boot decision return `no-profile-configured`. Passing `false`
+   * also disables every onboarding assertion, pre- and post-launch.
    */
   suppressOnboarding?: boolean;
   /**
@@ -411,20 +426,22 @@ async function finishElectronLaunch(args: {
       // Bound the whole teardown. `closeElectronApplication` is already
       // internally bounded, but the profile-process sweep and the `rm`
       // both touch the filesystem, and on a degraded shared runner either
-      // can stall. Anything that outlives the budget here would otherwise
-      // be collected by Playwright's 30s worker teardown timeout, which
-      // reports as `Worker teardown timeout of 30000ms exceeded` against
-      // the test — hiding the test's real result and recycling the worker.
-      // A warning line keeps the actual failure legible.
-      try {
-        await withTimeout(
-          teardown(),
-          ELECTRON_TEARDOWN_TIMEOUT_MS,
-          `[pwragent-e2e-teardown] teardown exceeded ${ELECTRON_TEARDOWN_TIMEOUT_MS}ms for homeRoot=${homeRoot}`,
-        );
-      } catch (error) {
+      // can stall. Specs call this from their own `finally`, so an
+      // unbounded stall burns the rest of the 30s test budget and reports
+      // as the test timing out — which buries whatever the test actually
+      // found. Warning and moving on keeps that result legible.
+      //
+      // ONLY the timeout is swallowed. A teardown that *fails* — an `rm`
+      // hitting ENOTEMPTY because a spawned profile survived the sweep,
+      // say — still rejects, because that is a real leak and a warning is
+      // not enough to get it noticed.
+      const running = teardown();
+      if (await raceTeardownTimeout(running, ELECTRON_TEARDOWN_TIMEOUT_MS)) {
+        // Still in flight, and now unobserved: keep a late rejection from
+        // surfacing as an unhandled promise rejection mid-suite.
+        running.catch(() => undefined);
         console.warn(
-          error instanceof Error ? error.message : String(error),
+          `[pwragent-e2e-teardown] teardown exceeded ${ELECTRON_TEARDOWN_TIMEOUT_MS}ms for homeRoot=${homeRoot}`,
         );
       }
     },
@@ -461,9 +478,27 @@ async function finishElectronLaunch(args: {
  * `default`. A hardcoded path silently seeds the wrong directory the
  * moment a spec (or the ambient environment) moves either one, and the
  * only symptom is the first-run wizard taking over every surface.
+ *
+ * Following the resolvers means inheriting their production fallback:
+ * with no `PWRAGENT_HOME` and no `HOME`, `resolvePwragentRoot` lands on
+ * `os.homedir()` — the operator's REAL `~/.pwragent`, which the seed
+ * would then rewrite. Right for the app, catastrophic for a test
+ * fixture, so an absent `HOME` is refused rather than resolved.
  */
 export function resolveSeedConfigPath(env: Record<string, string>): string {
-  const resolverOptions = { argv: [], env, homeDir: env.HOME } as const;
+  const homeDir = env.HOME;
+  if (!homeDir) {
+    throw new Error(
+      [
+        "PwrAgent E2E launch environment has no HOME.",
+        "  The profile resolvers would fall back to os.homedir(), so the",
+        "  onboarding seed would be written into the operator's real",
+        "  ~/.pwragent profile. Pass `homeRoot`, or an explicit `env.HOME`,",
+        "  rather than deleting HOME from the launch environment.",
+      ].join("\n"),
+    );
+  }
+  const resolverOptions = { argv: [], env, homeDir } as const;
   const profileName = resolveActiveProfileName(resolverOptions);
   return path.join(
     resolveProfileDir(profileName, resolverOptions),
@@ -565,7 +600,7 @@ export function assertOnboardingSeedTook(params: {
  *    resolve before the renderer has mounted the overlay — which is why
  *    it is not the thing being relied on.
  */
-async function waitForRendererReady(params: {
+export async function waitForRendererReady(params: {
   electronApp: ElectronApplication;
   env: Record<string, string>;
   requiresReplayDriver: boolean;
@@ -687,8 +722,12 @@ function describeBootDecision(decision: ProfileBootDecision): string {
       return `missing-named-profile (${decision.requestedName} via ${decision.source})`;
     case "missing-default-profile":
       return `missing-default-profile (${decision.configuredName})`;
+    case "no-profile-configured":
+      return "no-profile-configured (fresh PWRAGENT_HOME, nothing to open)";
     default:
-      return decision.kind;
+      // A new `ProfileBootDecision` variant should be a compile error
+      // here, not a decision this harness silently describes by name.
+      assertUnreachableProfileBootDecision(decision);
   }
 }
 
@@ -866,6 +905,34 @@ export async function closeElectronApplication(
   await killProcessTree(child);
   await waitForProcessExit(child, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
   await waitForClose(closePromise, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
+}
+
+/**
+ * Resolve `true` when `running` is still pending after `timeoutMs`.
+ *
+ * Deliberately not `withTimeout`: that collapses "timed out" and "the
+ * work rejected" into one rejection, and teardown needs to tell them
+ * apart — one is a degraded runner to warn about, the other is a real
+ * cleanup failure that must fail the test. A rejection before the
+ * deadline propagates to the caller here.
+ */
+export async function raceTeardownTimeout(
+  running: Promise<void>,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<boolean>([
+      running.then(() => false),
+      new Promise<true>((resolve) => {
+        timeout = setTimeout(() => resolve(true), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export async function withTimeout<T>(
