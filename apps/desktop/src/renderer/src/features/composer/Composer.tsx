@@ -105,6 +105,7 @@ import {
   filterHashReferenceCandidates,
   findHashReferenceTrigger,
   formatHashReferenceThreadLabel,
+  formatHashReferenceThreadTooltip,
 } from "../../lib/hash-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
 import {
@@ -1345,7 +1346,13 @@ function describeHashReferenceThread(
   if (directory?.label) {
     parts.push(directory.label);
   }
-  return parts.join(" · ") || thread.id;
+  if (parts.length > 0) {
+    return parts.join(" · ");
+  }
+  // The id is the last-resort disambiguator between same-named threads. A
+  // thread with no title is already showing that same id as its label, so
+  // repeating it here would just print the uuid twice.
+  return collapseHashReferenceWhitespace(thread.title) ? thread.id : "";
 }
 
 function createComposerSkillToken(
@@ -1398,7 +1405,15 @@ function createComposerThreadToken(
   });
   return {
     kind: "thread",
-    name: thread.title.trim() || thread.threadId,
+    // Every thread chip is minted here — picker, pasted url, and the draft
+    // rehydrate that rebuilds tokens from the live thread summary rather
+    // than from the saved link text. Formatting at the choke point is what
+    // makes the clamp survive a restore, and it makes the round trip
+    // converge: `format` of an already-formatted title is itself.
+    name: formatHashReferenceThreadLabel({
+      id: thread.threadId,
+      title: thread.title,
+    }),
     path,
     id: `${path}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     index,
@@ -1430,11 +1445,7 @@ function resolveThreadSummaryReference(
       ? { instanceId: federationTarget.instanceId }
       : {}),
     threadId: thread.id,
-    // The chip, its tooltip, and the `[title](pwragent://…)` markdown the
-    // agent receives all read this. A title that is really a whole pasted
-    // prompt would otherwise become a composer-wide chip and a link label
-    // hundreds of characters long; the url still carries the identity.
-    title: formatHashReferenceThreadLabel(thread),
+    title: thread.title,
     titleSource: thread.titleSource,
     gitBranch: thread.gitBranch,
     linkedDirectories: thread.linkedDirectories,
@@ -7613,18 +7624,7 @@ export function Composer(props: ComposerProps) {
     if (!inputRef.current) {
       return;
     }
-    inputRef.current.insertMentionToken(
-      createComposerThreadToken(
-        {
-          ...thread,
-          title: formatHashReferenceThreadLabel({
-            id: thread.threadId,
-            title: thread.title,
-          }),
-        },
-        0,
-      ),
-    );
+    inputRef.current.insertMentionToken(createComposerThreadToken(thread, 0));
   };
 
   const applyHashReference = (
@@ -10677,8 +10677,11 @@ export function Composer(props: ComposerProps) {
               if (option.kind === "thread") {
                 const thread = option.thread;
                 const threadLabel = formatHashReferenceThreadLabel(thread);
-                const threadTitle =
-                  collapseHashReferenceWhitespace(thread.title) || thread.id;
+                const threadTitle = formatHashReferenceThreadTooltip(thread);
+                const threadMeta = describeHashReferenceThread(
+                  thread,
+                  hashReferenceTrigger?.query ?? "",
+                );
                 const key = thread.federation
                   ? federatedThreadIdentityKey(thread.federation.ref)
                   : buildThreadIdentityKey(thread.source, thread.id);
@@ -10748,12 +10751,11 @@ export function Composer(props: ComposerProps) {
                             label={thread.federation.instanceLabel}
                           />
                         ) : null}
-                        <span className="composer__autocomplete-label">
-                          {describeHashReferenceThread(
-                            thread,
-                            hashReferenceTrigger?.query ?? "",
-                          )}
-                        </span>
+                        {threadMeta ? (
+                          <span className="composer__autocomplete-label">
+                            {threadMeta}
+                          </span>
+                        ) : null}
                       </span>
                     </button>
                   </Fragment>

@@ -47,6 +47,26 @@
             "reason": "new-thread"
           },
           "updatedAt": 1760000000000
+        },
+        {
+          "id": "thread-hash-reference-target",
+          "title": "Hash reference target",
+          "titleSource": "explicit",
+          "summary": "Referenceable sibling for the composer # picker, which leaves the thread you are writing in out of its own results. Kept out of the inbox so the sidebar renders exactly as before.",
+          "source": "codex",
+          "executionMode": "default",
+          "linkedDirectories": [
+            {
+              "id": "pwragent-fixture",
+              "label": "PwrAgent",
+              "path": "/Users/huntharo/github/PwrAgent",
+              "kind": "local"
+            }
+          ],
+          "inbox": {
+            "inInbox": false
+          },
+          "updatedAt": 1759000000000
         }
       ]
     },

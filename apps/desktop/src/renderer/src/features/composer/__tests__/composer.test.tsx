@@ -2262,6 +2262,123 @@ describe("Composer", () => {
       .toHaveTextContent("hash refer");
   });
 
+  it("does not print a titleless thread's id on both of its rows", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const untitledThread: NavigationThreadSummary = {
+      id: "019fdf98-11fe-71f4-936f-bfde8d967939",
+      title: "",
+      titleSource: "derived",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, untitledThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #" } });
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+
+    const option = within(listbox).getAllByRole("button")[0]!;
+    // The id is the label when there is no title; the meta row's own id
+    // fallback would only repeat it.
+    expect(option.querySelector(".composer__autocomplete-title"))
+      .toHaveTextContent(`#${untitledThread.id}`);
+    expect(option.querySelector(".composer__autocomplete-meta"))
+      .not.toHaveTextContent(untitledThread.id);
+  });
+
+  it("keeps a thread chip clamped when a draft is restored", async () => {
+    // The clamp has to live where tokens are minted, not only where the
+    // picker inserts them: a restore rebuilds thread tokens from the live
+    // thread summary and discards the saved link text, so formatting only
+    // at the picker is undone by the next restore.
+    const promptTitle =
+      "Apparently we don't allow cross-provider parent/child relationships? We should fix this, and the title runs on well past any reasonable label length.";
+    const targetThread: NavigationThreadSummary = {
+      id: "019fdf98-11fe-71f4-936f-bfde8d967939",
+      title: promptTitle,
+      titleSource: "derived",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const clampedLabel =
+      "Apparently we don't allow cross-provider parent/child relationships? We…";
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: `check [${clampedLabel}](pwragent://thread/${targetThread.id}?backend=codex) please`,
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const onMaterializeLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <ThreadLinkProvider onShowThread={() => undefined} threads={[targetThread]}>
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={{
+            key: "directory:/repo",
+            kind: "directory",
+            label: "Repo",
+            path: "/repo",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          }}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={onMaterializeLaunchpad}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    const richInput = screen.getByTestId("composer-tiptap-input");
+    const chip = await waitFor(() =>
+      within(richInput).getByText(`#${clampedLabel}`).closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveAttribute("data-mention-kind", "thread");
+    expect(chip?.textContent).not.toContain("reasonable label length");
+
+    // Re-serializing has to reproduce the draft it was restored from, or
+    // every restore rewrites the prompt the agent eventually receives.
+    await clickButton("Start thread");
+    await waitFor(() => {
+      expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        [{ type: "text", text: launchpad.prompt }],
+        undefined,
+        undefined,
+        [],
+      );
+    });
+  });
+
   it("offers matching threads and a precise PR link for a numeric hash query", async () => {
     const earlierPullRequest = {
       provider: "github.com" as const,
@@ -2329,9 +2446,20 @@ describe("Composer", () => {
       .toHaveTextContent("#123");
     expect(threadOption.querySelector(".composer__autocomplete-meta"))
       .not.toHaveTextContent("#44");
-    fireEvent.click(
-      within(listbox).getByRole("button", { name: /pwrdrvr\/PwrAgent#123/ }),
-    );
+
+    // The PR row's subject is clamped to one line like every other row,
+    // with the full text on the row for hover.
+    const pullRequestOption = within(listbox).getByRole("button", {
+      name: /pwrdrvr\/PwrAgent#123/,
+    });
+    expect(pullRequestOption).toHaveAttribute("title", pullRequest.title);
+    expect(
+      pullRequestOption.querySelector(
+        ".composer__autocomplete-meta--single-line",
+      ),
+    ).toHaveTextContent(pullRequest.title);
+
+    fireEvent.click(pullRequestOption);
 
     const chip = await waitFor(() =>
       within(textbox)
