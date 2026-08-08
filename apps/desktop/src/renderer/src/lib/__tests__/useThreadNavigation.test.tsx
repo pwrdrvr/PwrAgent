@@ -8954,6 +8954,90 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.directoryThreadsCollapsed).toBe(true);
   });
 
+  it("keeps a remote viewer's Directory threads disclosure independent of the owner", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const directory = {
+      key: "directory:/Users/remote/repos/PwrAgent",
+      kind: "directory" as const,
+      label: "PwrAgent",
+      path: "/Users/remote/repos/PwrAgent",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      directoryThreadsCollapsed: false,
+    };
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      federationTarget,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [directory],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const setDirectoryThreadsCollapsed: NonNullable<
+      DesktopApi["setDirectoryThreadsCollapsed"]
+    > = vi.fn(async (request) => ({
+      directoryKey: request.directoryKey,
+      collapsed: request.collapsed,
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (handler) => {
+        agentEventHandler = handler;
+        return () => undefined;
+      },
+      setDirectoryThreadsCollapsed,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.setDirectoryThreadsCollapsed(directory, true);
+    });
+
+    expect(setDirectoryThreadsCollapsed).toHaveBeenCalledWith({
+      directoryKey: directory.key,
+      collapsed: true,
+      federationTarget,
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "directory/threadsCollapsed/updated",
+          params: {
+            directoryKey: directory.key,
+            collapsed: false,
+          },
+        },
+      });
+    });
+    expect(result.current.directories[0]?.directoryThreadsCollapsed).toBe(true);
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.directories[0]?.directoryThreadsCollapsed).toBe(true);
+  });
+
   it("applies a peer's PR events to its pinned rows without touching local threads", async () => {
     // A pinned remote row is the only place a peer's PR chip is shown,
     // and the main window has no federation target, so these events do

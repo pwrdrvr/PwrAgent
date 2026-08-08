@@ -1315,6 +1315,11 @@ export type ReorderDirectoryPinsResponse = {
 export type SetDirectoryThreadsCollapsedRequest = {
   directoryKey: string;
   collapsed: boolean;
+  /**
+   * Remote-viewer disclosures are viewer-owned display state. The target
+   * namespaces the local preference; it is never routed to the owner.
+   */
+  federationTarget?: FederationTarget;
 };
 
 export type SetDirectoryThreadsCollapsedResponse = {
