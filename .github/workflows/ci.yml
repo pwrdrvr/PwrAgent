@@ -423,7 +423,7 @@ jobs:
           lookup-only: "true"
 
   desktop-e2e-macos:
-    name: macOS Desktop E2E (shared VM)
+    name: macOS Desktop E2E (lane ${{ matrix.lane }} of 2)
     # The restricted PwrDrvr organization runner group exposes this label only
     # to PwrAgent and PwrSnap. The host Tart VM runs Electron on its virtual
     # display, so neither CI nor manual test work takes over an operator's Mac.
@@ -437,6 +437,15 @@ jobs:
         github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     needs: [changes, macos-install-deps]
+    strategy:
+      # Keep both lab VMs busy when they are idle, while avoiding a third
+      # queued lane when one is already serving another job. Do not cancel the
+      # other shard on failure: its artifacts can distinguish a real failure
+      # from a flaky one and make the follow-up rerun smaller.
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        lane: [1, 2]
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -458,14 +467,16 @@ jobs:
         timeout-minutes: 20
         env:
           PWRAGENT_E2E_DISABLE_GPU: "1"
-        run: pnpm run test:desktop-e2e
+        run: >-
+          pnpm --filter @pwragent/desktop test:e2e
+          --shard=${{ matrix.lane }}/2
 
       - name: Upload macOS Playwright artifacts
         uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:
-          name: desktop-e2e-macos-artifacts
+          name: desktop-e2e-macos-lane-${{ matrix.lane }}-artifacts
           path: |
             apps/desktop/playwright-report/
             apps/desktop/test-results/
