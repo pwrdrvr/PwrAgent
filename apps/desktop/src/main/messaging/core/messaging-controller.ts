@@ -12966,7 +12966,7 @@ export class MessagingController {
   private async reviewSupportedForBinding(
     binding: MessagingBindingRecord,
   ): Promise<boolean> {
-    if (!this.options.backend.submitReview || isAcpBackendId(binding.backend)) {
+    if (!this.options.backend.submitReview) {
       return false;
     }
     try {

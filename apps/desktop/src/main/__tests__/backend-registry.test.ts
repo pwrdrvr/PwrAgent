@@ -2093,6 +2093,7 @@ type KimiStartPrompt = (params: {
 
 function createKimiAcpRegistry(options?: {
   acpBackendId?: AcpBackendId;
+  installedAgent?: AcpInstalledAgentRecord;
   acpRolloutStore?: AcpRolloutStore;
   sessionId?: string;
   sessions?: AcpSessionMetadata[];
@@ -2109,7 +2110,10 @@ function createKimiAcpRegistry(options?: {
     cwd: string,
   ) => Promise<LinkedDirectorySummary | undefined>;
 }) {
-  const acpBackendId = options?.acpBackendId ?? ("acp:kimi" as AcpBackendId);
+  const acpBackendId =
+    options?.installedAgent?.backendId
+    ?? options?.acpBackendId
+    ?? ("acp:kimi" as AcpBackendId);
   const sessions = options?.sessions ?? [];
   const sessionId = options?.sessionId ?? "kimi-session-1";
   const sendControlPrompt: KimiSendControlPrompt =
@@ -2166,13 +2170,19 @@ function createKimiAcpRegistry(options?: {
     refreshSession: vi.fn(async () => undefined),
     cancelSession: vi.fn(),
     readReplay: vi.fn((): AppServerThreadReplay => replay),
+    setRuntimeOption: vi.fn(async (params: {
+      sessionId: string;
+    }): Promise<BackendAcpSessionRuntimeState> =>
+      sessions.find((session) => session.sessionId === params.sessionId)?.acpRuntime
+      ?? { updatedAt: 1000 }),
   };
   const registry = new DesktopBackendRegistry({
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
     grokClient: new MockBackendClient({ threads: [] }),
     overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
     acpAgentStore: createAcpAgentStoreMock([
-      createKimiAgentRecord(acpBackendId, options?.runtimeCapabilities),
+      options?.installedAgent
+      ?? createKimiAgentRecord(acpBackendId, options?.runtimeCapabilities),
     ]),
     acpRolloutStore: options?.acpRolloutStore,
     acpSessionStore: createAcpSessionStoreMock(sessions),
@@ -18301,8 +18311,24 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("rejects review start for ACP backends instead of routing through built-in clients", async () => {
-    const { acpBackendId, registry } = createKimiAcpRegistry();
+  it("rejects managed review start for ACP providers without the capability", async () => {
+    const geminiBackendId = "acp:gemini" as AcpBackendId;
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      installedAgent: {
+        ...createKimiAgentRecord(geminiBackendId),
+        backendId: geminiBackendId,
+        registryId: "gemini",
+        name: "Gemini CLI",
+        launchDescriptor: {
+          backendId: geminiBackendId,
+          registryId: "gemini",
+          distributionKind: "local",
+          command: "gemini",
+          args: ["--experimental-acp"],
+          env: {},
+        },
+      },
+    });
 
     await expect(
       registry.startReview({
@@ -18312,6 +18338,139 @@ command = "pnpm dev"
         delivery: "inline",
       }),
     ).rejects.toThrow("Selected backend does not support review/start");
+
+    await registry.close();
+  });
+
+  it("runs Kimi review in a hidden child and injects its output into the next parent turn", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "kimi-parent";
+    const parentRuntime: BackendAcpSessionRuntimeState = {
+      currentModeId: "default",
+      currentModelId: "kimi-code/k3",
+      reasoningEffort: "high",
+      updatedAt: 1000,
+    };
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: acpBackendId,
+      sessionId: parentThreadId,
+      title: "Kimi parent",
+      cwd: "/repo/worktree",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "full-access",
+      acpRuntime: parentRuntime,
+      status: "idle",
+    }];
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`${acpBackendId}:${parentThreadId}`]: {
+          backend: acpBackendId,
+          threadId: parentThreadId,
+          executionMode: "full-access",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const startPrompt = vi.fn((params: Parameters<KimiStartPrompt>[0]) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn-${startPrompt.mock.calls.length}`,
+    }));
+    const { acpClient, registry } = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore,
+      sessionId: parentThreadId,
+      sessions,
+      startPrompt,
+    });
+
+    const response = await registry.startReview({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    expect(response).toMatchObject({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      reviewThreadId: expect.stringContaining(":title-helper:"),
+      turnId: expect.stringContaining("pending:"),
+    });
+    expect(acpClient.startSession).toHaveBeenCalledWith(expect.objectContaining({
+      acpRuntime: parentRuntime,
+      cwd: "/repo/worktree",
+      executionMode: "default",
+      hidden: true,
+    }));
+    expect(acpClient.setRuntimeOption).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: response.reviewThreadId,
+      source: "model",
+      value: "kimi-code/k3",
+      reasoningEffort: "high",
+    }));
+    expect(startPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: response.reviewThreadId,
+      prompt: expect.stringContaining("against base branch 'main'"),
+    }));
+
+    const reviewOutput = JSON.stringify({
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: "No blocking findings.",
+      overall_confidence_score: 0.96,
+    });
+    await (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: response.reviewThreadId,
+          turnId: response.turnId,
+          turn: {
+            id: response.turnId,
+            status: "completed",
+            output: [{ type: "text", text: reviewOutput }],
+          },
+        },
+      },
+    });
+
+    const nextTurn = await registry.startTurn({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      input: [{ type: "text", text: "Continue after review" }],
+    });
+    const nextPrompt = startPrompt.mock.calls.at(-1)?.[0].prompt;
+    expect(nextPrompt).toContain("PwrAgent review sub-agent results");
+    expect(nextPrompt).toContain(reviewOutput);
+    expect(nextPrompt).toContain("Continue after review");
+
+    await (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: parentThreadId,
+          turnId: nextTurn.turnId,
+          turn: {
+            id: nextTurn.turnId,
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      input: [{ type: "text", text: "One more turn" }],
+    });
+    expect(startPrompt.mock.calls.at(-1)?.[0].prompt).toBe("One more turn");
 
     await registry.close();
   });

@@ -39,6 +39,7 @@ import {
   type PwrSnapConnectionService,
 } from "../mcp-connections/pwrsnap-connection-service";
 import {
+  buildManagedReviewContextInput,
   buildManagedReviewPrompt,
   formatManagedReviewOutput,
   parseManagedReviewOutput,
@@ -2601,7 +2602,7 @@ type TaskMonitorDelegationRecord = {
 };
 
 type ReviewSubAgentRecord = {
-  backend: Exclude<AppServerBackendKind, AcpBackendId>;
+  backend: AppServerBackendKind;
   createdAt: number;
   displayText: string;
   fastMode?: boolean;
@@ -6372,6 +6373,7 @@ export class DesktopBackendRegistry {
     string,
     ReviewSubAgentRecord
   >();
+  private readonly pendingManagedReviewContexts = new Map<string, string[]>();
   private readonly codexNativeSubAgentParents = new Map<string, string>();
   private readonly codexNativeSubAgentReconciliations = new Map<
     string,
@@ -8221,6 +8223,7 @@ export class DesktopBackendRegistry {
     acpRuntime?: BackendAcpSessionRuntimeState;
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpServerRegistration;
+    hidden?: boolean;
   }): Promise<{ threadId: string }> {
     const client = await this.acpBackend.getClient(params.backend);
     const initialExecutionMode = this.usesSlashControlledAcpExecutionModes(
@@ -8233,6 +8236,7 @@ export class DesktopBackendRegistry {
       executionMode: initialExecutionMode,
       acpRuntime: params.acpRuntime,
       additionalMcpRegistration: params.mcpRegistration,
+      ...(params.hidden ? { hidden: true } : {}),
     });
     if (
       this.usesSlashControlledAcpExecutionModes(params.backend) &&
@@ -11230,6 +11234,13 @@ export class DesktopBackendRegistry {
     });
     const migrationApplied = migrationResult.status === "applied";
     if (isAcpBackendId(params.backend)) {
+      const managedReviewContextKey = buildThreadIdentityKey(
+        params.backend,
+        params.threadId,
+      );
+      const pendingManagedReviewContexts = [
+        ...(this.pendingManagedReviewContexts.get(managedReviewContextKey) ?? []),
+      ];
       const overlay = await this.overlayStore.getThreadOverlayState({
         backend: params.backend,
         threadId: params.threadId,
@@ -11260,9 +11271,20 @@ export class DesktopBackendRegistry {
           }),
           input: params.input,
         });
+        const inputWithManagedReviewContext = pendingManagedReviewContexts.length > 0
+          ? [
+              {
+                type: "text" as const,
+                text: buildManagedReviewContextInput(
+                  pendingManagedReviewContexts,
+                ),
+              },
+              ...preparedPdfInput.input,
+            ]
+          : preparedPdfInput.input;
         // ACP adapters already accept data-URL image parts. Keeping those
         // intact avoids changing their established image payload contract.
-        const input = await enrichLocalFileInputs(preparedPdfInput.input, {
+        const input = await enrichLocalFileInputs(inputWithManagedReviewContext, {
           privateStorageRoots: this.localFilePrivateStorageRoots,
         });
         if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
@@ -11288,6 +11310,10 @@ export class DesktopBackendRegistry {
           input,
           model: modelSettings.model,
           reasoningEffort: modelSettings.reasoningEffort,
+        });
+        this.consumePendingManagedReviewContexts({
+          key: managedReviewContextKey,
+          consumed: pendingManagedReviewContexts,
         });
         this.pdfAttachmentStore.bindTurn(
           {
@@ -11928,17 +11954,29 @@ export class DesktopBackendRegistry {
 
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
-    if (isAcpBackendId(params.backend)) {
+    const acpManagedMode =
+      isAcpBackendId(params.backend)
+      && this.acpBackend.supportsManagedReview(params.backend);
+    if (isAcpBackendId(params.backend) && !acpManagedMode) {
       throw new Error("Selected backend does not support review/start");
     }
     const managedMode =
-      params.backend === "codex" && this.resolveManagedReviewEnabledFn();
+      acpManagedMode
+      || (params.backend === "codex" && this.resolveManagedReviewEnabledFn());
     const reserveCodexReviewStart = params.backend === "codex";
+    const acpReviewReservationKey = isAcpBackendId(params.backend)
+      ? buildTurnStartReservationKey(params.backend, params.threadId)
+      : undefined;
     if (reserveCodexReviewStart) {
       if (this.threadHasActiveTurn(params.threadId)) {
         throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
       }
       this.reservedCodexStartThreadIds.add(params.threadId);
+    } else if (acpReviewReservationKey) {
+      if (this.threadHasActiveTurn(params.threadId, params.backend)) {
+        throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
+      }
+      this.reservedAcpStartThreadKeys.add(acpReviewReservationKey);
     }
     let modelSettings: ModelSettings = {};
     let result: { threadId: string; reviewThreadId: string; turnId: string };
@@ -11948,14 +11986,13 @@ export class DesktopBackendRegistry {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
       }
-      overlay =
-        params.backend === "codex"
-          ? await this.overlayStore.getThreadOverlayState({
-              backend: params.backend,
-              threadId: params.threadId,
-            })
-          : undefined;
-      if (params.backend === "codex") {
+      overlay = managedMode || params.backend === "codex"
+        ? await this.overlayStore.getThreadOverlayState({
+            backend: params.backend,
+            threadId: params.threadId,
+          })
+        : undefined;
+      if (params.backend === "codex" || acpManagedMode) {
         cwd =
           params.cwd?.trim()
           || await this.resolveThreadEnvironmentCwd(
@@ -11999,6 +12036,7 @@ export class DesktopBackendRegistry {
 
       result = managedMode
         ? await this.startManagedReviewChild({
+            backend: params.backend,
             cwd,
             modelSettings,
             overlay,
@@ -12011,6 +12049,9 @@ export class DesktopBackendRegistry {
     } catch (error) {
       if (reserveCodexReviewStart) {
         this.reservedCodexStartThreadIds.delete(params.threadId);
+      }
+      if (acpReviewReservationKey) {
+        this.reservedAcpStartThreadKeys.delete(acpReviewReservationKey);
       }
       throw error;
     }
@@ -12041,9 +12082,11 @@ export class DesktopBackendRegistry {
       } finally {
         this.reservedCodexStartThreadIds.delete(params.threadId);
       }
+    } else if (acpReviewReservationKey) {
+      this.reservedAcpStartThreadKeys.delete(acpReviewReservationKey);
     }
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
-      backend: params.backend as Exclude<AppServerBackendKind, AcpBackendId>,
+      backend: params.backend,
       createdAt: Date.now(),
       displayText: reviewTaskLabel(params.target),
       ...(modelSettings.fastMode !== undefined ? { fastMode: modelSettings.fastMode } : {}),
@@ -12089,12 +12132,47 @@ export class DesktopBackendRegistry {
   }
 
   private async startManagedReviewChild(params: {
+    backend: AppServerBackendKind;
     cwd?: string;
     modelSettings: ModelSettings;
     overlay?: ThreadOverlayState;
     parentThreadId: string;
     target: StartReviewRequest["target"];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    if (isAcpBackendId(params.backend)) {
+      const parentSession = this.acpBackend.getSession(
+        params.backend,
+        params.parentThreadId,
+      );
+      const acpRuntime = parentSession?.acpRuntime;
+      const executionMode =
+        params.overlay?.executionMode
+        ?? parentSession?.executionMode
+        ?? "default";
+      const thread = await this.startAcpSession({
+        backend: params.backend,
+        cwd: params.cwd,
+        executionMode,
+        acpRuntime,
+        reasoningEffort:
+          params.modelSettings.reasoningEffort
+          ?? acpRuntime?.reasoningEffort,
+        hidden: true,
+      });
+      const turn = await this.startAcpTurn({
+        backend: params.backend,
+        threadId: thread.threadId,
+        input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
+        model: params.modelSettings.model,
+        reasoningEffort: params.modelSettings.reasoningEffort,
+      });
+      return {
+        threadId: params.parentThreadId,
+        reviewThreadId: turn.threadId,
+        turnId: turn.turnId,
+      };
+    }
+
     const executionMode =
       params.overlay?.executionMode
       ?? await this.resolveCodexThreadExecutionModeForActiveTurn(
@@ -12223,6 +12301,14 @@ export class DesktopBackendRegistry {
       ?? (
         request.backend === "codex"
         && this.reservedCodexStartThreadIds.has(request.threadId)
+          ? `pending:${request.threadId}`
+          : undefined
+      )
+      ?? (
+        isAcpBackendId(request.backend)
+        && this.reservedAcpStartThreadKeys.has(
+          buildTurnStartReservationKey(request.backend, request.threadId),
+        )
           ? `pending:${request.threadId}`
           : undefined
       );
@@ -19758,6 +19844,28 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private consumePendingManagedReviewContexts(params: {
+    consumed: string[];
+    key: string;
+  }): void {
+    if (params.consumed.length === 0) {
+      return;
+    }
+    const current = this.pendingManagedReviewContexts.get(params.key);
+    if (
+      !current
+      || !params.consumed.every((output, index) => current[index] === output)
+    ) {
+      return;
+    }
+    const remaining = current.slice(params.consumed.length);
+    if (remaining.length === 0) {
+      this.pendingManagedReviewContexts.delete(params.key);
+      return;
+    }
+    this.pendingManagedReviewContexts.set(params.key, remaining);
+  }
+
   private async publishManagedReviewTerminal(params: {
     method: "turn/completed" | "turn/failed" | "turn/cancelled";
     notification: Extract<
@@ -19780,6 +19888,17 @@ export class DesktopBackendRegistry {
       const review = parsed
         ? formatManagedReviewOutput(parsed)
         : output?.trim() || "Review completed without output.";
+      if (isAcpBackendId(params.record.backend)) {
+        const contextKey = buildThreadIdentityKey(
+          params.record.backend,
+          params.record.parentThreadId,
+        );
+        const pending = this.pendingManagedReviewContexts.get(contextKey) ?? [];
+        this.pendingManagedReviewContexts.set(contextKey, [
+          ...pending,
+          output?.trim() || review,
+        ]);
+      }
       const entry: AppServerThreadReviewEntry = {
         type: "review",
         id: `managed-review:${params.record.turnId}:result`,
@@ -21789,7 +21908,10 @@ export class DesktopBackendRegistry {
         "start_review must be invoked from a live turn on the thread being reviewed.",
       );
     }
-    if (isAcpBackendId(request.context.backend)) {
+    if (
+      isAcpBackendId(request.context.backend)
+      && !this.acpBackend.supportsManagedReview(request.context.backend)
+    ) {
       return threadOrchestrationFailure(
         "unsupported_backend",
         "Selected backend does not support review/start.",
