@@ -167,6 +167,21 @@ describe("FederationSettings", () => {
           },
         },
         {
+          id: "pwr_quiet",
+          label: "Quiet Mini",
+          role: "client",
+          status: "connected",
+          capabilities: ["thread_navigation"],
+          transfer: {
+            bytesSent: 900,
+            bytesReceived: 5_452_595,
+            envelopesSent: 4,
+            envelopesReceived: 9,
+            since: Date.parse("2026-08-08T09:30:00.000Z"),
+            lastActivityAt: Date.parse("2026-08-08T09:31:00.000Z"),
+          },
+        },
+        {
           id: "pwr_idle",
           label: "Idle Mini",
           role: "client",
@@ -196,11 +211,21 @@ describe("FederationSettings", () => {
     await act(async () => {
       await Promise.resolve();
     });
+    // Whole-number MB once the magnitude carries the signal...
     expect(
-      screen.getByText(/Transferred ↑ 500 KB · ↓ 200\.0 MB across 4600 envelopes/),
+      screen.getByText(/^Transferred ↑ 500 KB · ↓ 200 MB$/),
+    ).toBeInTheDocument();
+    // ...one decimal while leading digits are scarce.
+    expect(
+      screen.getByText(/^Transferred ↑ 900 B · ↓ 5\.2 MB$/),
+    ).toBeInTheDocument();
+    // Screen readers get worded directions, and the envelope count +
+    // counting start live in the long form instead of the visible row.
+    expect(
+      screen.getByLabelText(/^Sent 500 KB, received 200 MB across 4,600 envelopes since /),
     ).toBeInTheDocument();
     // A peer with no observed traffic gets no transfer line at all.
-    expect(screen.getAllByText(/Transferred ↑/)).toHaveLength(1);
+    expect(screen.getAllByText(/Transferred ↑/)).toHaveLength(2);
   });
 
   it("saves the ordered gateway endpoint list", async () => {

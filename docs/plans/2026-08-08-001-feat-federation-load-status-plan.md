@@ -118,7 +118,10 @@ the protocol, not protocol fields** — nothing new crosses the wire:
   everything on the gateway's row because all its remote traffic rides
   that one socket.
 - Surface: the Settings → Federation peer rows render
-  "Transferred ↑ x · ↓ y across N envelopes since <t>".
+  "Transferred ↑ x · ↓ y"; the envelope count and counting start time
+  live in the row's hover tooltip + aria-label (the worded long form
+  also gives screen readers "sent/received" instead of arrow glyphs,
+  mirroring the sidebar's unpushed-commits chip pattern).
 
 ## Non-goals
 
