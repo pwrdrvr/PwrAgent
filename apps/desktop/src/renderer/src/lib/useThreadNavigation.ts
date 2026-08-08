@@ -47,6 +47,7 @@ import { resolveThreadWorkingStatePath } from "./thread-working-state-path";
 import {
   agentEventThreadIdentityKey,
   federationTargetsEqual,
+  threadSummaryIdentityKey,
 } from "./federated-thread-events";
 import {
   buildSubthreadLaunchpadKey,
@@ -136,6 +137,11 @@ type NavigationState = {
 type NavigationRefreshOptions = {
   forceRefresh?: boolean;
   refreshMode?: "active-recent" | "full";
+};
+
+type ThreadStatusObservation = {
+  sequence: number;
+  threadStatus: AppServerThreadStatus;
 };
 
 type PrChipLocation = {
@@ -827,6 +833,30 @@ function reconcileNavigationSnapshot(
         : thread;
     }),
   };
+}
+
+function applyConcurrentThreadStatusObservations(
+  snapshot: NavigationSnapshot,
+  observations: ReadonlyMap<string, ThreadStatusObservation>,
+  sequenceAtRefreshStart: number,
+): NavigationSnapshot {
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    const observation = observations.get(threadSummaryIdentityKey(thread));
+    if (
+      !observation
+      || observation.sequence <= sequenceAtRefreshStart
+      || observation.threadStatus === thread.threadStatus
+    ) {
+      return thread;
+    }
+    changed = true;
+    return {
+      ...thread,
+      threadStatus: observation.threadStatus,
+    };
+  });
+  return changed ? { ...snapshot, threads } : snapshot;
 }
 
 function applyDirectoryGitStatusUpdate(
@@ -1565,6 +1595,7 @@ function applyThreadStatusUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     threadStatus: AppServerThreadStatus;
   }
@@ -1576,6 +1607,14 @@ function applyThreadStatusUpdate(
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+    if (
+      !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
       return thread;
     }
     if (thread.threadStatus === params.threadStatus) {
@@ -2730,6 +2769,10 @@ export function useThreadNavigation(
   const pendingDirectoryGitStatusRef = useRef(
     new Map<string, NavigationDirectoryGitStatus | null>(),
   );
+  const threadStatusObservationSequenceRef = useRef(0);
+  const threadStatusObservationsRef = useRef(
+    new Map<string, ThreadStatusObservation>(),
+  );
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
   const stateRef = useRef(state);
 
@@ -2840,6 +2883,8 @@ export function useThreadNavigation(
                 ...(federationTarget ? { federationTarget } : {}),
               }
             : undefined;
+        const threadStatusSequenceAtRefreshStart =
+          threadStatusObservationSequenceRef.current;
         const snapshot = snapshotRequest
           ? await desktopApi.getNavigationSnapshot(snapshotRequest)
           : await desktopApi.getNavigationSnapshot();
@@ -2869,7 +2914,16 @@ export function useThreadNavigation(
             };
           }
 
-          const nextResponse = reconcileNavigationSnapshot(current.response, response);
+          const responseWithConcurrentThreadStatuses =
+            applyConcurrentThreadStatusObservations(
+              response,
+              threadStatusObservationsRef.current,
+              threadStatusSequenceAtRefreshStart,
+            );
+          const nextResponse = reconcileNavigationSnapshot(
+            current.response,
+            responseWithConcurrentThreadStatuses,
+          );
           prChipLocationIndexRef.current = buildPrChipLocationIndex(nextResponse);
           return {
             loading: false,
@@ -3521,10 +3575,22 @@ export function useThreadNavigation(
           return;
         }
 
+        const observationSequence =
+          threadStatusObservationSequenceRef.current + 1;
+        threadStatusObservationSequenceRef.current = observationSequence;
+        threadStatusObservationsRef.current.set(
+          agentEventThreadIdentityKey(event, threadId),
+          {
+            sequence: observationSequence,
+            threadStatus,
+          },
+        );
+
         setState((current) => ({
           ...current,
           response: applyThreadStatusUpdate(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             threadStatus,
           }),
