@@ -307,4 +307,96 @@ describe("RuntimeFederationLeaseCoordinator", () => {
       releasedAt: 1_000,
     });
   });
+
+  it("releases the lease and stops the heartbeat when post-acquisition startup fails", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    const coordinator = new RuntimeFederationLeaseCoordinator({
+      instanceId: "instance-a",
+      now: () => 1_000,
+      store,
+    });
+
+    await coordinator.applyMode(runtime, "client");
+    await coordinator.releaseAfterStartupFailure(runtime);
+
+    expect(runtime.stop).toHaveBeenCalledTimes(1);
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      status: "released",
+      releasedAt: 1_000,
+    });
+    expect(coordinator.snapshot()).toMatchObject({
+      leaseHeld: false,
+      disabledReasonKind: "startup_error",
+    });
+
+    // The heartbeat must be stopped too: nothing may re-activate the lease.
+    await vi.advanceTimersByTimeAsync(FEDERATION_LEASE_HEARTBEAT_MS * 3);
+    expect(store.getFederationLease()).toMatchObject({
+      status: "released",
+      releasedAt: 1_000,
+    });
+  });
+
+  it("lets another instance acquire after a startup-failure release", async () => {
+    const firstRuntime = createRuntime();
+    const secondRuntime = createRuntime();
+    recordInstance("instance-a", {
+      processId: 123,
+      cwd: "/tmp/PwrAgnt-a",
+      startedAt: 1_000,
+    });
+    recordInstance("instance-b", {
+      processId: 456,
+      cwd: "/tmp/PwrAgnt-b",
+      startedAt: 2_000,
+    });
+    const first = new RuntimeFederationLeaseCoordinator({
+      instanceId: "instance-a",
+      now: () => 1_000,
+      store,
+    });
+    const second = new RuntimeFederationLeaseCoordinator({
+      instanceId: "instance-b",
+      now: () => 2_000,
+      store,
+    });
+
+    await first.applyMode(firstRuntime, "dual");
+    await first.releaseAfterStartupFailure(firstRuntime);
+    await expect(second.applyMode(secondRuntime, "dual")).resolves
+      .toMatchObject({ enabled: true });
+
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-b",
+      acquiredAt: 2_000,
+      status: "active",
+    });
+    second.shutdownSync();
+  });
+
+  it("releases the lease even when runtime stop fails during startup cleanup", async () => {
+    const runtime: FederationLeaseRuntime = {
+      stop: vi.fn(async () => {
+        throw new Error("stop failed");
+      }),
+    };
+    const coordinator = new RuntimeFederationLeaseCoordinator({
+      instanceId: "instance-a",
+      now: () => 1_000,
+      store,
+    });
+
+    await coordinator.applyMode(runtime, "client");
+    await expect(
+      coordinator.releaseAfterStartupFailure(runtime),
+    ).resolves.toBeUndefined();
+
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      status: "released",
+      releasedAt: 1_000,
+    });
+  });
 });

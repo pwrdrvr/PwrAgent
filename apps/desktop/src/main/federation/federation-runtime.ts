@@ -96,6 +96,8 @@ import {
   type ForkThreadRequest,
   type FederationRemoteTarget,
   type DesktopApplicationsSnapshot,
+  type DesktopFederationMode,
+  type DesktopSettingsSnapshot,
   type HandoffThreadWorkspaceRequest,
   type GetWorktreeUnpublishedCommitDiffRequest,
   type GetWorktreeUnpublishedCommitDiffResponse,
@@ -1564,19 +1566,36 @@ export class DesktopFederationRuntime {
     // federation instance identity, so without the lease two of them evict
     // each other from the gateway in a connect/replace loop.
     if (isAppStateInitialized()) {
-      const leaseGate = await getRuntimeFederationLeaseCoordinator().applyMode(
-        this,
-        mode,
-      );
+      const leaseCoordinator = getRuntimeFederationLeaseCoordinator();
+      const leaseGate = await leaseCoordinator.applyMode(this, mode);
       if (!leaseGate.enabled) {
         if (leaseGate.disabledReasonKind === "lease_held") {
           this.lastConnectionError = leaseGate.disabledReason;
         }
         return;
       }
-    } else if (mode === "disabled") {
+      try {
+        await this.startAfterLeaseAcquired(mode, settings);
+      } catch (error) {
+        // A startup failure after acquisition (e.g. unreadable federation
+        // key material) must not keep renewing the profile lease with no
+        // runtime behind it: release so another instance can take over,
+        // mirroring the messaging lease's startup-failure cleanup.
+        await leaseCoordinator.releaseAfterStartupFailure(this);
+        throw error;
+      }
       return;
     }
+    if (mode === "disabled") {
+      return;
+    }
+    await this.startAfterLeaseAcquired(mode, settings);
+  }
+
+  private async startAfterLeaseAcquired(
+    mode: DesktopFederationMode,
+    settings: DesktopSettingsSnapshot,
+  ): Promise<void> {
     this.stopping = false;
 
     const localInstanceId = this.ensureLocalInstanceId();

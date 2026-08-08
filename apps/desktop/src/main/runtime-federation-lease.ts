@@ -24,7 +24,8 @@ const leaseLog = getMainLogger("pwragent:federation-lease");
 export type RuntimeFederationDisabledReasonKind =
   | "saved_disabled"
   | "lease_held"
-  | "runtime_stopped";
+  | "runtime_stopped"
+  | "startup_error";
 
 export type RuntimeFederationLeaseHolder = {
   instanceId: string;
@@ -134,6 +135,32 @@ export class RuntimeFederationLeaseCoordinator {
     this.disabledReasonKind = undefined;
     this.startHeartbeat(runtime);
     return { enabled: true };
+  }
+
+  /**
+   * Post-acquisition startup failure cleanup, mirroring the messaging
+   * coordinator: stop the heartbeat, tear down any partially started
+   * runtime, and release the lease so another instance can take over the
+   * profile instead of this process renewing it with no runtime behind it.
+   */
+  async releaseAfterStartupFailure(
+    runtime: FederationLeaseRuntime,
+  ): Promise<void> {
+    const now = this.now();
+    this.stopHeartbeat();
+    try {
+      await runtime.stop();
+    } catch (error) {
+      leaseLog.warn("federation runtime stop failed during startup cleanup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      if (this.leaseHeld) {
+        this.store.releaseFederationLease({ instanceId: this.instanceId, now });
+      }
+      this.leaseHeld = false;
+      this.disabledReasonKind = "startup_error";
+    }
   }
 
   shutdownSync(): void {
@@ -259,5 +286,7 @@ function federationDisabledReasonMessage(
       return "Federation is already active in another PwrAgent instance for this profile.";
     case "runtime_stopped":
       return "Federation is stopped for this app instance.";
+    case "startup_error":
+      return "Federation failed during startup for this app instance.";
   }
 }
