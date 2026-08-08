@@ -276,7 +276,7 @@ describe("ThreadView", () => {
     });
   });
 
-  it("applies a pending provider migration on the federated owner", async () => {
+  it("does not apply this instance's provider migration to a remote thread", () => {
     const applyThreadModelMigration = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-old",
@@ -332,21 +332,8 @@ describe("ThreadView", () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(applyThreadModelMigration).toHaveBeenCalledWith({
-        backend: "codex",
-        federationTarget: {
-          scope: "remote",
-          instanceId: "remote-instance",
-        },
-        threadId: "thread-old",
-        threadCreatedAt: 1_000,
-        threadModel: "gpt-5.5",
-      });
-    });
-    await waitFor(() => {
-      expect(onRefreshNavigation).toHaveBeenCalledTimes(1);
-    });
+    expect(applyThreadModelMigration).not.toHaveBeenCalled();
+    expect(onRefreshNavigation).not.toHaveBeenCalled();
   });
 
   it("renders a directory-less thread with transcript history and context", () => {

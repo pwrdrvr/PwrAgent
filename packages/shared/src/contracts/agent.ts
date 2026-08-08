@@ -545,7 +545,8 @@ export type ApplyThreadModelMigrationResponse = {
     | "acknowledged-source-model"
     | "metadata-unavailable"
     | "applied"
-    | "unavailable";
+    | "unavailable"
+    | "not-owner";
   revision?: string;
   model?: string;
   reasoningEffort?: string;

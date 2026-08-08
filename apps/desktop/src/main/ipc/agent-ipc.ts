@@ -945,9 +945,14 @@ export function registerAgentIpcHandlers(): void {
         request.federationTarget
         && isRemoteFederationTarget(request.federationTarget)
       ) {
-        return await getDesktopFederationRuntime()
-          .remoteBackend(request.federationTarget)
-          .applyThreadModelMigration(stripFederationTarget(request));
+        // Migration policy and acknowledgement state are profile-local. The
+        // owning instance must decide whether its own thread needs migration;
+        // forwarding this instance's policy would cross that ownership line.
+        return {
+          backend: request.backend,
+          threadId: request.threadId,
+          status: "not-owner",
+        };
       }
       return await registry.applyThreadModelMigration(request);
     },

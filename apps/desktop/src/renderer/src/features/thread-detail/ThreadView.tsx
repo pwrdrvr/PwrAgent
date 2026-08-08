@@ -49,6 +49,7 @@ import {
   buildPendingRequestResponse,
   buildThreadIdentityKey,
   isBranchDrifted,
+  isRemoteFederationTarget,
   PWRSNAP_MCP_CONNECTION_ID,
   readCodexEnvironmentActionRuns,
   resolveThreadTerminalCwd,
@@ -1900,11 +1901,17 @@ export function ThreadView(props: ThreadViewProps) {
     const migration = thread
       ? providerThreadMigrations?.[thread.source]
       : undefined;
+    const migrationFederationTarget =
+      thread?.federation?.ref.target ?? readRendererFederationTarget();
     if (
       !thread
       || selectedLaunchpad
       || !migration
       || thread.modelMigrationRevision === migration.revision
+      || (
+        migrationFederationTarget
+        && isRemoteFederationTarget(migrationFederationTarget)
+      )
       || !migrationDesktopApi?.applyThreadModelMigration
     ) {
       return;
@@ -1918,8 +1925,6 @@ export function ThreadView(props: ThreadViewProps) {
     void migrationDesktopApi
       .applyThreadModelMigration({
         backend: thread.source,
-        federationTarget: thread.federation?.ref.target ??
-          readRendererFederationTarget(),
         threadId: thread.id,
         threadCreatedAt: thread.createdAt,
         threadModel: thread.model,
