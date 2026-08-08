@@ -208,6 +208,12 @@ describe("discoverLocalAcpAgentRecords", () => {
         version: "0.30.0",
       }),
     ).toBe(false);
+    expect(
+      isLegacyPythonKimiCli({
+        output: "0.34.0",
+        version: "0.34.0",
+      }),
+    ).toBe(false);
   });
 
   it("ignores legacy Kimi on PATH and selects a side-by-side Kimi Code install", async () => {

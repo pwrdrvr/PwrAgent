@@ -1629,6 +1629,7 @@ describe("AcpBackendAdapter", () => {
         },
         captureStores: [],
         createAcpTransport: () => transport,
+        discoverLocalAcpAgents: async () => [],
         emit: vi.fn(async () => undefined),
         handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
       });
