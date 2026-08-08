@@ -744,7 +744,7 @@ test.describe("federation remote window", () => {
     }
   });
 
-  test("preserves a Codex environment when a Kimi child is born through a remote viewer", async () => {
+  test("preserves a Codex environment when a Kimi child is born through a remote viewer", async ({ browserName: _browserName }, testInfo) => {
     test.setTimeout(300_000);
 
     const fixtureRoot = await mkdtemp(
@@ -1055,8 +1055,7 @@ test.describe("federation remote window", () => {
         }, { timeout: 30_000 })
         .toBe(true);
 
-      // Durable protocol capture: thread/start saw the setup marker, and
-      // review/start followed initialize + thread/start.
+      // Durable protocol capture: thread/start saw the setup marker.
       await expect
         .poll(async () => {
           const entries = await readFakeCodexRequestLog(requestLogPath);
@@ -1064,15 +1063,9 @@ test.describe("federation remote window", () => {
         }, { timeout: 30_000 })
         .toBeGreaterThan(0);
 
-      const protocol = await readFakeCodexRequestLog(requestLogPath);
-      const initialize = findFakeCodexRequest(protocol, "initialize");
-      const threadStart = findFakeCodexRequest(protocol, "thread/start");
-      const reviewStart = findFakeCodexRequest(protocol, "review/start");
-      expect(initialize).toBeTruthy();
+      let protocol = await readFakeCodexRequestLog(requestLogPath);
+      let threadStart = findFakeCodexRequest(protocol, "thread/start");
       expect(threadStart).toBeTruthy();
-      expect(reviewStart).toBeTruthy();
-      expect(initialize!.at).toBeLessThanOrEqual(threadStart!.at);
-      expect(threadStart!.at).toBeLessThanOrEqual(reviewStart!.at + 1_000);
 
       // Exact failure assertion: when fake Codex received thread/start, the
       // environment setup marker already existed in the requested cwd.
@@ -1081,7 +1074,33 @@ test.describe("federation remote window", () => {
       // Filesystem clock corroboration (allow small FS timestamp skew).
       const setupMtimeMs = statSync(setupMarkerPath).mtimeMs;
       expect(setupMtimeMs).toBeLessThanOrEqual(threadStart!.at + 5_000);
+
+      // Starting a native review continues asynchronously after child
+      // materialization. Wait for the durable request instead of assuming it
+      // has arrived as soon as thread/start is observable on a slower VM.
+      await expect
+        .poll(async () => {
+          const entries = await readFakeCodexRequestLog(requestLogPath);
+          return findAllFakeCodexRequests(entries, "review/start").length;
+        }, { timeout: 30_000 })
+        .toBeGreaterThan(0);
+
+      protocol = await readFakeCodexRequestLog(requestLogPath);
+      const initialize = findFakeCodexRequest(protocol, "initialize");
+      threadStart = findFakeCodexRequest(protocol, "thread/start");
+      const reviewStart = findFakeCodexRequest(protocol, "review/start");
+      expect(initialize).toBeTruthy();
+      expect(threadStart).toBeTruthy();
+      expect(reviewStart).toBeTruthy();
+      expect(initialize!.at).toBeLessThanOrEqual(threadStart!.at);
+      expect(threadStart!.at).toBeLessThanOrEqual(reviewStart!.at);
     } finally {
+      if (existsSync(requestLogPath)) {
+        await testInfo.attach("fake-codex-protocol", {
+          path: requestLogPath,
+          contentType: "application/x-ndjson",
+        });
+      }
       await viewer?.close();
       await owner?.close();
       await rm(fixtureRoot, { force: true, recursive: true });
