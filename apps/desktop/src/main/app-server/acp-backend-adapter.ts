@@ -83,6 +83,7 @@ import {
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import {
   checkGrokCliUpdate,
+  preserveGrokUpdateAcknowledgement,
   shouldCheckGrokCliUpdate,
 } from "../acp/grok-cli-update";
 import { getMainLogger } from "../log";
@@ -1034,7 +1035,12 @@ export class AcpBackendAdapter {
     agent: AcpInstalledAgentRecord,
   ): void {
     const checker = this.grokUpdateChecker;
-    const command = agent.launchDescriptor?.command ?? agent.activeCommand;
+    const command = agent.activeCommand ?? agent.launchDescriptor?.command;
+    const previous =
+      agent.updateCommand === command
+      && agent.version === agent.update?.currentVersion
+        ? agent.update
+        : undefined;
     if (
       !checker
       || !command
@@ -1044,7 +1050,7 @@ export class AcpBackendAdapter {
         command,
         installedVersion: agent.version,
         now: Date.now(),
-        previous: agent.update,
+        previous,
         previousCommand: agent.updateCommand,
       })
     ) {
@@ -1053,18 +1059,31 @@ export class AcpBackendAdapter {
 
     const refresh = checker(command, {
       installedVersion: agent.version,
-      previous: agent.update,
+      previous,
     })
       .then(async (update) => {
         if (this.closed) return;
         const current = this.acpAgentStore?.getInstalledAgent(agent.backendId)
           ?? agent;
+        const currentCommand =
+          current.activeCommand ?? current.launchDescriptor?.command;
+        if (
+          currentCommand !== command
+          || current.version !== agent.version
+        ) {
+          return;
+        }
+        const mergedUpdate = preserveGrokUpdateAcknowledgement(
+          current.update,
+          update,
+        );
         this.acpAgentStore?.upsertInstalledAgent({
           ...current,
-          ...(update.status !== "failed" && update.currentVersion !== "unknown"
-            ? { version: update.currentVersion }
+          ...(mergedUpdate.status !== "failed"
+            && mergedUpdate.currentVersion !== "unknown"
+            ? { version: mergedUpdate.currentVersion }
             : {}),
-          update,
+          update: mergedUpdate,
           updateCommand: command,
         });
         await this.emit({

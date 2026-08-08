@@ -65,8 +65,9 @@ export function GrokCliUpdateNotice(props: {
   const notice = useMemo(() => buildGrokCliUpdateNotice({
     entry,
     now: clock,
-    onCopy: () => {
-      void desktopApi?.copyText?.("grok update");
+    platform: desktopApi?.platform,
+    onCopy: (command) => {
+      void desktopApi?.copyText?.(command);
     },
     onDismiss: () => {
       void acknowledge("dismiss");
@@ -86,7 +87,8 @@ export function GrokCliUpdateNotice(props: {
 export function buildGrokCliUpdateNotice(params: {
   entry?: AcpAgentSettingsEntry;
   now: number;
-  onCopy: () => void;
+  platform?: string;
+  onCopy: (command: string) => void;
   onDismiss: () => void;
   onSnooze: () => void;
 }): AppNoticeToastNotice | undefined {
@@ -100,18 +102,40 @@ export function buildGrokCliUpdateNotice(params: {
   ) {
     return undefined;
   }
+  const command = buildGrokCliUpdateCommand(
+    params.entry.activeCommand,
+    params.platform,
+  );
   return {
     id: `acp-update:acp:grok:${update.latestVersion}`,
     autoDismiss: false,
     title: "Grok update available",
     message: `Grok ${update.latestVersion} is available; ${update.currentVersion} is installed.`,
-    detail: "Run grok update in a terminal, then restart active Grok sessions.",
-    copyText: "grok update",
+    detail: `Run ${command} in a terminal, then restart active Grok sessions.`,
+    copyText: command,
     tone: "warning",
     actions: [
-      { label: "Copy command", onClick: params.onCopy, tone: "primary" },
+      {
+        label: "Copy command",
+        onClick: () => params.onCopy(command),
+        tone: "primary",
+      },
       { label: "Tomorrow", onClick: params.onSnooze },
       { label: "Dismiss version", onClick: params.onDismiss },
     ],
   };
+}
+
+export function buildGrokCliUpdateCommand(
+  activeCommand: string | undefined,
+  platform: string | undefined,
+): string {
+  const executable = activeCommand?.trim() || "grok";
+  if (/^[A-Za-z0-9_./:@%+,=\\-]+$/.test(executable)) {
+    return `${executable} update`;
+  }
+  if (platform === "win32") {
+    return `& '${executable.replace(/'/g, "''")}' update`;
+  }
+  return `'${executable.replace(/'/g, "'\\''")}' update`;
 }

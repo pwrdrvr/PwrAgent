@@ -72,7 +72,7 @@ export async function checkGrokCliUpdate(
         ? { autoUpdate: parsed.autoUpdate }
         : {}),
     };
-    return preserveAcknowledgement(options.previous, update);
+    return preserveGrokUpdateAcknowledgement(options.previous, update);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (options.previous && options.previous.status !== "failed") {
@@ -139,7 +139,7 @@ function parseCheckOutput(output: string): {
   };
 }
 
-function preserveAcknowledgement(
+export function preserveGrokUpdateAcknowledgement(
   previous: AcpAgentUpdateStatus | undefined,
   next: AcpAgentUpdateStatus,
 ): AcpAgentUpdateStatus {
