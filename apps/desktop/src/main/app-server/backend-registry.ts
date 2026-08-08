@@ -9095,6 +9095,19 @@ export class DesktopBackendRegistry {
     if (!session) {
       throw new Error(`ACP thread not found: ${params.threadId}`);
     }
+    let activeThreads: AppServerThreadSummary[] = [];
+    try {
+      activeThreads = await this.listThreads({
+        archived: false,
+        callerReason: "archive-cleanup",
+      });
+    } catch (error) {
+      backendRegistryLog.warn("ACP archive child lookup failed", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const archivedAt = Date.now();
     this.acpBackend.upsertSession({
       ...session,
@@ -9107,6 +9120,19 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       origin: "thread-archive",
     });
+    try {
+      await this.ungroupChildrenOfArchivedThread({
+        backend: params.backend,
+        activeThreads,
+        parentThreadId: params.threadId,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("ACP archive child ungrouping failed", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return {
       backend: params.backend,
       threadId: params.threadId,
@@ -14847,6 +14873,7 @@ export class DesktopBackendRegistry {
 
   private async ensureHandoffTrustedDirectoryLaunchpad(params: {
     cwd: string;
+    parentThreadBackend: AppServerBackendKind;
     preferredBackend: AppServerBackendKind;
     parentThreadId: string;
     parentThreadTitle?: string;
@@ -14861,6 +14888,7 @@ export class DesktopBackendRegistry {
       directoryPath,
       currentBranch: await readCurrentGitBranch(directoryPath).catch(() => undefined),
       parentThreadId: params.parentThreadId,
+      parentThreadBackend: params.parentThreadBackend,
       parentThreadTitle: params.parentThreadTitle,
       preferredBackend: params.preferredBackend,
       registeredAt: Date.now(),
@@ -14916,6 +14944,7 @@ export class DesktopBackendRegistry {
 
     await this.ensureHandoffTrustedDirectoryLaunchpad({
       cwd: params.cwd,
+      parentThreadBackend: params.backend,
       preferredBackend: params.backend,
       parentThreadId: params.sourceThreadId,
       parentThreadTitle: params.sourceThread?.title,
@@ -20201,11 +20230,13 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): Promise<ArchiveCleanupMetadata> {
     const activeThreads = await this.listThreads({
-      backend: params.backend,
       archived: false,
       callerReason: "archive-cleanup",
     });
-    const activeThread = activeThreads.find((thread) => thread.id === params.threadId);
+    const activeThread = activeThreads.find(
+      (thread) =>
+        thread.source === params.backend && thread.id === params.threadId,
+    );
     let archivedThreads: AppServerThreadSummary[] = [];
     try {
       archivedThreads = await this.listThreads({
@@ -20616,25 +20647,59 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    const activeThreadIds = params.activeThreads
-      .filter((thread) => thread.source === params.backend)
-      .map((thread) => thread.id);
-    const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
-      backend: params.backend,
-      threadIds: activeThreadIds,
-    });
-    const childThreadIds = activeThreadIds.filter(
-      (threadId) =>
-        overlaysByThreadId[threadId]?.parentThreadId === params.parentThreadId,
+    const activeThreadsByBackend = new Map<
+      AppServerBackendKind,
+      AppServerThreadSummary[]
+    >();
+    for (const thread of params.activeThreads) {
+      const backendThreads = activeThreadsByBackend.get(thread.source) ?? [];
+      backendThreads.push(thread);
+      activeThreadsByBackend.set(thread.source, backendThreads);
+    }
+    const childThreads: Array<{
+      backend: AppServerBackendKind;
+      threadId: string;
+    }> = [];
+    const legacyParentMatches = params.activeThreads.filter(
+      (thread) => thread.id === params.parentThreadId,
     );
-    if (childThreadIds.length === 0) {
+    for (const [backend, threads] of activeThreadsByBackend) {
+      const threadIds = threads.map((thread) => thread.id);
+      const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
+        backend,
+        threadIds,
+      });
+      for (const threadId of threadIds) {
+        const overlay = overlaysByThreadId[threadId];
+        if (overlay?.parentThreadId !== params.parentThreadId) {
+          continue;
+        }
+        if (overlay.parentThreadBackend) {
+          if (overlay.parentThreadBackend === params.backend) {
+            childThreads.push({ backend, threadId });
+          }
+          continue;
+        }
+        if (backend === params.backend) {
+          childThreads.push({ backend, threadId });
+          continue;
+        }
+        if (
+          legacyParentMatches.length === 1
+          && legacyParentMatches[0]?.source === params.backend
+        ) {
+          childThreads.push({ backend, threadId });
+        }
+      }
+    }
+    if (childThreads.length === 0) {
       return;
     }
 
     await Promise.all(
-      childThreadIds.map((threadId) =>
+      childThreads.map(({ backend, threadId }) =>
         setThreadParent.call(this.overlayStore, {
-          backend: params.backend,
+          backend,
           threadId,
           parentThreadId: undefined,
         }),
@@ -23525,6 +23590,7 @@ export class DesktopBackendRegistry {
       }
       await this.ensureHandoffTrustedDirectoryLaunchpad({
         cwd: requestedCwd,
+        parentThreadBackend: sourceBackend,
         preferredBackend: backend,
         parentThreadId: sourceThreadId,
         parentThreadTitle: sourceThread?.title,
