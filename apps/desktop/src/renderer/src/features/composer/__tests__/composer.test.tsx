@@ -99,6 +99,32 @@ function createDeferred<T>(): {
   return { promise, resolve, reject };
 }
 
+function createQueuedStartTurnController() {
+  const called = createDeferred<StartTurnRequest>();
+  const response = createDeferred<StartTurnResponse>();
+  const startTurn = vi.fn((request: StartTurnRequest) => {
+    called.resolve(request);
+    return response.promise;
+  });
+  return {
+    called: called.promise,
+    startTurn,
+    acknowledge: async () => {
+      const request = await called.promise;
+      await act(async () => {
+        response.resolve({
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: "queue-entry-1",
+          queueStatus: "queued",
+          queueEntryId: "queue-entry-1",
+        });
+        await response.promise;
+      });
+    },
+  };
+}
+
 afterEach(async () => {
   delete (window as unknown as {
     __pwragentFederationTarget?: unknown;
@@ -5431,6 +5457,7 @@ describe("Composer", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     }));
+    const queuedStart = createQueuedStartTurnController();
     render(
       <Composer
         activeTurnId="turn-1"
@@ -5446,13 +5473,7 @@ describe("Composer", () => {
         desktopApi={{
           cancelQueuedTurn,
           onAgentEvent: () => () => undefined,
-          startTurn: vi.fn(async () => ({
-            backend: "codex" as const,
-            threadId: "thread-1",
-            turnId: "queue-entry-1",
-            queueStatus: "queued" as const,
-            queueEntryId: "queue-entry-1",
-          })),
+          startTurn: queuedStart.startTurn,
           steerTurn,
         }}
         disabled={false}
@@ -5481,14 +5502,16 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Steer remotely" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await queuedStart.called;
+    await flushReactUpdates();
     await screen.findByLabelText("Queued message");
     const steerButton = screen.getByRole("button", { name: "Steer" });
     // The local projection renders immediately but remains disabled until the
     // owning peer returns its stable queue entry id. A click before that
     // acknowledgement is intentionally ignored.
-    await waitFor(() => {
-      expect(steerButton).toBeEnabled();
-    });
+    expect(steerButton).toBeDisabled();
+    await queuedStart.acknowledge();
+    expect(steerButton).toBeEnabled();
     fireEvent.click(steerButton);
 
     await waitFor(() => {
@@ -5520,6 +5543,7 @@ describe("Composer", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     }));
+    const queuedStart = createQueuedStartTurnController();
     render(
       <Composer
         activeTurnId="turn-1"
@@ -5535,13 +5559,7 @@ describe("Composer", () => {
         desktopApi={{
           cancelQueuedTurn,
           onAgentEvent: () => () => undefined,
-          startTurn: vi.fn(async () => ({
-            backend: "codex" as const,
-            threadId: "thread-1",
-            turnId: "queue-entry-1",
-            queueStatus: "queued" as const,
-            queueEntryId: "queue-entry-1",
-          })),
+          startTurn: queuedStart.startTurn,
           steerTurn,
         }}
         disabled={false}
@@ -5570,12 +5588,11 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Already admitted once" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await queuedStart.acknowledge();
     await screen.findByLabelText("Queued message");
 
     const steerButton = screen.getByRole("button", { name: "Steer" });
-    await waitFor(() => {
-      expect(steerButton).toBeEnabled();
-    });
+    expect(steerButton).toBeEnabled();
     fireEvent.click(steerButton);
 
     await waitFor(() => {
@@ -5622,6 +5639,7 @@ describe("Composer", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     }));
+    const queuedStart = createQueuedStartTurnController();
     render(
       <Composer
         activeTurnId="turn-1"
@@ -5640,13 +5658,7 @@ describe("Composer", () => {
             agentEventHandler = callback as typeof agentEventHandler;
             return () => undefined;
           },
-          startTurn: vi.fn(async () => ({
-            backend: "codex" as const,
-            threadId: "thread-1",
-            turnId: "queue-entry-1",
-            queueStatus: "queued" as const,
-            queueEntryId: "queue-entry-1",
-          })),
+          startTurn: queuedStart.startTurn,
           steerTurn,
         }}
         disabled={false}
@@ -5676,12 +5688,11 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Preserve until admitted" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await queuedStart.acknowledge();
     await screen.findByLabelText("Queued message");
 
     const steerButton = screen.getByRole("button", { name: "Steer" });
-    await waitFor(() => {
-      expect(steerButton).toBeEnabled();
-    });
+    expect(steerButton).toBeEnabled();
     fireEvent.click(steerButton);
 
     await waitFor(() => {

@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   formatWindowsJobStartupTelemetry,
   formatWindowsJobStartupTimeout,
@@ -140,16 +140,19 @@ describe("wrapCommandInWindowsJob", () => {
   });
 
   it("honors journaled progress inside the overall readiness bound", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-07T00:00:00.000Z"));
     const wrapped = wrapCommandInWindowsJob({
       args: ["/c", "exit 0"],
       command: "C:\\Windows\\System32\\cmd.exe",
       env: { SystemRoot: "C:\\Windows" },
     });
+    let readyPoll: ReturnType<typeof startWindowsJobReadyPoll> | undefined;
     try {
-      const telemetry = await new Promise<
+      const telemetryPromise = new Promise<
         ReturnType<typeof readWindowsJobStartupTelemetry>
       >((resolve, reject) => {
-        startWindowsJobReadyPoll({
+        readyPoll = startWindowsJobReadyPoll({
           launch: wrapped,
           onReady: resolve,
           onTimeout: ({ stage }) =>
@@ -158,29 +161,27 @@ describe("wrapCommandInWindowsJob", () => {
           powershellStartTimeoutMs: 200,
           progressTimeoutMs: 100,
         });
-        setTimeout(() => {
-          appendFileSync(
-            wrapped.startupStatusFilePath,
-            "150\tpowershell-started\t\n170\thelper-compile-started\t\n",
-          );
-        }, 150);
-        setTimeout(() => {
-          appendFileSync(
-            wrapped.startupStatusFilePath,
-            "240\thelper-ready\t\n",
-          );
-        }, 240);
-        setTimeout(() => {
-          appendFileSync(
-            wrapped.startupStatusFilePath,
-            "300\ttarget-assigned\t\n",
-          );
-        }, 300);
-        setTimeout(() => {
-          appendFileSync(wrapped.startupStatusFilePath, "320\tready\t\n");
-          writeFileSync(wrapped.readyFilePath, "ready", "utf8");
-        }, 320);
       });
+      await vi.advanceTimersByTimeAsync(150);
+      appendFileSync(
+        wrapped.startupStatusFilePath,
+        "150\tpowershell-started\t\n170\thelper-compile-started\t\n",
+      );
+      await vi.advanceTimersByTimeAsync(90);
+      appendFileSync(
+        wrapped.startupStatusFilePath,
+        "240\thelper-ready\t\n",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      appendFileSync(
+        wrapped.startupStatusFilePath,
+        "300\ttarget-assigned\t\n",
+      );
+      await vi.advanceTimersByTimeAsync(20);
+      appendFileSync(wrapped.startupStatusFilePath, "320\tready\t\n");
+      writeFileSync(wrapped.readyFilePath, "ready", "utf8");
+      await vi.advanceTimersByTimeAsync(5);
+      const telemetry = await telemetryPromise;
 
       expect(telemetry.phases.map(({ phase }) => phase)).toEqual([
         "wrapper-created",
@@ -194,7 +195,9 @@ describe("wrapCommandInWindowsJob", () => {
         "wrapper-created@0ms -> powershell-started@150ms -> helper-compile-started@170ms -> helper-ready@240ms -> target-assigned@300ms -> ready@320ms",
       );
     } finally {
+      readyPoll?.cancel();
       wrapped.cleanup();
+      vi.useRealTimers();
     }
   });
 
