@@ -34,7 +34,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@7c109865ae9af59c6fcd2f2a0e8cc851f6ded26a # v1
+        uses: pwrdrvr/configure-nodejs@e19a1a140ed1851a536fcc2cc116e9d3df6b0ce9 # v1.2.0
         with:
           node-version: 24.x
 
@@ -186,7 +186,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@7c109865ae9af59c6fcd2f2a0e8cc851f6ded26a # v1
+        uses: pwrdrvr/configure-nodejs@e19a1a140ed1851a536fcc2cc116e9d3df6b0ce9 # v1.2.0
         with:
           node-version: 24.x
 
@@ -225,13 +225,11 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
 
-      # pwrdrvr/configure-nodejs is POSIX-only, so use a Windows-specific
-      # setup action that activates the repo-pinned pnpm through Corepack.
-      - name: Setup Node.js and pnpm
-        uses: ./.github/actions/configure-windows-nodejs
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@e19a1a140ed1851a536fcc2cc116e9d3df6b0ce9 # v1.2.0
+        with:
+          node-version: 24.14.1
+          working-directory: .
 
       # NSIS installer is currently unsigned (no Windows code-signing identity
       # yet). Uploaded as a workflow artifact, not published to the GitHub
