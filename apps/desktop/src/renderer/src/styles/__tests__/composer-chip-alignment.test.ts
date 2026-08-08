@@ -4,24 +4,21 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * Locks the vertical alignment contract for the composer's inline mention
- * chips (`$skill`, `@file`, `@directory`, `#thread`, PR pill).
+ * Locks the vertical alignment of the composer's inline mention chips
+ * (`$skill`, `@file`, `@directory`, `#thread`, PR pill) against the
+ * paragraph baseline.
  *
- * These chips are inline-flex, and an inline-flex box takes its baseline
- * from its FIRST flex item. The kinds do not agree on what that item is:
- * the `$`/`@` chips lead with their label text, `#thread` leads with a 1em
- * SVG icon, and the PR pill leads with an 8px dot — each of which sits at
- * a different height. A shared `vertical-align: <length>` is therefore
- * measured from three different origins and lands in three places (the
- * shipped 0.13em nudge spread the chips over 3.0px on an 18.9px chip).
+ * Alignment is a layout outcome and jsdom does not lay out CSS, so what is
+ * asserted here is every declaration the outcome depends on. That is a
+ * narrower net than it sounds: with the `::before` strut in place the chips
+ * no longer take their baseline from whichever child happens to be first,
+ * so a DOM change in `ComposerTiptapInput`'s `renderHTML` can no longer
+ * move them — only these declarations can. Change an assertion in the same
+ * commit as any deliberate change to the alignment.
  *
- * The fix is a zero-width-space `::before` strut that gives every kind the
- * same text baseline, plus `vertical-align: baseline` so that baseline is
- * the paragraph's. Both halves are load-bearing and neither reads as
- * obviously necessary at a glance, which is what this test is for. Layout
- * itself cannot be asserted here — jsdom does not lay out CSS — so the
- * contract is asserted on the declarations. Change these assertions in the
- * same commit as any deliberate change to the alignment.
+ * What this cannot see: `align-items` and `font-size` reaching the chip
+ * from `.chip` / `.pr-chip`, and anything that only shows up in real
+ * layout. Measuring the chips themselves needs a browser.
  */
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
@@ -50,21 +47,17 @@ const STRUT = `${MENTION}::before`;
 
 describe("composer inline chip alignment contract", () => {
   it("aligns every mention chip on the paragraph baseline, not a nudge", () => {
-    const body = ruleBody(MENTION);
-
     // A length here would reintroduce the per-kind spread: it is measured
-    // from the chip's own synthesized baseline, which the strut — not the
-    // nudge — is what makes uniform.
-    expect(declaration(body, "vertical-align")).toBe("baseline");
+    // from the chip's own synthesized baseline, and the strut — not the
+    // nudge — is what makes that baseline uniform.
+    expect(declaration(ruleBody(MENTION), "vertical-align")).toBe("baseline");
   });
 
   it("keeps the zero-width baseline strut in front of every chip", () => {
-    const body = ruleBody(STRUT);
-
-    // U+200B. The strut must carry text, not `content: ""`: an empty box
-    // synthesizes its baseline from its bottom edge and the chips go back
-    // to disagreeing.
-    expect(declaration(body, "content")).toBe('"\\200b"');
+    // U+200B, with empty alt text so it stays out of accessible names. The
+    // strut must carry text: an empty box synthesizes its baseline from its
+    // bottom edge and the chip kinds go back to disagreeing.
+    expect(declaration(ruleBody(STRUT), "content")).toBe('"\\200b" / ""');
   });
 
   it("cancels exactly the one flex gap the strut opens", () => {
@@ -77,11 +70,25 @@ describe("composer inline chip alignment contract", () => {
     expect(cancel).toBe(`-${gap}`);
   });
 
-  it("outranks the chip primitives on specificity, not on source order", () => {
+  it("keeps the strut's own line box unstyled", () => {
+    // The strut is text, so its baseline sits inside its line box. A
+    // unitless or fixed `line-height` here would move that box — and every
+    // chip with it — without touching anything that reads as alignment.
+    expect(declaration(ruleBody(MENTION), "line-height")).toBe("normal");
+  });
+
+  it("keeps chips inside the line box they interrupt", () => {
+    // 1.35em = 18.9px against the composer's 22.4px line box, which leaves
+    // the chip 14.7px above and 4.2px below the baseline — inside the
+    // 16.0/6.4 the text strut already claims, so a chip never pushes its
+    // own line taller than a plain one.
+    expect(declaration(ruleBody(MENTION), "height")).toBe("1.35em");
+  });
+
+  it("does not leave an unqualified base rule to lose the cascade with", () => {
     // `.chip` (24px/12px) and `.pr-chip` (22px/11px) are row and header
-    // geometry; the composer's em-based sizing has to win regardless of
-    // where these rules end up in the file.
-    expect(css).toContain(MENTION);
+    // geometry. The composer's em-based sizing has to outrank them on
+    // specificity, not on where these rules land in the file.
     expect(css).not.toMatch(/\n\.composer-tiptap-input__mention\s*\{/);
   });
 });
