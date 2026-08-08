@@ -23,18 +23,6 @@ module.exports = {
       },
     },
     {
-      name: "agent-core-only-imports-shared",
-      severity: "error",
-      comment:
-        "agent-core may only depend on packages/shared internally.",
-      from: {
-        path: "^packages/agent-core/",
-      },
-      to: {
-        path: "^(@pwragent/(?!shared)|@pwrdrvr/codex-app-server-protocol|apps/|packages/(?!shared/|agent-core/))",
-      },
-    },
-    {
       name: "desktop-renderer-only-imports-shared",
       severity: "error",
       comment:
@@ -47,18 +35,6 @@ module.exports = {
       },
     },
     {
-      name: "desktop-does-not-import-agent-core",
-      severity: "error",
-      comment:
-        "The desktop app must communicate with agent-core through the Grok child app-server process, never import it in-process.",
-      from: {
-        path: "^apps/desktop/",
-      },
-      to: {
-        path: "^(@pwragent/agent-core|packages/agent-core/)",
-      },
-    },
-    {
       name: "messaging-interface-has-no-provider-dependencies",
       severity: "error",
       comment:
@@ -67,19 +43,19 @@ module.exports = {
         path: "^packages/messaging/interface/",
       },
       to: {
-        path: "^(@pwragent/(agent-core|messaging-provider|desktop)|@pwrdrvr/codex-app-server-protocol|apps/|packages/agent-core/|packages/messaging/providers/)",
+        path: "^(@pwragent/(messaging-provider|desktop)|@pwrdrvr/codex-app-server-protocol|apps/|packages/messaging/providers/)",
       },
     },
     {
       name: "messaging-providers-do-not-import-hosts",
       severity: "error",
       comment:
-        "Messaging providers must be isolated packages; they cannot import desktop or agent-core internals.",
+        "Messaging providers must be isolated packages; they cannot import desktop internals.",
       from: {
         path: "^packages/messaging/providers/",
       },
       to: {
-        path: "^(@pwragent/(agent-core|desktop)|@pwrdrvr/codex-app-server-protocol|apps/|packages/agent-core/)",
+        path: "^(@pwragent/desktop|@pwrdrvr/codex-app-server-protocol|apps/)",
       },
     },
     {

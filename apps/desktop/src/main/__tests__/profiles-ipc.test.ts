@@ -60,11 +60,8 @@ vi.mock("../state/app-state", () => ({
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
-  // Other parts of the import graph (e.g. agent-core's review-runner
-  // module, loaded transitively when this test imports profile IPC
-  // helpers that now reference state/app-state) bind execFile at
-  // module load. We never call them in these tests; a no-op mock
-  // suffices.
+  // Other parts of the import graph bind execFile at module load. We never
+  // call them in these tests; a no-op mock suffices.
   execFile: vi.fn(),
 }));
 
@@ -423,16 +420,16 @@ describe("profile IPC helpers", () => {
       const result = writeDesktopSecretsToProfile({
         profile: "personal",
         secrets: {
-          grokApiKey: "xai-fake-key",
+          discordBotToken: "discord-fake-token",
           telegramBotToken: "111:bot",
         },
       });
 
       expect(result).toEqual({
         profile: "personal",
-        written: ["grokApiKey", "telegramBotToken"],
+        written: ["discordBotToken", "telegramBotToken"],
       });
-      expect(safeStorageEncryptMock).toHaveBeenCalledWith("xai-fake-key");
+      expect(safeStorageEncryptMock).toHaveBeenCalledWith("discord-fake-token");
       expect(safeStorageEncryptMock).toHaveBeenCalledWith("111:bot");
 
       // Sanity-check that the encrypted values landed in the target
@@ -443,7 +440,7 @@ describe("profile IPC helpers", () => {
         profileName: "personal",
       });
       try {
-        expect(db.getSecret("grokApiKey")?.toString("utf8")).toBe("enc:xai-fake-key");
+        expect(db.getSecret("discordBotToken")?.toString("utf8")).toBe("enc:discord-fake-token");
         expect(db.getSecret("telegramBotToken")?.toString("utf8")).toBe("enc:111:bot");
       } finally {
         db.close();
@@ -459,12 +456,12 @@ describe("profile IPC helpers", () => {
       const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
       writeDesktopSecretsToProfile({
         profile: "personal",
-        secrets: { grokApiKey: "first-value" },
+        secrets: { discordBotToken: "first-value" },
       });
       // Replay-style clear: empty string deletes.
       writeDesktopSecretsToProfile({
         profile: "personal",
-        secrets: { grokApiKey: "" },
+        secrets: { discordBotToken: "" },
       });
 
       const { StateDb } = await import("../state/state-db");
@@ -472,7 +469,7 @@ describe("profile IPC helpers", () => {
         profileName: "personal",
       });
       try {
-        expect(db.getSecret("grokApiKey")).toBeUndefined();
+        expect(db.getSecret("discordBotToken")).toBeUndefined();
       } finally {
         db.close();
       }
@@ -486,7 +483,7 @@ describe("profile IPC helpers", () => {
     expect(() =>
       writeDesktopSecretsToProfile({
         profile: "!!!",
-        secrets: { grokApiKey: "x" },
+        secrets: { discordBotToken: "x" },
       }),
     ).toThrow(/must contain at least one letter or number/);
       expect(safeStorageEncryptMock).not.toHaveBeenCalled();
@@ -499,7 +496,7 @@ describe("profile IPC helpers", () => {
       expect(() =>
         writeDesktopSecretsToProfile({
           profile: "ghost",
-          secrets: { grokApiKey: "x" },
+          secrets: { discordBotToken: "x" },
         }),
       ).toThrow(/does not exist/);
     });
@@ -515,7 +512,7 @@ describe("profile IPC helpers", () => {
       expect(() =>
         writeDesktopSecretsToProfile({
           profile: "personal",
-          secrets: { grokApiKey: "x" },
+          secrets: { discordBotToken: "x" },
         }),
       ).toThrow(/encryption is unavailable/);
     });
@@ -534,7 +531,7 @@ describe("profile IPC helpers", () => {
       const { writeDesktopSecretsToProfile } = await import("../ipc/profiles");
       const result = writeDesktopSecretsToProfile({
         profile: "personal",
-        secrets: { grokApiKey: "would-have-been-encrypted" },
+        secrets: { discordBotToken: "would-have-been-encrypted" },
       });
 
       expect(result).toEqual({ profile: "personal", written: [] });
@@ -550,7 +547,7 @@ describe("profile IPC helpers", () => {
       try {
         // No ciphertext was written to the secrets table — the
         // typed value was silently dropped, as documented.
-        expect(db.getSecret("grokApiKey")).toBeUndefined();
+        expect(db.getSecret("discordBotToken")).toBeUndefined();
       } finally {
         db.close();
       }

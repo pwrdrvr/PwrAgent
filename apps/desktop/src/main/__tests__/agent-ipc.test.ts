@@ -865,16 +865,16 @@ describe("agent ipc", () => {
       backends: [],
     });
     expect(
-      await handlers.get(AGENT_START_THREAD_CHANNEL)?.({}, { backend: "grok" }),
+      await handlers.get(AGENT_START_THREAD_CHANNEL)?.({}, { backend: "acp:grok" }),
     ).toEqual({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
     });
     vi.mocked(registry.submitTurn).mockResolvedValueOnce({
       status: "queued",
       entry: {
         id: "renderer-queue-1",
-        backend: "grok",
+        backend: "acp:grok",
         createdAt: 2,
         input: [{ type: "text", text: "Queue it" }],
         origin: "manual",
@@ -884,13 +884,13 @@ describe("agent ipc", () => {
     });
     expect(
       await handlers.get(AGENT_START_TURN_CHANNEL)?.({}, {
-        backend: "grok",
+        backend: "acp:grok",
         threadId: "thread-1",
         queueEntryId: "renderer-queue-1",
         input: [{ type: "text", text: "Queue it" }],
       }),
     ).toEqual({
-      backend: "grok",
+      backend: "acp:grok",
       queueEntryId: "renderer-queue-1",
       queueEntryCreatedAt: 2,
       queueStatus: "queued",
@@ -902,12 +902,12 @@ describe("agent ipc", () => {
     );
     expect(
       await handlers.get(AGENT_START_TURN_CHANNEL)?.({}, {
-        backend: "grok",
+        backend: "acp:grok",
         threadId: "thread-1",
         input: [{ type: "text", text: "Ship it" }],
       }),
     ).toEqual({
-      backend: "grok",
+      backend: "acp:grok",
       queueEntryId: "queue-1",
       queueStatus: "started",
       threadId: "thread-1",
@@ -928,24 +928,24 @@ describe("agent ipc", () => {
     );
     expect(
       await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, {
-        backend: "grok",
+        backend: "acp:grok",
         threadId: "thread-1",
         target: { type: "uncommittedChanges" },
       }),
     ).toEqual({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       reviewThreadId: "thread-1",
       turnId: "turn-review-1",
     });
     expect(
       await handlers.get(AGENT_INTERRUPT_TURN_CHANNEL)?.({}, {
-        backend: "grok",
+        backend: "acp:grok",
         threadId: "thread-1",
         turnId: "turn-1",
       }),
     ).toEqual({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       turnId: "turn-1",
     });
@@ -988,7 +988,7 @@ describe("agent ipc", () => {
     });
 
     await registryListener?.({
-      backend: "grok",
+      backend: "acp:grok",
       notification: {
         method: "turn/completed",
         params: {
@@ -1004,7 +1004,7 @@ describe("agent ipc", () => {
     });
 
     expect(send).toHaveBeenCalledWith(AGENT_EVENT_CHANNEL, {
-      backend: "grok",
+      backend: "acp:grok",
       notification: {
         method: "turn/completed",
         params: {

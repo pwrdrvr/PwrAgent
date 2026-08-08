@@ -279,8 +279,8 @@ export async function deleteDesktopPwrAgentProfile(
  *     true })`, which already wrote `[onboarding] completed = true`.
  *     Copying the bootstrap profile's `completed = false` over that
  *     would re-fire the wizard on the next launch.
- *   - **Secrets.** The wizard buffers typed secrets (xAI API key,
- *     messaging tokens) in renderer memory and graduates them via
+ *   - **Secrets.** The wizard buffers typed messaging credentials in
+ *     renderer memory and graduates them via
  *     the separate `writeSecretsToProfile` IPC. This IPC's name is
  *     intentionally scoped (`Config`, not `Bootstrap`) so a future
  *     caller can't graduate config and silently lose the operator's
@@ -350,10 +350,9 @@ export function graduateDesktopBootstrapConfigToProfile(
  * Write secrets directly to a specific PwrAgent profile's keychain
  * (its state.db `secrets` table), encrypting each value via
  * `safeStorage` first. Used by the wizard's Finish path to graduate
- * in-memory secret values (xAI API key, messaging tokens) collected
- * during the wizard to the operator's chosen real profile —
- * specifically to support per-profile xAI keys in Multiple mode and
- * to avoid stranding secrets in `.bootstrap/state.db` when the
+ * in-memory messaging credentials collected during the wizard to the
+ * operator's chosen real profile, avoiding stranded secrets in
+ * `.bootstrap/state.db` when the
  * wizard runs in bootstrap mode.
  *
  * Implementation notes:

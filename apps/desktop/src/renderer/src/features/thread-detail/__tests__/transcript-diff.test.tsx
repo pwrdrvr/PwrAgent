@@ -64,7 +64,7 @@ describe("TranscriptDiff", () => {
   it("defaults to a focused view when analysis hides low-signal hunks", async () => {
     const analyzeFocusedDiff = vi.fn(async () => ({
       mode: "focused" as const,
-      source: "grok" as const,
+      source: "acp:grok" as const,
       hiddenHunkIndices: [1],
       hiddenHunkCount: 1,
       decisions: []

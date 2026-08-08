@@ -240,7 +240,7 @@ export const MESSAGING_SHUTDOWN_RUNTIME_CHANNEL =
 /**
  * Drives the per-credential "Test" button on Settings → Messaging
  * and Settings → Models. Request payload: `{ kind: "telegram" |
- * "discord" | "grok" | "codex" }`. Response: `SettingsCredentialTestResult`.
+ * "discord" | "codex" }`. Response: `SettingsCredentialTestResult`.
  *
  * The probe runs entirely in the main process — secrets never leave
  * it. The result returned to the renderer contains only public

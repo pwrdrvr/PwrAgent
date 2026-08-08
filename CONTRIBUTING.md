@@ -29,17 +29,14 @@ Useful checks (all run from the repo root):
 
 When focusing root Vitest runs through `pnpm test`, pass file paths or
 filters directly, for example
-`pnpm test packages/agent-core/src/__tests__/overlay-store.test.ts`. Do
+`pnpm test apps/desktop/src/main/__tests__/backend-registry.test.ts`. Do
 not insert a standalone `--` before the focus args; `pnpm test -- packages/...`
 makes Vitest run the full workspace suite.
 
 ## Workspace Map
 
 - `apps/desktop` — Electron app shell (main process, renderer, IPC).
-- `apps/grok-app-server` — standalone JSON-RPC stdio host for Agent-Core,
-  bundled into the desktop application for production.
 - `packages/shared` — internal contracts and types.
-- `packages/agent-core` — internal agent runtime and domain services.
 - `packages/messaging/interface` — generic messaging types and helpers.
 - `packages/messaging/providers/*` — per-platform messaging adapters
   (Telegram, Discord, Mattermost, Slack).
@@ -55,7 +52,7 @@ what's in each path and the layered dependency story.
   - `messaging` for Telegram, Discord, Mattermost, Slack, adapters, and
     messaging integrations.
   - `desktop` for the desktop app itself.
-  - `agent-core` for the coding agent, currently the Grok coding agent.
+  - `agent-core` for coding-agent backend and ACP integration changes.
   - `release` for packaging, signing, notarization, distribution, and
     the auto-update pipeline.
   - `docs` for documentation changes.
@@ -71,11 +68,6 @@ The rules in [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs) are
 load-bearing. **Do not loosen them to make a change pass.** Renderer code
 may only import `@pwragent/shared`; other package access crosses the IPC
 bridge through the desktop main process.
-
-The entire desktop app, including Electron main, is prohibited from
-importing `@pwragent/agent-core`. Agent-Core runs only inside
-`apps/grok-app-server`; desktop communicates with it through JSON-RPC
-over a managed child-process transport.
 
 If a rule blocks your change, the change is architecturally wrong —
 redesign it. See [ARCHITECTURE.md](ARCHITECTURE.md#dependency-boundaries)
@@ -248,81 +240,6 @@ startup. Re-run the analyzer for an existing session with:
 functions and source buckets. Open the raw `.cpuprofile` files in
 DevTools when the generated summary shows Electron- or Chromium-heavy
 frames that need deeper inspection.
-
-## Agent-Core Internal Notes
-
-`packages/agent-core` includes the Grok-backed Codex App Server contract,
-consumer-sequence compatibility tests, and provider coverage for the
-OpenClaw-used subset.
-
-Production hosts this package in `apps/grok-app-server`, never in Electron
-main. `pnpm --filter @pwragent/grok-app-server build` produces the standalone
-stdio entrypoint. Desktop's normal `pnpm build` stages it under
-`out/grok-app-server/` and checks that AI SDK/xAI implementation did not leak
-into `out/main/`. The desktop `pnpm dev` bootstrap also builds the child before
-starting Electron, so a clean checkout does not depend on ignored `dist/`
-artifacts.
-
-Supported app-server methods today:
-
-- `initialize`
-- `thread/list`, `thread/loaded/list`
-- `thread/start`, `thread/new`, `thread/resume`, `thread/name/set`,
-  `thread/read`, `thread/compact/start`
-- `model/list`, `skills/list`, `experimentalFeature/list`,
-  `mcpServerStatus/list`
-- `account/rateLimits/read`, `account/read`
-- `review/start`
-- `turn/start`, `turn/steer`, `turn/interrupt`
-
-Known shape-first endpoints:
-
-- `skills/list` returns stable empty skill collections per cwd.
-- `experimentalFeature/list` returns the Grok Responses feature
-  descriptor.
-- `mcpServerStatus/list` returns an empty collection until an MCP
-  runtime exists.
-- `account/rateLimits/read` returns an empty collection until rate-limit
-  reporting is wired.
-- `account/read` returns local development account metadata rather than
-  a full auth-backed profile.
-
-### Live xAI smoke coverage
-
-When you are ready to run live xAI-backed smoke coverage, set credentials
-in either your shell environment or the Grok app-server user config at
-`~/.config/grok-app-server/config.toml`.
-
-Runtime config keys:
-
-- `xai_api_key`
-- `grok_model`
-- `xai_base_url`
-- `state_root`
-
-Project-local env and already-exported shell env still win over the user
-config. For desktop development, the launcher passes the repository-root
-`.env.local` path explicitly to the bundled child rather than inferring it
-from `dist/index.mjs`. The runtime loader also preserves legacy fallback
-support under `~/.config/grok-app-server` for `config.env`, `.env.local`, and
-`.env`.
-
-CI uses the existing `live-agent-core` workflow job with the
-`XAI_API_KEY` repository secret. No separate tool-test secret is required.
-
-Live smoke commands:
-
-- `pnpm --filter @pwragent/agent-core test:live`
-- `pnpm test:agent-core:live:op` loads `XAI_API_KEY` from the concealed
-  `credential` field of the `PwrAgnt - xAI API Key` item in the current
-  1Password account's `Private` vault. Override `PWRAGENT_XAI_OP_ACCOUNT`,
-  `PWRAGENT_XAI_OP_VAULT`, `PWRAGENT_XAI_OP_ITEM`, or
-  `PWRAGENT_XAI_OP_FIELD` when the credential lives elsewhere.
-- Ordinary `pnpm test` runs always skip the network-backed Grok live suite,
-  even when an ambient shell or user config contains `XAI_API_KEY`.
-- Covers live thread continuation via `thread/resume`.
-- Covers live context compaction via `thread/compact/start`.
-- Covers live repository-tool usage against a temporary workspace.
 
 ## Runtime Config
 

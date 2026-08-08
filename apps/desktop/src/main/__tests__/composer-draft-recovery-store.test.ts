@@ -102,7 +102,7 @@ describe("ComposerDraftRecoveryStore", () => {
   it("does not return same-id thread drafts from a different backend", () => {
     store.recordHistory(
       buildDraft({
-        backend: "grok",
+        backend: "acp:grok",
         scopeKey: "thread:grok:thread-1",
         status: "sent",
         text: "Grok backend draft with the same local thread id.",

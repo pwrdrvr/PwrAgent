@@ -261,7 +261,6 @@ export type DesktopMessagingContactLookupResponse = {
 export type DesktopSettingsSecretName =
   | "telegramBotToken"
   | "discordBotToken"
-  | "grokApiKey"
   | "mattermostBotToken"
   | "mattermostHmacSecret"
   | "slackBotToken"
@@ -313,7 +312,6 @@ export function isMessagingRuntimeSecret(
     case "lineChannelAccessToken":
     case "lineChannelSecret":
       return true;
-    case "grokApiKey":
     case "federationInstancePrivateKey":
     case "federationNoiseStaticPrivateKey":
     case "federationCloudflareClientCertificate":
@@ -666,27 +664,13 @@ export type DesktopSettingsSnapshot = {
      */
     managedReview?: DesktopSettingsValue<boolean>;
     /**
-     * Diff condensation (a.k.a. "diff eliding") gates whether we send
-     * focused-diff requests to xAI. When enabled, less-relevant diff
-     * hunks are hidden via an xAI judgment call. When disabled, every
-     * diff renders in full and no xAI request fires.
-     *
-     * model:
-     *   - "auto" — use the backend's default condensation model
-     *   - any other string — use that model id for every condensation
-     *     request, regardless of which backend is active
+     * Diff condensation (a.k.a. "diff eliding") gates whether the configured
+     * backend may classify less-relevant diff hunks. When disabled, every diff
+     * renders in full and no structured-generation request fires.
      */
     diffCondensation: {
       enabled: DesktopSettingsValue<boolean>;
-      model: DesktopSettingsValue<string>;
     };
-    /**
-     * Gates the legacy direct-xAI agent-core Grok backend. When disabled
-     * (default), the kind="grok" backend is filtered out of the
-     * available-backends list. The ACP-backed Grok CLI (kind="acp:grok")
-     * is unaffected.
-     */
-    agentCoreGrok: DesktopSettingsValue<boolean>;
   };
   imageUploads: DesktopImageUploadSettingsSnapshot;
   updates: DesktopUpdateSettingsSnapshot;
@@ -812,9 +796,6 @@ export type DesktopSettingsSnapshot = {
       discovery: DesktopCodexDiscoverySnapshot;
       profiles: DesktopCodexAuthProfileDiscoverySnapshot;
     };
-    grok: {
-      apiKey: DesktopSettingsSecretState;
-    };
   };
   acpAgents: {
     gemini: {
@@ -937,10 +918,7 @@ export type DesktopSettingsConfigPatch = {
     managedReview?: boolean;
     diffCondensation?: {
       enabled?: boolean;
-      /** "auto" or a specific model id. Empty string is coerced to "auto". */
-      model?: string;
     };
-    agentCoreGrok?: boolean;
   };
   imageUploads?: {
     pastedImageMaxPatches?: number;
@@ -1296,14 +1274,13 @@ export type SetDefaultDesktopPwrAgentProfileResponse = {
 /**
  * Write one or more secrets to a specific profile's keychain. Used by
  * the onboarding wizard's Finish path in bootstrap mode: the wizard
- * collects xAI API keys + messaging tokens in renderer memory (it
+ * collects messaging tokens in renderer memory (it
  * doesn't write to the bootstrap profile's keychain — those values
  * would be stranded on `.bootstrap/state.db` and never reach the
  * operator's chosen real profile), and at graduation it writes the
  * buffered values to each created profile's keychain via this IPC.
  *
- * Multiple-profile mode supports per-profile xAI keys: profile A's
- * `secrets` record can hold a key and profile B's can be empty. The
+ * Multiple-profile mode supports per-profile messaging credentials. The
  * caller invokes this IPC once per profile.
  */
 export type WriteDesktopSecretsToProfileRequest = {
@@ -1380,7 +1357,7 @@ export type DesktopBootInfo = {
   configuredDefaultName?: string;
   /** Populated in `active-profile` mode — the profile this renderer
    *  is bound to. Used by the wizard's Finish path to graduate
-   *  buffered secrets (xAI key, messaging tokens) to the right
+   *  buffered messaging credentials to the right
    *  target profile when the operator picks Shared mode or runs
    *  via Help → Replay Onboarding. Bootstrap mode leaves it
    *  undefined; the wizard graduates per-profile through the
@@ -1587,7 +1564,6 @@ export function isDesktopFederationMode(
  *
  * - `telegram`  → HTTP GET https://api.telegram.org/bot<TOKEN>/getMe
  * - `discord`   → HTTP GET https://discord.com/api/v10/users/@me
- * - `grok`      → HTTP GET https://api.x.ai/v1/models
  * - `codex`     → spawn `<resolved-path> --version`
  * - `mattermost` → GET <serverUrl>/api/v4/users/me with bot token
  * - `slack`     → Slack Web API `auth.test` with bot token
@@ -1595,7 +1571,6 @@ export function isDesktopFederationMode(
 export const SETTINGS_CREDENTIAL_TEST_KINDS = [
   "telegram",
   "discord",
-  "grok",
   "codex",
   "mattermost",
   "slack",
@@ -1625,7 +1600,7 @@ export type SettingsCredentialTestResult = {
    *  Always already-public information; never a secret. */
   account?: string;
   /** Short human-readable detail to show under the row title.
-   *  e.g. version string for codex, comma-joined model IDs for grok. */
+   *  e.g. the version string reported by codex. */
   detail?: string;
   /** Failure detail when `status === "failed"`. Truncated by the
    *  tester to ~240 chars so we never surface a giant stack trace. */

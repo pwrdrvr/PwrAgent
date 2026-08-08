@@ -139,7 +139,7 @@ describe("SqliteOverlayStore — permission transition log", () => {
       transition: buildTransition({ id: "codex-1" }),
     });
     await store.appendPermissionTransition({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       transition: buildTransition({ id: "grok-1" }),
     });
@@ -149,7 +149,7 @@ describe("SqliteOverlayStore — permission transition log", () => {
       threadId: "thread-1",
     });
     const grok = await store.getThreadOverlayState({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
     });
 

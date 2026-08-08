@@ -471,7 +471,7 @@ describe("useThreadSessionState", () => {
   it("keeps a newer active turn busy when an older turn completion arrives", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -633,7 +633,7 @@ describe("useThreadSessionState", () => {
   it("keeps the optimistic user message ahead of the completed assistant reply", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -740,7 +740,7 @@ describe("useThreadSessionState", () => {
   it("does not duplicate a final reported by both item and turn completion", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -818,7 +818,7 @@ describe("useThreadSessionState", () => {
     });
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -1505,7 +1505,7 @@ describe("useThreadSessionState", () => {
   it("materializes completed steer user messages in the transcript", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -1636,7 +1636,7 @@ describe("useThreadSessionState", () => {
   it("preserves optimistic image attachments when Codex echoes a text-only user message", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -1733,7 +1733,7 @@ describe("useThreadSessionState", () => {
   it("reconciles redacted PDF file references and hidden PDF context to the Composer entry", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -1816,7 +1816,7 @@ describe("useThreadSessionState", () => {
   it("keeps live protocol activity before hydrated review output after completion", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -1991,7 +1991,7 @@ describe("useThreadSessionState", () => {
   it("materializes a new thread in user-then-assistant order on completion", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -2074,7 +2074,7 @@ describe("useThreadSessionState", () => {
   it("preserves multiple streamed assistant messages before the final answer", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -2213,7 +2213,7 @@ describe("useThreadSessionState", () => {
   it("replaces a transient message without persisting it in the transcript", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -2521,7 +2521,7 @@ describe("useThreadSessionState", () => {
   it("isolates transient messages by thread and turn", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -2771,7 +2771,7 @@ describe("useThreadSessionState", () => {
   it("retimestamps streamed final assistant messages when the turn completes", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -2895,7 +2895,7 @@ describe("useThreadSessionState", () => {
   it("renders completed assistant message items without waiting for a transcript reread", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -3011,7 +3011,7 @@ describe("useThreadSessionState", () => {
   it("renders task monitor usage metadata as a sibling activity entry", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -3103,7 +3103,7 @@ describe("useThreadSessionState", () => {
     let readCount = 0;
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -3326,7 +3326,7 @@ describe("useThreadSessionState", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now++);
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -3487,7 +3487,7 @@ describe("useThreadSessionState", () => {
     vi.spyOn(Date, "now").mockReturnValue(50_000);
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -3651,7 +3651,7 @@ describe("useThreadSessionState", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now++);
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -3780,7 +3780,7 @@ describe("useThreadSessionState", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now++);
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -4681,7 +4681,7 @@ describe("useThreadSessionState", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now++);
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -4819,7 +4819,7 @@ describe("useThreadSessionState", () => {
   it("keeps streamed assistant commentary below the optimistic user prompt", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -4931,7 +4931,7 @@ describe("useThreadSessionState", () => {
   it("hydrates unphased streamed assistant text after completion", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -5058,7 +5058,7 @@ describe("useThreadSessionState", () => {
   it("tracks thinking state for a nonselected thread until the turn completes", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -10812,7 +10812,7 @@ describe("useThreadSessionState", () => {
   it("renders item/fileChange/outputDelta as a Changed file activity entry", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -10896,7 +10896,7 @@ describe("useThreadSessionState", () => {
   it("collapses add+delete deltas for the same path into a Recreated detail", async () => {
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -10977,7 +10977,7 @@ describe("useThreadSessionState", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now++);
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;
@@ -11106,7 +11106,7 @@ describe("useThreadSessionState", () => {
     vi.spyOn(Date, "now").mockReturnValue(50_000);
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: "codex" | "acp:grok";
           notification: {
             method: string;
             params: Record<string, unknown>;

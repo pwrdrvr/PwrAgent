@@ -87,7 +87,6 @@ import {
   ACP_AGENTS_GROK_CLI_PATH_ENV,
   ACP_AGENTS_KIMI_CLI_PATH_ENV,
   ACP_AGENTS_QWEN_CLI_PATH_ENV,
-  AGENT_CORE_GROK_ENV,
   CODEX_COMMAND_ENV,
   DISCORD_APPLICATION_ID_ENV,
   DISCORD_AUTHORIZED_GUILDS_ENV,
@@ -492,11 +491,6 @@ export class DesktopSettingsService {
       LINE_CHANNEL_SECRET_ENV,
       secretStorage.available,
     );
-    const grokApiKey = await this.readSecretState(
-      "grokApiKey",
-      undefined,
-      secretStorage.available,
-    );
     const federationInstancePrivateKey = await this.readSecretState(
       "federationInstancePrivateKey",
       undefined,
@@ -703,15 +697,7 @@ export class DesktopSettingsService {
           enabled: this.resolveDiffCondensationEnabled(
             config.experimental?.diffCondensation?.enabled,
           ),
-          model: this.resolveDiffCondensationModel(
-            config.experimental?.diffCondensation?.model,
-          ),
         },
-        agentCoreGrok: this.resolveBoolean(
-          config.experimental?.agentCoreGrok,
-          false,
-          AGENT_CORE_GROK_ENV,
-        ),
       },
       imageUploads: {
         pastedImageMaxPatches: this.resolvePastedImageMaxPatches(
@@ -1080,9 +1066,6 @@ export class DesktopSettingsService {
           discovery: codexDiscovery,
           profiles: codexProfiles,
         },
-        grok: {
-          apiKey: grokApiKey,
-        },
       },
       acpAgents: {
         gemini: {
@@ -1398,10 +1381,6 @@ export class DesktopSettingsService {
     return this.readSettings();
   }
 
-  async resolveGrokApiKey(): Promise<string | undefined> {
-    return await this.options.secretStore.getSecret("grokApiKey");
-  }
-
   async getOrCreateFederationIdentityKeyPair(): Promise<FederationIdentityKeyPair> {
     const existing = await this.options.secretStore.getSecret(
       "federationInstancePrivateKey",
@@ -1599,10 +1578,6 @@ export class DesktopSettingsService {
 
   resolveLineChannelSecretSync(): string | undefined {
     return this.resolveSecretSync("lineChannelSecret", LINE_CHANNEL_SECRET_ENV);
-  }
-
-  resolveGrokApiKeySync(): string | undefined {
-    return this.options.secretStore.getSecretSync?.("grokApiKey");
   }
 
   resolveCodexCommandPreference(): string | undefined {
@@ -1841,16 +1816,6 @@ export class DesktopSettingsService {
     return {
       value: configValue ?? false,
       source: configValue === undefined ? "default" : "config",
-    };
-  }
-
-  private resolveDiffCondensationModel(
-    configValue: string | undefined,
-  ): DesktopSettingsValue<string> {
-    const trimmed = configValue?.trim();
-    return {
-      value: trimmed && trimmed.length > 0 ? trimmed : "auto",
-      source: trimmed && trimmed.length > 0 ? "config" : "default",
     };
   }
 

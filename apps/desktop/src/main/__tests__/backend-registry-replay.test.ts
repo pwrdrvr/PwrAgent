@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AppServerBackendKind } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { ReplayClient } from "../testing/replay-client";
@@ -13,7 +14,7 @@ function createOverlayStoreMock() {
       threadId,
       executionMode,
     }: {
-      backend: "codex" | "grok";
+      backend: AppServerBackendKind;
       threadId: string;
       executionMode: "default" | "full-access";
     }) => ({
@@ -27,7 +28,7 @@ function createOverlayStoreMock() {
       threadId,
       agent,
     }: {
-      backend: "codex" | "grok";
+      backend: AppServerBackendKind;
       threadId: string;
       agent: import("@pwragent/shared").ThreadOverlayState["agent"] | null;
     }) => ({
@@ -38,27 +39,6 @@ function createOverlayStoreMock() {
       agent: agent ?? undefined,
     }),
   } as unknown as OverlayStoreLike;
-}
-
-function createPassiveClient() {
-  return {
-    close: async () => undefined,
-    getInitializeResult: async () => ({ methods: ["thread/list", "thread/read"] }),
-    listThreads: async () => [],
-    listSkills: async () => [],
-    onNotification: () => () => undefined,
-    readThread: async () => ({
-      entries: [],
-      messages: [],
-      pagination: {
-        supportsPagination: false,
-        hasPreviousPage: false,
-      },
-    }),
-    startThread: async () => ({ threadId: "noop-thread" }),
-    startTurn: async () => ({ threadId: "noop-thread", turnId: "noop-turn" }),
-    interruptTurn: async () => ({ threadId: "noop-thread", turnId: "noop-turn" }),
-  };
 }
 
 describe("DesktopBackendRegistry replay integration", () => {
@@ -127,7 +107,6 @@ describe("DesktopBackendRegistry replay integration", () => {
 
     const registry = new DesktopBackendRegistry({
       codexClient: replayClient,
-      grokClient: createPassiveClient() as any,
       overlayStore: createOverlayStoreMock(),
     });
     const events: string[] = [];
@@ -241,7 +220,6 @@ describe("DesktopBackendRegistry replay integration", () => {
 
     const registry = new DesktopBackendRegistry({
       codexClient: replayClient,
-      grokClient: createPassiveClient() as any,
       overlayStore: createOverlayStoreMock(),
     });
     const events: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -362,7 +340,6 @@ describe("DesktopBackendRegistry replay integration", () => {
 
     const registry = new DesktopBackendRegistry({
       codexClient: replayClient,
-      grokClient: createPassiveClient() as any,
       overlayStore: createOverlayStoreMock(),
     });
     const events: Array<{ method: string; params: Record<string, unknown> }> = [];

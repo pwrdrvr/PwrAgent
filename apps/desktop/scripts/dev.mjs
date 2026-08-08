@@ -7,13 +7,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const desktopRoot = resolve(__dirname, "..");
-const grokAppServerBuildScript = resolve(
-  desktopRoot,
-  "..",
-  "grok-app-server",
-  "build.mjs"
-);
-
 export const ELECTRON_DEV_ENV_KEYS = [
   "ELECTRON_EXEC_PATH",
   "ELECTRON_RENDERER_URL",
@@ -25,8 +18,7 @@ export const ELECTRON_DEV_ENV_KEYS = [
 const TERMINAL_SHUTDOWN_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 export const DEV_SETUP_SCRIPTS = [
   "./scripts/ensure-electron-runtime.mjs",
-  "./scripts/rebuild-native-for-electron.mjs",
-  grokAppServerBuildScript
+  "./scripts/rebuild-native-for-electron.mjs"
 ];
 
 export function sanitizeDevEnv(input = process.env) {

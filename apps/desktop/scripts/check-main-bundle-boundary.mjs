@@ -15,18 +15,6 @@ const javascriptFiles = entries
   .map((entry) => path.join(mainOutputDirectory, entry.name));
 const forbidden = [
   {
-    label: "AI SDK package marker",
-    pattern: /(?:@ai-sdk\/xai|ai-sdk\/provider|ai-sdk\/ui-utils)/i,
-  },
-  {
-    label: "AI SDK runtime symbol",
-    pattern: /(?:xai\.responses|xAI Responses API|AI SDK telemetry)/,
-  },
-  {
-    label: "xAI runtime endpoint",
-    pattern: /api\.x\.ai\/v1\/responses/,
-  },
-  {
     label: "externalized ws runtime import",
     pattern: /\b(?:from\s+|import\(|require\()["']ws["']/,
   },
@@ -59,5 +47,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `main bundle boundary: OK (${javascriptFiles.length} files, no AI SDK/xAI runtime or external bundled-dependency imports)`,
+  `main bundle boundary: OK (${javascriptFiles.length} files, no external bundled-dependency imports)`,
 );

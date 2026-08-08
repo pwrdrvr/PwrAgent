@@ -288,7 +288,7 @@ describe("useBackendSummaries", () => {
         fetchedAt: 1,
         backends: [
           {
-            kind: "grok",
+            kind: "acp:grok",
             label: "Grok",
             available: false,
             unavailableReason: "Grok API key is not set",
@@ -315,7 +315,7 @@ describe("useBackendSummaries", () => {
         fetchedAt: 2,
         backends: [
           {
-            kind: "grok",
+            kind: "acp:grok",
             label: "Grok",
             available: true,
             methods: [],

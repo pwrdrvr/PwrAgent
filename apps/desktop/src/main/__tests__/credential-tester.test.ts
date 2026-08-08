@@ -3,21 +3,7 @@ import type { MessagingCredentialValidationResult } from "@pwragent/messaging-in
 import { CredentialTester } from "../credential-tester/credential-tester";
 import type { CredentialValidationRequest } from "../messaging/messaging-runtime";
 
-function buildFetcher(overrides: {
-  status?: number;
-  body?: string;
-  fail?: Error;
-}) {
-  return vi.fn<typeof fetch>(async (_input, _init) => {
-    if (overrides.fail) throw overrides.fail;
-    return new Response(overrides.body ?? "", {
-      status: overrides.status ?? 200,
-    });
-  });
-}
-
 type TesterOptions = {
-  fetch?: typeof fetch;
   resolveTelegramBotToken?: () => string | undefined;
   resolveDiscordBotToken?: () => string | undefined;
   resolveMattermostBotToken?: () => string | undefined;
@@ -27,7 +13,6 @@ type TesterOptions = {
   resolveFeishuAppSecret?: () => string | undefined;
   resolveFeishuTenantUrl?: () => string | undefined;
   resolveLineChannelAccessToken?: () => string | undefined;
-  resolveGrokApiKey?: () => Promise<string | undefined>;
   resolveCodexCommand?: () => Promise<string | undefined>;
   runCodexVersion?: (
     command: string,
@@ -68,10 +53,8 @@ function buildTester(options: TesterOptions = {}) {
       options.resolveFeishuTenantUrl ?? (() => "https://open.feishu.cn"),
     resolveLineChannelAccessToken:
       options.resolveLineChannelAccessToken ?? (() => "line-token"),
-    resolveGrokApiKey: options.resolveGrokApiKey ?? (async () => "grok-key"),
     resolveCodexCommand: options.resolveCodexCommand ?? (async () => "/usr/local/bin/codex"),
     validateMessagingCredentials,
-    fetch: options.fetch as typeof fetch,
     runCodexVersion:
       options.runCodexVersion
       ?? (async () => ({ stdout: "codex 0.130.0\n", stderr: "" })),
@@ -266,43 +249,6 @@ describe("CredentialTester", () => {
       expect(validateMessagingCredentials).not.toHaveBeenCalled();
     });
   });
-
-  describe("grok", () => {
-    it("summarizes available models on ok", async () => {
-      const fetcher = buildFetcher({
-        status: 200,
-        body: JSON.stringify({
-          data: [
-            { id: "grok-4-fast" },
-            { id: "grok-4-fast-reasoning" },
-            { id: "grok-3" },
-            { id: "grok-3-mini" },
-          ],
-        }),
-      });
-      const { tester } = buildTester({ fetch: fetcher });
-      const result = await tester.test("grok");
-      expect(result.status).toBe("ok");
-      // First three plus +N more.
-      expect(result.detail).toBe("grok-4-fast, grok-4-fast-reasoning, grok-3, +1 more");
-      const init = fetcher.mock.calls[0]?.[1];
-      expect(init?.headers).toMatchObject({
-        Authorization: "Bearer grok-key",
-      });
-    });
-
-    it("returns failed when API rejects", async () => {
-      const fetcher = buildFetcher({
-        status: 401,
-        body: JSON.stringify({ error: { message: "invalid api key" } }),
-      });
-      const { tester } = buildTester({ fetch: fetcher });
-      const result = await tester.test("grok");
-      expect(result.status).toBe("failed");
-      expect(result.errorMessage).toBe("invalid api key");
-    });
-  });
-
   describe("codex", () => {
     it("returns ok with the parsed version when --version succeeds", async () => {
       const { tester } = buildTester({

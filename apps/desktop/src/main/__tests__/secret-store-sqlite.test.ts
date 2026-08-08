@@ -22,10 +22,10 @@ describe("DbBackedSafeStorageSecretStore", () => {
       stateDb as never,
     );
 
-    expect(await store.hasSecret("grokApiKey")).toBe(true);
-    expect(store.getSecretSync("grokApiKey")).toBeUndefined();
-    expect(await store.hasSecret("grokApiKey")).toBe(false);
-    expect(store.getSecretAccessError("grokApiKey")).toContain(
+    expect(await store.hasSecret("pwrsnapMcpCredential")).toBe(true);
+    expect(store.getSecretSync("pwrsnapMcpCredential")).toBeUndefined();
+    expect(await store.hasSecret("pwrsnapMcpCredential")).toBe(false);
+    expect(store.getSecretAccessError("pwrsnapMcpCredential")).toContain(
       "could not unlock secret storage",
     );
   });
@@ -52,13 +52,13 @@ describe("DbBackedSafeStorageSecretStore", () => {
       stateDb as never,
     );
 
-    expect(store.getSecretSync("grokApiKey")).toBeUndefined();
-    expect(await store.hasSecret("grokApiKey")).toBe(false);
+    expect(store.getSecretSync("pwrsnapMcpCredential")).toBeUndefined();
+    expect(await store.hasSecret("pwrsnapMcpCredential")).toBe(false);
 
-    await store.setSecret("grokApiKey", "replacement");
+    await store.setSecret("pwrsnapMcpCredential", "replacement");
 
-    expect(await store.hasSecret("grokApiKey")).toBe(true);
-    expect(store.getSecretAccessError("grokApiKey")).toBeUndefined();
+    expect(await store.hasSecret("pwrsnapMcpCredential")).toBe(true);
+    expect(store.getSecretAccessError("pwrsnapMcpCredential")).toBeUndefined();
   });
 
   it("throws a clear error and does not write when encryption is denied", async () => {
@@ -80,12 +80,12 @@ describe("DbBackedSafeStorageSecretStore", () => {
       stateDb as never,
     );
 
-    await expect(store.setSecret("grokApiKey", "replacement")).rejects.toThrow(
+    await expect(store.setSecret("pwrsnapMcpCredential", "replacement")).rejects.toThrow(
       "could not unlock secret storage",
     );
 
     expect(stateDb.setSecret).not.toHaveBeenCalled();
-    expect(store.getSecretAccessError("grokApiKey")).toContain(
+    expect(store.getSecretAccessError("pwrsnapMcpCredential")).toContain(
       "could not unlock secret storage",
     );
   });

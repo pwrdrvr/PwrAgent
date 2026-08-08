@@ -1,13 +1,7 @@
 import type { AppServerBackendKind } from "@pwragent/shared";
-import {
-  XaiEphemeralObjectCaller,
-  type XaiObjectClientLike,
-} from "./ephemeral-object-call";
 import { buildThreadTitlePrompt } from "./thread-title-prompt";
 
 export const THREAD_TITLE_PROMPT_VERSION = "thread-title-v2";
-export const DEFAULT_GROK_THREAD_TITLE_MODEL = "grok-4-1-fast-non-reasoning";
-
 const THREAD_TITLE_TIMEOUT_MS = 20_000;
 const REQUESTED_MAX_TITLE_CHARACTERS = 50;
 const REQUESTED_MAX_TITLE_WORDS = 6;
@@ -94,22 +88,13 @@ export type ThreadTitleGenerationServiceOptions = {
   timeoutMs?: number;
 };
 
-export type GrokThreadTitleGeneratorOptions = {
-  client?: XaiObjectClientLike;
-  model?: string;
-  timeoutMs?: number;
-};
-
 export class ThreadTitleGenerationService {
   private readonly generators: Partial<Record<AppServerBackendKind, ThreadTitleGenerator>>;
   private readonly generatorResolver?: (backend: AppServerBackendKind) => ThreadTitleGenerator | undefined;
   private readonly timeoutMs: number;
 
   constructor(options: ThreadTitleGenerationServiceOptions = {}) {
-    this.generators = {
-      grok: new GrokThreadTitleGenerator({ timeoutMs: options.timeoutMs }),
-      ...options.generators,
-    };
+    this.generators = options.generators ?? {};
     this.generatorResolver = options.generatorResolver;
     this.timeoutMs = options.timeoutMs ?? THREAD_TITLE_TIMEOUT_MS;
   }
@@ -169,51 +154,6 @@ export class ThreadTitleGenerationService {
       status: "generated",
       title: normalized.title,
       ...metadata,
-    };
-  }
-}
-
-export class GrokThreadTitleGenerator implements ThreadTitleGenerator {
-  private readonly caller: XaiEphemeralObjectCaller;
-  private readonly model: string;
-  private readonly timeoutMs?: number;
-
-  constructor(options: GrokThreadTitleGeneratorOptions = {}) {
-    this.model = options.model?.trim() || DEFAULT_GROK_THREAD_TITLE_MODEL;
-    this.timeoutMs = options.timeoutMs;
-    this.caller = new XaiEphemeralObjectCaller({
-      client: options.client,
-    });
-  }
-
-  async generateTitle(
-    params: ThreadTitleAdapterParams
-  ): Promise<ThreadTitleAdapterResult> {
-    const result = await this.caller.generateObject({
-      model: this.model,
-      promptCacheKey: params.promptVersion,
-      headers: {
-        "x-grok-conv-id": params.promptVersion,
-      },
-      timeoutMs: this.timeoutMs ?? params.timeoutMs,
-      schema: params.schema,
-      schemaName: params.schemaName,
-      system: [
-        "Generate a concise desktop thread title.",
-        "Return JSON that matches the schema exactly.",
-      ].join("\n"),
-      prompt: params.prompt,
-    });
-
-    if (result.status !== "ok") {
-      return result;
-    }
-
-    return {
-      status: "ok",
-      object: result.response.object,
-      cachedTokens: result.response.cachedTokens,
-      model: this.model,
     };
   }
 }

@@ -22,7 +22,7 @@ import {
   type SettingsPathRowChip,
 } from "./SettingsPathRow";
 import { SettingsTestBlock } from "./SettingsTestBlock";
-import { formatSourceLabel, sourceBadge } from "./settings-fields";
+import { sourceBadge } from "./settings-fields";
 import {
   CodexAuthProfileCreateButton,
   CodexAuthProfileLoginButton,
@@ -106,14 +106,12 @@ export function ModelsSettings(props: {
   const [codexMode, setCodexMode] = useState<CodexPathMode>(
     props.snapshot.models.codex.path.value.trim() ? "specified" : "auto",
   );
-  const [grokKey, setGrokKey] = useState("");
   const [backends, setBackends] = useState<BackendSummary[]>(
     props.cachedBackends ?? [],
   );
   const [catalogError, setCatalogError] = useState<string | undefined>();
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const codex = props.snapshot.models.codex;
-  const grok = props.snapshot.models.grok.apiKey;
   const envForced = codex.path.source === "env";
   const autoCandidates = codex.discovery.candidates.filter(
     (candidate) => candidate.source === "path" || candidate.source === "application",
@@ -127,8 +125,6 @@ export function ModelsSettings(props: {
     codex.path.source === "default" ? "auto" : sourceBadge(codex.path);
   const codexProfileSource =
     codex.profile.source === "default" ? "default" : sourceBadge(codex.profile);
-  const grokConfigured = grok.configured;
-  const grokSource = formatSourceLabel(grok.source, grok.overriddenByEnv);
 
   useEffect(() => {
     setCodexPath(codex.path.value);
@@ -358,76 +354,6 @@ export function ModelsSettings(props: {
           />
         </div>
       </SettingsSection>
-
-      {props.snapshot.experimental.agentCoreGrok.value ? (
-      <SettingsSection
-        eyebrow="Models"
-        title="Grok (xAI API)"
-        description="The x.ai API key for the experimental AgentCore - Grok backend (enabled in Settings → Experimental). The Grok CLI (ACP) agent authenticates separately through the Grok CLI itself and is configured under ACP agents below."
-      >
-        <div className="settings-fields">
-          <SettingsField
-            label="API Key"
-            sub="x.ai API key. Stored in the system keychain."
-            source={grokConfigured ? `Set · ${grokSource}` : `Not set · ${grokSource}`}
-            error={grok.unavailableReason}
-            control={
-              <div className="settings-secret">
-                <input
-                  aria-label="Grok API Key"
-                  className="settings-input"
-                  disabled={props.saving || !grok.writable}
-                  placeholder="••••••••"
-                  type="password"
-                  value={grokKey}
-                  onChange={(event) => setGrokKey(event.currentTarget.value)}
-                />
-                <button
-                  className="button button--secondary"
-                  disabled={props.saving || !grok.writable || !grokKey.trim()}
-                  type="button"
-                  onClick={() => {
-                    const nextValue = grokKey.trim();
-                    void props.onReplaceSecret("grokApiKey", nextValue).then(
-                      (saved) => {
-                        if (saved) {
-                          setGrokKey("");
-                        }
-                      },
-                    );
-                  }}
-                >
-                  Replace
-                </button>
-                <button
-                  className="button button--ghost"
-                  disabled={props.saving || !grok.writable || grok.source === "env"}
-                  type="button"
-                  onClick={() => {
-                    void props.onClearSecret("grokApiKey");
-                  }}
-                >
-                  Clear
-                </button>
-              </div>
-            }
-          />
-          <SettingsField
-            label="Connection test"
-            sub="Calls GET /v1/models on the xAI API and reports the available models."
-            control={
-              <SettingsTestBlock
-                kind="grok"
-                desktopApi={props.desktopApi}
-                icon={<span aria-hidden="true">x</span>}
-                defaultName="api.x.ai/v1/models"
-                defaultSub="GET /v1/models"
-              />
-            }
-          />
-        </div>
-      </SettingsSection>
-      ) : null}
 
       <AcpAgentsSettings
         desktopApi={props.desktopApi}

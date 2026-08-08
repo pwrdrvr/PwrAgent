@@ -613,9 +613,7 @@ function DesktopAppShell(props: {
       }
       return backend === "codex"
         ? "Codex thread"
-        : backend === "grok"
-          ? "Grok thread"
-          : `${backend} thread`;
+        : `${backend} thread`;
     };
     return desktopApi?.onAgentEvent?.((event) => {
       if (

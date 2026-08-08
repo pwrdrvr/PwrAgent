@@ -9,24 +9,6 @@ import {
 import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
 
-/**
- * Diff condensation runs an xAI judgment call on each "focused diff"
- * request to decide which hunks to hide. Defaults to OFF so we don't
- * send xAI requests on every diff render unless the user opts in.
- *
- * "auto" picks the model that matches the active backend (Codex backend
- * uses a Codex-shaped model, Grok backend uses a Grok model). Pinning a
- * specific model overrides that — every condensation request will use
- * the chosen model regardless of which backend is active.
- */
-const DIFF_CONDENSATION_MODEL_OPTIONS: Array<{ label: string; value: string }> = [
-  { label: "Auto (match backend)", value: "auto" },
-  { label: "grok-4-fast-reasoning", value: "grok-4-fast-reasoning" },
-  { label: "grok-4-fast", value: "grok-4-fast" },
-  { label: "grok-3-mini", value: "grok-3-mini" },
-  { label: "grok-3", value: "grok-3" },
-];
-
 const DEFAULT_LIVE_TRANSCRIPT_EVENT_FILTERING = {
   value: false,
   source: "default" as const,
@@ -52,11 +34,6 @@ const DEFAULT_MANAGED_REVIEW = {
   source: "default" as const,
 };
 
-const DEFAULT_AGENT_CORE_GROK = {
-  value: false,
-  source: "default" as const,
-};
-
 const DEFAULT_THREAD_PRICING_SUMMARY = {
   value: true,
   source: "default" as const,
@@ -71,7 +48,6 @@ export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
-  onDiffCondensationModelChange: (model: string) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
   onLightweightNavigationRefreshChange: (enabled: boolean) => Promise<void>;
   onMarkdownMathRenderingChange: (enabled: boolean) => Promise<void>;
@@ -80,7 +56,6 @@ export function ExperimentalSettings(props: {
     enabled: boolean,
   ) => Promise<void>;
   onManagedReviewChange: (enabled: boolean) => Promise<void>;
-  onAgentCoreGrokChange: (enabled: boolean) => Promise<void>;
 }) {
   const condensation = props.snapshot.experimental.diffCondensation;
   const liveTranscriptEventFiltering =
@@ -103,14 +78,8 @@ export function ExperimentalSettings(props: {
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
   const managedReview =
     props.snapshot.experimental.managedReview ?? DEFAULT_MANAGED_REVIEW;
-  const agentCoreGrok =
-    props.snapshot.experimental.agentCoreGrok ?? DEFAULT_AGENT_CORE_GROK;
-  const knownCondensationModel = DIFF_CONDENSATION_MODEL_OPTIONS.some(
-    (option) => option.value === condensation.model.value,
-  );
   const discontinuedEnabledCount =
     (condensation.enabled.value ? 1 : 0) +
-    (agentCoreGrok.value ? 1 : 0) +
     (liveTranscriptEventFiltering.value ? 1 : 0);
 
   return (
@@ -268,15 +237,15 @@ export function ExperimentalSettings(props: {
         <SettingsSection
           eyebrow="Experimental"
           title="Diff Condensation"
-          description="Send focused-diff hunks to xAI for a judgment call on what to hide. Disabled by default — every diff renders in full and no xAI request fires."
+          description="Send focused-diff hunks to Codex GPT-5.6 Luna to decide which are safe to hide. Disabled by default — every diff renders in full and no structured-generation request fires."
           chip={condensation.enabled.value ? "On" : "Off"}
           chipKind={condensation.enabled.value ? "ok" : "default"}
         >
           <div className="settings-fields">
             <SettingsField
               label="Enable diff condensation"
-              sub="Use an xAI call to hide diff hunks."
-              help="Each focused-diff request fires an xAI judgment call to decide which hunks to elide."
+              sub="Use Codex GPT-5.6 Luna to hide low-signal diff hunks."
+              help="Each focused-diff request is sent to Codex, regardless of the launchpad default. If Codex is unavailable, the full diff remains visible."
               source={sourceBadge(condensation.enabled)}
               control={
                 <SettingsSwitch
@@ -290,75 +259,6 @@ export function ExperimentalSettings(props: {
               }
             />
 
-            <SettingsField
-              label="Eliding model"
-              sub="Which model decides which hunks to elide."
-              help="Auto matches the thread's primary backend. Pinning a specific model uses it for every eliding request, regardless of backend."
-              source={sourceBadge(condensation.model)}
-              control={
-                <div
-                  className="settings-segmented"
-                  role="radiogroup"
-                  aria-label="Diff condensation model"
-                >
-                  {DIFF_CONDENSATION_MODEL_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      aria-checked={condensation.model.value === option.value}
-                      className={`settings-segmented__button${
-                        condensation.model.value === option.value ? " is-active" : ""
-                      }`}
-                      disabled={props.saving || !condensation.enabled.value}
-                      role="radio"
-                      type="button"
-                      onClick={() => {
-                        void props.onDiffCondensationModelChange(option.value);
-                      }}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                  {!knownCondensationModel ? (
-                    <button
-                      aria-checked
-                      className="settings-segmented__button is-active"
-                      disabled
-                      role="radio"
-                      type="button"
-                    >
-                      {condensation.model.value} (custom)
-                    </button>
-                  ) : null}
-                </div>
-              }
-            />
-          </div>
-        </SettingsSection>
-
-        <SettingsSection
-          eyebrow="Experimental"
-          title="AgentCore - Grok"
-          description="Legacy direct-xAI Grok backend. Disabled by default. Prefer the Grok CLI (ACP) backend instead — set up under Settings → ACP Agents."
-          chip={agentCoreGrok.value ? "On" : "Off"}
-          chipKind={agentCoreGrok.value ? "ok" : "default"}
-        >
-          <div className="settings-fields">
-            <SettingsField
-              label="Enable AgentCore - Grok"
-              sub="Add the legacy Grok backend to the picker."
-              help="Uses the Grok API key from Settings → Models → Grok."
-              source={sourceBadge(agentCoreGrok)}
-              control={
-                <SettingsSwitch
-                  checked={agentCoreGrok.value}
-                  disabled={props.saving}
-                  label="Enable AgentCore - Grok"
-                  onChange={(enabled) => {
-                    void props.onAgentCoreGrokChange(enabled);
-                  }}
-                />
-              }
-            />
           </div>
         </SettingsSection>
 

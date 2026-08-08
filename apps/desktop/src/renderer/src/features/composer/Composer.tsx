@@ -8736,8 +8736,7 @@ export function Composer(props: ComposerProps) {
     (props.launchpad?.backend ?? props.thread?.source) === "codex";
   const supportsSteering =
     Boolean(backend?.capabilities.steerTurn) &&
-    selectedModelOption?.supportsSteering !== false &&
-    props.thread?.source !== "grok";
+    selectedModelOption?.supportsSteering !== false;
   const launchpadSubmitting = isLaunchpad && sending;
   const fiveHourResetAt = getFiveHourRateLimitResetAt({
     backend,

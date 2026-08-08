@@ -309,7 +309,7 @@ describe("registerDirectoryFromDisk", () => {
     });
 
     await registerDirectoryFromDisk(
-      { path: "/tmp/repo", preferredBackend: "grok" },
+      { path: "/tmp/repo", preferredBackend: "acp:grok" },
       {
         ensureDirectoryLaunchpad: ensure,
         runGit,
@@ -318,7 +318,7 @@ describe("registerDirectoryFromDisk", () => {
     );
 
     expect(ensure).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ preferredBackend: "grok" }),
+      expect.objectContaining({ preferredBackend: "acp:grok" }),
     );
   });
 });

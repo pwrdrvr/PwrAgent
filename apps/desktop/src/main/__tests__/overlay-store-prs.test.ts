@@ -193,7 +193,7 @@ describe("SqliteOverlayStore — thread PRs", () => {
       prs: [prMerged],
     });
     await store.setThreadPullRequests({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       prs: [prPassing],
     });
@@ -203,7 +203,7 @@ describe("SqliteOverlayStore — thread PRs", () => {
       threadId: "thread-1",
     });
     const grok = await store.getThreadOverlayState({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
     });
 

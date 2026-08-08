@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { XaiEphemeralObjectCaller } from "../app-server/ephemeral-object-call";
+import { EphemeralObjectCaller } from "../app-server/ephemeral-object-call";
 
 function makeStructuredResult(object: unknown, cachedTokens?: number) {
   return {
@@ -8,16 +8,14 @@ function makeStructuredResult(object: unknown, cachedTokens?: number) {
   };
 }
 
-describe("XaiEphemeralObjectCaller", () => {
+describe("EphemeralObjectCaller", () => {
   it("returns parsed object output from an injected client", async () => {
     const client = {
       generateObject: vi.fn(async () => makeStructuredResult({ title: "PROJECT-123 crash" }, 42)),
     };
-    const caller = new XaiEphemeralObjectCaller({ client });
+    const caller = new EphemeralObjectCaller({ client });
 
     const result = await caller.generateObject({
-      promptCacheKey: "thread-title-v1",
-      headers: { "x-grok-conv-id": "thread-title-v1" },
       schema: { type: "object" },
       schemaName: "thread_title",
       system: "Return a title.",
@@ -33,9 +31,6 @@ describe("XaiEphemeralObjectCaller", () => {
       },
     });
     expect(client.generateObject).toHaveBeenCalledWith({
-      model: undefined,
-      promptCacheKey: "thread-title-v1",
-      headers: { "x-grok-conv-id": "thread-title-v1" },
       schema: { type: "object" },
       schemaName: "thread_title",
       system: "Return a title.",
@@ -45,7 +40,7 @@ describe("XaiEphemeralObjectCaller", () => {
   });
 
   it("returns unavailable when no process-backed client is configured", async () => {
-    const caller = new XaiEphemeralObjectCaller();
+    const caller = new EphemeralObjectCaller();
 
     await expect(
       caller.generateObject({
@@ -55,7 +50,7 @@ describe("XaiEphemeralObjectCaller", () => {
       })
     ).resolves.toEqual({
       status: "unavailable",
-      reason: "xai_unavailable",
+      reason: "structured_generation_unavailable",
     });
   });
 
@@ -65,7 +60,7 @@ describe("XaiEphemeralObjectCaller", () => {
         throw new Error("timeout");
       }),
     };
-    const caller = new XaiEphemeralObjectCaller({ client });
+    const caller = new EphemeralObjectCaller({ client });
 
     await expect(
       caller.generateObject({

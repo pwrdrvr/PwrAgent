@@ -15,7 +15,6 @@ const constructorState = vi.hoisted(() => ({
     ((env: NodeJS.ProcessEnv) => Promise<string[]> | string[]) | undefined
   >,
   codexResolveEnvs: [] as Array<(() => Promise<NodeJS.ProcessEnv>) | undefined>,
-  grokCount: 0,
 }));
 
 vi.mock("../codex-app-server/client", () => ({
@@ -94,62 +93,6 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
     resolveWorktreeStorage: () => "in-repo",
   }),
 }));
-
-vi.mock("../grok-app-server/client", () => ({
-  GrokAppServerClient: class {
-    constructor() {
-      constructorState.grokCount += 1;
-    }
-
-    async close(): Promise<void> {
-      return;
-    }
-
-    async getInitializeResult() {
-      return {};
-    }
-
-    async listThreads() {
-      return [];
-    }
-
-    async listSkills() {
-      return [];
-    }
-
-    onNotification() {
-      return () => undefined;
-    }
-
-    onRequest() {
-      return () => undefined;
-    }
-
-    async readThread() {
-      return {
-        entries: [],
-        messages: [],
-        pagination: {
-          supportsPagination: false,
-          hasPreviousPage: false,
-        },
-      };
-    }
-
-    async startThread() {
-      return { threadId: "noop-thread" };
-    }
-
-    async startTurn() {
-      return { threadId: "noop-thread", turnId: "noop-turn" };
-    }
-
-    async interruptTurn() {
-      return { threadId: "noop-thread", turnId: "noop-turn" };
-    }
-  }
-}));
-
 const tempDirs: string[] = [];
 
 function createOverlayStoreMock() {
@@ -162,7 +105,7 @@ function createOverlayStoreMock() {
       threadId,
       executionMode,
     }: {
-      backend: "codex" | "grok";
+      backend: "codex" | "acp:grok";
       threadId: string;
       executionMode: "default" | "full-access";
     }) => ({
@@ -176,7 +119,7 @@ function createOverlayStoreMock() {
       threadId,
       agent,
     }: {
-      backend: "codex" | "grok";
+      backend: "codex" | "acp:grok";
       threadId: string;
       agent: import("@pwragent/shared").ThreadOverlayState["agent"] | null;
     }) => ({
@@ -195,7 +138,6 @@ beforeEach(() => {
   constructorState.codexEnvs = [];
   constructorState.codexResolveArgs = [];
   constructorState.codexResolveEnvs = [];
-  constructorState.grokCount = 0;
   settingsState.codexEnv = undefined;
 });
 
@@ -243,50 +185,9 @@ describe("DesktopBackendRegistry replay isolation", () => {
 
     await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([]);
     expect(constructorState.codexCount).toBe(0);
-    expect(constructorState.grokCount).toBe(0);
 
     await registry.close();
   });
-
-  it("does not instantiate live clients for a grok replay fixture", async () => {
-    process.env[REPLAY_FIXTURE_PATH_ENV] = writeFixture({
-      metadata: {
-        backend: "grok",
-        scenario: "registry-replay-grok"
-      },
-      steps: [
-        {
-          id: "initialize-1",
-          kind: "response",
-          method: "initialize",
-          result: {
-            serverInfo: {
-              name: "Replay Grok",
-              version: "1.0.0"
-            },
-            methods: ["thread/list"]
-          }
-        },
-        {
-          id: "list-1",
-          kind: "response",
-          method: "thread/list",
-          result: []
-        }
-      ]
-    });
-
-    const registry = new DesktopBackendRegistry({
-      overlayStore: createOverlayStoreMock(),
-    });
-
-    await expect(registry.listThreads({ backend: "grok" })).resolves.toEqual([]);
-    expect(constructorState.codexCount).toBe(0);
-    expect(constructorState.grokCount).toBe(0);
-
-    await registry.close();
-  });
-
   it("spawns exactly one codex child process with workspace-write defaults so newly created threads inherit Default Access", async () => {
     const registry = new DesktopBackendRegistry({
       overlayStore: createOverlayStoreMock(),

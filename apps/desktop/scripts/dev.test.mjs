@@ -43,7 +43,7 @@ function createFakeChild(pid = 12345) {
 }
 
 describe("dev launch wrapper", () => {
-  it("builds the Grok child before launching Electron development", () => {
+  it("prepares the Electron runtime before launching development", () => {
     const calls = [];
     const env = { PATH: "/usr/bin" };
 
@@ -53,16 +53,13 @@ describe("dev launch wrapper", () => {
     });
 
     expect(status).toBe(0);
-    expect(DEV_SETUP_SCRIPTS.at(-1)).toMatch(
-      /apps[/\\]grok-app-server[/\\]build\.mjs$/
-    );
     expect(calls).toEqual(
       DEV_SETUP_SCRIPTS.map((script) => ["node", [script], env])
     );
   });
 
   it("stops the dev setup when the child build fails", () => {
-    const statuses = [0, 0, 1];
+    const statuses = [0, 1];
     const calls = [];
 
     const status = runDevSetup("node", {}, (_command, args) => {
