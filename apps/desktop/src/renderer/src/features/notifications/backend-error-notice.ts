@@ -1,3 +1,7 @@
+import type {
+  AppServerBackendKind,
+  FederationInstanceId,
+} from "@pwragent/shared";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 /**
@@ -15,19 +19,22 @@ export type BackendErrorSignal =
       turnId: string;
       failureMessage: string;
       recoveryError?: string;
+      instanceId?: FederationInstanceId;
       threadLabel: string;
     }
   | {
       kind: "turn-failed";
-      backend: string;
+      backend: AppServerBackendKind;
       threadId: string;
       turnId: string;
       errorMessage: string;
+      instanceId?: FederationInstanceId;
       threadLabel: string;
     }
   | {
       kind: "system-error";
-      backend: string;
+      backend: AppServerBackendKind;
+      instanceId?: FederationInstanceId;
       threadId: string;
       threadLabel: string;
     };
@@ -53,6 +60,12 @@ export function resolveBackendErrorNotice(
       id:
         `codex-invalid-id-recovery:codex:${signal.threadId}:${signal.turnId}`,
       message: signal.failureMessage,
+      threadLink: {
+        backend: "codex" as const,
+        ...(signal.instanceId ? { instanceId: signal.instanceId } : {}),
+        threadId: signal.threadId,
+        title: signal.threadLabel,
+      },
     };
     if (signal.status === "repairing") {
       return {
@@ -100,6 +113,12 @@ export function resolveBackendErrorNotice(
       title: "Turn failed",
       message: signal.errorMessage,
       detail: signal.threadLabel,
+      threadLink: {
+        backend: signal.backend,
+        ...(signal.instanceId ? { instanceId: signal.instanceId } : {}),
+        threadId: signal.threadId,
+        title: signal.threadLabel,
+      },
       copyText: signal.errorMessage,
     };
   }
@@ -129,5 +148,11 @@ export function resolveBackendErrorNotice(
     message:
       "The agent backend reported a system error. The active turn may have stopped.",
     detail: signal.threadLabel,
+    threadLink: {
+      backend: signal.backend,
+      ...(signal.instanceId ? { instanceId: signal.instanceId } : {}),
+      threadId: signal.threadId,
+      title: signal.threadLabel,
+    },
   };
 }

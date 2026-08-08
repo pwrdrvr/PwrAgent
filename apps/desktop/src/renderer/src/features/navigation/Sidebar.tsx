@@ -24,6 +24,7 @@ import {
   isPinnedThread,
   moveDirectoryKey,
   moveThreadKey,
+  resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
   readRendererFederationLabel,
@@ -372,6 +373,15 @@ export function Sidebar(props: SidebarProps) {
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
   const selectedItemKey = props.selectedItemKey;
   const navigationThreads = props.threads;
+  const navigationThreadByKey = useMemo(
+    () => new Map(
+      navigationThreads.map((thread) => [
+        buildThreadIdentityKey(thread.source, thread.id),
+        thread,
+      ]),
+    ),
+    [navigationThreads],
+  );
   const setSubthreadsCollapsed = props.onSetSubthreadsCollapsed;
   const browseMode = props.browseMode;
 
@@ -563,13 +573,7 @@ export function Sidebar(props: SidebarProps) {
       return;
     }
 
-    const threadByKey = new Map(
-      navigationThreads.map((thread) => [
-        buildThreadIdentityKey(thread.source, thread.id),
-        thread,
-      ]),
-    );
-    const selectedThread = threadByKey.get(selectedItemKey);
+    const selectedThread = navigationThreadByKey.get(selectedItemKey);
     if (!selectedThread) {
       return;
     }
@@ -584,15 +588,15 @@ export function Sidebar(props: SidebarProps) {
     const visited = new Set<string>();
     let current = selectedThread;
     while (current.parentThreadId) {
-      const parentKey = buildThreadIdentityKey(
-        current.source,
-        current.parentThreadId,
-      );
+      const parentKey = resolveThreadParentKey(current, navigationThreadByKey);
+      if (!parentKey) {
+        break;
+      }
       if (visited.has(parentKey)) {
         break;
       }
       visited.add(parentKey);
-      const parent = threadByKey.get(parentKey);
+      const parent = navigationThreadByKey.get(parentKey);
       if (!parent) {
         break;
       }
@@ -603,7 +607,7 @@ export function Sidebar(props: SidebarProps) {
     }
   }, [
     browseMode,
-    navigationThreads,
+    navigationThreadByKey,
     revealSelectedThreadRequest,
     selectedItemKey,
     setSubthreadsCollapsed,
@@ -1160,8 +1164,11 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuChildThreadCount = contextMenu && !contextMenuIsBulk
     ? props.threads.filter(
         (thread) =>
-          thread.source === contextMenu.thread.source &&
-          thread.parentThreadId === contextMenu.thread.id,
+          resolveThreadParentKey(thread, navigationThreadByKey)
+          === buildThreadIdentityKey(
+            contextMenu.thread.source,
+            contextMenu.thread.id,
+          ),
       ).length
     : 0;
   const contextMenuHasChildThreads = contextMenuChildThreadCount > 0;

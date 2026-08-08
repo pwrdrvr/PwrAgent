@@ -54,6 +54,7 @@ export type StartThreadRequest = {
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   acpRuntime?: BackendAcpSessionRuntimeState;
   parentThreadId?: ThreadIdentifier;
+  parentThreadBackend?: AppServerBackendKind;
 };
 
 export type StartThreadResponse = {
@@ -81,6 +82,7 @@ export type ForkThreadRequest = {
   federationTarget?: FederationTarget;
   sourceThreadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier;
+  parentThreadBackend?: AppServerBackendKind;
   executionMode?: ThreadExecutionMode;
   directoryKind?: DirectorySummaryKind;
   directoryLabel?: string;
@@ -240,6 +242,11 @@ export type StartTurnRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
+  /**
+   * Renderer-reserved FIFO identity. Lets queue lifecycle events correlate a
+   * locally projected draft even when admission races ahead of the IPC reply.
+   */
+  queueEntryId?: string;
   input: AppServerTurnInputItem[];
   executionMode?: ThreadExecutionMode;
   approvalPolicy?: string;
@@ -258,6 +265,8 @@ export type StartTurnResponse = {
   turnId: string;
   queueStatus?: "started" | "queued";
   queueEntryId?: string;
+  /** Owner-clock creation time for ordering queue state against snapshots. */
+  queueEntryCreatedAt?: number;
 };
 
 export type CancelQueuedTurnRequest = {
@@ -545,7 +554,8 @@ export type ApplyThreadModelMigrationResponse = {
     | "acknowledged-source-model"
     | "metadata-unavailable"
     | "applied"
-    | "unavailable";
+    | "unavailable"
+    | "not-owner";
   revision?: string;
   model?: string;
   reasoningEffort?: string;
@@ -653,6 +663,7 @@ export type EnsureDirectoryLaunchpadRequest = {
   gitStatusSourcePath?: string;
   currentBranch?: string;
   parentThreadId?: string;
+  parentThreadBackend?: AppServerBackendKind;
   parentThreadTitle?: string;
   preferredBackend?: AppServerBackendKind;
   registeredAt?: number;
@@ -690,6 +701,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "workMode"
       | "branchName"
       | "parentThreadId"
+      | "parentThreadBackend"
       | "parentThreadTitle"
       | "codexEnvironmentId"
       | "codexEnvironmentExecutionTarget"
@@ -728,6 +740,7 @@ export type MaterializeDirectoryLaunchpadRequest = {
   collaborationMode?: AppServerCollaborationModeRequest;
   reviewTarget?: AppServerReviewTarget;
   parentThreadId?: ThreadIdentifier;
+  parentThreadBackend?: AppServerBackendKind;
   /**
    * Create the provider thread and prepare its workspace now, but defer the
    * first turn or review until this wall-clock time.

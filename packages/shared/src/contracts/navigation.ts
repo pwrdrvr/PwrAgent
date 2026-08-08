@@ -111,6 +111,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * agent thread; this only controls sidebar grouping.
    */
   parentThreadId?: ThreadIdentifier;
+  /** Provider that owns `parentThreadId`; defaults to this thread's provider. */
+  parentThreadBackend?: AppServerBackendKind;
   /**
    * Set only when this thread inherited copied context by forking another
    * thread. Renderer surfaces use this to distinguish fork baseline history
@@ -658,6 +660,7 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   workMode: LaunchpadWorkMode;
   branchName?: string;
   parentThreadId?: string;
+  parentThreadBackend?: AppServerBackendKind;
   parentThreadTitle?: string;
   /**
    * The thread card this launchpad was spawned from. May differ from
@@ -1252,12 +1255,14 @@ export type SetThreadParentRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier | null;
+  parentThreadBackend?: AppServerBackendKind | null;
 };
 
 export type SetThreadParentResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier;
+  parentThreadBackend?: AppServerBackendKind;
 };
 
 export type UpdateSubthreadOrderRequest = {
@@ -1589,6 +1594,8 @@ export type ThreadOverlayState = {
    * access to the parent transcript or state.
    */
   parentThreadId?: ThreadIdentifier;
+  /** Provider that owns `parentThreadId`; defaults to this thread's provider. */
+  parentThreadBackend?: AppServerBackendKind;
   /**
    * Set only when this thread was created by forking another thread
    * (`thread/fork`). Records the source thread the fork inherited its context
@@ -1646,6 +1653,12 @@ export type ThreadOverlayState = {
    * threads are intentionally ephemeral.
    */
   managedReviewEntries?: AppServerThreadReviewEntry[];
+  /**
+   * Managed-review result entry ids that still need to be supplied to the
+   * parent ACP agent. The review text remains in `managedReviewEntries`; this
+   * list is only durable delivery metadata.
+   */
+  pendingManagedReviewContextEntryIds?: string[];
   /** Durable delegated sub-agent/task-monitor summaries for this thread. */
   subAgents?: ThreadSubAgentSummary[];
   /** Durable origin metadata for threads created by an Agent handoff tool. */

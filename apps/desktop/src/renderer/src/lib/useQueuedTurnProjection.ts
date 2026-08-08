@@ -16,15 +16,17 @@ import type {
  * instead of relying on renderer-local memory. Entries this window
  * already tracks (matching queueEntryId, or still backendQueuePending
  * in-flight) are left alone so live submissions keep their richer local
- * state (attachments, review commands); backend-owned entries whose id
- * vanished from the snapshot are pruned — the FIFO dispatched or
- * cancelled them.
+ * state (attachments, review commands). A backend-owned entry is pruned when
+ * an owner snapshot taken after that entry was created omits it — the FIFO
+ * dispatched or cancelled it. Ordering in the owner's clock domain prevents
+ * an older navigation snapshot from pruning a just-acknowledged submission.
  */
 export function useQueuedTurnProjection(params: {
   composerDraftStore: ComposerDraftStore;
+  snapshotFetchedAt?: number;
   threads: readonly NavigationThreadSummary[];
 }): void {
-  const { composerDraftStore, threads } = params;
+  const { composerDraftStore, snapshotFetchedAt, threads } = params;
   useEffect(() => {
     for (const thread of threads) {
       const scopeKey = `thread:${thread.source}:${thread.id}`;
@@ -46,13 +48,19 @@ export function useQueuedTurnProjection(params: {
           // a snapshot that may predate them.
           !entry.queueEntryId
           || entry.backendQueuePending
-          || snapshotIds.has(entry.queueEntryId),
+          || snapshotIds.has(entry.queueEntryId)
+          || typeof entry.queueEntryCreatedAt !== "number"
+          || typeof snapshotFetchedAt !== "number"
+          // Millisecond equality is ambiguous: the snapshot may have read the
+          // FIFO just before creation within the same clock tick.
+          || snapshotFetchedAt <= entry.queueEntryCreatedAt,
       );
       const additions: ComposerQueuedTurnSnapshot[] = snapshotEntries
         .filter((entry) => !knownIds.has(entry.queueEntryId))
         .map((entry) => ({
           id: `backend-queued:${entry.queueEntryId}`,
           queueEntryId: entry.queueEntryId,
+          queueEntryCreatedAt: entry.createdAt,
           text: entry.displayText,
           imageAttachments: [],
           fileAttachments: [],
@@ -65,5 +73,5 @@ export function useQueuedTurnProjection(params: {
         composerDraftStore.setQueuedTurns(scopeKey, [...kept, ...additions]);
       }
     }
-  }, [composerDraftStore, threads]);
+  }, [composerDraftStore, snapshotFetchedAt, threads]);
 }

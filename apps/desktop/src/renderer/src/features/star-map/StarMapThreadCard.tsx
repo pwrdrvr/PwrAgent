@@ -6,6 +6,7 @@ import {
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
 import { PrChip } from "../pr-status/PrChip";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   StarMapCardMenu,
   type StarMapCardMenuAction,
@@ -87,6 +88,10 @@ export function StarMapThreadCard(props: {
   // Set while a pointer-drag exceeded the threshold, so the click that the
   // browser fires on release does not also open the thread.
   const suppressClickRef = useRef(false);
+  // Cards live inside the clipped, transformed canvas, and a native
+  // `title` cannot be styled, times out differently per platform, and
+  // does not wrap on macOS Electron — see UI-THEME.md.
+  const titleTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const left = props.baseSlot.dx + (props.offset?.dx ?? 0);
   const top = props.baseSlot.dy + (props.offset?.dy ?? 0);
   const style: CSSProperties = {
@@ -205,7 +210,13 @@ export function StarMapThreadCard(props: {
           }}
         >
           <ThreadRowStatus status={status} />
-          <span className="star-map-card__title" title={thread.title}>
+          <span
+            className="star-map-card__title"
+            onMouseEnter={(event) =>
+              titleTooltip.show(event.currentTarget, thread.title)
+            }
+            onMouseLeave={titleTooltip.hide}
+          >
             {thread.title}
           </span>
         </button>

@@ -41,6 +41,7 @@ type RuntimeHarness = {
     sourcePeerId: FederationInstanceId,
   ) => boolean;
   forwardLocalBackendEvent: (event: AgentEvent) => void;
+  hydrateLiveThreadMessageOrigin: (event: AgentEvent) => AgentEvent;
   broadcastStarMapArrangement: (
     entries: StarMapArrangementEntry[],
   ) => void;
@@ -1248,6 +1249,62 @@ describe("DesktopFederationRuntime", () => {
       sourceInstanceId: "gateway_one",
       targetInstanceId: "client_one",
     }]);
+  });
+
+  it("hydrates trusted instance metadata on live transcript origins", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.visiblePeers = () => [{
+      id: "source_one",
+      label: "Source Mac",
+      status: "connected",
+    }];
+    runtime.celestialIconFor = () => "moon";
+
+    const hydrated = runtime.hydrateLiveThreadMessageOrigin({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "user-message-1",
+            type: "userMessage",
+            origin: {
+              kind: "agent",
+              sourceThread: {
+                backend: "codex",
+                instanceId: "source_one",
+                instanceLabel: "Spoofed Mac",
+                celestialIcon: "black-hole",
+                threadId: "source-thread",
+                title: "Source thread",
+              },
+            },
+            content: [{ type: "text", text: "Remote result" }],
+          },
+        },
+      },
+    } as AgentEvent);
+
+    expect(hydrated).toMatchObject({
+      notification: {
+        method: "item/completed",
+        params: {
+          item: {
+            origin: {
+              sourceThread: {
+                instanceId: "source_one",
+                instanceLabel: "Source Mac",
+                celestialIcon: "moon",
+                threadId: "source-thread",
+              },
+            },
+          },
+        },
+      },
+    });
   });
 
   it("forwards scheduler lifecycle events to scheduler-capable peers", () => {

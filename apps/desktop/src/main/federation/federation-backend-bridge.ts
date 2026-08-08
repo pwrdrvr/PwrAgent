@@ -7,14 +7,13 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadMessageOrigin,
   AgentEvent,
-  ApplyThreadModelMigrationRequest,
-  ApplyThreadModelMigrationResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
+  CelestialIconId,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
@@ -137,6 +136,76 @@ export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
 };
 
+type ResolvedSourceInstance = {
+  label: string;
+  celestialIcon?: CelestialIconId;
+};
+
+function authenticateMessageOrigin(params: {
+  messageOrigin: AppServerThreadMessageOrigin | undefined;
+  resolveSourceInstance?: (
+    instanceId: string,
+  ) => ResolvedSourceInstance | undefined;
+  sourceInstanceId: string;
+}): AppServerThreadMessageOrigin | undefined {
+  const sourceThread = params.messageOrigin?.sourceThread;
+  if (!params.messageOrigin || !sourceThread) {
+    return params.messageOrigin;
+  }
+
+  let sourceInstance: ResolvedSourceInstance | undefined;
+  try {
+    sourceInstance = params.resolveSourceInstance?.(params.sourceInstanceId);
+  } catch {
+    // The authenticated instance id remains useful when display metadata is
+    // temporarily unavailable. Never fall back to caller-provided identity.
+  }
+
+  return {
+    ...params.messageOrigin,
+    sourceThread: {
+      backend: sourceThread.backend,
+      instanceId: params.sourceInstanceId,
+      ...(sourceInstance?.label
+        ? { instanceLabel: sourceInstance.label }
+        : {}),
+      ...(sourceInstance?.celestialIcon
+        ? { celestialIcon: sourceInstance.celestialIcon }
+        : {}),
+      threadId: sourceThread.threadId,
+      ...(sourceThread.title ? { title: sourceThread.title } : {}),
+    },
+  };
+}
+
+function authenticateScheduledTurnOrigin<
+  T extends {
+    turn?: { messageOrigin?: AppServerThreadMessageOrigin };
+  },
+>(params: {
+  request: T;
+  resolveSourceInstance?: (
+    instanceId: string,
+  ) => ResolvedSourceInstance | undefined;
+  sourceInstanceId: string;
+}): T {
+  const messageOrigin = params.request.turn?.messageOrigin;
+  if (!params.request.turn || !messageOrigin) {
+    return params.request;
+  }
+  return {
+    ...params.request,
+    turn: {
+      ...params.request.turn,
+      messageOrigin: authenticateMessageOrigin({
+        messageOrigin,
+        resolveSourceInstance: params.resolveSourceInstance,
+        sourceInstanceId: params.sourceInstanceId,
+      }),
+    },
+  };
+}
+
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   listThreads: "backend.listThreads",
@@ -175,7 +244,6 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelThreadExecutionModeQueue: "backend.cancelThreadExecutionModeQueue",
   setAcpSessionRuntimeOption: "backend.setAcpSessionRuntimeOption",
   setThreadModelSettings: "backend.setThreadModelSettings",
-  applyThreadModelMigration: "backend.applyThreadModelMigration",
   checkThreadBranchDrift: "backend.checkThreadBranchDrift",
   updateThreadExpectedBranch: "backend.updateThreadExpectedBranch",
   retainThreadBranchDrift: "backend.retainThreadBranchDrift",
@@ -259,7 +327,6 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelThreadExecutionModeQueue]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setAcpSessionRuntimeOption]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadModelSettings]: "turn_control",
-  [FEDERATION_BACKEND_METHODS.applyThreadModelMigration]: "turn_control",
   [FEDERATION_BACKEND_METHODS.checkThreadBranchDrift]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.updateThreadExpectedBranch]: "turn_control",
   [FEDERATION_BACKEND_METHODS.retainThreadBranchDrift]: "turn_control",
@@ -390,9 +457,6 @@ export type FederationBackendOperations = {
   setThreadModelSettings(
     request: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse>;
-  applyThreadModelMigration(
-    request: ApplyThreadModelMigrationRequest,
-  ): Promise<ApplyThreadModelMigrationResponse>;
   checkThreadBranchDrift(
     request: CheckThreadBranchDriftRequest,
   ): Promise<CheckThreadBranchDriftResponse>;
@@ -449,6 +513,9 @@ export type FederationBackendOperations = {
 export function registerFederationBackendHandlers(params: {
   router: FederationRouter;
   backend: FederationBackendOperations;
+  resolveSourceInstance?: (
+    instanceId: string,
+  ) => ResolvedSourceInstance | undefined;
   onEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
     targetInstanceId: string,
@@ -625,23 +692,14 @@ export function registerFederationBackendHandlers(params: {
     FEDERATION_BACKEND_METHODS.startTurn,
     async (envelope) => {
       const request = envelope.params as FederationStartTurnRequest;
-      const messageOrigin = request.messageOrigin;
-      const sourceThread = messageOrigin?.sourceThread;
+      const messageOrigin = authenticateMessageOrigin({
+        messageOrigin: request.messageOrigin,
+        resolveSourceInstance: params.resolveSourceInstance,
+        sourceInstanceId: envelope.sourceInstanceId,
+      });
       return await params.backend.startTurn({
         ...request,
-        ...(messageOrigin && sourceThread
-          ? {
-              messageOrigin: {
-                ...messageOrigin,
-                sourceThread: {
-                  ...sourceThread,
-                  // The authenticated envelope sender is authoritative. Do
-                  // not accept a caller-supplied provenance owner here.
-                  instanceId: envelope.sourceInstanceId,
-                },
-              },
-            }
-          : {}),
+        ...(messageOrigin ? { messageOrigin } : {}),
       });
     },
   );
@@ -668,17 +726,29 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
-    async (envelope) =>
-      await params.backend.createScheduledThreadAction(
-        envelope.params as CreateScheduledThreadActionRequest,
-      ),
+    async (envelope) => {
+      const request = envelope.params as CreateScheduledThreadActionRequest;
+      return await params.backend.createScheduledThreadAction(
+        authenticateScheduledTurnOrigin({
+          request,
+          resolveSourceInstance: params.resolveSourceInstance,
+          sourceInstanceId: envelope.sourceInstanceId,
+        }),
+      );
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
-    async (envelope) =>
-      await params.backend.updateScheduledThreadAction(
-        envelope.params as UpdateScheduledThreadActionRequest,
-      ),
+    async (envelope) => {
+      const request = envelope.params as UpdateScheduledThreadActionRequest;
+      return await params.backend.updateScheduledThreadAction(
+        authenticateScheduledTurnOrigin({
+          request,
+          resolveSourceInstance: params.resolveSourceInstance,
+          sourceInstanceId: envelope.sourceInstanceId,
+        }),
+      );
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction,
@@ -704,10 +774,18 @@ export function registerFederationBackendHandlers(params: {
   if (params.backend.controlActiveTurn) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.controlActiveTurn,
-      async (envelope) =>
-        await params.backend.controlActiveTurn!(
-          envelope.params as ControlActiveTurnRequest,
-        ),
+      async (envelope) => {
+        const request = envelope.params as ControlActiveTurnRequest;
+        const messageOrigin = authenticateMessageOrigin({
+          messageOrigin: request.messageOrigin,
+          resolveSourceInstance: params.resolveSourceInstance,
+          sourceInstanceId: envelope.sourceInstanceId,
+        });
+        return await params.backend.controlActiveTurn!({
+          ...request,
+          ...(messageOrigin ? { messageOrigin } : {}),
+        });
+      },
     );
   }
   params.router.registerHandler(
@@ -771,13 +849,6 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.setThreadModelSettings(
         envelope.params as SetThreadModelSettingsRequest,
-      ),
-  );
-  params.router.registerHandler(
-    FEDERATION_BACKEND_METHODS.applyThreadModelMigration,
-    async (envelope) =>
-      await params.backend.applyThreadModelMigration(
-        envelope.params as ApplyThreadModelMigrationRequest,
       ),
   );
   params.router.registerHandler(
@@ -1253,15 +1324,6 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetThreadModelSettingsResponse> {
     return await this.rpc.request<SetThreadModelSettingsResponse>({
       method: FEDERATION_BACKEND_METHODS.setThreadModelSettings,
-      params: request,
-    });
-  }
-
-  async applyThreadModelMigration(
-    request: ApplyThreadModelMigrationRequest,
-  ): Promise<ApplyThreadModelMigrationResponse> {
-    return await this.rpc.request<ApplyThreadModelMigrationResponse>({
-      method: FEDERATION_BACKEND_METHODS.applyThreadModelMigration,
       params: request,
     });
   }

@@ -308,6 +308,16 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps custom toast actions from collapsing the message column", () => {
+    const customActionsRule = extractRuleBody(
+      css,
+      '.app-notice-toast__actions[data-custom-actions="true"]',
+    );
+
+    expect(customActionsRule).toContain("grid-column: 1 / -1;");
+    expect(customActionsRule).toContain("justify-content: flex-end;");
+  });
+
   it("lets transcript scroll restoration own scroll anchoring", () => {
     expect(css).toMatch(
       /\.transcript-list__items\s*\{[\s\S]*?overflow-anchor:\s*none;[\s\S]*?\}/
@@ -667,6 +677,20 @@ describe("Tangerine Terminal theme contract", () => {
       ".thread-context-menu button:disabled",
     );
     expect(disabledRule).toContain("color: var(--text-muted);");
+  });
+
+  it("layers toast thread-chip menus above the toast stack", () => {
+    const toastStackRule = extractRuleBody(css, ".app-toast-stack");
+    const toastThreadMenuRule = extractRuleBody(
+      css,
+      ".app-notice-toast__thread-menu",
+    );
+    const readZIndex = (rule: string): number =>
+      Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
+
+    expect(readZIndex(toastThreadMenuRule)).toBeGreaterThan(
+      readZIndex(toastStackRule),
+    );
   });
 
   it("right-aligns the keyboard shortcut hint chip on context menu items", () => {

@@ -517,6 +517,30 @@ describe("MessagingController", () => {
     });
   });
 
+  it("submits reviews for Kimi when managed review is advertised", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [buildKimiRuntimeBackendSummary()],
+      }),
+    });
+    await bindThreadToBackend(harness, "acp:kimi");
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review main"));
+
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "acp:kimi",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Review started",
+    });
+  });
+
   it("rejects review when Codex does not advertise review/start", async () => {
     const harness = await createHarness({
       listBackends: async (): Promise<ListBackendsResponse> => ({
@@ -2698,8 +2722,16 @@ describe("MessagingController", () => {
 
   it("retracts a source stream that finishes while private delivery is in flight", async () => {
     let now = 1000;
+    let releaseSourceDeliveryRecord!: () => void;
     let releaseSourceStream!: () => void;
+    let resolveSourceDeliveryRecorded!: () => void;
     let resolveSourceStreamStarted!: () => void;
+    const sourceDeliveryRecorded = new Promise<void>((resolve) => {
+      resolveSourceDeliveryRecorded = resolve;
+    });
+    const sourceDeliveryRecordRelease = new Promise<void>((resolve) => {
+      releaseSourceDeliveryRecord = resolve;
+    });
     const sourceStreamStarted = new Promise<void>((resolve) => {
       resolveSourceStreamStarted = resolve;
     });
@@ -2733,6 +2765,15 @@ describe("MessagingController", () => {
         };
       },
     });
+    const recordDelivery = harness.store.recordDelivery.bind(harness.store);
+    vi.spyOn(harness.store, "recordDelivery").mockImplementation(async (delivery) => {
+      const recorded = await recordDelivery(delivery);
+      if (delivery.intentId?.startsWith("assistant-stream:")) {
+        resolveSourceDeliveryRecorded();
+        await sourceDeliveryRecordRelease;
+      }
+      return recorded;
+    });
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -2760,6 +2801,8 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
     await sourceStreamStarted;
+    releaseSourceStream();
+    await sourceDeliveryRecorded;
 
     let privateRequestSettled = false;
     const privateRequest = harness.controller.handlePwrAgentMessagingRequest({
@@ -2780,7 +2823,14 @@ describe("MessagingController", () => {
     });
     expect(privateRequestSettled).toBe(false);
 
-    releaseSourceStream();
+    // The stream adapter has returned and its delivery record is durable, so
+    // its first cancellation check has already passed. Let the private request
+    // cancel and begin awaiting that delivery before its caller receives the
+    // visible surface. This deterministically exercises the result-ownership
+    // gap that Windows load used to expose nondeterministically.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(privateRequestSettled).toBe(false);
+    releaseSourceDeliveryRecord();
     const [, response] = await Promise.all([sourceDelivery, privateRequest]);
 
     expect(response).toMatchObject({ ok: true });
@@ -2914,8 +2964,16 @@ describe("MessagingController", () => {
   });
 
   it("retracts an in-flight working update before private success", async () => {
+    let releaseWorkingUpdateRecord!: () => void;
     let releaseWorkingUpdate!: () => void;
+    let resolveWorkingUpdateRecorded!: () => void;
     let resolveWorkingUpdateStarted!: () => void;
+    const workingUpdateRecorded = new Promise<void>((resolve) => {
+      resolveWorkingUpdateRecorded = resolve;
+    });
+    const workingUpdateRecordRelease = new Promise<void>((resolve) => {
+      releaseWorkingUpdateRecord = resolve;
+    });
     const workingUpdateStarted = new Promise<void>((resolve) => {
       resolveWorkingUpdateStarted = resolve;
     });
@@ -2986,6 +3044,15 @@ describe("MessagingController", () => {
         };
       },
     });
+    const recordDelivery = harness.store.recordDelivery.bind(harness.store);
+    vi.spyOn(harness.store, "recordDelivery").mockImplementation(async (delivery) => {
+      const recorded = await recordDelivery(delivery);
+      if (delivery.intentId?.startsWith("tool-update:")) {
+        resolveWorkingUpdateRecorded();
+        await workingUpdateRecordRelease;
+      }
+      return recorded;
+    });
 
     const workingUpdate = harness.controller.handleBackendEvent({
       backend: "codex",
@@ -3004,6 +3071,8 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
     await workingUpdateStarted;
+    releaseWorkingUpdate();
+    await workingUpdateRecorded;
 
     const privateRequest = harness.controller.handlePwrAgentMessagingRequest({
       operation: "send_private_response",
@@ -3025,7 +3094,8 @@ describe("MessagingController", () => {
         ),
       ).toBe(true);
     });
-    releaseWorkingUpdate();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseWorkingUpdateRecord();
     const [, response] = await Promise.all([workingUpdate, privateRequest]);
 
     expect(response).toMatchObject({ ok: true });

@@ -73,6 +73,7 @@ export class OverlayStore {
             worktreeSnapshots: current?.worktreeSnapshots ?? [],
             pinnedRank: current?.pinnedRank,
             parentThreadId: current?.parentThreadId,
+            parentThreadBackend: current?.parentThreadBackend,
             subthreadOrder: current?.subthreadOrder,
             subthreadsCollapsed: current?.subthreadsCollapsed,
             permissionTransitionLog: current?.permissionTransitionLog,
@@ -592,9 +593,13 @@ export class OverlayStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     parentThreadId?: string | null;
+    parentThreadBackend?: ThreadOverlayState["backend"] | null;
   }): Promise<ThreadOverlayState> {
     return await this.withData(async (data) => {
-      if (params.parentThreadId === params.threadId) {
+      if (
+        params.parentThreadId === params.threadId
+        && (!params.parentThreadBackend || params.parentThreadBackend === params.backend)
+      ) {
         throw new Error("A thread cannot be its own parent.");
       }
       const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
@@ -605,16 +610,20 @@ export class OverlayStore {
         extraLinkedDirectories: [],
       };
       const parentThreadId = params.parentThreadId?.trim();
+      const parentThreadBackend = parentThreadId
+        ? params.parentThreadBackend ?? params.backend
+        : undefined;
       const nextState: ThreadOverlayState = {
         ...current,
         parentThreadId: parentThreadId || undefined,
+        parentThreadBackend,
         pinnedRank: parentThreadId ? undefined : current.pinnedRank,
       };
       data.threads[threadKey] = nextState;
       if (parentThreadId) {
-        const parentKey = buildThreadIdentityKey(params.backend, parentThreadId);
+        const parentKey = buildThreadIdentityKey(parentThreadBackend!, parentThreadId);
         const parent = data.threads[parentKey] ?? {
-          backend: params.backend,
+          backend: parentThreadBackend!,
           threadId: parentThreadId,
           executionMode: "default" as const,
           extraLinkedDirectories: [],

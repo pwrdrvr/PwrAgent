@@ -81,6 +81,11 @@ import {
   shouldSurfaceAcpThoughtsAsMessages,
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
+import {
+  checkGrokCliUpdate,
+  preserveGrokUpdateAcknowledgement,
+  shouldCheckGrokCliUpdate,
+} from "../acp/grok-cli-update";
 import { getMainLogger } from "../log";
 import {
   getAppStateDb,
@@ -171,6 +176,7 @@ export type AcpBackendAdapterOptions = {
   discoverLocalAcpAgents?: LocalAcpDiscovery;
   resolveLocalAcpDiscoveryEnv?: () => Promise<NodeJS.ProcessEnv>;
   isAcpAgentEnabled?: (registryId: string) => boolean;
+  checkGrokCliUpdate?: typeof checkGrokCliUpdate | null;
   resolveMcpConnectionServers?: (context: {
     backendId: AcpBackendId;
     sessionId?: string;
@@ -287,7 +293,9 @@ function hashString(value: string): string {
   return hash.toString(16);
 }
 
-export function buildAcpCapabilities(): BackendCapabilities {
+export function buildAcpCapabilities(
+  agentCapabilities?: AcpAgentCapabilities,
+): BackendCapabilities {
   return {
     listThreads: true,
     createThread: true,
@@ -299,7 +307,7 @@ export function buildAcpCapabilities(): BackendCapabilities {
     renameThread: true,
     readThread: true,
     startTurn: true,
-    startReview: false,
+    startReview: agentCapabilities?.managedReview === true,
     interruptTurn: true,
     steerTurn: false,
     transcriptPagination: false,
@@ -352,7 +360,7 @@ export function describeInstalledAcpBackend(
       "session/prompt",
       "session/cancel",
     ],
-    capabilities: buildAcpCapabilities(),
+    capabilities: buildAcpCapabilities(effectiveAcpAgentCapabilities(agent)),
     executionModes: buildAcpExecutionModes(agent, available, unavailableReason),
     launchpadOptions: buildAcpLaunchpadOptions(
       runtimeCapabilities,
@@ -390,12 +398,21 @@ function normalizeInstalledAcpAgent(
     : { ...agent, runtimeCapabilities };
 }
 
+function isLegacyKimiInstalledRecord(agent: AcpInstalledAgentRecord): boolean {
+  if (agent.registryId !== "kimi") {
+    return false;
+  }
+  const major = Number.parseInt(agent.version?.split(".")[0] ?? "", 10);
+  return Number.isFinite(major) && major >= 1;
+}
+
 function effectiveAcpAgentCapabilities(
   agent: AcpInstalledAgentRecord,
 ): AcpAgentCapabilities {
-  const configured =
-    agent.capabilities ??
-    acpAgentCapabilitiesForRegistryId(agent.registryId);
+  const configured = {
+    ...acpAgentCapabilitiesForRegistryId(agent.registryId),
+    ...agent.capabilities,
+  };
   return {
     ...configured,
     liveWorkspaceHandoff:
@@ -913,6 +930,8 @@ export class AcpBackendAdapter {
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
+  private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
+  private readonly grokUpdateRefreshes = new Map<AcpBackendId, Promise<void>>();
   private closed = false;
   private closePromise?: Promise<void>;
   private readonly closeTimeoutMs: number;
@@ -927,6 +946,10 @@ export class AcpBackendAdapter {
     this.handleServerRequest = options.handleServerRequest;
     this.resolveMcpConnectionServers = options.resolveMcpConnectionServers;
     this.closeTimeoutMs = options.closeTimeoutMs ?? ACP_CLOSE_TIMEOUT_MS;
+    this.grokUpdateChecker = options.checkGrokCliUpdate === null
+      ? undefined
+      : options.checkGrokCliUpdate
+        ?? (isAppStateInitialized() ? checkGrokCliUpdate : undefined);
     this.acpAgentStore =
       options.acpAgentStore === null
         ? undefined
@@ -996,6 +1019,7 @@ export class AcpBackendAdapter {
       if (agent.registryId !== "grok" || !summary.available) {
         return summary;
       }
+      this.refreshGrokUpdateStatusInBackground(agent);
       // Backend discovery is also used by launchpad and messaging flows.
       // Merge only cached decoration here; vendor billing must never delay it.
       const providerStatus = this.providerStatuses.get(agent.backendId);
@@ -1008,6 +1032,82 @@ export class AcpBackendAdapter {
           }
         : summary;
     });
+  }
+
+  private refreshGrokUpdateStatusInBackground(
+    agent: AcpInstalledAgentRecord,
+  ): void {
+    const checker = this.grokUpdateChecker;
+    const command = agent.activeCommand ?? agent.launchDescriptor?.command;
+    const previous =
+      agent.updateCommand === command
+      && agent.version === agent.update?.currentVersion
+        ? agent.update
+        : undefined;
+    if (
+      !checker
+      || !command
+      || this.closed
+      || this.grokUpdateRefreshes.has(agent.backendId)
+      || !shouldCheckGrokCliUpdate({
+        command,
+        installedVersion: agent.version,
+        now: Date.now(),
+        previous,
+        previousCommand: agent.updateCommand,
+      })
+    ) {
+      return;
+    }
+
+    const refresh = checker(command, {
+      installedVersion: agent.version,
+      previous,
+    })
+      .then(async (update) => {
+        if (this.closed) return;
+        const current = this.acpAgentStore?.getInstalledAgent(agent.backendId)
+          ?? agent;
+        const currentCommand =
+          current.activeCommand ?? current.launchDescriptor?.command;
+        if (
+          currentCommand !== command
+          || current.version !== agent.version
+        ) {
+          return;
+        }
+        const mergedUpdate = preserveGrokUpdateAcknowledgement(
+          current.update,
+          update,
+        );
+        this.acpAgentStore?.upsertInstalledAgent({
+          ...current,
+          ...(mergedUpdate.status !== "failed"
+            && mergedUpdate.currentVersion !== "unknown"
+            ? { version: mergedUpdate.currentVersion }
+            : {}),
+          update: mergedUpdate,
+          updateCommand: command,
+        });
+        await this.emit({
+          backend: agent.backendId,
+          notification: {
+            method: "backend/acpUpdateStatus/updated",
+            params: { backend: agent.backendId },
+          },
+        });
+      })
+      .catch((error) => {
+        acpBackendAdapterLog.debug("grok_update_check_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (this.grokUpdateRefreshes.get(agent.backendId) === refresh) {
+          this.grokUpdateRefreshes.delete(agent.backendId);
+        }
+      });
+    this.grokUpdateRefreshes.set(agent.backendId, refresh);
   }
 
   private refreshProviderStatusInBackground(backend: AcpBackendId): void {
@@ -1519,25 +1619,59 @@ export class AcpBackendAdapter {
     return effectiveAcpAgentCapabilities(agent).liveWorkspaceHandoff;
   }
 
+  supportsManagedReview(backend: AcpBackendId): boolean {
+    const agent = this.getInstalledAgent(backend);
+    return Boolean(agent && effectiveAcpAgentCapabilities(agent).managedReview);
+  }
+
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
     const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? [])
       .map(normalizeInstalledAcpAgent)
       .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
-    const installedBackendIds = new Set(
-      installedAgents.map((agent) => agent.backendId),
+    const installedByBackendId = new Map(
+      installedAgents.map((agent) => [agent.backendId, agent]),
     );
     const discoveredAgents = (await this.readLocalAgentsOnce())
       .map(normalizeInstalledAcpAgent)
       .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
-    for (const agent of discoveredAgents) {
-      if (!installedBackendIds.has(agent.backendId)) {
-        this.acpAgentStore?.upsertInstalledAgent(agent);
+    const effectiveDiscoveredAgents = discoveredAgents.flatMap((agent) => {
+      const cached = installedByBackendId.get(agent.backendId);
+      if (cached && !isLegacyKimiInstalledRecord(cached)) {
+        return [];
       }
+      const sameRuntime =
+        agent.installStatus === "installed"
+        && cached?.installStatus === "installed"
+        && cached.version === agent.version
+        && cached.activeCommand === agent.activeCommand;
+      return [{
+        ...agent,
+        installedAt: cached?.installedAt ?? agent.installedAt,
+        ...(sameRuntime && cached?.runtimeCapabilities
+          ? { runtimeCapabilities: cached.runtimeCapabilities }
+          : {}),
+        ...(sameRuntime && cached?.lastDiscoveredAt !== undefined
+          ? { lastDiscoveredAt: cached.lastDiscoveredAt }
+          : {}),
+        ...(sameRuntime && cached?.lastDiscoveryError !== undefined
+          ? { lastDiscoveryError: cached.lastDiscoveryError }
+          : {}),
+      }];
+    });
+    for (const agent of effectiveDiscoveredAgents) {
+      // A known legacy Kimi cache must never outrank fresh local discovery: it
+      // may now resolve to the supported side-by-side install, or to a durable
+      // non-launchable compatibility diagnostic. Other cached providers retain
+      // the existing cache-first behavior.
+      this.acpAgentStore?.upsertInstalledAgent(agent);
     }
+    const discoveredBackendIds = new Set(
+      effectiveDiscoveredAgents.map((agent) => agent.backendId),
+    );
     return [
-      ...installedAgents,
-      ...discoveredAgents.filter(
-        (agent) => !installedBackendIds.has(agent.backendId),
+      ...effectiveDiscoveredAgents,
+      ...installedAgents.filter(
+        (agent) => !discoveredBackendIds.has(agent.backendId),
       ),
     ];
   }
@@ -1553,6 +1687,7 @@ export class AcpBackendAdapter {
     this.providerStatuses.clear();
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
+    this.grokUpdateRefreshes.clear();
     this.liveTurnUsage.clear();
     this.closePromise = this.closeResources(acpClients);
     return await this.closePromise;

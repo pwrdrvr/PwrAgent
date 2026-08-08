@@ -71,6 +71,59 @@ describe("AppNoticeToast", () => {
     );
   });
 
+  it("renders an originating thread as an actionable thread chip", () => {
+    const onOpenThread = vi.fn();
+    const threadLink = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      title: "Fix the flaky test",
+    };
+
+    render(
+      <AppNoticeToast
+        notice={{
+          ...notice,
+          detail: threadLink.title,
+          threadLink,
+        }}
+        onDismiss={vi.fn()}
+        onOpenThread={onOpenThread}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread Fix the flaky test" }),
+    );
+    expect(onOpenThread).toHaveBeenCalledWith(threadLink);
+  });
+
+  it("opens its thread-chip context menu above the toast layer", () => {
+    const threadLink = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      title: "Fix the flaky test",
+    };
+
+    render(
+      <AppNoticeToast
+        notice={{
+          ...notice,
+          detail: threadLink.title,
+          threadLink,
+        }}
+        onDismiss={vi.fn()}
+        onOpenThread={vi.fn()}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Open thread Fix the flaky test" }),
+    );
+    expect(screen.getByRole("menu")).toHaveClass(
+      "app-notice-toast__thread-menu",
+    );
+  });
+
   it("marks warning notices for high-contrast styling", () => {
     render(
       <AppNoticeToast
@@ -201,6 +254,9 @@ describe("AppNoticeToast", () => {
     expect(screen.getAllByRole("button")).toHaveLength(2);
     expect(screen.queryByRole("button", { name: "Copy notice" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Dismiss notice" })).toBeNull();
+    expect(
+      container.querySelector(".app-notice-toast__actions"),
+    ).toHaveAttribute("data-custom-actions", "true");
     expect(container.querySelector(".app-notice-toast__timer")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Leave disabled" }));

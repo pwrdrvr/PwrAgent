@@ -340,12 +340,18 @@ function remotePrStatusEventIsSupersededLocally(event: AgentEvent): boolean {
 }
 
 export function broadcastAgentEvent(event: AgentEvent): void {
-  const eventSummary = summarizeAgentEvent(event);
+  const federationRuntime = getDesktopFederationRuntime();
+  const hydratedEvent = federationRuntime.hydrateLiveThreadMessageOrigin(event);
+  const eventSummary = summarizeAgentEvent(hydratedEvent);
   if (eventSummary) {
     logAgentEventSummary(eventSummary);
   }
-  const rendererEvent = sanitizeRendererPayload(withRendererActivityEntry(event));
-  const federationWindowsOnly = remotePrStatusEventIsSupersededLocally(event);
+  const rendererEvent = sanitizeRendererPayload(
+    withRendererActivityEntry(hydratedEvent),
+  );
+  const federationWindowsOnly = remotePrStatusEventIsSupersededLocally(
+    hydratedEvent,
+  );
 
   // Only deliver to windows that registered for this channel.
   // Secondary windows (e.g. the Messaging Activity window) opt out by
@@ -359,16 +365,16 @@ export function broadcastAgentEvent(event: AgentEvent): void {
     ) {
       continue;
     }
-    if (event.federationTarget?.scope === "remote") {
+    if (hydratedEvent.federationTarget?.scope === "remote") {
       const isLocalPeerStatus =
-        event.notification.method === "federation/peerStatus/changed"
+        hydratedEvent.notification.method === "federation/peerStatus/changed"
         && !windowTarget;
       if (
         !isLocalPeerStatus
-        && !getDesktopFederationRuntime().rendererWantsRemoteEvent(
+        && !federationRuntime.rendererWantsRemoteEvent(
           webContents.id,
-          event.federationTarget.instanceId,
-          federationEventClassForMethod(event.notification.method),
+          hydratedEvent.federationTarget.instanceId,
+          federationEventClassForMethod(hydratedEvent.notification.method),
         )
       ) {
         continue;
@@ -562,6 +568,7 @@ export function registerAgentIpcHandlers(): void {
                 turnId: submitted.entry.id,
                 queueStatus: "queued",
                 queueEntryId: submitted.entry.id,
+                queueEntryCreatedAt: submitted.entry.createdAt,
               };
         logDebug("startTurnResult", {
           backend: response.backend,
@@ -939,9 +946,14 @@ export function registerAgentIpcHandlers(): void {
         request.federationTarget
         && isRemoteFederationTarget(request.federationTarget)
       ) {
-        return await getDesktopFederationRuntime()
-          .remoteBackend(request.federationTarget)
-          .applyThreadModelMigration(stripFederationTarget(request));
+        // Migration policy and acknowledgement state are profile-local. The
+        // owning instance must decide whether its own thread needs migration;
+        // forwarding this instance's policy would cross that ownership line.
+        return {
+          backend: request.backend,
+          threadId: request.threadId,
+          status: "not-owner",
+        };
       }
       return await registry.applyThreadModelMigration(request);
     },

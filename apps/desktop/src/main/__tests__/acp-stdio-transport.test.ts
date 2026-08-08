@@ -294,6 +294,27 @@ describe("AcpStdioJsonRpcTransport", () => {
     expect(child.killCalled).toBe(true);
   });
 
+  it("reports an unexpected ACP exit with its exit code and stderr", async () => {
+    const child = new MockAcpChildProcess();
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor({
+        backendId: "acp:kimi" as AcpBackendId,
+        registryId: "kimi",
+      }),
+      spawn: () => child,
+    });
+
+    const request = transport.request("initialize");
+    await vi.waitFor(() => expect(child.writes).toHaveLength(1));
+    child.stderr.write("\u001b[31mSelected model is no longer available.\u001b[0m\n");
+    child.exitCode = 1;
+    child.emit("close", 1, null);
+
+    await expect(request).rejects.toThrow(
+      "Kimi ACP agent exited unexpectedly (code 1): Selected model is no longer available.",
+    );
+  });
+
   it("waits for ACP exit and escalates when SIGTERM is resisted", async () => {
     vi.useFakeTimers();
     try {

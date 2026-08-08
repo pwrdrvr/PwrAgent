@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type {
   AcpAgentSettingsEntry,
   DesktopSettingsSnapshot,
@@ -7,9 +7,17 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
+import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { acpStatusLabel } from "./acp-agent-copy";
+
+const KIMI_CODE_INSTALL_GUIDE_URL =
+  "https://www.kimi.com/help/kimi-code/cli-getting-started";
+const KIMI_CODE_INSTALL_COMMAND =
+  "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash";
+const KIMI_CODE_WINDOWS_INSTALL_COMMAND =
+  "irm https://code.kimi.com/kimi-code/install.ps1 | iex";
 
 /** Look up the persisted CLI-path override for an agent by its registry id. */
 function cliPathSnapshotFor(
@@ -108,19 +116,27 @@ export function AcpAgentsSettings(props: {
   return (
     <>
       {entries.map((entry) => (
-        <AcpAgentSection
-          key={entry.backendId}
-          entry={entry}
-          cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
-          enabled={enabledSnapshotFor(props.snapshot, entry.registryId)}
-          saving={props.saving}
-          refreshing={refreshing || loading}
-          onCliPathChange={props.onCliPathChange}
-          onEnabledChange={props.onEnabledChange}
-          onRefresh={() => {
-            void refresh(true, true);
-          }}
-        />
+        <Fragment key={entry.backendId}>
+          {entry.registryId === "kimi"
+          && entry.incompatibleInstances?.length ? (
+            <LegacyKimiCompatibilityCard
+              desktopApi={props.desktopApi}
+              entry={entry}
+            />
+          ) : null}
+          <AcpAgentSection
+            entry={entry}
+            cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
+            enabled={enabledSnapshotFor(props.snapshot, entry.registryId)}
+            saving={props.saving}
+            refreshing={refreshing || loading}
+            onCliPathChange={props.onCliPathChange}
+            onEnabledChange={props.onEnabledChange}
+            onRefresh={() => {
+              void refresh(true, true);
+            }}
+          />
+        </Fragment>
       ))}
       {!loading && entries.length === 0 ? (
         <SettingsSection
@@ -134,6 +150,92 @@ export function AcpAgentsSettings(props: {
         </SettingsSection>
       ) : null}
     </>
+  );
+}
+
+function LegacyKimiCompatibilityCard(props: {
+  desktopApi?: DesktopApi;
+  entry: AcpAgentSettingsEntry;
+}) {
+  const incompatibleInstances = props.entry.incompatibleInstances ?? [];
+  const hasCurrentKimiCode = props.entry.installed;
+  const installCommand = /Windows/i.test(window.navigator.userAgent)
+    ? KIMI_CODE_WINDOWS_INSTALL_COMMAND
+    : KIMI_CODE_INSTALL_COMMAND;
+
+  return (
+    <SettingsSection
+      eyebrow="Compatibility"
+      title={
+        hasCurrentKimiCode
+          ? "Legacy Python kimi-cli ignored"
+          : "Current Kimi Code required"
+      }
+      sectionId="kimi-compatibility"
+      chip={hasCurrentKimiCode ? "Legacy ignored" : "Action required"}
+      chipKind="warn"
+    >
+      <div className="settings-fields">
+        <SettingsField
+          label="Provider collision"
+          sub={
+            hasCurrentKimiCode
+              ? "PwrAgent found the supported Kimi Code install and will not launch these older Python binaries."
+              : "The detected kimi command is the retired Python kimi-cli. Its ACP models are incompatible with current Kimi Code and are excluded from model discovery."
+          }
+          source={`${incompatibleInstances.length} ignored`}
+          control={
+            <div
+              className="settings-paths"
+              aria-label="Ignored legacy Kimi installs"
+            >
+              {incompatibleInstances.map((instance) => (
+                <SettingsPathRow
+                  key={instance.command}
+                  path={instance.command}
+                  chips={[
+                    { label: "legacy Python", tone: "muted" },
+                    {
+                      label: instance.version
+                        ? `v${instance.version}`
+                        : "version unknown",
+                      tone: "muted",
+                    },
+                  ]}
+                  selected={false}
+                  disabled
+                />
+              ))}
+            </div>
+          }
+        />
+        {!hasCurrentKimiCode ? (
+          <SettingsField
+            label="Install Kimi Code"
+            sub="Install the current TypeScript-based CLI, then click Refresh in the Kimi Code section. PwrAgent also checks the official ~/.kimi-code/bin location automatically."
+            control={
+              <div className="settings-fields">
+                <SettingsCopyValue
+                  value={installCommand}
+                  desktopApi={props.desktopApi}
+                  label="Kimi Code install command"
+                />
+                <div className="settings-inline-actions">
+                  <a
+                    className="button button--secondary"
+                    href={KIMI_CODE_INSTALL_GUIDE_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open install guide
+                  </a>
+                </div>
+              </div>
+            }
+          />
+        ) : null}
+      </div>
+    </SettingsSection>
   );
 }
 

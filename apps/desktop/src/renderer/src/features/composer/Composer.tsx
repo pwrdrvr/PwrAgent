@@ -1414,6 +1414,7 @@ function resolveThreadSummaryReference(
       : {}),
     threadId: thread.id,
     title: thread.title,
+    titleSource: thread.titleSource,
     gitBranch: thread.gitBranch,
     linkedDirectories: thread.linkedDirectories,
   };
@@ -5087,6 +5088,7 @@ export function Composer(props: ComposerProps) {
           ? (event.notification.params as {
               errorMessage?: unknown;
               queueEntryId?: unknown;
+              queueEntryCreatedAt?: unknown;
               status?: unknown;
               turnId?: unknown;
             })
@@ -5121,6 +5123,9 @@ export function Composer(props: ComposerProps) {
             {
               id: `backend-queued:${turnQueueRecord.queueEntryId}`,
               queueEntryId: turnQueueRecord.queueEntryId,
+              ...(typeof turnQueueRecord.queueEntryCreatedAt === "number"
+                ? { queueEntryCreatedAt: turnQueueRecord.queueEntryCreatedAt }
+                : {}),
               text: typeof displayText === "string" ? displayText : "",
               imageAttachments: [],
               fileAttachments: [],
@@ -5995,6 +6000,9 @@ export function Composer(props: ComposerProps) {
         federationTarget: props.thread.federation?.ref.target ??
           readRendererFederationTarget(),
         threadId: props.thread.id,
+        ...(backendQueueSubmission?.queued.queueEntryId
+          ? { queueEntryId: backendQueueSubmission.queued.queueEntryId }
+          : {}),
         input: payload.input,
         executionMode: props.thread.executionMode,
         collaborationMode,
@@ -6016,6 +6024,9 @@ export function Composer(props: ComposerProps) {
               backendQueuePending: false,
               input: payload.input,
               queueEntryId,
+              ...(typeof response.queueEntryCreatedAt === "number"
+                ? { queueEntryCreatedAt: response.queueEntryCreatedAt }
+                : {}),
             }),
           );
           if (submittedScopeIsVisible()) {
@@ -7153,9 +7164,11 @@ export function Composer(props: ComposerProps) {
             setSendError(undefined);
             updateSending(true);
           }
+          const queueEntryId = createQueuedTurnId();
           const backendQueueProjection: QueuedTurnDraft = {
-            id: createQueuedTurnId(),
+            id: queueEntryId,
             backendQueuePending: true,
+            queueEntryId,
             text: canonicalDraft,
             imageAttachments,
             fileAttachments,
@@ -9104,6 +9117,20 @@ export function Composer(props: ComposerProps) {
     return true;
   };
 
+  const dismissAutocomplete = useCallback((restoreFocus = false): void => {
+    if (!autocompleteKey) {
+      return;
+    }
+    setDismissedAutocompleteKey(autocompleteKey);
+    setActiveSkillIndex(0);
+    setActiveSlashIndex(0);
+    setActiveDirectoryRefIndex(0);
+    setActiveHashReferenceIndex(0);
+    if (restoreFocus) {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }, [autocompleteKey]);
+
   const handleAutocompleteKeyDown = (
     event: ReactKeyboardEvent<HTMLElement>,
   ): void => {
@@ -9167,14 +9194,7 @@ export function Composer(props: ComposerProps) {
 
     if (event.key === "Escape") {
       event.preventDefault();
-      if (autocompleteKey) {
-        setDismissedAutocompleteKey(autocompleteKey);
-      }
-      setActiveSkillIndex(0);
-      setActiveSlashIndex(0);
-      setActiveDirectoryRefIndex(0);
-      setActiveHashReferenceIndex(0);
-      requestAnimationFrame(() => inputRef.current?.focus());
+      dismissAutocomplete(true);
       return;
     }
 
@@ -9201,6 +9221,23 @@ export function Composer(props: ComposerProps) {
       commitActiveAutocomplete();
     }
   };
+
+  // Autocomplete stays open when focus moves into the transcript, so Escape
+  // must dismiss it at window scope instead of relying on the editor handler.
+  useEffect(() => {
+    if (!autocompleteKind) {
+      return;
+    }
+    const dismissOnEscape = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return;
+      }
+      event.preventDefault();
+      dismissAutocomplete();
+    };
+    window.addEventListener("keydown", dismissOnEscape);
+    return () => window.removeEventListener("keydown", dismissOnEscape);
+  }, [autocompleteKind, dismissAutocomplete]);
 
   // Backend availability gates submission and remote actions, not the draft.
   // Keeping the editor live lets an operator inspect, copy, revise, or remove

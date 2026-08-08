@@ -30,6 +30,7 @@ import type {
   TrustCodexProjectRequest,
   UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
+import type { ThreadTurnQueueSubmissionResult } from "../app-server/thread-turn-queue";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const send = vi.fn();
@@ -68,18 +69,22 @@ const registry = {
     threadId: request.threadId,
     turnId: "turn-1",
   })),
-  submitTurn: vi.fn(async (request: StartTurnRequest & { origin: "manual" }) => ({
-    status: "started" as const,
-    entry: {
-      id: "queue-1",
-      backend: request.backend,
-      createdAt: 1,
-      input: request.input,
-      origin: request.origin,
-      threadId: request.threadId,
-    },
-    turnId: "turn-1",
-  })),
+  submitTurn: vi.fn(
+    async (
+      request: StartTurnRequest & { origin: "manual" },
+    ): Promise<ThreadTurnQueueSubmissionResult> => ({
+      status: "started" as const,
+      entry: {
+        id: "queue-1",
+        backend: request.backend,
+        createdAt: 1,
+        input: request.input,
+        origin: request.origin,
+        threadId: request.threadId,
+      },
+      turnId: "turn-1",
+    }),
+  ),
   startReview: vi.fn(async (request: StartReviewRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -134,6 +139,12 @@ const registry = {
     async (request: SendThreadPrAutoDispatchNowRequest) => ({
       ...request,
       accepted: true,
+    }),
+  ),
+  applyThreadModelMigration: vi.fn(
+    async (request: ApplyThreadModelMigrationRequest) => ({
+      ...request,
+      status: "acknowledged-new-thread" as const,
     }),
   ),
   getLatestCodexConfigWarning: vi.fn(() => ({})),
@@ -237,12 +248,6 @@ const federationMock = vi.hoisted(() => {
         accepted: true,
       }),
     ),
-    applyThreadModelMigration: vi.fn(
-      async (request: ApplyThreadModelMigrationRequest) => ({
-        ...request,
-        status: "acknowledged-new-thread" as const,
-      }),
-    ),
     checkThreadBranchDrift: vi.fn(
       async (request: CheckThreadBranchDriftRequest) => ({
         ...request,
@@ -320,6 +325,7 @@ const federationMock = vi.hoisted(() => {
   return {
     remoteBackend,
     runtime: {
+      hydrateLiveThreadMessageOrigin: vi.fn((event: AgentEvent) => event),
       remoteBackend: vi.fn(() => remoteBackend),
       rendererWantsRemoteEvent: vi.fn(() => true),
       setAgentEventPublisher: vi.fn(),
@@ -404,7 +410,12 @@ describe("agent ipc", () => {
     registry.setThreadPrAutoDispatch.mockClear();
     registry.cancelThreadPrAutoDispatch.mockClear();
     registry.sendThreadPrAutoDispatchNow.mockClear();
+    registry.applyThreadModelMigration.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.hydrateLiveThreadMessageOrigin.mockReset();
+    federationMock.runtime.hydrateLiveThreadMessageOrigin.mockImplementation(
+      (event: AgentEvent) => event,
+    );
     federationMock.runtime.rendererWantsRemoteEvent.mockReset();
     federationMock.runtime.rendererWantsRemoteEvent.mockReturnValue(true);
     federationMock.runtime.setAgentEventPublisher.mockClear();
@@ -717,14 +728,7 @@ describe("agent ipc", () => {
       fingerprint: "fingerprint-1",
     });
     expect(registry.sendThreadPrAutoDispatchNow).not.toHaveBeenCalled();
-    expect(
-      federationMock.remoteBackend.applyThreadModelMigration,
-    ).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "thread-1",
-      threadCreatedAt: 1_000,
-      threadModel: "gpt-5-codex",
-    });
+    expect(registry.applyThreadModelMigration).not.toHaveBeenCalled();
     expect(federationMock.remoteBackend.checkThreadBranchDrift).toHaveBeenCalledWith({
       backend: "codex",
       expectedBranch: "feature/expected",
@@ -805,6 +809,37 @@ describe("agent ipc", () => {
     disposeAgentIpcHandlers();
   });
 
+  it("refuses to apply this instance's model migration to a remote thread", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
+      "../ipc/agent-ipc"
+    );
+    const { AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    registerAgentIpcHandlers();
+
+    // Migration configuration and acknowledgement state are profile-local.
+    // Forwarding this request would apply this instance's migration policy to
+    // a thread owned by another instance.
+    expect(
+      await handlers.get(AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL)?.({}, {
+        backend: "codex",
+        federationTarget: { scope: "remote", instanceId: "client_one" },
+        threadId: "thread-1",
+        threadCreatedAt: 1_000,
+        threadModel: "gpt-5-codex",
+      }),
+    ).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      status: "not-owner",
+    });
+    expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+    expect(registry.applyThreadModelMigration).not.toHaveBeenCalled();
+
+    disposeAgentIpcHandlers();
+  });
+
   it("registers backend and agent handlers and broadcasts backend-tagged events", async () => {
     const {
       registerAgentIpcHandlers,
@@ -835,6 +870,36 @@ describe("agent ipc", () => {
       backend: "grok",
       threadId: "thread-1",
     });
+    vi.mocked(registry.submitTurn).mockResolvedValueOnce({
+      status: "queued",
+      entry: {
+        id: "renderer-queue-1",
+        backend: "grok",
+        createdAt: 2,
+        input: [{ type: "text", text: "Queue it" }],
+        origin: "manual",
+        threadId: "thread-1",
+      },
+      position: 1,
+    });
+    expect(
+      await handlers.get(AGENT_START_TURN_CHANNEL)?.({}, {
+        backend: "grok",
+        threadId: "thread-1",
+        queueEntryId: "renderer-queue-1",
+        input: [{ type: "text", text: "Queue it" }],
+      }),
+    ).toEqual({
+      backend: "grok",
+      queueEntryId: "renderer-queue-1",
+      queueEntryCreatedAt: 2,
+      queueStatus: "queued",
+      threadId: "thread-1",
+      turnId: "renderer-queue-1",
+    });
+    expect(registry.submitTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ queueEntryId: "renderer-queue-1" }),
+    );
     expect(
       await handlers.get(AGENT_START_TURN_CHANNEL)?.({}, {
         backend: "grok",
@@ -997,6 +1062,82 @@ describe("agent ipc", () => {
     expect(ownerSend).toHaveBeenCalledTimes(1);
     expect(localSend).not.toHaveBeenCalled();
     expect(unrelatedSend).not.toHaveBeenCalled();
+  });
+
+  it("hydrates live message provenance before broadcasting it", async () => {
+    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
+    federationMock.runtime.hydrateLiveThreadMessageOrigin.mockImplementation(
+      (event: AgentEvent) => ({
+        ...event,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "user-message-1",
+              type: "userMessage",
+              origin: {
+                kind: "agent",
+                sourceThread: {
+                  backend: "codex",
+                  instanceId: "source_one",
+                  instanceLabel: "Source Mac",
+                  celestialIcon: "moon",
+                  threadId: "source-thread",
+                  title: "Source thread",
+                },
+              },
+              content: [{ type: "text", text: "Remote result" }],
+            },
+          },
+        },
+      } as AgentEvent),
+    );
+
+    broadcastAgentEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "user-message-1",
+            type: "userMessage",
+            origin: {
+              kind: "agent",
+              sourceThread: {
+                backend: "codex",
+                instanceId: "source_one",
+                threadId: "source-thread",
+                title: "Source thread",
+              },
+            },
+            content: [{ type: "text", text: "Remote result" }],
+          },
+        },
+      },
+    } as AgentEvent);
+
+    expect(send).toHaveBeenCalledWith(
+      AGENT_EVENT_CHANNEL,
+      expect.objectContaining({
+        notification: expect.objectContaining({
+          params: expect.objectContaining({
+            item: expect.objectContaining({
+              origin: expect.objectContaining({
+                sourceThread: expect.objectContaining({
+                  instanceLabel: "Source Mac",
+                  celestialIcon: "moon",
+                }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
   });
 
   it("caps oversized live agent event strings before broadcasting to renderer subscribers", async () => {

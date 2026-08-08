@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ThreadTurnQueueEntry } from "../app-server/thread-turn-queue";
 import { ThreadQueueAutomationRunner } from "../automations/automation-runner";
@@ -8,6 +5,7 @@ import { AutomationScheduler } from "../automations/automation-scheduler";
 import { AutomationStore } from "../automations/automation-store";
 import type { AutomationGateRunner } from "../automations/automation-gate-runner";
 import { StateDb } from "../state/state-db";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 class FakeQueue {
   active = false;
@@ -49,15 +47,13 @@ class FakeQueue {
   }
 }
 
-let tempDir: string;
 let stateDb: StateDb;
 let store: AutomationStore;
 let queue: FakeQueue;
 let now = 0;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-automation-scheduler-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new AutomationStore(stateDb);
   queue = new FakeQueue();
   now = 0;
@@ -65,7 +61,6 @@ beforeEach(() => {
 
 afterEach(() => {
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
 });
 
 function createIntervalAutomation(

@@ -5722,6 +5722,16 @@ textarea,
   color: var(--text-secondary);
 }
 
+.app-notice-toast__thread-link {
+  display: flex;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.app-notice-toast__thread-menu {
+  z-index: 90;
+}
+
 .app-notice-toast__status {
   display: flex;
   align-items: flex-start;
@@ -5750,6 +5760,11 @@ textarea,
 
 .app-notice-toast__actions {
   align-self: start;
+}
+
+.app-notice-toast__actions[data-custom-actions="true"] {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
 }
 
 .app-notice-toast__navigation {
@@ -9132,18 +9147,27 @@ textarea,
   position: absolute;
   inset: -12%;
   border-radius: 999px;
+  /* Calmer at rest than it was: the cards are the content and the bodies
+     are organisation, so the bodies must not out-shout them. The glow
+     comes back up on hover, where it is answering the pointer rather
+     than competing for it.
+
+     Opacity carries the whole reduction (~0.69 of the former) and the
+     accent share stays put. Dropping both together compounded to 44% of
+     the original intensity, which risks trading "calm" for "cannot find
+     my instances" — the opposite failure. */
   background: radial-gradient(
     circle,
     color-mix(in srgb, var(--accent) 17%, transparent),
     transparent 70%
   );
-  opacity: 0.8;
+  opacity: 0.55;
   transition: opacity 160ms ease, transform 160ms ease;
   pointer-events: none;
 }
 
 .star-map-instance__body:hover .star-map-instance__glow {
-  opacity: 1;
+  opacity: 0.95;
   transform: scale(1.12);
 }
 
@@ -9583,11 +9607,29 @@ textarea,
   cursor: default;
 }
 
-/* Projects lens: each project is a sun with its threads — pooled from
-   every instance — orbiting it. */
+/* Projects lens: projects seat along spiral arms, each the centre of its
+   own little system. Deliberately quiet — a project is a place, not a
+   star, and a field of bright orange discs reads as noise rather than as
+   a galaxy. The instance lens keeps the luminous bodies. */
 .star-map__project-cloud {
   position: absolute;
   z-index: 1;
+}
+
+/* The arms themselves, behind everything. */
+.star-map__arms {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.star-map__arm {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 0.16;
 }
 
 .star-map-project {
@@ -9595,38 +9637,35 @@ textarea,
   position: absolute;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   transform: translate(-50%, -50%);
   z-index: 2;
 }
 
+/* A dim halo rather than a disc: enough to mark a centre of gravity
+   without competing with the cards, which are the content. */
 .star-map-project__glow {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 168px;
-  height: 168px;
+  width: 132px;
+  height: 132px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  /* Cooler than an instance body: a project is a place, not a machine. */
   background: radial-gradient(
     circle,
-    color-mix(in srgb, var(--accent) 26%, transparent) 0%,
-    transparent 68%
+    color-mix(in srgb, var(--accent) 14%, transparent) 0%,
+    transparent 70%
   );
   pointer-events: none;
 }
 
 .star-map-project__core {
-  width: 86px;
-  height: 86px;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--accent-border);
   border-radius: 50%;
-  background: radial-gradient(
-    circle at 35% 32%,
-    var(--accent-bright) 0%,
-    var(--accent) 58%,
-    color-mix(in srgb, var(--accent) 55%, transparent) 100%
-  );
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .star-map-project__label {
@@ -10034,10 +10073,30 @@ textarea,
   cursor: pointer;
 }
 
-.star-map__filter-chip.is-on {
+/* Tri-state. Neutral is the resting style above: not filtering on this.
+   Include reads as selected; exclude reads as struck through, because
+   "hidden" is a different idea from "chosen" and sharing one highlight
+   would make the two indistinguishable at a glance. */
+.star-map__filter-chip--include {
   border-color: var(--accent-border);
   background: var(--accent-soft);
   color: var(--text-primary);
+}
+
+.star-map__filter-chip--exclude {
+  border-color: var(--border-strong);
+  border-style: dashed;
+  background: color-mix(in srgb, var(--bg-panel) 75%, transparent);
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--danger-text);
+}
+
+.star-map__filter-mark {
+  color: var(--danger-text);
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
 }
 
 .star-map__filter-chip:focus-visible {
@@ -10045,7 +10104,71 @@ textarea,
   outline-offset: 1px;
 }
 
-/* How many cards appear/disappear if this chip is flipped. */
+/* Clearing is only offered when there is something to clear, so it never
+   sits in the strip as dead weight. */
+.star-map__filter-clear {
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.star-map__filter-clear:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+/* A map filtered down to nothing otherwise looks broken rather than
+   empty: the star field renders and the cards are simply absent. */
+.star-map__empty {
+  display: flex;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 20;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 22px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
+  text-align: center;
+}
+
+.star-map__empty-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.star-map__empty-detail {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.star-map__empty-actions {
+  display: inline-flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.star-map__empty-action {
+  padding: 5px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* How many cards this chip speaks for, given the other facets. */
 .star-map__filter-count {
   min-width: 14px;
   padding: 0 4px;
@@ -11782,6 +11905,11 @@ textarea,
 
 .transcript-message__attribution .thread-chip {
   height: 20px;
+}
+
+.transcript-message__attribution .chip--instance {
+  height: 20px;
+  font-size: 11px;
 }
 
 .transcript-message__messaging-origin {
@@ -17728,7 +17856,14 @@ a.transcript-message__messaging-origin:focus-visible {
   pointer-events: none;
 }
 
-.composer-tiptap-input__mention {
+/* Inline mention chips inside the composer: `$skill`, `@file`, `@directory`,
+   `#thread`, PR pills. They interrupt running prose, so they are sized in `em`
+   off the paragraph rather than off `.chip` (24px / 12px) and `.pr-chip`
+   (22px / 11px), which are row and header geometry. Qualified by the editor so
+   that sizing wins on specificity rather than on this block happening to sit
+   below those two. Height stays under the 22.4px line box so a chip never
+   pushes its line taller than a plain one. */
+.composer-tiptap-input__editor .composer-tiptap-input__mention {
   display: inline-flex;
   height: 1.35em;
   gap: 0.35em;
@@ -17736,7 +17871,23 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 0 0.5em;
   font-size: inherit;
   line-height: normal;
-  vertical-align: 0.13em;
+  vertical-align: baseline;
+}
+
+/* Zero-width baseline strut — load-bearing, not decoration. An inline-flex box
+   takes its baseline from its FIRST flex item, and the kinds disagree on what
+   that is: label text for `$`/`@`, a 1em SVG icon for `#thread`, an 8px dot for
+   the PR pill. Every `vertical-align` is measured from that baseline, so one
+   shared offset landed in three places (a 3.0px spread on an 18.9px chip). A
+   text-bearing item in front makes the first baseline the chip font's own, so
+   `vertical-align: baseline` above puts each label on the paragraph's baseline.
+   `content: ""` will not do — an empty box synthesizes its baseline from its
+   bottom edge, and the chips go back to disagreeing. The `/ ""` keeps the strut
+   out of the accessible name; the negative margin cancels the single `gap` it
+   opens and must stay equal to that `gap`. */
+.composer-tiptap-input__editor .composer-tiptap-input__mention::before {
+  content: "\200b" / "";
+  margin-inline-end: -0.35em;
 }
 
 .composer-tiptap-input__mention.thread-chip {

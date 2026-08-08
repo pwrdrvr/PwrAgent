@@ -60,7 +60,10 @@ function readRawAcpSessionPayload(
 
 describe("AcpAgentClient", () => {
   it("initializes, starts sessions, sends prompts, and normalizes updates", async () => {
-    const transport = new FakeAcpAgentTransport();
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
     const sessionUpdates: string[] = [];
     const client = new AcpAgentClient({
       backendId: "acp:codex-acp",
@@ -78,7 +81,7 @@ describe("AcpAgentClient", () => {
       executionMode: "default",
       title: "Test ACP",
     });
-    const prompt = await client.prompt({
+    const promptPromise = client.prompt({
       sessionId: session.sessionId,
       prompt: "hello",
     });
@@ -86,6 +89,8 @@ describe("AcpAgentClient", () => {
       kind: "agent_message_chunk",
       content: "Done",
     });
+    promptResponse.resolve({ turnId: "turn-1" });
+    const prompt = await promptPromise;
 
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
@@ -3096,6 +3101,194 @@ describe("AcpAgentClient", () => {
     await vi.waitFor(() => {
       expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
     });
+  });
+
+  it("reports a Kimi turn that resolves without an assistant response", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: {
+          name: "Kimi Code CLI",
+          version: "1.46.0",
+        },
+      },
+      "session/prompt": promptResponse.promise,
+    });
+    const errors: Array<{ sessionId: string; turnId: string; error: unknown }> = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      agentDisplayName: "Kimi Code CLI",
+      store,
+      transport,
+      now: () => 1000,
+      onPromptError: (event) => {
+        errors.push(event);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+      turnId: "turn-1",
+    });
+    promptResponse.resolve({ stopReason: "end_turn" });
+
+    await vi.waitFor(() => {
+      expect(errors).toHaveLength(1);
+    });
+    const errorMessage =
+      "Kimi Code CLI ended the turn without a response. Kimi Code CLI 1.46.0 may be out of date or incompatible with the selected model. Update Kimi, refresh the model catalog, and try again.";
+    expect((errors[0]?.error as Error).message).toBe(errorMessage);
+    expect(store.getSession("acp:kimi", session.sessionId)).toMatchObject({
+      lastError: errorMessage,
+      status: "idle",
+    });
+    expect(client.readReplay(session.sessionId).entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "Inspect this",
+        turn: expect.objectContaining({ status: "failed" }),
+      }),
+      expect.objectContaining({
+        type: "activity",
+        summary: "Turn failed",
+        status: "failed",
+        details: [
+          expect.objectContaining({
+            label: errorMessage,
+            status: "failed",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("accepts a cancelled fire-and-forget prompt without assistant output", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const errors: unknown[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+      onPromptError: ({ error }) => {
+        errors.push(error);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+      turnId: "turn-1",
+    });
+    promptResponse.resolve({ stopReason: "cancelled" });
+
+    await vi.waitFor(() => {
+      expect(store.getSession("acp:kimi", session.sessionId)?.status).toBe(
+        "idle",
+      );
+    });
+    expect(errors).toEqual([]);
+    expect(
+      store.getSession("acp:kimi", session.sessionId)?.lastError,
+    ).toBeUndefined();
+    expect(
+      client.readReplay(session.sessionId).entries.some(
+        (entry) => entry.type === "activity" && entry.summary === "Turn failed",
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts a cancelled awaited prompt without assistant output", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const promptPromise = client.prompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+    });
+    promptResponse.resolve({ stopReason: "cancelled" });
+
+    await expect(promptPromise).resolves.toEqual({
+      sessionId: session.sessionId,
+      turnId: `pending:${session.sessionId}:1000`,
+    });
+    expect(store.getSession("acp:kimi", session.sessionId)).toMatchObject({
+      status: "idle",
+    });
+    expect(
+      store.getSession("acp:kimi", session.sessionId)?.lastError,
+    ).toBeUndefined();
+  });
+
+  it("accepts an ACP response delivered only by a terminal update", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const errors: unknown[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:test-agent",
+      store,
+      transport,
+      now: () => 1000,
+      onPromptError: ({ error }) => {
+        errors.push(error);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+      turnId: "turn-1",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      kind: "turn_finished",
+      outputText: "Finished from the terminal update.",
+    });
+    promptResponse.resolve({ stopReason: "end_turn" });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await vi.waitFor(() => {
+      expect(store.getSession("acp:test-agent", session.sessionId)?.status).toBe(
+        "idle",
+      );
+    });
+    expect(errors).toEqual([]);
+    expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
   });
 
   it("reports fire-and-forget prompt failures", async () => {

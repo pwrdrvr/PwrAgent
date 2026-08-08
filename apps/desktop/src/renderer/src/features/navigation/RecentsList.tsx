@@ -10,6 +10,7 @@ import {
   isPinnedThread,
   moveThreadKey,
   parseThreadIdentityKey,
+  resolveThreadParentKey,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import {
@@ -98,13 +99,14 @@ export function RecentsList(props: RecentsListProps) {
   );
   const topLevelThreads = props.threads.filter((thread) => {
     if (!thread.parentThreadId) return true;
-    return !threadByKey.has(buildThreadIdentityKey(thread.source, thread.parentThreadId));
+    const parentKey = resolveThreadParentKey(thread, threadByKey);
+    return !parentKey || !threadByKey.has(parentKey);
   });
   const childrenByParentKey = new Map<string, NavigationThreadSummary[]>();
   for (const thread of props.threads) {
     if (!thread.parentThreadId) continue;
-    const parentKey = buildThreadIdentityKey(thread.source, thread.parentThreadId);
-    if (!threadByKey.has(parentKey)) continue;
+    const parentKey = resolveThreadParentKey(thread, threadByKey);
+    if (!parentKey || !threadByKey.has(parentKey)) continue;
     const children = childrenByParentKey.get(parentKey) ?? [];
     children.push(thread);
     childrenByParentKey.set(parentKey, children);
@@ -157,7 +159,9 @@ export function RecentsList(props: RecentsListProps) {
       return null;
     }
 
-    const childIds = children.map((child) => child.id);
+    const childKeys = children.map((child) =>
+      buildThreadIdentityKey(child.source, child.id),
+    );
     return (
       <div className="subthread-list" role="list" aria-label={`Sub-threads of ${parent.title}`}>
         {children.map((child) => {
@@ -188,7 +192,10 @@ export function RecentsList(props: RecentsListProps) {
                 event.preventDefault();
                 const draggedKey = draggedThreadKey;
                 const draggedThread = draggedKey ? threadByKey.get(draggedKey) : undefined;
-                if (!draggedThread || draggedThread.parentThreadId !== parent.id) {
+                if (
+                  !draggedThread
+                  || resolveThreadParentKey(draggedThread, threadByKey) !== parentKey
+                ) {
                   event.dataTransfer.dropEffect = "none";
                   setDropIndicator(undefined);
                   return;
@@ -222,13 +229,16 @@ export function RecentsList(props: RecentsListProps) {
                   event.dataTransfer.getData("application/x-pwragent-subthread") ||
                   event.dataTransfer.getData("text/plain");
                 const draggedThread = threadByKey.get(draggedKey);
-                if (!draggedThread || draggedThread.parentThreadId !== parent.id) {
+                if (
+                  !draggedThread
+                  || resolveThreadParentKey(draggedThread, threadByKey) !== parentKey
+                ) {
                   return;
                 }
                 const draggedId = parseThreadIdentityKey(draggedKey)?.threadId;
                 if (!draggedId) return;
                 const nextKeys = moveThreadKey(
-                  childIds.map((threadId) => buildThreadIdentityKey(parent.source, threadId)),
+                  childKeys,
                   draggedKey,
                   childKey,
                   getDropIndicatorPosition(event),

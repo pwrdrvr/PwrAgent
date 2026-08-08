@@ -901,6 +901,74 @@ describe("settings ipc", () => {
     }
   });
 
+  it("persists legacy Kimi diagnostics without probing or retaining models", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const legacyPath = "/Users/me/.local/bin/kimi";
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
+      {
+        backendId: "acp:kimi",
+        registryId: "kimi",
+        name: "Kimi Code CLI",
+        version: "1.46.0",
+        distributionKind: "local",
+        distributionSource: `${legacyPath} (legacy kimi-cli ignored)`,
+        installStatus: "unavailable",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-kimi-cli",
+        installedAt: 1234,
+        updatedAt: 1234,
+        lastError: "Legacy Python kimi-cli was found and ignored.",
+        instances: [],
+        incompatibleInstances: [
+          { command: legacyPath, version: "1.46.0", source: "path" },
+        ],
+      },
+    ]);
+    const { initializeAppState, disposeAppState } = await import(
+      "../state/app-state"
+    );
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState("bootstrap");
+    try {
+      registerSettingsIpcHandlers(service);
+      const refreshed = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: true },
+      )) as { entries?: Array<Record<string, unknown>> } | undefined;
+      expect(refreshed?.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            backendId: "acp:kimi",
+            installed: false,
+            installStatus: "unavailable",
+            runtime: undefined,
+            incompatibleInstances: [
+              expect.objectContaining({ command: legacyPath }),
+            ],
+          }),
+        ]),
+      );
+      expect(
+        acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities,
+      ).not.toHaveBeenCalled();
+    } finally {
+      disposeAppState();
+    }
+  });
+
   it("passes configured ACP CLI overrides to explicit local discovery refreshes", async () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),
@@ -1208,6 +1276,80 @@ describe("settings ipc", () => {
         handler?.({}, { refresh: true, force: true }),
       ]);
       expect(probe).toHaveBeenCalledTimes(1);
+    } finally {
+      disposeAppState();
+    }
+  });
+
+  it("persists a version-keyed Grok update acknowledgement", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import(
+      "../state/app-state"
+    );
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    initializeAppState();
+    try {
+      const store = new AcpAgentStore(getAppStateDb());
+      store.upsertInstalledAgent({
+        backendId: "acp:grok",
+        registryId: "grok",
+        name: "Grok",
+        version: "0.2.118",
+        distributionKind: "local",
+        distributionSource: "grok agent stdio",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-grok-cli",
+        installedAt: 100,
+        updatedAt: 100,
+        update: {
+          status: "available",
+          checkedAt: 200,
+          currentVersion: "0.2.118",
+          latestVersion: "1.0.0",
+        },
+      });
+      registerSettingsIpcHandlers(service);
+
+      await expect(handlers.get(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL)?.(
+        {},
+        {
+          action: "dismiss",
+          backendId: "acp:grok",
+          latestVersion: "0.2.119",
+        },
+      )).resolves.toEqual({ applied: false });
+      const response = await handlers.get(
+        ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
+      )?.(
+        {},
+        {
+          action: "snooze",
+          backendId: "acp:grok",
+          latestVersion: "1.0.0",
+        },
+      ) as { applied: boolean; update: { snoozedUntil?: number } };
+
+      expect(response.applied).toBe(true);
+      expect(response.update.snoozedUntil).toBeGreaterThan(Date.now());
+      expect(
+        store.getInstalledAgent("acp:grok")?.update?.snoozedUntil,
+      ).toBe(response.update.snoozedUntil);
     } finally {
       disposeAppState();
     }

@@ -390,8 +390,16 @@ function createOverlayStoreMock(params?: {
       backend: ThreadOverlayState["backend"];
       threadId: string;
     }) => overlays.get(`${backend}:${threadId}`),
-    getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
-      Object.fromEntries(threadIds.map((threadId) => [threadId, overlays.get(`codex:${threadId}`)])),
+    getThreadOverlayStates: async ({
+      backend,
+      threadIds,
+    }: {
+      backend: AppServerBackendKind;
+      threadIds: string[];
+    }) =>
+      Object.fromEntries(
+        threadIds.map((threadId) => [threadId, overlays.get(`${backend}:${threadId}`)]),
+      ),
     upsertThreadUsageLine: async ({ line }: { line: ThreadUsageLineRecord }) => {
       usageLines.set(line.usageLineId, line);
       return {
@@ -508,10 +516,12 @@ function createOverlayStoreMock(params?: {
       backend,
       threadId,
       entry,
+      pendingContext,
     }: {
-      backend: "codex" | "grok";
+      backend: AppServerBackendKind;
       threadId: string;
       entry: NonNullable<ThreadOverlayState["managedReviewEntries"]>[number];
+      pendingContext?: boolean;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -533,6 +543,37 @@ function createOverlayStoreMock(params?: {
       const next = {
         ...current,
         managedReviewEntries: nextEntries,
+        pendingManagedReviewContextEntryIds: pendingContext
+          ? [
+              ...(current.pendingManagedReviewContextEntryIds ?? []),
+              entry.id,
+            ].filter((id, index, ids) => ids.indexOf(id) === index)
+          : current.pendingManagedReviewContextEntryIds,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    consumeManagedReviewContexts: async ({
+      backend,
+      threadId,
+      entryIds,
+    }: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      entryIds: string[];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key);
+      if (!current) {
+        return undefined;
+      }
+      const consumed = new Set(entryIds);
+      const remaining = (current.pendingManagedReviewContextEntryIds ?? [])
+        .filter((id) => !consumed.has(id));
+      const next = {
+        ...current,
+        pendingManagedReviewContextEntryIds:
+          remaining.length > 0 ? remaining : undefined,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -719,10 +760,12 @@ function createOverlayStoreMock(params?: {
       backend,
       threadId,
       parentThreadId,
+      parentThreadBackend,
     }: {
-      backend: "codex" | "grok";
+      backend: AppServerBackendKind;
       threadId: string;
       parentThreadId?: string;
+      parentThreadBackend?: AppServerBackendKind;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -734,6 +777,7 @@ function createOverlayStoreMock(params?: {
       const next = {
         ...current,
         parentThreadId,
+        parentThreadBackend,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -743,7 +787,7 @@ function createOverlayStoreMock(params?: {
       threadId,
       pinnedRank,
     }: {
-      backend: "codex" | "grok";
+      backend: AppServerBackendKind;
       threadId: string;
       pinnedRank?: string | null;
     }) => {
@@ -766,7 +810,7 @@ function createOverlayStoreMock(params?: {
       threadId,
       scheduledStart,
     }: {
-      backend: "codex" | "grok";
+      backend: AppServerBackendKind;
       threadId: string;
       scheduledStart?: ThreadOverlayState["scheduledStart"];
     }) => {
@@ -1274,38 +1318,6 @@ function createOverlayStoreMock(params?: {
       return next;
     },
   } as unknown as OverlayStoreLike;
-}
-
-/**
- * Detach-mode env actions resolve on spawn and `unref()` the child, so the
- * spawned process (the shell plus any grandchild it launches) keeps holding
- * its `cwd` directory handle after `runCodexEnvironmentAction` returns. On
- * Windows that open handle blocks the temp-dir cleanup with
- * `EBUSY: resource busy or locked, rmdir` until the process fully exits —
- * POSIX can unlink a directory that still has open handles, Windows cannot.
- *
- * Waiting for the action's output *file* is not sufficient: it is written
- * while the child is still alive. The detached-exit handler flips the run's
- * status to a terminal value ("exited"/"failed") once the child's `close`
- * event fires, so gate temp-dir cleanup on that terminal status — the same
- * pattern the concurrent-runs test uses — to guarantee the process is gone
- * before we remove its working directory. The `rm` retry options remain as a
- * backstop for Windows' lazy post-exit handle release.
- */
-async function waitForDetachedActionRunToExit(
-  overlayStore: OverlayStoreLike,
-  params: { backend: "codex" | "grok"; threadId: string; actionId: string },
-): Promise<void> {
-  await expectEventually(async () => {
-    const overlay = await overlayStore.getThreadOverlayState({
-      backend: params.backend,
-      threadId: params.threadId,
-    });
-    const run = overlay?.codexEnvironmentRuntime?.actionRuns?.find(
-      (candidate) => candidate.actionId === params.actionId,
-    );
-    return run?.status === "exited" || run?.status === "failed";
-  }, true);
 }
 
 const TEST_TASK_MONITOR_MODELS: BackendModelOption[] = [
@@ -2093,6 +2105,7 @@ type KimiStartPrompt = (params: {
 
 function createKimiAcpRegistry(options?: {
   acpBackendId?: AcpBackendId;
+  installedAgent?: AcpInstalledAgentRecord;
   acpRolloutStore?: AcpRolloutStore;
   sessionId?: string;
   sessions?: AcpSessionMetadata[];
@@ -2104,12 +2117,16 @@ function createKimiAcpRegistry(options?: {
   codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
   gitDirectoryService?: unknown;
   gitWorkspaceHandoffService?: unknown;
+  worktreeArchiveService?: WorktreeArchiveService;
   runtimeCapabilities?: BackendAcpRuntimeCapabilities;
   acpWorktreeRepositoryResolver?: (
     cwd: string,
   ) => Promise<LinkedDirectorySummary | undefined>;
 }) {
-  const acpBackendId = options?.acpBackendId ?? ("acp:kimi" as AcpBackendId);
+  const acpBackendId =
+    options?.installedAgent?.backendId
+    ?? options?.acpBackendId
+    ?? ("acp:kimi" as AcpBackendId);
   const sessions = options?.sessions ?? [];
   const sessionId = options?.sessionId ?? "kimi-session-1";
   const sendControlPrompt: KimiSendControlPrompt =
@@ -2166,13 +2183,19 @@ function createKimiAcpRegistry(options?: {
     refreshSession: vi.fn(async () => undefined),
     cancelSession: vi.fn(),
     readReplay: vi.fn((): AppServerThreadReplay => replay),
+    setRuntimeOption: vi.fn(async (params: {
+      sessionId: string;
+    }): Promise<BackendAcpSessionRuntimeState> =>
+      sessions.find((session) => session.sessionId === params.sessionId)?.acpRuntime
+      ?? { updatedAt: 1000 }),
   };
   const registry = new DesktopBackendRegistry({
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
     grokClient: new MockBackendClient({ threads: [] }),
     overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
     acpAgentStore: createAcpAgentStoreMock([
-      createKimiAgentRecord(acpBackendId, options?.runtimeCapabilities),
+      options?.installedAgent
+      ?? createKimiAgentRecord(acpBackendId, options?.runtimeCapabilities),
     ]),
     acpRolloutStore: options?.acpRolloutStore,
     acpSessionStore: createAcpSessionStoreMock(sessions),
@@ -2181,6 +2204,7 @@ function createKimiAcpRegistry(options?: {
     gitDirectoryService: options?.gitDirectoryService as never,
     gitWorkspaceHandoffService:
       options?.gitWorkspaceHandoffService as never,
+    worktreeArchiveService: options?.worktreeArchiveService,
     acpWorktreeRepositoryResolver: options?.acpWorktreeRepositoryResolver,
   });
   return {
@@ -12462,7 +12486,6 @@ command = '''${expectedActionCommand}'''
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-worktree-"));
     const localPath = path.join(root, "local");
     const worktreePath = path.join(root, "worktree");
-    const outputPath = path.join(root, "action-cwd.txt");
     await mkdir(localPath, { recursive: true });
     await mkdir(worktreePath, { recursive: true });
 
@@ -12490,13 +12513,14 @@ command = '''${expectedActionCommand}'''
               {
                 id: "capture-cwd",
                 name: "Capture CWD",
-                command: `node -e "require('node:fs').writeFileSync(process.argv[1], process.cwd())" ${JSON.stringify(outputPath)}`,
+                command: "capture-cwd",
               },
             ],
           },
         },
       },
     });
+    let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
@@ -12506,6 +12530,10 @@ command = '''${expectedActionCommand}'''
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore,
+      codexEnvironmentCommandRunner: vi.fn(async (params) => {
+        commandParams = params;
+        return { pid: 12345 };
+      }),
     });
 
     try {
@@ -12527,17 +12555,11 @@ command = '''${expectedActionCommand}'''
           ],
         },
       });
-      // The action writes process.cwd() (native separators on Windows). Compare
-      // both sides forward-slashed so a backslash/forward-slash difference
-      // doesn't fail the match — no-op on POSIX where there are no backslashes.
-      await expectEventually(
-        async () =>
-          (await realpath((await readFile(outputPath, "utf8")).trim())).replace(
-            /\\/g,
-            "/",
-          ),
-        (await realpath(worktreePath)).replace(/\\/g, "/"),
-      );
+      expect(commandParams).toMatchObject({
+        command: "capture-cwd",
+        cwd: worktreePath,
+        mode: "detach",
+      });
       await expect(
         overlayStore.getThreadOverlayState({
           backend: "codex",
@@ -12547,13 +12569,6 @@ command = '''${expectedActionCommand}'''
         codexEnvironmentRuntime: {
           cwd: worktreePath,
         },
-      });
-      // Gate cleanup on the detached child fully exiting (see helper) so the
-      // worktree dir it ran in is no longer locked when we remove it.
-      await waitForDetachedActionRunToExit(overlayStore, {
-        backend: "codex",
-        threadId: "thread-1",
-        actionId: "capture-cwd",
       });
     } finally {
       await registry.close();
@@ -12565,7 +12580,6 @@ command = '''${expectedActionCommand}'''
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-local-"));
     const localPath = path.join(root, "local");
     const worktreePath = path.join(root, "worktree");
-    const outputPath = path.join(root, "action-cwd.txt");
     await mkdir(localPath, { recursive: true });
     await mkdir(worktreePath, { recursive: true });
 
@@ -12592,13 +12606,14 @@ command = '''${expectedActionCommand}'''
               {
                 id: "capture-cwd",
                 name: "Capture CWD",
-                command: `node -e "require('node:fs').writeFileSync(process.argv[1], process.cwd())" ${JSON.stringify(outputPath)}`,
+                command: "capture-cwd",
               },
             ],
           },
         },
       },
     });
+    let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
@@ -12608,6 +12623,10 @@ command = '''${expectedActionCommand}'''
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore,
+      codexEnvironmentCommandRunner: vi.fn(async (params) => {
+        commandParams = params;
+        return { pid: 12345 };
+      }),
     });
 
     try {
@@ -12629,22 +12648,10 @@ command = '''${expectedActionCommand}'''
           ],
         },
       });
-      // Compare both sides forward-slashed so native Windows separators in the
-      // captured process.cwd() don't fail the match — no-op on POSIX.
-      await expectEventually(
-        async () =>
-          (await realpath((await readFile(outputPath, "utf8")).trim())).replace(
-            /\\/g,
-            "/",
-          ),
-        (await realpath(localPath)).replace(/\\/g, "/"),
-      );
-      // Gate cleanup on the detached child fully exiting (see helper) so the
-      // dir it ran in is no longer locked when we remove it.
-      await waitForDetachedActionRunToExit(overlayStore, {
-        backend: "codex",
-        threadId: "thread-1",
-        actionId: "capture-cwd",
+      expect(commandParams).toMatchObject({
+        command: "capture-cwd",
+        cwd: localPath,
+        mode: "detach",
       });
     } finally {
       await registry.close();
@@ -12850,24 +12857,21 @@ command = '''${expectedActionCommand}'''
             cwd: root,
             actions: [
               {
-                // Print a marker to stdout so the captured output (which
-                // gets attributed to the run via onDetachedExit) has a
-                // deterministic value to assert on. A small sleep makes
-                // the two children genuinely overlap in time.
                 id: "action-a",
                 name: "Action A",
-                command: "sleep 0.2 && printf 'A-output-marker'",
+                command: "action-a-command",
               },
               {
                 id: "action-b",
                 name: "Action B",
-                command: "sleep 0.2 && printf 'B-output-marker'",
+                command: "action-b-command",
               },
             ],
           },
         },
       },
     });
+    const commandParams: Array<Parameters<CodexEnvironmentCommandRunner>[0]> = [];
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
@@ -12877,6 +12881,10 @@ command = '''${expectedActionCommand}'''
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore,
+      codexEnvironmentCommandRunner: vi.fn(async (params) => {
+        commandParams.push(params);
+        return { pid: 12345 + commandParams.length };
+      }),
     });
 
     try {
@@ -12906,9 +12914,33 @@ command = '''${expectedActionCommand}'''
       expect(runIdB).toBeTruthy();
       expect(runIdA).not.toBe(runIdB);
 
-      // After both detached children exit, the overlay's actionRuns should
-      // contain both entries, each with its own captured output. Poll
-      // until the exit + output handlers have both fired and persisted.
+      const paramsA = commandParams.find(
+        (params) => params.command === "action-a-command",
+      );
+      const paramsB = commandParams.find(
+        (params) => params.command === "action-b-command",
+      );
+      expect(paramsA).toBeTruthy();
+      expect(paramsB).toBeTruthy();
+
+      // Interleave the injected lifecycle callbacks after both runs exist.
+      // This exercises run-id attribution without making a unit test launch
+      // competing Git Bash/PowerShell process trees.
+      paramsA?.onDetachedOutput?.({ output: "A-output-marker" });
+      paramsB?.onDetachedOutput?.({ output: "B-output-marker" });
+      paramsB?.onDetachedExit?.({
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 200,
+        output: "B-output-marker",
+      });
+      paramsA?.onDetachedExit?.({
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 250,
+        output: "A-output-marker",
+      });
+
       const deadline = Date.now() + 10_000;
       let lastSnapshot: ReadonlyArray<unknown> | undefined;
       let lastError: string | undefined;
@@ -12945,7 +12977,7 @@ command = '''${expectedActionCommand}'''
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  }, 15_000);
+  });
 
   it("cleans up prior-session env-action runs on startup", async () => {
     // Before the cleanup pass: an overlay row from a previous app launch
@@ -18358,8 +18390,24 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("rejects review start for ACP backends instead of routing through built-in clients", async () => {
-    const { acpBackendId, registry } = createKimiAcpRegistry();
+  it("rejects managed review start for ACP providers without the capability", async () => {
+    const geminiBackendId = "acp:gemini" as AcpBackendId;
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      installedAgent: {
+        ...createKimiAgentRecord(geminiBackendId),
+        backendId: geminiBackendId,
+        registryId: "gemini",
+        name: "Gemini CLI",
+        launchDescriptor: {
+          backendId: geminiBackendId,
+          registryId: "gemini",
+          distributionKind: "local",
+          command: "gemini",
+          args: ["--experimental-acp"],
+          env: {},
+        },
+      },
+    });
 
     await expect(
       registry.startReview({
@@ -18371,6 +18419,270 @@ command = "pnpm dev"
     ).rejects.toThrow("Selected backend does not support review/start");
 
     await registry.close();
+  });
+
+  it("runs Kimi review in a hidden child and injects its output into the next parent turn", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "kimi-parent";
+    const parentRuntime: BackendAcpSessionRuntimeState = {
+      currentModeId: "default",
+      currentModelId: "kimi-code/k3",
+      reasoningEffort: "high",
+      updatedAt: 1000,
+    };
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: acpBackendId,
+      sessionId: parentThreadId,
+      title: "ACP session",
+      titleSource: "fallback",
+      cwd: "/repo/worktree",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "full-access",
+      acpRuntime: parentRuntime,
+      status: "idle",
+    }];
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`${acpBackendId}:${parentThreadId}`]: {
+          backend: acpBackendId,
+          threadId: parentThreadId,
+          executionMode: "full-access",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const startPrompt = vi.fn((params: Parameters<KimiStartPrompt>[0]) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn-${startPrompt.mock.calls.length}`,
+    }));
+    const firstRegistry = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore,
+      sessionId: parentThreadId,
+      sessions,
+      startPrompt,
+    });
+    const { acpClient, registry } = firstRegistry;
+
+    const response = await registry.startReview({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    expect(response).toMatchObject({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      reviewThreadId: expect.stringContaining(":title-helper:"),
+      turnId: expect.stringContaining("pending:"),
+    });
+    expect(acpClient.startSession).toHaveBeenCalledWith(expect.objectContaining({
+      acpRuntime: parentRuntime,
+      cwd: "/repo/worktree",
+      executionMode: "default",
+      hidden: true,
+    }));
+    expect(acpClient.setRuntimeOption).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: response.reviewThreadId,
+      source: "model",
+      value: "kimi-code/k3",
+      reasoningEffort: "high",
+    }));
+    expect(startPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: response.reviewThreadId,
+      prompt: expect.stringContaining("against base branch 'main'"),
+    }));
+
+    const reviewOutput = JSON.stringify({
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: "No blocking findings.",
+      overall_confidence_score: 0.96,
+    });
+    await (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: response.reviewThreadId,
+          turnId: response.turnId,
+          turn: {
+            id: response.turnId,
+            status: "completed",
+            output: [{ type: "text", text: reviewOutput }],
+          },
+        },
+      },
+    });
+
+    const completedOverlay = await overlayStore.getThreadOverlayState({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+    });
+    expect(completedOverlay?.pendingManagedReviewContextEntryIds).toEqual([
+      `managed-review:${response.turnId}:result`,
+    ]);
+    await registry.close();
+
+    const followupStartPrompt = vi.fn(
+      (params: Parameters<KimiStartPrompt>[0]) => ({
+        sessionId: params.sessionId,
+        turnId: params.turnId ?? "followup-turn",
+      }),
+    );
+    const followup = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore,
+      sessionId: parentThreadId,
+      sessions,
+      startPrompt: followupStartPrompt,
+    });
+    const scheduleTitleGeneration = vi.spyOn(
+      followup.registry as unknown as {
+        scheduleThreadTitleGeneration(params: {
+          backend: AppServerBackendKind;
+          threadId: string;
+          input: AppServerTurnInputItem[];
+        }): void;
+      },
+      "scheduleThreadTitleGeneration",
+    );
+
+    const nextTurn = await followup.registry.startTurn({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      input: [{ type: "text", text: "Continue after review" }],
+    });
+    const nextPrompt = followupStartPrompt.mock.calls.at(-1)?.[0].prompt;
+    expect(nextPrompt).toContain("PwrAgent review sub-agent results");
+    expect(nextPrompt).toContain(reviewOutput);
+    expect(nextPrompt).toContain("Continue after review");
+    expect(scheduleTitleGeneration).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      input: [{ type: "text", text: "Continue after review" }],
+    });
+    const consumedOverlay = await overlayStore.getThreadOverlayState({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+    });
+    expect(
+      consumedOverlay?.pendingManagedReviewContextEntryIds,
+    ).toBeUndefined();
+
+    await (followup.registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: parentThreadId,
+          turnId: nextTurn.turnId,
+          turn: {
+            id: nextTurn.turnId,
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    await followup.registry.startTurn({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      input: [{ type: "text", text: "One more turn" }],
+    });
+    expect(followupStartPrompt.mock.calls.at(-1)?.[0].prompt).toBe("One more turn");
+
+    await followup.registry.close();
+  });
+
+  it("routes direct and controlled Kimi review cancellation to the hidden child", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "kimi-review-parent";
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: acpBackendId,
+      sessionId: parentThreadId,
+      title: "Kimi review parent",
+      cwd: "/repo/worktree",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+    }];
+    const startPrompt = vi.fn((params: Parameters<KimiStartPrompt>[0]) => ({
+      sessionId: params.sessionId,
+      turnId: `review-turn-${startPrompt.mock.calls.length}`,
+    }));
+    const { acpClient, registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: parentThreadId,
+      sessions,
+      startPrompt,
+    });
+
+    const directReview = await registry.startReview({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+    await registry.interruptTurn({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: directReview.turnId,
+    });
+    expect(acpClient.cancelSession).toHaveBeenLastCalledWith(
+      directReview.reviewThreadId,
+    );
+    await registry.close();
+
+    const controlledSessions: AcpSessionMetadata[] = [{
+      ...sessions[0]!,
+    }];
+    const controlledStartPrompt = vi.fn(
+      (params: Parameters<KimiStartPrompt>[0]) => ({
+        sessionId: params.sessionId,
+        turnId: "controlled-review-turn",
+      }),
+    );
+    const controlled = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: parentThreadId,
+      sessions: controlledSessions,
+      startPrompt: controlledStartPrompt,
+    });
+    const controlledReview = await controlled.registry.startReview({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+    await expect(controlled.registry.controlActiveTurn({
+      operation: "stop",
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      requestId: "stop-kimi-review",
+      expectedTurnId: controlledReview.turnId,
+    })).resolves.toMatchObject({
+      ok: true,
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: controlledReview.turnId,
+      disposition: "interrupted",
+    });
+    expect(controlled.acpClient.cancelSession).toHaveBeenLastCalledWith(
+      controlledReview.reviewThreadId,
+    );
+    expect(controlled.acpClient.cancelSession).not.toHaveBeenCalledWith(
+      parentThreadId,
+    );
+
+    await controlled.registry.close();
   });
 
   it("rejects Codex review start while the thread has an active turn", async () => {
@@ -21599,6 +21911,337 @@ command = "pnpm dev"
     await rm(root, { recursive: true, force: true });
   });
 
+  it("groups an ACP handoff under a Codex parent", async () => {
+    const parentDirectory = {
+      id: expectedDir("/repo/app"),
+      kind: "local" as const,
+      label: "app",
+      path: expectedDir("/repo/app"),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "codex-parent",
+          title: "Codex parent",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [parentDirectory],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:codex-parent": {
+          backend: "codex",
+          threadId: "codex-parent",
+          executionMode: "default",
+          extraLinkedDirectories: [parentDirectory],
+        },
+      },
+    });
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      codexClient,
+      overlayStore,
+      sessionId: "kimi-child",
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "codex-parent",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "codex-parent",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          backend: acpBackendId,
+          task: "Investigate the migration race.",
+          title: "Migration race",
+          groupingMode: "subthread",
+          workspaceMode: "none",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      backend: acpBackendId,
+      threadId: "kimi-child",
+      groupingMode: "subthread",
+      groupedUnderThreadId: "codex-parent",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "kimi-child",
+      }),
+    ).resolves.toMatchObject({
+      parentThreadId: "codex-parent",
+      parentThreadBackend: "codex",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "codex-parent",
+      }),
+    ).resolves.toMatchObject({
+      subthreadOrder: ["kimi-child"],
+    });
+
+    await registry.close();
+  });
+
+  it("groups a Codex handoff under its Kimi parent", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentDirectory = {
+      id: expectedDir("/repo/app"),
+      kind: "local" as const,
+      label: "app",
+      path: expectedDir("/repo/app"),
+    };
+    const parentSession: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "kimi-parent",
+      title: "Kimi parent",
+      cwd: "/repo/app",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "acp:kimi:kimi-parent": {
+          backend: acpBackendId,
+          threadId: "kimi-parent",
+          executionMode: "default",
+          extraLinkedDirectories: [parentDirectory],
+        },
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      codexClient,
+      overlayStore,
+      sessions: [parentSession],
+    });
+    const turn = await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "kimi-parent",
+      input: [{ type: "text", text: "Delegate the migration lock fix." }],
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "kimi-parent",
+          turnId: turn.turnId,
+          turn: { id: turn.turnId },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: "kimi-parent",
+      turnId: turn.turnId,
+      tool: "handoff_task",
+      args: {
+        backend: "codex",
+        task: "Fix the migration lock race.",
+        title: "Migration lock",
+        groupingMode: "subthread",
+        workspaceMode: "none",
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "thread-1",
+        groupingMode: "subthread",
+        groupedUnderThreadId: "kimi-parent",
+      },
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      parentThreadId: "kimi-parent",
+      parentThreadBackend: acpBackendId,
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "kimi-parent",
+      }),
+    ).resolves.toMatchObject({
+      subthreadOrder: ["thread-1"],
+    });
+
+    await registry.close();
+  });
+
+  it("persists the source backend on a trusted cross-provider handoff launchpad", async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-cross-provider-trust-"),
+    );
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    await mkdir(repoPath, { recursive: true });
+    await mkdir(worktreePath, { recursive: true });
+    const parentDirectory: LinkedDirectorySummary = {
+      id: expectedDir(repoPath),
+      kind: "worktree",
+      label: "repo",
+      path: expectedDir(repoPath),
+      worktreePath: expectedDir(worktreePath),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "codex-parent",
+          title: "Codex parent",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [parentDirectory],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:codex-parent": {
+          backend: "codex",
+          threadId: "codex-parent",
+          executionMode: "default",
+          extraLinkedDirectories: [parentDirectory],
+        },
+      },
+    });
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      codexClient,
+      overlayStore,
+      sessionId: "kimi-child",
+      gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async () => ({
+          kind: "local" as const,
+          branch: "main",
+          hasCommits: true,
+          headHasCommit: true,
+          worktreeCreationAvailable: true,
+        })),
+        resolvePrimaryWorkspacePath: vi.fn(async () => repoPath),
+      },
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    try {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "codex-parent",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+
+      const responsePromise = codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "codex-parent",
+          turnId: "turn-1",
+          callId: "call-1",
+          requestId: "call-1",
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: {
+            backend: acpBackendId,
+            task: "Investigate the migration race.",
+            groupingMode: "subthread",
+            workspaceMode: "project_local",
+            cwd: repoPath,
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      await vi.waitFor(() => {
+        expect(
+          events.find(
+            (event) => event.notification.method === "item/tool/requestUserInput",
+          ),
+        ).toBeDefined();
+      });
+      const inputRequest = events.find(
+        (event): event is AgentEvent & {
+          notification: Extract<
+            AppServerNotification,
+            { method: "item/tool/requestUserInput" }
+          >;
+        } => event.notification.method === "item/tool/requestUserInput",
+      )!.notification;
+      await registry.submitServerRequest({
+        backend: "codex",
+        threadId: "codex-parent",
+        turnId: "turn-1",
+        requestId: inputRequest.params.requestId,
+        response: {
+          answers: {
+            trust_directory: {
+              answers: ["Trust directory (Recommended)"],
+            },
+          },
+        },
+      });
+
+      await expect(responsePromise).resolves.toMatchObject({ success: true });
+      const realRepoPath = expectedDir(await realpath(repoPath));
+      await expect(
+        overlayStore.getDirectoryLaunchpad({
+          directoryKey: `directory:${realRepoPath}`,
+        }),
+      ).resolves.toMatchObject({
+        backend: acpBackendId,
+        parentThreadId: "codex-parent",
+        parentThreadBackend: "codex",
+      });
+    } finally {
+      unsubscribe();
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("ignores subthread grouping when a handoff targets a different project", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-cross-project-"));
     const parentRepoPath = path.join(root, "PwrAgent");
@@ -24654,26 +25297,20 @@ script = "printf setup"
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-task-cwd-"));
     const scratchPath = path.join(root, "scratch-workspace");
     const repoPath = path.join(root, "PwrAgnt");
+    const worktreePath = path.join(repoPath, ".worktrees", "handoff-task");
     try {
       await mkdir(scratchPath, { recursive: true });
-      await mkdir(repoPath, { recursive: true });
-      try {
-        await git(repoPath, ["init", "-b", "main"]);
-      } catch {
-        await git(repoPath, ["init"]);
-        await git(repoPath, ["checkout", "-b", "main"]);
-      }
-      await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
-      await git(repoPath, ["add", "README.md"]);
-      await git(repoPath, [
-        "-c",
-        "user.name=PwrAgent Tests",
-        "-c",
-        "user.email=tests@pwragent.local",
-        "commit",
-        "-m",
-        "initial",
-      ]);
+      await mkdir(worktreePath, { recursive: true });
+      const canonicalRepoPath = await realpath(repoPath);
+      const canonicalWorktreePath = await realpath(worktreePath);
+      const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: {
+        directoryPath?: string;
+        workMode: "local" | "worktree";
+      }) => ({
+        cwd: canonicalWorktreePath,
+        repositoryPath: canonicalRepoPath,
+        workMode: "worktree" as const,
+      }));
 
       const scratchDirectory = {
         id: expectedDir(scratchPath),
@@ -24699,9 +25336,28 @@ script = "printf setup"
         grokClient: new MockBackendClient({
           initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
         }),
-        gitDirectoryService: new GitDirectoryService({
-          resolveWorktreeStorage: () => "in-repo",
-        }),
+        gitDirectoryService: {
+          inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
+            kind: "worktree" as const,
+            branch: cwd === canonicalWorktreePath ? "HEAD" : "main",
+            hasCommits: true,
+            headHasCommit: true,
+            worktreeCreationAvailable: true,
+          })),
+          prepareLaunchpadWorkspace,
+          recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+          resolvePrimaryWorkspacePath: vi.fn(async (cwd?: string) => {
+            if (
+              cwd?.startsWith(worktreePath)
+              || cwd?.startsWith(canonicalWorktreePath)
+              || cwd?.startsWith(repoPath)
+              || cwd?.startsWith(canonicalRepoPath)
+            ) {
+              return canonicalRepoPath;
+            }
+            return cwd;
+          }),
+        } as never,
         overlayStore: createOverlayStoreMock({
           overlays: {
             "codex:ordinary-thread": {
@@ -24748,6 +25404,15 @@ script = "printf setup"
       } as AppServerPendingRequestNotification);
 
       expect(response).toMatchObject({ success: true });
+      expect(prepareLaunchpadWorkspace).toHaveBeenCalledOnce();
+      expect(prepareLaunchpadWorkspace.mock.calls[0]?.[0]).toMatchObject({
+        workMode: "worktree",
+      });
+      expect(
+        expectedDir(
+          prepareLaunchpadWorkspace.mock.calls[0]?.[0].directoryPath ?? "",
+        ),
+      ).toBe(expectedDir(repoPath));
       const handoffCwd = expectedDir(codexClient.lastStartThreadParams?.cwd ?? "");
       expect(handoffCwd).toContain(
         expectedDir(await realpath(path.join(repoPath, ".worktrees"))),
@@ -24932,27 +25597,21 @@ script = "printf setup"
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-fork-cwd-"));
     const parentPath = path.join(root, "parent-project");
     const repoPath = path.join(root, "other-project");
+    const worktreePath = path.join(repoPath, ".worktrees", "forked-child");
     try {
-      for (const repo of [parentPath, repoPath]) {
-        await mkdir(repo, { recursive: true });
-        try {
-          await git(repo, ["init", "-b", "main"]);
-        } catch {
-          await git(repo, ["init"]);
-          await git(repo, ["checkout", "-b", "main"]);
-        }
-        await writeFile(path.join(repo, "README.md"), "handoff\n", "utf8");
-        await git(repo, ["add", "README.md"]);
-        await git(repo, [
-          "-c",
-          "user.name=PwrAgent Tests",
-          "-c",
-          "user.email=tests@pwragent.local",
-          "commit",
-          "-m",
-          "initial",
-        ]);
-      }
+      await mkdir(parentPath, { recursive: true });
+      await mkdir(worktreePath, { recursive: true });
+      const canonicalParentPath = await realpath(parentPath);
+      const canonicalRepoPath = await realpath(repoPath);
+      const canonicalWorktreePath = await realpath(worktreePath);
+      const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: {
+        directoryPath?: string;
+        workMode: "local" | "worktree";
+      }) => ({
+        cwd: canonicalWorktreePath,
+        repositoryPath: canonicalRepoPath,
+        workMode: "worktree" as const,
+      }));
 
       const parentRuntime: CodexThreadEnvironmentRuntime = {
         environmentId: "parent-env",
@@ -24985,9 +25644,34 @@ script = "printf setup"
         grokClient: new MockBackendClient({
           initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
         }),
-        gitDirectoryService: new GitDirectoryService({
-          resolveWorktreeStorage: () => "in-repo",
-        }),
+        gitDirectoryService: {
+          inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
+            kind: "worktree" as const,
+            branch: cwd === canonicalWorktreePath ? "HEAD" : "main",
+            hasCommits: true,
+            headHasCommit: true,
+            worktreeCreationAvailable: true,
+          })),
+          prepareLaunchpadWorkspace,
+          recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+          resolvePrimaryWorkspacePath: vi.fn(async (cwd?: string) => {
+            if (
+              cwd?.startsWith(worktreePath)
+              || cwd?.startsWith(canonicalWorktreePath)
+              || cwd?.startsWith(repoPath)
+              || cwd?.startsWith(canonicalRepoPath)
+            ) {
+              return canonicalRepoPath;
+            }
+            if (
+              cwd?.startsWith(parentPath)
+              || cwd?.startsWith(canonicalParentPath)
+            ) {
+              return canonicalParentPath;
+            }
+            return cwd;
+          }),
+        } as never,
         overlayStore: createOverlayStoreMock({
           overlays: {
             "codex:ordinary-thread": {
@@ -25033,6 +25717,18 @@ script = "printf setup"
       } as AppServerPendingRequestNotification);
 
       expect(response).toMatchObject({ success: true });
+      expect(prepareLaunchpadWorkspace).toHaveBeenCalledOnce();
+      expect(prepareLaunchpadWorkspace.mock.calls[0]?.[0]).toMatchObject({
+        workMode: "worktree",
+      });
+      expect(
+        expectedDir(
+          prepareLaunchpadWorkspace.mock.calls[0]?.[0].directoryPath ?? "",
+        ),
+      ).toBe(expectedDir(repoPath));
+      expect(expectedDir(codexClient.lastForkThreadParams?.cwd ?? "")).toBe(
+        expectedDir(canonicalWorktreePath),
+      );
       expect(codexClient.lastForkThreadParams?.codexEnvironmentRuntime).toBeUndefined();
       const payload = JSON.parse(
         (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
@@ -34108,6 +34804,82 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("skips Codex parent worktree cleanup while an active ACP child shares it", async () => {
+    const worktreePath = "/repo/.worktrees/shared";
+    const parentThread: AppServerThreadSummary = {
+      id: "codex-parent",
+      title: "Codex parent",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "directory:/repo/app",
+          label: "app",
+          path: "/repo/app",
+          kind: "worktree",
+          worktreePath,
+        },
+      ],
+      source: "codex",
+      gitBranch: "codex/parent",
+      updatedAt: 1,
+    };
+    const childSession: AcpSessionMetadata = {
+      backendId: "acp:kimi" as AcpBackendId,
+      sessionId: "kimi-child",
+      title: "Kimi child",
+      cwd: worktreePath,
+      createdAt: 2,
+      updatedAt: 2,
+      executionMode: "default",
+      status: "idle",
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [parentThread],
+    });
+    const archiveWorktree = vi.fn(async () => ({
+      id: "snapshot-1",
+      backend: "codex" as const,
+      threadId: "codex-parent",
+      worktreePath,
+      repositoryPath: "/repo/app",
+      snapshotRef: "refs/pwragent/snapshots/snapshot-1",
+      snapshotCommit: "abc123",
+      sourceBranch: "codex/parent",
+      sourceHead: "def456",
+      createdAt: 1000,
+      archivedAt: 1000,
+      state: "archived" as const,
+      ignoredFilesExcluded: true,
+    }));
+    const { registry } = createKimiAcpRegistry({
+      codexClient,
+      sessions: [childSession],
+      worktreeArchiveService: {
+        archive: archiveWorktree,
+      } as unknown as WorktreeArchiveService,
+    });
+
+    const response = await registry.archiveThread({
+      backend: "codex",
+      threadId: "codex-parent",
+    });
+
+    expect(archiveWorktree).not.toHaveBeenCalled();
+    expect(response.cleanup).toEqual([
+      {
+        worktreePath,
+        branch: "codex/parent",
+        removedWorktree: false,
+        deletedBranch: false,
+        skippedReason:
+          "Worktree is still used by another active thread: kimi-child.",
+      },
+    ]);
+
+    await registry.close();
+  });
+
   it("ungroups active child threads when archiving only the parent", async () => {
     const parentThread: AppServerThreadSummary = {
       id: "thread-parent",
@@ -34160,6 +34932,115 @@ script = "printf setup"
     expect(setThreadParent).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-child",
+      parentThreadId: undefined,
+    });
+
+    await registry.close();
+  });
+
+  it("ungroups legacy cross-provider ACP children when archiving a Codex parent", async () => {
+    const parentThread: AppServerThreadSummary = {
+      id: "codex-parent",
+      title: "Codex parent",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 1,
+    };
+    const childSession: AcpSessionMetadata = {
+      backendId: "acp:kimi" as AcpBackendId,
+      sessionId: "kimi-child",
+      title: "Kimi child",
+      createdAt: 2,
+      updatedAt: 2,
+      executionMode: "default",
+      status: "idle",
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "acp:kimi:kimi-child": {
+          backend: "acp:kimi",
+          threadId: "kimi-child",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          parentThreadId: "codex-parent",
+        },
+      },
+    });
+    const setThreadParent = vi.spyOn(overlayStore, "setThreadParent");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/archive"] },
+      threads: [parentThread],
+    });
+    const { registry } = createKimiAcpRegistry({
+      codexClient,
+      overlayStore,
+      sessions: [childSession],
+    });
+
+    await registry.archiveThread({
+      backend: "codex",
+      threadId: "codex-parent",
+    });
+
+    expect(setThreadParent).toHaveBeenCalledWith({
+      backend: "acp:kimi",
+      threadId: "kimi-child",
+      parentThreadId: undefined,
+    });
+
+    await registry.close();
+  });
+
+  it("ungroups active Codex children when archiving an ACP parent", async () => {
+    const parentSession: AcpSessionMetadata = {
+      backendId: "acp:kimi" as AcpBackendId,
+      sessionId: "kimi-parent",
+      title: "Kimi parent",
+      createdAt: 1,
+      updatedAt: 1,
+      executionMode: "default",
+      status: "idle",
+    };
+    const childThread: AppServerThreadSummary = {
+      id: "codex-child",
+      title: "Codex child",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      source: "codex",
+      updatedAt: 2,
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:codex-child": {
+          backend: "codex",
+          threadId: "codex-child",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          parentThreadId: "kimi-parent",
+          parentThreadBackend: "acp:kimi",
+        },
+      },
+    });
+    const setThreadParent = vi.spyOn(overlayStore, "setThreadParent");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [childThread],
+    });
+    const { registry } = createKimiAcpRegistry({
+      codexClient,
+      overlayStore,
+      sessions: [parentSession],
+    });
+
+    await registry.archiveThread({
+      backend: "acp:kimi",
+      threadId: "kimi-parent",
+    });
+
+    expect(setThreadParent).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "codex-child",
       parentThreadId: undefined,
     });
 

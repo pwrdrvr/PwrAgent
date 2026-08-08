@@ -182,6 +182,11 @@ describe("ThreadMarkdown", () => {
   });
 
   it("stops typesetting immediately when experimental math rendering is disabled", async () => {
+    // This assertion is about the enabled -> disabled transition, not the
+    // latency of the provider's first lazy module fetch. Warm the same module
+    // before mounting so renderer load cannot consume waitFor's readiness
+    // window on a busy Windows worker.
+    await import("../../../lib/markdown-math-runtime");
     const text = String.raw`Toggle \(a=1\).`;
     const { container, rerender } = render(
       <MarkdownRenderingOptionsProvider mathEnabled>
