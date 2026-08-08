@@ -88,7 +88,9 @@ describe("PrStatusCard", () => {
     expect(text(container, ".pr-status-card__additions")).toBe("+0");
   });
 
-  it("reports lifespan and recency once a PR is terminal", () => {
+  it("adds the terminal event in the same grammar as the opened row", () => {
+    // Both rows read "<event> <duration> ago" so "Opened" means the same thing
+    // before and after the PR lands. Lifespan is the difference between them.
     const container = renderCard(basePr({
       lifecycleState: "merged",
       state: "merged",
@@ -101,8 +103,32 @@ describe("PrStatusCard", () => {
     const values = [...container.querySelectorAll(".pr-status-card__row-value")]
       .map((node) => node.textContent);
 
-    expect(labels).toEqual(["Open for", "Merged"]);
-    expect(values).toEqual(["4d 22h", "2h ago"]);
+    expect(labels).toEqual(["Opened", "Merged"]);
+    expect(values).toEqual(["5d ago", "2h ago"]);
+  });
+
+  it("still reports when a closed PR was opened, and vice versa", () => {
+    const openedOnly = renderCard(basePr({
+      lifecycleState: "closed",
+      state: "closed",
+      createdAt: NOW - (2 * DAY),
+    }));
+    expect(
+      [...openedOnly.querySelectorAll(".pr-status-card__row-label")]
+        .map((node) => node.textContent),
+    ).toEqual(["Opened"]);
+
+    cleanup();
+
+    const closedOnly = renderCard(basePr({
+      lifecycleState: "closed",
+      state: "closed",
+      closedAt: NOW - (6 * 60 * 60 * 1000),
+    }));
+    expect(
+      [...closedOnly.querySelectorAll(".pr-status-card__row-label")]
+        .map((node) => node.textContent),
+    ).toEqual(["Closed"]);
   });
 
   it("omits sections a peer did not send rather than showing zeros", () => {

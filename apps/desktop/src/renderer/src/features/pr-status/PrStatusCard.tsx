@@ -211,8 +211,12 @@ type PrTimelineRow = { label: string; value: string };
 /**
  * Age rows. `createdAt` is immutable, so these stay exact against the wall
  * clock without any polling — a PR nobody has refreshed in a week still reports
- * its true age. Once a PR is terminal, raw age stops being the interesting
- * number, so the pair becomes lifespan plus recency.
+ * its true age.
+ *
+ * Every row is "<event> <duration> ago". One grammar for the whole section
+ * means "Opened" says the same thing whether or not the PR has landed, instead
+ * of switching to a lifespan reading the moment it merges. The lifespan is
+ * still there for anyone who wants it — it is the difference between the rows.
  */
 function readPrTimeline(pr: PrSummary, now: number): PrTimelineRow[] {
   const createdAt = readTimestamp(pr.createdAt);
@@ -226,15 +230,11 @@ function readPrTimeline(pr: PrSummary, now: number): PrTimelineRow[] {
   const terminalLabel = lifecycleState === "merged" ? "Merged" : "Closed";
 
   const rows: PrTimelineRow[] = [];
-  if (terminalAt !== undefined) {
-    if (createdAt !== undefined) {
-      rows.push({ label: "Open for", value: formatSpan(terminalAt - createdAt) });
-    }
-    rows.push({ label: terminalLabel, value: `${formatSpan(now - terminalAt)} ago` });
-    return rows;
-  }
   if (createdAt !== undefined) {
     rows.push({ label: "Opened", value: `${formatSpan(now - createdAt)} ago` });
+  }
+  if (terminalAt !== undefined) {
+    rows.push({ label: terminalLabel, value: `${formatSpan(now - terminalAt)} ago` });
   }
   return rows;
 }
