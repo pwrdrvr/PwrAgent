@@ -201,4 +201,37 @@ describe("SqliteOverlayStore — thread pins", () => {
       store = new SqliteOverlayStore(stateDb);
     }
   });
+
+  it("stores cross-provider child order on the actual parent", async () => {
+    await store.setThreadParent({
+      backend: "codex",
+      threadId: "codex-child",
+      parentThreadId: "kimi-parent",
+      parentThreadBackend: "acp:kimi",
+    });
+
+    await expect(
+      store.getThreadOverlayState({
+        backend: "codex",
+        threadId: "codex-child",
+      }),
+    ).resolves.toMatchObject({
+      parentThreadId: "kimi-parent",
+      parentThreadBackend: "acp:kimi",
+    });
+    await expect(
+      store.getThreadOverlayState({
+        backend: "acp:kimi",
+        threadId: "kimi-parent",
+      }),
+    ).resolves.toMatchObject({
+      subthreadOrder: ["codex-child"],
+    });
+    await expect(
+      store.getThreadOverlayState({
+        backend: "codex",
+        threadId: "kimi-parent",
+      }),
+    ).resolves.toBeUndefined();
+  });
 });

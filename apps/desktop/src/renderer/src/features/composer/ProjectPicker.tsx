@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from "
 import type { NavigationDirectorySummary } from "@pwragent/shared";
 import { FolderIcon, SearchIcon } from "../../icons";
 import { tildifyPath } from "../../lib/tildify-path";
+import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 
 /**
  * Project-directory picker for the new-thread composer (issue #223).
@@ -37,6 +38,7 @@ export type ProjectPickerProps = {
   picking?: boolean;
   onSelect: (directory: NavigationDirectorySummary) => void;
   onPickFromDisk?: () => void;
+  nativePickingDisabled?: boolean;
   /**
    * Switch the launchpad to a directory-less ("workspace") thread. When
    * omitted, the "Chat without a directory" row is not rendered.
@@ -236,7 +238,17 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
               <button
                 type="button"
                 className="project-picker__row project-picker__row--action"
-                disabled={props.picking}
+                data-tooltip={
+                  props.nativePickingDisabled
+                    ? REMOTE_NATIVE_PICKER_TOOLTIP
+                    : undefined
+                }
+                disabled={props.picking || props.nativePickingDisabled}
+                title={
+                  props.nativePickingDisabled
+                    ? REMOTE_NATIVE_PICKER_TOOLTIP
+                    : undefined
+                }
                 onClick={() => {
                   setOpen(false);
                   props.onPickFromDisk?.();

@@ -18,6 +18,7 @@ export const FEDERATION_CAPABILITIES = [
   "scheduled_actions",
   "pending_request_control",
   "environment_actions",
+  "launchpad_metadata",
   "federated_search",
   "messaging_route",
   "pwrsnap_connection",

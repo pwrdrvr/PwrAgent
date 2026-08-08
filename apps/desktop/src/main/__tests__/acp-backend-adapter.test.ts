@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  AcpAgentUpdateStatus,
   AcpBackendId,
   AgentEvent,
   AppServerPendingRequestNotification,
@@ -58,6 +59,19 @@ describe("describeInstalledAcpBackend", () => {
     });
 
     expect(backend.methods).toContain("session/load");
+  });
+
+  it("advertises managed review for Kimi but not other ACP providers", () => {
+    const kimi = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:kimi" as AcpBackendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+    });
+    const gemini = describeInstalledAcpBackend(buildInstalledAgent());
+
+    expect(kimi.capabilities.startReview).toBe(true);
+    expect(gemini.capabilities.startReview).toBe(false);
   });
 
   it("advertises Grok 4.5 reasoning efforts in launchpad options", () => {
@@ -352,7 +366,7 @@ describe("AcpBackendAdapter", () => {
       backendId,
       registryId: "kimi",
       name: "Kimi Code CLI",
-      version: "1.44.0",
+      version: "0.30.0",
       distributionKind: "local",
       distributionSource: "kimi acp",
       installStatus: "installed",
@@ -553,6 +567,7 @@ describe("AcpBackendAdapter", () => {
 
     transport.emitSessionUpdate(session.sessionId, {
       sessionUpdate: "turn_completed",
+      outputText: "Build succeeded",
       usage: {
         inputTokens: 1_200,
         cachedReadTokens: 1_000,
@@ -717,7 +732,7 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
-  it("emits Grok thoughts as transient messages instead of replayable text", async () => {
+  it("does not emit Grok thoughts as live or replayable text", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();
     const events: AgentEvent[] = [];
@@ -833,66 +848,10 @@ describe("AcpBackendAdapter", () => {
       expect(
         events
           .filter(
-            (event) =>
-              event.notification.method === "item/transientMessage/updated" ||
-              event.notification.method === "item/agentMessage/delta",
+            (event) => event.notification.method === "item/agentMessage/delta",
           )
           .map((event) => event.notification),
       ).toEqual([
-        {
-          method: "item/transientMessage/updated",
-          params: {
-            threadId: session.sessionId,
-            turnId: "turn-1",
-            itemId: "transient-thought:turn-1",
-            role: "assistant",
-            text: "The",
-            phase: "commentary",
-          },
-        },
-        {
-          method: "item/transientMessage/updated",
-          params: {
-            threadId: session.sessionId,
-            turnId: "turn-1",
-            itemId: "transient-thought:turn-1",
-            role: "assistant",
-            text: "The code",
-            phase: "commentary",
-          },
-        },
-        {
-          method: "item/transientMessage/updated",
-          params: {
-            threadId: session.sessionId,
-            turnId: "turn-1",
-            itemId: "transient-thought:turn-1",
-            role: "assistant",
-            text: "The code seems",
-            phase: "commentary",
-          },
-        },
-        ...[
-          "The code seems to",
-          "The code seems to be",
-          "The code seems to be over",
-          "The code seems to be over here",
-          "The code seems to be over here.",
-          "So",
-          "So the",
-          "So the key",
-          "So the key logic is:",
-        ].map((text) => ({
-          method: "item/transientMessage/updated" as const,
-          params: {
-            threadId: session.sessionId,
-            turnId: "turn-1",
-            itemId: "transient-thought:turn-1",
-            role: "assistant" as const,
-            text,
-            phase: "commentary" as const,
-          },
-        })),
         {
           method: "item/agentMessage/delta",
           params: {
@@ -905,6 +864,12 @@ describe("AcpBackendAdapter", () => {
         },
       ]);
     });
+    expect(
+      events.filter(
+        (event) =>
+          event.notification.method === "item/transientMessage/updated",
+      ),
+    ).toEqual([]);
     expect(
       events.filter(
         (event) =>
@@ -1628,6 +1593,7 @@ describe("AcpBackendAdapter", () => {
         },
         captureStores: [],
         createAcpTransport: () => transport,
+        discoverLocalAcpAgents: async () => [],
         emit: vi.fn(async () => undefined),
         handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
       });
@@ -1792,6 +1758,215 @@ describe("AcpBackendAdapter", () => {
     expect(summary?.account).toBeUndefined();
     expect(readProviderStatus).toHaveBeenCalledTimes(1);
 
+    await adapter.close();
+  });
+
+  it("checks Grok updates in the background and persists one daily result", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    let stored: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version: "0.2.118",
+      activeCommand: "/opt/grok",
+    };
+    const upsertInstalledAgent = vi.fn((record: AcpInstalledAgentRecord) => {
+      stored = record;
+    });
+    const updateCheck = vi.fn(async () => ({
+      status: "available" as const,
+      checkedAt: Date.now(),
+      currentVersion: "0.2.118",
+      latestVersion: "1.0.0",
+      channel: "stable",
+    }));
+    const emit = vi.fn(async () => undefined);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored,
+        listInstalledAgents: () => [stored],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      checkGrokCliUpdate: updateCheck,
+      discoverLocalAcpAgents: async () => [],
+      emit,
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    const [summary] = await adapter.describeInstalledBackends();
+    expect(summary?.kind).toBe(backendId);
+    expect(updateCheck).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledWith({
+        backend: backendId,
+        notification: {
+          method: "backend/acpUpdateStatus/updated",
+          params: { backend: backendId },
+        },
+      });
+    });
+    expect(upsertInstalledAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ latestVersion: "1.0.0" }),
+        updateCommand: "/opt/grok",
+      }),
+    );
+
+    await adapter.describeInstalledBackends();
+    expect(updateCheck).toHaveBeenCalledOnce();
+    await adapter.close();
+  });
+
+  it.each([
+    {
+      change: "selected command",
+      installedVersion: "0.2.118",
+      command: "/new/grok",
+      previousCommand: "/old/grok",
+    },
+    {
+      change: "installed version",
+      installedVersion: "1.0.0",
+      command: "/opt/grok",
+      previousCommand: "/opt/grok",
+    },
+  ])("does not reuse update state after a $change change", async ({
+    installedVersion,
+    command,
+    previousCommand,
+  }) => {
+    const backendId = "acp:grok" as AcpBackendId;
+    let stored: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version: installedVersion,
+      activeCommand: command,
+      update: {
+        status: "available",
+        checkedAt: 100,
+        currentVersion: "0.2.118",
+        latestVersion: "1.0.0",
+      },
+      updateCommand: previousCommand,
+    };
+    const updateCheck = vi.fn(async (
+      _command: string,
+      options?: {
+        installedVersion?: string;
+        previous?: AcpAgentUpdateStatus;
+      },
+    ): Promise<AcpAgentUpdateStatus> => ({
+      status: "failed",
+      checkedAt: 500,
+      currentVersion: options?.installedVersion ?? "unknown",
+      error: "offline",
+    }));
+    const emit = vi.fn(async () => undefined);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored,
+        listInstalledAgents: () => [stored],
+        upsertInstalledAgent: (record) => {
+          stored = record;
+        },
+      },
+      captureStores: [],
+      checkGrokCliUpdate: updateCheck,
+      discoverLocalAcpAgents: async () => [],
+      emit,
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    await adapter.describeInstalledBackends();
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledOnce();
+    });
+
+    expect(updateCheck).toHaveBeenCalledWith(command, {
+      installedVersion,
+      previous: undefined,
+    });
+    expect(stored.version).toBe(installedVersion);
+    expect(stored.update).toMatchObject({
+      status: "failed",
+      currentVersion: installedVersion,
+      error: "offline",
+    });
+    await adapter.close();
+  });
+
+  it("preserves an acknowledgement committed while an update check runs", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    let stored: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version: "0.2.118",
+      activeCommand: "/opt/grok",
+      update: {
+        status: "available",
+        checkedAt: 100,
+        currentVersion: "0.2.118",
+        latestVersion: "1.0.0",
+      },
+      updateCommand: "/opt/grok",
+    };
+    let finishUpdate: ((update: AcpAgentUpdateStatus) => void) | undefined;
+    const updateCheck = vi.fn(async () =>
+      await new Promise<AcpAgentUpdateStatus>((resolve) => {
+        finishUpdate = resolve;
+      }),
+    );
+    const emit = vi.fn(async () => undefined);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored,
+        listInstalledAgents: () => [stored],
+        upsertInstalledAgent: (record) => {
+          stored = record;
+        },
+      },
+      captureStores: [],
+      checkGrokCliUpdate: updateCheck,
+      discoverLocalAcpAgents: async () => [],
+      emit,
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    await adapter.describeInstalledBackends();
+    await vi.waitFor(() => {
+      expect(updateCheck).toHaveBeenCalledOnce();
+    });
+    stored = {
+      ...stored,
+      update: {
+        ...stored.update!,
+        dismissedAt: 400,
+      },
+    };
+    finishUpdate?.({
+      status: "available",
+      checkedAt: 500,
+      currentVersion: "0.2.118",
+      latestVersion: "1.0.0",
+    });
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledOnce();
+    });
+
+    expect(stored.update).toMatchObject({
+      checkedAt: 500,
+      latestVersion: "1.0.0",
+      dismissedAt: 400,
+    });
     await adapter.close();
   });
 
@@ -2440,6 +2615,92 @@ describe("AcpBackendAdapter", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("replaces a cached Kimi model catalog with a legacy-CLI diagnostic", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const cached: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      version: "1.46.0",
+      activeCommand: "/Users/me/.local/bin/kimi",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "/Users/me/.local/bin/kimi",
+        args: ["acp"],
+        env: {},
+      },
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        models: {
+          currentModelId: "kimi-code/kimi-for-coding",
+          availableModels: [
+            { id: "kimi-code/kimi-for-coding", label: "Kimi for Coding" },
+          ],
+        },
+      },
+    };
+    const diagnostic: AcpInstalledAgentRecord = {
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      version: "1.46.0",
+      distributionKind: "local",
+      distributionSource: "/Users/me/.local/bin/kimi (legacy kimi-cli ignored)",
+      installStatus: "unavailable",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "local-kimi-cli",
+      installedAt: 2000,
+      updatedAt: 2000,
+      lastError: "Legacy Python kimi-cli was found and ignored.",
+      instances: [],
+      incompatibleInstances: [
+        {
+          command: "/Users/me/.local/bin/kimi",
+          version: "1.46.0",
+          source: "path",
+        },
+      ],
+    };
+    const upsertInstalledAgent = vi.fn();
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => cached,
+        listInstalledAgents: () => [cached],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [diagnostic],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await expect(adapter.describeInstalledBackends()).resolves.toEqual([
+      expect.objectContaining({
+        kind: backendId,
+        available: false,
+        unavailableReason: diagnostic.lastError,
+        acp: expect.objectContaining({
+          installStatus: "unavailable",
+          runtime: undefined,
+        }),
+        launchpadOptions: undefined,
+      }),
+    ]);
+    expect(upsertInstalledAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installStatus: "unavailable",
+        incompatibleInstances: diagnostic.incompatibleInstances,
+      }),
+    );
+
+    await adapter.close();
   });
 
   it("does not create an ACP client when discovery finishes after close", async () => {

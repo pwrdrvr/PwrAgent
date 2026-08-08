@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 46;
+export const CURRENT_STATE_DB_USER_VERSION = 47;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -210,6 +210,17 @@ const DIRECTORY_OVERLAY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS directory_overlay (
   directory_key TEXT PRIMARY KEY,
   payload       TEXT NOT NULL
+);
+`;
+
+/* Viewer-owned directory display preferences for federation windows. The
+   owning instance's directory overlay remains untouched. */
+const REMOTE_DIRECTORY_OVERLAY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS remote_directory_overlay (
+  instance_id   TEXT NOT NULL,
+  directory_key TEXT NOT NULL,
+  payload       TEXT NOT NULL,
+  PRIMARY KEY(instance_id, directory_key)
 );
 `;
 
@@ -1354,6 +1365,12 @@ FROM remote_thread_pins
 LEFT JOIN federation_peers
   ON federation_peers.peer_id = remote_thread_pins.instance_id
 `);
+        db.pragma("user_version = 46");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 47) {
+      db.transaction(() => {
+        db.exec(REMOTE_DIRECTORY_OVERLAY_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1516,6 +1533,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(DIRECTORY_GIT_STATUS_SCHEMA);
     db.exec(THREAD_GIT_WORKING_STATE_SCHEMA);
     db.exec(DIRECTORY_OVERLAY_SCHEMA);
+    db.exec(REMOTE_DIRECTORY_OVERLAY_SCHEMA);
     db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
     db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
     db.exec(ACP_AGENT_SCHEMA);

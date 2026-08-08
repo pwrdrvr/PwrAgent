@@ -57,6 +57,34 @@ describe("materializeNavigationThreads — subthread grouping", () => {
       threads.find((thread) => thread.id === "nested-child")?.parentThreadId,
     ).toBe("root-thread");
   });
+
+  it("preserves an explicit cross-provider parent identity", () => {
+    const threads = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:codex-child": {
+          backend: "codex",
+          threadId: "codex-child",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          parentThreadId: "kimi-parent",
+          parentThreadBackend: "acp:kimi",
+        },
+      },
+      previousKnownThreadKeys: [],
+      threads: [
+        buildThread({ id: "kimi-parent", source: "acp:kimi" }),
+        buildThread({ id: "codex-child" }),
+      ],
+    });
+
+    expect(
+      threads.find((thread) => thread.id === "codex-child"),
+    ).toMatchObject({
+      parentThreadId: "kimi-parent",
+      parentThreadBackend: "acp:kimi",
+    });
+  });
 });
 
 describe("buildDirectorySummaries", () => {

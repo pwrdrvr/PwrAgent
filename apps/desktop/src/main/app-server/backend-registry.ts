@@ -39,6 +39,7 @@ import {
   type PwrSnapConnectionService,
 } from "../mcp-connections/pwrsnap-connection-service";
 import {
+  buildManagedReviewContextInput,
   buildManagedReviewPrompt,
   formatManagedReviewOutput,
   parseManagedReviewOutput,
@@ -567,6 +568,9 @@ function assistantOutputForTurn(
 type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
+  readConfiguredMcpServerNames?(params?: {
+    cwd?: string;
+  }): Promise<string[]>;
   listThreads(
     params?: {
       archived?: boolean;
@@ -2601,7 +2605,7 @@ type TaskMonitorDelegationRecord = {
 };
 
 type ReviewSubAgentRecord = {
-  backend: Exclude<AppServerBackendKind, AcpBackendId>;
+  backend: AppServerBackendKind;
   createdAt: number;
   displayText: string;
   fastMode?: boolean;
@@ -5809,33 +5813,57 @@ function buildCodexConnectionMcpServerName(
 
 function buildCodexConnectionMcpConfig(
   registrations: McpConnectionBridgeRegistration[],
+  inheritedServerNames?: readonly string[],
 ): CodexThreadStartParams["config"] | undefined {
   if (registrations.length === 0) return undefined;
+  const inheritedNames = new Set(inheritedServerNames ?? []);
   return {
     mcp_servers: Object.fromEntries(
-      registrations.flatMap(({ server }) => [
+      registrations.flatMap(({ server }) => {
         // Codex recursively merges thread config over the operator's global
-        // config. Disable both the original name and our former fixed alias,
-        // then give this grant a stable hashed key so inherited HTTP fields
-        // cannot turn the stdio bridge into an invalid mixed transport.
-        [server.name, { enabled: false }],
-        [
+        // config. Disable only aliases that were actually inherited: a new
+        // `{ enabled: false }` entry has no command or URL, which Codex
+        // correctly rejects as a transport-less MCP server. The bridge itself
+        // always receives a unique hashed name so it cannot mix with an
+        // inherited HTTP server.
+        const aliases = [
+          server.name,
           `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}`,
-          { enabled: false },
-        ],
-        [
-          buildCodexConnectionMcpServerName(server),
-          {
-            enabled: true,
-            command: server.command,
-            args: server.args,
-            env: server.env,
-            tool_timeout_sec: MCP_CONNECTION_TOOL_TIMEOUT_SECONDS,
-          },
-        ],
-      ]),
+        ].filter((name) => inheritedNames.has(name));
+        return [
+          ...aliases.map((name) => [name, { enabled: false }] as const),
+          [
+            buildCodexConnectionMcpServerName(server),
+            {
+              enabled: true,
+              command: server.command,
+              args: server.args,
+              env: server.env,
+              tool_timeout_sec: MCP_CONNECTION_TOOL_TIMEOUT_SECONDS,
+            },
+          ] as const,
+        ];
+      }),
     ),
   } as CodexThreadStartParams["config"];
+}
+
+function userActionablePwrSnapMcpConfigError(
+  error: unknown,
+  registrations: McpConnectionBridgeRegistration[],
+): unknown {
+  if (
+    !registrations.some(({ server }) => server.name === PWRSNAP_MCP_CONNECTION_ID)
+    || !(error instanceof Error)
+    || !/invalid transport\s+in\s+`?mcp_servers\./.test(error.message)
+  ) {
+    return error;
+  }
+  return new Error(
+    "PwrSnap was not contacted: Codex rejected PwrAgent's temporary MCP configuration. Update PwrAgent and retry the thread. If this still happens after updating, repair or remove the named MCP server in Codex configuration. Details: "
+      + error.message,
+    { cause: error },
+  );
 }
 
 function mergeCodexThreadConfigs(
@@ -6372,6 +6400,7 @@ export class DesktopBackendRegistry {
     string,
     ReviewSubAgentRecord
   >();
+  private readonly managedReviewOutputByReviewTurn = new Map<string, string>();
   private readonly codexNativeSubAgentParents = new Map<string, string>();
   private readonly codexNativeSubAgentReconciliations = new Map<
     string,
@@ -7501,6 +7530,7 @@ export class DesktopBackendRegistry {
     const baseParams = {
       threadId: event.entry.threadId,
       queueEntryId: event.entry.id,
+      queueEntryCreatedAt: event.entry.createdAt,
       origin: event.entry.origin,
       automationRunId: event.entry.automationRunId,
       automationName: event.entry.automationName,
@@ -8221,6 +8251,7 @@ export class DesktopBackendRegistry {
     acpRuntime?: BackendAcpSessionRuntimeState;
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpServerRegistration;
+    hidden?: boolean;
   }): Promise<{ threadId: string }> {
     const client = await this.acpBackend.getClient(params.backend);
     const initialExecutionMode = this.usesSlashControlledAcpExecutionModes(
@@ -8233,6 +8264,7 @@ export class DesktopBackendRegistry {
       executionMode: initialExecutionMode,
       acpRuntime: params.acpRuntime,
       additionalMcpRegistration: params.mcpRegistration,
+      ...(params.hidden ? { hidden: true } : {}),
     });
     if (
       this.usesSlashControlledAcpExecutionModes(params.backend) &&
@@ -9094,6 +9126,19 @@ export class DesktopBackendRegistry {
     if (!session) {
       throw new Error(`ACP thread not found: ${params.threadId}`);
     }
+    let activeThreads: AppServerThreadSummary[] = [];
+    try {
+      activeThreads = await this.listThreads({
+        archived: false,
+        callerReason: "archive-cleanup",
+      });
+    } catch (error) {
+      backendRegistryLog.warn("ACP archive child lookup failed", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const archivedAt = Date.now();
     this.acpBackend.upsertSession({
       ...session,
@@ -9106,6 +9151,19 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       origin: "thread-archive",
     });
+    try {
+      await this.ungroupChildrenOfArchivedThread({
+        backend: params.backend,
+        activeThreads,
+        parentThreadId: params.threadId,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("ACP archive child ungrouping failed", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return {
       backend: params.backend,
       threadId: params.threadId,
@@ -10144,6 +10202,7 @@ export class DesktopBackendRegistry {
     branchName?: string;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
     parentThreadId?: string;
+    parentThreadBackend?: AppServerBackendKind;
     prAutoDispatchEnabled?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
@@ -10158,6 +10217,7 @@ export class DesktopBackendRegistry {
       branchName,
       requiredWorkMode,
       parentThreadId,
+      parentThreadBackend,
       prAutoDispatchEnabled,
       mcpConnectionIds,
       ...request
@@ -10306,6 +10366,9 @@ export class DesktopBackendRegistry {
         : [];
     const connectionMcpConfig = buildCodexConnectionMcpConfig(
       mcpConnectionRegistrations,
+      backend === "codex" && mcpConnectionRegistrations.length > 0
+        ? await this.readConfiguredCodexMcpServerNames(cwd)
+        : undefined,
     );
     const codexMcpConfig = mergeCodexThreadConfigs(
       pdfMcpConfig,
@@ -10394,7 +10457,10 @@ export class DesktopBackendRegistry {
               : String(rollbackError),
         });
       });
-      throw error;
+      throw userActionablePwrSnapMcpConfigError(
+        error,
+        mcpConnectionRegistrations,
+      );
     }
     pdfMcpRegistration?.bindThread(result.threadId);
     for (const registration of mcpConnectionRegistrations) {
@@ -10513,6 +10579,7 @@ export class DesktopBackendRegistry {
         backend,
         threadId: result.threadId,
         parentThreadId,
+        parentThreadBackend,
       });
       await this.emit({
         backend,
@@ -10521,6 +10588,7 @@ export class DesktopBackendRegistry {
           params: {
             threadId: result.threadId,
             parentThreadId,
+            parentThreadBackend,
           },
         },
       });
@@ -10825,6 +10893,7 @@ export class DesktopBackendRegistry {
           backend,
           threadId: result.threadId,
           parentThreadId: request.parentThreadId,
+          parentThreadBackend: request.parentThreadBackend,
         });
         await this.emit({
           backend,
@@ -10833,6 +10902,7 @@ export class DesktopBackendRegistry {
             params: {
               threadId: result.threadId,
               parentThreadId: request.parentThreadId,
+              parentThreadBackend: request.parentThreadBackend,
             },
           },
         });
@@ -11162,6 +11232,27 @@ export class DesktopBackendRegistry {
     return registrations;
   }
 
+  private async readConfiguredCodexMcpServerNames(
+    cwd?: string,
+  ): Promise<string[] | undefined> {
+    if (!this.codexClient.readConfiguredMcpServerNames) {
+      return undefined;
+    }
+    try {
+      return await this.codexClient.readConfiguredMcpServerNames(
+        cwd ? { cwd } : undefined,
+      );
+    } catch (error) {
+      // A compatibility fallback must not prevent a selected connection from
+      // starting. Without an inventory, omit disable entries rather than
+      // creating a transport-less MCP config record.
+      backendRegistryLog.warn("connection_mcp_config_inventory_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
   private async registerAcpMcpConnections(
     connectionIds: string[] | undefined,
     threadId?: string,
@@ -11234,6 +11325,19 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
+      const pendingManagedReviewContextEntryIds =
+        overlay?.pendingManagedReviewContextEntryIds ?? [];
+      const managedReviewEntriesById = new Map(
+        (overlay?.managedReviewEntries ?? []).map((entry) => [entry.id, entry]),
+      );
+      const pendingManagedReviewContexts =
+        pendingManagedReviewContextEntryIds.flatMap((entryId) => {
+          const entry = managedReviewEntriesById.get(entryId);
+          if (!entry) {
+            return [];
+          }
+          return [entry.output ? JSON.stringify(entry.output) : entry.review];
+        });
       const modelSettings = await this.resolveModelSettings(params.backend, {
         model: migrationApplied
           ? overlay?.model
@@ -11262,9 +11366,20 @@ export class DesktopBackendRegistry {
         });
         // ACP adapters already accept data-URL image parts. Keeping those
         // intact avoids changing their established image payload contract.
-        const input = await enrichLocalFileInputs(preparedPdfInput.input, {
+        const userInput = await enrichLocalFileInputs(preparedPdfInput.input, {
           privateStorageRoots: this.localFilePrivateStorageRoots,
         });
+        const input = pendingManagedReviewContexts.length > 0
+          ? [
+              {
+                type: "text" as const,
+                text: buildManagedReviewContextInput(
+                  pendingManagedReviewContexts,
+                ),
+              },
+              ...userInput,
+            ]
+          : userInput;
         if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
           await this.flushQueuedExecutionModeIfPresent(
             params.threadId,
@@ -11289,6 +11404,11 @@ export class DesktopBackendRegistry {
           model: modelSettings.model,
           reasoningEffort: modelSettings.reasoningEffort,
         });
+        await this.overlayStore.consumeManagedReviewContexts({
+          backend: params.backend,
+          threadId: params.threadId,
+          entryIds: pendingManagedReviewContextEntryIds,
+        });
         this.pdfAttachmentStore.bindTurn(
           {
             backend: params.backend,
@@ -11300,7 +11420,7 @@ export class DesktopBackendRegistry {
         this.scheduleThreadTitleGeneration({
           backend: params.backend,
           threadId: result.threadId,
-          input,
+          input: userInput,
         });
         this.bindPendingThreadMessageContext(
           pendingMessageContextId,
@@ -11354,6 +11474,14 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
+      cwd =
+        params.backend === "codex"
+          ? await this.resolveThreadEnvironmentCwd(
+              params.backend,
+              params.threadId,
+              overlay,
+            )
+          : undefined;
       const hasPdfMcpToolCatalog =
         params.backend === "codex" && this.hasPdfMcpToolCatalog(overlay);
       if (hasPdfMcpToolCatalog) {
@@ -11372,7 +11500,10 @@ export class DesktopBackendRegistry {
         );
         codexMcpConfig = mergeCodexThreadConfigs(
           codexMcpConfig,
-          buildCodexConnectionMcpConfig(registrations),
+          buildCodexConnectionMcpConfig(
+            registrations,
+            await this.readConfiguredCodexMcpServerNames(cwd),
+          ),
         );
       }
       const preparedPdfInput = await preparePdfTurnInput({
@@ -11400,14 +11531,6 @@ export class DesktopBackendRegistry {
           : params.reasoningEffort ?? overlay?.reasoningEffort,
         fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
       });
-      cwd =
-        params.backend === "codex"
-          ? await this.resolveThreadEnvironmentCwd(
-              params.backend,
-              params.threadId,
-              overlay,
-            )
-          : undefined;
       await this.emit({
         backend: params.backend,
         notification: {
@@ -11928,34 +12051,80 @@ export class DesktopBackendRegistry {
 
   async startReview(params: StartReviewRequest): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
-    if (isAcpBackendId(params.backend)) {
+    const acpManagedMode =
+      isAcpBackendId(params.backend)
+      && this.acpBackend.supportsManagedReview(params.backend);
+    if (isAcpBackendId(params.backend) && !acpManagedMode) {
       throw new Error("Selected backend does not support review/start");
     }
-    const managedMode =
+    const managedReviewExperiment =
       params.backend === "codex" && this.resolveManagedReviewEnabledFn();
+    let managedMode = acpManagedMode || managedReviewExperiment;
     const reserveCodexReviewStart = params.backend === "codex";
+    const acpReviewReservationKey = isAcpBackendId(params.backend)
+      ? buildTurnStartReservationKey(params.backend, params.threadId)
+      : undefined;
     if (reserveCodexReviewStart) {
       if (this.threadHasActiveTurn(params.threadId)) {
         throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
       }
       this.reservedCodexStartThreadIds.add(params.threadId);
+    } else if (acpReviewReservationKey) {
+      if (this.threadHasActiveTurn(params.threadId, params.backend)) {
+        throw new Error(`Thread already has an active turn in progress: ${params.threadId}`);
+      }
+      this.reservedAcpStartThreadKeys.add(acpReviewReservationKey);
     }
     let modelSettings: ModelSettings = {};
     let result: { threadId: string; reviewThreadId: string; turnId: string };
     let overlay: ThreadOverlayState | undefined;
     let cwd: string | undefined;
+    let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
       }
-      overlay =
-        params.backend === "codex"
-          ? await this.overlayStore.getThreadOverlayState({
-              backend: params.backend,
-              threadId: params.threadId,
-            })
-          : undefined;
+      overlay = managedMode || params.backend === "codex"
+        ? await this.overlayStore.getThreadOverlayState({
+            backend: params.backend,
+            threadId: params.threadId,
+          })
+        : undefined;
       if (params.backend === "codex") {
+        codexEnvironmentRuntime = overlay?.codexEnvironmentRuntime;
+        const threadCwd = await this.resolveThreadEnvironmentCwd(
+          params.backend,
+          params.threadId,
+          overlay,
+        );
+        const requestedCwd = params.cwd?.trim();
+        cwd = requestedCwd || threadCwd;
+        const normalizedRequestedCwd = normalizeLinkedDirectoryIdentityPath(
+          requestedCwd,
+        );
+        const normalizedThreadCwd = normalizeLinkedDirectoryIdentityPath(
+          threadCwd,
+        );
+        const usesSelectedSecondaryWorkspace = Boolean(
+          normalizedRequestedCwd
+          && normalizedRequestedCwd !== normalizedThreadCwd,
+        );
+        // Codex review/start has no cwd field. When the operator selects a
+        // linked project other than the parent thread's workspace, start the
+        // review as a managed child so both thread/start and turn/start are
+        // explicitly rooted in the selected project.
+        managedMode ||= usesSelectedSecondaryWorkspace;
+        if (
+          usesSelectedSecondaryWorkspace
+          && codexEnvironmentRuntime?.executionTarget !== "remote"
+        ) {
+          // A persisted local environment can contain cwd-specific PATH or
+          // VIRTUAL_ENV hydration from the parent workspace. Remote runtimes
+          // must retain their environment ID so Codex routes the selected cwd
+          // to the same host.
+          codexEnvironmentRuntime = undefined;
+        }
+      } else if (acpManagedMode) {
         cwd =
           params.cwd?.trim()
           || await this.resolveThreadEnvironmentCwd(
@@ -11991,15 +12160,17 @@ export class DesktopBackendRegistry {
           delivery: params.delivery ?? "inline",
           ...modelSettings,
           ...(cwd ? { cwd } : {}),
-          ...(overlay?.codexEnvironmentRuntime
-            ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+          ...(codexEnvironmentRuntime
+            ? { codexEnvironmentRuntime }
             : {}),
         });
       };
 
       result = managedMode
         ? await this.startManagedReviewChild({
+            backend: params.backend,
             cwd,
+            codexEnvironmentRuntime,
             modelSettings,
             overlay,
             parentThreadId: params.threadId,
@@ -12011,6 +12182,9 @@ export class DesktopBackendRegistry {
     } catch (error) {
       if (reserveCodexReviewStart) {
         this.reservedCodexStartThreadIds.delete(params.threadId);
+      }
+      if (acpReviewReservationKey) {
+        this.reservedAcpStartThreadKeys.delete(acpReviewReservationKey);
       }
       throw error;
     }
@@ -12041,9 +12215,11 @@ export class DesktopBackendRegistry {
       } finally {
         this.reservedCodexStartThreadIds.delete(params.threadId);
       }
+    } else if (acpReviewReservationKey) {
+      this.reservedAcpStartThreadKeys.delete(acpReviewReservationKey);
     }
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
-      backend: params.backend as Exclude<AppServerBackendKind, AcpBackendId>,
+      backend: params.backend,
       createdAt: Date.now(),
       displayText: reviewTaskLabel(params.target),
       ...(modelSettings.fastMode !== undefined ? { fastMode: modelSettings.fastMode } : {}),
@@ -12089,12 +12265,48 @@ export class DesktopBackendRegistry {
   }
 
   private async startManagedReviewChild(params: {
+    backend: AppServerBackendKind;
+    codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     cwd?: string;
     modelSettings: ModelSettings;
     overlay?: ThreadOverlayState;
     parentThreadId: string;
     target: StartReviewRequest["target"];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    if (isAcpBackendId(params.backend)) {
+      const parentSession = this.acpBackend.getSession(
+        params.backend,
+        params.parentThreadId,
+      );
+      const acpRuntime = parentSession?.acpRuntime;
+      const executionMode =
+        params.overlay?.executionMode
+        ?? parentSession?.executionMode
+        ?? "default";
+      const thread = await this.startAcpSession({
+        backend: params.backend,
+        cwd: params.cwd,
+        executionMode,
+        acpRuntime,
+        reasoningEffort:
+          params.modelSettings.reasoningEffort
+          ?? acpRuntime?.reasoningEffort,
+        hidden: true,
+      });
+      const turn = await this.startAcpTurn({
+        backend: params.backend,
+        threadId: thread.threadId,
+        input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
+        model: params.modelSettings.model,
+        reasoningEffort: params.modelSettings.reasoningEffort,
+      });
+      return {
+        threadId: params.parentThreadId,
+        reviewThreadId: turn.threadId,
+        turnId: turn.turnId,
+      };
+    }
+
     const executionMode =
       params.overlay?.executionMode
       ?? await this.resolveCodexThreadExecutionModeForActiveTurn(
@@ -12108,8 +12320,8 @@ export class DesktopBackendRegistry {
       ephemeral: true,
       sandbox: modeSettings.sandbox,
       ...params.modelSettings,
-      ...(params.overlay?.codexEnvironmentRuntime
-        ? { codexEnvironmentRuntime: params.overlay.codexEnvironmentRuntime }
+      ...(params.codexEnvironmentRuntime
+        ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
         : {}),
     });
     this.reservedCodexStartThreadIds.add(thread.threadId);
@@ -12121,8 +12333,8 @@ export class DesktopBackendRegistry {
         approvalPolicy: modeSettings.approvalPolicy,
         sandbox: modeSettings.sandbox,
         ...params.modelSettings,
-        ...(params.overlay?.codexEnvironmentRuntime
-          ? { codexEnvironmentRuntime: params.overlay.codexEnvironmentRuntime }
+        ...(params.codexEnvironmentRuntime
+          ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
           : {}),
       });
       this.activeTurnKeys.add(
@@ -12223,6 +12435,14 @@ export class DesktopBackendRegistry {
       ?? (
         request.backend === "codex"
         && this.reservedCodexStartThreadIds.has(request.threadId)
+          ? `pending:${request.threadId}`
+          : undefined
+      )
+      ?? (
+        isAcpBackendId(request.backend)
+        && this.reservedAcpStartThreadKeys.has(
+          buildTurnStartReservationKey(request.backend, request.threadId),
+        )
           ? `pending:${request.threadId}`
           : undefined
       );
@@ -12588,8 +12808,18 @@ export class DesktopBackendRegistry {
 
       try {
         if (request.operation === "stop") {
-          const stopped = isAcpBackendId(request.backend)
-            ? await this.interruptAcpTurn(active, true)
+          const managedAcpReview = isAcpBackendId(request.backend)
+            ? this.findManagedReviewForParentTurn({
+                backend: request.backend,
+                parentThreadId: request.threadId,
+                turnId: active.turnId,
+              })
+            : undefined;
+          const stopped = isAcpBackendId(request.backend) && !managedAcpReview
+            ? await this.acpSessionPromptLocks.run(
+                lockKey,
+                async () => await this.interruptAcpTurn(active, true),
+              )
             : await this.interruptTurn(active);
           return {
             ok: true,
@@ -12651,13 +12881,7 @@ export class DesktopBackendRegistry {
       }
     };
 
-    return await this.activeTurnControlLocks.run(
-      lockKey,
-      async () =>
-        isAcpBackendId(request.backend)
-          ? await this.acpSessionPromptLocks.run(lockKey, perform)
-          : await perform(),
-    );
+    return await this.activeTurnControlLocks.run(lockKey, perform);
   }
 
   private async interruptAcpTurn(
@@ -12716,16 +12940,32 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    if (isAcpBackendId(params.backend)) {
-      return await this.interruptAcpTurn(params);
-    }
-
     const managedReview = this.findManagedReviewForParentTurn({
       backend: params.backend,
       parentThreadId: params.threadId,
       turnId: params.turnId,
     });
     if (managedReview) {
+      if (isAcpBackendId(params.backend)) {
+        const childLockKey = executionModeQueueKey(
+          params.backend,
+          managedReview.reviewThreadId,
+        );
+        await this.acpSessionPromptLocks.run(
+          childLockKey,
+          async () => await this.interruptAcpTurn({
+            backend: params.backend,
+            threadId: managedReview.reviewThreadId,
+            turnId: managedReview.turnId,
+          }),
+        );
+        backendRegistryLog.info("managed ACP review interrupt requested", {
+          parentThreadId: managedReview.parentThreadId,
+          reviewThreadId: managedReview.reviewThreadId,
+          turnId: managedReview.turnId,
+        });
+        return params;
+      }
       const activeMode = this.activeCodexTurnModes.get(
         buildActiveTurnModeKey(
           managedReview.reviewThreadId,
@@ -12745,6 +12985,10 @@ export class DesktopBackendRegistry {
         turnId: managedReview.turnId,
       });
       return params;
+    }
+
+    if (isAcpBackendId(params.backend)) {
+      return await this.interruptAcpTurn(params);
     }
 
     const requestedCodexTurnModeKey =
@@ -14840,6 +15084,7 @@ export class DesktopBackendRegistry {
 
   private async ensureHandoffTrustedDirectoryLaunchpad(params: {
     cwd: string;
+    parentThreadBackend: AppServerBackendKind;
     preferredBackend: AppServerBackendKind;
     parentThreadId: string;
     parentThreadTitle?: string;
@@ -14854,6 +15099,7 @@ export class DesktopBackendRegistry {
       directoryPath,
       currentBranch: await readCurrentGitBranch(directoryPath).catch(() => undefined),
       parentThreadId: params.parentThreadId,
+      parentThreadBackend: params.parentThreadBackend,
       parentThreadTitle: params.parentThreadTitle,
       preferredBackend: params.preferredBackend,
       registeredAt: Date.now(),
@@ -14909,6 +15155,7 @@ export class DesktopBackendRegistry {
 
     await this.ensureHandoffTrustedDirectoryLaunchpad({
       cwd: params.cwd,
+      parentThreadBackend: params.backend,
       preferredBackend: params.backend,
       parentThreadId: params.sourceThreadId,
       parentThreadTitle: params.sourceThread?.title,
@@ -14918,10 +15165,17 @@ export class DesktopBackendRegistry {
 
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
+    options?: {
+      /**
+       * A remote viewer may persist the draft here, but its matching local path
+       * is never a valid source of environment/filesystem metadata.
+       */
+      skipFilesystemInspection?: boolean;
+    },
   ): Promise<EnsureDirectoryLaunchpadResponse> {
-    const codexEnvironmentOptions = await listCodexEnvironmentOptions(
-      request.directoryPath,
-    );
+    const codexEnvironmentOptions = options?.skipFilesystemInspection
+      ? []
+      : await listCodexEnvironmentOptions(request.directoryPath);
     const existing = await this.overlayStore.getDirectoryLaunchpad({
       directoryKey: request.directoryKey,
     });
@@ -14949,6 +15203,8 @@ export class DesktopBackendRegistry {
       };
       const requestParentThreadId =
         request.parentThreadId ?? normalizedExisting.parentThreadId;
+      const requestParentThreadBackend =
+        request.parentThreadBackend ?? normalizedExisting.parentThreadBackend;
       const requestParentThreadTitle =
         request.parentThreadTitle ?? normalizedExisting.parentThreadTitle;
       const identityChanged =
@@ -14958,6 +15214,7 @@ export class DesktopBackendRegistry {
       const parentChanged =
         request.parentThreadId !== undefined &&
         (normalizedExisting.parentThreadId !== request.parentThreadId ||
+          normalizedExisting.parentThreadBackend !== request.parentThreadBackend ||
           normalizedExisting.parentThreadTitle !== request.parentThreadTitle);
 
       if (isEmptyDirectoryLaunchpadDraft(existing)) {
@@ -14978,6 +15235,7 @@ export class DesktopBackendRegistry {
           workMode: defaultLaunchpadWorkMode(request, defaults),
           branchName: existing.branchName ?? request.currentBranch,
           parentThreadId: requestParentThreadId,
+          parentThreadBackend: requestParentThreadBackend,
           parentThreadTitle: requestParentThreadTitle,
           registeredAt,
           updatedAt: Date.now(),
@@ -15010,6 +15268,7 @@ export class DesktopBackendRegistry {
               directoryLabel: request.directoryLabel,
               directoryPath: request.directoryPath,
               parentThreadId: requestParentThreadId,
+              parentThreadBackend: requestParentThreadBackend,
               parentThreadTitle: requestParentThreadTitle,
               registeredAt,
               updatedAt: Date.now(),
@@ -15045,6 +15304,7 @@ export class DesktopBackendRegistry {
       workMode: defaultLaunchpadWorkMode(request, defaults),
       branchName: request.currentBranch,
       parentThreadId: request.parentThreadId,
+      parentThreadBackend: request.parentThreadBackend,
       parentThreadTitle: request.parentThreadTitle,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -15833,7 +16093,9 @@ export class DesktopBackendRegistry {
       acpRuntime: launchpad.acpRuntime,
       codexEnvironmentRuntime,
       directoryKey: launchpad.directoryKey,
-      parentThreadId: request.parentThreadId,
+      parentThreadId: request.parentThreadId ?? launchpad.parentThreadId,
+      parentThreadBackend:
+        request.parentThreadBackend ?? launchpad.parentThreadBackend,
     });
     const linkedDirectory = linkedDirectories?.[0];
     if (linkedDirectory) {
@@ -19768,6 +20030,7 @@ export class DesktopBackendRegistry {
   }): Promise<void> {
     const completedAt =
       completedAtFromTerminalNotification(params.notification) ?? Date.now();
+    const completedItemOutput = this.takeManagedReviewOutput(params.record);
     if (params.method === "turn/completed") {
       const output = await this.readManagedReviewOutput(
         params.record,
@@ -19775,6 +20038,7 @@ export class DesktopBackendRegistry {
           AppServerNotification,
           { method: "turn/completed" }
         >,
+        completedItemOutput,
       );
       const parsed = parseManagedReviewOutput(output);
       const review = parsed
@@ -19796,6 +20060,7 @@ export class DesktopBackendRegistry {
         backend: params.record.backend,
         threadId: params.record.parentThreadId,
         entry,
+        pendingContext: isAcpBackendId(params.record.backend),
       });
       await this.emit({
         backend: params.record.backend,
@@ -19896,6 +20161,7 @@ export class DesktopBackendRegistry {
   private async readManagedReviewOutput(
     record: ReviewSubAgentRecord,
     notification: Extract<AppServerNotification, { method: "turn/completed" }>,
+    completedItemOutput?: string,
   ): Promise<string | undefined> {
     const terminalOutput = notification.params.turn?.output
       ?.map((item) => item.text)
@@ -19904,6 +20170,9 @@ export class DesktopBackendRegistry {
       .trim();
     if (terminalOutput) {
       return terminalOutput;
+    }
+    if (completedItemOutput?.trim()) {
+      return completedItemOutput.trim();
     }
     try {
       const replay = await this.readThread({
@@ -19922,6 +20191,47 @@ export class DesktopBackendRegistry {
       });
       return undefined;
     }
+  }
+
+  private rememberManagedReviewOutput(event: AgentEvent): void {
+    if (
+      event.notification.method !== "item/completed"
+      || readNotificationItemType(event.notification) !== "agentMessage"
+    ) {
+      return;
+    }
+    const params = readRecord(event.notification.params);
+    const reviewThreadId = readNonEmptyString(params?.threadId);
+    const turnId = readNonEmptyString(params?.turnId);
+    const output = textFragmentsFromCodexNotification(event.notification)
+      .at(-1)
+      ?.trim();
+    if (!reviewThreadId || !turnId || !output) {
+      return;
+    }
+    const record = this.findManagedReviewForChildRequest({
+      backend: event.backend,
+      reviewThreadId,
+      turnId,
+    });
+    if (record?.mode !== "managed") {
+      return;
+    }
+    this.managedReviewOutputByReviewTurn.set(
+      buildReviewSubAgentKey(event.backend, reviewThreadId, record.turnId),
+      output,
+    );
+  }
+
+  private takeManagedReviewOutput(record: ReviewSubAgentRecord): string | undefined {
+    const key = buildReviewSubAgentKey(
+      record.backend,
+      record.reviewThreadId,
+      record.turnId,
+    );
+    const output = this.managedReviewOutputByReviewTurn.get(key);
+    this.managedReviewOutputByReviewTurn.delete(key);
+    return output;
   }
 
   private findActiveReviewSubAgentForTerminal(params: {
@@ -20186,11 +20496,13 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): Promise<ArchiveCleanupMetadata> {
     const activeThreads = await this.listThreads({
-      backend: params.backend,
       archived: false,
       callerReason: "archive-cleanup",
     });
-    const activeThread = activeThreads.find((thread) => thread.id === params.threadId);
+    const activeThread = activeThreads.find(
+      (thread) =>
+        thread.source === params.backend && thread.id === params.threadId,
+    );
     let archivedThreads: AppServerThreadSummary[] = [];
     try {
       archivedThreads = await this.listThreads({
@@ -20601,25 +20913,59 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    const activeThreadIds = params.activeThreads
-      .filter((thread) => thread.source === params.backend)
-      .map((thread) => thread.id);
-    const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
-      backend: params.backend,
-      threadIds: activeThreadIds,
-    });
-    const childThreadIds = activeThreadIds.filter(
-      (threadId) =>
-        overlaysByThreadId[threadId]?.parentThreadId === params.parentThreadId,
+    const activeThreadsByBackend = new Map<
+      AppServerBackendKind,
+      AppServerThreadSummary[]
+    >();
+    for (const thread of params.activeThreads) {
+      const backendThreads = activeThreadsByBackend.get(thread.source) ?? [];
+      backendThreads.push(thread);
+      activeThreadsByBackend.set(thread.source, backendThreads);
+    }
+    const childThreads: Array<{
+      backend: AppServerBackendKind;
+      threadId: string;
+    }> = [];
+    const legacyParentMatches = params.activeThreads.filter(
+      (thread) => thread.id === params.parentThreadId,
     );
-    if (childThreadIds.length === 0) {
+    for (const [backend, threads] of activeThreadsByBackend) {
+      const threadIds = threads.map((thread) => thread.id);
+      const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
+        backend,
+        threadIds,
+      });
+      for (const threadId of threadIds) {
+        const overlay = overlaysByThreadId[threadId];
+        if (overlay?.parentThreadId !== params.parentThreadId) {
+          continue;
+        }
+        if (overlay.parentThreadBackend) {
+          if (overlay.parentThreadBackend === params.backend) {
+            childThreads.push({ backend, threadId });
+          }
+          continue;
+        }
+        if (backend === params.backend) {
+          childThreads.push({ backend, threadId });
+          continue;
+        }
+        if (
+          legacyParentMatches.length === 1
+          && legacyParentMatches[0]?.source === params.backend
+        ) {
+          childThreads.push({ backend, threadId });
+        }
+      }
+    }
+    if (childThreads.length === 0) {
       return;
     }
 
     await Promise.all(
-      childThreadIds.map((threadId) =>
+      childThreads.map(({ backend, threadId }) =>
         setThreadParent.call(this.overlayStore, {
-          backend: params.backend,
+          backend,
           threadId,
           parentThreadId: undefined,
         }),
@@ -21789,7 +22135,10 @@ export class DesktopBackendRegistry {
         "start_review must be invoked from a live turn on the thread being reviewed.",
       );
     }
-    if (isAcpBackendId(request.context.backend)) {
+    if (
+      isAcpBackendId(request.context.backend)
+      && !this.acpBackend.supportsManagedReview(request.context.backend)
+    ) {
       return threadOrchestrationFailure(
         "unsupported_backend",
         "Selected backend does not support review/start.",
@@ -21911,32 +22260,43 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async resolveHandoffGroupParentThreadId(params: {
+  private async resolveHandoffGroupParentThreadRef(params: {
     backend: AppServerBackendKind;
     sourceOverlay: ThreadOverlayState;
     sourceThreadId: string;
-  }): Promise<string> {
+  }): Promise<{ backend: AppServerBackendKind; threadId: string }> {
     const directParentThreadId = params.sourceOverlay.parentThreadId?.trim();
     if (!directParentThreadId) {
-      return params.sourceThreadId;
+      return { backend: params.backend, threadId: params.sourceThreadId };
     }
 
     let parentThreadId = directParentThreadId;
-    const seen = new Set([params.sourceThreadId]);
-    while (!seen.has(parentThreadId)) {
-      seen.add(parentThreadId);
+    let parentBackend =
+      params.sourceOverlay.parentThreadBackend ?? params.backend;
+    const directParentBackend = parentBackend;
+    const seen = new Set([
+      buildThreadIdentityKey(params.backend, params.sourceThreadId),
+    ]);
+    let parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
+    while (!seen.has(parentKey)) {
+      seen.add(parentKey);
       const parentOverlay = await this.overlayStore.getThreadOverlayState({
-        backend: params.backend,
+        backend: parentBackend,
         threadId: parentThreadId,
       });
       const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
       if (!nextParentThreadId) {
-        return parentThreadId;
+        return { backend: parentBackend, threadId: parentThreadId };
       }
       parentThreadId = nextParentThreadId;
+      parentBackend = parentOverlay?.parentThreadBackend ?? parentBackend;
+      parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
     }
 
-    return directParentThreadId;
+    return {
+      backend: directParentBackend,
+      threadId: directParentThreadId,
+    };
   }
 
   private startPendingThreadWorkspaceMove(
@@ -23499,6 +23859,7 @@ export class DesktopBackendRegistry {
       }
       await this.ensureHandoffTrustedDirectoryLaunchpad({
         cwd: requestedCwd,
+        parentThreadBackend: sourceBackend,
         preferredBackend: backend,
         parentThreadId: sourceThreadId,
         parentThreadTitle: sourceThread?.title,
@@ -23618,7 +23979,6 @@ export class DesktopBackendRegistry {
           });
     const groupingMode: HandoffTaskGroupingMode =
       requestedGroupingMode === "subthread" &&
-      backend === sourceBackend &&
       sameHandoffProjectBoundary(callerProjectBoundary, childProjectBoundary)
         ? "subthread"
         : "none";
@@ -23626,7 +23986,7 @@ export class DesktopBackendRegistry {
       this.updatePendingThreadHandoff(handoffId, {
         groupingMode,
         message:
-          "Requested subthread grouping crosses a backend or project boundary, so the child thread will be created ungrouped.",
+          "Requested subthread grouping crosses a project boundary, so the child thread will be created ungrouped.",
       });
       if (workspaceMode === "same_workspace") {
         const message =
@@ -23635,14 +23995,16 @@ export class DesktopBackendRegistry {
         return threadOrchestrationFailure("invalid_arguments", message);
       }
     }
-    const groupedParentThreadId =
+    const groupedParentThread =
       groupingMode === "subthread"
-        ? await this.resolveHandoffGroupParentThreadId({
+        ? await this.resolveHandoffGroupParentThreadRef({
             backend: sourceBackend,
             sourceOverlay,
             sourceThreadId,
           })
         : undefined;
+    const groupedParentThreadId = groupedParentThread?.threadId;
+    const groupedParentBackend = groupedParentThread?.backend;
 
     let threadId: string;
     let createdLinkedDirectory: LinkedDirectorySummary | undefined;
@@ -23667,7 +24029,10 @@ export class DesktopBackendRegistry {
           backend,
           sourceThreadId,
           ...(groupedParentThreadId
-            ? { parentThreadId: groupedParentThreadId }
+            ? {
+                parentThreadId: groupedParentThreadId,
+                parentThreadBackend: groupedParentBackend,
+              }
             : {}),
           executionMode,
           directoryLabel:
@@ -23714,6 +24079,7 @@ export class DesktopBackendRegistry {
           sandbox: inheritedSettings.sandbox,
           codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
           parentThreadId: groupedParentThreadId,
+          parentThreadBackend: groupedParentBackend,
         });
         threadId = started.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
@@ -23723,7 +24089,7 @@ export class DesktopBackendRegistry {
       }
       if (groupedParentThreadId && this.overlayStore.updateSubthreadOrder) {
         const parentOverlay = await this.overlayStore.getThreadOverlayState({
-          backend,
+          backend: groupedParentBackend ?? backend,
           threadId: groupedParentThreadId,
         });
         const nextOrder = insertSubthreadIdAfter(
@@ -23735,7 +24101,7 @@ export class DesktopBackendRegistry {
           threadId,
         );
         await this.overlayStore.updateSubthreadOrder({
-          backend,
+          backend: groupedParentBackend ?? backend,
           parentThreadId: groupedParentThreadId,
           threadIds: nextOrder,
         });
@@ -27209,6 +27575,7 @@ export class DesktopBackendRegistry {
     event = await this.withThreadMessageContext(event);
     this.rememberFileChangeApprovalContext(event);
     event = this.withEmbeddedFileChangeApprovalContext(event);
+    this.rememberManagedReviewOutput(event);
 
     if (event.backend === "codex") {
       this.recordTaskMonitorActivity(event.notification);

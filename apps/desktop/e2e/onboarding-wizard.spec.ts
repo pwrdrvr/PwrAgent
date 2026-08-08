@@ -36,6 +36,13 @@ const fakeProviderNames = [
   "grok",
 ] as const;
 type FakeProviderName = (typeof fakeProviderNames)[number];
+const fakeProviderVersions: Record<FakeProviderName, string> = {
+  codex: "999.0.0",
+  gemini: "999.0.0",
+  kimi: "0.999.0",
+  qwen: "999.0.0",
+  grok: "999.0.0",
+};
 
 function fakeProviderScript(): string {
   return `#!${process.execPath}
@@ -44,7 +51,11 @@ const name = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 
 if (args.includes("--version")) {
-  console.log(name + " 999.0.0");
+  // Current Kimi Code reports a bare 0.x version. Its retired Python
+  // predecessor owns the 1.x line, so the shared v999 fixture would
+  // intentionally be rejected by PwrAgent's compatibility gate.
+  const version = ${JSON.stringify(fakeProviderVersions)}[name];
+  console.log(name === "kimi" ? version : name + " " + version);
   process.exit(0);
 }
 
@@ -160,7 +171,9 @@ async function expectFakeProvidersFound(
       .getByRole("tab", { name: new RegExp(providerLabels[name], "i") })
       .click();
     const panel = app.window.getByRole("tabpanel");
-    await expect(panel.getByText("✓ Found v999.0.0")).toBeVisible();
+    await expect(
+      panel.getByText(`✓ Found v${fakeProviderVersions[name]}`),
+    ).toBeVisible();
     await expect(panel.getByText(commands[name], { exact: true })).toBeVisible();
   }
 }

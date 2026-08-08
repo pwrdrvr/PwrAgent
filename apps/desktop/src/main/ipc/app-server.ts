@@ -57,6 +57,7 @@ import {
   type GetGhStatusRequest,
   type GhStatus,
   type LinkedDirectorySummary,
+  type ListRecentFileReferencesRequest,
   type ListRecentFileReferencesResponse,
   type PickDirectoryFromDiskResponse,
   type PickFileFromDiskResponse,
@@ -877,6 +878,28 @@ function normalizePrLookupDirectoryPaths(directoryPaths: string[]): string[] {
 
 function toLinkedDirectoryPathId(value: string): string {
   return path.resolve(value).replace(/\\/g, "/");
+}
+
+function reconcileRemoteLaunchpadBranch(
+  branchName: string | undefined,
+  gitStatus: NavigationDirectoryGitStatus | null | undefined,
+): string | undefined {
+  const branchNames = new Set([
+    ...(gitStatus?.branches ?? []),
+    ...(gitStatus?.branchDetails ?? []).map((branch) => branch.name),
+    ...(gitStatus?.baseBranches ?? []),
+    ...(gitStatus?.baseBranchDetails ?? []).map((branch) => branch.name),
+  ]);
+  if (!branchName) {
+    return gitStatus?.currentBranch;
+  }
+  if (branchNames.size === 0) {
+    return gitStatus?.currentBranch ?? branchName;
+  }
+  if (branchNames.has(branchName)) {
+    return branchName;
+  }
+  return gitStatus?.currentBranch;
 }
 
 function normalizeLinkedDirectoryPathForMatch(
@@ -1856,21 +1879,25 @@ class DesktopAppServerService {
     request: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const federationTarget = request.federationTarget;
       const cacheKey = getRemoteNavigationSnapshotCacheKey({
         ...request,
-        federationTarget: request.federationTarget,
+        federationTarget,
       });
       try {
         const snapshot = await getDesktopFederationRuntime()
           .remoteNavigationSnapshot(
-            request.federationTarget,
+            federationTarget,
             {
               backend: request.backend === "all" ? undefined : request.backend,
               filter: request.filter,
             },
           );
         this.remoteNavigationSnapshotCache.set(cacheKey, snapshot);
-        return snapshot;
+        return await this.applyRemoteDirectoryViewerOverlays(
+          snapshot,
+          federationTarget.instanceId,
+        );
       } catch (error) {
         if (!isFederationPeerUnavailableError(error)) {
           throw error;
@@ -1889,21 +1916,24 @@ class DesktopAppServerService {
             executionMode: "default",
           },
         };
-        return {
-          ...fallback,
-          unchanged: false,
-          threads: fallback.threads.map((thread) =>
-            thread.federation
-              ? {
-                  ...thread,
-                  federation: {
-                    ...thread.federation,
-                    peerStatus: "disconnected",
-                  },
-                }
-              : thread,
-          ),
-        };
+        return await this.applyRemoteDirectoryViewerOverlays(
+          {
+            ...fallback,
+            unchanged: false,
+            threads: fallback.threads.map((thread) =>
+              thread.federation
+                ? {
+                    ...thread,
+                    federation: {
+                      ...thread.federation,
+                      peerStatus: "disconnected",
+                    },
+                  }
+                : thread,
+            ),
+          },
+          federationTarget.instanceId,
+        );
       }
     }
     const backend: AppServerBackendScope = request.backend ?? "all";
@@ -2044,6 +2074,38 @@ class DesktopAppServerService {
         && !primaryGitRepositoriesChanged
         && !remotePins.changed,
     };
+  }
+
+  private async applyRemoteDirectoryViewerOverlays(
+    snapshot: NavigationSnapshot,
+    instanceId: string,
+  ): Promise<NavigationSnapshot> {
+    const overlays = await this.getOverlayStore().readRemoteDirectoryOverlays({
+      instanceId,
+    });
+    let changed = false;
+    const directories = snapshot.directories.map((directory) => {
+      const collapsed = overlays[directory.key]?.directoryThreadsCollapsed;
+      if (
+        collapsed === undefined
+        || directory.directoryThreadsCollapsed === collapsed
+      ) {
+        return directory;
+      }
+      changed = true;
+      return {
+        ...directory,
+        directoryThreadsCollapsed: collapsed,
+      };
+    });
+    return changed
+      ? {
+          ...snapshot,
+          directories,
+          // The owner's unchanged hash does not include viewer-local state.
+          unchanged: false,
+        }
+      : snapshot;
   }
 
   /**
@@ -5792,12 +5854,20 @@ class DesktopAppServerService {
     instanceLabel: string,
   ): Promise<FederatedThreadRef | undefined> {
     const parentThreadId = request.summary?.parentThreadId;
-    if (!parentThreadId || parentThreadId === request.ref.threadId) {
+    const parentBackend =
+      request.summary?.parentThreadBackend ?? request.ref.backend;
+    if (
+      !parentThreadId
+      || (
+        parentThreadId === request.ref.threadId
+        && parentBackend === request.ref.backend
+      )
+    ) {
       return undefined;
     }
     try {
       const parentRef = buildFederatedThreadRef({
-        backend: request.ref.backend,
+        backend: parentBackend,
         instanceId,
         threadId: parentThreadId,
       });
@@ -5809,7 +5879,7 @@ class DesktopAppServerService {
         .remoteThreadSummaries()
         .threadFromPeer({
           target: { scope: "remote", instanceId },
-          backend: request.ref.backend,
+          backend: parentBackend,
           threadId: parentThreadId,
         });
       if (!parentSummary) {
@@ -5822,13 +5892,13 @@ class DesktopAppServerService {
         pinnedVia: "companion",
       });
       logDebug("addRemoteThreadPin:companion-parent", {
-        backend: request.ref.backend,
+        backend: parentBackend,
         instanceId,
         threadId: parentThreadId,
         childThreadId: request.ref.threadId,
       });
       await getDesktopBackendRegistry().publishLocalEvent({
-        backend: request.ref.backend,
+        backend: parentBackend,
         notification: {
           method: "navigation/remoteThreadPins/changed",
           params: {
@@ -6019,12 +6089,14 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
       parentThreadId: request.parentThreadId,
+      parentThreadBackend: request.parentThreadBackend,
     });
 
     logDebug("setThreadParent", {
       backend,
       threadId: request.threadId,
       parentThreadId: overlay.parentThreadId ?? null,
+      parentThreadBackend: overlay.parentThreadBackend ?? null,
     });
 
     await getDesktopBackendRegistry().publishLocalEvent({
@@ -6035,6 +6107,7 @@ class DesktopAppServerService {
             params: {
               threadId: request.threadId,
               parentThreadId: overlay.parentThreadId,
+              parentThreadBackend: overlay.parentThreadBackend,
             },
           }
         : {
@@ -6049,6 +6122,7 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
       parentThreadId: overlay.parentThreadId,
+      parentThreadBackend: overlay.parentThreadBackend,
     };
   }
 
@@ -6204,6 +6278,28 @@ class DesktopAppServerService {
   ): Promise<SetDirectoryThreadsCollapsedResponse> {
     rejectNonUserDirectoryKey(request.directoryKey);
 
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const overlay = await this.getOverlayStore()
+        .setRemoteDirectoryThreadsCollapsed({
+          instanceId: request.federationTarget.instanceId,
+          directoryKey: request.directoryKey,
+          collapsed: request.collapsed,
+        });
+      const collapsed = overlay.directoryThreadsCollapsed === true;
+      logDebug("setDirectoryThreadsCollapsed:remote-viewer", {
+        instanceId: request.federationTarget.instanceId,
+        directoryKey: request.directoryKey,
+        collapsed,
+      });
+      return {
+        directoryKey: request.directoryKey,
+        collapsed,
+      };
+    }
+
     const overlay = await this.getOverlayStore().setDirectoryThreadsCollapsed({
       directoryKey: request.directoryKey,
       collapsed: request.collapsed,
@@ -6235,6 +6331,69 @@ class DesktopAppServerService {
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const {
+        federationTarget,
+        gitStatus: snapshotGitStatus,
+        ...ownerRequest
+      } = request;
+      const federationRuntime = getDesktopFederationRuntime();
+      const ownerResponse =
+        federationRuntime.remoteTargetSupportsCapability(
+          federationTarget,
+          "launchpad_metadata",
+        )
+          ? await federationRuntime
+              .remoteBackend(federationTarget)
+              .ensureDirectoryLaunchpad(ownerRequest)
+          : undefined;
+      const ownerGitStatus =
+        ownerResponse?.gitStatus
+        ?? snapshotGitStatus
+        ?? (request.currentBranch
+          ? { currentBranch: request.currentBranch }
+          : undefined);
+      const registry = getDesktopBackendRegistry();
+      const localResponse = await registry.ensureDirectoryLaunchpad(
+        {
+          ...ownerRequest,
+          directoryKind:
+            ownerResponse?.launchpad.directoryKind ?? request.directoryKind,
+          directoryLabel:
+            ownerResponse?.launchpad.directoryLabel ?? request.directoryLabel,
+          directoryPath:
+            ownerResponse?.launchpad.directoryPath ?? request.directoryPath,
+          currentBranch: undefined,
+        },
+        {
+          skipFilesystemInspection: true,
+        },
+      );
+      const branchName = reconcileRemoteLaunchpadBranch(
+        localResponse.launchpad.branchName,
+        ownerGitStatus,
+      );
+      return {
+        ...localResponse,
+        launchpad: {
+          ...localResponse.launchpad,
+          directoryKind:
+            ownerResponse?.launchpad.directoryKind ?? request.directoryKind,
+          directoryLabel:
+            ownerResponse?.launchpad.directoryLabel ?? request.directoryLabel,
+          directoryPath:
+            ownerResponse?.launchpad.directoryPath ?? request.directoryPath,
+          codexEnvironmentOptions:
+            ownerResponse?.launchpad.codexEnvironmentOptions,
+          branchName,
+        },
+        gitStatus: ownerGitStatus,
+      };
+    }
+
     const refreshed = await this.refreshLaunchpadDirectoryGitStatus(request);
     const response = await getDesktopBackendRegistry().ensureDirectoryLaunchpad(
       refreshed.request,
@@ -6377,7 +6536,17 @@ class DesktopAppServerService {
     return { canceled: false, entries: classifyReferencePaths(result.filePaths) };
   }
 
-  listRecentFileReferences(): ListRecentFileReferencesResponse {
+  async listRecentFileReferences(
+    request: ListRecentFileReferencesRequest = {},
+  ): Promise<ListRecentFileReferencesResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listRecentFileReferences();
+    }
     return {
       files: listRecentFileReferencePaths(getAppStateDb()).map((filePath) => ({
         label: path.basename(filePath),
@@ -6386,7 +6555,19 @@ class DesktopAppServerService {
     };
   }
 
-  recordRecentFileReferences(request: RecordRecentFileReferencesRequest): void {
+  async recordRecentFileReferences(
+    request: RecordRecentFileReferencesRequest,
+  ): Promise<void> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .recordRecentFileReferences(ownerRequest);
+      return;
+    }
     recordRecentFileReferencePaths(getAppStateDb(), request.paths ?? []);
   }
 
@@ -6412,6 +6593,15 @@ class DesktopAppServerService {
   async attachDirectoryToThread(
     request: AttachDirectoryToThreadRequest,
   ): Promise<AttachDirectoryToThreadResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .attachDirectoryToThread(ownerRequest);
+    }
     const backend = request.backend ?? "codex";
     const registered = await this.registerDirectoryFromDisk({
       path: request.path,
@@ -7492,9 +7682,20 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
     async (
-      _event,
+      event,
       request: EnsureDirectoryLaunchpadRequest,
     ): Promise<EnsureDirectoryLaunchpadResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Remote launchpads must load filesystem metadata from the owning instance.",
+        );
+      }
       return await appServerService.ensureDirectoryLaunchpad(request);
     },
   );
@@ -7532,6 +7733,9 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
     async (event): Promise<PickDirectoryFromDiskResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        return { canceled: true };
+      }
       // Find the window that dispatched the IPC so the system "Choose
       // folder" dialog anchors to it as a sheet on macOS. Falls back to
       // the focused window inside `pickDirectoryFromDisk`.
@@ -7545,6 +7749,9 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
     async (event): Promise<PickFileFromDiskResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        return { canceled: true };
+      }
       const senderWindow = BrowserWindow.fromWebContents(event.sender);
       return await appServerService.pickFileFromDisk(
         senderWindow ?? undefined,
@@ -7555,6 +7762,9 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
     async (event): Promise<PickReferenceFromDiskResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        return { canceled: true };
+      }
       const senderWindow = BrowserWindow.fromWebContents(event.sender);
       return await appServerService.pickReferenceFromDisk(
         senderWindow ?? undefined,
@@ -7565,44 +7775,86 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL,
     async (
-      _event,
+      event,
       request: InspectPdfReferencePathsRequest,
-    ): Promise<InspectPdfReferencePathsResponse> =>
-      inspectPdfReferencePaths(request.paths ?? []),
+    ): Promise<InspectPdfReferencePathsResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error(
+          "Remote file references cannot be inspected on the viewing instance.",
+        );
+      }
+      return inspectPdfReferencePaths(request.paths ?? []);
+    },
   );
   ipcMain.removeHandler(NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL);
   ipcMain.handle(
     NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
     async (
-      _event,
+      event,
       request: RenderComposerPdfPreviewRequest,
-    ): Promise<RenderComposerPdfPreviewResponse> =>
-      await renderExplicitComposerPdfPreview(request),
+    ): Promise<RenderComposerPdfPreviewResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error(
+          "Remote file previews cannot be rendered on the viewing instance.",
+        );
+      }
+      return await renderExplicitComposerPdfPreview(request);
+    },
   );
   ipcMain.removeHandler(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL);
   ipcMain.handle(
     NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
-    async (): Promise<ListRecentFileReferencesResponse> => {
-      return appServerService.listRecentFileReferences();
+    async (
+      event,
+      request: ListRecentFileReferencesRequest = {},
+    ): Promise<ListRecentFileReferencesResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Remote recent files must be loaded from the owning instance.",
+        );
+      }
+      return await appServerService.listRecentFileReferences(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL);
   ipcMain.handle(
     NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
     async (
-      _event,
+      event,
       request: RecordRecentFileReferencesRequest,
     ): Promise<void> => {
-      appServerService.recordRecentFileReferences(request);
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Remote recent files must be recorded on the owning instance.",
+        );
+      }
+      await appServerService.recordRecentFileReferences(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.handle(
     NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
     async (
-      _event,
+      event,
       request: RegisterDirectoryFromDiskRequest,
     ): Promise<RegisterDirectoryFromDiskResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error(
+          "Remote windows cannot register directories from the viewing instance.",
+        );
+      }
       return await appServerService.registerDirectoryFromDisk(request);
     },
   );
@@ -7610,9 +7862,20 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
     async (
-      _event,
+      event,
       request: AttachDirectoryToThreadRequest,
     ): Promise<AttachDirectoryToThreadResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Remote directory attachments must target the owning instance.",
+        );
+      }
       return await appServerService.attachDirectoryToThread(request);
     },
   );

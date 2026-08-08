@@ -22,6 +22,7 @@ import {
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
   type FederationInstanceId,
+  type FederationTarget,
   type MessagingChannelKind,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
@@ -94,6 +95,7 @@ import {
 } from "./features/notifications/app-notice-state";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
+import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
@@ -451,6 +453,17 @@ function DesktopAppShell(props: {
       prefix: `messaging-platform-error:${platform}:`,
     });
   }, [showAppNotice]);
+  const syncGrokCliUpdateNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    dispatchAppNotice({
+      type: "dismiss-prefix",
+      prefix: "acp-update:acp:grok:",
+    });
+    if (notice) {
+      showAppNotice(notice);
+    }
+  }, [showAppNotice]);
 
   useEffect(() => {
     return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
@@ -613,6 +626,9 @@ function DesktopAppShell(props: {
       ) {
         return;
       }
+      const instanceId = event.federationTarget?.scope === "remote"
+        ? event.federationTarget.instanceId
+        : undefined;
       // Params are cast explicitly: the AppServerNotification union is too
       // wide for the discriminant to narrow `params` reliably here.
       if (event.notification.method === "turn/failed") {
@@ -634,6 +650,7 @@ function DesktopAppShell(props: {
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",
             errorMessage,
+            ...(instanceId ? { instanceId } : {}),
             threadLabel: labelForThread(event.backend, params.threadId),
           },
         });
@@ -655,6 +672,7 @@ function DesktopAppShell(props: {
           signal: {
             kind: "codex-invalid-id-recovery",
             failureMessage: params.failureMessage,
+            ...(instanceId ? { instanceId } : {}),
             recoveryError: params.recoveryError,
             status: params.status,
             threadId: params.threadId,
@@ -677,6 +695,7 @@ function DesktopAppShell(props: {
           signal: {
             kind: "system-error",
             backend: event.backend,
+            ...(instanceId ? { instanceId } : {}),
             threadId: params.threadId ?? "unknown",
             threadLabel: labelForThread(event.backend, params.threadId),
           },
@@ -1067,6 +1086,7 @@ function DesktopAppShell(props: {
   );
   useQueuedTurnProjection({
     composerDraftStore,
+    snapshotFetchedAt: navigation.snapshot?.fetchedAt,
     threads: navigation.threads,
   });
   const scheduledActionProjectionSources = useMemo(
@@ -1440,7 +1460,11 @@ function DesktopAppShell(props: {
     onPickDirectoryForReference: () => navigation.pickDirectoryForReference(),
     onAttachDirectoryReferences: (
       paths: string[],
-      target: { backend: AppServerBackendKind; threadId: string }
+      target: {
+        backend: AppServerBackendKind;
+        federationTarget?: FederationTarget;
+        threadId: string;
+      }
     ) => {
       void navigation.attachDirectoryPathsToThread(target, paths);
     },
@@ -2236,10 +2260,15 @@ function DesktopAppShell(props: {
           desktopApi={desktopApi}
           onNoticeChanged={syncMessagingErrorNotice}
         />
+        <GrokCliUpdateNotice
+          desktopApi={desktopApi}
+          onNoticeChanged={syncGrokCliUpdateNotice}
+        />
         <AppNoticeStack
           desktopApi={desktopApi}
           durableNotices={appNotices.durable}
           onDismissDurable={dismissAppNotice}
+          onOpenThread={showThreadFromLink}
           transientNotices={[
             {
               notice: navigation.archiveThreadNotice,

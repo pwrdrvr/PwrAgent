@@ -17,6 +17,23 @@ import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 
 describe("federation backend bridge", () => {
+  it("negotiates launchpad metadata separately from environment actions", () => {
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad
+      ],
+    ).toBe("launchpad_metadata");
+  });
+
+  it("does not expose profile-local thread model migrations over federation", () => {
+    expect(FEDERATION_BACKEND_METHODS).not.toHaveProperty(
+      "applyThreadModelMigration",
+    );
+    expect(FederationRemoteBackendClient.prototype).not.toHaveProperty(
+      "applyThreadModelMigration",
+    );
+  });
+
   it("routes thread reactions through the thread-navigation capability", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -283,7 +300,14 @@ describe("federation backend bridge", () => {
       ],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
-    registerFederationBackendHandlers({ router, backend });
+    registerFederationBackendHandlers({
+      router,
+      backend,
+      resolveSourceInstance: () => ({
+        label: "Client Mac",
+        celestialIcon: "moon",
+      }),
+    });
 
     await router.routeEnvelope({
       sourcePeerId: "client_one",
@@ -310,7 +334,20 @@ describe("federation backend bridge", () => {
           kind: "turn",
           scheduledFor: 3_000,
           displayText: "Follow up",
-          turn: { input: [{ type: "text", text: "Follow up" }] },
+          turn: {
+            input: [{ type: "text", text: "Follow up" }],
+            messageOrigin: {
+              kind: "agent",
+              sourceThread: {
+                backend: "codex",
+                instanceId: "spoofed_instance",
+                instanceLabel: "Spoofed Mac",
+                celestialIcon: "black-hole",
+                threadId: "source-thread",
+                title: "Source thread",
+              },
+            },
+          },
         },
         protocolVersion: 1,
         sourceInstanceId: "client_one",
@@ -357,6 +394,20 @@ describe("federation backend bridge", () => {
       expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
+        turn: {
+          input: [{ type: "text", text: "Follow up" }],
+          messageOrigin: {
+            kind: "agent",
+            sourceThread: {
+              backend: "codex",
+              instanceId: "client_one",
+              instanceLabel: "Client Mac",
+              celestialIcon: "moon",
+              threadId: "source-thread",
+              title: "Source thread",
+            },
+          },
+        },
       }),
     );
     expect(replies).toMatchObject([
@@ -1003,60 +1054,6 @@ describe("federation backend bridge", () => {
         "codex:thread-2": "a0",
         "codex:thread-1": "a1",
       },
-    });
-  });
-
-  it("routes thread model migrations over RPC with turn_control authorization", async () => {
-    const sent: FederationProtocolEnvelope[] = [];
-    const rpc = new FederationRpcEndpoint({
-      localInstanceId: "viewer_one",
-      remoteInstanceId: "owner_one",
-      sendEnvelope: (envelope) => sent.push(envelope),
-      now: () => 1_000,
-    });
-    const client = new FederationRemoteBackendClient(rpc);
-
-    const pending = client.applyThreadModelMigration({
-      backend: "codex",
-      threadId: "thread-1",
-      threadCreatedAt: 900,
-      threadModel: "gpt-5.5",
-    });
-    const request = sent.at(-1)!;
-    expect(request).toMatchObject({
-      kind: "request",
-      method: FEDERATION_BACKEND_METHODS.applyThreadModelMigration,
-      params: {
-        backend: "codex",
-        threadId: "thread-1",
-        threadCreatedAt: 900,
-        threadModel: "gpt-5.5",
-      },
-    });
-    expect(
-      FEDERATION_BACKEND_METHOD_CAPABILITIES[
-        FEDERATION_BACKEND_METHODS.applyThreadModelMigration
-      ],
-    ).toBe("turn_control");
-
-    rpc.receiveEnvelope({
-      id: "response-migration",
-      kind: "response",
-      requestId: request.id,
-      protocolVersion: 1,
-      sourceInstanceId: "owner_one",
-      targetInstanceId: "viewer_one",
-      createdAt: 1_100,
-      result: {
-        backend: "codex",
-        threadId: "thread-1",
-        status: "applied",
-      },
-    });
-    await expect(pending).resolves.toMatchObject({
-      backend: "codex",
-      threadId: "thread-1",
-      status: "applied",
     });
   });
 
@@ -1862,7 +1859,14 @@ describe("federation backend bridge", () => {
       capabilities: ["turn_control"],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
-    registerFederationBackendHandlers({ router, backend });
+    registerFederationBackendHandlers({
+      router,
+      backend,
+      resolveSourceInstance: () => ({
+        label: "Gateway Mac",
+        celestialIcon: "moon",
+      }),
+    });
 
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
@@ -1876,7 +1880,13 @@ describe("federation backend bridge", () => {
           input: [{ type: "text", text: "ship it" }],
           messageOrigin: {
             kind: "agent",
-            sourceThread: { backend: "codex", threadId: "source-thread" },
+            sourceThread: {
+              backend: "codex",
+              instanceId: "spoofed_instance",
+              instanceLabel: "Spoofed Mac",
+              celestialIcon: "black-hole",
+              threadId: "source-thread",
+            },
           },
         },
         protocolVersion: 1,
@@ -1895,6 +1905,8 @@ describe("federation backend bridge", () => {
         sourceThread: {
           backend: "codex",
           instanceId: "gateway_one",
+          instanceLabel: "Gateway Mac",
+          celestialIcon: "moon",
           threadId: "source-thread",
         },
       },
@@ -2025,10 +2037,6 @@ describe("federation backend bridge", () => {
       cancelThreadExecutionModeQueue: vi.fn(),
       setAcpSessionRuntimeOption: vi.fn(),
       setThreadModelSettings: vi.fn(),
-      applyThreadModelMigration: vi.fn(async (request) => ({
-        ...request,
-        status: "acknowledged-new-thread" as const,
-      })),
       checkThreadBranchDrift: vi.fn(),
       updateThreadExpectedBranch: vi.fn(),
       retainThreadBranchDrift: vi.fn(),
@@ -2050,6 +2058,10 @@ describe("federation backend bridge", () => {
       setCodexThreadEnvironment: vi.fn(),
       materializeDirectoryLaunchpad: vi.fn(),
       refreshDirectoryGitStatuses: vi.fn(),
+      ensureDirectoryLaunchpad: vi.fn(),
+      listRecentFileReferences: vi.fn(),
+      recordRecentFileReferences: vi.fn(),
+      attachDirectoryToThread: vi.fn(),
       listWorktreeUnpublishedCommits: vi.fn(),
       getWorktreeUnpublishedCommitDiff: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
@@ -2077,7 +2089,14 @@ describe("federation backend bridge", () => {
       ],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
-    registerFederationBackendHandlers({ router, backend });
+    registerFederationBackendHandlers({
+      router,
+      backend,
+      resolveSourceInstance: () => ({
+        label: "Gateway Mac",
+        celestialIcon: "moon",
+      }),
+    });
 
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
@@ -2099,11 +2118,23 @@ describe("federation backend bridge", () => {
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.controlActiveTurn,
         params: {
-          operation: "stop",
+          operation: "steer",
           backend: "codex",
           threadId: "thread-1",
-          requestId: "stop-1",
+          requestId: "steer-1",
           expectedTurnId: "turn-live",
+          input: [{ type: "text", text: "Report progress." }],
+          messageOrigin: {
+            kind: "agent",
+            sourceThread: {
+              backend: "codex",
+              instanceId: "spoofed_instance",
+              instanceLabel: "Spoofed Mac",
+              celestialIcon: "black-hole",
+              threadId: "source-thread",
+              title: "Source thread",
+            },
+          },
         },
         protocolVersion: 1,
         sourceInstanceId: "gateway_one",
@@ -2145,24 +2176,6 @@ describe("federation backend bridge", () => {
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
       envelope: {
-        id: "migration-request",
-        kind: "request",
-        method: FEDERATION_BACKEND_METHODS.applyThreadModelMigration,
-        params: {
-          backend: "codex",
-          threadId: "thread-1",
-          threadCreatedAt: 1_000,
-          threadModel: "gpt-5.6-sol",
-        },
-        protocolVersion: 1,
-        sourceInstanceId: "gateway_one",
-        targetInstanceId: "client_one",
-        createdAt: 1_150,
-      },
-    });
-    await router.routeEnvelope({
-      sourcePeerId: "gateway_one",
-      envelope: {
         id: "env-request",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.runCodexEnvironmentAction,
@@ -2187,11 +2200,23 @@ describe("federation backend bridge", () => {
       threadId: "thread-1",
     });
     expect(backend.controlActiveTurn).toHaveBeenCalledWith({
-      operation: "stop",
+      operation: "steer",
       backend: "codex",
       threadId: "thread-1",
-      requestId: "stop-1",
+      requestId: "steer-1",
       expectedTurnId: "turn-live",
+      input: [{ type: "text", text: "Report progress." }],
+      messageOrigin: {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          instanceId: "gateway_one",
+          instanceLabel: "Gateway Mac",
+          celestialIcon: "moon",
+          threadId: "source-thread",
+          title: "Source thread",
+        },
+      },
     });
     expect(
       FEDERATION_BACKEND_METHOD_CAPABILITIES[
@@ -2203,12 +2228,6 @@ describe("federation backend bridge", () => {
       threadId: "thread-1",
       requestId: "approval-1",
       response: { decision: "approve" },
-    });
-    expect(backend.applyThreadModelMigration).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "thread-1",
-      threadCreatedAt: 1_000,
-      threadModel: "gpt-5.6-sol",
     });
     expect(backend.runCodexEnvironmentAction).toHaveBeenCalledWith({
       actionId: "start",
@@ -2226,7 +2245,7 @@ describe("federation backend bridge", () => {
         requestId: "control-active-request",
         result: {
           disposition: "interrupted",
-          requestId: "stop-1",
+          requestId: "steer-1",
           turnId: "turn-live",
         },
       },
@@ -2239,11 +2258,6 @@ describe("federation backend bridge", () => {
         kind: "response",
         requestId: "approval-request",
         result: { requestId: "approval-1" },
-      },
-      {
-        kind: "response",
-        requestId: "migration-request",
-        result: { status: "acknowledged-new-thread" },
       },
       {
         kind: "response",
@@ -2307,7 +2321,6 @@ describe("federation backend bridge", () => {
         cancelThreadExecutionModeQueue: vi.fn(),
         setAcpSessionRuntimeOption: vi.fn(),
         setThreadModelSettings: vi.fn(),
-        applyThreadModelMigration: vi.fn(),
         checkThreadBranchDrift: vi.fn(),
         updateThreadExpectedBranch: vi.fn(),
         retainThreadBranchDrift: vi.fn(),
@@ -2316,6 +2329,10 @@ describe("federation backend bridge", () => {
         stopCodexEnvironmentAction: vi.fn(),
         setCodexThreadEnvironment: vi.fn(),
         refreshDirectoryGitStatuses: vi.fn(),
+        ensureDirectoryLaunchpad: vi.fn(),
+        listRecentFileReferences: vi.fn(),
+        recordRecentFileReferences: vi.fn(),
+        attachDirectoryToThread: vi.fn(),
         listWorktreeUnpublishedCommits: vi.fn(),
         getWorktreeUnpublishedCommitDiff: vi.fn(),
         materializeDirectoryLaunchpad: vi.fn(),

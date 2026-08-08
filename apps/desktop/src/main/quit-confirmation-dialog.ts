@@ -1,8 +1,11 @@
 import { BrowserWindow, nativeTheme } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
 import { revealIntegratedTerminal } from "./ipc/integrated-terminal";
+import { getMainLogger } from "./log";
 import { readBootstrapAppearance } from "./settings/appearance-bootstrap";
 import { requestShowThread } from "./window-show-thread";
+
+const quitDialogLog = getMainLogger("pwragent:quit-dialog");
 
 export type QuitConfirmationDialogResult =
   | "manual-confirm"
@@ -103,6 +106,49 @@ function resolveQuitDialogTheme(): "dark" | "light" {
   return nativeTheme.shouldUseDarkColors ? "dark" : "light";
 }
 
+/**
+ * The dialog currently open, if any.
+ *
+ * The quit manager collapses concurrent quit requests onto one prompt, so a
+ * later request while this dialog is open resolves to the same pending promise.
+ * That is only acceptable if the later request can still *reach* the dialog:
+ * it is a small frameless window that a user can lose behind the main window or
+ * on another Space, and once the countdown has been cancelled nothing else will
+ * ever settle the quit. Keeping the handle here is what lets a repeat request
+ * raise it instead of doing nothing at all.
+ *
+ * `ready` tracks `ready-to-show`, because the window is created hidden: showing
+ * it before its first paint puts a themed empty rectangle on screen. Until then
+ * the prompt is still "open" — its own `ready-to-show` handler shows it — so a
+ * raise reports success without touching the window.
+ */
+type ActiveQuitDialog = {
+  window: BrowserWindow;
+  ready: boolean;
+};
+
+let activeDialog: ActiveQuitDialog | undefined;
+
+/**
+ * Bring the open quit prompt back in front of the user. Returns false when
+ * there is no prompt to raise.
+ */
+export function focusActiveQuitConfirmationDialog(): boolean {
+  const active = activeDialog;
+  if (!active || active.window.isDestroyed()) {
+    return false;
+  }
+  if (!active.ready) {
+    return true;
+  }
+  if (active.window.isMinimized()) {
+    active.window.restore();
+  }
+  active.window.show();
+  active.window.focus();
+  return true;
+}
+
 export async function showQuitConfirmationDialog(
   options: QuitConfirmationDialogOptions,
 ): Promise<QuitConfirmationDialogResult> {
@@ -152,6 +198,19 @@ export async function showQuitConfirmationDialog(
     },
   });
 
+  const active: ActiveQuitDialog = { window, ready: false };
+  activeDialog = active;
+
+  /** Drop the shared handle and the window, whichever way this call ends. */
+  const releaseDialog = (): void => {
+    if (activeDialog === active) {
+      activeDialog = undefined;
+    }
+    if (!window.isDestroyed()) {
+      window.close();
+    }
+  };
+
   return await new Promise<QuitConfirmationDialogResult>((resolve) => {
     let settled = false;
     let hardCeiling: NodeJS.Timeout | undefined;
@@ -160,9 +219,7 @@ export async function showQuitConfirmationDialog(
       if (settled) return;
       settled = true;
       if (hardCeiling) clearTimeout(hardCeiling);
-      if (!window.isDestroyed()) {
-        window.close();
-      }
+      releaseDialog();
       resolve(result);
     };
 
@@ -219,24 +276,44 @@ export async function showQuitConfirmationDialog(
       countdownSeconds * 1000 + HARD_CEILING_GRACE_MS,
     );
 
-    void window.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(
-        buildQuitConfirmationHtml({
-          countdownSeconds,
-          inProgressThreadCount: options.inProgressThreadCount,
-          terminalSessionCount: options.terminalSessionCount,
-          actionRunCount: options.actionRunCount ?? 0,
-          items,
-          navigationPrefix,
-          colorScheme,
-          palette,
-        }),
-      )}`,
-    );
+    const dialogUrl = `data:text/html;charset=utf-8,${encodeURIComponent(
+      buildQuitConfirmationHtml({
+        countdownSeconds,
+        inProgressThreadCount: options.inProgressThreadCount,
+        terminalSessionCount: options.terminalSessionCount,
+        actionRunCount: options.actionRunCount ?? 0,
+        items,
+        navigationPrefix,
+        colorScheme,
+        palette,
+      }),
+    )}`;
+    // A rejected load leaves a window that never emits `ready-to-show` and never
+    // renders a control, so there is no consent to collect and nothing for the
+    // user to answer — showing the empty window would only park an unusable box
+    // on screen until the hard ceiling fires. Settle the request the same way
+    // that ceiling would, immediately, and record why. A rejection that arrives
+    // *after* the page painted is noise (a superseded navigation, say): the
+    // prompt is up and the user owns the decision, so only log it.
+    void window.loadURL(dialogUrl).catch((error: unknown) => {
+      quitDialogLog.warn("quit confirmation dialog failed to load", {
+        error: error instanceof Error ? error.message : String(error),
+        painted: active.ready,
+      });
+      if (!active.ready) {
+        finish("countdown-expired");
+      }
+    });
     window.once("ready-to-show", () => {
+      active.ready = true;
       window.show();
       window.focus();
     });
+  }).catch((error: unknown) => {
+    // An executor that throws would otherwise strand the shared handle on a
+    // window nobody closes, and a later raise would surface an orphan dialog.
+    releaseDialog();
+    throw error;
   });
 }
 

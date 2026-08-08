@@ -93,6 +93,8 @@ import type {
   ListBackendsResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
+  AcknowledgeAcpAgentUpdateRequest,
+  AcknowledgeAcpAgentUpdateResponse,
   ListDesktopPwrAgentProfilesResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
@@ -199,6 +201,7 @@ import type {
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
   RenderComposerPdfPreviewResponse,
+  ListRecentFileReferencesRequest,
   ListRecentFileReferencesResponse,
   RecordRecentFileReferencesRequest,
   DetachThreadPullRequestRequest,
@@ -668,6 +671,9 @@ export type DesktopApi = {
   listAcpAgents?: (
     request?: ListAcpAgentSettingsRequest
   ) => Promise<ListAcpAgentSettingsResponse>;
+  acknowledgeAcpAgentUpdate?: (
+    request: AcknowledgeAcpAgentUpdateRequest,
+  ) => Promise<AcknowledgeAcpAgentUpdateResponse>;
   readSettings?: (
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;
@@ -938,7 +944,9 @@ export type DesktopApi = {
     request: RenderComposerPdfPreviewRequest,
   ) => Promise<RenderComposerPdfPreviewResponse>;
   /** Recently referenced files for the reference picker's Files tab. */
-  listRecentFileReferences?: () => Promise<ListRecentFileReferencesResponse>;
+  listRecentFileReferences?: (
+    request?: ListRecentFileReferencesRequest,
+  ) => Promise<ListRecentFileReferencesResponse>;
   /** Fire-and-forget record of freshly committed file references. */
   recordRecentFileReferences?: (
     request: RecordRecentFileReferencesRequest,

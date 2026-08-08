@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { AppNoticeToastNotice } from "../AppNoticeToast";
-import { resolveBackendErrorNotice } from "../backend-error-notice";
+import {
+  resolveBackendErrorNotice,
+  type BackendErrorSignal,
+} from "../backend-error-notice";
 
 describe("resolveBackendErrorNotice", () => {
   const invalidIdFailure =
@@ -32,6 +35,11 @@ describe("resolveBackendErrorNotice", () => {
       },
       title: "Known Codex issue",
       tone: "warning",
+      threadLink: {
+        backend: "codex",
+        threadId: "thread-1",
+        title: "Fix the flaky test",
+      },
     });
 
     const succeeded = resolveBackendErrorNotice(
@@ -102,6 +110,11 @@ describe("resolveBackendErrorNotice", () => {
       title: "Turn failed",
       message: "stream disconnected before completion",
       detail: "Fix the flaky test",
+      threadLink: {
+        backend: "codex",
+        threadId: "thread-1",
+        title: "Fix the flaky test",
+      },
       copyText: "stream disconnected before completion",
     });
   });
@@ -121,6 +134,11 @@ describe("resolveBackendErrorNotice", () => {
       id: "system-error:codex:thread-1",
       title: "Agent backend error",
       detail: "Codex thread",
+      threadLink: {
+        backend: "codex",
+        threadId: "thread-1",
+        title: "Codex thread",
+      },
     });
   });
 
@@ -213,5 +231,39 @@ describe("resolveBackendErrorNotice", () => {
       undefined,
     );
     expect(a?.id).not.toBe(b?.id);
+  });
+
+  it("preserves remote federation identity for every backend error path", () => {
+    const base = {
+      instanceId: "remote-gateway",
+      threadId: "thread-1",
+      threadLabel: "Remote thread",
+    };
+    const signals: BackendErrorSignal[] = [
+      {
+        ...base,
+        kind: "turn-failed",
+        backend: "codex",
+        errorMessage: "turn failed",
+        turnId: "turn-1",
+      },
+      {
+        ...base,
+        kind: "codex-invalid-id-recovery",
+        failureMessage: invalidIdFailure,
+        status: "failed",
+        turnId: "turn-1",
+      },
+      {
+        ...base,
+        kind: "system-error",
+        backend: "codex",
+      },
+    ];
+
+    for (const signal of signals) {
+      expect(resolveBackendErrorNotice(signal, undefined)?.threadLink)
+        .toMatchObject({ instanceId: "remote-gateway" });
+    }
   });
 });

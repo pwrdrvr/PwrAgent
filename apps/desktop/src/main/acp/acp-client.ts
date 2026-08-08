@@ -15,6 +15,7 @@ import {
   AcpSessionReplayNormalizer,
   isAcpUserBoilerplateMessage,
   isGrokTransientUpdateKind,
+  readAcpToolCallId,
   readAcpContentText,
   readAcpTopicTitle,
   readAcpUpdateTimestamp,
@@ -142,6 +143,7 @@ type AcpActiveTurn = {
   activeAssistantMessagePhase?: AppServerTranscriptPhase;
   assistantText: string;
   assistantMessageSequence: number;
+  knownToolCallIds: Set<string>;
   turnId: string;
 };
 
@@ -448,6 +450,7 @@ export class AcpAgentClient {
         ACP_PROMPT_REQUEST_TIMEOUT_MS,
       );
       result = await promptRequest;
+      this.assertPromptProducedResponse(params.sessionId, result);
     } catch (error) {
       this.finishTrackedTurn(params.sessionId, this.now());
       this.recordPromptFailure(params.sessionId, turnId, error);
@@ -576,7 +579,8 @@ export class AcpAgentClient {
       ACP_PROMPT_REQUEST_TIMEOUT_MS,
     );
     void promptRequest
-      .then(() => {
+      .then((result) => {
+        this.assertPromptProducedResponse(params.sessionId, result);
         const receivedAt = this.now();
         const finished = this.finishTrackedTurn(params.sessionId, receivedAt);
         this.appendHistoryUpdate(params.sessionId, receivedAt, {
@@ -939,6 +943,11 @@ export class AcpAgentClient {
       updateKind === "agent_message_chunk" ||
       (updateKind === "agent_thought_chunk" && this.surfaceThoughtsAsMessages);
     const text = readUpdateText(update);
+    const toolCallId = readAcpToolCallId(update);
+    const updatesKnownToolCall =
+      updateKind === "tool_call_update"
+      && toolCallId !== undefined
+      && activeTurn?.knownToolCallIds.has(toolCallId) === true;
     let assistantMessageItemId: string | undefined;
     if (shouldTrackAssistantTextUpdate && activeTurn && text) {
       const phase: AppServerTranscriptPhase =
@@ -952,12 +961,30 @@ export class AcpAgentClient {
         activeTurn.assistantText += text;
       }
     } else if (
+      activeTurn
+      && text
+      && !activeTurn.assistantText.trim()
+      && (updateKind === "turn_finished" || updateKind === "turn_completed")
+    ) {
+      // Some ACP agents send the final answer only on the terminal update
+      // instead of streaming agent_message_chunk events. Preserve that valid
+      // response before the session/prompt result is checked for silence.
+      activeTurn.assistantText = text;
+    } else if (
       !isAssistantTextUpdate
       && activeTurn
       && !isGrokTransientUpdateKind(updateKind)
+      && !updatesKnownToolCall
     ) {
       activeTurn.activeAssistantMessageItemId = undefined;
       activeTurn.activeAssistantMessagePhase = undefined;
+    }
+    if (
+      activeTurn
+      && toolCallId
+      && (updateKind === "tool_call" || updateKind === "tool_call_update")
+    ) {
+      activeTurn.knownToolCallIds.add(toolCallId);
     }
     const replay = this.normalizerFor(sessionId).apply({
       sessionId,
@@ -1309,6 +1336,7 @@ export class AcpAgentClient {
     this.activeTurns.set(sessionId, {
       assistantText: "",
       assistantMessageSequence: 0,
+      knownToolCallIds: new Set<string>(),
       turnId,
     });
     this.updateSessionStatus(sessionId, "active");
@@ -1331,6 +1359,36 @@ export class AcpAgentClient {
       replay,
       turnId: activeTurn?.turnId,
     };
+  }
+
+  private assertPromptProducedResponse(
+    sessionId: string,
+    result: unknown,
+  ): void {
+    const resultRecord = asRecord(result);
+    if (
+      resultRecord?.stopReason === "cancelled"
+      || resultRecord?.stop_reason === "cancelled"
+    ) {
+      return;
+    }
+    const activeTurn = this.activeTurns.get(sessionId);
+    if (activeTurn?.assistantText.trim()) {
+      return;
+    }
+
+    const displayName = this.options.agentDisplayName?.trim() || "ACP agent";
+    const version = this.runtimeCapabilities?.agentInfo?.version?.trim();
+    if (this.options.backendId === "acp:kimi") {
+      throw new Error(
+        `${displayName} ended the turn without a response.${
+          version ? ` Kimi Code CLI ${version}` : " This Kimi Code CLI"
+        } may be out of date or incompatible with the selected model. Update Kimi, refresh the model catalog, and try again.`,
+      );
+    }
+    throw new Error(
+      `${displayName} ended the turn without a response. Refresh the provider model catalog and try again.`,
+    );
   }
 
   private recordPromptFailure(

@@ -130,6 +130,7 @@ describe("star map view stability", () => {
   // Layout preference is global; leaking it reorders unrelated suites.
   afterEach(() => {
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+    window.localStorage.removeItem("pwragent.starMap.filterSelection");
   });
 
   it("keeps the operator's pan when a card is archived away (orbit)", async () => {
@@ -236,7 +237,7 @@ describe("star map view stability", () => {
     seedLayout("projects");
     renderMap({ threads: threads(9) });
     await waitFor(() => {
-      expect(screen.getByTitle("PwrSnap")).toBeTruthy();
+      expect(screen.getByText("PwrSnap")).toBeTruthy();
     });
 
     const before = canvas().style.transform;
@@ -248,7 +249,7 @@ describe("star map view stability", () => {
     seedLayout("projects");
     const { rerender } = renderMap({ threads: threads(9) });
     await waitFor(() => {
-      expect(screen.getByTitle("PwrSnap")).toBeTruthy();
+      expect(screen.getByText("PwrSnap")).toBeTruthy();
     });
 
     pan(-300, -200);
@@ -289,6 +290,7 @@ describe("star map view stability", () => {
 describe("star map view bounds", () => {
   afterEach(() => {
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+    window.localStorage.removeItem("pwragent.starMap.filterSelection");
   });
 
   async function openOrbit() {
@@ -381,7 +383,7 @@ describe("star map view bounds", () => {
     seedLayout("projects");
     renderMap({ threads: threads(9) });
     await waitFor(() => {
-      expect(screen.getByTitle("PwrSnap")).toBeTruthy();
+      expect(screen.getByText("PwrSnap")).toBeTruthy();
     });
     const box = canvasBox();
 

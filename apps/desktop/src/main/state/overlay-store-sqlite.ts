@@ -592,6 +592,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
           immutableUsageActivities: current?.immutableUsageActivities,
           managedReviewEntries: current?.managedReviewEntries,
+          pendingManagedReviewContextEntryIds:
+            current?.pendingManagedReviewContextEntryIds,
           subAgents: current?.subAgents,
           handoffOrigin: current?.handoffOrigin,
           lastSeenAt: params.fetchedAt,
@@ -600,6 +602,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           worktreeSnapshots: current?.worktreeSnapshots ?? [],
           pinnedRank: current?.pinnedRank,
           parentThreadId: current?.parentThreadId,
+          parentThreadBackend: current?.parentThreadBackend,
           subthreadOrder: current?.subthreadOrder,
           subthreadsCollapsed: current?.subthreadsCollapsed,
           permissionTransitionLog: current?.permissionTransitionLog,
@@ -929,6 +932,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     entry: NonNullable<ThreadOverlayState["managedReviewEntries"]>[number];
+    pendingContext?: boolean;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey) ?? {
@@ -950,6 +954,42 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const nextState: ThreadOverlayState = {
       ...current,
       managedReviewEntries: nextEntries.slice(-MAX_MANAGED_REVIEW_ENTRIES),
+    };
+    const retainedEntryIds = new Set(
+      nextState.managedReviewEntries?.map((entry) => entry.id) ?? [],
+    );
+    const pendingContextEntryIds = [
+      ...(current.pendingManagedReviewContextEntryIds ?? []),
+      ...(params.pendingContext ? [params.entry.id] : []),
+    ].filter(
+      (id, index, ids) =>
+        retainedEntryIds.has(id) && ids.indexOf(id) === index,
+    );
+    nextState.pendingManagedReviewContextEntryIds =
+      pendingContextEntryIds.length > 0
+        ? pendingContextEntryIds
+        : undefined;
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async consumeManagedReviewContexts(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    entryIds: string[];
+  }): Promise<ThreadOverlayState | undefined> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey);
+    if (!current || params.entryIds.length === 0) {
+      return current;
+    }
+    const consumed = new Set(params.entryIds);
+    const remaining = (current.pendingManagedReviewContextEntryIds ?? [])
+      .filter((id) => !consumed.has(id));
+    const nextState: ThreadOverlayState = {
+      ...current,
+      pendingManagedReviewContextEntryIds:
+        remaining.length > 0 ? remaining : undefined,
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -2442,8 +2482,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     parentThreadId?: string | null;
+    parentThreadBackend?: ThreadOverlayState["backend"] | null;
   }): Promise<ThreadOverlayState> {
-    if (params.parentThreadId === params.threadId) {
+    if (
+      params.parentThreadId === params.threadId
+      && (!params.parentThreadBackend || params.parentThreadBackend === params.backend)
+    ) {
       throw new Error("A thread cannot be its own parent.");
     }
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
@@ -2454,16 +2498,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       extraLinkedDirectories: [],
     };
     const parentThreadId = params.parentThreadId?.trim();
+    const parentThreadBackend = parentThreadId
+      ? params.parentThreadBackend ?? params.backend
+      : undefined;
     const nextState: ThreadOverlayState = {
       ...current,
       parentThreadId: parentThreadId || undefined,
+      parentThreadBackend,
       pinnedRank: parentThreadId ? undefined : current.pinnedRank,
     };
     this.putThread(threadKey, nextState);
     if (parentThreadId) {
-      const parentKey = buildThreadIdentityKey(params.backend, parentThreadId);
+      const parentKey = buildThreadIdentityKey(parentThreadBackend!, parentThreadId);
       const parent = this.getThread(parentKey) ?? {
-        backend: params.backend,
+        backend: parentThreadBackend!,
         threadId: parentThreadId,
         executionMode: "default" as const,
         extraLinkedDirectories: [],
@@ -2578,6 +2626,62 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     };
     this.putDirectoryOverlay(params.directoryKey, nextState);
     return nextState;
+  }
+
+  /**
+   * Persist a remote window's disclosure locally without changing either the
+   * owning instance's overlay or this viewer's same-path local directory.
+   */
+  async setRemoteDirectoryThreadsCollapsed(params: {
+    instanceId: string;
+    directoryKey: string;
+    collapsed: boolean;
+  }): Promise<DirectoryOverlayState> {
+    const current = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM remote_directory_overlay
+         WHERE instance_id = ? AND directory_key = ?`,
+      )
+      .get(params.instanceId, params.directoryKey) as
+        | { payload: string }
+        | undefined;
+    const nextState: DirectoryOverlayState = {
+      ...(current
+        ? JSON.parse(current.payload) as DirectoryOverlayState
+        : {}),
+      directoryKey: params.directoryKey,
+      directoryThreadsCollapsed: params.collapsed,
+    };
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO remote_directory_overlay(
+           instance_id,
+           directory_key,
+           payload
+         ) VALUES (?, ?, ?)`,
+      )
+      .run(params.instanceId, params.directoryKey, JSON.stringify(nextState));
+    return nextState;
+  }
+
+  async readRemoteDirectoryOverlays(params: {
+    instanceId: string;
+  }): Promise<Record<string, DirectoryOverlayState>> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT directory_key, payload FROM remote_directory_overlay
+         WHERE instance_id = ?`,
+      )
+      .all(params.instanceId) as Array<{
+        directory_key: string;
+        payload: string;
+      }>;
+    return Object.fromEntries(
+      rows.map((row) => [
+        row.directory_key,
+        JSON.parse(row.payload) as DirectoryOverlayState,
+      ]),
+    );
   }
 
   async getDirectoryOverlayState(params: {
@@ -6215,6 +6319,7 @@ export type OverlayStoreLike = Pick<
   | "setAcpWorktreeDirectory"
   | "persistThreadUsageActivity"
   | "upsertManagedReviewEntry"
+  | "consumeManagedReviewContexts"
   | "upsertThreadUsageLine"
   | "readThreadPricing"
   | "upsertThreadToolInvocation"
@@ -6237,6 +6342,8 @@ export type OverlayStoreLike = Pick<
   | "setDirectoryPin"
   | "reorderDirectoryPins"
   | "setDirectoryThreadsCollapsed"
+  | "setRemoteDirectoryThreadsCollapsed"
+  | "readRemoteDirectoryOverlays"
   | "getDirectoryOverlayState"
   | "readAllDirectoryOverlays"
   | "setThreadPullRequests"

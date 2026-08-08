@@ -20,6 +20,17 @@ export function buildManagedReviewPrompt(
   ].join("\n\n");
 }
 
+export function buildManagedReviewContextInput(outputs: string[]): string {
+  return [
+    "[PwrAgent review sub-agent results — context for this turn]",
+    ...outputs.map((output, index) => [
+      outputs.length > 1 ? `Review ${index + 1}:` : undefined,
+      output.trim(),
+    ].filter((line): line is string => Boolean(line)).join("\n")),
+    "[End PwrAgent review sub-agent results]",
+  ].join("\n\n");
+}
+
 function reviewTargetInstructions(target: AppServerReviewTarget): string {
   switch (target.type) {
     case "baseBranch":

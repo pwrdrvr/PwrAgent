@@ -264,14 +264,32 @@ export type AcpAgentSettingsEntry = {
   lastDiscoveredAt?: number;
   lastDiscoveryError?: string;
   runtime?: BackendAcpRuntimeCapabilities;
+  update?: AcpAgentUpdateStatus;
   // Multi-install (Wave 2 / agent-acp). Every installed executable of this
   // agent found on the machine (PATH matches + fallbacks + a passing override),
   // the one currently in effect, the user's enable toggle, and their path
   // preference. Populated from the kit's `discoverLocalAcpAgentInstances`.
   instances?: AcpAgentInstance[];
+  /** Executables that matched the provider command but belong to an
+   *  unsupported predecessor product. They are shown for remediation but are
+   *  never eligible for launch or model discovery. */
+  incompatibleInstances?: AcpAgentInstance[];
   activeCommand?: string;
   enabled?: boolean;
   preference?: AcpAgentPreference;
+};
+
+export type AcpAgentUpdateStatus = {
+  status: "available" | "up-to-date" | "failed";
+  checkedAt: number;
+  currentVersion: string;
+  latestVersion?: string;
+  channel?: string;
+  installer?: string;
+  autoUpdate?: boolean;
+  error?: string;
+  dismissedAt?: number;
+  snoozedUntil?: number;
 };
 
 /** How a discovered ACP instance's executable path was located. Mirrors the
@@ -315,4 +333,15 @@ export type ListAcpAgentSettingsResponse = {
   fetchedAt: number;
   entries: AcpAgentSettingsEntry[];
   error?: string;
+};
+
+export type AcknowledgeAcpAgentUpdateRequest = {
+  action: "dismiss" | "snooze";
+  backendId: AppServerBackendKind;
+  latestVersion: string;
+};
+
+export type AcknowledgeAcpAgentUpdateResponse = {
+  applied: boolean;
+  update?: AcpAgentUpdateStatus;
 };

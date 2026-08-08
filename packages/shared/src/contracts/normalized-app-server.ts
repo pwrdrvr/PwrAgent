@@ -4,7 +4,7 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
 } from "./messaging";
-import type { CelestialIconAssignment } from "./celestial";
+import type { CelestialIconAssignment, CelestialIconId } from "./celestial";
 import type { StarMapArrangementEntry, StarMapIntakePhase } from "./star-map";
 import type {
   FederationConnectionState,
@@ -422,6 +422,10 @@ export type AppServerThreadMessageOrigin = {
     backend: AppServerBackendKind;
     /** Durable owner identity when the source thread belongs to another instance. */
     instanceId?: FederationInstanceId;
+    /** Hydrated owner label so provenance stays useful without mounting the source thread. */
+    instanceLabel?: string;
+    /** Hydrated owner identity icon, matching remote thread rows. */
+    celestialIcon?: CelestialIconId;
     threadId: ThreadIdentifier;
     title?: string;
   };
@@ -1347,6 +1351,12 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "backend/acpUpdateStatus/updated";
+      params: {
+        backend: AppServerBackendKind;
+      };
+    }
+  | {
       method: "item/commandExecution/outputDelta";
       params: {
         threadId: string;
@@ -1589,6 +1599,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         queueEntryId: string;
+        /** Owner-clock creation time for ordering against navigation snapshots. */
+        queueEntryCreatedAt?: number;
         origin: "manual" | "automation" | "messaging" | "scheduled";
         status: "queued" | "started" | "failed" | "cancelled" | "terminal";
         /**
@@ -1657,6 +1669,7 @@ export type AppServerNotification =
       params: {
         threadId: string;
         parentThreadId: string;
+        parentThreadBackend?: AppServerBackendKind;
       };
     }
   | {

@@ -6,6 +6,8 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
+  EnsureDirectoryLaunchpadRequest,
+  EnsureDirectoryLaunchpadResponse,
   ListBackendsResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
@@ -264,6 +266,41 @@ export async function startInProcessFederationGateway(params: {
     async listScheduledThreadActions() {
       calls.push({ method: "listScheduledThreadActions", params: {} });
       return { actions: [] };
+    },
+    async ensureDirectoryLaunchpad(
+      request: EnsureDirectoryLaunchpadRequest,
+    ): Promise<EnsureDirectoryLaunchpadResponse> {
+      calls.push({ method: "ensureDirectoryLaunchpad", params: request });
+      const directory = directories.find(
+        (entry) =>
+          entry.key === request.directoryKey
+          || entry.path === request.directoryPath,
+      );
+      const now = Date.now();
+      return {
+        launchpad: {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: directory?.label ?? request.directoryLabel,
+          directoryPath: directory?.path ?? request.directoryPath,
+          backend: request.preferredBackend ?? "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: now,
+          updatedAt: now,
+        },
+        defaults: {
+          backend: "codex",
+          executionMode: "default",
+        },
+        gitStatus: {
+          currentBranch: "main",
+          branches: ["main"],
+          baseBranches: ["main", "origin/main"],
+        },
+      };
     },
     async materializeDirectoryLaunchpad(
       request: MaterializeDirectoryLaunchpadRequest,

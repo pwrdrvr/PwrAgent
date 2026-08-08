@@ -192,6 +192,55 @@ describe("AcpAgentsSettings", () => {
     expect(screen.getByText("Not installed.")).toBeInTheDocument();
   });
 
+  it("renders a durable remediation card for legacy Python kimi-cli", async () => {
+    const legacyPath = "/Users/me/.local/bin/kimi";
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({
+        fetchedAt: 1000,
+        entries: [
+          {
+            backendId: "acp:kimi",
+            registryId: "kimi",
+            name: "Kimi Code CLI",
+            version: "1.46.0",
+            authors: ["Moonshot AI"],
+            distributionKind: "local",
+            distributionSource: `${legacyPath} (legacy kimi-cli ignored)`,
+            installable: false,
+            installed: false,
+            installStatus: "unavailable",
+            authStatus: "not-required",
+            verificationStatus: "not-applicable",
+            instances: [],
+            incompatibleInstances: [
+              { command: legacyPath, version: "1.46.0", source: "path" },
+            ],
+          } satisfies AcpAgentSettingsEntry,
+        ],
+      })),
+    } as unknown as DesktopApi;
+
+    render(<AcpAgentsSettings desktopApi={desktopApi} />);
+
+    expect(
+      await screen.findByText("Current Kimi Code required"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Action required")).toBeInTheDocument();
+    expect(screen.getByText(legacyPath)).toBeInTheDocument();
+    expect(screen.getByText("legacy Python")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Open install guide" }),
+    ).toHaveAttribute(
+      "href",
+      "https://www.kimi.com/help/kimi-code/cli-getting-started",
+    );
+  });
+
   it("loads exactly once under StrictMode's double-invoked mount effect", async () => {
     const listAcpAgents = vi.fn(
       async (_request?: { refresh?: boolean; force?: boolean }) => ({

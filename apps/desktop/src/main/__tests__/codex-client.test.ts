@@ -1221,6 +1221,42 @@ describe("CodexAppServerClient", () => {
     );
   });
 
+  it("reads only effective MCP server names for connection setup", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const observedMessages: string[] = [];
+    const client = new CodexAppServerClient({
+      command: "codex",
+      connectionObserver: {
+        onMessage: async (event) => {
+          observedMessages.push(event.raw);
+        },
+      },
+    });
+
+    await expect(
+      client.readConfiguredMcpServerNames({
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      }),
+    ).resolves.toEqual(["context7", "github"]);
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown },
+    );
+    expect(requests).toContainEqual(expect.objectContaining({
+      method: "config/read",
+      params: {
+        includeLayers: false,
+        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      },
+    }));
+    expect(observedMessages.join("\n")).not.toContain("never-forward-me");
+    expect(observedMessages.join("\n")).not.toContain("github-mcp-server");
+    expect(observedMessages.join("\n")).toContain('"context7":{}');
+    expect(observedMessages.join("\n")).toContain('"github":{}');
+
+    await client.close();
+  });
+
   it("initializes once and normalizes thread/list results", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
@@ -8905,7 +8941,6 @@ describe("CodexAppServerClient", () => {
           threadId: "thread-2",
           target: { type: "baseBranch", branch: "main" },
           delivery: "inline",
-          cwd: "/Users/example/project",
         },
       })
     );

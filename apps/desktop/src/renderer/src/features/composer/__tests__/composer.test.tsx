@@ -5,6 +5,7 @@ import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
   type BackendSummary,
+  type AgentEvent,
   type CompactThreadRequest,
   type ComposerDraftRecoveryCandidate,
   type CreateScheduledThreadActionRequest,
@@ -29,6 +30,7 @@ import {
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { Composer } from "../Composer";
+import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import type {
   ComposerDraftSnapshot,
   ComposerDraftStore,
@@ -96,6 +98,32 @@ function createDeferred<T>(): {
     reject = promiseReject;
   });
   return { promise, resolve, reject };
+}
+
+function createQueuedStartTurnController() {
+  const called = createDeferred<StartTurnRequest>();
+  const response = createDeferred<StartTurnResponse>();
+  const startTurn = vi.fn((request: StartTurnRequest) => {
+    called.resolve(request);
+    return response.promise;
+  });
+  return {
+    called: called.promise,
+    startTurn,
+    acknowledge: async () => {
+      const request = await called.promise;
+      await act(async () => {
+        response.resolve({
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: "queue-entry-1",
+          queueStatus: "queued",
+          queueEntryId: "queue-entry-1",
+        });
+        await response.promise;
+      });
+    },
+  };
 }
 
 afterEach(async () => {
@@ -1504,10 +1532,205 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
 
     expect(screen.getByRole("option", { name: /remote repo/i })).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /add directory/i }),
-    ).not.toBeInTheDocument();
+    const addDirectory = screen.getByRole("button", { name: /add directory/i });
+    expect(addDirectory).toBeDisabled();
+    expect(addDirectory).toHaveAttribute(
+      "title",
+      REMOTE_NATIVE_PICKER_TOOLTIP,
+    );
     expect(onPickAndRegisterDirectory).not.toHaveBeenCalled();
+  });
+
+  it("routes remote recent files to the owner and disables every native add path", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const listRecentFileReferences = vi.fn(async () => ({
+      files: [{ label: "owner.md", path: "/owner/notes/owner.md" }],
+    }));
+    const recordRecentFileReferences = vi.fn(async () => undefined);
+    const pickFileFromDisk = vi.fn(async () => ({
+      canceled: false as const,
+      paths: ["/viewer/notes/viewer.md"],
+    }));
+    const onPickDirectoryForReference = vi.fn(async () => ({
+      label: "viewer",
+      path: "/viewer/project",
+    }));
+    const onPickAndAttachDirectoryToThread = vi.fn();
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          listRecentFileReferences,
+          onAgentEvent: () => () => undefined,
+          pickFileFromDisk,
+          recordRecentFileReferences,
+        }}
+        directories={[{
+          key: "directory:/owner/project",
+          kind: "directory",
+          label: "Owner project",
+          path: "/owner/project",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        }]}
+        disabled={false}
+        onPickAndAttachDirectoryToThread={onPickAndAttachDirectoryToThread}
+        onPickDirectoryForReference={onPickDirectoryForReference}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Remote thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: federationTarget,
+              threadId: "thread-1",
+            },
+            instanceLabel: "Remote",
+            peerStatus: "connected",
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const existingThreadAdd = screen.getByRole("button", {
+      name: "Add directory",
+    });
+    expect(existingThreadAdd).toBeDisabled();
+    expect(existingThreadAdd).toHaveAttribute(
+      "title",
+      REMOTE_NATIVE_PICKER_TOOLTIP,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Check @" },
+    });
+    const autocomplete = screen.getByRole("listbox", { name: "Directories" });
+    for (const name of ["+ Add directory…", "+ Add file…"]) {
+      const action = within(autocomplete).getByRole("button", { name });
+      expect(action).toBeDisabled();
+      expect(action).toHaveAttribute("title", REMOTE_NATIVE_PICKER_TOOLTIP);
+    }
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Review owner file" },
+    });
+    await clickButton("Add reference");
+    expect(listRecentFileReferences).toHaveBeenCalledWith({
+      federationTarget,
+    });
+    const dialog = screen.getByRole("dialog", { name: "Add reference" });
+    expect(
+      within(dialog).getByRole("button", { name: "Add directory…" }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("button", { name: "Add file…" }),
+    ).toHaveAttribute("data-tooltip", REMOTE_NATIVE_PICKER_TOOLTIP);
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Files" }));
+    fireEvent.click(within(dialog).getByRole("option", { name: /owner\.md/ }));
+
+    await waitFor(() => {
+      expect(recordRecentFileReferences).toHaveBeenCalledWith({
+        federationTarget,
+        paths: ["/owner/notes/owner.md"],
+      });
+    });
+    expect(pickFileFromDisk).not.toHaveBeenCalled();
+    expect(onPickDirectoryForReference).not.toHaveBeenCalled();
+    expect(onPickAndAttachDirectoryToThread).not.toHaveBeenCalled();
+  });
+
+  it("clears recent files when filesystem authority changes and the new read fails", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner-two",
+    };
+    const listRecentFileReferences = vi.fn()
+      .mockResolvedValueOnce({
+        files: [{ label: "local.md", path: "/viewer/notes/local.md" }],
+      })
+      .mockRejectedValueOnce(new Error("owner unavailable"));
+    const desktopApi: DesktopApi = {
+      listRecentFileReferences,
+      onAgentEvent: () => () => undefined,
+      pickFileFromDisk: vi.fn(async () => ({ canceled: true as const })),
+    };
+    const localThread: NavigationThreadSummary = {
+      id: "local-thread",
+      title: "Local thread",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const remoteThread: NavigationThreadSummary = {
+      ...localThread,
+      id: "remote-thread",
+      title: "Remote thread",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: federationTarget,
+          threadId: "remote-thread",
+        },
+        instanceLabel: "Owner two",
+        peerStatus: "connected",
+      },
+    };
+    const { rerender } = render(
+      <Composer
+        desktopApi={desktopApi}
+        disabled={false}
+        skills={[]}
+        thread={localThread}
+      />,
+    );
+
+    await clickButton("Add reference");
+    let dialog = screen.getByRole("dialog", { name: "Add reference" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Files" }));
+    expect(
+      await within(dialog).findByRole("option", { name: /local\.md/ }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Add reference" }),
+      ).not.toBeInTheDocument();
+    });
+
+    rerender(
+      <Composer
+        desktopApi={desktopApi}
+        disabled={false}
+        skills={[]}
+        thread={remoteThread}
+      />,
+    );
+    await clickButton("Add reference");
+    dialog = screen.getByRole("dialog", { name: "Add reference" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Files" }));
+    await waitFor(() => {
+      expect(listRecentFileReferences).toHaveBeenLastCalledWith({
+        federationTarget,
+      });
+    });
+    expect(
+      within(dialog).queryByRole("option", { name: /local\.md/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows thread environment commands from refreshed environment options", async () => {
@@ -5430,6 +5653,7 @@ describe("Composer", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     }));
+    const queuedStart = createQueuedStartTurnController();
     render(
       <Composer
         activeTurnId="turn-1"
@@ -5445,13 +5669,7 @@ describe("Composer", () => {
         desktopApi={{
           cancelQueuedTurn,
           onAgentEvent: () => () => undefined,
-          startTurn: vi.fn(async () => ({
-            backend: "codex" as const,
-            threadId: "thread-1",
-            turnId: "queue-entry-1",
-            queueStatus: "queued" as const,
-            queueEntryId: "queue-entry-1",
-          })),
+          startTurn: queuedStart.startTurn,
           steerTurn,
         }}
         disabled={false}
@@ -5480,14 +5698,16 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Steer remotely" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await queuedStart.called;
+    await flushReactUpdates();
     await screen.findByLabelText("Queued message");
     const steerButton = screen.getByRole("button", { name: "Steer" });
     // The local projection renders immediately but remains disabled until the
     // owning peer returns its stable queue entry id. A click before that
     // acknowledgement is intentionally ignored.
-    await waitFor(() => {
-      expect(steerButton).toBeEnabled();
-    });
+    expect(steerButton).toBeDisabled();
+    await queuedStart.acknowledge();
+    expect(steerButton).toBeEnabled();
     fireEvent.click(steerButton);
 
     await waitFor(() => {
@@ -5519,6 +5739,7 @@ describe("Composer", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     }));
+    const queuedStart = createQueuedStartTurnController();
     render(
       <Composer
         activeTurnId="turn-1"
@@ -5534,13 +5755,7 @@ describe("Composer", () => {
         desktopApi={{
           cancelQueuedTurn,
           onAgentEvent: () => () => undefined,
-          startTurn: vi.fn(async () => ({
-            backend: "codex" as const,
-            threadId: "thread-1",
-            turnId: "queue-entry-1",
-            queueStatus: "queued" as const,
-            queueEntryId: "queue-entry-1",
-          })),
+          startTurn: queuedStart.startTurn,
           steerTurn,
         }}
         disabled={false}
@@ -5569,12 +5784,11 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Already admitted once" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await queuedStart.acknowledge();
     await screen.findByLabelText("Queued message");
 
     const steerButton = screen.getByRole("button", { name: "Steer" });
-    await waitFor(() => {
-      expect(steerButton).toBeEnabled();
-    });
+    expect(steerButton).toBeEnabled();
     fireEvent.click(steerButton);
 
     await waitFor(() => {
@@ -5621,6 +5835,7 @@ describe("Composer", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     }));
+    const queuedStart = createQueuedStartTurnController();
     render(
       <Composer
         activeTurnId="turn-1"
@@ -5639,13 +5854,7 @@ describe("Composer", () => {
             agentEventHandler = callback as typeof agentEventHandler;
             return () => undefined;
           },
-          startTurn: vi.fn(async () => ({
-            backend: "codex" as const,
-            threadId: "thread-1",
-            turnId: "queue-entry-1",
-            queueStatus: "queued" as const,
-            queueEntryId: "queue-entry-1",
-          })),
+          startTurn: queuedStart.startTurn,
           steerTurn,
         }}
         disabled={false}
@@ -5675,12 +5884,11 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Preserve until admitted" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
+    await queuedStart.acknowledge();
     await screen.findByLabelText("Queued message");
 
     const steerButton = screen.getByRole("button", { name: "Steer" });
-    await waitFor(() => {
-      expect(steerButton).toBeEnabled();
-    });
+    expect(steerButton).toBeEnabled();
     fireEvent.click(steerButton);
 
     await waitFor(() => {
@@ -6019,6 +6227,86 @@ describe("Composer", () => {
 
     unmount();
     expect(startTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles queue admission that arrives before the enqueue response", async () => {
+    const draftStore = createComposerDraftStore();
+    const startTurnDeferred = createDeferred<StartTurnResponse>();
+    const startTurn = vi.fn(
+      (_request: StartTurnRequest) => startTurnDeferred.promise,
+    );
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        desktopApi={{
+          onAgentEvent: (listener) => {
+            agentEventHandler = listener;
+            return () => undefined;
+          },
+          startTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Admit before acknowledgement" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+    const request = startTurn.mock.calls[0]?.[0];
+    expect(request).toBeDefined();
+    if (!request) throw new Error("Expected a queued turn request.");
+    const scopeKey = "thread:codex:thread-1";
+    const queued = draftStore.getQueuedTurn(scopeKey);
+    expect(request.queueEntryId).toBe(queued?.id);
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "thread-1",
+            queueEntryId: request.queueEntryId!,
+            queueEntryCreatedAt: 2_000,
+            origin: "manual",
+            status: "started",
+            turnId: "turn-2",
+          },
+        },
+      });
+    });
+    expect(draftStore.getQueuedTurn(scopeKey)).toBeUndefined();
+
+    await act(async () => {
+      startTurnDeferred.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: request.queueEntryId!,
+        queueStatus: "queued",
+        queueEntryId: request.queueEntryId!,
+        queueEntryCreatedAt: 2_000,
+      });
+      await startTurnDeferred.promise;
+    });
+
+    expect(draftStore.getQueuedTurn(scopeKey)).toBeUndefined();
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
   });
 
   it("keeps a delayed backend queue acknowledgement scoped to its thread", async () => {
@@ -17632,6 +17920,62 @@ describe("Composer", () => {
 
     expect(screen.queryByRole("listbox", { name: "Skills" })).not.toBeInTheDocument();
     expect(textarea).toHaveValue("$ce:pl");
+  });
+
+  it("dismisses directory autocomplete with Escape after focus leaves the composer", () => {
+    const directory: NavigationDirectorySummary = {
+      key: "directory:/repo/search",
+      kind: "directory",
+      label: "search",
+      path: "/repo/search",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+
+    render(
+      <>
+        <button type="button">Transcript blank area</button>
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn: async () => ({
+              backend: "codex",
+              threadId: "thread-1",
+              turnId: "turn-1",
+            }),
+          }}
+          directories={[directory]}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Search thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      </>
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Check @sea" } });
+    expect(
+      screen.getByRole("listbox", { name: "Directories" })
+    ).toBeInTheDocument();
+
+    const transcript = screen.getByRole("button", {
+      name: "Transcript blank area",
+    });
+    transcript.focus();
+    fireEvent.keyDown(transcript, { key: "Escape", code: "Escape" });
+
+    expect(
+      screen.queryByRole("listbox", { name: "Directories" })
+    ).not.toBeInTheDocument();
+    expect(textarea).toHaveValue("Check @sea");
+    expect(transcript).toHaveFocus();
   });
 
   it("shows a stop button for an active turn and interrupts it", async () => {

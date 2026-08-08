@@ -1,12 +1,13 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
+import path from "node:path";
 import type {
   AgentEvent,
-  ApplyThreadModelMigrationResponse,
   AppServerListSkillsResponse,
   AppServerListThreadsResponse,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
+  AttachDirectoryToThreadResponse,
   CancelQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
@@ -36,6 +37,7 @@ import type {
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
   MaterializeDirectoryLaunchpadResponse,
+  ListRecentFileReferencesResponse,
   MarkThreadSeenResponse,
   MessagingPlatformStatus,
   PwrSnapConnectionStatus,
@@ -85,7 +87,7 @@ import {
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
   type AppServerReadThreadRequest,
-  type ApplyThreadModelMigrationRequest,
+  type AttachDirectoryToThreadRequest,
   type CancelQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
   type CelestialIconAssignment,
@@ -94,6 +96,7 @@ import {
   type CompactThreadRequest,
   type ControlActiveTurnRequest,
   type ForkThreadRequest,
+  type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
   type DesktopApplicationsSnapshot,
   type DesktopFederationMode,
@@ -125,6 +128,7 @@ import {
   type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
   type RefreshDirectoryGitStatusesRequest,
+  type RecordRecentFileReferencesRequest,
   type RetainThreadBranchDriftRequest,
   type RenameThreadRequest,
   type ResolveActiveTurnRequest,
@@ -150,6 +154,7 @@ import {
   type UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
@@ -171,6 +176,10 @@ import {
   getExistingRuntimeFederationLeaseCoordinator,
   getRuntimeFederationLeaseCoordinator,
 } from "../runtime-federation-lease";
+import {
+  listRecentFileReferencePaths,
+  recordRecentFileReferencePaths,
+} from "../state/recent-file-references-store";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import {
   createFederationEnrollmentInvite,
@@ -330,6 +339,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "scheduled_actions",
   "pending_request_control",
   "environment_actions",
+  "launchpad_metadata",
   "federated_search",
   "messaging_route",
   "pwrsnap_connection",
@@ -724,6 +734,19 @@ export class DesktopFederationRuntime {
         label: formatFederationPeerDisplayLabel(peer, visible),
         capabilities: [...peer.capabilities],
       }));
+  }
+
+  remoteTargetSupportsCapability(
+    target: FederationRemoteTarget,
+    capability: FederationCapability,
+  ): boolean {
+    const visiblePeer = this.visiblePeers().find(
+      (peer) => peer.id === target.instanceId,
+    );
+    return this.viewerCapabilitiesFor(
+      target.instanceId,
+      visiblePeer,
+    ).includes(capability);
   }
 
   async restart(): Promise<void> {
@@ -1260,6 +1283,107 @@ export class DesktopFederationRuntime {
     );
   }
 
+  hydrateLiveThreadMessageOrigin(event: AgentEvent): AgentEvent {
+    if (
+      event.notification.method !== "item/started"
+      && event.notification.method !== "item/completed"
+    ) {
+      return event;
+    }
+    const notificationParams = event.notification.params as Record<string, unknown>;
+    const itemValue = notificationParams.item;
+    if (
+      !itemValue
+      || typeof itemValue !== "object"
+      || Array.isArray(itemValue)
+    ) {
+      return event;
+    }
+    const item = itemValue as Record<string, unknown>;
+    const originValue = item.origin;
+    if (
+      item.type !== "userMessage"
+      || !originValue
+      || typeof originValue !== "object"
+      || Array.isArray(originValue)
+    ) {
+      return event;
+    }
+    const origin = originValue as Record<string, unknown>;
+    const sourceThreadValue = origin.sourceThread;
+    if (
+      !sourceThreadValue
+      || typeof sourceThreadValue !== "object"
+      || Array.isArray(sourceThreadValue)
+    ) {
+      return event;
+    }
+    const sourceThread = sourceThreadValue as Record<string, unknown>;
+    if (typeof sourceThread.instanceId !== "string") {
+      return event;
+    }
+    const instance = this.resolveThreadMessageOriginInstance(
+      sourceThread.instanceId,
+    );
+    if (!instance) {
+      return event;
+    }
+    const {
+      celestialIcon: _callerCelestialIcon,
+      instanceLabel: _callerInstanceLabel,
+      ...trustedSourceThread
+    } = sourceThread;
+
+    return {
+      ...event,
+      notification: {
+        ...event.notification,
+        params: {
+          ...notificationParams,
+          item: {
+            ...item,
+            origin: {
+              ...origin,
+              sourceThread: {
+                ...trustedSourceThread,
+                instanceLabel: instance.label,
+                ...(instance.celestialIcon
+                  ? { celestialIcon: instance.celestialIcon }
+                  : {}),
+              },
+            },
+          },
+        },
+      },
+    } as AgentEvent;
+  }
+
+  private resolveThreadMessageOriginInstance(
+    instanceId: FederationInstanceId,
+  ): { label: string; celestialIcon?: CelestialIconId } | undefined {
+    let visible: FederationPeerSummary[] = [];
+    try {
+      visible = this.visiblePeers();
+    } catch {
+      // Early boot tests may not have initialized the app-state DB yet.
+    }
+    let peer = visible.find((candidate) => candidate.id === instanceId);
+    if (!peer) {
+      try {
+        peer = this.store().getPeer(instanceId);
+      } catch {
+        // A source id remains actionable even when peer metadata is gone.
+      }
+    }
+    return peer
+      ? {
+          label: formatFederationPeerDisplayLabel(peer, visible),
+          celestialIcon:
+            this.celestialIconFor(instanceId) ?? peer.celestialIcon,
+        }
+      : undefined;
+  }
+
   async hydrateThreadMessageOrigins(
     response: AppServerReadThreadResponse,
     ownerInstanceId = this.ensureLocalInstanceId(),
@@ -1268,6 +1392,8 @@ export class DesktopFederationRuntime {
       localInstanceId: this.ensureLocalInstanceId(),
       ownerInstanceId,
       response,
+      resolveInstance: (instanceId) =>
+        this.resolveThreadMessageOriginInstance(instanceId),
       resolveThread: async (source) => {
         const resolveOnInstance = async (instanceId: FederationInstanceId) => {
           if (instanceId === this.ensureLocalInstanceId()) {
@@ -1615,6 +1741,8 @@ export class DesktopFederationRuntime {
     registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
+      resolveSourceInstance: (instanceId) =>
+        this.resolveThreadMessageOriginInstance(instanceId),
       onEnvironmentSetupProgress: (event, targetInstanceId) => {
         this.sendEnvironmentSetupProgress(event, targetInstanceId);
       },
@@ -4056,11 +4184,6 @@ function localBackendOperations(): FederationBackendOperations {
     ): Promise<SetThreadModelSettingsResponse> {
       return await getDesktopBackendRegistry().setThreadModelSettings(request);
     },
-    async applyThreadModelMigration(
-      request: ApplyThreadModelMigrationRequest,
-    ): Promise<ApplyThreadModelMigrationResponse> {
-      return await getDesktopBackendRegistry().applyThreadModelMigration(request);
-    },
     async checkThreadBranchDrift(
       request: CheckThreadBranchDriftRequest,
     ): Promise<CheckThreadBranchDriftResponse> {
@@ -4100,6 +4223,78 @@ function localBackendOperations(): FederationBackendOperations {
       request: RefreshDirectoryGitStatusesRequest,
     ): Promise<RefreshDirectoryGitStatusesResponse> {
       return await getDesktopBackendRegistry().refreshDirectoryGitStatuses(request);
+    },
+    async ensureDirectoryLaunchpad(request: EnsureDirectoryLaunchpadRequest) {
+      return await new DesktopMessagingBackendBridge()
+        .ensureDirectoryLaunchpad(request);
+    },
+    async listRecentFileReferences(): Promise<ListRecentFileReferencesResponse> {
+      return {
+        files: listRecentFileReferencePaths(getAppStateDb()).map((filePath) => ({
+          label: path.basename(filePath),
+          path: filePath,
+        })),
+      };
+    },
+    async recordRecentFileReferences(
+      request: RecordRecentFileReferencesRequest,
+    ): Promise<void> {
+      recordRecentFileReferencePaths(getAppStateDb(), request.paths ?? []);
+    },
+    async attachDirectoryToThread(
+      request: AttachDirectoryToThreadRequest,
+    ): Promise<AttachDirectoryToThreadResponse> {
+      const backend = request.backend ?? "codex";
+      const bridge = new DesktopMessagingBackendBridge();
+      const registered = await registerDirectoryFromDisk(
+        {
+          path: request.path,
+          preferredBackend: request.preferredBackend ?? backend,
+        },
+        {
+          ensureDirectoryLaunchpad: (ensureRequest) =>
+            bridge.ensureDirectoryLaunchpad(ensureRequest),
+        },
+      );
+      if (!registered.ok) {
+        return {
+          ok: false,
+          backend,
+          threadId: request.threadId,
+          reason: registered.reason,
+          message: registered.message,
+        };
+      }
+      const directoryPath = path
+        .resolve(registered.directoryPath)
+        .replace(/\\/g, "/");
+      const directory = {
+        id: directoryPath,
+        kind: "local" as const,
+        label: registered.directoryLabel,
+        path: directoryPath,
+      };
+      await getDesktopOverlayStore().addLinkedDirectory({
+        backend,
+        threadId: request.threadId,
+        directory,
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: {
+            reason: "selected-thread",
+            threadIds: [request.threadId],
+          },
+        },
+      });
+      return {
+        ok: true,
+        backend,
+        threadId: request.threadId,
+        directory,
+      };
     },
     async listWorktreeUnpublishedCommits(
       request: ListWorktreeUnpublishedCommitsRequest,

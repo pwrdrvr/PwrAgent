@@ -20,12 +20,14 @@ import type {
   AppServerThreadTextPart,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
 import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { InstanceChip } from "../federation/InstanceGlyph";
 import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
 import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
@@ -754,6 +756,20 @@ function renderMessageHeader(params: {
     || params.message.origin?.prAutomation
     ? "transcript-message__attribution transcript-message__attribution--stacked"
     : "transcript-message__attribution";
+  const sourceThread = params.message.origin?.sourceThread;
+  const rendererFederationTarget = readRendererFederationTarget();
+  const sourceInstanceChip =
+    sourceThread?.instanceId
+    && sourceThread.instanceLabel
+    && rendererFederationTarget?.instanceId !== sourceThread.instanceId
+      ? (
+          <InstanceChip
+            icon={sourceThread.celestialIcon}
+            instanceId={sourceThread.instanceId}
+            label={sourceThread.instanceLabel}
+          />
+        )
+      : null;
 
   return (
     <header className="transcript-message__header">
@@ -780,6 +796,7 @@ function renderMessageHeader(params: {
           && params.message.origin.messaging ? (
             <MessagingOriginChip origin={params.message.origin.messaging} />
           ) : null}
+        {sourceInstanceChip}
       </span>
       <span className="transcript-message__header-actions">
         {params.text ? (

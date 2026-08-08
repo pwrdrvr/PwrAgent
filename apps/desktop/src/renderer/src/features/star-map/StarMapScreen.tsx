@@ -20,10 +20,6 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
 import {
-  addFilterImpactCounts,
-  countAgentFilterImpact,
-  countFilterImpact,
-  selectAttentionThreads,
   STAR_MAP_ATTENTION_CATEGORIES,
   STAR_MAP_ATTENTION_LABELS,
   type StarMapAttentionCategory,
@@ -45,6 +41,18 @@ import {
   galaxyArmPath,
   shouldStartCanvasPan,
 } from "./star-map-orbit";
+import {
+  addFilterMatchCounts,
+  countFilterMatches,
+  cycleFilterState,
+  filterState,
+  readStoredFilterSelection,
+  selectFilteredThreads,
+  STAR_MAP_FILTERS,
+  writeStoredFilterSelection,
+  type StarMapFilterKey,
+  type StarMapFilterSelection,
+} from "./star-map-filters";
 import { buildFederationTopology } from "./star-map-topology";
 import {
   groupThreadsByProject,
@@ -58,10 +66,8 @@ import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import {
-  nextAgentFilter,
   readStoredPreferences,
   writeStoredPreferences,
-  STAR_MAP_AGENT_FILTER_LABELS,
   type StarMapViewPreferences,
 } from "./star-map-preferences";
 import {
@@ -76,7 +82,6 @@ import { StarMapThreadCard } from "./StarMapThreadCard";
 import { useStarMapArrangement } from "./useStarMapArrangement";
 import { useStarMapThreads } from "./useStarMapThreads";
 
-const FILTERS_STORAGE_KEY = "pwragent.starMap.filters";
 const MAX_CARDS_PER_INSTANCE = 8;
 const STAR_COUNT = 130;
 /** Orbit rings use a fixed card width; lanes narrow theirs to fit. */
@@ -88,26 +93,6 @@ const ORBIT_MAX_CARDS_PER_INSTANCE = 16;
  * options) so a card being read is never underneath a control strip.
  */
 const STAR_MAP_CHAT_CARD_BASE_Z = 40;
-
-function readStoredFilters(): Set<StarMapAttentionCategory> {
-  if (typeof window === "undefined") {
-    return new Set(STAR_MAP_ATTENTION_CATEGORIES);
-  }
-  try {
-    const raw = window.localStorage.getItem(FILTERS_STORAGE_KEY);
-    if (!raw) return new Set(STAR_MAP_ATTENTION_CATEGORIES);
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set(STAR_MAP_ATTENTION_CATEGORIES);
-    const valid = parsed.filter(
-      (entry): entry is StarMapAttentionCategory =>
-        typeof entry === "string"
-        && (STAR_MAP_ATTENTION_CATEGORIES as readonly string[]).includes(entry),
-    );
-    return new Set(valid);
-  } catch {
-    return new Set(STAR_MAP_ATTENTION_CATEGORIES);
-  }
-}
 
 type StarMapScreenProps = {
   desktopApi?: DesktopApi;
@@ -140,9 +125,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const { health } = useFederationHealth({ desktopApi: props.desktopApi });
   const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
-  const [filters, setFilters] = useState<Set<StarMapAttentionCategory>>(
-    readStoredFilters,
-  );
+  const [filterSelection, setFilterSelection] =
+    useState<StarMapFilterSelection>(() => readStoredFilterSelection());
   const [viewportSize, setViewportSize] = useState<{
     width: number;
     height: number;
@@ -306,22 +290,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
     window.addEventListener("pointercancel", stop);
   };
 
-  const toggleFilter = useCallback((category: StarMapAttentionCategory) => {
-    setFilters((current) => {
-      const next = new Set(current);
-      if (next.has(category)) {
-        next.delete(category);
-      } else {
-        next.add(category);
-      }
-      try {
-        window.localStorage.setItem(
-          FILTERS_STORAGE_KEY,
-          JSON.stringify([...next]),
-        );
-      } catch {
-        // Filters are per-window viewing state; losing them is harmless.
-      }
+  const cycleFilter = useCallback((key: StarMapFilterKey) => {
+    setFilterSelection((current) => {
+      const next: StarMapFilterSelection = { ...current };
+      const state = cycleFilterState(current[key]);
+      if (state === "neutral") delete next[key];
+      else next[key] = state;
+      writeStoredFilterSelection(next);
       return next;
     });
   }, []);
@@ -374,6 +349,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
       });
     };
   }, [eventSubscriptionsJson, props.desktopApi]);
+  /**
+   * Instances the view option is suppressing. Their threads are never
+   * fetched — `useStarMapThreads` only sees the filtered peer list — so
+   * an empty map caused by this setting cannot be detected by counting
+   * threads. The count of hidden bodies is what we can honestly report.
+   */
+  const hiddenInstanceCount = useMemo(() => {
+    if (!preferences.hideOfflineInstances) return 0;
+    return (health?.peers ?? []).filter(
+      (peer) => peer.status !== "revoked" && peer.status !== "connected",
+    ).length;
+  }, [health, preferences.hideOfflineInstances]);
+
   const remote = useStarMapThreads({
     desktopApi: props.desktopApi,
     peers,
@@ -419,32 +407,26 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // locally-owned threads only, or pinned remote cards would double up.
     result.set(
       localInstanceId,
-      selectAttentionThreads({
+      selectFilteredThreads({
         threads: props.localThreads.filter(
           (thread) =>
             !thread.federation
             || !isRemoteFederationTarget(thread.federation.ref.target),
         ),
-        enabled: filters,
+        selection: filterSelection,
         sessionKeys: props.sessionKeys,
-        agentFilter: preferences.agentFilter,
       }),
     );
     for (const [instanceId, threads] of remote.threadsByInstance) {
       result.set(
         instanceId,
-        selectAttentionThreads({
-          threads,
-          enabled: filters,
-          agentFilter: preferences.agentFilter,
-        }),
+        selectFilteredThreads({ threads, selection: filterSelection }),
       );
     }
     return result;
   }, [
-    filters,
+    filterSelection,
     localInstanceId,
-    preferences.agentFilter,
     props.localThreads,
     props.sessionKeys,
     remote,
@@ -470,60 +452,60 @@ export function StarMapScreen(props: StarMapScreenProps) {
             project.threads.length,
             ORBIT_MAX_CARDS_PER_INSTANCE,
           ),
+          mass: project.mass,
         })),
       }),
     [projects],
   );
 
-  // What the agent chip is currently holding back: cards the attention
-  // filters would show but this one excludes.
-  const agentFilterCount = useMemo(() => {
-    let count = countAgentFilterImpact({
-      threads: props.localThreads.filter(
-        (thread) =>
-          !thread.federation
-          || !isRemoteFederationTarget(thread.federation.ref.target),
+  /**
+   * A filtered-to-nothing map is otherwise indistinguishable from a
+   * broken or still-loading one: the star field renders, and every card
+   * is simply absent. The operator needs to be told it was their filter.
+   */
+  const matchedThreadCount = useMemo(
+    () =>
+      [...attentionByInstance.values()].reduce(
+        (total, threads) => total + threads.length,
+        0,
       ),
-      enabled: filters,
-      sessionKeys: props.sessionKeys,
-      agentFilter: preferences.agentFilter,
-    });
-    for (const threads of remote.threadsByInstance.values()) {
-      count += countAgentFilterImpact({
-        threads,
-        enabled: filters,
-        agentFilter: preferences.agentFilter,
-      });
-    }
-    return count;
-  }, [
-    filters,
-    preferences.agentFilter,
-    props.localThreads,
-    props.sessionKeys,
-    remote,
-  ]);
+    [attentionByInstance],
+  );
+  const hasFilterSelection = Object.keys(filterSelection).length > 0;
 
-  // Chip counts answer "how many cards does flipping this change" across
-  // every lane, local session state included.
+  const clearFilters = useCallback(() => {
+    setFilterSelection({});
+    writeStoredFilterSelection({});
+  }, []);
+
+  const showOfflineInstances = useCallback(() => {
+    setPreferences((current) => {
+      const next = { ...current, hideOfflineInstances: false };
+      writeStoredPreferences(next);
+      return next;
+    });
+  }, []);
+
+  // Chip counts answer "how many cards is this chip about", measured
+  // against whatever the other facets already allow.
   const filterCounts = useMemo(() => {
-    let counts = countFilterImpact({
+    let counts = countFilterMatches({
+      selection: filterSelection,
+      sessionKeys: props.sessionKeys,
       threads: props.localThreads.filter(
         (thread) =>
           !thread.federation
           || !isRemoteFederationTarget(thread.federation.ref.target),
       ),
-      enabled: filters,
-      sessionKeys: props.sessionKeys,
     });
     for (const threads of remote.threadsByInstance.values()) {
-      counts = addFilterImpactCounts(
+      counts = addFilterMatchCounts(
         counts,
-        countFilterImpact({ threads, enabled: filters }),
+        countFilterMatches({ selection: filterSelection, threads }),
       );
     }
     return counts;
-  }, [filters, props.localThreads, props.sessionKeys, remote]);
+  }, [filterSelection, props.localThreads, props.sessionKeys, remote]);
 
   const lanes = useMemo(() => {
     const result = new Map<
@@ -1247,6 +1229,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
           );
         })}
         {(projectsMode ? [] : bodies).map((position) => renderCloud(position))}
+        {projectsMode && projectLayout.arms.length > 0 ? (
+          <svg
+            className="star-map__arms"
+            width={projectLayout.canvasWidth}
+            height={projectLayout.canvasHeight}
+            aria-hidden="true"
+          >
+            {projectLayout.arms.map((d, index) => (
+              <path className="star-map__arm" d={d} key={index} />
+            ))}
+          </svg>
+        ) : null}
         {projectsMode
           ? projectLayout.projects.map((placement) => {
               const project = projects.find(
@@ -1416,48 +1410,94 @@ export function StarMapScreen(props: StarMapScreenProps) {
           onResetView={panZoomMode ? resetView : undefined}
         />
       </div>
-      <div className="star-map__filters" role="group" aria-label="Attention filters">
-        {STAR_MAP_ATTENTION_CATEGORIES.map((category) => (
-          <button
-            key={category}
-            type="button"
-            className={`star-map__filter-chip${
-              filters.has(category) ? " is-on" : ""
-            }`}
-            aria-pressed={filters.has(category)}
-            onClick={() => toggleFilter(category)}
-          >
-            <span>{STAR_MAP_ATTENTION_LABELS[category]}</span>
-            <span className="star-map__filter-count">
-              {filterCounts[category]}
-            </span>
-          </button>
-        ))}
-        {/* Separate from the attention chips because it behaves
-            differently: those OR together to widen the set, this ANDs on
-            top to narrow it. Hence a cycle, not a toggle. */}
-        <button
-          type="button"
-          className={`star-map__filter-chip star-map__filter-chip--agent${
-            preferences.agentFilter === "all" ? "" : " is-on"
-          }`}
-          aria-label={`${
-            STAR_MAP_AGENT_FILTER_LABELS[preferences.agentFilter]
-          } — click to change`}
-          onClick={() => {
-            const next = {
-              ...preferences,
-              agentFilter: nextAgentFilter(preferences.agentFilter),
-            };
-            setPreferences(next);
-            writeStoredPreferences(next);
-          }}
-        >
-          <span>{STAR_MAP_AGENT_FILTER_LABELS[preferences.agentFilter]}</span>
-          {agentFilterCount > 0 ? (
-            <span className="star-map__filter-count">{agentFilterCount}</span>
+      {/* Two different settings can empty the map, and a blank star field
+          looks identical either way. Name whichever one is responsible —
+          and say nothing at all when the fleet is simply idle, because
+          blaming a setting the operator did not touch is worse than
+          silence. */}
+      {matchedThreadCount === 0 && (hasFilterSelection || hiddenInstanceCount > 0) ? (
+        <div className="star-map__empty" role="status">
+          <p className="star-map__empty-title">
+            {hasFilterSelection
+              ? "No threads match these filters"
+              : "No threads on the visible instances"}
+          </p>
+          {hiddenInstanceCount > 0 ? (
+            <p className="star-map__empty-detail">
+              {hiddenInstanceCount === 1
+                ? "1 offline instance is hidden"
+                : `${hiddenInstanceCount} offline instances are hidden`}
+            </p>
           ) : null}
-        </button>
+          <span className="star-map__empty-actions">
+            {hasFilterSelection ? (
+              <button
+                type="button"
+                className="star-map__empty-action"
+                onClick={clearFilters}
+              >
+                Clear filters
+              </button>
+            ) : null}
+            {hiddenInstanceCount > 0 ? (
+              <button
+                type="button"
+                className="star-map__empty-action"
+                onClick={showOfflineInstances}
+              >
+                Show offline instances
+              </button>
+            ) : null}
+          </span>
+        </div>
+      ) : null}
+      <div className="star-map__filters" role="group" aria-label="Thread filters">
+        {STAR_MAP_FILTERS.map((definition) => {
+          const state = filterState(filterSelection, definition.key);
+          const next =
+            state === "neutral"
+              ? "show only these"
+              : state === "include"
+                ? "hide these instead"
+                : "stop filtering on this";
+          return (
+            <button
+              key={definition.key}
+              type="button"
+              className={`star-map__filter-chip star-map__filter-chip--${state}`}
+              // Tri-state, so `aria-pressed` cannot describe it: exclude is
+              // neither pressed nor unpressed. The label carries the state
+              // and what the next click does.
+              aria-label={`${definition.label}: ${
+                state === "neutral"
+                  ? "not filtered"
+                  : state === "include"
+                    ? "showing only these"
+                    : "hidden"
+              } — click to ${next}`}
+              onClick={() => cycleFilter(definition.key)}
+            >
+              {state === "exclude" ? (
+                <span className="star-map__filter-mark" aria-hidden="true">
+                  −
+                </span>
+              ) : null}
+              <span>{definition.label}</span>
+              <span className="star-map__filter-count">
+                {filterCounts[definition.key]}
+              </span>
+            </button>
+          );
+        })}
+        {hasFilterSelection ? (
+          <button
+            type="button"
+            className="star-map__filter-clear"
+            onClick={clearFilters}
+          >
+            Clear
+          </button>
+        ) : null}
       </div>
     </div>
   );

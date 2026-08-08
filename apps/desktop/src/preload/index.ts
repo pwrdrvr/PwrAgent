@@ -91,6 +91,8 @@ import type {
   HandoffThreadWorkspaceResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
+  AcknowledgeAcpAgentUpdateRequest,
+  AcknowledgeAcpAgentUpdateResponse,
   NavigationBrowseMode,
   AttachDirectoryToThreadRequest,
   AttachDirectoryToThreadResponse,
@@ -170,6 +172,7 @@ import type {
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
   RenderComposerPdfPreviewResponse,
+  ListRecentFileReferencesRequest,
   ListRecentFileReferencesResponse,
   RecordRecentFileReferencesRequest,
   DetachThreadPullRequestRequest,
@@ -401,6 +404,7 @@ import {
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
+  ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
   AUTOMATIONS_CREATE_CHANNEL,
   AUTOMATIONS_DELETE_CHANNEL,
   AUTOMATIONS_DRAFT_PROMPT_CHANNEL,
@@ -984,6 +988,10 @@ const desktopApi = Object.freeze({
     request?: ListAcpAgentSettingsRequest,
   ): Promise<ListAcpAgentSettingsResponse> =>
     await ipcRenderer.invoke(ACP_AGENTS_LIST_CHANNEL, request),
+  acknowledgeAcpAgentUpdate: async (
+    request: AcknowledgeAcpAgentUpdateRequest,
+  ): Promise<AcknowledgeAcpAgentUpdateResponse> =>
+    await ipcRenderer.invoke(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL, request),
   readSettings: async (
     request?: ReadDesktopSettingsRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
@@ -1641,8 +1649,13 @@ const desktopApi = Object.freeze({
       NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
       request,
     ),
-  listRecentFileReferences: async (): Promise<ListRecentFileReferencesResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL),
+  listRecentFileReferences: async (
+    request: ListRecentFileReferencesRequest = {},
+  ): Promise<ListRecentFileReferencesResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
+      request,
+    ),
   recordRecentFileReferences: async (
     request: RecordRecentFileReferencesRequest,
   ): Promise<void> =>

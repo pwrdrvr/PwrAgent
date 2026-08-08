@@ -136,6 +136,7 @@ const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.6-luna";
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
 const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
+const CODEX_CONNECTION_MCP_CONFIG_READ_REASON = "connection-mcp-inventory";
 const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
   tmpdir(),
   "pwragent",
@@ -235,10 +236,6 @@ const MCP_RESOURCE_IMAGE_MIME_TYPES = new Set([
   "image/webp",
 ]);
 const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
-
-type CodexReviewStartPayload = CodexReviewStartParams & {
-  cwd?: string;
-};
 
 type CodexClientOptions = {
   command?: string;
@@ -572,7 +569,10 @@ function createCodexObserverWithConfigReadRedaction(
       if (
         redactedEvent.direction === "outbound"
         && redactedEvent.envelope.method === "config/read"
-        && redactedEvent.diagnostics?.callerReason === CODEX_THREAD_TITLE_CONFIG_READ_REASON
+        && (
+          redactedEvent.diagnostics?.callerReason === CODEX_THREAD_TITLE_CONFIG_READ_REASON
+          || redactedEvent.diagnostics?.callerReason === CODEX_CONNECTION_MCP_CONFIG_READ_REASON
+        )
         && requestKey
       ) {
         sensitiveRequestIds.add(requestKey);
@@ -6527,18 +6527,12 @@ function buildReviewStartPayload(params: {
   threadId: string;
   target: AppServerReviewTarget;
   delivery?: AppServerReviewDelivery;
-  cwd?: string;
-}): CodexReviewStartPayload {
-  const payload: CodexReviewStartPayload = {
+}): CodexReviewStartParams {
+  return {
     threadId: params.threadId,
     target: params.target,
     delivery: params.delivery ?? "inline",
   };
-  const cwd = params.cwd?.trim();
-  if (cwd) {
-    payload.cwd = cwd;
-  }
-  return payload;
 }
 
 function buildThreadSettingsUpdatePayload(params: {
@@ -7838,6 +7832,28 @@ export class CodexAppServerClient {
     timeoutMs?: number;
   }): Promise<ThreadTitleAdapterResult> {
     return await this.runHelperStructuredTurn(params);
+  }
+
+  /**
+   * Returns only the effective MCP server names. Connection setup uses this to
+   * avoid creating a transport-less disable entry for an alias that Codex did
+   * not inherit. The protocol observer redacts the complete config response.
+   */
+  async readConfiguredMcpServerNames(params?: {
+    cwd?: string;
+  }): Promise<string[]> {
+    await this.ensureInitialized();
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      diagnostics: { callerReason: CODEX_CONNECTION_MCP_CONFIG_READ_REASON },
+      methods: ["config/read"],
+      payloads: [{
+        includeLayers: false,
+        ...(params?.cwd ? { cwd: params.cwd } : {}),
+      }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    return readConfiguredMcpServerNames(result);
   }
 
   /** Read only configured MCP names; the observer wrapper strips secret values. */

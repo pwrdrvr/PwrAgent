@@ -442,6 +442,7 @@ vi.mock("../messaging/messaging-runtime", () => ({
 vi.mock("../federation/federation-runtime", () => ({
   federationEventClassForMethod: vi.fn(() => "transcript"),
   getDesktopFederationRuntime: vi.fn(() => ({
+    hydrateLiveThreadMessageOrigin: (event: AgentEvent) => event,
     restart: federationRuntimeRestartMock,
     connectedPeerTargets: connectedPeerTargetsMock,
     onPeerStatusChanged: federationPeerStatusChangedMock,
