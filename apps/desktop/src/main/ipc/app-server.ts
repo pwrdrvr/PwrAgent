@@ -568,14 +568,15 @@ function findRemoteHomeDirectoryIndex(
     }
   });
   const projectKey = thread.projectKey;
+  const linkedDirectories = thread.linkedDirectories ?? [];
   const primaryProjectDirectory = projectKey
-    ? thread.linkedDirectories.find((directory) =>
+    ? linkedDirectories.find((directory) =>
         linkedDirectoryMatchesProjectKey(directory, projectKey)
       )
     : undefined;
   const linkedByHomePreference = primaryProjectDirectory
     ? [primaryProjectDirectory]
-    : [...thread.linkedDirectories].sort((left, right) => {
+    : [...linkedDirectories].sort((left, right) => {
       if (left.kind !== right.kind) {
         return left.kind === "worktree" ? 1 : -1;
       }
@@ -609,7 +610,7 @@ function linkedDirectoryMatchesProjectKey(
 }
 
 function normalizeFederatedPath(value: string | undefined): string | undefined {
-  const normalized = value?.trim().replace(/\\\\/g, "/").replace(/\/+$/, "");
+  const normalized = value?.trim().replace(/\\/g, "/").replace(/\/+$/, "");
   return normalized || undefined;
 }
 

@@ -2335,13 +2335,13 @@ describe("app server ipc", () => {
           // This is the owner's authoritative project. The PwrSuiteLab link
           // was added later by a composer @-reference and must not re-home
           // the pinned row in this viewer's Directories lens.
-          projectKey: "/peer/.codex/worktrees/federated-bind/PwrAgent",
+          projectKey: "C:\\peer\\.codex\\worktrees\\federated-bind\\PwrAgent",
           linkedDirectories: [
             {
               id: "pwragent",
               label: "PwrAgent",
               path: "/peer/pwrdrvr/PwrAgent",
-              worktreePath: "/peer/.codex/worktrees/federated-bind/PwrAgent",
+              worktreePath: "C:/peer/.codex/worktrees/federated-bind/PwrAgent",
               kind: "worktree" as const,
             },
             {
@@ -2381,6 +2381,51 @@ describe("app server ipc", () => {
     );
     expect(byKey.get("directory:/repo/PwrSuiteLab")?.threadKeys).not.toContain(
       "codex:remote-primary-project",
+    );
+  });
+
+  it("keeps a partial remote pin summary ungrouped", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "remote-partial-summary",
+    });
+    listRemoteThreadPins.mockResolvedValueOnce([
+      { ref, addedAt: 1_000, instanceLabel: "Laptop" },
+    ]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
+      // Cached pin payloads are untrusted JSON. A partial record must stay
+      // visible in Updated / Created rather than throwing during projection.
+      threads: [{
+        source: "codex" as const,
+        id: "remote-partial-summary",
+        title: "Partial remote summary",
+        titleSource: "explicit" as const,
+        projectKey: "/peer/.codex/worktrees/partial/PwrAgent",
+        inbox: { inInbox: false },
+        federation: {
+          ref,
+          instanceLabel: "Laptop",
+          peerStatus: "disconnected" as const,
+          capabilities: [],
+        },
+      }],
+      refreshed: [],
+      archived: [],
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    )) as { threads: Array<{ id: string }> };
+
+    expect(response.threads).toContainEqual(
+      expect.objectContaining({ id: "remote-partial-summary" }),
     );
   });
 
