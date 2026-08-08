@@ -1,8 +1,11 @@
 import { BrowserWindow, nativeTheme } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
 import { revealIntegratedTerminal } from "./ipc/integrated-terminal";
+import { getMainLogger } from "./log";
 import { readBootstrapAppearance } from "./settings/appearance-bootstrap";
 import { requestShowThread } from "./window-show-thread";
+
+const quitDialogLog = getMainLogger("pwragent:quit-dialog");
 
 export type QuitConfirmationDialogResult =
   | "manual-confirm"
@@ -103,6 +106,36 @@ function resolveQuitDialogTheme(): "dark" | "light" {
   return nativeTheme.shouldUseDarkColors ? "dark" : "light";
 }
 
+/**
+ * The dialog currently on screen, if any.
+ *
+ * The quit manager collapses concurrent quit requests onto one prompt, so a
+ * second Cmd+Q while this dialog is open resolves to the same pending promise.
+ * That is only acceptable if the second request can still *reach* the dialog:
+ * it is a small frameless window that a user can lose behind the main window or
+ * on another Space, and once the countdown has been cancelled nothing else will
+ * ever settle the quit. Keeping the handle here is what lets a repeat request
+ * raise it instead of doing nothing at all.
+ */
+let activeDialogWindow: BrowserWindow | undefined;
+
+/**
+ * Bring the open quit prompt back in front of the user. Returns false when
+ * there is nothing on screen to raise.
+ */
+export function focusActiveQuitConfirmationDialog(): boolean {
+  const window = activeDialogWindow;
+  if (!window || window.isDestroyed()) {
+    return false;
+  }
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  window.show();
+  window.focus();
+  return true;
+}
+
 export async function showQuitConfirmationDialog(
   options: QuitConfirmationDialogOptions,
 ): Promise<QuitConfirmationDialogResult> {
@@ -152,6 +185,8 @@ export async function showQuitConfirmationDialog(
     },
   });
 
+  activeDialogWindow = window;
+
   return await new Promise<QuitConfirmationDialogResult>((resolve) => {
     let settled = false;
     let hardCeiling: NodeJS.Timeout | undefined;
@@ -160,6 +195,9 @@ export async function showQuitConfirmationDialog(
       if (settled) return;
       settled = true;
       if (hardCeiling) clearTimeout(hardCeiling);
+      if (activeDialogWindow === window) {
+        activeDialogWindow = undefined;
+      }
       if (!window.isDestroyed()) {
         window.close();
       }
@@ -219,20 +257,30 @@ export async function showQuitConfirmationDialog(
       countdownSeconds * 1000 + HARD_CEILING_GRACE_MS,
     );
 
-    void window.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(
-        buildQuitConfirmationHtml({
-          countdownSeconds,
-          inProgressThreadCount: options.inProgressThreadCount,
-          terminalSessionCount: options.terminalSessionCount,
-          actionRunCount: options.actionRunCount ?? 0,
-          items,
-          navigationPrefix,
-          colorScheme,
-          palette,
-        }),
-      )}`,
-    );
+    const dialogUrl = `data:text/html;charset=utf-8,${encodeURIComponent(
+      buildQuitConfirmationHtml({
+        countdownSeconds,
+        inProgressThreadCount: options.inProgressThreadCount,
+        terminalSessionCount: options.terminalSessionCount,
+        actionRunCount: options.actionRunCount ?? 0,
+        items,
+        navigationPrefix,
+        colorScheme,
+        palette,
+      }),
+    )}`;
+    // A rejected load leaves a window that never emits `ready-to-show`, which
+    // would hold the quit open behind a window the user never sees. Log it and
+    // show the window anyway so the prompt is at least reachable; the hard
+    // ceiling above still settles the request if the page never rendered.
+    void window.loadURL(dialogUrl).catch((error: unknown) => {
+      quitDialogLog.warn("quit confirmation dialog failed to load", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (!window.isDestroyed()) {
+        window.show();
+      }
+    });
     window.once("ready-to-show", () => {
       window.show();
       window.focus();

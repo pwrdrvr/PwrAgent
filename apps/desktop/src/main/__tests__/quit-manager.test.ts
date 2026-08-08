@@ -213,6 +213,56 @@ describe("createQuitManager", () => {
     expect(installUpdateAndQuit).toHaveBeenCalledTimes(1);
   });
 
+  // A second Cmd+Q while the prompt is open collapses onto the same pending
+  // promise, which is fine only if it still reaches the user. The prompt's
+  // countdown is cancelled for good by any deliberate keystroke — including the
+  // one that produced this second request — so nothing else will settle the
+  // quit, and a dialog sitting behind the main window reads as an app that
+  // refuses to quit.
+  it("raises the open confirmation when a quit is requested again", async () => {
+    const { createQuitManager } = await import("../quit-manager");
+    const performQuit = vi.fn();
+    const info = vi.fn();
+    const focusPendingConfirmation = vi.fn(() => true);
+    let resolveConfirm!: (value: "manual-confirm") => void;
+    const confirm = vi.fn(
+      async () =>
+        await new Promise<"manual-confirm">((resolve) => {
+          resolveConfirm = resolve;
+        }),
+    );
+    const manager = createQuitManager({
+      confirm,
+      focusPendingConfirmation,
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () => ({
+        count: 1,
+        terminalSessionCount: 1,
+        terminalThreadKeys: ["codex:thread-terminal"],
+        threadIds: [],
+        actionRunCount: 0,
+        items: [],
+      }),
+      log: { info },
+      performQuit,
+    });
+
+    const first = manager.requestQuit({ source: "before-quit" });
+    const second = manager.requestQuit({ source: "before-quit" });
+
+    expect(focusPendingConfirmation).toHaveBeenCalledTimes(1);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith(
+      "quit requested while confirmation is open",
+      expect.objectContaining({ raisedConfirmation: true }),
+    );
+
+    resolveConfirm("manual-confirm");
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    expect(performQuit).toHaveBeenCalledTimes(1);
+  });
+
   it("quits without prompting when confirmation is disabled", async () => {
     const { createQuitManager } = await import("../quit-manager");
     const performQuit = vi.fn();

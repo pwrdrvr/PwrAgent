@@ -38,13 +38,22 @@ type QuitOutcome = {
 };
 
 /**
- * Ask the app to quit and wait for real process exit.
+ * Ask the app to quit, the same call the macOS Quit menu item makes.
  *
- * The `evaluate` call is deliberately not awaited for its result: a healthy
- * quit tears the Playwright connection down before the round trip resolves,
- * so the reply is not a signal either way. Process exit is.
+ * Deliberately not awaited for its result: a healthy quit tears the Playwright
+ * connection down before the round trip resolves, and a quit that stops at the
+ * confirmation prompt does not resolve either. Process exit is the signal.
  */
-async function quitAndAwaitExit(
+function requestQuit(electronApp: ElectronApplication): void {
+  void electronApp
+    .evaluate(({ app }) => {
+      app.quit();
+    })
+    .catch(() => undefined);
+}
+
+/** Wait for real process exit, bounded by the product's own shutdown ceiling. */
+async function awaitExit(
   electronApp: ElectronApplication,
   captured: () => string,
 ): Promise<QuitOutcome> {
@@ -57,12 +66,6 @@ async function quitAndAwaitExit(
     }
     child.once("exit", () => resolve());
   });
-
-  void electronApp
-    .evaluate(({ app }) => {
-      app.quit();
-    })
-    .catch(() => undefined);
 
   let timer: NodeJS.Timeout | undefined;
   await Promise.race([
@@ -115,10 +118,107 @@ test("exits the process when a profile-backed session is asked to quit", async (
   const captured = captureMainProcessOutput(app.electronApp);
 
   try {
-    const outcome = await quitAndAwaitExit(app.electronApp, captured);
+    requestQuit(app.electronApp);
+    const outcome = await awaitExit(app.electronApp, captured);
     expect(outcome.exited, describeOutcome("profile-backed app", outcome)).toBe(
       true,
     );
+    expect(outcome.signalCode).toBeNull();
+  } finally {
+    await app.close();
+  }
+});
+
+/**
+ * The path a real operator hits, and the one every other spec seeds away:
+ * quit confirmation ON, with work running. The prompt's countdown is cancelled
+ * for good by any deliberate keystroke — and an impatient second Cmd+Q *is*
+ * that keystroke once the dialog has focus. From there the dialog is the only
+ * thing that can settle the quit, so a repeat request has to reach it rather
+ * than collapse silently onto the pending prompt.
+ */
+test("acknowledges a repeat quit request and exits once the prompt is answered", async () => {
+  // Spawning a real login shell plus a second BrowserWindow outruns the default.
+  test.setTimeout(120_000);
+
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+  });
+  const captured = captureMainProcessOutput(app.electronApp);
+
+  try {
+    // The shared harness seeds confirmation OFF so specs close cleanly. This
+    // spec is about the confirmation, so turn it back on the way the app does.
+    await app.window.evaluate(async () => {
+      await (
+        window as unknown as {
+          pwragent: {
+            writeSettingsConfig: (request: unknown) => Promise<unknown>;
+          };
+        }
+      ).pwragent.writeSettingsConfig({
+        patch: { general: { confirmQuitWithInProgressThreads: true } },
+      });
+    });
+
+    await app.window
+      .getByRole("button", { name: /Replay smoke thread/i })
+      .first()
+      .click();
+    await expect(
+      app.window.getByRole("heading", { level: 2, name: "Replay smoke thread" }),
+    ).toBeVisible();
+
+    // An idle shell is not a quit blocker; a foreground command is.
+    await app.window
+      .getByRole("button", { name: "Open integrated terminal" })
+      .click();
+    await expect(
+      app.window.getByLabel("Integrated terminal", { exact: true }),
+    ).toBeVisible();
+    await expect(app.window.locator(".integrated-terminal__status")).not.toHaveText(
+      "Starting shell...",
+    );
+    await app.window.locator(".integrated-terminal__viewport").click();
+    await app.window.keyboard.type("echo PWRAGENT_QUIT_BLOCKER_READY; sleep 120");
+    await app.window.keyboard.press("Enter");
+    await expect(
+      app.window.locator(".integrated-terminal .xterm-rows"),
+    ).toContainText("PWRAGENT_QUIT_BLOCKER_READY");
+
+    const dialogPromise = app.electronApp.waitForEvent("window");
+    requestQuit(app.electronApp);
+    const dialog = await dialogPromise;
+    await expect(
+      dialog.getByRole("heading", { name: "Quit PwrAgent?" }),
+    ).toBeVisible();
+
+    // Stand in for the impatient operator's second Cmd+Q: a keystroke on the
+    // dialog cancels the auto-quit permanently, so nothing but the dialog will
+    // ever settle this request.
+    await dialog.keyboard.press("ArrowDown");
+    await expect
+      .poll(async () => await dialog.locator("#countdown").innerText())
+      .toBe("Auto-quit cancelled. Choose an option below.");
+
+    requestQuit(app.electronApp);
+    await expect
+      .poll(() => captured())
+      .toContain("quit requested while confirmation is open");
+    // The repeat request raises the existing prompt; it must not stack a second
+    // dialog on top of it.
+    expect(
+      app.electronApp.windows().filter((page) => page !== app.window).length,
+    ).toBe(1);
+
+    // Answering it has to actually reach process exit — the countdown is gone,
+    // so this is the only remaining path out.
+    await dialog.locator("#quit").dispatchEvent("click");
+    const outcome = await awaitExit(app.electronApp, captured);
+    expect(
+      outcome.exited,
+      describeOutcome("app with quit confirmation answered", outcome),
+    ).toBe(true);
     expect(outcome.signalCode).toBeNull();
   } finally {
     await app.close();
@@ -139,7 +239,8 @@ test("exits the process when the first-run wizard is asked to quit", async () =>
     await expect(
       app.window.getByRole("heading", { name: /A few short choices/i }),
     ).toBeVisible();
-    const outcome = await quitAndAwaitExit(app.electronApp, captured);
+    requestQuit(app.electronApp);
+    const outcome = await awaitExit(app.electronApp, captured);
     expect(outcome.exited, describeOutcome("first-run wizard app", outcome)).toBe(
       true,
     );

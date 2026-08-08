@@ -13,6 +13,7 @@ import { getIntegratedTerminalQuitSnapshot } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import {
+  focusActiveQuitConfirmationDialog,
   showQuitConfirmationDialog,
   type QuitBlockerItem,
   type QuitConfirmationDialogResult,
@@ -57,6 +58,11 @@ export type QuitManagerDependencies = {
   }) => Promise<QuitConfirmationDialogResult>;
   getConfirmationEnabled: () => boolean;
   getFocusedWindow?: () => BrowserWindow | null;
+  /**
+   * Raise the confirmation prompt that is already on screen. Returns false when
+   * there is nothing to raise. See the `promptPromise` branch in `requestQuit`.
+   */
+  focusPendingConfirmation?: () => boolean;
   getQuitBlockers: () => QuitBlockerSnapshot;
   /** Best-effort thread-title lookup for the dialog's links. */
   resolveThreadTitles?: (
@@ -122,6 +128,19 @@ export function createQuitManager(
       if (options.performQuit) {
         pendingPerformQuit = options.performQuit;
       }
+      // Asking again has to do *something*. The prompt's countdown is
+      // cancelled for good by any deliberate interaction — including the
+      // keystroke of a second Cmd+Q, which lands on the dialog once it has
+      // focus — so from that point the only thing that ever settles this quit
+      // is the user answering the dialog. If the dialog has drifted behind the
+      // main window or onto another Space, a repeat request that silently
+      // returns this pending promise reads as an app that refuses to quit.
+      // Raise it instead.
+      const raised = dependencies.focusPendingConfirmation?.() ?? false;
+      dependencies.log.info?.("quit requested while confirmation is open", {
+        raisedConfirmation: raised,
+        source: options.source,
+      });
       return await promptPromise;
     }
 
@@ -291,6 +310,7 @@ const quitLog = getMainLogger("pwragent:quit");
 export const appQuitManager = createQuitManager({
   getConfirmationEnabled: () =>
     getDesktopSettingsService().resolveConfirmQuitWithInProgressThreads(),
+  focusPendingConfirmation: () => focusActiveQuitConfirmationDialog(),
   getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
   getQuitBlockers: () =>
     buildQuitBlockerSnapshot({
