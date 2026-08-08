@@ -393,6 +393,14 @@ function normalizeInstalledAcpAgent(
     : { ...agent, runtimeCapabilities };
 }
 
+function isLegacyKimiInstalledRecord(agent: AcpInstalledAgentRecord): boolean {
+  if (agent.registryId !== "kimi") {
+    return false;
+  }
+  const major = Number.parseInt(agent.version?.split(".")[0] ?? "", 10);
+  return Number.isFinite(major) && major >= 1;
+}
+
 function effectiveAcpAgentCapabilities(
   agent: AcpInstalledAgentRecord,
 ): AcpAgentCapabilities {
@@ -1527,21 +1535,50 @@ export class AcpBackendAdapter {
     const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? [])
       .map(normalizeInstalledAcpAgent)
       .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
-    const installedBackendIds = new Set(
-      installedAgents.map((agent) => agent.backendId),
+    const installedByBackendId = new Map(
+      installedAgents.map((agent) => [agent.backendId, agent]),
     );
     const discoveredAgents = (await this.readLocalAgentsOnce())
       .map(normalizeInstalledAcpAgent)
       .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
-    for (const agent of discoveredAgents) {
-      if (!installedBackendIds.has(agent.backendId)) {
-        this.acpAgentStore?.upsertInstalledAgent(agent);
+    const effectiveDiscoveredAgents = discoveredAgents.flatMap((agent) => {
+      const cached = installedByBackendId.get(agent.backendId);
+      if (cached && !isLegacyKimiInstalledRecord(cached)) {
+        return [];
       }
+      const sameRuntime =
+        agent.installStatus === "installed"
+        && cached?.installStatus === "installed"
+        && cached.version === agent.version
+        && cached.activeCommand === agent.activeCommand;
+      return [{
+        ...agent,
+        installedAt: cached?.installedAt ?? agent.installedAt,
+        ...(sameRuntime && cached?.runtimeCapabilities
+          ? { runtimeCapabilities: cached.runtimeCapabilities }
+          : {}),
+        ...(sameRuntime && cached?.lastDiscoveredAt !== undefined
+          ? { lastDiscoveredAt: cached.lastDiscoveredAt }
+          : {}),
+        ...(sameRuntime && cached?.lastDiscoveryError !== undefined
+          ? { lastDiscoveryError: cached.lastDiscoveryError }
+          : {}),
+      }];
+    });
+    for (const agent of effectiveDiscoveredAgents) {
+      // A known legacy Kimi cache must never outrank fresh local discovery: it
+      // may now resolve to the supported side-by-side install, or to a durable
+      // non-launchable compatibility diagnostic. Other cached providers retain
+      // the existing cache-first behavior.
+      this.acpAgentStore?.upsertInstalledAgent(agent);
     }
+    const discoveredBackendIds = new Set(
+      effectiveDiscoveredAgents.map((agent) => agent.backendId),
+    );
     return [
-      ...installedAgents,
-      ...discoveredAgents.filter(
-        (agent) => !installedBackendIds.has(agent.backendId),
+      ...effectiveDiscoveredAgents,
+      ...installedAgents.filter(
+        (agent) => !discoveredBackendIds.has(agent.backendId),
       ),
     ];
   }

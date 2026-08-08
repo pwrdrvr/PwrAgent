@@ -352,7 +352,7 @@ describe("AcpBackendAdapter", () => {
       backendId,
       registryId: "kimi",
       name: "Kimi Code CLI",
-      version: "1.44.0",
+      version: "0.30.0",
       distributionKind: "local",
       distributionSource: "kimi acp",
       installStatus: "installed",
@@ -553,6 +553,7 @@ describe("AcpBackendAdapter", () => {
 
     transport.emitSessionUpdate(session.sessionId, {
       sessionUpdate: "turn_completed",
+      outputText: "Build succeeded",
       usage: {
         inputTokens: 1_200,
         cachedReadTokens: 1_000,
@@ -2440,6 +2441,92 @@ describe("AcpBackendAdapter", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("replaces a cached Kimi model catalog with a legacy-CLI diagnostic", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const cached: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      version: "1.46.0",
+      activeCommand: "/Users/me/.local/bin/kimi",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "/Users/me/.local/bin/kimi",
+        args: ["acp"],
+        env: {},
+      },
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        models: {
+          currentModelId: "kimi-code/kimi-for-coding",
+          availableModels: [
+            { id: "kimi-code/kimi-for-coding", label: "Kimi for Coding" },
+          ],
+        },
+      },
+    };
+    const diagnostic: AcpInstalledAgentRecord = {
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      version: "1.46.0",
+      distributionKind: "local",
+      distributionSource: "/Users/me/.local/bin/kimi (legacy kimi-cli ignored)",
+      installStatus: "unavailable",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "local-kimi-cli",
+      installedAt: 2000,
+      updatedAt: 2000,
+      lastError: "Legacy Python kimi-cli was found and ignored.",
+      instances: [],
+      incompatibleInstances: [
+        {
+          command: "/Users/me/.local/bin/kimi",
+          version: "1.46.0",
+          source: "path",
+        },
+      ],
+    };
+    const upsertInstalledAgent = vi.fn();
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => cached,
+        listInstalledAgents: () => [cached],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [diagnostic],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await expect(adapter.describeInstalledBackends()).resolves.toEqual([
+      expect.objectContaining({
+        kind: backendId,
+        available: false,
+        unavailableReason: diagnostic.lastError,
+        acp: expect.objectContaining({
+          installStatus: "unavailable",
+          runtime: undefined,
+        }),
+        launchpadOptions: undefined,
+      }),
+    ]);
+    expect(upsertInstalledAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installStatus: "unavailable",
+        incompatibleInstances: diagnostic.incompatibleInstances,
+      }),
+    );
+
+    await adapter.close();
   });
 
   it("does not create an ACP client when discovery finishes after close", async () => {

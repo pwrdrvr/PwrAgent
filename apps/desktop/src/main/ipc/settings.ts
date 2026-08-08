@@ -349,6 +349,13 @@ async function listInstalledAndLocalAcpAgents(
       const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
       const now = Date.now();
       for (const record of discovered) {
+        if (record.installStatus !== "installed") {
+          // Compatibility diagnostics (for example a legacy Python kimi-cli)
+          // are durable records but must never inherit the previous usable
+          // runtime/model cache or launch an ACP capability probe.
+          store.upsertInstalledAgent(record);
+          continue;
+        }
         const current = store.getInstalledAgent(record.backendId);
         const nextRecord = {
           ...record,
@@ -541,6 +548,9 @@ function installedAcpAgentSettingsEntry(
     lastDiscoveryError: record.lastDiscoveryError,
     runtime: record.runtimeCapabilities,
     ...(record.instances !== undefined ? { instances: record.instances } : {}),
+    ...(record.incompatibleInstances !== undefined
+      ? { incompatibleInstances: record.incompatibleInstances }
+      : {}),
     ...(record.activeCommand !== undefined
       ? { activeCommand: record.activeCommand }
       : {}),
