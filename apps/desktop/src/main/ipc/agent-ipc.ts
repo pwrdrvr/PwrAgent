@@ -568,6 +568,7 @@ export function registerAgentIpcHandlers(): void {
                 turnId: submitted.entry.id,
                 queueStatus: "queued",
                 queueEntryId: submitted.entry.id,
+                queueEntryCreatedAt: submitted.entry.createdAt,
               };
         logDebug("startTurnResult", {
           backend: response.backend,

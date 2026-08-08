@@ -30,6 +30,7 @@ import type {
   TrustCodexProjectRequest,
   UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
+import type { ThreadTurnQueueSubmissionResult } from "../app-server/thread-turn-queue";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const send = vi.fn();
@@ -68,18 +69,22 @@ const registry = {
     threadId: request.threadId,
     turnId: "turn-1",
   })),
-  submitTurn: vi.fn(async (request: StartTurnRequest & { origin: "manual" }) => ({
-    status: "started" as const,
-    entry: {
-      id: "queue-1",
-      backend: request.backend,
-      createdAt: 1,
-      input: request.input,
-      origin: request.origin,
-      threadId: request.threadId,
-    },
-    turnId: "turn-1",
-  })),
+  submitTurn: vi.fn(
+    async (
+      request: StartTurnRequest & { origin: "manual" },
+    ): Promise<ThreadTurnQueueSubmissionResult> => ({
+      status: "started" as const,
+      entry: {
+        id: "queue-1",
+        backend: request.backend,
+        createdAt: 1,
+        input: request.input,
+        origin: request.origin,
+        threadId: request.threadId,
+      },
+      turnId: "turn-1",
+    }),
+  ),
   startReview: vi.fn(async (request: StartReviewRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -840,6 +845,36 @@ describe("agent ipc", () => {
       backend: "grok",
       threadId: "thread-1",
     });
+    vi.mocked(registry.submitTurn).mockResolvedValueOnce({
+      status: "queued",
+      entry: {
+        id: "renderer-queue-1",
+        backend: "grok",
+        createdAt: 2,
+        input: [{ type: "text", text: "Queue it" }],
+        origin: "manual",
+        threadId: "thread-1",
+      },
+      position: 1,
+    });
+    expect(
+      await handlers.get(AGENT_START_TURN_CHANNEL)?.({}, {
+        backend: "grok",
+        threadId: "thread-1",
+        queueEntryId: "renderer-queue-1",
+        input: [{ type: "text", text: "Queue it" }],
+      }),
+    ).toEqual({
+      backend: "grok",
+      queueEntryId: "renderer-queue-1",
+      queueEntryCreatedAt: 2,
+      queueStatus: "queued",
+      threadId: "thread-1",
+      turnId: "renderer-queue-1",
+    });
+    expect(registry.submitTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ queueEntryId: "renderer-queue-1" }),
+    );
     expect(
       await handlers.get(AGENT_START_TURN_CHANNEL)?.({}, {
         backend: "grok",

@@ -7501,6 +7501,7 @@ export class DesktopBackendRegistry {
     const baseParams = {
       threadId: event.entry.threadId,
       queueEntryId: event.entry.id,
+      queueEntryCreatedAt: event.entry.createdAt,
       origin: event.entry.origin,
       automationRunId: event.entry.automationRunId,
       automationName: event.entry.automationName,

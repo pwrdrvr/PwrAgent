@@ -5088,6 +5088,7 @@ export function Composer(props: ComposerProps) {
           ? (event.notification.params as {
               errorMessage?: unknown;
               queueEntryId?: unknown;
+              queueEntryCreatedAt?: unknown;
               status?: unknown;
               turnId?: unknown;
             })
@@ -5122,6 +5123,9 @@ export function Composer(props: ComposerProps) {
             {
               id: `backend-queued:${turnQueueRecord.queueEntryId}`,
               queueEntryId: turnQueueRecord.queueEntryId,
+              ...(typeof turnQueueRecord.queueEntryCreatedAt === "number"
+                ? { queueEntryCreatedAt: turnQueueRecord.queueEntryCreatedAt }
+                : {}),
               text: typeof displayText === "string" ? displayText : "",
               imageAttachments: [],
               fileAttachments: [],
@@ -5996,6 +6000,9 @@ export function Composer(props: ComposerProps) {
         federationTarget: props.thread.federation?.ref.target ??
           readRendererFederationTarget(),
         threadId: props.thread.id,
+        ...(backendQueueSubmission?.queued.queueEntryId
+          ? { queueEntryId: backendQueueSubmission.queued.queueEntryId }
+          : {}),
         input: payload.input,
         executionMode: props.thread.executionMode,
         collaborationMode,
@@ -6017,6 +6024,9 @@ export function Composer(props: ComposerProps) {
               backendQueuePending: false,
               input: payload.input,
               queueEntryId,
+              ...(typeof response.queueEntryCreatedAt === "number"
+                ? { queueEntryCreatedAt: response.queueEntryCreatedAt }
+                : {}),
             }),
           );
           if (submittedScopeIsVisible()) {
@@ -7154,9 +7164,11 @@ export function Composer(props: ComposerProps) {
             setSendError(undefined);
             updateSending(true);
           }
+          const queueEntryId = createQueuedTurnId();
           const backendQueueProjection: QueuedTurnDraft = {
-            id: createQueuedTurnId(),
+            id: queueEntryId,
             backendQueuePending: true,
+            queueEntryId,
             text: canonicalDraft,
             imageAttachments,
             fileAttachments,

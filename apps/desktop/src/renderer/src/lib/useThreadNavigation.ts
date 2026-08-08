@@ -730,6 +730,8 @@ function threadSummariesEqual(
     left.executionMode === right.executionMode &&
     left.queuedExecutionMode === right.queuedExecutionMode &&
     left.queuedExecutionModeAt === right.queuedExecutionModeAt &&
+    JSON.stringify(left.queuedTurns ?? []) ===
+      JSON.stringify(right.queuedTurns ?? []) &&
     left.model === right.model &&
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
