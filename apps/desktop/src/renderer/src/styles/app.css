@@ -17846,7 +17846,14 @@ a.transcript-message__messaging-origin:focus-visible {
   pointer-events: none;
 }
 
-.composer-tiptap-input__mention {
+/* Inline mention chips inside the composer: `$skill`, `@file`, `@directory`,
+   `#thread`, PR pills. They interrupt running prose, so they are sized in `em`
+   off the paragraph rather than off `.chip` (24px / 12px) and `.pr-chip`
+   (22px / 11px), which are row and header geometry. Qualified by the editor so
+   that sizing wins on specificity rather than on this block happening to sit
+   below those two. Height stays under the 22.4px line box so a chip never
+   pushes its line taller than a plain one. */
+.composer-tiptap-input__editor .composer-tiptap-input__mention {
   display: inline-flex;
   height: 1.35em;
   gap: 0.35em;
@@ -17854,7 +17861,23 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 0 0.5em;
   font-size: inherit;
   line-height: normal;
-  vertical-align: 0.13em;
+  vertical-align: baseline;
+}
+
+/* Zero-width baseline strut — load-bearing, not decoration. An inline-flex box
+   takes its baseline from its FIRST flex item, and the kinds disagree on what
+   that is: label text for `$`/`@`, a 1em SVG icon for `#thread`, an 8px dot for
+   the PR pill. Every `vertical-align` is measured from that baseline, so one
+   shared offset landed in three places (a 3.0px spread on an 18.9px chip). A
+   text-bearing item in front makes the first baseline the chip font's own, so
+   `vertical-align: baseline` above puts each label on the paragraph's baseline.
+   `content: ""` will not do — an empty box synthesizes its baseline from its
+   bottom edge, and the chips go back to disagreeing. The `/ ""` keeps the strut
+   out of the accessible name; the negative margin cancels the single `gap` it
+   opens and must stay equal to that `gap`. */
+.composer-tiptap-input__editor .composer-tiptap-input__mention::before {
+  content: "\200b" / "";
+  margin-inline-end: -0.35em;
 }
 
 .composer-tiptap-input__mention.thread-chip {
