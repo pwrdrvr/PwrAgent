@@ -84,19 +84,23 @@ export default async function globalSetup(): Promise<void> {
     () => undefined,
   );
 
+  // Distinguish "gave up waiting" from "the harness told us what is
+  // wrong". Only the former means a sick guest, and only the former
+  // should send an operator off to recycle one. The harness rejects with
+  // a real diagnosis for things like a missing onboarding seed, which
+  // recycling would not fix.
+  const timeoutMessage = `timed out after ${CANARY_TIMEOUT_MS}ms`;
   try {
-    launched = await withTimeout(
-      launching,
-      CANARY_TIMEOUT_MS,
-      `timed out after ${CANARY_TIMEOUT_MS}ms`,
-    );
+    launched = await withTimeout(launching, CANARY_TIMEOUT_MS, timeoutMessage);
   } catch (error) {
     settled = true;
+    const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
       describeCanaryFailure({
         timeoutMs: CANARY_TIMEOUT_MS,
         runnerName: process.env.RUNNER_NAME,
-        detail: error instanceof Error ? error.message : String(error),
+        detail,
+        timedOut: detail === timeoutMessage,
       }),
     );
   } finally {
