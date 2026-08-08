@@ -9999,6 +9999,14 @@ textarea,
   cursor: pointer;
 }
 
+.star-map__layout-option:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+/* After :hover so the selected option keeps its own resting style while the
+   pointer is over a sibling. The two rules happen to agree on border and
+   text colour, so the order only matters if either ever diverges. */
 .star-map__layout-option.is-on {
   border-color: var(--accent-border);
   background: var(--accent-soft);
@@ -10006,7 +10014,7 @@ textarea,
 }
 
 .star-map__layout-option:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -10029,7 +10037,7 @@ textarea,
 }
 
 .star-map__view-action:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -10104,8 +10112,13 @@ textarea,
   text-decoration: none;
 }
 
+/* All three focusable controls in the View popover — the chip that opens it,
+   the layout switch, and the action row — name `--focus-ring` rather than
+   `--accent`. It resolves to `var(--accent)` in both themes, so this is the
+   same pixel it always painted, and it matches both the rest of this file
+   and the star-map card ring above. Offset stays at the Star Map's 1px. */
 .star-map__filter-chip:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
