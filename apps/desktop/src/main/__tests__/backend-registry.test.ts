@@ -24573,26 +24573,20 @@ script = "printf setup"
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-task-cwd-"));
     const scratchPath = path.join(root, "scratch-workspace");
     const repoPath = path.join(root, "PwrAgnt");
+    const worktreePath = path.join(repoPath, ".worktrees", "handoff-task");
     try {
       await mkdir(scratchPath, { recursive: true });
-      await mkdir(repoPath, { recursive: true });
-      try {
-        await git(repoPath, ["init", "-b", "main"]);
-      } catch {
-        await git(repoPath, ["init"]);
-        await git(repoPath, ["checkout", "-b", "main"]);
-      }
-      await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
-      await git(repoPath, ["add", "README.md"]);
-      await git(repoPath, [
-        "-c",
-        "user.name=PwrAgent Tests",
-        "-c",
-        "user.email=tests@pwragent.local",
-        "commit",
-        "-m",
-        "initial",
-      ]);
+      await mkdir(worktreePath, { recursive: true });
+      const canonicalRepoPath = await realpath(repoPath);
+      const canonicalWorktreePath = await realpath(worktreePath);
+      const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: {
+        directoryPath?: string;
+        workMode: "local" | "worktree";
+      }) => ({
+        cwd: canonicalWorktreePath,
+        repositoryPath: canonicalRepoPath,
+        workMode: "worktree" as const,
+      }));
 
       const scratchDirectory = {
         id: expectedDir(scratchPath),
@@ -24618,9 +24612,28 @@ script = "printf setup"
         grokClient: new MockBackendClient({
           initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
         }),
-        gitDirectoryService: new GitDirectoryService({
-          resolveWorktreeStorage: () => "in-repo",
-        }),
+        gitDirectoryService: {
+          inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
+            kind: "worktree" as const,
+            branch: cwd === canonicalWorktreePath ? "HEAD" : "main",
+            hasCommits: true,
+            headHasCommit: true,
+            worktreeCreationAvailable: true,
+          })),
+          prepareLaunchpadWorkspace,
+          recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+          resolvePrimaryWorkspacePath: vi.fn(async (cwd?: string) => {
+            if (
+              cwd?.startsWith(worktreePath)
+              || cwd?.startsWith(canonicalWorktreePath)
+              || cwd?.startsWith(repoPath)
+              || cwd?.startsWith(canonicalRepoPath)
+            ) {
+              return canonicalRepoPath;
+            }
+            return cwd;
+          }),
+        } as never,
         overlayStore: createOverlayStoreMock({
           overlays: {
             "codex:ordinary-thread": {
@@ -24667,6 +24680,15 @@ script = "printf setup"
       } as AppServerPendingRequestNotification);
 
       expect(response).toMatchObject({ success: true });
+      expect(prepareLaunchpadWorkspace).toHaveBeenCalledOnce();
+      expect(prepareLaunchpadWorkspace.mock.calls[0]?.[0]).toMatchObject({
+        workMode: "worktree",
+      });
+      expect(
+        expectedDir(
+          prepareLaunchpadWorkspace.mock.calls[0]?.[0].directoryPath ?? "",
+        ),
+      ).toBe(expectedDir(repoPath));
       const handoffCwd = expectedDir(codexClient.lastStartThreadParams?.cwd ?? "");
       expect(handoffCwd).toContain(
         expectedDir(await realpath(path.join(repoPath, ".worktrees"))),
@@ -24851,27 +24873,21 @@ script = "printf setup"
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-fork-cwd-"));
     const parentPath = path.join(root, "parent-project");
     const repoPath = path.join(root, "other-project");
+    const worktreePath = path.join(repoPath, ".worktrees", "forked-child");
     try {
-      for (const repo of [parentPath, repoPath]) {
-        await mkdir(repo, { recursive: true });
-        try {
-          await git(repo, ["init", "-b", "main"]);
-        } catch {
-          await git(repo, ["init"]);
-          await git(repo, ["checkout", "-b", "main"]);
-        }
-        await writeFile(path.join(repo, "README.md"), "handoff\n", "utf8");
-        await git(repo, ["add", "README.md"]);
-        await git(repo, [
-          "-c",
-          "user.name=PwrAgent Tests",
-          "-c",
-          "user.email=tests@pwragent.local",
-          "commit",
-          "-m",
-          "initial",
-        ]);
-      }
+      await mkdir(parentPath, { recursive: true });
+      await mkdir(worktreePath, { recursive: true });
+      const canonicalParentPath = await realpath(parentPath);
+      const canonicalRepoPath = await realpath(repoPath);
+      const canonicalWorktreePath = await realpath(worktreePath);
+      const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: {
+        directoryPath?: string;
+        workMode: "local" | "worktree";
+      }) => ({
+        cwd: canonicalWorktreePath,
+        repositoryPath: canonicalRepoPath,
+        workMode: "worktree" as const,
+      }));
 
       const parentRuntime: CodexThreadEnvironmentRuntime = {
         environmentId: "parent-env",
@@ -24904,9 +24920,34 @@ script = "printf setup"
         grokClient: new MockBackendClient({
           initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
         }),
-        gitDirectoryService: new GitDirectoryService({
-          resolveWorktreeStorage: () => "in-repo",
-        }),
+        gitDirectoryService: {
+          inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
+            kind: "worktree" as const,
+            branch: cwd === canonicalWorktreePath ? "HEAD" : "main",
+            hasCommits: true,
+            headHasCommit: true,
+            worktreeCreationAvailable: true,
+          })),
+          prepareLaunchpadWorkspace,
+          recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+          resolvePrimaryWorkspacePath: vi.fn(async (cwd?: string) => {
+            if (
+              cwd?.startsWith(worktreePath)
+              || cwd?.startsWith(canonicalWorktreePath)
+              || cwd?.startsWith(repoPath)
+              || cwd?.startsWith(canonicalRepoPath)
+            ) {
+              return canonicalRepoPath;
+            }
+            if (
+              cwd?.startsWith(parentPath)
+              || cwd?.startsWith(canonicalParentPath)
+            ) {
+              return canonicalParentPath;
+            }
+            return cwd;
+          }),
+        } as never,
         overlayStore: createOverlayStoreMock({
           overlays: {
             "codex:ordinary-thread": {
@@ -24952,6 +24993,18 @@ script = "printf setup"
       } as AppServerPendingRequestNotification);
 
       expect(response).toMatchObject({ success: true });
+      expect(prepareLaunchpadWorkspace).toHaveBeenCalledOnce();
+      expect(prepareLaunchpadWorkspace.mock.calls[0]?.[0]).toMatchObject({
+        workMode: "worktree",
+      });
+      expect(
+        expectedDir(
+          prepareLaunchpadWorkspace.mock.calls[0]?.[0].directoryPath ?? "",
+        ),
+      ).toBe(expectedDir(repoPath));
+      expect(expectedDir(codexClient.lastForkThreadParams?.cwd ?? "")).toBe(
+        expectedDir(canonicalWorktreePath),
+      );
       expect(codexClient.lastForkThreadParams?.codexEnvironmentRuntime).toBeUndefined();
       const payload = JSON.parse(
         (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
