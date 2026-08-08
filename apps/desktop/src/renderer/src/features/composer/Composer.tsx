@@ -2800,6 +2800,11 @@ export function Composer(props: ComposerProps) {
   const rendererFederationTarget = readRendererFederationTarget();
   const filesystemFederationTarget =
     props.thread?.federation?.ref.target ?? rendererFederationTarget;
+  const filesystemAuthorityKey = filesystemFederationTarget?.scope === "remote"
+    ? `remote:${filesystemFederationTarget.instanceId}`
+    : "local";
+  const recentFileAuthorityKeyRef = useRef(filesystemAuthorityKey);
+  recentFileAuthorityKeyRef.current = filesystemAuthorityKey;
   const inputRef = useRef<ComposerInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
@@ -2913,9 +2918,14 @@ export function Composer(props: ComposerProps) {
   const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
   // Recently referenced files for the reference picker's Files tab —
   // loaded lazily from the main process each time the picker opens.
-  const [recentFileReferences, setRecentFileReferences] = useState<
-    ReferencePickerFile[]
-  >([]);
+  const [recentFileReferenceState, setRecentFileReferenceState] = useState<{
+    authorityKey: string;
+    files: ReferencePickerFile[];
+  }>({ authorityKey: filesystemAuthorityKey, files: [] });
+  const recentFileReferences =
+    recentFileReferenceState.authorityKey === filesystemAuthorityKey
+      ? recentFileReferenceState.files
+      : [];
   // The state only schedules the next countdown render. It must not be used as
   // the clock itself: a newly received schedule can arrive long after the
   // previous tick, briefly making its first countdown look much too long.
@@ -7863,17 +7873,33 @@ export function Composer(props: ComposerProps) {
 
   /**
    * Load the reference picker's Files tab from the main process. Called
-   * on every picker open; failures keep the previous list — recents are
-   * a convenience surface, not load-bearing.
+   * on every picker open. Recents are scoped to one filesystem authority;
+   * switching owner or a failed read clears the list instead of retaining
+   * paths sourced from another machine.
    */
   const refreshRecentFileReferences = async (): Promise<void> => {
+    const requestedAuthorityKey = filesystemAuthorityKey;
+    setRecentFileReferenceState({
+      authorityKey: requestedAuthorityKey,
+      files: [],
+    });
     try {
       const response = await props.desktopApi?.listRecentFileReferences?.({
         federationTarget: filesystemFederationTarget,
       });
-      setRecentFileReferences(response?.files ?? []);
+      if (recentFileAuthorityKeyRef.current === requestedAuthorityKey) {
+        setRecentFileReferenceState({
+          authorityKey: requestedAuthorityKey,
+          files: response?.files ?? [],
+        });
+      }
     } catch {
-      // Keep whatever list we had.
+      if (recentFileAuthorityKeyRef.current === requestedAuthorityKey) {
+        setRecentFileReferenceState({
+          authorityKey: requestedAuthorityKey,
+          files: [],
+        });
+      }
     }
   };
 

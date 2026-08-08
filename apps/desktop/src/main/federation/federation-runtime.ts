@@ -333,6 +333,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "scheduled_actions",
   "pending_request_control",
   "environment_actions",
+  "launchpad_metadata",
   "federated_search",
   "messaging_route",
   "pwrsnap_connection",
@@ -727,6 +728,19 @@ export class DesktopFederationRuntime {
         label: formatFederationPeerDisplayLabel(peer, visible),
         capabilities: [...peer.capabilities],
       }));
+  }
+
+  remoteTargetSupportsCapability(
+    target: FederationRemoteTarget,
+    capability: FederationCapability,
+  ): boolean {
+    const visiblePeer = this.visiblePeers().find(
+      (peer) => peer.id === target.instanceId,
+    );
+    return this.viewerCapabilitiesFor(
+      target.instanceId,
+      visiblePeer,
+    ).includes(capability);
   }
 
   async restart(): Promise<void> {

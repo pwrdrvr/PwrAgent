@@ -17,6 +17,14 @@ import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 
 describe("federation backend bridge", () => {
+  it("negotiates launchpad metadata separately from environment actions", () => {
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad
+      ],
+    ).toBe("launchpad_metadata");
+  });
+
   it("does not expose profile-local thread model migrations over federation", () => {
     expect(FEDERATION_BACKEND_METHODS).not.toHaveProperty(
       "applyThreadModelMigration",

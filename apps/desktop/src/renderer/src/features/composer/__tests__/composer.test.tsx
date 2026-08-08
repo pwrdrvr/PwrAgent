@@ -1652,6 +1652,87 @@ describe("Composer", () => {
     expect(onPickAndAttachDirectoryToThread).not.toHaveBeenCalled();
   });
 
+  it("clears recent files when filesystem authority changes and the new read fails", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner-two",
+    };
+    const listRecentFileReferences = vi.fn()
+      .mockResolvedValueOnce({
+        files: [{ label: "local.md", path: "/viewer/notes/local.md" }],
+      })
+      .mockRejectedValueOnce(new Error("owner unavailable"));
+    const desktopApi: DesktopApi = {
+      listRecentFileReferences,
+      onAgentEvent: () => () => undefined,
+      pickFileFromDisk: vi.fn(async () => ({ canceled: true as const })),
+    };
+    const localThread: NavigationThreadSummary = {
+      id: "local-thread",
+      title: "Local thread",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const remoteThread: NavigationThreadSummary = {
+      ...localThread,
+      id: "remote-thread",
+      title: "Remote thread",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: federationTarget,
+          threadId: "remote-thread",
+        },
+        instanceLabel: "Owner two",
+        peerStatus: "connected",
+      },
+    };
+    const { rerender } = render(
+      <Composer
+        desktopApi={desktopApi}
+        disabled={false}
+        skills={[]}
+        thread={localThread}
+      />,
+    );
+
+    await clickButton("Add reference");
+    let dialog = screen.getByRole("dialog", { name: "Add reference" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Files" }));
+    expect(
+      await within(dialog).findByRole("option", { name: /local\.md/ }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Add reference" }),
+      ).not.toBeInTheDocument();
+    });
+
+    rerender(
+      <Composer
+        desktopApi={desktopApi}
+        disabled={false}
+        skills={[]}
+        thread={remoteThread}
+      />,
+    );
+    await clickButton("Add reference");
+    dialog = screen.getByRole("dialog", { name: "Add reference" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Files" }));
+    await waitFor(() => {
+      expect(listRecentFileReferences).toHaveBeenLastCalledWith({
+        federationTarget,
+      });
+    });
+    expect(
+      within(dialog).queryByRole("option", { name: /local\.md/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows thread environment commands from refreshed environment options", async () => {
     const runCodexEnvironmentAction = vi.fn(async () => ({
       backend: "codex" as const,

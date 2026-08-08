@@ -345,7 +345,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses]: "thread_navigation",
-  [FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad]: "environment_actions",
+  [FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad]: "launchpad_metadata",
   [FEDERATION_BACKEND_METHODS.listRecentFileReferences]: "remote_window",
   [FEDERATION_BACKEND_METHODS.recordRecentFileReferences]: "remote_window",
   [FEDERATION_BACKEND_METHODS.attachDirectoryToThread]: "environment_actions",

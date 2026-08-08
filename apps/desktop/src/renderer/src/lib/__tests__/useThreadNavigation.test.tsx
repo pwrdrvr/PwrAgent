@@ -5447,6 +5447,10 @@ describe("useThreadNavigation", () => {
         { name: "owner/main", lastCommitAt: 200 },
         { name: "owner/release", lastCommitAt: 100 },
       ],
+      baseBranches: ["owner/main", "owner/release", "origin/release"],
+      baseBranchDetails: [
+        { name: "origin/release", lastCommitAt: 90 },
+      ],
       syncState: "in-sync" as const,
     };
     const snapshot: NavigationSnapshot = {
@@ -5516,6 +5520,7 @@ describe("useThreadNavigation", () => {
       directoryKind: "directory",
       directoryLabel: "Owner PwrAgent",
       directoryPath: "/shared/PwrAgent",
+      gitStatus: ownerGitStatus,
       currentBranch: "owner/main",
       preferredBackend: undefined,
     });
@@ -5525,6 +5530,31 @@ describe("useThreadNavigation", () => {
       prompt: "viewer-persisted draft",
       directoryLabel: "Owner PwrAgent",
       branchName: "owner/main",
+    });
+
+    ensureDirectoryLaunchpad.mockResolvedValueOnce({
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "Viewer PwrAgent",
+        directoryPath: "/shared/PwrAgent",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "remote base draft",
+        workMode: "local" as const,
+        branchName: "origin/release",
+        createdAt: 1,
+        updatedAt: 3,
+      },
+      defaults: snapshot.launchpadDefaults,
+      gitStatus: ownerGitStatus,
+    });
+    await act(async () => {
+      await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      prompt: "remote base draft",
+      branchName: "origin/release",
     });
   });
 

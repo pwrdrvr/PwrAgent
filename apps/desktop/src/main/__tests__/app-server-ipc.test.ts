@@ -94,6 +94,7 @@ const federationMock = vi.hoisted(() => {
     runtime: {
       hydrateThreadMessageOrigins: vi.fn(async (response) => response),
       remoteBackend: vi.fn(() => remoteBackend),
+      remoteTargetSupportsCapability: vi.fn(() => true),
       remoteNavigationSnapshot: vi.fn(),
       remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
     },
@@ -963,6 +964,8 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.listWorktreeUnpublishedCommits.mockClear();
     federationMock.remoteBackend.getWorktreeUnpublishedCommitDiff.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.remoteTargetSupportsCapability.mockReset();
+    federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(true);
     federationMock.runtime.hydrateThreadMessageOrigins.mockClear();
     federationMock.runtime.remoteNavigationSnapshot.mockReset();
     listThreads.mockClear();
@@ -7377,14 +7380,11 @@ describe("app server ipc", () => {
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
         directoryPath: "/repo/app",
-        currentBranch: "owner/main",
+        currentBranch: undefined,
       }),
       { skipFilesystemInspection: true },
     );
-    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
-      directoryKey: "directory:/repo/app",
-      patch: { branchName: "owner/main" },
-    });
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(response).toEqual(
       expect.objectContaining({
         gitStatus: ownerGitStatus,
@@ -7394,6 +7394,150 @@ describe("app server ipc", () => {
         }),
       }),
     );
+  });
+
+  it("falls back to owner snapshot metadata when the peer lacks launchpad metadata RPC support", async () => {
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "older_owner",
+    };
+    const ownerGitStatus = {
+      currentBranch: "owner/main",
+      branches: ["owner/main", "owner/release"],
+      syncState: "in-sync" as const,
+    };
+    federationMock.runtime.remoteTargetSupportsCapability.mockReturnValueOnce(
+      false,
+    );
+    ensureDirectoryLaunchpad.mockResolvedValueOnce({
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "viewer draft",
+        branchName: "viewer/local-only",
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+      defaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+
+    registerAppServerIpcHandlers();
+    const response = await handlers.get(
+      NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    )?.({}, {
+      federationTarget,
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory",
+      directoryLabel: "Owner app",
+      directoryPath: "/owner/repo/app",
+      gitStatus: ownerGitStatus,
+      currentBranch: "owner/main",
+    });
+
+    expect(
+      federationMock.remoteBackend.ensureDirectoryLaunchpad,
+    ).not.toHaveBeenCalled();
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryLabel: "Owner app",
+        directoryPath: "/owner/repo/app",
+        currentBranch: undefined,
+      }),
+      { skipFilesystemInspection: true },
+    );
+    expect(response).toEqual(
+      expect.objectContaining({
+        gitStatus: ownerGitStatus,
+        launchpad: expect.objectContaining({
+          directoryLabel: "Owner app",
+          directoryPath: "/owner/repo/app",
+          prompt: "viewer draft",
+          branchName: "owner/main",
+        }),
+      }),
+    );
+  });
+
+  it("preserves owner remote-tracking worktree base branches", async () => {
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner_one",
+    };
+    const ownerGitStatus = {
+      currentBranch: "main",
+      branches: ["main", "release"],
+      baseBranches: ["main", "release", "origin/release"],
+      baseBranchDetails: [
+        { name: "origin/release", lastCommitAt: 200 },
+      ],
+    };
+    federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValueOnce({
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        branchName: "main",
+        createdAt: 100,
+        updatedAt: 100,
+      },
+      defaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+      gitStatus: ownerGitStatus,
+    });
+    ensureDirectoryLaunchpad.mockResolvedValueOnce({
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "viewer draft",
+        branchName: "origin/release",
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+      defaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+
+    registerAppServerIpcHandlers();
+    const response = await handlers.get(
+      NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    )?.({}, {
+      federationTarget,
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      gitStatus: ownerGitStatus,
+    });
+
+    expect(response).toEqual(
+      expect.objectContaining({
+        launchpad: expect.objectContaining({
+          branchName: "origin/release",
+        }),
+      }),
+    );
+    expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
   it("routes remote recent file reads and writes to the owning instance", async () => {

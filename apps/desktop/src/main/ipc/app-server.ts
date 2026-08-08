@@ -887,11 +887,16 @@ function reconcileRemoteLaunchpadBranch(
   const branchNames = new Set([
     ...(gitStatus?.branches ?? []),
     ...(gitStatus?.branchDetails ?? []).map((branch) => branch.name),
+    ...(gitStatus?.baseBranches ?? []),
+    ...(gitStatus?.baseBranchDetails ?? []).map((branch) => branch.name),
   ]);
   if (!branchName) {
     return gitStatus?.currentBranch;
   }
-  if (branchNames.size === 0 || branchNames.has(branchName)) {
+  if (branchNames.size === 0) {
+    return gitStatus?.currentBranch ?? branchName;
+  }
+  if (branchNames.has(branchName)) {
     return branchName;
   }
   return gitStatus?.currentBranch;
@@ -6269,45 +6274,62 @@ class DesktopAppServerService {
       request.federationTarget
       && isRemoteFederationTarget(request.federationTarget)
     ) {
-      const { federationTarget, ...ownerRequest } = request;
-      const ownerResponse = await getDesktopFederationRuntime()
-        .remoteBackend(federationTarget)
-        .ensureDirectoryLaunchpad(ownerRequest);
+      const {
+        federationTarget,
+        gitStatus: snapshotGitStatus,
+        ...ownerRequest
+      } = request;
+      const federationRuntime = getDesktopFederationRuntime();
+      const ownerResponse =
+        federationRuntime.remoteTargetSupportsCapability(
+          federationTarget,
+          "launchpad_metadata",
+        )
+          ? await federationRuntime
+              .remoteBackend(federationTarget)
+              .ensureDirectoryLaunchpad(ownerRequest)
+          : undefined;
+      const ownerGitStatus =
+        ownerResponse?.gitStatus
+        ?? snapshotGitStatus
+        ?? (request.currentBranch
+          ? { currentBranch: request.currentBranch }
+          : undefined);
       const registry = getDesktopBackendRegistry();
-      const localResponse = await registry.ensureDirectoryLaunchpad({
-        ...ownerRequest,
-        directoryKind: ownerResponse.launchpad.directoryKind,
-        directoryLabel: ownerResponse.launchpad.directoryLabel,
-        directoryPath: ownerResponse.launchpad.directoryPath,
-        currentBranch:
-          ownerResponse.gitStatus?.currentBranch
-          ?? ownerResponse.launchpad.branchName,
-      }, {
-        skipFilesystemInspection: true,
-      });
+      const localResponse = await registry.ensureDirectoryLaunchpad(
+        {
+          ...ownerRequest,
+          directoryKind:
+            ownerResponse?.launchpad.directoryKind ?? request.directoryKind,
+          directoryLabel:
+            ownerResponse?.launchpad.directoryLabel ?? request.directoryLabel,
+          directoryPath:
+            ownerResponse?.launchpad.directoryPath ?? request.directoryPath,
+          currentBranch: undefined,
+        },
+        {
+          skipFilesystemInspection: true,
+        },
+      );
       const branchName = reconcileRemoteLaunchpadBranch(
         localResponse.launchpad.branchName,
-        ownerResponse.gitStatus,
+        ownerGitStatus,
       );
-      let launchpad = localResponse.launchpad;
-      if (branchName !== localResponse.launchpad.branchName) {
-        launchpad = (await registry.updateDirectoryLaunchpad({
-          directoryKey: request.directoryKey,
-          patch: { branchName },
-        })).launchpad;
-      }
       return {
         ...localResponse,
         launchpad: {
-          ...launchpad,
-          directoryKind: ownerResponse.launchpad.directoryKind,
-          directoryLabel: ownerResponse.launchpad.directoryLabel,
-          directoryPath: ownerResponse.launchpad.directoryPath,
+          ...localResponse.launchpad,
+          directoryKind:
+            ownerResponse?.launchpad.directoryKind ?? request.directoryKind,
+          directoryLabel:
+            ownerResponse?.launchpad.directoryLabel ?? request.directoryLabel,
+          directoryPath:
+            ownerResponse?.launchpad.directoryPath ?? request.directoryPath,
           codexEnvironmentOptions:
-            ownerResponse.launchpad.codexEnvironmentOptions,
+            ownerResponse?.launchpad.codexEnvironmentOptions,
           branchName,
         },
-        gitStatus: ownerResponse.gitStatus,
+        gitStatus: ownerGitStatus,
       };
     }
 

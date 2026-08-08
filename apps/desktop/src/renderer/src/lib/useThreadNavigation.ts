@@ -317,6 +317,10 @@ function upsertLaunchpadDirectory(
     ...(existingDirectory?.gitStatus?.branchDetails ?? []).map(
       (branch) => branch.name,
     ),
+    ...(existingDirectory?.gitStatus?.baseBranches ?? []),
+    ...(existingDirectory?.gitStatus?.baseBranchDetails ?? []).map(
+      (branch) => branch.name,
+    ),
   ]);
   const branchName =
     options?.preserveExistingDirectoryAuthority
@@ -4578,6 +4582,9 @@ export function useThreadNavigation(
           directoryKind: targetDirectory.directoryKind,
           directoryLabel: targetDirectory.directoryLabel,
           directoryPath: targetDirectory.directoryPath,
+          ...(targetDirectory.gitStatus
+            ? { gitStatus: targetDirectory.gitStatus }
+            : {}),
           currentBranch: targetDirectory.gitStatus?.currentBranch,
           preferredBackend: backend,
         });
@@ -4816,6 +4823,15 @@ export function useThreadNavigation(
           directoryLabel: directory.directoryLabel,
           directoryPath: launchpadDirectoryPath,
           gitStatusSourcePath: directory.gitStatusSourcePath,
+          ...(parent.federation
+            ? {
+                gitStatus: stateRef.current.response?.directories.find(
+                  (entry) =>
+                    entry.path === directory.gitStatusSourcePath
+                    || entry.path === directory.directoryPath,
+                )?.gitStatus,
+              }
+            : {}),
           currentBranch: directory.branchName,
           parentThreadId: groupRoot.id,
           parentThreadBackend: groupRoot.source,
@@ -5024,6 +5040,7 @@ export function useThreadNavigation(
           directoryKind: directory.kind,
           directoryLabel: directory.label,
           directoryPath: directory.path,
+          ...(directory.gitStatus ? { gitStatus: directory.gitStatus } : {}),
           currentBranch: directory.gitStatus?.currentBranch,
           preferredBackend,
         });

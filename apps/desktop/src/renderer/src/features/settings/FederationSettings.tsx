@@ -1636,6 +1636,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   scheduled_actions: "schedule and manage messages",
   pending_request_control: "handle approvals and questions",
   environment_actions: "run environments and scripts",
+  launchpad_metadata: "read launchpad Git metadata",
   federated_search: "search remote threads",
   messaging_route: "route messaging threads",
   pwrsnap_connection: "read PwrSnap availability",

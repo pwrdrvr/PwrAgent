@@ -667,6 +667,12 @@ export type EnsureDirectoryLaunchpadRequest = {
    * launchpad's target path is stale, missing, or has not been created yet.
    */
   gitStatusSourcePath?: string;
+  /**
+   * Latest owner-sourced status already present in the navigation snapshot.
+   * Used as a filesystem-safe fallback when an older owner does not advertise
+   * the dedicated launchpad metadata RPC.
+   */
+  gitStatus?: NavigationDirectoryGitStatus;
   currentBranch?: string;
   parentThreadId?: string;
   parentThreadBackend?: AppServerBackendKind;
