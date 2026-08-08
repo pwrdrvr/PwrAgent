@@ -193,6 +193,107 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads[0]?.threadStatus).toBe("idle");
   });
 
+  it("does not let an in-flight remote snapshot overwrite a live status event", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "instance-m2-max",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const snapshot = (threadStatus: "active" | "idle"): NavigationSnapshot => ({
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["acp:kimi:session-1"],
+      threads: [
+        {
+          id: "session-1",
+          title: "Remote Kimi thread",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          threadStatus,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread",
+          },
+          federation: {
+            ref: {
+              backend: "acp:kimi",
+              target: federationTarget,
+              threadId: "session-1",
+            },
+            instanceLabel: "M2 Max",
+            peerStatus: "connected",
+            capabilities: ["thread_navigation"],
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+      federationTarget,
+    });
+    const staleRefresh = createDeferred<NavigationSnapshot>();
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(snapshot("idle"))
+      .mockReturnValueOnce(staleRefresh.promise)
+      .mockResolvedValueOnce(snapshot("idle"));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.threadStatus).toBe("idle");
+    });
+    let refresh!: Promise<void>;
+    act(() => {
+      refresh = result.current.refresh();
+    });
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "acp:kimi",
+        federationTarget,
+        notification: {
+          method: "thread/status/changed",
+          params: {
+            threadId: "session-1",
+            status: { type: "active" },
+          },
+        },
+      });
+    });
+    expect(result.current.threads[0]?.threadStatus).toBe("active");
+
+    await act(async () => {
+      staleRefresh.resolve(snapshot("idle"));
+      await refresh;
+    });
+    expect(result.current.threads[0]?.threadStatus).toBe("active");
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.threads[0]?.threadStatus).toBe("idle");
+  });
+
   it("clears a directory attention count after the selected thread is marked seen", async () => {
     const markThreadSeen = vi.fn(async () => ({
       backend: "codex" as const,
