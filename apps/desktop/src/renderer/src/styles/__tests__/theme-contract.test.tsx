@@ -207,13 +207,21 @@ describe("Tangerine Terminal theme contract", () => {
     // that the bottom value stays at 24 (the over-scroll feel above
     // the last message / thinking indicator) and that the pending
     // override still drops to 4px.
+    //
+    // The override keys off `.transcript-list__pending-item`, the
+    // role="listitem" wrapper the thinking line now renders inside (a
+    // bare role="status" child of the role="list" scroller trips
+    // aria-required-children). The pending element is always the last
+    // child of that wrapper, so the pre-wrapper
+    // `.transcript-list__pending:last-child` form would fire even when a
+    // questionnaire / approval card follows it.
     const itemsRule = css.match(/\.transcript-list__items\s*\{[\s\S]*?\}/)?.[0];
     expect(itemsRule).toBeDefined();
     expect(itemsRule).toMatch(
       /padding-bottom:\s*24px;|padding:\s*\S+\s+\S+\s+24px(?:\s+\S+)?;/,
     );
     expect(css).toMatch(
-      /\.transcript-list__items:has\(\.transcript-list__pending:last-child\)\s*\{[\s\S]*?padding-bottom:\s*4px;[\s\S]*?\}/
+      /\.transcript-list__items:has\(\.transcript-list__pending-item:last-child\)\s*\{[\s\S]*?padding-bottom:\s*4px;[\s\S]*?\}/
     );
     // Negative regex stays — guard against accidental large bottom
     // values (>= 40px) regardless of which form is used.

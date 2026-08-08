@@ -1667,6 +1667,63 @@ describe("TranscriptList", () => {
       "Usage so far: 1,100 uncached in · 1,900 cached · 50 out"
     );
     expect(screen.getByRole("status").querySelector(".thinking-scanner")).not.toBeNull();
+    // The scroll container is a role="list", and role="status" is not a
+    // permitted owned element of a list — bare, it fails axe's
+    // aria-required-children for the whole transcript (the a11y gate's
+    // active-thread block covers it end to end). The live region has to
+    // sit inside a listitem wrapper, and that wrapper is what the
+    // bottom-padding rule in app.css keys off, so it also has to be the
+    // last child of the content wrapper when nothing follows it.
+    const pendingItem = screen.getByRole("status").closest('[role="listitem"]');
+    expect(pendingItem).toHaveClass("transcript-list__pending-item");
+    expect(pendingItem).toBe(
+      document.querySelector(".transcript-list__content")?.lastElementChild
+    );
+  });
+
+  // The other half of that contract. `.transcript-list__pending-item` is what
+  // the bottom-padding override in app.css tests for `:last-child`, and the
+  // wrapper made the pre-wrapper `.transcript-list__pending:last-child` form
+  // unusable: the pending element is always the only child of its wrapper, so
+  // that selector would have trimmed the over-scroll reserve even with an
+  // approval card sitting below the thinking line. Assert the wrapper stops
+  // being last-of-content as soon as something follows it, or nothing catches
+  // a regression back to a selector that matches unconditionally.
+  it("keeps the pending wrapper off the content tail when an approval follows", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "What can this skill do?"
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingStatusText="Waiting for the app server…"
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            command: "node --version",
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const pendingItem = screen.getByRole("status").closest('[role="listitem"]');
+    expect(pendingItem).toHaveClass("transcript-list__pending-item");
+    const contentTail =
+      document.querySelector(".transcript-list__content")?.lastElementChild;
+    expect(contentTail).not.toBe(pendingItem);
+    expect(contentTail).toBe(
+      screen.getByRole("group", { name: "Pending approval" })
+    );
   });
 
   it("renders replayed plan progress inline in the transcript", () => {
