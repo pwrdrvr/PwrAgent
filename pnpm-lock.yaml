@@ -104,7 +104,7 @@ importers:
         version: link:../../packages/shared
       '@pwrdrvr/agent-acp':
         specifier: ^0.12.0
-        version: 0.12.2
+        version: 0.12.3
       '@pwrdrvr/agent-client':
         specifier: ^0.6.1
         version: 0.6.1
@@ -340,6 +340,9 @@ packages:
 
   '@adobe/css-tools@4.4.4':
     resolution: {integrity: sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg==}
+
+  '@agentclientprotocol/sdk@0.4.5':
+    resolution: {integrity: sha512-1cKCZvy6xJ+9n7BkUzrgFfj+waJOj21HaiYvbE4elxBCT7WAHAk5zaQ5cQfmw876TZoEP062Vxy7qkYp1rzEfw==}
 
   '@asamuzakjp/css-color@5.1.11':
     resolution: {integrity: sha512-KVw6qIiCTUQhByfTd78h2yD1/00waTmm9uy/R7Ck/ctUyAPj+AEDLkQIdJW0T8+qGgj3j5bpNKK7Q3G+LedJWg==}
@@ -1048,8 +1051,8 @@ packages:
   '@protobufjs/utf8@1.1.2':
     resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
 
-  '@pwrdrvr/agent-acp@0.12.2':
-    resolution: {integrity: sha512-SwBZfk98nStyoK8t2NTYF9d00+MqhemsP6pUDOkVMHXXNkAbiPn0a8VAuFU2GZxMrQf8QesGi6R8utvw1CULig==}
+  '@pwrdrvr/agent-acp@0.12.3':
+    resolution: {integrity: sha512-pjZLp3XKQYPkUNdrE9z2t+lMs3y64/KoANqQKAYcgzG4zdGt2NCCsk9hJo2kg7NMW6W4tKhbhn+TPG78XZLQlg==}
 
   '@pwrdrvr/agent-client@0.6.1':
     resolution: {integrity: sha512-Q8jyGN9c3BfGTW1ba3baFliaF0bWpabV2rYgKmgwZypB3BoPiraZ3qv4X4piHNKVHJ+XK8PdNtyGC78c6sLHNA==}
@@ -1747,10 +1750,6 @@ packages:
 
   '@xterm/xterm@6.0.0':
     resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
-
-  '@zed-industries/agent-client-protocol@0.4.5':
-    resolution: {integrity: sha512-OwHKfu5AiKul/GSJilHg36+kOSV9eOl2eYnjR6tenAQDdraSnt22WFk0SDFTeuAANz1Gxkv+DTf7Hq32rvX7FQ==}
-    deprecated: This package has been renamed to @agentclientprotocol/sdk. Please migrate to continue receiving updates.
 
   abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}
@@ -4421,6 +4420,10 @@ snapshots:
 
   '@adobe/css-tools@4.4.4': {}
 
+  '@agentclientprotocol/sdk@0.4.5':
+    dependencies:
+      zod: 3.25.76
+
   '@asamuzakjp/css-color@5.1.11':
     dependencies:
       '@asamuzakjp/generational-cache': 1.0.1
@@ -5132,11 +5135,11 @@ snapshots:
 
   '@protobufjs/utf8@1.1.2': {}
 
-  '@pwrdrvr/agent-acp@0.12.2':
+  '@pwrdrvr/agent-acp@0.12.3':
     dependencies:
+      '@agentclientprotocol/sdk': 0.4.5
       '@pwrdrvr/agent-core': 0.2.0
       '@pwrdrvr/agent-transport': 0.1.6
-      '@zed-industries/agent-client-protocol': 0.4.5
 
   '@pwrdrvr/agent-client@0.6.1':
     dependencies:
@@ -5825,10 +5828,6 @@ snapshots:
   '@xterm/addon-fit@0.11.0': {}
 
   '@xterm/xterm@6.0.0': {}
-
-  '@zed-industries/agent-client-protocol@0.4.5':
-    dependencies:
-      zod: 3.25.76
 
   abbrev@4.0.0: {}
 
