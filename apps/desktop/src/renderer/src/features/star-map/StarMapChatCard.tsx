@@ -12,6 +12,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   CompactComposer,
   type CompactComposerAction,
@@ -70,6 +71,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     props;
   const dragRef = useRef<DragState | undefined>(undefined);
   const [sendError, setSendError] = useState<string | undefined>(undefined);
+  // The card is draggable and clipped; a native `title` fights both, and
+  // UI-THEME.md rules it out regardless.
+  const titleTooltip = useViewportTooltip({ className: "viewport-tooltip" });
 
   const session = useThreadSessionState({ desktopApi, thread });
 
@@ -286,7 +290,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             <CelestialIcon icon={props.instanceIcon} size={72} />
           </span>
         ) : null}
-        <span className="star-map-chat-card__title" title={thread.title}>
+        <span
+          className="star-map-chat-card__title"
+          onMouseEnter={(event) =>
+            titleTooltip.show(event.currentTarget, thread.title)
+          }
+          onMouseLeave={titleTooltip.hide}
+        >
           {thread.title}
         </span>
         {props.instanceLabel ? (
@@ -353,6 +363,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         threadTitle={thread.title}
       />
 
+      {titleTooltip.tooltipNode}
       <span
         aria-hidden="true"
         className="star-map-chat-card__resize"

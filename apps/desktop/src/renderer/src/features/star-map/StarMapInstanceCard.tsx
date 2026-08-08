@@ -1,5 +1,6 @@
 import type { CelestialIconId, FederationConnectionState } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 function statusTone(status: FederationConnectionState): string {
   switch (status) {
@@ -44,6 +45,9 @@ export function StarMapInstanceCard(props: {
   // Display stacks the two lines to stay narrow, but every accessible name
   // has to keep the profile inline: two instances on one machine would
   // otherwise expose identical button names.
+  // Native `title` is an anti-pattern here (UI-THEME.md): unstyleable,
+  // platform-dependent timing, no wrapping on macOS Electron.
+  const labelTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const fullLabel = props.profileName
     ? `${props.label} / ${props.profileName}`
     : props.label;
@@ -83,7 +87,10 @@ export function StarMapInstanceCard(props: {
       <span className="star-map-instance__row">
         <span
           className="star-map-instance__label"
-          title={fullLabel}
+          onMouseEnter={(event) =>
+            labelTooltip.show(event.currentTarget, fullLabel)
+          }
+          onMouseLeave={labelTooltip.hide}
         >
           <span className="star-map-instance__machine">{props.label}</span>
           {props.profileName ? (
@@ -106,6 +113,7 @@ export function StarMapInstanceCard(props: {
       {props.unreachable ? (
         <span className="star-map-instance__unreachable">Unreachable</span>
       ) : null}
+      {labelTooltip.tooltipNode}
     </div>
   );
 }
