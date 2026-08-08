@@ -44,6 +44,12 @@ export type ScheduledThreadReviewPayload = {
   draftText?: string;
   delivery?: AppServerReviewDelivery;
   cwd?: string;
+  /**
+   * Reviewer override captured when the review was queued, so releasing it
+   * later runs on the picked provider instead of silently falling back to the
+   * thread's own.
+   */
+  reviewBackend?: AppServerBackendKind;
   model?: string;
   reasoningEffort?: string;
   serviceTier?: string;

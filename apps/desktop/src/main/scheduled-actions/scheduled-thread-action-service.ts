@@ -274,6 +274,7 @@ export class ScheduledThreadActionService {
           target: action.review.target,
           delivery: action.review.delivery ?? "inline",
           cwd: action.review.cwd,
+          reviewBackend: action.review.reviewBackend,
           model: action.review.model,
           reasoningEffort: action.review.reasoningEffort,
           serviceTier: action.review.serviceTier,

@@ -17186,6 +17186,125 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("keeps an explicitly picked reviewer out of the thread's own model settings", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
+      models: [
+        { id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true },
+        { id: "gpt-5.2", label: "GPT-5.2", supportsReasoning: true },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+          model: "gpt-5.5",
+          reasoningEffort: "medium",
+        } as ThreadOverlayState,
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    await registry.startReview({
+      backend: "codex",
+      reviewBackend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+      model: "gpt-5.2",
+      reasoningEffort: "high",
+    });
+
+    // The review itself runs on the picked model...
+    expect(codexClient.lastStartReviewParams).toMatchObject({
+      model: "gpt-5.2",
+      reasoningEffort: "high",
+    });
+    // ...but the thread keeps answering as it did before.
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(overlay?.model).toBe("gpt-5.5");
+    expect(overlay?.reasoningEffort).toBe("medium");
+
+    await registry.close();
+  });
+
+  it("still persists review model settings when no reviewer was picked", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
+      models: [
+        { id: "gpt-5.5", label: "GPT-5.5", current: true, supportsReasoning: true },
+        { id: "gpt-5.2", label: "GPT-5.2", supportsReasoning: true },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+          model: "gpt-5.5",
+          reasoningEffort: "medium",
+        } as ThreadOverlayState,
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+      model: "gpt-5.2",
+      reasoningEffort: "high",
+    });
+
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(overlay?.model).toBe("gpt-5.2");
+
+    await registry.close();
+  });
+
+  it("rejects a reviewer the instance cannot run reviews on", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start", "review/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    await expect(
+      registry.startReview({
+        backend: "codex",
+        reviewBackend: "acp:gemini",
+        threadId: "thread-parent",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      }),
+    ).rejects.toThrow(/cannot run reviews/);
+
+    await registry.close();
+  });
+
+  it("advertises codex as a reviewer override target", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    const codexBackend = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends.find((backend) => backend.kind === "codex");
+    expect(codexBackend?.capabilities.reviewRunner).toBe(true);
+
+    await registry.close();
+  });
+
   it("runs the managed review experiment as one child turn and attributes usage to it", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },

@@ -33,6 +33,7 @@ import type {
   DesktopProviderModelDefaults,
   FederationTarget,
   HandoffThreadWorkspaceRequest,
+  ModelSettingsRecent,
   NavigationDirectorySummary,
   NavigationGitCommitSummary,
   NavigationLaunchpadDraft,
@@ -550,6 +551,14 @@ type ReviewConfigState = {
   branchSource?: "auto" | "user";
   commit: string;
   customInstructions: string;
+  /**
+   * Explicitly picked reviewer. Undefined means the review inherits the
+   * thread's own provider/model/reasoning — the row reads the thread's values
+   * either way, so the reset control is what signals divergence. Lives on the
+   * panel's state so it clears whenever the panel closes: a reviewer override
+   * applies to one review, never to the thread.
+   */
+  reviewer?: ModelSettingsRecent;
   target?: ReviewTargetChoice;
   workspaceCwd?: string;
 };
@@ -743,6 +752,60 @@ function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefine
     models.find((model) => model.supportsReasoning) ??
     models[0]
   );
+}
+
+/**
+ * Resolve what the reviewer chips display. With no override the row mirrors
+ * the thread's own settings; with one, every value resolves against the picked
+ * provider's catalog so a model from the thread's provider can never leak into
+ * another provider's review.
+ */
+function resolveReviewerSelection(params: {
+  backends?: BackendSummary[];
+  override?: ModelSettingsRecent;
+  threadBackend?: AppServerBackendKind;
+  threadModel?: string;
+  threadReasoningEffort?: string;
+}): {
+  backend?: AppServerBackendKind;
+  model?: ModelOption;
+  reasoningEffort?: string;
+  summary?: BackendSummary;
+} {
+  const backendKind = params.override?.backend ?? params.threadBackend;
+  const summary = params.backends?.find(
+    (candidate) => candidate.kind === backendKind,
+  );
+  const models = summary?.launchpadOptions?.models ?? [];
+  const requestedModel = params.override
+    ? params.override.model
+    : params.threadModel;
+  const model =
+    models.find((candidate) => candidate.id === requestedModel)
+    ?? getDefaultModelOption(summary);
+  const requestedReasoning = params.override
+    ? params.override.reasoningEffort
+    : params.threadReasoningEffort;
+  return {
+    backend: backendKind,
+    model,
+    reasoningEffort: getReasoningEffortValue(summary, model, requestedReasoning),
+    summary,
+  };
+}
+
+/** Compact "Codex · gpt-5.6-sol · high" label for a remembered combination. */
+function formatReviewerRecentLabel(
+  recent: ModelSettingsRecent,
+  backends?: BackendSummary[],
+): string {
+  return [
+    formatBackendLabel(recent.backend, backends),
+    recent.model,
+    recent.reasoningEffort,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
 }
 
 function getReasoningEffortsForModel(
@@ -3159,6 +3222,14 @@ export function Composer(props: ComposerProps) {
   }>({ maxHeight: 320, placement: "above" });
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
   const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
+  // Tagged with the owning instance the same way recent file references are:
+  // a combination remembered on another instance names models that instance
+  // has, so a response that lands after the thread changed must not paint.
+  const [reviewerRecentsState, setReviewerRecentsState] = useState<{
+    authorityKey: string;
+    recents: ModelSettingsRecent[];
+  }>({ authorityKey: "local", recents: [] });
+  const reviewerAuthorityKeyRef = useRef("local");
   const isLaunchpad = Boolean(props.launchpad && props.directory);
   const launchpad = props.launchpad;
   const backend = useMemo(
@@ -5477,6 +5548,7 @@ export function Composer(props: ComposerProps) {
     cwd?: string;
     displayText: string;
     target: AppServerReviewTarget;
+    reviewer?: ModelSettingsRecent;
   }, options?: {
     queueClaimed?: boolean;
     queued?: QueuedTurnDraft;
@@ -5583,6 +5655,19 @@ export function Composer(props: ComposerProps) {
     );
     setActiveOptimisticMessageId(optimisticReviewId);
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    // A released queued review carries its own reviewer: the panel is long
+    // closed by then, so reviewConfig is empty and would silently downgrade the
+    // review to the thread's provider. Otherwise take the live panel state,
+    // captured before it clears below.
+    const submittedReviewer = reviewCommand.reviewer ?? reviewConfig?.reviewer;
+    // A queued reviewer already carries resolved values; only the live panel
+    // needs its chips resolved against the picked provider's catalog.
+    const submittedModel = reviewCommand.reviewer
+      ? reviewCommand.reviewer.model
+      : reviewerSelection.model?.id;
+    const submittedReasoningEffort = reviewCommand.reviewer
+      ? reviewCommand.reviewer.reasoningEffort
+      : reviewerSelection.reasoningEffort;
     if (!options?.queued) {
       resetComposerDraftAndState(composerScopeKey);
       setReviewConfig(undefined);
@@ -5596,15 +5681,49 @@ export function Composer(props: ComposerProps) {
         target: reviewCommand.target,
         delivery: "inline",
         ...(reviewCommand.cwd ? { cwd: reviewCommand.cwd } : {}),
-        ...(selectedModelOption?.id ? { model: selectedModelOption.id } : {}),
-        ...(supportsReasoning && selectedReasoningEffort
-          ? { reasoningEffort: selectedReasoningEffort }
-          : {}),
-        ...(selectedServiceTier ? { serviceTier: selectedServiceTier } : {}),
-        ...(props.thread.source === "codex" && supportsFast
-          ? { fastMode: Boolean(currentSettings?.fastMode) }
-          : {}),
+        ...(submittedReviewer
+          ? {
+              reviewBackend: submittedReviewer.backend,
+              ...(submittedModel ? { model: submittedModel } : {}),
+              ...(submittedReasoningEffort
+                ? { reasoningEffort: submittedReasoningEffort }
+                : {}),
+            }
+          : {
+              ...(selectedModelOption?.id
+                ? { model: selectedModelOption.id }
+                : {}),
+              ...(supportsReasoning && selectedReasoningEffort
+                ? { reasoningEffort: selectedReasoningEffort }
+                : {}),
+              ...(selectedServiceTier
+                ? { serviceTier: selectedServiceTier }
+                : {}),
+              ...(props.thread.source === "codex" && supportsFast
+                ? { fastMode: Boolean(currentSettings?.fastMode) }
+                : {}),
+            }),
       });
+      if (submittedReviewer) {
+        // Only an explicit pick is worth replaying; recording inherited
+        // settings would push real picks off the list.
+        void props.desktopApi?.recordModelSettingsRecent?.({
+          ...(props.thread.federation?.ref.target ?? rendererFederationTarget
+            ? {
+                federationTarget:
+                  props.thread.federation?.ref.target ?? rendererFederationTarget,
+              }
+            : {}),
+          scope: "review",
+          recent: {
+            backend: submittedReviewer.backend,
+            ...(submittedModel ? { model: submittedModel } : {}),
+            ...(submittedReasoningEffort
+              ? { reasoningEffort: submittedReasoningEffort }
+              : {}),
+          },
+        })?.catch(() => undefined);
+      }
       inFlightReviewSubmissionKeyRef.current = undefined;
       updateActiveTurnId(response.turnId, { review: true });
       props.onActiveTurnIdChange?.(response.turnId);
@@ -5725,6 +5844,44 @@ export function Composer(props: ComposerProps) {
     }
   };
 
+  /**
+   * Read the owning instance's reviewer history. Owner-scoped because a
+   * combination remembered here would name a model the owner's catalog may not
+   * have — the picker and its history have to come from one catalog.
+   */
+  const refreshReviewerRecents = async (): Promise<void> => {
+    const federationTarget =
+      props.thread?.federation?.ref.target ?? rendererFederationTarget;
+    const requestedAuthorityKey = reviewerAuthorityKey;
+    // Clear first so a slow response cannot leave the previous owner's
+    // history on screen while the new one loads.
+    setReviewerRecentsState({
+      authorityKey: requestedAuthorityKey,
+      recents: [],
+    });
+    try {
+      const response = await props.desktopApi?.listModelSettingsRecents?.({
+        ...(federationTarget ? { federationTarget } : {}),
+        scope: "review",
+      });
+      if (reviewerAuthorityKeyRef.current !== requestedAuthorityKey) {
+        return;
+      }
+      setReviewerRecentsState({
+        authorityKey: requestedAuthorityKey,
+        recents: response?.recents ?? [],
+      });
+    } catch {
+      if (reviewerAuthorityKeyRef.current !== requestedAuthorityKey) {
+        return;
+      }
+      setReviewerRecentsState({
+        authorityKey: requestedAuthorityKey,
+        recents: [],
+      });
+    }
+  };
+
   const enterReviewComposer = (): void => {
     setReviewConfig(
       createReviewConfig({
@@ -5732,6 +5889,7 @@ export function Composer(props: ComposerProps) {
         thread: props.thread,
       })
     );
+    void refreshReviewerRecents();
     updateVisibleDraft("/review");
     setDismissedAutocompleteKey(autocompleteKey);
     setActiveSkillIndex(0);
@@ -6492,8 +6650,18 @@ export function Composer(props: ComposerProps) {
           draftText: text,
           delivery: "inline",
           cwd: reviewCommand.cwd,
-          model: props.thread.model,
-          reasoningEffort: props.thread.reasoningEffort,
+          // Carry the picked reviewer through the queue so releasing it later
+          // does not silently fall back to the thread's own provider.
+          ...(reviewConfig?.reviewer
+            ? {
+                reviewBackend: reviewConfig.reviewer.backend,
+                model: reviewerSelection.model?.id,
+                reasoningEffort: reviewerSelection.reasoningEffort,
+              }
+            : {
+                model: props.thread.model,
+                reasoningEffort: props.thread.reasoningEffort,
+              }),
           serviceTier: props.thread.serviceTier,
           fastMode:
             props.thread.source === "codex"
@@ -8777,6 +8945,87 @@ export function Composer(props: ComposerProps) {
     props.backends?.filter(
       (candidate) => candidate.available && candidate.capabilities.createThread
     ) ?? [];
+  // Backends we can hand a review to. `reviewRunner` doubles as the feature
+  // probe for reviewer overrides: an instance that predates them never sets
+  // it, so a viewer federated to an older owner finds no eligible reviewers
+  // and keeps the row read-only rather than sending a `reviewBackend` that
+  // owner would silently ignore.
+  const reviewerBackendOptions =
+    props.backends?.filter(
+      (candidate) =>
+        candidate.available && candidate.capabilities.reviewRunner === true
+    ) ?? [];
+  // Gated on an existing thread: the launchpad's materialize path takes only
+  // a review target (`onMaterializeLaunchpad`), so a reviewer picked there
+  // would be accepted by the UI and then silently dropped on submit.
+  const reviewerOverridesSupported =
+    Boolean(props.thread) && reviewerBackendOptions.length > 0;
+  const reviewerFederationTarget =
+    props.thread?.federation?.ref.target ?? rendererFederationTarget;
+  const reviewerAuthorityKey =
+    reviewerFederationTarget?.scope === "remote"
+      ? `remote:${reviewerFederationTarget.instanceId}`
+      : "local";
+  reviewerAuthorityKeyRef.current = reviewerAuthorityKey;
+  const reviewerRecents =
+    reviewerRecentsState.authorityKey === reviewerAuthorityKey
+      ? reviewerRecentsState.recents
+      : [];
+  const reviewerSelection = resolveReviewerSelection({
+    backends: props.backends,
+    override: reviewConfig?.reviewer,
+    threadBackend: props.thread?.source,
+    threadModel: selectedModelOption?.id,
+    threadReasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
+  });
+  const reviewerModelOptions =
+    reviewerSelection.summary?.launchpadOptions?.models ?? [];
+  const reviewerReasoningOptions = getReasoningEffortsForModel(
+    reviewerSelection.summary,
+    reviewerSelection.model,
+  );
+  const reviewerOverridden = Boolean(reviewConfig?.reviewer);
+  // A remembered combination is only offered while it still resolves against
+  // the owner's current catalog. Recents are disposable, so a dead row is
+  // noise rather than a preference worth preserving.
+  const resolvableReviewerRecents = reviewerRecents.filter((recent) => {
+    const summary = reviewerBackendOptions.find(
+      (candidate) => candidate.kind === recent.backend,
+    );
+    if (!summary) {
+      return false;
+    }
+    return (
+      !recent.model
+      || (summary.launchpadOptions?.models ?? []).some(
+        (model) => model.id === recent.model,
+      )
+    );
+  });
+  // Identity is the list position, not the rendered label: the store dedupes
+  // on a wider tuple than the label shows, so two distinct entries can format
+  // identically.
+  const activeReviewerRecentIndex = resolvableReviewerRecents.findIndex(
+    (recent) =>
+      recent.backend === reviewConfig?.reviewer?.backend
+      && recent.model === reviewConfig?.reviewer?.model
+      && recent.reasoningEffort === reviewConfig?.reviewer?.reasoningEffort,
+  );
+
+  const patchReviewer = (
+    build: (current: ModelSettingsRecent | undefined) => ModelSettingsRecent | undefined,
+  ): void => {
+    setReviewConfig((current) => {
+      const base =
+        current
+        ?? createReviewConfig({
+          directory: props.directory,
+          thread: props.thread,
+        });
+      return { ...base, reviewer: build(base.reviewer) };
+    });
+    setSendError(undefined);
+  };
   const availableExecutionModes =
     backend?.executionModes.filter((mode) => mode.available) ?? [];
   const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
@@ -10481,6 +10730,118 @@ export function Composer(props: ComposerProps) {
                   }}
                 />
               </label>
+            ) : null}
+
+            {reviewerOverridesSupported ? (
+              <div className="composer__review-field composer__review-reviewer">
+                <span>Reviewer</span>
+                <div className="composer__review-reviewer-chips">
+                  <ComposerDropdown
+                    ariaLabel="Review provider"
+                    id="composer-review-provider"
+                    options={reviewerBackendOptions.map((candidate) => ({
+                      label: formatBackendLabel(candidate.kind, props.backends),
+                      value: candidate.kind,
+                    }))}
+                    value={reviewerSelection.backend ?? ""}
+                    onChange={(value) => {
+                      patchReviewer(() => ({
+                        backend: value as AppServerBackendKind,
+                      }));
+                    }}
+                  />
+                  {reviewerModelOptions.length > 0 ? (
+                    <ComposerDropdown
+                      ariaLabel="Review model"
+                      id="composer-review-model"
+                      options={reviewerModelOptions.map((option) => ({
+                        label: option.label ?? option.id,
+                        value: option.id,
+                      }))}
+                      value={reviewerSelection.model?.id ?? ""}
+                      onChange={(value) => {
+                        patchReviewer((current) => {
+                          const backend =
+                            current?.backend ?? reviewerSelection.backend;
+                          return backend ? { backend, model: value } : current;
+                        });
+                      }}
+                    />
+                  ) : null}
+                  {reviewerReasoningOptions.length > 0 ? (
+                    <ComposerDropdown
+                      ariaLabel="Review reasoning"
+                      id="composer-review-reasoning"
+                      options={reviewerReasoningOptions.map((effort) => ({
+                        label: effort,
+                        value: effort,
+                      }))}
+                      value={reviewerSelection.reasoningEffort ?? ""}
+                      onChange={(value) => {
+                        patchReviewer((current) => {
+                          const backend =
+                            current?.backend ?? reviewerSelection.backend;
+                          if (!backend) {
+                            return current;
+                          }
+                          return {
+                            backend,
+                            ...(reviewerSelection.model?.id
+                              ? { model: reviewerSelection.model.id }
+                              : {}),
+                            reasoningEffort: value,
+                          };
+                        });
+                      }}
+                    />
+                  ) : null}
+                  {resolvableReviewerRecents.length > 0 ? (
+                    <ComposerDropdown
+                      ariaLabel="Recent reviewer settings"
+                      id="composer-review-recents"
+                      options={[
+                        // Sentinel so the trigger reads "Recent" until a
+                        // remembered combination is actually applied; the
+                        // dropdown falls back to the first option whenever the
+                        // value matches nothing.
+                        { label: "Recent", value: "" },
+                        ...resolvableReviewerRecents.map((recent, index) => ({
+                          label: formatReviewerRecentLabel(
+                            recent,
+                            props.backends,
+                          ),
+                          value: String(index),
+                        })),
+                      ]}
+                      tooltip="Reuse a recent reviewer"
+                      value={
+                        activeReviewerRecentIndex >= 0
+                          ? String(activeReviewerRecentIndex)
+                          : ""
+                      }
+                      onChange={(value) => {
+                        const picked = resolvableReviewerRecents[Number(value)];
+                        if (picked) {
+                          patchReviewer(() => picked);
+                        }
+                      }}
+                    />
+                  ) : null}
+                  {reviewerOverridden ? (
+                    <button
+                      type="button"
+                      aria-label="Reset reviewer to thread settings"
+                      className="composer__toggle tooltip-target"
+                      data-tooltip="Reset the reviewer to this thread's provider, model, and reasoning"
+                      onClick={() => {
+                        patchReviewer(() => undefined);
+                      }}
+                    >
+                      ↺
+                    </button>
+                  ) : null}
+                </div>
+              </div>
             ) : null}
 
             <div className="composer__review-actions">

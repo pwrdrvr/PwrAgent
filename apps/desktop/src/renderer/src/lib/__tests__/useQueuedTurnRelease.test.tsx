@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
   AgentEvent,
   BackendSummary,
+  StartReviewRequest,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -675,6 +676,96 @@ describe("useQueuedTurnRelease", () => {
     });
     expect(startTurn).not.toHaveBeenCalled();
     expect(composerDraftStore.getQueuedTurn("thread:codex:thread-a")).toBeUndefined();
+  });
+
+  it("releases a queued review on its picked reviewer, not the thread's", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: "codex" as const,
+      threadId: request.threadId,
+      reviewThreadId: "thread-a",
+      turnId: "review-turn",
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      startReview,
+      startTurn: vi.fn(),
+    };
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-review",
+      text: "/review main",
+      imageAttachments: [],
+      fileAttachments: [],
+      reviewCommand: {
+        displayText: "Review changes against main",
+        target: { type: "baseBranch", branch: "main" },
+        reviewer: {
+          backend: "acp:grok",
+          model: "grok-4",
+          reasoningEffort: "high",
+        },
+      },
+    });
+
+    const backend = backendSummary();
+    backend.capabilities.startReview = true;
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backend],
+        composerDraftStore,
+        desktopApi,
+        selectedThread: thread("thread-b"),
+        threads: [
+          thread("thread-a", {
+            model: "gpt-5.5",
+            reasoningEffort: "medium",
+            serviceTier: "priority",
+            fastMode: true,
+          }),
+          thread("thread-b"),
+        ],
+      })
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-a",
+              turnId: "turn-1",
+              turn: { id: "turn-1", status: "completed", output: [] },
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          reviewBackend: "acp:grok",
+          model: "grok-4",
+          reasoningEffort: "high",
+        })
+      );
+    });
+    // The thread's own settings belong to a different catalog and must not
+    // ride along with an overridden reviewer.
+    const request = startReview.mock.calls.at(-1)?.[0];
+    expect(request).toBeDefined();
+    expect(request).not.toHaveProperty("serviceTier");
+    expect(request).not.toHaveProperty("fastMode");
   });
 
   it("keeps a queued review when review/start rejects", async () => {

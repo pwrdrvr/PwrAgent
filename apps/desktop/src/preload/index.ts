@@ -172,8 +172,11 @@ import type {
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
   RenderComposerPdfPreviewResponse,
+  ListModelSettingsRecentsRequest,
+  ListModelSettingsRecentsResponse,
   ListRecentFileReferencesRequest,
   ListRecentFileReferencesResponse,
+  RecordModelSettingsRecentRequest,
   RecordRecentFileReferencesRequest,
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
@@ -532,12 +535,14 @@ import {
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
+  NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
   NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
   NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL,
   NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
+  NAVIGATION_RECORD_MODEL_SETTINGS_RECENT_CHANNEL,
   NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
@@ -1668,6 +1673,20 @@ const desktopApi = Object.freeze({
   ): Promise<void> =>
     await ipcRenderer.invoke(
       NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
+      request,
+    ),
+  listModelSettingsRecents: async (
+    request: ListModelSettingsRecentsRequest,
+  ): Promise<ListModelSettingsRecentsResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
+      request,
+    ),
+  recordModelSettingsRecent: async (
+    request: RecordModelSettingsRecentRequest,
+  ): Promise<void> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_RECORD_MODEL_SETTINGS_RECENT_CHANNEL,
       request,
     ),
   /**

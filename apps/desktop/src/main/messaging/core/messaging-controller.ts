@@ -22,6 +22,7 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadReviewEntry,
   AppServerReviewTarget,
+  ModelSettingsRecent,
   AutomationMessagingConversationSnapshot,
   AutomationRunSourceMetadata,
   AutomationRunOutputDecision,
@@ -2560,6 +2561,7 @@ export class MessagingController {
       navigation,
       phase: "summary",
       target,
+      reviewerBackends: await this.listReviewerBackends(),
       ...(selectedWorkspace
         ? {
             cwd: selectedWorkspace.cwd,
@@ -2583,6 +2585,8 @@ export class MessagingController {
     repositoryPath?: string;
     workspacePageIndex?: number;
     target?: AppServerReviewTarget;
+    reviewer?: ModelSettingsRecent;
+    reviewerBackends?: MessagingReviewIntent["review"]["reviewerBackends"];
     id?: string;
     createdAt?: number;
     targetSurface?: MessagingSurfaceRef;
@@ -2619,6 +2623,39 @@ export class MessagingController {
         type: "baseBranch" as const,
         branch: defaultBaseBranch,
       };
+    const reviewerBackends = params.reviewerBackends ?? [];
+    // No advertised review runners means this instance predates reviewer
+    // overrides; the Reviewer button stays off rather than offering a choice
+    // that cannot land.
+    const reviewerOverridesSupported = reviewerBackends.length > 0;
+    const reviewerBackendKind = params.reviewer?.backend ?? params.binding.backend;
+    const reviewerEntry = reviewerBackends.find(
+      (entry) => entry.backend === reviewerBackendKind,
+    );
+    // The inherited case must report the same settings the non-override
+    // submit path resolves, which falls back to the binding's own preferences
+    // when the thread carries none — reading `thread` alone would show
+    // "provider default" and then run with the binding's model.
+    const inheritedSettings = params.reviewer
+      ? undefined
+      : turnSettingsForBinding(params.binding, params.navigation);
+    // An un-picked model/effort stays blank rather than guessing the
+    // provider's first entry — the review resolves those against the picked
+    // provider's own defaults.
+    const reviewerModelId = params.reviewer?.model ?? inheritedSettings?.model;
+    const reviewerEffort =
+      params.reviewer?.reasoningEffort ?? inheritedSettings?.reasoningEffort;
+    const reviewerModelEntry = reviewerEntry?.models.find(
+      (model) => model.id === reviewerModelId,
+    );
+    const reviewerSummaryLabel = [
+      reviewerEntry?.label ?? reviewerBackendKind,
+      reviewerModelId ?? "provider default",
+      reviewerEffort,
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join(" · ");
+
     let title = "Review";
     let body: string;
     let allowFreeform = false;
@@ -2658,6 +2695,11 @@ export class MessagingController {
       } else if (target.type === "custom") {
         summaryLines.push(`Instructions: ${target.instructions}`);
       }
+      if (reviewerOverridesSupported) {
+        summaryLines.push(
+          `Reviewer: ${reviewerSummaryLabel}${params.reviewer ? "" : " (thread default)"}`,
+        );
+      }
       body = summaryLines.join("\n");
       actions = [
         ...(linkedWorkspaces.length > 1
@@ -2696,6 +2738,14 @@ export class MessagingController {
                   priority: 12,
                 }]
               : []),
+        ...(reviewerOverridesSupported
+          ? [{
+              id: "review:summary:reviewer",
+              label: "Reviewer",
+              fallbackText: "reviewer",
+              priority: 13,
+            }]
+          : []),
         {
           id: "review:summary:start",
           label: "Start Review",
@@ -2830,6 +2880,84 @@ export class MessagingController {
       body = "Reply with the review instructions.";
       allowFreeform = true;
       actions = [backAction, cancelAction];
+    } else if (params.phase === "reviewer_provider") {
+      title = "Review provider";
+      body = [
+        "Choose the provider that runs this review.",
+        "It applies to this review only — the thread keeps its own settings.",
+      ].join("\n");
+      actions = [
+        ...reviewerBackends.map((entry, index) => ({
+          id: `review:reviewer:provider:${index}`,
+          label: entry.label,
+          fallbackText: entry.backend,
+          priority: 10 + index,
+          value: { backend: entry.backend },
+        })),
+        // Priority sits with Back/Cancel, not with the options: truncation
+        // drops the highest priority number first, and the escape hatch is
+        // the last thing that should go when a profile caps actions.
+        ...(params.reviewer
+          ? [{
+              id: "review:reviewer:inherit",
+              label: "Use Thread Default",
+              fallbackText: "use thread default",
+              priority: 3,
+            }]
+          : []),
+        backAction,
+        cancelAction,
+      ];
+    } else if (params.phase === "reviewer_model") {
+      const models = reviewerEntry?.models ?? [];
+      const maxActions = this.capabilityProfile.actions?.maxActions;
+      if (maxActions !== undefined && models.length + 3 > maxActions) {
+        this.logger.debug?.("messaging reviewer model list truncated", {
+          backend: reviewerBackendKind,
+          maxActions,
+          modelCount: models.length,
+        });
+      }
+      title = "Review model";
+      body = `Choose the model ${reviewerEntry?.label ?? reviewerBackendKind} should review with.`;
+      actions = [
+        ...models.map((model, index) => ({
+          id: `review:reviewer:model:${index}`,
+          label: model.label,
+          fallbackText: model.id,
+          priority: 10 + index,
+          value: { model: model.id },
+        })),
+        {
+          id: "review:reviewer:model:default",
+          label: "Provider Default",
+          fallbackText: "provider default",
+          priority: 3,
+        },
+        backAction,
+        cancelAction,
+      ];
+    } else if (params.phase === "reviewer_effort") {
+      const efforts = reviewerModelEntry?.reasoningEfforts ?? [];
+      title = "Review reasoning";
+      body = `Choose the reasoning effort for ${reviewerModelEntry?.label ?? reviewerModelId ?? "this model"}.`;
+      actions = [
+        ...efforts.map((effort, index) => ({
+          id: `review:reviewer:effort:${index}`,
+          label: effort,
+          fallbackText: effort,
+          priority: 10 + index,
+          value: { reasoningEffort: effort },
+        })),
+        {
+          id: "review:reviewer:effort:default",
+          label: "Provider Default",
+          fallbackText: "provider default",
+          priority: 3,
+        },
+        backAction,
+        cancelAction,
+      ];
     } else {
       title = "Review submitted";
       body = "The review request was submitted.";
@@ -2852,6 +2980,8 @@ export class MessagingController {
         backend: params.binding.backend,
         threadId: params.binding.threadId,
         phase: params.phase,
+        ...(params.reviewer ? { reviewer: params.reviewer } : {}),
+        ...(reviewerBackends.length > 0 ? { reviewerBackends } : {}),
         ...(params.cwd ? { cwd: params.cwd } : {}),
         ...(params.repositoryPath
           ? { repositoryPath: params.repositoryPath }
@@ -4499,6 +4629,10 @@ export class MessagingController {
         await this.updateReviewPendingIntent(pendingIntent, event, {
           phase: "custom",
         });
+      } else if (action.id === "review:summary:reviewer") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "reviewer_provider",
+        });
       } else if (action.id === "review:summary:start") {
         if (
           pendingIntent.intent.review.workspaceSelectionRequired
@@ -4523,6 +4657,76 @@ export class MessagingController {
           target,
         );
       }
+      return;
+    }
+
+    if (
+      phase === "reviewer_provider"
+      || phase === "reviewer_model"
+      || phase === "reviewer_effort"
+    ) {
+      const current = pendingIntent.intent.review.reviewer;
+      if (action.id === "review:reviewer:inherit") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "summary",
+          clearReviewer: true,
+        });
+        return;
+      }
+      if (phase === "reviewer_provider") {
+        const backend = typeof value?.backend === "string"
+          ? (value.backend as AppServerBackendKind)
+          : undefined;
+        if (!backend) {
+          return;
+        }
+        // Switching provider drops the model and effort: they belong to the
+        // previous provider's catalog and cannot carry across.
+        const entry = pendingIntent.intent.review.reviewerBackends?.find(
+          (candidate) => candidate.backend === backend,
+        );
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: entry?.models.length ? "reviewer_model" : "summary",
+          reviewer: { backend },
+        });
+        return;
+      }
+      if (!current) {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "reviewer_provider",
+        });
+        return;
+      }
+      if (phase === "reviewer_model") {
+        const model = typeof value?.model === "string" ? value.model : undefined;
+        const next: ModelSettingsRecent = {
+          backend: current.backend,
+          ...(model ? { model } : {}),
+        };
+        const entry = pendingIntent.intent.review.reviewerBackends?.find(
+          (candidate) => candidate.backend === current.backend,
+        );
+        const efforts = model
+          ? entry?.models.find((candidate) => candidate.id === model)
+              ?.reasoningEfforts ?? []
+          : [];
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: efforts.length > 0 ? "reviewer_effort" : "summary",
+          reviewer: next,
+        });
+        return;
+      }
+      const reasoningEffort =
+        typeof value?.reasoningEffort === "string"
+          ? value.reasoningEffort
+          : undefined;
+      await this.updateReviewPendingIntent(pendingIntent, event, {
+        phase: "summary",
+        reviewer: {
+          ...current,
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        },
+      });
       return;
     }
 
@@ -4619,6 +4823,8 @@ export class MessagingController {
       repositoryPath?: string;
       workspacePageIndex?: number;
       target?: AppServerReviewTarget;
+      reviewer?: ModelSettingsRecent;
+      clearReviewer?: boolean;
       forceBaseBranch?: boolean;
       resetRepositoryTarget?: boolean;
       resetBaseBranch?: boolean;
@@ -4680,6 +4886,14 @@ export class MessagingController {
       repositoryPath,
       workspacePageIndex: review.workspacePageIndex,
       target,
+      ...(review.clearReviewer
+        ? {}
+        : {
+            reviewer: review.reviewer ?? pendingIntent.intent.review.reviewer,
+          }),
+      reviewerBackends:
+        pendingIntent.intent.review.reviewerBackends
+        ?? await this.listReviewerBackends(),
       id: pendingIntent.intent.id,
       createdAt: pendingIntent.intent.createdAt,
       targetSurface,
@@ -4735,11 +4949,21 @@ export class MessagingController {
       return;
     }
 
+    const reviewer = pendingIntent.intent.review.reviewer;
     await this.submitMessagingReview({
       binding,
       event,
       target,
       cwd: pendingIntent.intent.review.cwd,
+      ...(reviewer
+        ? {
+            reviewBackend: reviewer.backend,
+            ...(reviewer.model ? { model: reviewer.model } : {}),
+            ...(reviewer.reasoningEffort
+              ? { reasoningEffort: reviewer.reasoningEffort }
+              : {}),
+          }
+        : {}),
       targetSurface: pendingIntent.surface,
       pendingIntentId: pendingIntent.id,
     });
@@ -4750,6 +4974,10 @@ export class MessagingController {
     event: MessagingInboundEvent;
     target: AppServerReviewTarget;
     cwd?: string;
+    /** Reviewer override typed on the command; absent means inherit. */
+    reviewBackend?: AppServerBackendKind;
+    model?: string;
+    reasoningEffort?: string;
     targetSurface?: MessagingSurfaceRef;
     pendingIntentId?: string;
   }): Promise<void> {
@@ -4772,12 +5000,28 @@ export class MessagingController {
         target: params.target,
         delivery: "inline",
         ...(params.cwd ? { cwd: params.cwd } : {}),
-        ...(settings.model ? { model: settings.model } : {}),
-        ...(settings.reasoningEffort
-          ? { reasoningEffort: settings.reasoningEffort }
-          : {}),
-        ...(settings.serviceTier ? { serviceTier: settings.serviceTier } : {}),
-        ...(settings.fastMode !== undefined ? { fastMode: settings.fastMode } : {}),
+        // An explicit reviewer replaces the binding's inherited settings
+        // wholesale — its model belongs to a different catalog.
+        ...(params.reviewBackend
+          ? {
+              reviewBackend: params.reviewBackend,
+              ...(params.model ? { model: params.model } : {}),
+              ...(params.reasoningEffort
+                ? { reasoningEffort: params.reasoningEffort }
+                : {}),
+            }
+          : {
+              ...(settings.model ? { model: settings.model } : {}),
+              ...(settings.reasoningEffort
+                ? { reasoningEffort: settings.reasoningEffort }
+                : {}),
+              ...(settings.serviceTier
+                ? { serviceTier: settings.serviceTier }
+                : {}),
+              ...(settings.fastMode !== undefined
+                ? { fastMode: settings.fastMode }
+                : {}),
+            }),
       });
       if (params.pendingIntentId) {
         await this.options.store.deletePendingIntent(params.pendingIntentId);
@@ -12999,6 +13243,42 @@ export class MessagingController {
       federationTarget,
     });
     return response?.backends.find((candidate) => candidate.kind === backend);
+  }
+
+  /**
+   * Providers on this instance that can run a review, with the models and
+   * reasoning levels each offers. Drives the configurator's Provider / Model /
+   * Effort buttons. Returns an empty list — which hides those buttons — when
+   * nothing advertises `reviewRunner`, so an instance that predates reviewer
+   * overrides never offers a choice it cannot honor.
+   */
+  private async listReviewerBackends(): Promise<
+    NonNullable<MessagingReviewIntent["review"]["reviewerBackends"]>
+  > {
+    try {
+      const response = await this.options.backend.listBackends?.({
+        includeUnavailable: false,
+      });
+      return (response?.backends ?? [])
+        .filter((candidate) => candidate.capabilities.reviewRunner === true)
+        .map((candidate) => ({
+          backend: candidate.kind,
+          label: candidate.label,
+          models: (candidate.launchpadOptions?.models ?? []).map((model) => ({
+            id: model.id,
+            label: model.label ?? model.id,
+            reasoningEfforts:
+              model.reasoningEfforts
+              ?? candidate.launchpadOptions?.reasoningEfforts
+              ?? [],
+          })),
+        }));
+    } catch (error) {
+      this.logger.debug?.("messaging reviewer backend lookup failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
   }
 
   private async reviewSupportedForBinding(

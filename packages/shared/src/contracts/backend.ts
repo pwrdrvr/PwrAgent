@@ -147,6 +147,16 @@ export type BackendCapabilities = {
   readThread: boolean;
   startTurn: boolean;
   startReview?: boolean;
+  /**
+   * This backend can run a PwrAgent-managed review on behalf of a thread that
+   * lives on a different provider, so it can be offered as a reviewer
+   * override. Doubles as the feature probe for the override itself: an
+   * instance that predates reviewer overrides never sets it, so a viewer
+   * federated to an older owner sees no eligible reviewers and keeps the
+   * picker hidden rather than sending a `reviewBackend` the owner would
+   * silently ignore.
+   */
+  reviewRunner?: boolean;
   interruptTurn: boolean;
   steerTurn: boolean;
   transcriptPagination: boolean;

@@ -4,6 +4,7 @@ import type {
   BackendAcpSessionRuntimeState,
   CodexEnvironmentExecutionTarget,
   LaunchpadWorkMode,
+  ModelSettingsRecent,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadSummary,
@@ -912,6 +913,9 @@ export type MessagingReviewPhase =
   | "base_branch"
   | "commit"
   | "custom"
+  | "reviewer_provider"
+  | "reviewer_model"
+  | "reviewer_effort"
   | "submitted";
 
 export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
@@ -930,6 +934,23 @@ export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
     workspacePageIndex?: number;
     targetType?: AppServerReviewTarget["type"];
     target?: AppServerReviewTarget;
+    /**
+     * Reviewer override picked from the configurator. Absent means the review
+     * inherits the thread's own provider/model/reasoning — the summary shows
+     * the inherited values either way, so this field is what distinguishes
+     * "chosen" from "shown".
+     */
+    reviewer?: ModelSettingsRecent;
+    /**
+     * Providers on the owning instance that can run a review. Empty when the
+     * instance predates reviewer overrides, which is what keeps the Provider
+     * button off the summary rather than offering a choice that cannot land.
+     */
+    reviewerBackends?: {
+      backend: AppServerBackendKind;
+      label: string;
+      models: { id: string; label: string; reasoningEfforts: string[] }[];
+    }[];
   };
 };
 

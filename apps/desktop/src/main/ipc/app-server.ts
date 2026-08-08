@@ -57,8 +57,11 @@ import {
   type GetGhStatusRequest,
   type GhStatus,
   type LinkedDirectorySummary,
+  type ListModelSettingsRecentsRequest,
+  type ListModelSettingsRecentsResponse,
   type ListRecentFileReferencesRequest,
   type ListRecentFileReferencesResponse,
+  type RecordModelSettingsRecentRequest,
   type PickDirectoryFromDiskResponse,
   type PickFileFromDiskResponse,
   type PickReferenceFromDiskResponse,
@@ -183,6 +186,10 @@ import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-env
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { getAppStateDb } from "../state/app-state";
 import {
+  listModelSettingsRecents,
+  recordModelSettingsRecent,
+} from "../state/model-settings-recents-store";
+import {
   listRecentFileReferencePaths,
   recordRecentFileReferencePaths,
 } from "../state/recent-file-references-store";
@@ -238,12 +245,14 @@ import {
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
   NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
   NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL,
   NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
+  NAVIGATION_RECORD_MODEL_SETTINGS_RECENT_CHANNEL,
   NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -6617,6 +6626,39 @@ class DesktopAppServerService {
     recordRecentFileReferencePaths(getAppStateDb(), request.paths ?? []);
   }
 
+  async listModelSettingsRecents(
+    request: ListModelSettingsRecentsRequest,
+  ): Promise<ListModelSettingsRecentsResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .listModelSettingsRecents(ownerRequest);
+    }
+    return {
+      recents: listModelSettingsRecents(getAppStateDb(), request.scope),
+    };
+  }
+
+  async recordModelSettingsRecent(
+    request: RecordModelSettingsRecentRequest,
+  ): Promise<void> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .recordModelSettingsRecent(ownerRequest);
+      return;
+    }
+    recordModelSettingsRecent(getAppStateDb(), request.scope, request.recent);
+  }
+
   async registerDirectoryFromDisk(
     request: RegisterDirectoryFromDiskRequest,
   ): Promise<RegisterDirectoryFromDiskResponse> {
@@ -7883,6 +7925,48 @@ export function registerAppServerIpcHandlers(): void {
         );
       }
       await appServerService.recordRecentFileReferences(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
+    async (
+      event,
+      request: ListModelSettingsRecentsRequest,
+    ): Promise<ListModelSettingsRecentsResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Remote model settings recents must be loaded from the owning instance.",
+        );
+      }
+      return await appServerService.listModelSettingsRecents(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_RECORD_MODEL_SETTINGS_RECENT_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_RECORD_MODEL_SETTINGS_RECENT_CHANNEL,
+    async (
+      event,
+      request: RecordModelSettingsRecentRequest,
+    ): Promise<void> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Remote model settings recents must be recorded on the owning instance.",
+        );
+      }
+      await appServerService.recordModelSettingsRecent(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);

@@ -264,6 +264,22 @@ function projectionFromAction(action: ScheduledThreadAction) {
             cwd: action.review.cwd,
             displayText: action.displayText,
             target: action.review.target,
+            // A scheduled review can also be released client-side, so the
+            // picked reviewer has to survive the round trip through this
+            // projection or that release runs on the thread's own provider.
+            ...(action.review.reviewBackend
+              ? {
+                  reviewer: {
+                    backend: action.review.reviewBackend,
+                    ...(action.review.model
+                      ? { model: action.review.model }
+                      : {}),
+                    ...(action.review.reasoningEffort
+                      ? { reasoningEffort: action.review.reasoningEffort }
+                      : {}),
+                  },
+                }
+              : {}),
           },
         }
       : {}),

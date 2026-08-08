@@ -329,6 +329,15 @@ export const NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL =
   "navigation:list-recent-file-references";
 export const NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL =
   "navigation:record-recent-file-references";
+/**
+ * Recently picked provider/model/reasoning combinations, scoped per picker —
+ * `list` reads the persisted most-recent-first list; `record` is a
+ * fire-and-forget append whenever a picked combination is actually run.
+ */
+export const NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL =
+  "navigation:list-model-settings-recents";
+export const NAVIGATION_RECORD_MODEL_SETTINGS_RECENT_CHANNEL =
+  "navigation:record-model-settings-recent";
 export const COMPOSER_DRAFT_SAVE_CHANNEL = "composer-draft:save";
 export const COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL =
   "composer-draft:record-history";

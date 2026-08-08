@@ -40,6 +40,8 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListModelSettingsRecentsRequest,
+  ListModelSettingsRecentsResponse,
   ListRecentFileReferencesResponse,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
@@ -74,6 +76,7 @@ import type {
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
+  RecordModelSettingsRecentRequest,
   RecordRecentFileReferencesRequest,
   ResolveThreadRequest,
   ResolveThreadResponse,
@@ -274,6 +277,8 @@ export const FEDERATION_BACKEND_METHODS = {
   ensureDirectoryLaunchpad: "backend.ensureDirectoryLaunchpad",
   listRecentFileReferences: "backend.listRecentFileReferences",
   recordRecentFileReferences: "backend.recordRecentFileReferences",
+  listModelSettingsRecents: "backend.listModelSettingsRecents",
+  recordModelSettingsRecent: "backend.recordModelSettingsRecent",
   attachDirectoryToThread: "backend.attachDirectoryToThread",
   listWorktreeUnpublishedCommits: "backend.listWorktreeUnpublishedCommits",
   getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
@@ -362,6 +367,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad]: "launchpad_metadata",
   [FEDERATION_BACKEND_METHODS.listRecentFileReferences]: "remote_window",
   [FEDERATION_BACKEND_METHODS.recordRecentFileReferences]: "remote_window",
+  // Reviewer/composer model-settings history is read-only preference data at
+  // the same sensitivity tier as the recent-file list it sits beside.
+  [FEDERATION_BACKEND_METHODS.listModelSettingsRecents]: "remote_window",
+  [FEDERATION_BACKEND_METHODS.recordModelSettingsRecent]: "remote_window",
   [FEDERATION_BACKEND_METHODS.attachDirectoryToThread]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
@@ -522,6 +531,12 @@ export type FederationBackendOperations = {
   listRecentFileReferences(): Promise<ListRecentFileReferencesResponse>;
   recordRecentFileReferences(
     request: RecordRecentFileReferencesRequest,
+  ): Promise<void>;
+  listModelSettingsRecents(
+    request: ListModelSettingsRecentsRequest,
+  ): Promise<ListModelSettingsRecentsResponse>;
+  recordModelSettingsRecent(
+    request: RecordModelSettingsRecentRequest,
   ): Promise<void>;
   attachDirectoryToThread(
     request: AttachDirectoryToThreadRequest,
@@ -971,6 +986,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.recordRecentFileReferences(
         envelope.params as RecordRecentFileReferencesRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.listModelSettingsRecents,
+    async (envelope) =>
+      await params.backend.listModelSettingsRecents(
+        envelope.params as ListModelSettingsRecentsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.recordModelSettingsRecent,
+    async (envelope) =>
+      await params.backend.recordModelSettingsRecent(
+        envelope.params as RecordModelSettingsRecentRequest,
       ),
   );
   params.router.registerHandler(
@@ -1500,6 +1529,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<void> {
     await this.rpc.request<void>({
       method: FEDERATION_BACKEND_METHODS.recordRecentFileReferences,
+      params: request,
+    });
+  }
+
+  async listModelSettingsRecents(
+    request: ListModelSettingsRecentsRequest,
+  ): Promise<ListModelSettingsRecentsResponse> {
+    return await this.rpc.request<ListModelSettingsRecentsResponse>({
+      method: FEDERATION_BACKEND_METHODS.listModelSettingsRecents,
+      params: request,
+    });
+  }
+
+  async recordModelSettingsRecent(
+    request: RecordModelSettingsRecentRequest,
+  ): Promise<void> {
+    await this.rpc.request<void>({
+      method: FEDERATION_BACKEND_METHODS.recordModelSettingsRecent,
       params: request,
     });
   }

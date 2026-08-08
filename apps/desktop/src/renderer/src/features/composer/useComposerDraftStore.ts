@@ -8,6 +8,7 @@ import type {
   ListComposerDraftRecoveryCandidatesRequest,
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
+  ModelSettingsRecent,
 } from "@pwragent/shared";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
 
@@ -42,6 +43,13 @@ export type ComposerQueuedTurnSnapshot = {
     cwd?: string;
     displayText: string;
     target: AppServerReviewTarget;
+    /**
+     * Reviewer picked when the review was queued. Carried here because a
+     * scheduled review is projected back into a queued turn and can be
+     * released client-side; without it that release would silently fall back
+     * to the thread's own provider.
+     */
+    reviewer?: ModelSettingsRecent;
   };
 };
 

@@ -517,6 +517,217 @@ describe("MessagingController", () => {
     });
   });
 
+  it("picks a reviewer through the configurator buttons", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            capabilities: {
+              ...buildBackendSummary().capabilities,
+              reviewRunner: true,
+            },
+            launchpadOptions: {
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  label: "GPT-5.6 Sol",
+                  reasoningEfforts: ["low", "high"],
+                },
+              ],
+            },
+          }),
+          {
+            ...buildKimiRuntimeBackendSummary(),
+            capabilities: {
+              ...buildKimiRuntimeBackendSummary().capabilities,
+              reviewRunner: true,
+            },
+            launchpadOptions: {
+              models: [
+                {
+                  id: "kimi-k2-thinking",
+                  label: "Kimi K2 Thinking",
+                  reasoningEfforts: ["medium", "high"],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    // The summary shows what the review would inherit, and offers to change it.
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("(thread default)"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "review:summary:reviewer" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:reviewer" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      review: { phase: "reviewer_provider" },
+      actions: expect.arrayContaining([
+        expect.objectContaining({ label: "Kimi", value: { backend: "acp:kimi" } }),
+      ]),
+    });
+
+    // Provider -> model -> effort, then back to the summary.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:reviewer:provider:1" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      review: { phase: "reviewer_model", reviewer: { backend: "acp:kimi" } },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:reviewer:model:0" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      review: {
+        phase: "reviewer_effort",
+        reviewer: { backend: "acp:kimi", model: "kimi-k2-thinking" },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:reviewer:effort:1" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      review: { phase: "summary" },
+      body: expect.stringContaining("Kimi · kimi-k2-thinking · high"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:start" }),
+    );
+    expect(harness.submitReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        reviewBackend: "acp:kimi",
+        model: "kimi-k2-thinking",
+        reasoningEffort: "high",
+      }),
+    );
+  });
+
+  it("restores the thread default reviewer from the configurator", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            capabilities: {
+              ...buildBackendSummary().capabilities,
+              reviewRunner: true,
+            },
+          }),
+          {
+            ...buildKimiRuntimeBackendSummary(),
+            capabilities: {
+              ...buildKimiRuntimeBackendSummary().capabilities,
+              reviewRunner: true,
+            },
+          },
+        ],
+      }),
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:reviewer" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:reviewer:provider:1" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:reviewer:model:default" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      review: { phase: "summary", reviewer: { backend: "acp:kimi" } },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:reviewer" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:reviewer:inherit" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("(thread default)"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:start" }),
+    );
+    const request = harness.submitReview.mock.calls.at(-1)?.[0];
+    expect(request).toBeDefined();
+    expect(request).not.toHaveProperty("reviewBackend");
+  });
+
+  it("reports the settings the review would actually inherit", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      model: "gpt-5.2",
+      reasoningEffort: "xhigh",
+    };
+    const harness = await createHarness({
+      navigation,
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            capabilities: {
+              ...buildBackendSummary().capabilities,
+              reviewRunner: true,
+            },
+          }),
+        ],
+      }),
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    // Read through the same resolver the non-override submit path uses, so
+    // "(thread default)" cannot claim one thing and run another.
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("gpt-5.2 · xhigh (thread default)"),
+    });
+  });
+
+  it("hides the reviewer button when nothing advertises reviewRunner", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({ kind: "review" });
+    expect(harness.delivered.at(-1)).not.toMatchObject({
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "review:summary:reviewer" }),
+      ]),
+    });
+  });
+
   it("submits reviews for Kimi when managed review is advertised", async () => {
     const harness = await createHarness({
       listBackends: async (): Promise<ListBackendsResponse> => ({

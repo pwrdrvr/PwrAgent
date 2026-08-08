@@ -339,6 +339,60 @@ describe("scheduled thread action projections", () => {
     ]);
   });
 
+  it("carries a picked reviewer onto the projected queued review", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = "thread:codex:thread-1";
+
+    applyScheduledActionProjection(store, scheduledAction({
+      kind: "review",
+      displayText: "Review changes against main",
+      turn: undefined,
+      review: {
+        target: { type: "baseBranch", branch: "main" },
+        draftText: "/review main",
+        reviewBackend: "acp:grok",
+        model: "grok-4",
+        reasoningEffort: "high",
+      },
+    }));
+
+    // Without this the client-side release path re-issues the review on the
+    // thread's own provider.
+    expect(store.getQueuedTurns(scopeKey)).toEqual([
+      expect.objectContaining({
+        reviewCommand: expect.objectContaining({
+          reviewer: {
+            backend: "acp:grok",
+            model: "grok-4",
+            reasoningEffort: "high",
+          },
+        }),
+      }),
+    ]);
+  });
+
+  it("omits the reviewer when the queued review inherits thread settings", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = "thread:codex:thread-1";
+
+    applyScheduledActionProjection(store, scheduledAction({
+      kind: "review",
+      displayText: "Review changes against main",
+      turn: undefined,
+      review: {
+        target: { type: "baseBranch", branch: "main" },
+        draftText: "/review main",
+        model: "gpt-5.6-sol",
+      },
+    }));
+
+    expect(
+      store.getQueuedTurns(scopeKey)[0]?.reviewCommand,
+    ).not.toHaveProperty("reviewer");
+  });
+
   it("deduplicates navigation queue mirrors by backend queue entry id", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;

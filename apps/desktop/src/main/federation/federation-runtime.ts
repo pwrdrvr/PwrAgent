@@ -38,6 +38,8 @@ import type {
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
   MaterializeDirectoryLaunchpadResponse,
+  ListModelSettingsRecentsRequest,
+  ListModelSettingsRecentsResponse,
   ListRecentFileReferencesResponse,
   MarkThreadSeenResponse,
   MessagingPlatformStatus,
@@ -131,6 +133,7 @@ import {
   type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
   type RefreshDirectoryGitStatusesRequest,
+  type RecordModelSettingsRecentRequest,
   type RecordRecentFileReferencesRequest,
   type RetainThreadBranchDriftRequest,
   type RenameThreadRequest,
@@ -179,6 +182,10 @@ import {
   getExistingRuntimeFederationLeaseCoordinator,
   getRuntimeFederationLeaseCoordinator,
 } from "../runtime-federation-lease";
+import {
+  listModelSettingsRecents,
+  recordModelSettingsRecent,
+} from "../state/model-settings-recents-store";
 import {
   listRecentFileReferencePaths,
   recordRecentFileReferencePaths,
@@ -4290,6 +4297,18 @@ function localBackendOperations(): FederationBackendOperations {
       request: RecordRecentFileReferencesRequest,
     ): Promise<void> {
       recordRecentFileReferencePaths(getAppStateDb(), request.paths ?? []);
+    },
+    async listModelSettingsRecents(
+      request: ListModelSettingsRecentsRequest,
+    ): Promise<ListModelSettingsRecentsResponse> {
+      return {
+        recents: listModelSettingsRecents(getAppStateDb(), request.scope),
+      };
+    },
+    async recordModelSettingsRecent(
+      request: RecordModelSettingsRecentRequest,
+    ): Promise<void> {
+      recordModelSettingsRecent(getAppStateDb(), request.scope, request.recent);
     },
     async attachDirectoryToThread(
       request: AttachDirectoryToThreadRequest,
