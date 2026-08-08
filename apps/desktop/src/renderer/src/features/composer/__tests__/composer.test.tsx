@@ -17634,6 +17634,62 @@ describe("Composer", () => {
     expect(textarea).toHaveValue("$ce:pl");
   });
 
+  it("dismisses directory autocomplete with Escape after focus leaves the composer", () => {
+    const directory: NavigationDirectorySummary = {
+      key: "directory:/repo/search",
+      kind: "directory",
+      label: "search",
+      path: "/repo/search",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+
+    render(
+      <>
+        <button type="button">Transcript blank area</button>
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn: async () => ({
+              backend: "codex",
+              threadId: "thread-1",
+              turnId: "turn-1",
+            }),
+          }}
+          directories={[directory]}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Search thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      </>
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Check @sea" } });
+    expect(
+      screen.getByRole("listbox", { name: "Directories" })
+    ).toBeInTheDocument();
+
+    const transcript = screen.getByRole("button", {
+      name: "Transcript blank area",
+    });
+    transcript.focus();
+    fireEvent.keyDown(transcript, { key: "Escape", code: "Escape" });
+
+    expect(
+      screen.queryByRole("listbox", { name: "Directories" })
+    ).not.toBeInTheDocument();
+    expect(textarea).toHaveValue("Check @sea");
+    expect(transcript).toHaveFocus();
+  });
+
   it("shows a stop button for an active turn and interrupts it", async () => {
     let agentEventHandler:
       | ((event: {
