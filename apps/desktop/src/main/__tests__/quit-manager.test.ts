@@ -213,12 +213,11 @@ describe("createQuitManager", () => {
     expect(installUpdateAndQuit).toHaveBeenCalledTimes(1);
   });
 
-  // A second Cmd+Q while the prompt is open collapses onto the same pending
-  // promise, which is fine only if it still reaches the user. The prompt's
-  // countdown is cancelled for good by any deliberate keystroke — including the
-  // one that produced this second request — so nothing else will settle the
-  // quit, and a dialog sitting behind the main window reads as an app that
-  // refuses to quit.
+  // A repeat quit request while the prompt is open collapses onto the same
+  // pending promise, which is fine only if it still reaches the user: any
+  // deliberate interaction cancels the prompt's countdown for good, so from
+  // then on nothing but the dialog settles the quit — and a dialog sitting
+  // behind the main window reads as an app that refuses to quit.
   it("raises the open confirmation when a quit is requested again", async () => {
     const { createQuitManager } = await import("../quit-manager");
     const performQuit = vi.fn();
@@ -261,6 +260,44 @@ describe("createQuitManager", () => {
     await expect(first).resolves.toBe(true);
     await expect(second).resolves.toBe(true);
     expect(performQuit).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a repeat request with nothing to raise", async () => {
+    const { createQuitManager } = await import("../quit-manager");
+    const info = vi.fn();
+    let resolveConfirm!: (value: "manual-cancel") => void;
+    const confirm = vi.fn(
+      async () =>
+        await new Promise<"manual-cancel">((resolve) => {
+          resolveConfirm = resolve;
+        }),
+    );
+    const manager = createQuitManager({
+      confirm,
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () => ({
+        count: 1,
+        terminalSessionCount: 1,
+        terminalThreadKeys: ["codex:thread-terminal"],
+        threadIds: [],
+        actionRunCount: 0,
+        items: [],
+      }),
+      log: { info },
+      performQuit: vi.fn(),
+    });
+
+    const first = manager.requestQuit({ source: "menu" });
+    const second = manager.requestQuit({ source: "menu" });
+
+    expect(info).toHaveBeenCalledWith(
+      "quit requested while confirmation is open",
+      expect.objectContaining({ raisedConfirmation: false }),
+    );
+
+    resolveConfirm("manual-cancel");
+    await expect(first).resolves.toBe(false);
+    await expect(second).resolves.toBe(false);
   });
 
   it("quits without prompting when confirmation is disabled", async () => {

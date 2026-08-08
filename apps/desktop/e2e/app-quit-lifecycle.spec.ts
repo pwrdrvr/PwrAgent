@@ -29,6 +29,14 @@ const specDir = path.dirname(fileURLToPath(import.meta.url));
  */
 const QUIT_BUDGET_MS = 20_000;
 
+/**
+ * Launch, the quit budget, and `close()`'s own bounded force-kill fallback
+ * (~5s) all have to fit, or a genuinely wedged app fails on Playwright's
+ * default 30s timeout instead of on `describeOutcome` — losing the main-process
+ * log tail in the exact case this spec exists to diagnose.
+ */
+const TEST_TIMEOUT_MS = 60_000;
+
 type QuitOutcome = {
   elapsedMs: number;
   exited: boolean;
@@ -112,6 +120,8 @@ function describeOutcome(label: string, outcome: QuitOutcome): string {
 }
 
 test("exits the process when a profile-backed session is asked to quit", async () => {
+  test.setTimeout(TEST_TIMEOUT_MS);
+
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
   });
@@ -130,12 +140,16 @@ test("exits the process when a profile-backed session is asked to quit", async (
 });
 
 /**
- * The path a real operator hits, and the one every other spec seeds away:
- * quit confirmation ON, with work running. The prompt's countdown is cancelled
- * for good by any deliberate keystroke — and an impatient second Cmd+Q *is*
- * that keystroke once the dialog has focus. From there the dialog is the only
- * thing that can settle the quit, so a repeat request has to reach it rather
- * than collapse silently onto the pending prompt.
+ * The path a real operator hits, and the one every other spec seeds away: quit
+ * confirmation ON, with work running. Any deliberate interaction cancels the
+ * prompt's countdown for good, so from that point the dialog is the only thing
+ * that can settle the quit — and a repeat request has to reach it rather than
+ * collapse silently onto the pending prompt.
+ *
+ * What this asserts is the acknowledgement (the main-process log line) and that
+ * answering the prompt reaches process exit, not that the window was actually
+ * raised: real focus assertions are not dependable in a VM. The restore / show
+ * / focus calls are pinned in `quit-confirmation-dialog.test.ts` instead.
  */
 test("acknowledges a repeat quit request and exits once the prompt is answered", async () => {
   // Spawning a real login shell plus a second BrowserWindow outruns the default.
@@ -226,6 +240,8 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
 });
 
 test("exits the process when the first-run wizard is asked to quit", async () => {
+  test.setTimeout(TEST_TIMEOUT_MS);
+
   // No profile dir, no onboarding seed: the boot decision resolves to
   // `no-profile-configured` and app state comes up in bootstrap mode with the
   // wizard on screen — the state that hung a full E2E run for an hour.
