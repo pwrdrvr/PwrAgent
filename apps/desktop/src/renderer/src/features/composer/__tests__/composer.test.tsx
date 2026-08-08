@@ -11077,23 +11077,31 @@ describe("Composer", () => {
     expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
   });
 
-  it("keeps duplicate local and provider slash commands labeled by source", async () => {
+  it.each([
+    ["Codex", "codex", "OpenAI"],
+    ["Grok", "acp:grok", "Grok"],
+  ] as const)("keeps duplicate local and provider slash commands labeled by source for %s", async (
+    _providerName,
+    backend,
+    providerLabel,
+  ) => {
     render(
       <Composer
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startTurn: async () => ({
-            backend: "codex",
+            backend,
             threadId: "thread-1",
             turnId: "turn-1",
           }),
         }}
+        backends={[{ ...backendSummary(backend), label: providerLabel }]}
         disabled={false}
         providerCommands={[
           {
             name: "review",
-            description: "Run a Codex code review.",
-            backend: "codex",
+            description: `Run a ${providerLabel} code review.`,
+            backend,
             scope: "backend",
             source: "provider",
           },
@@ -11103,7 +11111,7 @@ describe("Composer", () => {
           id: "thread-1",
           title: "Review thread",
           titleSource: "explicit",
-          source: "codex",
+          source: backend,
           executionMode: "default",
           linkedDirectories: [],
           inbox: { inInbox: false },
@@ -11117,7 +11125,7 @@ describe("Composer", () => {
     const commands = screen.getByRole("listbox", { name: "Commands" });
     expect(within(commands).getAllByRole("button", { name: /\/review/i })).toHaveLength(2);
     expect(within(commands).getByText("PwrAgent")).toBeInTheDocument();
-    expect(within(commands).getByText("OpenAI")).toBeInTheDocument();
+    expect(within(commands).getByText(providerLabel)).toBeInTheDocument();
   });
 
   it("routes Codex compact slash commands to thread compaction", async () => {
