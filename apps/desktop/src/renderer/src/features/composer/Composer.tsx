@@ -101,8 +101,10 @@ import {
 } from "../../lib/directory-references";
 import { expandTildePath } from "../../lib/tildify-path";
 import {
+  collapseHashReferenceWhitespace,
   filterHashReferenceCandidates,
   findHashReferenceTrigger,
+  formatHashReferenceThreadLabel,
 } from "../../lib/hash-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
 import {
@@ -1290,20 +1292,35 @@ function reviewSubmissionKey(command: {
   }
 }
 
+/**
+ * `matchAnywhere` is for populations the picker matches by substring —
+ * thread titles, where the query rarely starts the name. Prefix-ranked
+ * populations ($ skills, / commands, @ directories) keep the leading-run
+ * highlight so the emphasis always sits on what was typed.
+ */
 function HighlightedAutocompleteLabel(props: {
   label: string;
+  matchAnywhere?: boolean;
   query: string;
 }) {
-  if (!props.query || !props.label.toLowerCase().startsWith(props.query.toLowerCase())) {
+  const matchIndex = !props.query
+    ? -1
+    : props.matchAnywhere
+      ? props.label.toLowerCase().indexOf(props.query.toLowerCase())
+      : props.label.toLowerCase().startsWith(props.query.toLowerCase())
+        ? 0
+        : -1;
+  if (matchIndex < 0) {
     return <span>{props.label}</span>;
   }
 
   return (
     <span>
+      {props.label.slice(0, matchIndex)}
       <span className="composer__autocomplete-match">
-        {props.label.slice(0, props.query.length)}
+        {props.label.slice(matchIndex, matchIndex + props.query.length)}
       </span>
-      {props.label.slice(props.query.length)}
+      {props.label.slice(matchIndex + props.query.length)}
     </span>
   );
 }
@@ -1413,7 +1430,11 @@ function resolveThreadSummaryReference(
       ? { instanceId: federationTarget.instanceId }
       : {}),
     threadId: thread.id,
-    title: thread.title,
+    // The chip, its tooltip, and the `[title](pwragent://…)` markdown the
+    // agent receives all read this. A title that is really a whole pasted
+    // prompt would otherwise become a composer-wide chip and a link label
+    // hundreds of characters long; the url still carries the identity.
+    title: formatHashReferenceThreadLabel(thread),
     titleSource: thread.titleSource,
     gitBranch: thread.gitBranch,
     linkedDirectories: thread.linkedDirectories,
@@ -4443,8 +4464,17 @@ export function Composer(props: ComposerProps) {
     if (!hashReferenceTrigger) {
       return [];
     }
+    // Referencing the thread you are writing in tells the agent nothing it
+    // does not already have, and on a bare `#` the current thread is the
+    // most recently updated one — so it would otherwise take the first row.
+    const currentThreadKey = props.thread
+      ? buildThreadIdentityKey(props.thread.source, props.thread.id)
+      : undefined;
+    const isCurrentThread = (thread: NavigationThreadSummary): boolean =>
+      currentThreadKey !== undefined
+      && buildThreadIdentityKey(thread.source, thread.id) === currentThreadKey;
     const localCandidates = filterHashReferenceCandidates(
-      props.threads ?? [],
+      (props.threads ?? []).filter((thread) => !isCurrentThread(thread)),
       hashReferenceTrigger.query,
     );
     const localThreadKeys = new Set(
@@ -4456,6 +4486,7 @@ export function Composer(props: ComposerProps) {
       federatedHashSearchResults.filter(
         (thread) =>
           thread.federation?.ref.target.scope === "remote"
+          && !isCurrentThread(thread)
           && !localThreadKeys.has(
             buildThreadIdentityKey(thread.source, thread.id),
           ),
@@ -4492,7 +4523,13 @@ export function Composer(props: ComposerProps) {
           remote: true,
         })),
     ];
-  }, [federatedHashSearchResults, hashReferenceTrigger, props.threads]);
+  }, [
+    federatedHashSearchResults,
+    hashReferenceTrigger,
+    props.thread?.id,
+    props.thread?.source,
+    props.threads,
+  ]);
   const hashReferenceCount = filteredHashReferenceOptions.length;
   const availableAutocompleteKind: AutocompleteKind | undefined = trigger && filteredSkills.length > 0
     ? "skills"
@@ -7576,7 +7613,18 @@ export function Composer(props: ComposerProps) {
     if (!inputRef.current) {
       return;
     }
-    inputRef.current.insertMentionToken(createComposerThreadToken(thread, 0));
+    inputRef.current.insertMentionToken(
+      createComposerThreadToken(
+        {
+          ...thread,
+          title: formatHashReferenceThreadLabel({
+            id: thread.threadId,
+            title: thread.title,
+          }),
+        },
+        0,
+      ),
+    );
   };
 
   const applyHashReference = (
@@ -10628,6 +10676,9 @@ export function Composer(props: ComposerProps) {
                 && !filteredHashReferenceOptions[index - 1]?.remote;
               if (option.kind === "thread") {
                 const thread = option.thread;
+                const threadLabel = formatHashReferenceThreadLabel(thread);
+                const threadTitle =
+                  collapseHashReferenceWhitespace(thread.title) || thread.id;
                 const key = thread.federation
                   ? federatedThreadIdentityKey(thread.federation.ref)
                   : buildThreadIdentityKey(thread.source, thread.id);
@@ -10650,6 +10701,9 @@ export function Composer(props: ComposerProps) {
                       aria-selected={index === activeHashReferenceIndex}
                       className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
                       tabIndex={index === activeHashReferenceIndex ? 0 : -1}
+                      // The visible label is one clamped line; hovering the
+                      // row still gives the operator the whole title.
+                      title={threadTitle}
                       type="button"
                       onMouseDown={(event) => {
                         event.preventDefault();
@@ -10675,14 +10729,13 @@ export function Composer(props: ComposerProps) {
                     >
                       <span className="composer__autocomplete-title">
                         <ThreadIcon size={13} aria-hidden="true" />
-                        <HighlightedAutocompleteLabel
-                          label={`#${thread.title.replace(/^#/, "")}`}
-                          query={
-                            hashReferenceTrigger?.query
-                              ? `#${hashReferenceTrigger.query}`
-                              : "#"
-                          }
-                        />
+                        <span className="composer__autocomplete-label">
+                          <HighlightedAutocompleteLabel
+                            label={`#${threadLabel.replace(/^#/, "")}`}
+                            matchAnywhere
+                            query={hashReferenceTrigger?.query.trim() ?? ""}
+                          />
+                        </span>
                         <span className="composer__autocomplete-source composer__autocomplete-source--pwragent">
                           Thread
                         </span>
@@ -10695,7 +10748,7 @@ export function Composer(props: ComposerProps) {
                             label={thread.federation.instanceLabel}
                           />
                         ) : null}
-                        <span>
+                        <span className="composer__autocomplete-label">
                           {describeHashReferenceThread(
                             thread,
                             hashReferenceTrigger?.query ?? "",
@@ -10727,6 +10780,7 @@ export function Composer(props: ComposerProps) {
                     aria-selected={index === activeHashReferenceIndex}
                     className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
                     tabIndex={index === activeHashReferenceIndex ? 0 : -1}
+                    title={pullRequest.title || pullRequest.url}
                     type="button"
                     onMouseDown={(event) => {
                       event.preventDefault();
@@ -10746,12 +10800,14 @@ export function Composer(props: ComposerProps) {
                   >
                     <span className="composer__autocomplete-title">
                       <PullRequestIcon size={13} aria-hidden="true" />
-                      <span>{`${pullRequest.org}/${pullRequest.repo}#${pullRequest.number}`}</span>
+                      <span className="composer__autocomplete-label">
+                        {`${pullRequest.org}/${pullRequest.repo}#${pullRequest.number}`}
+                      </span>
                       <span className="composer__autocomplete-source composer__autocomplete-source--provider">
                         Pull request
                       </span>
                     </span>
-                    <span className="composer__autocomplete-meta">
+                    <span className="composer__autocomplete-meta composer__autocomplete-meta--single-line">
                       {pullRequest.title || pullRequest.url}
                     </span>
                   </button>

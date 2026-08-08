@@ -19,6 +19,44 @@ export type HashReferenceCandidates = {
 
 const THREAD_CANDIDATE_LIMIT = 8;
 const PULL_REQUEST_CANDIDATE_LIMIT = 6;
+const THREAD_LABEL_LENGTH_LIMIT = 72;
+const THREAD_LABEL_MIN_BREAK_INDEX = 36;
+
+/** Collapse a free-text thread title onto one line. */
+export function collapseHashReferenceWhitespace(
+  value: string | undefined,
+): string {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * A thread title is free text, and nothing guarantees it is short: a
+ * provider that never derived a name leaves the operator's entire first
+ * prompt — paragraphs, newlines and all — as the title. The `#` popover
+ * renders one row per candidate inside a ~320px list, so an unbounded
+ * title wraps until it is the only row the operator can see. Collapse to
+ * a single line and cut at a word boundary; callers keep the untruncated
+ * title reachable through the row's `title` attribute.
+ */
+export function formatHashReferenceThreadLabel(
+  thread: Pick<NavigationThreadSummary, "id" | "title">,
+): string {
+  const collapsed = collapseHashReferenceWhitespace(thread.title);
+  if (!collapsed) {
+    return thread.id;
+  }
+  if (collapsed.length <= THREAD_LABEL_LENGTH_LIMIT) {
+    return collapsed;
+  }
+
+  const breakWindow = collapsed.slice(0, THREAD_LABEL_LENGTH_LIMIT + 1);
+  const wordBreak = breakWindow.lastIndexOf(" ");
+  const truncated =
+    wordBreak >= THREAD_LABEL_MIN_BREAK_INDEX
+      ? collapsed.slice(0, wordBreak)
+      : collapsed.slice(0, THREAD_LABEL_LENGTH_LIMIT);
+  return `${truncated.replace(/[\s,;:.-]+$/, "")}…`;
+}
 
 /**
  * Match a composer `#` reference from the trigger through the caret. Thread

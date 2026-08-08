@@ -20125,6 +20125,12 @@ a.transcript-message__messaging-origin:focus-visible {
   width: min(100%, 440px);
 }
 
+/* The kind badge is the row's only classifier, so it never shrinks — the
+   title label absorbs the width instead. */
+.composer__autocomplete--hash-references .composer__autocomplete-source {
+  flex: none;
+}
+
 .composer__autocomplete--directories .composer__autocomplete-option:not(.composer__autocomplete-option--action) {
   display: grid;
   grid-template-columns: minmax(0, 160px) minmax(0, 1fr);
@@ -20227,6 +20233,25 @@ a.transcript-message__messaging-origin:focus-visible {
   min-width: 0;
 }
 
+/* Kind icons keep their intrinsic size so only the label absorbs the
+   row's shrinking. */
+.composer__autocomplete-title > svg {
+  flex: none;
+}
+
+/* Free-text names (thread titles, branches, PR subjects) get one line and
+   an ellipsis. A thread whose provider never derived a short name carries
+   the operator's whole first prompt as its title, and left to wrap that
+   single row fills the popover and hides every other candidate. The full
+   text stays on the row's `title` attribute. */
+.composer__autocomplete-label {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer__autocomplete-match {
   color: var(--accent-bright);
 }
@@ -20286,6 +20311,12 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow: hidden;
 }
 
+.composer__autocomplete-meta--single-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer__autocomplete-meta--thread .chip--instance {
   flex: none;
   height: 18px;
@@ -20302,6 +20333,15 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+/* An all-remote result set still names its section, but there is no local
+   group above it to rule off — the border would just sit against the
+   popover's own top edge. */
+.composer__autocomplete-section-divider:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .composer__autocomplete-remote-loading {

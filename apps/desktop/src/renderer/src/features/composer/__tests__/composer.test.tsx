@@ -2137,6 +2137,131 @@ describe("Composer", () => {
     });
   });
 
+  it("clamps a prompt-length thread title and leaves the current thread out", async () => {
+    const promptTitle = [
+      "Apparently we don't allow cross-provider parent/child relationships?",
+      "We should… In this case we created a \"child\" thread that is stuck in",
+      "the unpinned section because it is a parent but we refuse to render it.",
+    ].join("\n");
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      updatedAt: 30,
+    };
+    const promptTitledThread: NavigationThreadSummary = {
+      id: "019fdf98-11fe-71f4-936f-bfde8d967939",
+      title: promptTitle,
+      titleSource: "derived",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      updatedAt: 20,
+    };
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: currentThread.id,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, promptTitledThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #" } });
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+
+    // Referencing the thread you are writing in is never useful, and on a
+    // bare `#` it would otherwise sort first as the most recent thread.
+    expect(
+      within(listbox).queryByRole("button", { name: /#Current thread/ }),
+    ).not.toBeInTheDocument();
+
+    const options = within(listbox).getAllByRole("button");
+    expect(options).toHaveLength(1);
+    const label = options[0]!.querySelector(".composer__autocomplete-label");
+    expect(label).toHaveTextContent(
+      "#Apparently we don't allow cross-provider parent/child relationships? We…",
+    );
+    expect(label?.textContent).not.toContain("refuse to render it");
+    // The untruncated title stays reachable on the row itself.
+    expect(options[0]).toHaveAttribute(
+      "title",
+      promptTitle.replace(/\s+/g, " "),
+    );
+
+    fireEvent.keyDown(textbox, { key: "Enter" });
+
+    await clickButton("Send");
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: currentThread.id,
+        input: [
+          {
+            type: "text",
+            text: "Ask [Apparently we don't allow cross-provider parent/child relationships? We…](pwragent://thread/019fdf98-11fe-71f4-936f-bfde8d967939?backend=codex)",
+          },
+        ],
+      });
+    });
+  });
+
+  it("highlights a thread-title match that does not start the name", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: "thread-target",
+      title: "Implement hash references",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, targetThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #hash refer" } });
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    const option = within(listbox).getByRole("button", {
+      name: /#Implement hash references/,
+    });
+    expect(option.querySelector(".composer__autocomplete-match"))
+      .toHaveTextContent("hash refer");
+  });
+
   it("offers matching threads and a precise PR link for a numeric hash query", async () => {
     const earlierPullRequest = {
       provider: "github.com" as const,

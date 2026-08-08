@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import {
+  collapseHashReferenceWhitespace,
   filterHashReferenceCandidates,
   findHashReferenceTrigger,
+  formatHashReferenceThreadLabel,
 } from "../hash-references";
 
 function pullRequest(
@@ -63,6 +65,46 @@ describe("findHashReferenceTrigger", () => {
     expect(
       findHashReferenceTrigger(continuingDraft, continuingDraft.length),
     ).toBeUndefined();
+  });
+});
+
+describe("formatHashReferenceThreadLabel", () => {
+  it("keeps a short title verbatim and falls back to the id when it is blank", () => {
+    expect(
+      formatHashReferenceThreadLabel(thread("id-1", "Bob's Best Thread 3000")),
+    ).toBe("Bob's Best Thread 3000");
+    expect(formatHashReferenceThreadLabel(thread("id-1", "   "))).toBe("id-1");
+  });
+
+  it("collapses a multi-line prompt title onto one truncated line", () => {
+    const promptTitle = [
+      "#Apparently we don't allow cross-provider parent/child relationships?",
+      "We should… In this case we created a \"child\" thread that is stuck in",
+      "the unpinned section because it is a parent but we refuse to render it.",
+    ].join("\n");
+
+    const label = formatHashReferenceThreadLabel(thread("id-1", promptTitle));
+
+    expect(label).not.toContain("\n");
+    expect(label.length).toBeLessThanOrEqual(73);
+    expect(label.endsWith("…")).toBe(true);
+    expect(label).toBe(
+      "#Apparently we don't allow cross-provider parent/child relationships? We…",
+    );
+  });
+
+  it("breaks mid-token only when no word boundary is near the limit", () => {
+    const label = formatHashReferenceThreadLabel(thread("id-1", "x".repeat(200)));
+    expect(label).toBe(`${"x".repeat(72)}…`);
+  });
+});
+
+describe("collapseHashReferenceWhitespace", () => {
+  it("folds every run of whitespace into a single space", () => {
+    expect(collapseHashReferenceWhitespace("  one\n\ntwo\tthree ")).toBe(
+      "one two three",
+    );
+    expect(collapseHashReferenceWhitespace(undefined)).toBe("");
   });
 });
 
