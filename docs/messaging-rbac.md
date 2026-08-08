@@ -269,6 +269,35 @@ inline role attach/detach, and custom-role CRUD
 The renderer speaks only `@pwragent/shared` contracts over the
 `messaging-rbac` IPC surface.
 
+## Known gap: the catalog has no federation scope
+
+Every permission here answers *what* an actor may do, never *where*. Federation
+made that distinction load-bearing after this catalog was written:
+
+- `DesktopMessagingBackendBridge.getNavigationSnapshot` merges the threads of
+  every peer advertising the `messaging_route` capability into the same list as
+  local threads, so a messaging actor's `/resume` picker already offers threads
+  living on other instances — and the picker itself discloses peer thread
+  titles before any action is taken.
+- A binding carries `federatedThread`, and its operations route to the owning
+  instance.
+- `mutate_thread` takes `instanceId` and `includeRemote`, and `includeRemote`
+  **defaults to true** — remote resolution is the default, not an opt-in.
+
+So `thread.resume` today means "resume any thread, local or on any
+`messaging_route` peer", and `thread.execution.full_access` on a remote thread
+is full access **on that peer's machine**. The only control is the peer's own
+`messaging_route` opt-in, which is all-or-nothing per peer and is the *peer's*
+decision — the local operator cannot say "Alice may drive local threads but not
+remote ones."
+
+The intended shape is one orthogonal permission (e.g. `federation.remote_control`,
+danger: high) required *in addition to* the action's own permission whenever the
+resolved target is remote — the same double-gate as `thread.execution.full_access`
+— plus filtering remote entries out of the resume picker. That keeps the additive
+union intact and makes "Local Only" the default posture for every built-in except
+Admin, instead of duplicating the role list into local and federated variants.
+
 ## Deliberately deferred (Phase 1 boundaries)
 
 - Adapters stamping admission-mode onto inbound events (Phase 1 infers

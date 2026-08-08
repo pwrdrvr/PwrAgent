@@ -737,10 +737,22 @@ export function permissionForDynamicTool(
  * Add a new mutable field to `MutateThreadToolArgs` and the
  * `THREAD_MUTATION_FIELD_PERMISSIONS` map below fails to compile until you gate
  * it, closing the "new field ships ungated" hazard.
+ *
+ * The omitted fields SELECT the thread rather than change it, so they carry no
+ * per-field permission of their own:
+ *   - `backend` / `threadId` / `dryRun` — plain envelope.
+ *   - `instanceId` / `includeRemote` — federation targeting. `includeRemote`
+ *     defaults to TRUE, so a messaging-originated `mutate_thread` already
+ *     resolves across connected peers unless the caller opts out. Which
+ *     *fields* may change is gated below; whether the target may live on
+ *     ANOTHER INSTANCE is a separate axis this catalog does not yet model —
+ *     see the federation-scope gap noted in `docs/messaging-rbac.md`. Gating a
+ *     selector as if it were a mutation would be the wrong shape; the scope
+ *     needs its own permission, checked where the remote target is resolved.
  */
 export type ThreadMutationFields = Omit<
   MutateThreadToolArgs,
-  "backend" | "threadId" | "dryRun"
+  "backend" | "threadId" | "dryRun" | "instanceId" | "includeRemote"
 >;
 
 type ThreadMutationFieldRule = (value: unknown) => MessagingPermissionId[];
