@@ -2278,6 +2278,112 @@ describe("app server ipc", () => {
     );
   });
 
+  it("keeps a pinned remote thread in its owner's primary project", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+
+    reconcileNavigationSnapshot.mockImplementationOnce(async (params: unknown) => ({
+      backend: (params as { backend: "all" | "codex" | "acp:grok" }).backend,
+      fetchedAt: 1234,
+      unchanged: false,
+      threads: (params as { threads: object[] }).threads.map((thread) => ({
+        inbox: { inInbox: false },
+        ...thread,
+      })),
+      inboxThreadKeys: [],
+      directories: [
+        {
+          key: "directory:/repo/PwrAgent",
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/repo/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 2000,
+        },
+        {
+          key: "directory:/repo/PwrSuiteLab",
+          kind: "directory" as const,
+          label: "PwrSuiteLab",
+          path: "/repo/PwrSuiteLab",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 2000,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "remote-primary-project",
+    });
+    listRemoteThreadPins.mockResolvedValueOnce([
+      { ref, addedAt: 1_000, instanceLabel: "Laptop" },
+    ]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
+      threads: [
+        {
+          source: "codex" as const,
+          id: "remote-primary-project",
+          title: "Review #1317: bind remote threads",
+          titleSource: "explicit" as const,
+          // This is the owner's authoritative project. The PwrSuiteLab link
+          // was added later by a composer @-reference and must not re-home
+          // the pinned row in this viewer's Directories lens.
+          projectKey: "/peer/.codex/worktrees/federated-bind/PwrAgent",
+          linkedDirectories: [
+            {
+              id: "pwragent",
+              label: "PwrAgent",
+              path: "/peer/pwrdrvr/PwrAgent",
+              worktreePath: "/peer/.codex/worktrees/federated-bind/PwrAgent",
+              kind: "worktree" as const,
+            },
+            {
+              id: "pwrsuitelab",
+              label: "PwrSuiteLab",
+              path: "/peer/pwrdrvr/PwrSuiteLab",
+              kind: "local" as const,
+            },
+          ],
+          inbox: { inInbox: false },
+          federation: {
+            ref,
+            instanceLabel: "Laptop",
+            peerStatus: "connected" as const,
+            capabilities: [],
+          },
+        },
+      ],
+      refreshed: [],
+      archived: [],
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    )) as {
+      directories: Array<{ key: string; threadKeys: string[] }>;
+    };
+
+    const byKey = new Map(
+      response.directories.map((directory) => [directory.key, directory]),
+    );
+    expect(byKey.get("directory:/repo/PwrAgent")?.threadKeys).toContain(
+      "codex:remote-primary-project",
+    );
+    expect(byKey.get("directory:/repo/PwrSuiteLab")?.threadKeys).not.toContain(
+      "codex:remote-primary-project",
+    );
+  });
+
   it("stamps the viewer-owned local rank onto merged remote rows", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
