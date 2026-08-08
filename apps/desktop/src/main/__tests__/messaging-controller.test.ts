@@ -4134,39 +4134,108 @@ describe("MessagingController", () => {
     });
   });
 
-  it("attaches a remotely resolved thread with its Federation owner", async () => {
-    const navigation = buildNavigationSnapshot();
-    navigation.threads.push({
+  it("finds and attaches a remote thread from a default Agent route, then keeps steering it remotely", async () => {
+    const localNavigation = buildNavigationSnapshot();
+    localNavigation.threads[0] = {
+      ...localNavigation.threads[0]!,
+      title: "Messaging Agent",
+      agent: {
+        name: "Messaging Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1_500,
+      },
+    };
+    const remoteNavigation = buildNavigationSnapshot();
+    remoteNavigation.threads = [{
       id: "remote-thread",
-      title: "Remote collector",
+      title: "AB Test - Post LTR Pushdown",
       titleSource: "explicit",
       source: "codex",
-      linkedDirectories: [],
+      linkedDirectories: [
+        {
+          id: "directory:remote-project",
+          kind: "worktree",
+          label: "Remote Project",
+          path: "/remote/project",
+          worktreePath: "/remote/worktrees/ab-test",
+        },
+      ],
       inbox: { inInbox: false },
       updatedAt: 2_000,
-    });
+    }];
+    remoteNavigation.directories = [
+      {
+        key: "directory:remote-project",
+        kind: "directory",
+        label: "Remote Project",
+        path: "/remote/project",
+        threadKeys: ["codex:remote-thread"],
+        needsAttentionCount: 0,
+      },
+    ];
     const resolveThreadTarget = vi.fn(async () => ({
-      navigation,
-      thread: navigation.threads.at(-1)!,
+      navigation: remoteNavigation,
+      thread: remoteNavigation.threads[0]!,
       federatedThread: buildFederatedThreadRef({
         backend: "codex",
         threadId: "remote-thread",
         instanceId: "pwr_remote",
       }),
     }));
-    const harness = await createHarness({ resolveThreadTarget });
-    const event = buildTextEvent("attach remote here");
-    await harness.store.upsertBinding({
-      id: "binding:source",
-      authorizedActorIds: ["user-1"],
-      backend: "codex",
-      channel: event.channel,
-      createdAt: 1_000,
-      routingState: event.routingState,
-      targetKind: "agent_thread",
-      threadId: "thread-1",
-      updatedAt: 1_000,
+    const getNavigationSnapshot = vi.fn(async (request) =>
+      request.federationTarget?.scope === "remote"
+        ? remoteNavigation
+        : localNavigation
+    );
+    const slackRootChannel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012PWRAGENT",
+        kind: "channel" as const,
+        title: "pwragent",
+        workspaceId: "T012PWRDRVR",
+      },
+    };
+    const slackThreadChannel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "1786208400.000100",
+        kind: "thread" as const,
+        parentId: "C012PWRAGENT",
+        parentConversationId: "C012PWRAGENT",
+        parentTitle: "pwragent",
+        title: "AB Test - Post LTR Pushdown",
+        workspaceId: "T012PWRDRVR",
+      },
+    };
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "slack" as const,
+      conversation: slackThreadChannel.conversation,
+      outcome: "created" as const,
+      routingState: {
+        opaque: {
+          channelId: "C012PWRAGENT",
+          threadTs: "1786208400.000100",
+        },
+      },
+      updatedAt: 2_000,
+    }));
+    const harness = await createHarness({
+      channel: "slack",
+      createManagedConversation,
+      getNavigationSnapshot,
+      navigation: localNavigation,
+      resolveThreadTarget,
     });
+    const event = buildTextEvent("bind the M5 thread here", {
+      botMention: true,
+      channel: slackRootChannel,
+      routingState: {
+        opaque: { channelId: "C012PWRAGENT" },
+      },
+    });
+    await seedConversationDefaultAgent(harness.store, slackRootChannel);
     await harness.controller.handleInboundEvent(event);
 
     await expect(harness.controller.handlePwrAgentMessagingRequest({
@@ -4180,13 +4249,22 @@ describe("MessagingController", () => {
         backend: "codex",
         threadId: "remote-thread",
         instanceId: "pwr_remote",
-        placement: "current_conversation",
+        placement: "auto",
+        title: "AB Test - Post LTR Pushdown",
       },
     })).resolves.toMatchObject({
       ok: true,
       data: {
-        binding: { threadId: "remote-thread" },
-        placement: "current_conversation",
+        binding: {
+          thread: { title: "AB Test - Post LTR Pushdown" },
+          threadId: "remote-thread",
+        },
+        createdConversation: {
+          id: "1786208400.000100",
+          kind: "thread",
+        },
+        outcome: "created_and_attached",
+        placement: "new_child",
       },
     });
     expect(resolveThreadTarget).toHaveBeenCalledWith({
@@ -4196,7 +4274,7 @@ describe("MessagingController", () => {
       includeRemote: true,
     });
     await expect(
-      harness.store.findActiveBindingForChannel(event.channel),
+      harness.store.findActiveBindingForChannel(slackThreadChannel),
     ).resolves.toMatchObject({
       backend: "codex",
       threadId: "remote-thread",
@@ -4206,6 +4284,63 @@ describe("MessagingController", () => {
         target: { scope: "remote", instanceId: "pwr_remote" },
       },
     });
+    expect(getNavigationSnapshot).toHaveBeenCalledWith({
+      backend: "all",
+      federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+    });
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "status",
+        text: expect.stringContaining("AB Test - Post LTR Pushdown"),
+      }),
+    );
+
+    getNavigationSnapshot.mockClear();
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+      notification: {
+        method: "thread/modelSettings/updated",
+        params: {
+          threadId: "remote-thread",
+          model: "gpt-5.6-sol",
+        },
+      },
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledWith({
+      backend: "all",
+      federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+    });
+
+    getNavigationSnapshot.mockClear();
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+      notification: {
+        method: "account/updated",
+        params: {},
+      },
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledWith({
+      backend: "all",
+      federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+    });
+
+    harness.startTurn.mockClear();
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("continue the AB test", { channel: slackThreadChannel }),
+    );
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        federationTarget: {
+          scope: "remote",
+          instanceId: "pwr_remote",
+        },
+        input: [{ type: "text", text: "continue the AB test" }],
+        threadId: "remote-thread",
+      }),
+    );
   });
 
   it("creates a child conversation from an active handoff thread binding", async () => {
@@ -21140,6 +21275,7 @@ async function createHarness(options?: {
   resolvePrivateConversation?: MessagingAdapter["resolvePrivateConversation"];
   responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
   getManagedConversationRights?: MessagingAdapter["getManagedConversationRights"];
+  getNavigationSnapshot?: NonNullable<MessagingBackendBridge["getNavigationSnapshot"]>;
   createManagedConversation?: MessagingAdapter["createManagedConversation"];
   closeManagedConversation?: MessagingAdapter["closeManagedConversation"];
   deleteManagedConversation?: MessagingAdapter["deleteManagedConversation"];
@@ -21283,7 +21419,8 @@ async function createHarness(options?: {
       : {}),
   };
   const getNavigationSnapshot = vi.fn(
-    async () => options?.navigation ?? buildNavigationSnapshot(),
+    options?.getNavigationSnapshot
+      ?? (async () => options?.navigation ?? buildNavigationSnapshot()),
   );
   const ensureDirectoryLaunchpad = vi.fn(
     options?.ensureDirectoryLaunchpad ??
