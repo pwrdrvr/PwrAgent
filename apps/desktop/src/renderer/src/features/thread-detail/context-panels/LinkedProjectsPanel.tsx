@@ -3,6 +3,7 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import { FolderIcon, WorktreeIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PrChip } from "../../pr-status/PrChip";
+import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../../composer/native-picker-boundary";
 import {
   CopyValueButton,
   TooltipValue,
@@ -47,7 +48,11 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
   const canAttachDirectory = Boolean(
     props.desktopApi?.pickDirectoryFromDisk && props.desktopApi.attachDirectoryToThread,
   );
+  const nativePickingDisabled = Boolean(props.thread.federation?.ref.target);
   const attachDirectory = async (): Promise<void> => {
+    if (nativePickingDisabled) {
+      return;
+    }
     if (!props.desktopApi?.pickDirectoryFromDisk || !props.desktopApi.attachDirectoryToThread) {
       return;
     }
@@ -106,7 +111,13 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
         {canAttachDirectory ? (
           <button
             className="context-list__action"
-            disabled={attaching}
+            data-tooltip={
+              nativePickingDisabled ? REMOTE_NATIVE_PICKER_TOOLTIP : undefined
+            }
+            disabled={attaching || nativePickingDisabled}
+            title={
+              nativePickingDisabled ? REMOTE_NATIVE_PICKER_TOOLTIP : undefined
+            }
             type="button"
             onClick={() => {
               void attachDirectory();

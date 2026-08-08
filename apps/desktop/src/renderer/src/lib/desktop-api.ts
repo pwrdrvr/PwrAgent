@@ -201,6 +201,7 @@ import type {
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
   RenderComposerPdfPreviewResponse,
+  ListRecentFileReferencesRequest,
   ListRecentFileReferencesResponse,
   RecordRecentFileReferencesRequest,
   DetachThreadPullRequestRequest,
@@ -943,7 +944,9 @@ export type DesktopApi = {
     request: RenderComposerPdfPreviewRequest,
   ) => Promise<RenderComposerPdfPreviewResponse>;
   /** Recently referenced files for the reference picker's Files tab. */
-  listRecentFileReferences?: () => Promise<ListRecentFileReferencesResponse>;
+  listRecentFileReferences?: (
+    request?: ListRecentFileReferencesRequest,
+  ) => Promise<ListRecentFileReferencesResponse>;
   /** Fire-and-forget record of freshly committed file references. */
   recordRecentFileReferences?: (
     request: RecordRecentFileReferencesRequest,

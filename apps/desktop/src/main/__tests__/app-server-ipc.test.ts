@@ -58,6 +58,12 @@ const federationMock = vi.hoisted(() => {
       renamedAt: 6_000,
     })),
     refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
+    ensureDirectoryLaunchpad: vi.fn(),
+    listRecentFileReferences: vi.fn(async () => ({
+      files: [] as Array<{ label: string; path: string }>,
+    })),
+    recordRecentFileReferences: vi.fn(async () => undefined),
+    attachDirectoryToThread: vi.fn(),
     listWorktreeUnpublishedCommits: vi.fn(async () => ({
       commits: [],
       totalCommits: 0,
@@ -477,6 +483,27 @@ const ensureDirectoryLaunchpad = vi.fn(async (request: {
     executionMode: "default",
   },
 }));
+const updateDirectoryLaunchpad = vi.fn(async (request: {
+  directoryKey: string;
+  patch: { branchName?: string };
+}) => ({
+  launchpad: {
+    directoryKey: request.directoryKey,
+    directoryKind: "directory" as const,
+    directoryLabel: "app",
+    directoryPath: "/repo/app",
+    backend: "codex" as const,
+    executionMode: "default" as const,
+    prompt: "viewer draft",
+    branchName: request.patch.branchName,
+    createdAt: 1000,
+    updatedAt: 1001,
+  },
+  defaults: {
+    backend: "codex" as const,
+    executionMode: "default" as const,
+  },
+}));
 const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   backend: request.backend ?? "codex",
   threadId: request.threadId,
@@ -740,6 +767,12 @@ vi.mock("../window-channels", () => ({
   ]),
 }));
 
+vi.mock("../window", () => ({
+  isFederationWindowWebContents: (
+    webContents: { id?: number } | undefined,
+  ) => webContents?.id === 999,
+}));
+
 vi.mock("../log", () => ({
   getMainLogger: vi.fn(() => mockAppServerLog),
 }));
@@ -840,6 +873,7 @@ vi.mock("../app-server/backend-registry", () => {
     setDirectoryGitStatusWriter,
     setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
+    updateDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
     getQueuedTurnsSnapshot: () => ({}),
     rememberCompleteNavigationSnapshot,
@@ -922,6 +956,10 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.markThreadSeen.mockClear();
     federationMock.remoteBackend.setThreadReaction.mockClear();
     federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
+    federationMock.remoteBackend.ensureDirectoryLaunchpad.mockReset();
+    federationMock.remoteBackend.listRecentFileReferences.mockReset();
+    federationMock.remoteBackend.recordRecentFileReferences.mockReset();
+    federationMock.remoteBackend.attachDirectoryToThread.mockReset();
     federationMock.remoteBackend.listWorktreeUnpublishedCommits.mockClear();
     federationMock.remoteBackend.getWorktreeUnpublishedCommitDiff.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
@@ -962,6 +1000,7 @@ describe("app server ipc", () => {
     setDirectoryGitStatusWriter.mockClear();
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
+    updateDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
     setThreadReactionOverlay.mockClear();
     registerDirectoryFromDiskService.mockClear();
@@ -7255,6 +7294,171 @@ describe("app server ipc", () => {
         }),
       }),
     );
+  });
+
+  it("keeps owner branch inventory authoritative when viewer and owner paths match", async () => {
+    const { NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner_one",
+    };
+    const ownerGitStatus = {
+      currentBranch: "owner/main",
+      branches: ["owner/main", "owner/release"],
+      branchDetails: [
+        { name: "owner/main", lastCommitAt: 200 },
+        { name: "owner/release", lastCommitAt: 100 },
+      ],
+      syncState: "in-sync" as const,
+    };
+    federationMock.remoteBackend.ensureDirectoryLaunchpad.mockResolvedValueOnce({
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        branchName: "owner/main",
+        createdAt: 100,
+        updatedAt: 100,
+      },
+      defaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+      gitStatus: ownerGitStatus,
+    });
+    ensureDirectoryLaunchpad.mockResolvedValueOnce({
+      launchpad: {
+        directoryKey: "directory:/repo/app",
+        directoryKind: "directory",
+        directoryLabel: "app",
+        directoryPath: "/repo/app",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "viewer draft",
+        branchName: "viewer/local-only",
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+      defaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+
+    registerAppServerIpcHandlers();
+    const response = await handlers.get(
+      NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    )?.({}, {
+      federationTarget,
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      currentBranch: "owner/main",
+    });
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(
+      federationMock.remoteBackend.ensureDirectoryLaunchpad,
+    ).toHaveBeenCalledWith({
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      currentBranch: "owner/main",
+    });
+    expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryPath: "/repo/app",
+        currentBranch: "owner/main",
+      }),
+      { skipFilesystemInspection: true },
+    );
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:/repo/app",
+      patch: { branchName: "owner/main" },
+    });
+    expect(response).toEqual(
+      expect.objectContaining({
+        gitStatus: ownerGitStatus,
+        launchpad: expect.objectContaining({
+          prompt: "viewer draft",
+          branchName: "owner/main",
+        }),
+      }),
+    );
+  });
+
+  it("routes remote recent file reads and writes to the owning instance", async () => {
+    const {
+      NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
+      NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
+    } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner_one",
+    };
+    federationMock.remoteBackend.listRecentFileReferences.mockResolvedValueOnce({
+      files: [{ label: "owner.md", path: "/owner/notes/owner.md" }],
+    });
+    federationMock.remoteBackend.recordRecentFileReferences.mockResolvedValueOnce(
+      undefined,
+    );
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(
+      NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
+    )?.({}, { federationTarget });
+    await handlers.get(
+      NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
+    )?.({}, {
+      federationTarget,
+      paths: ["/owner/notes/owner.md"],
+    });
+
+    expect(response).toEqual({
+      files: [{ label: "owner.md", path: "/owner/notes/owner.md" }],
+    });
+    expect(
+      federationMock.remoteBackend.recordRecentFileReferences,
+    ).toHaveBeenCalledWith({ paths: ["/owner/notes/owner.md"] });
+  });
+
+  it("never opens native filesystem pickers for a federation window", async () => {
+    const {
+      NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
+      NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
+      NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
+      NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
+    } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+    const event = { sender: { id: 999 } };
+
+    await expect(
+      handlers.get(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL)?.(event),
+    ).resolves.toEqual({ canceled: true });
+    await expect(
+      handlers.get(NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL)?.(event),
+    ).resolves.toEqual({ canceled: true });
+    await expect(
+      handlers.get(NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL)?.(event),
+    ).resolves.toEqual({ canceled: true });
+    await expect(
+      handlers.get(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL)?.(
+        event,
+        { path: "/viewer/project" },
+      ),
+    ).rejects.toThrow(
+      "Remote windows cannot register directories from the viewing instance.",
+    );
+    expect(registerDirectoryFromDiskService).not.toHaveBeenCalled();
   });
 
   it("attaches directories with path-shaped linked directory ids", async () => {

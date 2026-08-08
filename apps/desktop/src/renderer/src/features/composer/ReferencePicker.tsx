@@ -11,6 +11,7 @@ import {
 import type { NavigationDirectorySummary } from "@pwragent/shared";
 import { FileCodeIcon, FolderIcon, SearchIcon } from "../../icons";
 import { tildifyPath } from "../../lib/tildify-path";
+import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 
 /**
  * Combined reference picker for the composer's setup-row "+" button.
@@ -59,6 +60,8 @@ export type ReferencePickerProps = {
   /** Separate OS dialogs for platforms without a combined dialog. */
   onPickDirectoryFromDisk?: () => void;
   onPickFileFromDisk?: () => void;
+  /** Disable controller-local native pickers in a remote viewer. */
+  nativePickingDisabled?: boolean;
 };
 
 const RECENTS_LIMIT = 10;
@@ -317,7 +320,9 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
                 <li className="reference-picker__empty">
                   {trimmedQuery
                     ? "No matches."
-                    : "No recent files. Drop files on the composer or add one below."}
+                    : props.nativePickingDisabled
+                      ? "No recent files."
+                      : "No recent files. Drop files on the composer or add one below."}
                 </li>
               ) : (
                 filteredFiles.map((file) => (
@@ -354,6 +359,17 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
             <button
               type="button"
               className="reference-picker__row reference-picker__row--action"
+              data-tooltip={
+                props.nativePickingDisabled
+                  ? REMOTE_NATIVE_PICKER_TOOLTIP
+                  : undefined
+              }
+              disabled={props.nativePickingDisabled}
+              title={
+                props.nativePickingDisabled
+                  ? REMOTE_NATIVE_PICKER_TOOLTIP
+                  : undefined
+              }
               onClick={() => props.onPickFromDisk?.()}
             >
               <span aria-hidden="true" className="reference-picker__plus">
@@ -369,6 +385,17 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
                 <button
                   type="button"
                   className="reference-picker__row reference-picker__row--action"
+                  data-tooltip={
+                    props.nativePickingDisabled
+                      ? REMOTE_NATIVE_PICKER_TOOLTIP
+                      : undefined
+                  }
+                  disabled={props.nativePickingDisabled}
+                  title={
+                    props.nativePickingDisabled
+                      ? REMOTE_NATIVE_PICKER_TOOLTIP
+                      : undefined
+                  }
                   onClick={() => props.onPickDirectoryFromDisk?.()}
                 >
                   <span aria-hidden="true" className="reference-picker__plus">
@@ -383,6 +410,17 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
                 <button
                   type="button"
                   className="reference-picker__row reference-picker__row--action"
+                  data-tooltip={
+                    props.nativePickingDisabled
+                      ? REMOTE_NATIVE_PICKER_TOOLTIP
+                      : undefined
+                  }
+                  disabled={props.nativePickingDisabled}
+                  title={
+                    props.nativePickingDisabled
+                      ? REMOTE_NATIVE_PICKER_TOOLTIP
+                      : undefined
+                  }
                   onClick={() => props.onPickFileFromDisk?.()}
                 >
                   <span aria-hidden="true" className="reference-picker__plus">

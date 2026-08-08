@@ -30,6 +30,7 @@ import {
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { Composer } from "../Composer";
+import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import type {
   ComposerDraftSnapshot,
   ComposerDraftStore,
@@ -1531,10 +1532,124 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
 
     expect(screen.getByRole("option", { name: /remote repo/i })).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /add directory/i }),
-    ).not.toBeInTheDocument();
+    const addDirectory = screen.getByRole("button", { name: /add directory/i });
+    expect(addDirectory).toBeDisabled();
+    expect(addDirectory).toHaveAttribute(
+      "title",
+      REMOTE_NATIVE_PICKER_TOOLTIP,
+    );
     expect(onPickAndRegisterDirectory).not.toHaveBeenCalled();
+  });
+
+  it("routes remote recent files to the owner and disables every native add path", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const listRecentFileReferences = vi.fn(async () => ({
+      files: [{ label: "owner.md", path: "/owner/notes/owner.md" }],
+    }));
+    const recordRecentFileReferences = vi.fn(async () => undefined);
+    const pickFileFromDisk = vi.fn(async () => ({
+      canceled: false as const,
+      paths: ["/viewer/notes/viewer.md"],
+    }));
+    const onPickDirectoryForReference = vi.fn(async () => ({
+      label: "viewer",
+      path: "/viewer/project",
+    }));
+    const onPickAndAttachDirectoryToThread = vi.fn();
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          listRecentFileReferences,
+          onAgentEvent: () => () => undefined,
+          pickFileFromDisk,
+          recordRecentFileReferences,
+        }}
+        directories={[{
+          key: "directory:/owner/project",
+          kind: "directory",
+          label: "Owner project",
+          path: "/owner/project",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        }]}
+        disabled={false}
+        onPickAndAttachDirectoryToThread={onPickAndAttachDirectoryToThread}
+        onPickDirectoryForReference={onPickDirectoryForReference}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Remote thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: federationTarget,
+              threadId: "thread-1",
+            },
+            instanceLabel: "Remote",
+            peerStatus: "connected",
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const existingThreadAdd = screen.getByRole("button", {
+      name: "Add directory",
+    });
+    expect(existingThreadAdd).toBeDisabled();
+    expect(existingThreadAdd).toHaveAttribute(
+      "title",
+      REMOTE_NATIVE_PICKER_TOOLTIP,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Check @" },
+    });
+    const autocomplete = screen.getByRole("listbox", { name: "Directories" });
+    for (const name of ["+ Add directory…", "+ Add file…"]) {
+      const action = within(autocomplete).getByRole("button", { name });
+      expect(action).toBeDisabled();
+      expect(action).toHaveAttribute("title", REMOTE_NATIVE_PICKER_TOOLTIP);
+    }
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Review owner file" },
+    });
+    await clickButton("Add reference");
+    expect(listRecentFileReferences).toHaveBeenCalledWith({
+      federationTarget,
+    });
+    const dialog = screen.getByRole("dialog", { name: "Add reference" });
+    expect(
+      within(dialog).getByRole("button", { name: "Add directory…" }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByRole("button", { name: "Add file…" }),
+    ).toHaveAttribute("data-tooltip", REMOTE_NATIVE_PICKER_TOOLTIP);
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Files" }));
+    fireEvent.click(within(dialog).getByRole("option", { name: /owner\.md/ }));
+
+    await waitFor(() => {
+      expect(recordRecentFileReferences).toHaveBeenCalledWith({
+        federationTarget,
+        paths: ["/owner/notes/owner.md"],
+      });
+    });
+    expect(pickFileFromDisk).not.toHaveBeenCalled();
+    expect(onPickDirectoryForReference).not.toHaveBeenCalled();
+    expect(onPickAndAttachDirectoryToThread).not.toHaveBeenCalled();
   });
 
   it("shows thread environment commands from refreshed environment options", async () => {

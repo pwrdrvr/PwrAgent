@@ -1381,6 +1381,8 @@ export type DetachThreadPullRequestResponse = {
 
 export type AttachDirectoryToThreadRequest = {
   backend?: AppServerBackendKind;
+  /** Route known remote directory paths to the instance that owns the thread. */
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   /** Absolute path the user picked from the system dialog. */
   path: string;

@@ -31,6 +31,7 @@ import type {
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   DesktopProviderModelDefaults,
+  FederationTarget,
   HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
   NavigationGitCommitSummary,
@@ -144,6 +145,7 @@ import {
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
+import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
 import {
   EnvActionRunEntry,
@@ -283,6 +285,7 @@ type ComposerProps = {
     paths: string[],
     target: {
       backend: NavigationThreadSummary["source"];
+      federationTarget?: FederationTarget;
       threadId: string;
     },
   ) => void;
@@ -2795,6 +2798,8 @@ function CopyableComposerError(props: {
 export function Composer(props: ComposerProps) {
   const threadLinks = useThreadLinks();
   const rendererFederationTarget = readRendererFederationTarget();
+  const filesystemFederationTarget =
+    props.thread?.federation?.ref.target ?? rendererFederationTarget;
   const inputRef = useRef<ComposerInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
@@ -3194,6 +3199,9 @@ export function Composer(props: ComposerProps) {
           .filter(Boolean),
       )].sort();
       if (candidates.length === 0) {
+        return EMPTY_COMPOSER_REFERENCE_INSPECTION;
+      }
+      if (filesystemFederationTarget) {
         return EMPTY_COMPOSER_REFERENCE_INSPECTION;
       }
 
@@ -6081,6 +6089,8 @@ export function Composer(props: ComposerProps) {
       if (sentReferencedDirectoryPaths.length > 0) {
         props.onAttachDirectoryReferences?.(sentReferencedDirectoryPaths, {
           backend: props.thread.source,
+          federationTarget:
+            props.thread.federation?.ref.target ?? rendererFederationTarget,
           threadId: props.thread.id,
         });
       }
@@ -7716,12 +7726,18 @@ export function Composer(props: ComposerProps) {
 
     // Feed the reference picker's Files tab — fire-and-forget.
     void props.desktopApi
-      ?.recordRecentFileReferences?.({ paths })
+      ?.recordRecentFileReferences?.({
+        federationTarget: filesystemFederationTarget,
+        paths,
+      })
       ?.catch(() => undefined);
   };
 
   /** "@ → Add file…" action: OS file picker → file-reference chips. */
   const applyPickedFileReferences = async (): Promise<void> => {
+    if (filesystemFederationTarget) {
+      return;
+    }
     const result = await props.desktopApi?.pickFileFromDisk?.();
     if (!result || result.canceled || result.paths.length === 0) {
       return;
@@ -7807,6 +7823,9 @@ export function Composer(props: ComposerProps) {
    * mint is about to rewrite.
    */
   const applyPickedReferencesFromDisk = async (): Promise<void> => {
+    if (filesystemFederationTarget) {
+      return;
+    }
     const result = await props.desktopApi?.pickReferenceFromDisk?.();
     if (!result || result.canceled || result.entries.length === 0) {
       return;
@@ -7849,7 +7868,9 @@ export function Composer(props: ComposerProps) {
    */
   const refreshRecentFileReferences = async (): Promise<void> => {
     try {
-      const response = await props.desktopApi?.listRecentFileReferences?.();
+      const response = await props.desktopApi?.listRecentFileReferences?.({
+        federationTarget: filesystemFederationTarget,
+      });
       setRecentFileReferences(response?.files ?? []);
     } catch {
       // Keep whatever list we had.
@@ -8000,6 +8021,7 @@ export function Composer(props: ComposerProps) {
     // Feed the reference picker's Files tab — fire-and-forget.
     void props.desktopApi
       ?.recordRecentFileReferences?.({
+        federationTarget: filesystemFederationTarget,
         paths: accepted.map((attachment) => attachment.path),
       })
       ?.catch(() => undefined);
@@ -8012,6 +8034,13 @@ export function Composer(props: ComposerProps) {
    * Toasts once per batch for unresolvable paths.
    */
   const attachFiles = (files: File[]): void => {
+    if (filesystemFederationTarget) {
+      showComposerNotice({
+        title: "Local files unavailable",
+        message: REMOTE_NATIVE_PICKER_TOOLTIP,
+      });
+      return;
+    }
     let unresolvedCount = 0;
     const paths: string[] = [];
     for (const file of files) {
@@ -8034,6 +8063,9 @@ export function Composer(props: ComposerProps) {
 
   /** "+"-menu "Add file…" action: OS file picker → tray pills. */
   const attachPickedFilesToTray = async (): Promise<void> => {
+    if (filesystemFederationTarget) {
+      return;
+    }
     const result = await props.desktopApi?.pickFileFromDisk?.();
     if (!result || result.canceled || result.paths.length === 0) {
       return;
@@ -10583,6 +10615,17 @@ export function Composer(props: ComposerProps) {
             {props.onPickDirectoryForReference ? (
               <button
                 className="composer__autocomplete-option composer__autocomplete-option--action"
+                data-tooltip={
+                  filesystemFederationTarget
+                    ? REMOTE_NATIVE_PICKER_TOOLTIP
+                    : undefined
+                }
+                disabled={Boolean(filesystemFederationTarget)}
+                title={
+                  filesystemFederationTarget
+                    ? REMOTE_NATIVE_PICKER_TOOLTIP
+                    : undefined
+                }
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -10599,6 +10642,17 @@ export function Composer(props: ComposerProps) {
             {props.desktopApi?.pickFileFromDisk ? (
               <button
                 className="composer__autocomplete-option composer__autocomplete-option--action"
+                data-tooltip={
+                  filesystemFederationTarget
+                    ? REMOTE_NATIVE_PICKER_TOOLTIP
+                    : undefined
+                }
+                disabled={Boolean(filesystemFederationTarget)}
+                title={
+                  filesystemFederationTarget
+                    ? REMOTE_NATIVE_PICKER_TOOLTIP
+                    : undefined
+                }
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -10908,6 +10962,7 @@ export function Composer(props: ComposerProps) {
               }
               directories={props.directories ?? []}
               disabled={launchpadSubmitting}
+              nativePickingDisabled={Boolean(filesystemFederationTarget)}
               pickError={props.pickDirectoryError}
               picking={props.pickingDirectory}
               onSelect={(directory) => {
@@ -10924,12 +10979,12 @@ export function Composer(props: ComposerProps) {
                   : undefined
               }
               onPickFromDisk={
-                rendererFederationTarget
-                  ? undefined
-                  : () => {
+                props.onPickAndRegisterDirectory
+                  ? () => {
                       props.onClearPickDirectoryError?.();
                       props.onPickAndRegisterDirectory?.();
                     }
+                  : undefined
               }
             />
           ) : null}
@@ -10938,7 +10993,19 @@ export function Composer(props: ComposerProps) {
             <>
               <button
                 className="composer__action-button composer__attach-directory-button"
-                disabled={props.pickingDirectory}
+                data-tooltip={
+                  filesystemFederationTarget
+                    ? REMOTE_NATIVE_PICKER_TOOLTIP
+                    : undefined
+                }
+                disabled={
+                  props.pickingDirectory || Boolean(filesystemFederationTarget)
+                }
+                title={
+                  filesystemFederationTarget
+                    ? REMOTE_NATIVE_PICKER_TOOLTIP
+                    : undefined
+                }
                 type="button"
                 onClick={() => {
                   props.onClearPickDirectoryError?.();
@@ -10994,6 +11061,7 @@ export function Composer(props: ComposerProps) {
                   ? () => {
                       void props.desktopApi?.refreshDirectoryGitStatuses?.({
                         directoryKeys: [props.launchpad!.directoryKey],
+                        federationTarget: filesystemFederationTarget,
                         force: true,
                       });
                     }
@@ -11264,6 +11332,7 @@ export function Composer(props: ComposerProps) {
               directories={props.directories ?? []}
               recentFiles={recentFileReferences}
               platform={props.desktopApi?.platform}
+              nativePickingDisabled={Boolean(filesystemFederationTarget)}
               onSelectDirectory={(directory) => {
                 setAddReferenceMenuOpen(false);
                 applyDirectoryReference(directory);

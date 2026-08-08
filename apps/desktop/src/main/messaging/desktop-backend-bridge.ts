@@ -524,7 +524,39 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
-    return await this.registry.ensureDirectoryLaunchpad(request);
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.ensureDirectoryLaunchpad(
+        stripFederationTarget(request),
+      );
+    }
+
+    const statusPath =
+      request.gitStatusSourcePath?.trim() || request.directoryPath?.trim();
+    let gitStatus: EnsureDirectoryLaunchpadResponse["gitStatus"];
+    if (statusPath) {
+      for await (const entry of this.registry.readDirectoryStatusEntries([{
+        key: request.directoryKey,
+        kind: request.directoryKind,
+        label: request.directoryLabel,
+        path: statusPath,
+        threadKeys: [],
+        needsAttentionCount: 0,
+      }])) {
+        gitStatus = entry.gitStatus ?? null;
+        break;
+      }
+    }
+    const response = await this.registry.ensureDirectoryLaunchpad({
+      ...request,
+      ...(gitStatus?.currentBranch
+        ? { currentBranch: gitStatus.currentBranch }
+        : {}),
+    });
+    return {
+      ...response,
+      ...(gitStatus !== undefined ? { gitStatus } : {}),
+    };
   }
 
   async materializeDirectoryLaunchpad(

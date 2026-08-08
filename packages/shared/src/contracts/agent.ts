@@ -652,6 +652,12 @@ export type TrustCodexProjectResponse = {
 };
 
 export type EnsureDirectoryLaunchpadRequest = {
+  /**
+   * Owning instance for filesystem-derived launchpad metadata. Remote viewer
+   * drafts may still be persisted locally, but branch/status inspection must
+   * run on this target.
+   */
+  federationTarget?: FederationTarget;
   directoryKey: string;
   directoryKind: DirectorySummaryKind;
   directoryLabel: string;
@@ -933,8 +939,15 @@ export type ListRecentFileReferencesResponse = {
   files: { label: string; path: string }[];
 };
 
+export type ListRecentFileReferencesRequest = {
+  /** Owning instance whose recent-file history should be read. */
+  federationTarget?: FederationTarget;
+};
+
 /** Fire-and-forget record of freshly committed file references. */
 export type RecordRecentFileReferencesRequest = {
+  /** Owning instance whose recent-file history should be updated. */
+  federationTarget?: FederationTarget;
   paths: string[];
 };
 

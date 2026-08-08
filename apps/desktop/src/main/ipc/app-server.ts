@@ -57,6 +57,7 @@ import {
   type GetGhStatusRequest,
   type GhStatus,
   type LinkedDirectorySummary,
+  type ListRecentFileReferencesRequest,
   type ListRecentFileReferencesResponse,
   type PickDirectoryFromDiskResponse,
   type PickFileFromDiskResponse,
@@ -877,6 +878,23 @@ function normalizePrLookupDirectoryPaths(directoryPaths: string[]): string[] {
 
 function toLinkedDirectoryPathId(value: string): string {
   return path.resolve(value).replace(/\\/g, "/");
+}
+
+function reconcileRemoteLaunchpadBranch(
+  branchName: string | undefined,
+  gitStatus: NavigationDirectoryGitStatus | null | undefined,
+): string | undefined {
+  const branchNames = new Set([
+    ...(gitStatus?.branches ?? []),
+    ...(gitStatus?.branchDetails ?? []).map((branch) => branch.name),
+  ]);
+  if (!branchName) {
+    return gitStatus?.currentBranch;
+  }
+  if (branchNames.size === 0 || branchNames.has(branchName)) {
+    return branchName;
+  }
+  return gitStatus?.currentBranch;
 }
 
 function normalizeLinkedDirectoryPathForMatch(
@@ -6247,6 +6265,52 @@ class DesktopAppServerService {
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      const ownerResponse = await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .ensureDirectoryLaunchpad(ownerRequest);
+      const registry = getDesktopBackendRegistry();
+      const localResponse = await registry.ensureDirectoryLaunchpad({
+        ...ownerRequest,
+        directoryKind: ownerResponse.launchpad.directoryKind,
+        directoryLabel: ownerResponse.launchpad.directoryLabel,
+        directoryPath: ownerResponse.launchpad.directoryPath,
+        currentBranch:
+          ownerResponse.gitStatus?.currentBranch
+          ?? ownerResponse.launchpad.branchName,
+      }, {
+        skipFilesystemInspection: true,
+      });
+      const branchName = reconcileRemoteLaunchpadBranch(
+        localResponse.launchpad.branchName,
+        ownerResponse.gitStatus,
+      );
+      let launchpad = localResponse.launchpad;
+      if (branchName !== localResponse.launchpad.branchName) {
+        launchpad = (await registry.updateDirectoryLaunchpad({
+          directoryKey: request.directoryKey,
+          patch: { branchName },
+        })).launchpad;
+      }
+      return {
+        ...localResponse,
+        launchpad: {
+          ...launchpad,
+          directoryKind: ownerResponse.launchpad.directoryKind,
+          directoryLabel: ownerResponse.launchpad.directoryLabel,
+          directoryPath: ownerResponse.launchpad.directoryPath,
+          codexEnvironmentOptions:
+            ownerResponse.launchpad.codexEnvironmentOptions,
+          branchName,
+        },
+        gitStatus: ownerResponse.gitStatus,
+      };
+    }
+
     const refreshed = await this.refreshLaunchpadDirectoryGitStatus(request);
     const response = await getDesktopBackendRegistry().ensureDirectoryLaunchpad(
       refreshed.request,
@@ -6389,7 +6453,17 @@ class DesktopAppServerService {
     return { canceled: false, entries: classifyReferencePaths(result.filePaths) };
   }
 
-  listRecentFileReferences(): ListRecentFileReferencesResponse {
+  async listRecentFileReferences(
+    request: ListRecentFileReferencesRequest = {},
+  ): Promise<ListRecentFileReferencesResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listRecentFileReferences();
+    }
     return {
       files: listRecentFileReferencePaths(getAppStateDb()).map((filePath) => ({
         label: path.basename(filePath),
@@ -6398,7 +6472,19 @@ class DesktopAppServerService {
     };
   }
 
-  recordRecentFileReferences(request: RecordRecentFileReferencesRequest): void {
+  async recordRecentFileReferences(
+    request: RecordRecentFileReferencesRequest,
+  ): Promise<void> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .recordRecentFileReferences(ownerRequest);
+      return;
+    }
     recordRecentFileReferencePaths(getAppStateDb(), request.paths ?? []);
   }
 
@@ -6424,6 +6510,15 @@ class DesktopAppServerService {
   async attachDirectoryToThread(
     request: AttachDirectoryToThreadRequest,
   ): Promise<AttachDirectoryToThreadResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .attachDirectoryToThread(ownerRequest);
+    }
     const backend = request.backend ?? "codex";
     const registered = await this.registerDirectoryFromDisk({
       path: request.path,
@@ -7504,9 +7599,20 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
     async (
-      _event,
+      event,
       request: EnsureDirectoryLaunchpadRequest,
     ): Promise<EnsureDirectoryLaunchpadResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Remote launchpads must load filesystem metadata from the owning instance.",
+        );
+      }
       return await appServerService.ensureDirectoryLaunchpad(request);
     },
   );
@@ -7544,6 +7650,9 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
     async (event): Promise<PickDirectoryFromDiskResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        return { canceled: true };
+      }
       // Find the window that dispatched the IPC so the system "Choose
       // folder" dialog anchors to it as a sheet on macOS. Falls back to
       // the focused window inside `pickDirectoryFromDisk`.
@@ -7557,6 +7666,9 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
     async (event): Promise<PickFileFromDiskResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        return { canceled: true };
+      }
       const senderWindow = BrowserWindow.fromWebContents(event.sender);
       return await appServerService.pickFileFromDisk(
         senderWindow ?? undefined,
@@ -7567,6 +7679,9 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
     async (event): Promise<PickReferenceFromDiskResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        return { canceled: true };
+      }
       const senderWindow = BrowserWindow.fromWebContents(event.sender);
       return await appServerService.pickReferenceFromDisk(
         senderWindow ?? undefined,
@@ -7577,44 +7692,86 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL,
     async (
-      _event,
+      event,
       request: InspectPdfReferencePathsRequest,
-    ): Promise<InspectPdfReferencePathsResponse> =>
-      inspectPdfReferencePaths(request.paths ?? []),
+    ): Promise<InspectPdfReferencePathsResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error(
+          "Remote file references cannot be inspected on the viewing instance.",
+        );
+      }
+      return inspectPdfReferencePaths(request.paths ?? []);
+    },
   );
   ipcMain.removeHandler(NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL);
   ipcMain.handle(
     NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
     async (
-      _event,
+      event,
       request: RenderComposerPdfPreviewRequest,
-    ): Promise<RenderComposerPdfPreviewResponse> =>
-      await renderExplicitComposerPdfPreview(request),
+    ): Promise<RenderComposerPdfPreviewResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error(
+          "Remote file previews cannot be rendered on the viewing instance.",
+        );
+      }
+      return await renderExplicitComposerPdfPreview(request);
+    },
   );
   ipcMain.removeHandler(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL);
   ipcMain.handle(
     NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
-    async (): Promise<ListRecentFileReferencesResponse> => {
-      return appServerService.listRecentFileReferences();
+    async (
+      event,
+      request: ListRecentFileReferencesRequest = {},
+    ): Promise<ListRecentFileReferencesResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Remote recent files must be loaded from the owning instance.",
+        );
+      }
+      return await appServerService.listRecentFileReferences(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL);
   ipcMain.handle(
     NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
     async (
-      _event,
+      event,
       request: RecordRecentFileReferencesRequest,
     ): Promise<void> => {
-      appServerService.recordRecentFileReferences(request);
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Remote recent files must be recorded on the owning instance.",
+        );
+      }
+      await appServerService.recordRecentFileReferences(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.handle(
     NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
     async (
-      _event,
+      event,
       request: RegisterDirectoryFromDiskRequest,
     ): Promise<RegisterDirectoryFromDiskResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error(
+          "Remote windows cannot register directories from the viewing instance.",
+        );
+      }
       return await appServerService.registerDirectoryFromDisk(request);
     },
   );
@@ -7622,9 +7779,20 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
     async (
-      _event,
+      event,
       request: AttachDirectoryToThreadRequest,
     ): Promise<AttachDirectoryToThreadResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
+        throw new Error(
+          "Remote directory attachments must target the owning instance.",
+        );
+      }
       return await appServerService.attachDirectoryToThread(request);
     },
   );

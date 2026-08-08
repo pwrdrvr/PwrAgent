@@ -22,6 +22,7 @@ import {
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
   type FederationInstanceId,
+  type FederationTarget,
   type MessagingChannelKind,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
@@ -1459,7 +1460,11 @@ function DesktopAppShell(props: {
     onPickDirectoryForReference: () => navigation.pickDirectoryForReference(),
     onAttachDirectoryReferences: (
       paths: string[],
-      target: { backend: AppServerBackendKind; threadId: string }
+      target: {
+        backend: AppServerBackendKind;
+        federationTarget?: FederationTarget;
+        threadId: string;
+      }
     ) => {
       void navigation.attachDirectoryPathsToThread(target, paths);
     },
