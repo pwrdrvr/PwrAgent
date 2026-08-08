@@ -11,7 +11,10 @@ import type {
   ThreadPermissionTransition,
   ThreadPermissionTransitionStatus,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  isAppServerBackendKind,
+} from "@pwragent/shared";
 
 export const CURRENT_OVERLAY_STORE_VERSION = 6;
 
@@ -388,6 +391,19 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
               typeof launchpadRecord.branchName === "string"
                 ? launchpadRecord.branchName
                 : undefined,
+            parentThreadId:
+              typeof launchpadRecord.parentThreadId === "string"
+                ? launchpadRecord.parentThreadId
+                : undefined,
+            parentThreadBackend:
+              typeof launchpadRecord.parentThreadBackend === "string"
+              && isAppServerBackendKind(launchpadRecord.parentThreadBackend)
+                ? launchpadRecord.parentThreadBackend
+                : undefined,
+            parentThreadTitle:
+              typeof launchpadRecord.parentThreadTitle === "string"
+                ? launchpadRecord.parentThreadTitle
+                : undefined,
             model:
               typeof launchpadRecord.model === "string"
                 ? launchpadRecord.model
@@ -506,6 +522,15 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
               threadRecord.messagingBindingTransitionLog,
             ),
             reactions: migrateThreadReactions(threadRecord.reactions),
+            parentThreadId:
+              typeof threadRecord.parentThreadId === "string"
+                ? threadRecord.parentThreadId
+                : undefined,
+            parentThreadBackend:
+              typeof threadRecord.parentThreadBackend === "string"
+              && isAppServerBackendKind(threadRecord.parentThreadBackend)
+                ? threadRecord.parentThreadBackend
+                : undefined,
           } satisfies ThreadOverlayState,
         ];
       }),

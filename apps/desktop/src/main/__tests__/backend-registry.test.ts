@@ -719,10 +719,12 @@ function createOverlayStoreMock(params?: {
       backend,
       threadId,
       parentThreadId,
+      parentThreadBackend,
     }: {
-      backend: "codex" | "grok";
+      backend: AppServerBackendKind;
       threadId: string;
       parentThreadId?: string;
+      parentThreadBackend?: AppServerBackendKind;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -734,6 +736,7 @@ function createOverlayStoreMock(params?: {
       const next = {
         ...current,
         parentThreadId,
+        parentThreadBackend,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -743,7 +746,7 @@ function createOverlayStoreMock(params?: {
       threadId,
       pinnedRank,
     }: {
-      backend: "codex" | "grok";
+      backend: AppServerBackendKind;
       threadId: string;
       pinnedRank?: string | null;
     }) => {
@@ -766,7 +769,7 @@ function createOverlayStoreMock(params?: {
       threadId,
       scheduledStart,
     }: {
-      backend: "codex" | "grok";
+      backend: AppServerBackendKind;
       threadId: string;
       scheduledStart?: ThreadOverlayState["scheduledStart"];
     }) => {
@@ -21540,6 +21543,201 @@ command = "pnpm dev"
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("groups an ACP handoff under a Codex parent", async () => {
+    const parentDirectory = {
+      id: expectedDir("/repo/app"),
+      kind: "local" as const,
+      label: "app",
+      path: expectedDir("/repo/app"),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "codex-parent",
+          title: "Codex parent",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [parentDirectory],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:codex-parent": {
+          backend: "codex",
+          threadId: "codex-parent",
+          executionMode: "default",
+          extraLinkedDirectories: [parentDirectory],
+        },
+      },
+    });
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      codexClient,
+      overlayStore,
+      sessionId: "kimi-child",
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "codex-parent",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "codex-parent",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          backend: acpBackendId,
+          task: "Investigate the migration race.",
+          title: "Migration race",
+          groupingMode: "subthread",
+          workspaceMode: "none",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload).toMatchObject({
+      backend: acpBackendId,
+      threadId: "kimi-child",
+      groupingMode: "subthread",
+      groupedUnderThreadId: "codex-parent",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "kimi-child",
+      }),
+    ).resolves.toMatchObject({
+      parentThreadId: "codex-parent",
+      parentThreadBackend: "codex",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "codex-parent",
+      }),
+    ).resolves.toMatchObject({
+      subthreadOrder: ["kimi-child"],
+    });
+
+    await registry.close();
+  });
+
+  it("groups a Codex handoff under its Kimi parent", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentDirectory = {
+      id: expectedDir("/repo/app"),
+      kind: "local" as const,
+      label: "app",
+      path: expectedDir("/repo/app"),
+    };
+    const parentSession: AcpSessionMetadata = {
+      backendId: acpBackendId,
+      sessionId: "kimi-parent",
+      title: "Kimi parent",
+      cwd: "/repo/app",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "acp:kimi:kimi-parent": {
+          backend: acpBackendId,
+          threadId: "kimi-parent",
+          executionMode: "default",
+          extraLinkedDirectories: [parentDirectory],
+        },
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      codexClient,
+      overlayStore,
+      sessions: [parentSession],
+    });
+    const turn = await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "kimi-parent",
+      input: [{ type: "text", text: "Delegate the migration lock fix." }],
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "kimi-parent",
+          turnId: turn.turnId,
+          turn: { id: turn.turnId },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: "kimi-parent",
+      turnId: turn.turnId,
+      tool: "handoff_task",
+      args: {
+        backend: "codex",
+        task: "Fix the migration lock race.",
+        title: "Migration lock",
+        groupingMode: "subthread",
+        workspaceMode: "none",
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "thread-1",
+        groupingMode: "subthread",
+        groupedUnderThreadId: "kimi-parent",
+      },
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      parentThreadId: "kimi-parent",
+      parentThreadBackend: acpBackendId,
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "kimi-parent",
+      }),
+    ).resolves.toMatchObject({
+      subthreadOrder: ["thread-1"],
+    });
+
+    await registry.close();
   });
 
   it("ignores subthread grouping when a handoff targets a different project", async () => {

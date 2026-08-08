@@ -5792,12 +5792,20 @@ class DesktopAppServerService {
     instanceLabel: string,
   ): Promise<FederatedThreadRef | undefined> {
     const parentThreadId = request.summary?.parentThreadId;
-    if (!parentThreadId || parentThreadId === request.ref.threadId) {
+    const parentBackend =
+      request.summary?.parentThreadBackend ?? request.ref.backend;
+    if (
+      !parentThreadId
+      || (
+        parentThreadId === request.ref.threadId
+        && parentBackend === request.ref.backend
+      )
+    ) {
       return undefined;
     }
     try {
       const parentRef = buildFederatedThreadRef({
-        backend: request.ref.backend,
+        backend: parentBackend,
         instanceId,
         threadId: parentThreadId,
       });
@@ -5809,7 +5817,7 @@ class DesktopAppServerService {
         .remoteThreadSummaries()
         .threadFromPeer({
           target: { scope: "remote", instanceId },
-          backend: request.ref.backend,
+          backend: parentBackend,
           threadId: parentThreadId,
         });
       if (!parentSummary) {
@@ -5822,13 +5830,13 @@ class DesktopAppServerService {
         pinnedVia: "companion",
       });
       logDebug("addRemoteThreadPin:companion-parent", {
-        backend: request.ref.backend,
+        backend: parentBackend,
         instanceId,
         threadId: parentThreadId,
         childThreadId: request.ref.threadId,
       });
       await getDesktopBackendRegistry().publishLocalEvent({
-        backend: request.ref.backend,
+        backend: parentBackend,
         notification: {
           method: "navigation/remoteThreadPins/changed",
           params: {
@@ -6019,12 +6027,14 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
       parentThreadId: request.parentThreadId,
+      parentThreadBackend: request.parentThreadBackend,
     });
 
     logDebug("setThreadParent", {
       backend,
       threadId: request.threadId,
       parentThreadId: overlay.parentThreadId ?? null,
+      parentThreadBackend: overlay.parentThreadBackend ?? null,
     });
 
     await getDesktopBackendRegistry().publishLocalEvent({
@@ -6035,6 +6045,7 @@ class DesktopAppServerService {
             params: {
               threadId: request.threadId,
               parentThreadId: overlay.parentThreadId,
+              parentThreadBackend: overlay.parentThreadBackend,
             },
           }
         : {
@@ -6049,6 +6060,7 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
       parentThreadId: overlay.parentThreadId,
+      parentThreadBackend: overlay.parentThreadBackend,
     };
   }
 

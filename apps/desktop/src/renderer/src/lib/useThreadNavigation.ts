@@ -36,6 +36,7 @@ import {
   insertSubthreadIdAfter,
   isRemoteFederationTarget,
   isSubthreadLaunchpadKey,
+  resolveThreadParentKey,
   shortenDerivedThreadTitle,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
@@ -744,6 +745,7 @@ function threadSummariesEqual(
       JSON.stringify(right.workspaceHandoff ?? {}) &&
     left.pinnedRank === right.pinnedRank &&
     left.parentThreadId === right.parentThreadId &&
+    left.parentThreadBackend === right.parentThreadBackend &&
     JSON.stringify(left.subthreadOrder ?? []) ===
       JSON.stringify(right.subthreadOrder ?? []) &&
     left.subthreadsCollapsed === right.subthreadsCollapsed &&
@@ -1025,6 +1027,7 @@ function updateThreadParentInSnapshot(
     backend: AppServerBackendKind;
     threadId: string;
     parentThreadId?: string;
+    parentThreadBackend?: AppServerBackendKind;
   },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
@@ -1036,13 +1039,19 @@ function updateThreadParentInSnapshot(
     if (thread.source !== params.backend || thread.id !== params.threadId) {
       return thread;
     }
-    if (thread.parentThreadId === params.parentThreadId) {
+    if (
+      thread.parentThreadId === params.parentThreadId
+      && thread.parentThreadBackend === params.parentThreadBackend
+    ) {
       return thread;
     }
     changed = true;
     return {
       ...thread,
       parentThreadId: params.parentThreadId,
+      parentThreadBackend: params.parentThreadId
+        ? params.parentThreadBackend ?? params.backend
+        : undefined,
       pinnedRank: params.parentThreadId ? undefined : thread.pinnedRank,
     };
   });
@@ -1062,15 +1071,26 @@ function ungroupChildThreadsInSnapshot(
   }
 
   let changed = false;
+  const threadByKey = new Map(
+    snapshot.threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread,
+    ]),
+  );
+  const parentKey = buildThreadIdentityKey(
+    params.backend,
+    params.parentThreadId,
+  );
   const threads = snapshot.threads.map((thread) => {
-    if (
-      thread.source !== params.backend ||
-      thread.parentThreadId !== params.parentThreadId
-    ) {
+    if (resolveThreadParentKey(thread, threadByKey) !== parentKey) {
       return thread;
     }
     changed = true;
-    return { ...thread, parentThreadId: undefined };
+    return {
+      ...thread,
+      parentThreadId: undefined,
+      parentThreadBackend: undefined,
+    };
   });
 
   return changed ? { ...snapshot, threads } : snapshot;
@@ -1081,10 +1101,15 @@ function collectDescendantThreads(
   parent: NavigationThreadSummary,
 ): NavigationThreadSummary[] {
   const descendants: NavigationThreadSummary[] = [];
+  const threadByKey = new Map(
+    threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread,
+    ]),
+  );
+  const parentKey = buildThreadIdentityKey(parent.source, parent.id);
   const queue = threads.filter(
-    (thread) =>
-      thread.source === parent.source &&
-      thread.parentThreadId === parent.id,
+    (thread) => resolveThreadParentKey(thread, threadByKey) === parentKey,
   );
   const seen = new Set<string>();
 
@@ -1096,11 +1121,11 @@ function collectDescendantThreads(
     }
     seen.add(key);
     descendants.push(thread);
+    const currentKey = buildThreadIdentityKey(thread.source, thread.id);
     queue.push(
       ...threads.filter(
         (candidate) =>
-          candidate.source === thread.source &&
-          candidate.parentThreadId === thread.id,
+          resolveThreadParentKey(candidate, threadByKey) === currentKey,
       ),
     );
   }
@@ -2220,6 +2245,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
   optimisticActiveTurn?: NavigationThreadSummary["optimisticActiveTurn"];
   parentThreadId?: string;
+  parentThreadBackend?: AppServerBackendKind;
   pinnedRank?: string;
   scheduledStart?: NavigationThreadSummary["scheduledStart"];
 }): NavigationThreadSummary {
@@ -2257,6 +2283,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
         }
       : {}),
     parentThreadId: params.parentThreadId,
+    parentThreadBackend: params.parentThreadBackend,
     pinnedRank: params.pinnedRank,
     acpRuntime: params.launchpad.acpRuntime,
     codexEnvironmentRuntime: params.codexEnvironmentRuntime,
@@ -3865,9 +3892,10 @@ export function useThreadNavigation(
       }
 
       if (method === "thread/parent/set") {
-        const { threadId, parentThreadId } = event.notification.params as {
+        const { threadId, parentThreadId, parentThreadBackend } = event.notification.params as {
           threadId: string;
           parentThreadId: string;
+          parentThreadBackend?: AppServerBackendKind;
         };
         setState((current) => ({
           ...current,
@@ -3875,6 +3903,7 @@ export function useThreadNavigation(
             backend: event.backend,
             threadId,
             parentThreadId,
+            parentThreadBackend,
           }),
         }));
         scheduleRefresh();
@@ -3891,6 +3920,7 @@ export function useThreadNavigation(
             backend: event.backend,
             threadId,
             parentThreadId: undefined,
+            parentThreadBackend: undefined,
           }),
         }));
         scheduleRefresh();
@@ -4589,11 +4619,15 @@ export function useThreadNavigation(
       if (!source.parentThreadId) {
         return source;
       }
-      const root = stateRef.current.response?.threads.find(
-        (thread) =>
-          thread.source === source.source &&
-          thread.id === source.parentThreadId,
+      const threads = stateRef.current.response?.threads ?? [];
+      const threadByKey = new Map(
+        threads.map((thread) => [
+          buildThreadIdentityKey(thread.source, thread.id),
+          thread,
+        ]),
       );
+      const parentKey = resolveThreadParentKey(source, threadByKey);
+      const root = parentKey ? threadByKey.get(parentKey) : undefined;
       return root ?? source;
     },
     [],
@@ -4608,7 +4642,7 @@ export function useThreadNavigation(
    */
   const insertSubthreadBelowSource = useCallback(
     async (
-      backend: AppServerBackendKind,
+      parentBackend: AppServerBackendKind,
       rootThreadId: string,
       sourceThreadId: string,
       newThreadId: string,
@@ -4617,15 +4651,18 @@ export function useThreadNavigation(
       if (!snapshot) {
         return;
       }
-      const root = snapshot.threads.find(
-        (thread) => thread.source === backend && thread.id === rootThreadId,
+      const threadByKey = new Map(
+        snapshot.threads.map((thread) => [
+          buildThreadIdentityKey(thread.source, thread.id),
+          thread,
+        ]),
       );
+      const rootKey = buildThreadIdentityKey(parentBackend, rootThreadId);
+      const root = threadByKey.get(rootKey);
       const currentChildIds = sortSubthreadSummaries(
         root ?? { subthreadOrder: undefined },
         snapshot.threads.filter(
-          (thread) =>
-            thread.source === backend &&
-            thread.parentThreadId === rootThreadId,
+          (thread) => resolveThreadParentKey(thread, threadByKey) === rootKey,
         ),
       ).map((child) => child.id);
       const nextOrder = insertSubthreadIdAfter(
@@ -4637,7 +4674,7 @@ export function useThreadNavigation(
       setState((current) => ({
         ...current,
         response: updateSubthreadOrderInSnapshot(current.response, {
-          backend,
+          backend: parentBackend,
           parentThreadId: rootThreadId,
           threadIds: nextOrder,
         }),
@@ -4649,7 +4686,7 @@ export function useThreadNavigation(
       if (persistOrder) {
         try {
           const result = await persistOrder({
-            backend,
+            backend: parentBackend,
             parentThreadId: rootThreadId,
             threadIds: nextOrder,
           });
@@ -4662,7 +4699,7 @@ export function useThreadNavigation(
             }),
           }));
         } catch {
-          await refresh(buildThreadIdentityKey(backend, rootThreadId));
+          await refresh(buildThreadIdentityKey(parentBackend, rootThreadId));
         }
       }
 
@@ -4670,13 +4707,13 @@ export function useThreadNavigation(
         setState((current) => ({
           ...current,
           response: updateSubthreadsCollapsedInSnapshot(current.response, {
-            backend,
+            backend: parentBackend,
             parentThreadId: rootThreadId,
             collapsed: false,
           }),
         }));
         void desktopApi?.setSubthreadsCollapsed?.({
-          backend,
+          backend: parentBackend,
           parentThreadId: rootThreadId,
           collapsed: false,
         }).catch(() => {});
@@ -4722,12 +4759,14 @@ export function useThreadNavigation(
           directoryPath: launchpadDirectoryPath,
           gitStatusSourcePath: directory.gitStatusSourcePath,
           parentThreadId: groupRoot.id,
+          parentThreadBackend: groupRoot.source,
           parentThreadTitle: groupRoot.title,
           preferredBackend: parent.source,
         });
         let launchpad: NavigationLaunchpadDraft = {
           ...response.launchpad,
           parentThreadId: groupRoot.id,
+          parentThreadBackend: groupRoot.source,
           parentThreadTitle: groupRoot.title,
           sourceThreadId: parent.id,
         };
@@ -4740,6 +4779,7 @@ export function useThreadNavigation(
           directoryPath: launchpadDirectoryPath,
           ...(directory.branchName ? { branchName: directory.branchName } : {}),
           parentThreadId: groupRoot.id,
+          parentThreadBackend: groupRoot.source,
           parentThreadTitle: groupRoot.title,
         };
         if (desktopApi.updateDirectoryLaunchpad) {
@@ -4750,6 +4790,7 @@ export function useThreadNavigation(
           launchpad = {
             ...updated.launchpad,
             parentThreadId: groupRoot.id,
+            parentThreadBackend: groupRoot.source,
             parentThreadTitle: groupRoot.title,
             sourceThreadId: parent.id,
           };
@@ -4820,6 +4861,7 @@ export function useThreadNavigation(
             readRendererFederationTarget(),
           sourceThreadId: parent.id,
           parentThreadId: groupRoot.id,
+          parentThreadBackend: groupRoot.source,
           executionMode,
           directoryKind: directory.directoryKind,
           directoryLabel: directory.directoryLabel,
@@ -4871,12 +4913,13 @@ export function useThreadNavigation(
           codexEnvironmentRuntime: response.codexEnvironmentRuntime,
           linkedDirectories,
           parentThreadId: groupRoot.id,
+          parentThreadBackend: groupRoot.source,
         };
         const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
         // Drop the fork directly below the card it was spawned from, and let
         // the order write land before the refresh below reads it back.
         await insertSubthreadBelowSource(
-          response.backend,
+          groupRoot.source,
           groupRoot.id,
           parent.id,
           response.threadId,
@@ -5498,6 +5541,8 @@ export function useThreadNavigation(
         parentThreadId ??
         launchpad.parentThreadId ??
         getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
+      const materializeParentThreadBackend =
+        launchpad.parentThreadBackend ?? launchpad.backend;
       const federationTarget = readRendererFederationTarget();
       let response: Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>;
       try {
@@ -5510,7 +5555,10 @@ export function useThreadNavigation(
           reviewTarget,
           scheduledFor,
           ...(materializeParentThreadId
-            ? { parentThreadId: materializeParentThreadId }
+            ? {
+                parentThreadId: materializeParentThreadId,
+                parentThreadBackend: materializeParentThreadBackend,
+              }
             : {}),
         });
       } catch (error) {
@@ -5558,6 +5606,9 @@ export function useThreadNavigation(
             }
           : undefined,
         parentThreadId: materializeParentThreadId,
+        parentThreadBackend: materializeParentThreadId
+          ? materializeParentThreadBackend
+          : undefined,
         pinnedRank: response.pinnedRank,
         scheduledStart: response.scheduledAction
           ? {
@@ -5573,7 +5624,7 @@ export function useThreadNavigation(
       // so the order write commits before the refresh below reads it back.
       if (materializeParentThreadId) {
         await insertSubthreadBelowSource(
-          response.backend,
+          materializeParentThreadBackend,
           materializeParentThreadId,
           launchpad.sourceThreadId ?? materializeParentThreadId,
           response.threadId,
@@ -6161,6 +6212,7 @@ export function useThreadNavigation(
     async (
       thread: NavigationThreadSummary,
       parentThreadId?: string,
+      parentThreadBackend?: AppServerBackendKind,
     ): Promise<void> => {
       if (!setThreadParentRequest) {
         return;
@@ -6172,6 +6224,7 @@ export function useThreadNavigation(
           backend: thread.source,
           threadId: thread.id,
           parentThreadId,
+          parentThreadBackend,
         }),
       }));
 
@@ -6180,6 +6233,7 @@ export function useThreadNavigation(
           backend: thread.source,
           threadId: thread.id,
           parentThreadId,
+          parentThreadBackend,
         });
         setState((current) => ({
           ...current,
@@ -6187,6 +6241,7 @@ export function useThreadNavigation(
             backend: result.backend,
             threadId: result.threadId,
             parentThreadId: result.parentThreadId,
+            parentThreadBackend: result.parentThreadBackend,
           }),
         }));
       } catch {

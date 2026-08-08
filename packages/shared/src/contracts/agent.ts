@@ -54,6 +54,7 @@ export type StartThreadRequest = {
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   acpRuntime?: BackendAcpSessionRuntimeState;
   parentThreadId?: ThreadIdentifier;
+  parentThreadBackend?: AppServerBackendKind;
 };
 
 export type StartThreadResponse = {
@@ -81,6 +82,7 @@ export type ForkThreadRequest = {
   federationTarget?: FederationTarget;
   sourceThreadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier;
+  parentThreadBackend?: AppServerBackendKind;
   executionMode?: ThreadExecutionMode;
   directoryKind?: DirectorySummaryKind;
   directoryLabel?: string;
@@ -660,6 +662,7 @@ export type EnsureDirectoryLaunchpadRequest = {
   gitStatusSourcePath?: string;
   currentBranch?: string;
   parentThreadId?: string;
+  parentThreadBackend?: AppServerBackendKind;
   parentThreadTitle?: string;
   preferredBackend?: AppServerBackendKind;
   registeredAt?: number;
@@ -697,6 +700,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "workMode"
       | "branchName"
       | "parentThreadId"
+      | "parentThreadBackend"
       | "parentThreadTitle"
       | "codexEnvironmentId"
       | "codexEnvironmentExecutionTarget"
@@ -735,6 +739,7 @@ export type MaterializeDirectoryLaunchpadRequest = {
   collaborationMode?: AppServerCollaborationModeRequest;
   reviewTarget?: AppServerReviewTarget;
   parentThreadId?: ThreadIdentifier;
+  parentThreadBackend?: AppServerBackendKind;
   /**
    * Create the provider thread and prepare its workspace now, but defer the
    * first turn or review until this wall-clock time.

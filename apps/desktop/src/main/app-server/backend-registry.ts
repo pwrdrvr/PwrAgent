@@ -10145,6 +10145,7 @@ export class DesktopBackendRegistry {
     branchName?: string;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
     parentThreadId?: string;
+    parentThreadBackend?: AppServerBackendKind;
     prAutoDispatchEnabled?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
@@ -10159,6 +10160,7 @@ export class DesktopBackendRegistry {
       branchName,
       requiredWorkMode,
       parentThreadId,
+      parentThreadBackend,
       prAutoDispatchEnabled,
       mcpConnectionIds,
       ...request
@@ -10514,6 +10516,7 @@ export class DesktopBackendRegistry {
         backend,
         threadId: result.threadId,
         parentThreadId,
+        parentThreadBackend,
       });
       await this.emit({
         backend,
@@ -10522,6 +10525,7 @@ export class DesktopBackendRegistry {
           params: {
             threadId: result.threadId,
             parentThreadId,
+            parentThreadBackend,
           },
         },
       });
@@ -10826,6 +10830,7 @@ export class DesktopBackendRegistry {
           backend,
           threadId: result.threadId,
           parentThreadId: request.parentThreadId,
+          parentThreadBackend: request.parentThreadBackend,
         });
         await this.emit({
           backend,
@@ -10834,6 +10839,7 @@ export class DesktopBackendRegistry {
             params: {
               threadId: result.threadId,
               parentThreadId: request.parentThreadId,
+              parentThreadBackend: request.parentThreadBackend,
             },
           },
         });
@@ -14950,6 +14956,8 @@ export class DesktopBackendRegistry {
       };
       const requestParentThreadId =
         request.parentThreadId ?? normalizedExisting.parentThreadId;
+      const requestParentThreadBackend =
+        request.parentThreadBackend ?? normalizedExisting.parentThreadBackend;
       const requestParentThreadTitle =
         request.parentThreadTitle ?? normalizedExisting.parentThreadTitle;
       const identityChanged =
@@ -14959,6 +14967,7 @@ export class DesktopBackendRegistry {
       const parentChanged =
         request.parentThreadId !== undefined &&
         (normalizedExisting.parentThreadId !== request.parentThreadId ||
+          normalizedExisting.parentThreadBackend !== request.parentThreadBackend ||
           normalizedExisting.parentThreadTitle !== request.parentThreadTitle);
 
       if (isEmptyDirectoryLaunchpadDraft(existing)) {
@@ -14979,6 +14988,7 @@ export class DesktopBackendRegistry {
           workMode: defaultLaunchpadWorkMode(request, defaults),
           branchName: existing.branchName ?? request.currentBranch,
           parentThreadId: requestParentThreadId,
+          parentThreadBackend: requestParentThreadBackend,
           parentThreadTitle: requestParentThreadTitle,
           registeredAt,
           updatedAt: Date.now(),
@@ -15011,6 +15021,7 @@ export class DesktopBackendRegistry {
               directoryLabel: request.directoryLabel,
               directoryPath: request.directoryPath,
               parentThreadId: requestParentThreadId,
+              parentThreadBackend: requestParentThreadBackend,
               parentThreadTitle: requestParentThreadTitle,
               registeredAt,
               updatedAt: Date.now(),
@@ -15046,6 +15057,7 @@ export class DesktopBackendRegistry {
       workMode: defaultLaunchpadWorkMode(request, defaults),
       branchName: request.currentBranch,
       parentThreadId: request.parentThreadId,
+      parentThreadBackend: request.parentThreadBackend,
       parentThreadTitle: request.parentThreadTitle,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -15834,7 +15846,9 @@ export class DesktopBackendRegistry {
       acpRuntime: launchpad.acpRuntime,
       codexEnvironmentRuntime,
       directoryKey: launchpad.directoryKey,
-      parentThreadId: request.parentThreadId,
+      parentThreadId: request.parentThreadId ?? launchpad.parentThreadId,
+      parentThreadBackend:
+        request.parentThreadBackend ?? launchpad.parentThreadBackend,
     });
     const linkedDirectory = linkedDirectories?.[0];
     if (linkedDirectory) {
@@ -21912,32 +21926,43 @@ export class DesktopBackendRegistry {
     }
   }
 
-  private async resolveHandoffGroupParentThreadId(params: {
+  private async resolveHandoffGroupParentThreadRef(params: {
     backend: AppServerBackendKind;
     sourceOverlay: ThreadOverlayState;
     sourceThreadId: string;
-  }): Promise<string> {
+  }): Promise<{ backend: AppServerBackendKind; threadId: string }> {
     const directParentThreadId = params.sourceOverlay.parentThreadId?.trim();
     if (!directParentThreadId) {
-      return params.sourceThreadId;
+      return { backend: params.backend, threadId: params.sourceThreadId };
     }
 
     let parentThreadId = directParentThreadId;
-    const seen = new Set([params.sourceThreadId]);
-    while (!seen.has(parentThreadId)) {
-      seen.add(parentThreadId);
+    let parentBackend =
+      params.sourceOverlay.parentThreadBackend ?? params.backend;
+    const directParentBackend = parentBackend;
+    const seen = new Set([
+      buildThreadIdentityKey(params.backend, params.sourceThreadId),
+    ]);
+    let parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
+    while (!seen.has(parentKey)) {
+      seen.add(parentKey);
       const parentOverlay = await this.overlayStore.getThreadOverlayState({
-        backend: params.backend,
+        backend: parentBackend,
         threadId: parentThreadId,
       });
       const nextParentThreadId = parentOverlay?.parentThreadId?.trim();
       if (!nextParentThreadId) {
-        return parentThreadId;
+        return { backend: parentBackend, threadId: parentThreadId };
       }
       parentThreadId = nextParentThreadId;
+      parentBackend = parentOverlay?.parentThreadBackend ?? parentBackend;
+      parentKey = buildThreadIdentityKey(parentBackend, parentThreadId);
     }
 
-    return directParentThreadId;
+    return {
+      backend: directParentBackend,
+      threadId: directParentThreadId,
+    };
   }
 
   private startPendingThreadWorkspaceMove(
@@ -23619,7 +23644,6 @@ export class DesktopBackendRegistry {
           });
     const groupingMode: HandoffTaskGroupingMode =
       requestedGroupingMode === "subthread" &&
-      backend === sourceBackend &&
       sameHandoffProjectBoundary(callerProjectBoundary, childProjectBoundary)
         ? "subthread"
         : "none";
@@ -23627,7 +23651,7 @@ export class DesktopBackendRegistry {
       this.updatePendingThreadHandoff(handoffId, {
         groupingMode,
         message:
-          "Requested subthread grouping crosses a backend or project boundary, so the child thread will be created ungrouped.",
+          "Requested subthread grouping crosses a project boundary, so the child thread will be created ungrouped.",
       });
       if (workspaceMode === "same_workspace") {
         const message =
@@ -23636,14 +23660,16 @@ export class DesktopBackendRegistry {
         return threadOrchestrationFailure("invalid_arguments", message);
       }
     }
-    const groupedParentThreadId =
+    const groupedParentThread =
       groupingMode === "subthread"
-        ? await this.resolveHandoffGroupParentThreadId({
+        ? await this.resolveHandoffGroupParentThreadRef({
             backend: sourceBackend,
             sourceOverlay,
             sourceThreadId,
           })
         : undefined;
+    const groupedParentThreadId = groupedParentThread?.threadId;
+    const groupedParentBackend = groupedParentThread?.backend;
 
     let threadId: string;
     let createdLinkedDirectory: LinkedDirectorySummary | undefined;
@@ -23668,7 +23694,10 @@ export class DesktopBackendRegistry {
           backend,
           sourceThreadId,
           ...(groupedParentThreadId
-            ? { parentThreadId: groupedParentThreadId }
+            ? {
+                parentThreadId: groupedParentThreadId,
+                parentThreadBackend: groupedParentBackend,
+              }
             : {}),
           executionMode,
           directoryLabel:
@@ -23715,6 +23744,7 @@ export class DesktopBackendRegistry {
           sandbox: inheritedSettings.sandbox,
           codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
           parentThreadId: groupedParentThreadId,
+          parentThreadBackend: groupedParentBackend,
         });
         threadId = started.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
@@ -23724,7 +23754,7 @@ export class DesktopBackendRegistry {
       }
       if (groupedParentThreadId && this.overlayStore.updateSubthreadOrder) {
         const parentOverlay = await this.overlayStore.getThreadOverlayState({
-          backend,
+          backend: groupedParentBackend ?? backend,
           threadId: groupedParentThreadId,
         });
         const nextOrder = insertSubthreadIdAfter(
@@ -23736,7 +23766,7 @@ export class DesktopBackendRegistry {
           threadId,
         );
         await this.overlayStore.updateSubthreadOrder({
-          backend,
+          backend: groupedParentBackend ?? backend,
           parentThreadId: groupedParentThreadId,
           threadIds: nextOrder,
         });
