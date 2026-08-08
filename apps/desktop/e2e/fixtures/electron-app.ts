@@ -9,7 +9,21 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
-import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
+import {
+  assertUnreachableProfileBootDecision,
+  bootstrapProfileExists,
+  PWRAGENT_HOME_ENV,
+  PWRAGENT_PROFILE_AUTO_CREATE_ENV,
+  PWRAGENT_PROFILE_ENV,
+  resolveActiveProfileName,
+  resolveProfileBootDecision,
+  resolveProfileDir,
+  type ProfileBootDecision,
+} from "../../src/main/profile";
+import {
+  applyDesktopSettingsPatch,
+  readDesktopSettingsConfig,
+} from "../../src/main/settings/desktop-config";
 import {
   E2E_MEMORY_SECRET_STORAGE_ENV,
   SECRET_STORAGE_DISABLED_ENV,
@@ -30,6 +44,50 @@ export const DESKTOP_MAIN_ENTRY = path.resolve(
 const ELECTRON_EVALUATE_QUIT_TIMEOUT_MS = 1_000;
 const ELECTRON_CLOSE_TIMEOUT_MS = 1_000;
 const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
+/**
+ * Hard ceiling on everything `close()` does.
+ *
+ * Specs call `close()` from their own `try`/`finally`, so it spends the
+ * test's budget, not a fixture's: an unbounded stall shows up as the
+ * test timing out at 30s, which replaces whatever the test actually
+ * found with a timeout that names nothing. (Playwright's separate 30s
+ * *worker* teardown timeout is what collects an Electron process no one
+ * closed at all — see the catch in `launchElectronApp`.) 15s leaves room
+ * for a slow force-kill plus `rm` while still failing inside one test.
+ */
+const ELECTRON_TEARDOWN_TIMEOUT_MS = 15_000;
+
+/**
+ * Root element of the first-run wizard overlay (`OnboardingWizard.tsx`).
+ * It is also `role="dialog"` / `aria-label="First-run setup"`, but the
+ * class is the element the component itself roots on and does not move
+ * when the accessible name is reworded.
+ */
+const ONBOARDING_WIZARD_SELECTOR = ".onboarding-wizard-overlay";
+
+/**
+ * Upper bound on how long the wizard watcher stays armed. It only has to
+ * outlive a slow boot; expiring means the wizard never appeared, so the
+ * watcher goes quiet rather than failing.
+ */
+const ONBOARDING_WIZARD_WATCH_TIMEOUT_MS = 120_000;
+
+/**
+ * Env vars that redirect which PwrAgent root and profile the launched
+ * app opens into. The harness inherits the full ambient environment
+ * (below), so any of these left exported in the runner's shell — the
+ * `pwragent-dev-profile` skill exports `PWRAGENT_PROFILE`, for one —
+ * would silently point Electron at a different profile than the one the
+ * harness seeds `onboarding.completed = true` into. The wizard then
+ * fires over every spec. Strip them from the inherited copy BEFORE
+ * per-spec `params.env` is applied, so a spec that deliberately sets one
+ * (see `onboarding-wizard.spec.ts`) still gets it.
+ */
+const PROFILE_RESOLUTION_ENV_VARS = [
+  PWRAGENT_HOME_ENV,
+  PWRAGENT_PROFILE_ENV,
+  PWRAGENT_PROFILE_AUTO_CREATE_ENV,
+] as const;
 
 type ElectronChildProcess = ReturnType<ElectronApplication["process"]>;
 type CloseResult = "closed" | "rejected" | "timeout";
@@ -91,6 +149,13 @@ type LaunchElectronAppParams = {
    * `<homeRoot>/.pwragent/profiles/default/config.toml` or any other
    * on-disk state the app reads at startup. Everything underneath
    * `<homeRoot>/` is cleaned up on `close()`.
+   *
+   * `default` is right for every caller today, but it is hardcoded here
+   * while the onboarding seed resolves its profile from the launch env
+   * (see `resolveSeedConfigPath`). A spec that also passed
+   * `env.PWRAGENT_PROFILE` would have its hook and the seed writing to
+   * two different profiles — resolve the name the same way if you ever
+   * need that combination.
    */
   preLaunchHook?: (homeRoot: string) => void | Promise<void>;
   /**
@@ -124,13 +189,18 @@ type LaunchElectronAppParams = {
    */
   secretStorage?: "disabled" | "memory";
   /**
-   * Whether to seed `onboarding.completed = true` into the
-   * `default` profile's config.toml before launch. Defaults to
-   * `true` so the wizard doesn't intercept clicks in most specs.
+   * Whether to seed `onboarding.completed = true` into the config.toml
+   * of the profile this launch will actually open — resolved from the
+   * launch environment by `resolveSeedConfigPath`, not assumed to be
+   * `default`. Defaults to `true` so the wizard doesn't intercept
+   * clicks in most specs, and the seed is verified before launch (see
+   * `assertOnboardingSeedTook`).
+   *
    * Wizard specs pass `false` to let the wizard fire — combined
    * with NOT pre-creating any profile dir (skip the appearance
    * seed and any preLaunchHook profile-creation), this lets the
-   * boot decision return `no-profile-configured`.
+   * boot decision return `no-profile-configured`. Passing `false`
+   * also disables every onboarding assertion, pre- and post-launch.
    */
   suppressOnboarding?: boolean;
   /**
@@ -151,49 +221,19 @@ export async function launchElectronApp(
   if (params.preLaunchHook) {
     await params.preLaunchHook(homeRoot);
   }
-  // Seed `[general.appearance]` AFTER the preLaunchHook so hooks that
-  // write the whole config.toml don't clobber the appearance keys. The
-  // patch path edits the file in place, preserving anything the hook
-  // wrote, and creates the file if the hook didn't write one. Defaults
-  // to dark so color-assertion tests don't pick up the runner's OS
-  // theme through `theme: "system"`.
-  //
-  // The seed target follows whatever HOME the launched Electron process
-  // will actually use: tests may pass `env.HOME = <their own tmp>` to
-  // override the helper's `homeRoot`, in which case the appearance has
-  // to land in THEIR tmp dir, not the helper's. If both are unset, fall
-  // back to the helper's `homeRoot`.
-  const seedHomeRoot = params.env?.HOME ?? homeRoot;
-  const suppressOnboarding = params.suppressOnboarding ?? true;
-  if (suppressOnboarding) {
-    applyDesktopSettingsPatch(
-      path.join(seedHomeRoot, ".pwragent/profiles/default/config.toml"),
-      {
-        general: {
-          confirmQuitWithInProgressThreads: false,
-          appearance: {
-            theme: params.appearance?.theme ?? "dark",
-            density: params.appearance?.density ?? "mission-control",
-          },
-        },
-        // Suppress the first-run onboarding wizard for every replay-backed
-        // test. The wizard's modal scrim auto-fires on profiles with
-        // `onboarding.completed === false` (see App.tsx), and the per-test
-        // home root is always fresh, so without this seed the wizard would
-        // intercept clicks in every spec. Wizard specs explicitly pass
-        // `suppressOnboarding: false` to let the wizard fire.
-        onboarding: { completed: true },
-        ...(params.contextRailPinned !== undefined
-          ? { ui: { contextRailPinned: params.contextRailPinned } }
-          : {}),
-      },
-    );
-  }
+  // Build the launch environment BEFORE seeding config.toml. The seed
+  // has to land in the profile directory the launched process will
+  // actually open, and that is a function of the final environment
+  // (`PWRAGENT_HOME`, `PWRAGENT_PROFILE`, `HOME`), not of `homeRoot`
+  // alone — see `resolveSeedConfigPath` below.
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {
       env[key] = value;
     }
+  }
+  for (const key of PROFILE_RESOLUTION_ENV_VARS) {
+    delete env[key];
   }
   Object.assign(env, {
     HOME: homeRoot,
@@ -221,6 +261,40 @@ export async function launchElectronApp(
   // openDesktopPwrAgentProfile(), covering both Electron processes.
   configureElectronE2eSecretStorageEnv(env, params.secretStorage);
 
+  // Seed `[general.appearance]` AFTER the preLaunchHook so hooks that
+  // write the whole config.toml don't clobber the appearance keys. The
+  // patch path edits the file in place, preserving anything the hook
+  // wrote, and creates the file if the hook didn't write one. Defaults
+  // to dark so color-assertion tests don't pick up the runner's OS
+  // theme through `theme: "system"`.
+  const seedConfigPath = resolveSeedConfigPath(env);
+  const suppressOnboarding = params.suppressOnboarding ?? true;
+  if (suppressOnboarding) {
+    applyDesktopSettingsPatch(seedConfigPath, {
+      general: {
+        confirmQuitWithInProgressThreads: false,
+        appearance: {
+          theme: params.appearance?.theme ?? "dark",
+          density: params.appearance?.density ?? "mission-control",
+        },
+      },
+      // Suppress the first-run onboarding wizard for every replay-backed
+      // test. The wizard's modal scrim auto-fires on profiles with
+      // `onboarding.completed === false` (see App.tsx), and the per-test
+      // home root is always fresh, so without this seed the wizard would
+      // intercept clicks in every spec. Wizard specs explicitly pass
+      // `suppressOnboarding: false` to let the wizard fire.
+      onboarding: { completed: true },
+      ...(params.contextRailPinned !== undefined
+        ? { ui: { contextRailPinned: params.contextRailPinned } }
+        : {}),
+    });
+    // Prove the seed took before paying for an Electron boot. Both
+    // checks reuse the production resolvers/parser, so they cannot
+    // drift from what the launched process does with the same env.
+    assertOnboardingSeedTook({ env, seedConfigPath });
+  }
+
   const electronApp = await electron.launch({
     args: [
       DESKTOP_MAIN_ENTRY,
@@ -247,100 +321,61 @@ export async function launchElectronApp(
   // the observed one: it never returns when the window layer is wedged. The
   // launched process is ours the moment `electron.launch()` resolves, so a
   // failure past this point has to close it rather than leave an orphan for
-  // the next job on a persistent runner to inherit.
+  // the next job on a persistent runner to inherit. That now includes the
+  // onboarding-wizard check inside `finishElectronLaunch`, which throws by
+  // design.
   try {
-    return await finishElectronLaunch({ electronApp, homeRoot, params });
+    return await finishElectronLaunch({
+      electronApp,
+      env,
+      homeRoot,
+      params,
+      seedConfigPath,
+      suppressOnboarding,
+    });
   } catch (error) {
     await closeElectronApplication(electronApp).catch(() => undefined);
+    await killSpawnedProfileProcessesUnder(homeRoot).catch(() => undefined);
+    // Deliberately NOT removing `homeRoot`: on a launch failure the
+    // seeded config.toml and whatever profile state exists are the
+    // evidence, and the dir sits under the OS tmpdir either way.
     throw error;
   }
 }
 
 async function finishElectronLaunch(args: {
   electronApp: ElectronApplication;
+  env: Record<string, string>;
   homeRoot: string;
   params: LaunchElectronAppParams;
+  seedConfigPath: string;
+  suppressOnboarding: boolean;
 }): Promise<LaunchResult> {
-  const { electronApp, homeRoot, params } = args;
+  const {
+    electronApp,
+    env,
+    homeRoot,
+    params,
+    seedConfigPath,
+    suppressOnboarding,
+  } = args;
   const window = await electronApp.firstWindow();
 
-  const requiresReplayDriver = params.requiresReplayDriver ?? true;
-  if (requiresReplayDriver) {
-    await expect
-      .poll(async () =>
-        await electronApp.evaluate(() =>
-          Boolean(globalThis.__PWRAGENT_REPLAY_DRIVER__)
-        )
-      )
-      .toBe(true);
-  } else {
-    // Wizard specs: just wait for the renderer to mount. We don't
-    // care about the replay driver — there's no thread to replay.
-    await window.waitForLoadState("domcontentloaded");
-  }
+  await waitForRendererReady({
+    electronApp,
+    env,
+    requiresReplayDriver: params.requiresReplayDriver ?? true,
+    seedConfigPath,
+    suppressOnboarding,
+    window,
+  });
 
   if (params.windowSize) {
-    const targetSize = params.windowSize;
-    const windowId = await electronApp.evaluate(
-      ({ BrowserWindow }, size) => {
-        const window = BrowserWindow.getAllWindows()[0];
-        if (!window) {
-          throw new Error("Expected an Electron BrowserWindow for replay E2E sizing");
-        }
-
-        window.setMinimumSize(0, 0);
-        window.setContentSize(size.width, size.height);
-        return window.id;
-      },
-      targetSize
-    );
-
-    let attempt = 0;
-    let previousRequest: NativeContentSize | null = null;
-    await expect
-      .poll(async () => {
-        const observed = await window.evaluate(() => ({
-          innerHeight: globalThis.innerHeight,
-          innerWidth: globalThis.innerWidth,
-        }));
-        if (
-          observed.innerHeight === targetSize.height
-          && observed.innerWidth === targetSize.width
-        ) {
-          return observed;
-        }
-
-        const request = nextRendererViewportRequest({
-          attempt,
-          observed,
-          previousRequest,
-          target: targetSize,
-        });
-        previousRequest = request;
-        attempt += 1;
-
-        await electronApp.evaluate(
-          ({ BrowserWindow }, resize) => {
-            const window = BrowserWindow.fromId(resize.windowId);
-            if (!window || window.isDestroyed()) {
-              throw new Error(
-                "Expected the replay E2E BrowserWindow to remain live while resizing",
-              );
-            }
-            window.setContentSize(resize.request.width, resize.request.height);
-          },
-          { request, windowId },
-        );
-
-        return await window.evaluate(() => ({
-          innerHeight: globalThis.innerHeight,
-          innerWidth: globalThis.innerWidth,
-        }));
-      })
-      .toMatchObject({
-        innerHeight: targetSize.height,
-        innerWidth: targetSize.width,
-      });
+    await applyRendererViewport({
+      electronApp,
+      target: params.windowSize,
+      window,
+    });
   }
 
   return {
@@ -388,24 +423,380 @@ async function finishElectronLaunch(args: {
       }, requestParams);
     },
     close: async () => {
-      await closeElectronApplication(electronApp);
-      // The wizard's graduation path can spawn a detached child
-      // Electron process for the operator's chosen profile (see
-      // `openPwrAgentProfile` in `ipc/profiles.ts`). That child
-      // outlives the test's bootstrap Electron and keeps writing
-      // to `<homeRoot>/.pwragent/profiles/<name>/` (state.db
-      // heartbeats, Codex plugin clones, etc.). If we rm the
-      // tmpdir while the child is mid-write, rm races and ENOTEMPTYs.
+      // Bound the whole teardown. `closeElectronApplication` is already
+      // internally bounded, but the profile-process sweep and the `rm`
+      // both touch the filesystem, and on a degraded shared runner either
+      // can stall. Specs call this from their own `finally`, so an
+      // unbounded stall burns the rest of the 30s test budget and reports
+      // as the test timing out — which buries whatever the test actually
+      // found. Warning and moving on keeps that result legible.
       //
-      // Find any live PwrAgent instances under this tmpdir via
-      // their runtime-instance heartbeat markers, kill them, then
-      // proceed with cleanup. Each marker file is a JSON blob
-      // containing the process's PID; the marker dir layout matches
-      // `startProfileRuntimeHeartbeat` in `main/profile.ts`.
-      await killSpawnedProfileProcessesUnder(homeRoot);
-      await rm(homeRoot, { recursive: true, force: true });
+      // ONLY the timeout is swallowed. A teardown that *fails* — an `rm`
+      // hitting ENOTEMPTY because a spawned profile survived the sweep,
+      // say — still rejects, because that is a real leak and a warning is
+      // not enough to get it noticed.
+      const running = teardown();
+      if (await raceTeardownTimeout(running, ELECTRON_TEARDOWN_TIMEOUT_MS)) {
+        // Still in flight, and now unobserved: keep a late rejection from
+        // surfacing as an unhandled promise rejection mid-suite.
+        running.catch(() => undefined);
+        console.warn(
+          `[pwragent-e2e-teardown] teardown exceeded ${ELECTRON_TEARDOWN_TIMEOUT_MS}ms for homeRoot=${homeRoot}`,
+        );
+      }
     },
   };
+
+  async function teardown(): Promise<void> {
+    await closeElectronApplication(electronApp);
+    // The wizard's graduation path can spawn a detached child
+    // Electron process for the operator's chosen profile (see
+    // `openPwrAgentProfile` in `ipc/profiles.ts`). That child
+    // outlives the test's bootstrap Electron and keeps writing
+    // to `<homeRoot>/.pwragent/profiles/<name>/` (state.db
+    // heartbeats, Codex plugin clones, etc.). If we rm the
+    // tmpdir while the child is mid-write, rm races and ENOTEMPTYs.
+    //
+    // Find any live PwrAgent instances under this tmpdir via
+    // their runtime-instance heartbeat markers, kill them, then
+    // proceed with cleanup. Each marker file is a JSON blob
+    // containing the process's PID; the marker dir layout matches
+    // `startProfileRuntimeHeartbeat` in `main/profile.ts`.
+    await killSpawnedProfileProcessesUnder(homeRoot);
+    await rm(homeRoot, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Path of the `config.toml` the launched process will read, resolved
+ * through the SAME production resolvers the app uses at boot rather than
+ * a hand-built `<home>/.pwragent/profiles/default/` string.
+ *
+ * That distinction is the whole point. The app's root is
+ * `PWRAGENT_HOME` when set and `<HOME>/.pwragent` otherwise, and its
+ * profile is `PWRAGENT_PROFILE` → `profiles.toml::default_profile` →
+ * `default`. A hardcoded path silently seeds the wrong directory the
+ * moment a spec (or the ambient environment) moves either one, and the
+ * only symptom is the first-run wizard taking over every surface.
+ *
+ * Following the resolvers means inheriting their production fallback:
+ * with no `PWRAGENT_HOME` and no `HOME`, `resolvePwragentRoot` lands on
+ * `os.homedir()` — the operator's REAL `~/.pwragent`, which the seed
+ * would then rewrite. Right for the app, catastrophic for a test
+ * fixture, so an absent `HOME` is refused rather than resolved.
+ */
+export function resolveSeedConfigPath(env: Record<string, string>): string {
+  const homeDir = env.HOME;
+  if (!homeDir) {
+    throw new Error(
+      [
+        "PwrAgent E2E launch environment has no HOME.",
+        "  The profile resolvers would fall back to os.homedir(), so the",
+        "  onboarding seed would be written into the operator's real",
+        "  ~/.pwragent profile. Pass `homeRoot`, or an explicit `env.HOME`,",
+        "  rather than deleting HOME from the launch environment.",
+      ].join("\n"),
+    );
+  }
+  const resolverOptions = { argv: [], env, homeDir } as const;
+  const profileName = resolveActiveProfileName(resolverOptions);
+  return path.join(
+    resolveProfileDir(profileName, resolverOptions),
+    "config.toml",
+  );
+}
+
+/**
+ * Fail before paying for an Electron boot if the onboarding seed will
+ * not actually suppress the wizard.
+ *
+ * There are exactly two ways the wizard fires, and this covers both:
+ *
+ *  1. The boot decision is not `open` — no profile dir where the app
+ *     looks, or a named/registry profile that doesn't exist. The app
+ *     drops into bootstrap mode and runs the wizard before committing to
+ *     a profile (see `resolveProfileBootDecision`).
+ *  2. The profile opens, but `onboarding.completed` doesn't read back as
+ *     `true`. `App.tsx` auto-opens the wizard on the first snapshot
+ *     where it is `false`. (A malformed `config.toml` does NOT quietly
+ *     fall back to defaults here — `parseDesktopSettingsToml` is strict
+ *     and throws — but that throw says "Invalid TOML" and nothing about
+ *     onboarding, so it gets the same context attached below.)
+ *
+ * Both are checked with production code (`resolveProfileBootDecision`,
+ * `readDesktopSettingsConfig`) so the harness cannot drift from the app.
+ */
+export function assertOnboardingSeedTook(params: {
+  env: Record<string, string>;
+  seedConfigPath: string;
+}): void {
+  const decision = resolveProfileBootDecision({
+    argv: [],
+    env: params.env,
+    homeDir: params.env.HOME,
+  });
+  if (decision.kind !== "open") {
+    throw new Error(
+      [
+        "PwrAgent E2E launch would open the first-run onboarding wizard:",
+        `  boot decision:    ${describeBootDecision(decision)}`,
+        "  The app boots into bootstrap mode and the wizard's modal scrim",
+        "  intercepts every click, so no spec assertion can run.",
+        describeProfileEnvironment(params),
+      ].join("\n"),
+    );
+  }
+
+  let completed: boolean | undefined;
+  try {
+    completed = readDesktopSettingsConfig(params.seedConfigPath)
+      .onboarding?.completed;
+  } catch (error) {
+    throw new Error(
+      [
+        "PwrAgent E2E onboarding seed did not take: the seeded config.toml",
+        `  is unreadable — ${error instanceof Error ? error.message : String(error)}`,
+        describeProfileEnvironment(params),
+      ].join("\n"),
+      { cause: error },
+    );
+  }
+  if (completed !== true) {
+    throw new Error(
+      [
+        "PwrAgent E2E onboarding seed did not take:",
+        `  onboarding.completed read back as ${JSON.stringify(completed)},`,
+        "  expected true. The wizard auto-opens on the first settings",
+        "  snapshot where it is not true, and its scrim intercepts every",
+        "  click, so no spec assertion can run.",
+        describeProfileEnvironment(params),
+      ].join("\n"),
+    );
+  }
+}
+
+/**
+ * Wait for the launched app to be driveable, failing fast and by name if
+ * the first-run wizard takes the window instead.
+ *
+ * The wizard is worth catching by name because of how badly it presents
+ * otherwise. Its overlay is a SIBLING of the app shell, so the sidebar
+ * and its rows stay in the DOM: a spec either fails
+ * `expect(row).toBeVisible()` with a bare "element(s) not found", or
+ * watches a `.click()` retry against the scrim until the 30s Playwright
+ * test timeout. Neither mentions onboarding.
+ *
+ * Two checks, in order of certainty:
+ *
+ *  - `bootstrapProfileExists` is the deterministic one.
+ *    `initializeAppState("bootstrap")` materializes `<root>/.bootstrap/`
+ *    during `app.whenReady()`, before any BrowserWindow exists, so by
+ *    the time `firstWindow()` has resolved the directory is either there
+ *    or the app is not in bootstrap mode. No polling, no race.
+ *  - The overlay racer is a net for a wizard that opens some other way
+ *    (`onboarding.completed` flipping to false under a live profile).
+ *    It can lose — the replay driver installs from the `BackendRegistry`
+ *    constructor, which runs in bootstrap mode too, so readiness can
+ *    resolve before the renderer has mounted the overlay — which is why
+ *    it is not the thing being relied on.
+ */
+export async function waitForRendererReady(params: {
+  electronApp: ElectronApplication;
+  env: Record<string, string>;
+  requiresReplayDriver: boolean;
+  seedConfigPath: string;
+  suppressOnboarding: boolean;
+  window: Page;
+}): Promise<void> {
+  if (
+    params.suppressOnboarding
+    && bootstrapProfileExists({
+      env: params.env,
+      homeDir: params.env.HOME,
+    })
+  ) {
+    throw onboardingWizardError({
+      ...params,
+      detail: "the app booted into bootstrap mode (`.bootstrap/` exists)",
+    });
+  }
+
+  const wizardWatch = params.suppressOnboarding
+    ? watchForOnboardingWizard(params.window, params)
+    : undefined;
+  try {
+    const ready = params.requiresReplayDriver
+      ? expect
+        .poll(async () =>
+          await params.electronApp.evaluate(() =>
+            Boolean(globalThis.__PWRAGENT_REPLAY_DRIVER__)
+          )
+        )
+        .toBe(true)
+      // Wizard specs: just wait for the renderer to mount. We don't
+      // care about the replay driver — there's no thread to replay.
+      : params.window.waitForLoadState("domcontentloaded");
+    await Promise.race(wizardWatch ? [ready, wizardWatch.detected] : [ready]);
+    if (wizardWatch) {
+      await wizardWatch.assertAbsent();
+    }
+  } finally {
+    wizardWatch?.disarm();
+  }
+}
+
+function watchForOnboardingWizard(
+  window: Page,
+  context: { env: Record<string, string>; seedConfigPath: string },
+): {
+  detected: Promise<never>;
+  assertAbsent: () => Promise<void>;
+  disarm: () => void;
+} {
+  let disarmed = false;
+  const overlay = window.locator(ONBOARDING_WIZARD_SELECTOR);
+  const never = new Promise<never>(() => undefined);
+  const detected = overlay
+    .waitFor({
+      state: "attached",
+      timeout: ONBOARDING_WIZARD_WATCH_TIMEOUT_MS,
+    })
+    .then(
+      () => (disarmed ? never : Promise.reject(onboardingWizardError(context))),
+      // Timed out, or the page went away because the launch failed for
+      // an unrelated reason. Either way this racer has nothing to say —
+      // never settle, and let the real result win the race.
+      () => never,
+    );
+  detected.catch(() => undefined);
+  return {
+    detected,
+    assertAbsent: async () => {
+      if (await overlay.count() > 0) {
+        throw onboardingWizardError(context);
+      }
+    },
+    disarm: () => {
+      disarmed = true;
+    },
+  };
+}
+
+function onboardingWizardError(context: {
+  detail?: string;
+  env: Record<string, string>;
+  seedConfigPath: string;
+}): Error {
+  return new Error(
+    [
+      "PwrAgent first-run onboarding wizard is showing, but this app was",
+      "launched with suppressOnboarding: true. Its modal scrim intercepts",
+      "every click, so no assertion in this spec can run.",
+      ...(context.detail ? [`Detected because ${context.detail}.`] : []),
+      "",
+      `The \`onboarding.completed = true\` seed at ${context.seedConfigPath}`,
+      "did not take effect for the profile this Electron process opened.",
+      describeProfileEnvironment(context),
+    ].join("\n"),
+  );
+}
+
+function describeProfileEnvironment(context: {
+  env: Record<string, string>;
+  seedConfigPath: string;
+}): string {
+  const show = (key: string): string => context.env[key] ?? "(unset)";
+  return [
+    `  seeded config:    ${context.seedConfigPath}`,
+    `  HOME:             ${show("HOME")}`,
+    `  ${PWRAGENT_HOME_ENV}:    ${show(PWRAGENT_HOME_ENV)}`,
+    `  ${PWRAGENT_PROFILE_ENV}: ${show(PWRAGENT_PROFILE_ENV)}`,
+  ].join("\n");
+}
+
+function describeBootDecision(decision: ProfileBootDecision): string {
+  switch (decision.kind) {
+    case "open":
+      return `open (${decision.profileName} via ${decision.source})`;
+    case "missing-named-profile":
+      return `missing-named-profile (${decision.requestedName} via ${decision.source})`;
+    case "missing-default-profile":
+      return `missing-default-profile (${decision.configuredName})`;
+    case "no-profile-configured":
+      return "no-profile-configured (fresh PWRAGENT_HOME, nothing to open)";
+    default:
+      // A new `ProfileBootDecision` variant should be a compile error
+      // here, not a decision this harness silently describes by name.
+      assertUnreachableProfileBootDecision(decision);
+  }
+}
+
+async function applyRendererViewport(params: {
+  electronApp: ElectronApplication;
+  target: NativeContentSize;
+  window: Page;
+}): Promise<void> {
+  const { electronApp, target: targetSize, window } = params;
+  const windowId = await electronApp.evaluate(
+    ({ BrowserWindow }, size) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      if (!window) {
+        throw new Error("Expected an Electron BrowserWindow for replay E2E sizing");
+      }
+
+      window.setMinimumSize(0, 0);
+      window.setContentSize(size.width, size.height);
+      return window.id;
+    },
+    targetSize
+  );
+
+  let attempt = 0;
+  let previousRequest: NativeContentSize | null = null;
+  await expect
+    .poll(async () => {
+      const observed = await window.evaluate(() => ({
+        innerHeight: globalThis.innerHeight,
+        innerWidth: globalThis.innerWidth,
+      }));
+      if (
+        observed.innerHeight === targetSize.height
+        && observed.innerWidth === targetSize.width
+      ) {
+        return observed;
+      }
+
+      const request = nextRendererViewportRequest({
+        attempt,
+        observed,
+        previousRequest,
+        target: targetSize,
+      });
+      previousRequest = request;
+      attempt += 1;
+
+      await electronApp.evaluate(
+        ({ BrowserWindow }, resize) => {
+          const window = BrowserWindow.fromId(resize.windowId);
+          if (!window || window.isDestroyed()) {
+            throw new Error(
+              "Expected the replay E2E BrowserWindow to remain live while resizing",
+            );
+          }
+          window.setContentSize(resize.request.width, resize.request.height);
+        },
+        { request, windowId },
+      );
+
+      return await window.evaluate(() => ({
+        innerHeight: globalThis.innerHeight,
+        innerWidth: globalThis.innerWidth,
+      }));
+    })
+    .toMatchObject({
+      innerHeight: targetSize.height,
+      innerWidth: targetSize.width,
+    });
 }
 
 /**
@@ -514,6 +905,34 @@ export async function closeElectronApplication(
   await killProcessTree(child);
   await waitForProcessExit(child, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
   await waitForClose(closePromise, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
+}
+
+/**
+ * Resolve `true` when `running` is still pending after `timeoutMs`.
+ *
+ * Deliberately not `withTimeout`: that collapses "timed out" and "the
+ * work rejected" into one rejection, and teardown needs to tell them
+ * apart — one is a degraded runner to warn about, the other is a real
+ * cleanup failure that must fail the test. A rejection before the
+ * deadline propagates to the caller here.
+ */
+export async function raceTeardownTimeout(
+  running: Promise<void>,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<boolean>([
+      running.then(() => false),
+      new Promise<true>((resolve) => {
+        timeout = setTimeout(() => resolve(true), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export async function withTimeout<T>(
