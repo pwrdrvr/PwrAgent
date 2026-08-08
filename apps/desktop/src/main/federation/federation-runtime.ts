@@ -72,6 +72,7 @@ import {
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
   buildFederatedThreadRef,
+  encodeLegacyThreadIdentityKey,
   federationEndpointAcceptsCloudflareCredentials,
   isCelestialIconAssignment,
   isCelestialIconId,
@@ -369,6 +370,16 @@ type FederationStarMapArrangementNotification = {
     entries: StarMapArrangementEntry[];
   };
 };
+
+function encodeStarMapEntriesForProtocolV1(
+  entries: StarMapArrangementEntry[],
+): StarMapArrangementEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    threadKey:
+      encodeLegacyThreadIdentityKey(entry.threadKey) ?? entry.threadKey,
+  }));
+}
 
 type FederationEventSubscriptionNotification = {
   method: typeof FEDERATION_EVENT_SUBSCRIPTION_METHOD;
@@ -3114,6 +3125,7 @@ export class DesktopFederationRuntime {
     entries: StarMapArrangementEntry[],
   ): void {
     if (!this.router || entries.length === 0) return;
+    const protocolEntries = encodeStarMapEntriesForProtocolV1(entries);
     for (const [subscriberInstanceId, subscription] of
       this.incomingEventSubscriptions) {
       if (!subscription.eventClasses.has("star_map")) {
@@ -3124,7 +3136,7 @@ export class DesktopFederationRuntime {
           id: `federation-star-map:${randomUUID()}`,
           kind: "notification",
           method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
-          params: { entries },
+          params: { entries: protocolEntries },
           protocolVersion: FEDERATION_PROTOCOL_VERSION,
           sourceInstanceId: this.ensureLocalInstanceId(),
           targetInstanceId: subscriberInstanceId,
@@ -3161,7 +3173,9 @@ export class DesktopFederationRuntime {
             id: `federation-star-map:${randomUUID()}`,
             kind: "notification",
             method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
-            params: { entries },
+            params: {
+              entries: encodeStarMapEntriesForProtocolV1(entries),
+            },
             protocolVersion: FEDERATION_PROTOCOL_VERSION,
             sourceInstanceId: this.ensureLocalInstanceId(),
             targetInstanceId: subscriberInstanceId,

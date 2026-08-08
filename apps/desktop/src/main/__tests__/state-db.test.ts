@@ -135,13 +135,13 @@ describe("StateDb", () => {
     );
   });
 
-  it("migrates percent-encoded ACP thread identity keys", () => {
+  it("restores raw v48 ACP keys to rollback-compatible storage", () => {
     const dbPath = path.join(tempDir, "state.db");
     stateDb.raw.prepare(
       `INSERT INTO threads(thread_id, payload)
        VALUES (?, ?)`,
     ).run(
-      "acp%3Agrok:thread-1",
+      "acp:grok:thread-1",
       JSON.stringify({
         backend: "acp:grok",
         threadId: "thread-1",
@@ -154,7 +154,7 @@ describe("StateDb", () => {
     ).run(
       "all",
       JSON.stringify({
-        knownThreadKeys: ["acp%3Agrok:thread-1", "codex:thread-2"],
+        knownThreadKeys: ["acp:grok:thread-1", "codex:thread-2"],
       }),
     );
     stateDb.raw.prepare(
@@ -163,7 +163,7 @@ describe("StateDb", () => {
          display_json, indexed_at
        ) VALUES (?, ?, ?, ?, '[]', '{}', 1)`,
     ).run(
-      "acp%3Agrok:thread-1",
+      "acp:grok:thread-1",
       "acp:grok",
       "thread-1",
       "Legacy search row",
@@ -171,15 +171,15 @@ describe("StateDb", () => {
     stateDb.raw.prepare(
       `INSERT INTO thread_search_fts(identity_key, title)
        VALUES (?, ?)`,
-    ).run("acp%3Agrok:thread-1", "Legacy search row");
+    ).run("acp:grok:thread-1", "Raw v48 search row");
     stateDb.raw.prepare(
       `INSERT INTO star_map_arrangement(entry_key, payload)
        VALUES (?, ?)`,
     ).run(
-      "pwr_local acp%3Agrok:thread-1",
+      "pwr_local acp:grok:thread-1",
       JSON.stringify({
         instanceId: "pwr_local",
-        threadKey: "acp%3Agrok:thread-1",
+        threadKey: "acp:grok:thread-1",
         dx: 10,
         dy: 20,
         updatedAt: 1,
@@ -187,19 +187,19 @@ describe("StateDb", () => {
       }),
     );
 
-    stateDb.raw.pragma("user_version = 47");
+    stateDb.raw.pragma("user_version = 48");
     stateDb.close();
     stateDb = StateDb.open(dbPath);
 
     expect(
       stateDb.raw.prepare("SELECT thread_id FROM threads").pluck().all(),
-    ).toEqual(["acp:grok:thread-1"]);
+    ).toEqual(["acp%3Agrok:thread-1"]);
     expect(JSON.parse(
       stateDb.raw.prepare("SELECT payload FROM backends WHERE scope = 'all'")
         .pluck()
         .get() as string,
     )).toMatchObject({
-      knownThreadKeys: ["acp:grok:thread-1", "codex:thread-2"],
+      knownThreadKeys: ["acp%3Agrok:thread-1", "codex:thread-2"],
     });
     expect(
       stateDb.raw.prepare(
@@ -207,21 +207,21 @@ describe("StateDb", () => {
       )
         .pluck()
         .all(),
-    ).toEqual(["acp:grok:thread-1"]);
+    ).toEqual(["acp%3Agrok:thread-1"]);
     expect(
       stateDb.raw.prepare("SELECT identity_key FROM thread_search_fts")
         .pluck()
         .all(),
-    ).toEqual(["acp:grok:thread-1"]);
+    ).toEqual(["acp%3Agrok:thread-1"]);
     expect(
       stateDb.raw.prepare(
         "SELECT entry_key, payload FROM star_map_arrangement",
       ).get(),
     ).toMatchObject({
-      entry_key: "pwr_local acp:grok:thread-1",
+      entry_key: "pwr_local acp%3Agrok:thread-1",
       payload: JSON.stringify({
         instanceId: "pwr_local",
-        threadKey: "acp:grok:thread-1",
+        threadKey: "acp%3Agrok:thread-1",
         dx: 10,
         dy: 20,
         updatedAt: 1,

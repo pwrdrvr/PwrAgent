@@ -34,6 +34,64 @@ describe("federation backend bridge", () => {
     );
   });
 
+  it("preserves encoded ACP navigation keys on the protocol-v1 wire", async () => {
+    const backend = {
+      getNavigationSnapshot: vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: 1_000,
+        unchanged: false,
+        threads: [],
+        inboxThreadKeys: ["acp:grok:thread-1"],
+        directories: [{
+          key: "directory-1",
+          kind: "directory" as const,
+          label: "Project",
+          threadKeys: ["acp:grok:thread-1"],
+          needsAttentionCount: 0,
+        }],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "navigation-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
+        params: {},
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(replies[0]).toMatchObject({
+      kind: "response",
+      result: {
+        inboxThreadKeys: ["acp%3Agrok:thread-1"],
+        directories: [{
+          threadKeys: ["acp%3Agrok:thread-1"],
+        }],
+      },
+    });
+  });
+
   it("routes thread reactions through the thread-navigation capability", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({

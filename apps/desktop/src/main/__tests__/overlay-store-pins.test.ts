@@ -127,7 +127,7 @@ describe("SqliteOverlayStore — thread pins", () => {
     }
   });
 
-  it("persists dynamic ACP backend pin state with an intact backend id", async () => {
+  it("keeps ACP pins raw in memory and encoded in shared storage", async () => {
     await store.setThreadPin({
       backend: "acp:gemini",
       threadId: "thread-1",
@@ -144,7 +144,27 @@ describe("SqliteOverlayStore — thread pins", () => {
     const rows = stateDb.raw.prepare("SELECT thread_id FROM threads").all() as Array<{
       thread_id: string;
     }>;
-    expect(rows.map((row) => row.thread_id)).toEqual(["acp:gemini:thread-1"]);
+    expect(rows.map((row) => row.thread_id)).toEqual([
+      "acp%3Agemini:thread-1",
+    ]);
+
+    const payload = JSON.parse(
+      stateDb.raw.prepare(
+        "SELECT payload FROM threads WHERE thread_id = ?",
+      ).pluck().get("acp%3Agemini:thread-1") as string,
+    ) as Record<string, unknown>;
+    stateDb.raw.prepare(
+      "UPDATE threads SET payload = ? WHERE thread_id = ?",
+    ).run(
+      JSON.stringify({ ...payload, pinnedRank: "2048" }),
+      "acp%3Agemini:thread-1",
+    );
+    await expect(
+      store.getThreadOverlayState({
+        backend: "acp:gemini",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({ pinnedRank: "2048" });
   });
 
   it("persists sub-thread parent, order, and collapsed state", async () => {

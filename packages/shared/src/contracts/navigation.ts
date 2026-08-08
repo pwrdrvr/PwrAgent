@@ -1029,6 +1029,18 @@ export function buildThreadIdentityKey(
 }
 
 /**
+ * Pre-v48 representation retained only at compatibility boundaries such as
+ * protocol-v1 federation and the shared profile database. Internal and public
+ * identities use `buildThreadIdentityKey`.
+ */
+export function buildLegacyEncodedThreadIdentityKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+): string {
+  return `${encodeURIComponent(backend)}:${threadId}`;
+}
+
+/**
  * Directory-key prefix for a sub-thread launchpad
  * (`subthread:<source>:<parent>:<mode>`). Sub-thread launchpads are transient,
  * thread-scoped composers — never a project directory — so several layers must
@@ -1081,6 +1093,15 @@ export function normalizeThreadIdentityKey(
     : undefined;
 }
 
+export function encodeLegacyThreadIdentityKey(
+  threadKey: string,
+): string | undefined {
+  const parsed = parseThreadIdentityKey(threadKey);
+  return parsed
+    ? buildLegacyEncodedThreadIdentityKey(parsed.backend, parsed.threadId)
+    : undefined;
+}
+
 export type NavigationSnapshot = {
   backend: AppServerBackendScope;
   fetchedAt: number;
@@ -1105,6 +1126,22 @@ export function normalizeNavigationSnapshotThreadKeys(
     directories: snapshot.directories.map((directory) => ({
       ...directory,
       threadKeys: directory.threadKeys.map(normalize),
+    })),
+  };
+}
+
+/** Preserve the protocol-v1 wire representation for older federation peers. */
+export function encodeNavigationSnapshotThreadKeysForProtocolV1(
+  snapshot: NavigationSnapshot,
+): NavigationSnapshot {
+  const encode = (threadKey: string): string =>
+    encodeLegacyThreadIdentityKey(threadKey) ?? threadKey;
+  return {
+    ...snapshot,
+    inboxThreadKeys: snapshot.inboxThreadKeys.map(encode),
+    directories: snapshot.directories.map((directory) => ({
+      ...directory,
+      threadKeys: directory.threadKeys.map(encode),
     })),
   };
 }

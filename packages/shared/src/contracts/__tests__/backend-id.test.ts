@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAcpBackendId,
+  buildLegacyEncodedThreadIdentityKey,
   buildThreadIdentityKey,
+  encodeLegacyThreadIdentityKey,
+  encodeNavigationSnapshotThreadKeysForProtocolV1,
   isAcpBackendId,
   isAppServerBackendKind,
   isAppServerBuiltinBackendKind,
@@ -50,6 +53,18 @@ describe("backend identity helpers", () => {
     });
   });
 
+  it("retains an explicit encoded form for compatibility boundaries", () => {
+    expect(
+      buildLegacyEncodedThreadIdentityKey(
+        "acp:gemini",
+        "thread:with:colon",
+      ),
+    ).toBe("acp%3Agemini:thread:with:colon");
+    expect(
+      encodeLegacyThreadIdentityKey("acp:gemini:thread:with:colon"),
+    ).toBe("acp%3Agemini:thread:with:colon");
+  });
+
   it("parses legacy percent-encoded ACP thread keys", () => {
     expect(parseThreadIdentityKey("acp%3Agemini:thread:with:colon")).toEqual({
       backend: "acp:gemini",
@@ -83,6 +98,32 @@ describe("backend identity helpers", () => {
     expect(snapshot.inboxThreadKeys).toEqual(["acp:gemini:thread-1"]);
     expect(snapshot.directories[0]?.threadKeys).toEqual([
       "acp:gemini:thread-1",
+    ]);
+  });
+
+  it("encodes navigation keys for protocol-v1 federation peers", () => {
+    const snapshot = encodeNavigationSnapshotThreadKeysForProtocolV1({
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      threads: [],
+      inboxThreadKeys: ["acp:gemini:thread-1"],
+      directories: [{
+        key: "directory-1",
+        kind: "directory",
+        label: "Project",
+        threadKeys: ["acp:gemini:thread-1"],
+        needsAttentionCount: 0,
+      }],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+
+    expect(snapshot.inboxThreadKeys).toEqual(["acp%3Agemini:thread-1"]);
+    expect(snapshot.directories[0]?.threadKeys).toEqual([
+      "acp%3Agemini:thread-1",
     ]);
   });
 

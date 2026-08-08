@@ -54,6 +54,7 @@ import {
   buildPullRequestStatusKey,
   buildFederatedThreadRef,
   buildThreadIdentityKey,
+  encodeLegacyThreadIdentityKey,
   buildNavigationSnapshot,
   buildNavigationSnapshotHash,
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -2725,17 +2726,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       for (const rawEntry of incoming) {
         const entry = normalizeStarMapArrangementEntry(rawEntry);
         if (!isStarMapArrangementEntry(entry)) continue;
-        const key = starMapArrangementEntryKey(entry);
+        const storageEntry = encodeStarMapArrangementEntryForStorage(entry);
+        const key = starMapArrangementEntryKey(storageEntry);
         const row = select.get(key) as { payload: string } | undefined;
         const existing = row
-          ? (JSON.parse(row.payload) as StarMapArrangementEntry)
+          ? normalizeStarMapArrangementEntry(
+              JSON.parse(row.payload) as StarMapArrangementEntry,
+            )
           : undefined;
         const merged = mergeStarMapArrangementEntries(
           existing ? [existing] : [],
           [entry],
         );
         if (!merged.changed) continue;
-        upsert.run(key, JSON.stringify(entry));
+        upsert.run(key, JSON.stringify(storageEntry));
         accepted.push(entry);
       }
     });
@@ -5162,9 +5166,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   private getThread(threadKey: string): ThreadOverlayState | undefined {
+    const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
     const row = this.stateDb.raw
       .prepare("SELECT payload FROM threads WHERE thread_id = ?")
-      .get(threadKey) as { payload: string } | undefined;
+      .get(storageKey) as { payload: string } | undefined;
     if (!row) return undefined;
     const overlay = normalizeThreadOverlayState(JSON.parse(row.payload));
     const pending = this.readThreadPrAutoDispatchPending({
@@ -5221,7 +5226,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        threadKey,
+        encodeThreadIdentityKeyForStorage(threadKey),
         (persistable as Record<string, unknown>).directoryPath as string ?? null,
         persistable.lastSeenAt ?? null,
         persistable.dismissedAt ?? null,
@@ -5236,7 +5241,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const row = this.stateDb.raw
       .prepare("SELECT payload FROM backends WHERE scope = ?")
       .get(scope) as { payload: string } | undefined;
-    return row ? JSON.parse(row.payload) : undefined;
+    if (!row) return undefined;
+    const state = JSON.parse(row.payload) as {
+      knownThreadKeys: string[];
+      lastSnapshotHash?: string;
+    };
+    return {
+      ...state,
+      knownThreadKeys: state.knownThreadKeys.map((threadKey) =>
+        normalizeThreadIdentityKey(threadKey) ?? threadKey
+      ),
+    };
   }
 
   private putBackend(
@@ -5245,7 +5260,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   ): void {
     this.stateDb.raw
       .prepare("INSERT OR REPLACE INTO backends(scope, payload) VALUES (?, ?)")
-      .run(scope, JSON.stringify(state));
+      .run(scope, JSON.stringify({
+        ...state,
+        knownThreadKeys: state.knownThreadKeys.map(
+          encodeThreadIdentityKeyForStorage,
+        ),
+      }));
   }
 
   private readLaunchpadDefaults(): NavigationLaunchpadDefaults {
@@ -6215,6 +6235,19 @@ function normalizeStarMapArrangementEntry(
 ): StarMapArrangementEntry {
   const threadKey = normalizeThreadIdentityKey(entry.threadKey);
   return threadKey && threadKey !== entry.threadKey
+    ? { ...entry, threadKey }
+    : entry;
+}
+
+function encodeThreadIdentityKeyForStorage(threadKey: string): string {
+  return encodeLegacyThreadIdentityKey(threadKey) ?? threadKey;
+}
+
+function encodeStarMapArrangementEntryForStorage(
+  entry: StarMapArrangementEntry,
+): StarMapArrangementEntry {
+  const threadKey = encodeThreadIdentityKeyForStorage(entry.threadKey);
+  return threadKey !== entry.threadKey
     ? { ...entry, threadKey }
     : entry;
 }

@@ -3,14 +3,14 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import {
+  encodeLegacyThreadIdentityKey,
   estimateTokenUsageCost,
-  normalizeThreadIdentityKey,
   resolveOpenAiPricingServiceTier,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 48;
+export const CURRENT_STATE_DB_USER_VERSION = 49;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1377,7 +1377,12 @@ LEFT JOIN federation_peers
     }
     if ((db.pragma("user_version", { simple: true }) as number) < 48) {
       db.transaction(() => {
-        migrateEncodedThreadIdentityKeys(db);
+        db.pragma("user_version = 48");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 49) {
+      db.transaction(() => {
+        migrateRawThreadIdentityKeysToLegacyStorage(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1534,9 +1539,11 @@ LEFT JOIN federation_peers
   }
 }
 
-function migrateEncodedThreadIdentityKeys(db: BetterSqlite3.Database): void {
-  const normalize = (value: string): string =>
-    normalizeThreadIdentityKey(value) ?? value;
+function migrateRawThreadIdentityKeysToLegacyStorage(
+  db: BetterSqlite3.Database,
+): void {
+  const encode = (value: string): string =>
+    encodeLegacyThreadIdentityKey(value) ?? value;
 
   if (tableExists(db, "threads")) {
     const threadRows = db
@@ -1550,13 +1557,15 @@ function migrateEncodedThreadIdentityKeys(db: BetterSqlite3.Database): void {
     );
     const deleteThread = db.prepare("DELETE FROM threads WHERE thread_id = ?");
     for (const row of threadRows) {
-      const normalized = normalize(row.thread_id);
-      if (normalized === row.thread_id) continue;
-      if (threadExists.get(normalized)) {
-        deleteThread.run(row.thread_id);
-      } else {
-        updateThread.run(normalized, row.thread_id);
+      const encoded = encode(row.thread_id);
+      if (encoded === row.thread_id) continue;
+      if (threadExists.get(encoded)) {
+        // A v48 process may have created the raw row after an older process
+        // created the encoded row. Prefer the newer representation's payload
+        // while restoring the shared physical key older clients can read.
+        deleteThread.run(encoded);
       }
+      updateThread.run(encoded, row.thread_id);
     }
   }
 
@@ -1573,9 +1582,11 @@ function migrateEncodedThreadIdentityKeys(db: BetterSqlite3.Database): void {
           knownThreadKeys?: unknown;
         };
         if (!Array.isArray(payload.knownThreadKeys)) continue;
-        const knownThreadKeys = payload.knownThreadKeys.map((value) =>
-          typeof value === "string" ? normalize(value) : value
-        );
+        const knownThreadKeys = [...new Set(
+          payload.knownThreadKeys.map((value) =>
+            typeof value === "string" ? encode(value) : value
+          ),
+        )];
         updateBackend.run(
           JSON.stringify({ ...payload, knownThreadKeys }),
           row.scope,
@@ -1615,15 +1626,14 @@ function migrateEncodedThreadIdentityKeys(db: BetterSqlite3.Database): void {
         )
       : undefined;
     for (const row of searchRows) {
-      const normalized = normalize(row.identity_key);
-      if (normalized === row.identity_key) continue;
-      if (searchDocumentExists.get(normalized)) {
-        deleteSearchFts?.run(row.identity_key);
-        deleteSearchDocument.run(row.identity_key);
-      } else {
-        updateSearchFts?.run(normalized, row.identity_key);
-        updateSearchDocument.run(normalized, row.identity_key);
+      const encoded = encode(row.identity_key);
+      if (encoded === row.identity_key) continue;
+      if (searchDocumentExists.get(encoded)) {
+        deleteSearchFts?.run(encoded);
+        deleteSearchDocument.run(encoded);
       }
+      updateSearchFts?.run(encoded, row.identity_key);
+      updateSearchDocument.run(encoded, row.identity_key);
     }
   }
 
@@ -1656,7 +1666,7 @@ function migrateEncodedThreadIdentityKeys(db: BetterSqlite3.Database): void {
       ) {
         continue;
       }
-      const threadKey = normalize(entry.threadKey);
+      const threadKey = encode(entry.threadKey);
       const entryKey = `${entry.instanceId} ${threadKey}`;
       if (threadKey === entry.threadKey && entryKey === row.entry_key) continue;
 
