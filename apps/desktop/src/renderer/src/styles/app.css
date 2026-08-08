@@ -11784,6 +11784,11 @@ textarea,
   height: 20px;
 }
 
+.transcript-message__attribution .chip--instance {
+  height: 20px;
+  font-size: 11px;
+}
+
 .transcript-message__messaging-origin {
   height: 20px;
   border: 1px solid var(--accent-border);

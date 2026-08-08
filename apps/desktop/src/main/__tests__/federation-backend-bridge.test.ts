@@ -283,7 +283,14 @@ describe("federation backend bridge", () => {
       ],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
-    registerFederationBackendHandlers({ router, backend });
+    registerFederationBackendHandlers({
+      router,
+      backend,
+      resolveSourceInstance: () => ({
+        label: "Client Mac",
+        celestialIcon: "moon",
+      }),
+    });
 
     await router.routeEnvelope({
       sourcePeerId: "client_one",
@@ -310,7 +317,20 @@ describe("federation backend bridge", () => {
           kind: "turn",
           scheduledFor: 3_000,
           displayText: "Follow up",
-          turn: { input: [{ type: "text", text: "Follow up" }] },
+          turn: {
+            input: [{ type: "text", text: "Follow up" }],
+            messageOrigin: {
+              kind: "agent",
+              sourceThread: {
+                backend: "codex",
+                instanceId: "spoofed_instance",
+                instanceLabel: "Spoofed Mac",
+                celestialIcon: "black-hole",
+                threadId: "source-thread",
+                title: "Source thread",
+              },
+            },
+          },
         },
         protocolVersion: 1,
         sourceInstanceId: "client_one",
@@ -357,6 +377,20 @@ describe("federation backend bridge", () => {
       expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
+        turn: {
+          input: [{ type: "text", text: "Follow up" }],
+          messageOrigin: {
+            kind: "agent",
+            sourceThread: {
+              backend: "codex",
+              instanceId: "client_one",
+              instanceLabel: "Client Mac",
+              celestialIcon: "moon",
+              threadId: "source-thread",
+              title: "Source thread",
+            },
+          },
+        },
       }),
     );
     expect(replies).toMatchObject([
@@ -1862,7 +1896,14 @@ describe("federation backend bridge", () => {
       capabilities: ["turn_control"],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
-    registerFederationBackendHandlers({ router, backend });
+    registerFederationBackendHandlers({
+      router,
+      backend,
+      resolveSourceInstance: () => ({
+        label: "Gateway Mac",
+        celestialIcon: "moon",
+      }),
+    });
 
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
@@ -1876,7 +1917,13 @@ describe("federation backend bridge", () => {
           input: [{ type: "text", text: "ship it" }],
           messageOrigin: {
             kind: "agent",
-            sourceThread: { backend: "codex", threadId: "source-thread" },
+            sourceThread: {
+              backend: "codex",
+              instanceId: "spoofed_instance",
+              instanceLabel: "Spoofed Mac",
+              celestialIcon: "black-hole",
+              threadId: "source-thread",
+            },
           },
         },
         protocolVersion: 1,
@@ -1895,6 +1942,8 @@ describe("federation backend bridge", () => {
         sourceThread: {
           backend: "codex",
           instanceId: "gateway_one",
+          instanceLabel: "Gateway Mac",
+          celestialIcon: "moon",
           threadId: "source-thread",
         },
       },
@@ -2077,7 +2126,14 @@ describe("federation backend bridge", () => {
       ],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
-    registerFederationBackendHandlers({ router, backend });
+    registerFederationBackendHandlers({
+      router,
+      backend,
+      resolveSourceInstance: () => ({
+        label: "Gateway Mac",
+        celestialIcon: "moon",
+      }),
+    });
 
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
@@ -2099,11 +2155,23 @@ describe("federation backend bridge", () => {
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.controlActiveTurn,
         params: {
-          operation: "stop",
+          operation: "steer",
           backend: "codex",
           threadId: "thread-1",
-          requestId: "stop-1",
+          requestId: "steer-1",
           expectedTurnId: "turn-live",
+          input: [{ type: "text", text: "Report progress." }],
+          messageOrigin: {
+            kind: "agent",
+            sourceThread: {
+              backend: "codex",
+              instanceId: "spoofed_instance",
+              instanceLabel: "Spoofed Mac",
+              celestialIcon: "black-hole",
+              threadId: "source-thread",
+              title: "Source thread",
+            },
+          },
         },
         protocolVersion: 1,
         sourceInstanceId: "gateway_one",
@@ -2187,11 +2255,23 @@ describe("federation backend bridge", () => {
       threadId: "thread-1",
     });
     expect(backend.controlActiveTurn).toHaveBeenCalledWith({
-      operation: "stop",
+      operation: "steer",
       backend: "codex",
       threadId: "thread-1",
-      requestId: "stop-1",
+      requestId: "steer-1",
       expectedTurnId: "turn-live",
+      input: [{ type: "text", text: "Report progress." }],
+      messageOrigin: {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          instanceId: "gateway_one",
+          instanceLabel: "Gateway Mac",
+          celestialIcon: "moon",
+          threadId: "source-thread",
+          title: "Source thread",
+        },
+      },
     });
     expect(
       FEDERATION_BACKEND_METHOD_CAPABILITIES[
@@ -2226,7 +2306,7 @@ describe("federation backend bridge", () => {
         requestId: "control-active-request",
         result: {
           disposition: "interrupted",
-          requestId: "stop-1",
+          requestId: "steer-1",
           turnId: "turn-live",
         },
       },

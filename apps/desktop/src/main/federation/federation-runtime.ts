@@ -1238,6 +1238,107 @@ export class DesktopFederationRuntime {
     );
   }
 
+  hydrateLiveThreadMessageOrigin(event: AgentEvent): AgentEvent {
+    if (
+      event.notification.method !== "item/started"
+      && event.notification.method !== "item/completed"
+    ) {
+      return event;
+    }
+    const notificationParams = event.notification.params as Record<string, unknown>;
+    const itemValue = notificationParams.item;
+    if (
+      !itemValue
+      || typeof itemValue !== "object"
+      || Array.isArray(itemValue)
+    ) {
+      return event;
+    }
+    const item = itemValue as Record<string, unknown>;
+    const originValue = item.origin;
+    if (
+      item.type !== "userMessage"
+      || !originValue
+      || typeof originValue !== "object"
+      || Array.isArray(originValue)
+    ) {
+      return event;
+    }
+    const origin = originValue as Record<string, unknown>;
+    const sourceThreadValue = origin.sourceThread;
+    if (
+      !sourceThreadValue
+      || typeof sourceThreadValue !== "object"
+      || Array.isArray(sourceThreadValue)
+    ) {
+      return event;
+    }
+    const sourceThread = sourceThreadValue as Record<string, unknown>;
+    if (typeof sourceThread.instanceId !== "string") {
+      return event;
+    }
+    const instance = this.resolveThreadMessageOriginInstance(
+      sourceThread.instanceId,
+    );
+    if (!instance) {
+      return event;
+    }
+    const {
+      celestialIcon: _callerCelestialIcon,
+      instanceLabel: _callerInstanceLabel,
+      ...trustedSourceThread
+    } = sourceThread;
+
+    return {
+      ...event,
+      notification: {
+        ...event.notification,
+        params: {
+          ...notificationParams,
+          item: {
+            ...item,
+            origin: {
+              ...origin,
+              sourceThread: {
+                ...trustedSourceThread,
+                instanceLabel: instance.label,
+                ...(instance.celestialIcon
+                  ? { celestialIcon: instance.celestialIcon }
+                  : {}),
+              },
+            },
+          },
+        },
+      },
+    } as AgentEvent;
+  }
+
+  private resolveThreadMessageOriginInstance(
+    instanceId: FederationInstanceId,
+  ): { label: string; celestialIcon?: CelestialIconId } | undefined {
+    let visible: FederationPeerSummary[] = [];
+    try {
+      visible = this.visiblePeers();
+    } catch {
+      // Early boot tests may not have initialized the app-state DB yet.
+    }
+    let peer = visible.find((candidate) => candidate.id === instanceId);
+    if (!peer) {
+      try {
+        peer = this.store().getPeer(instanceId);
+      } catch {
+        // A source id remains actionable even when peer metadata is gone.
+      }
+    }
+    return peer
+      ? {
+          label: formatFederationPeerDisplayLabel(peer, visible),
+          celestialIcon:
+            this.celestialIconFor(instanceId) ?? peer.celestialIcon,
+        }
+      : undefined;
+  }
+
   async hydrateThreadMessageOrigins(
     response: AppServerReadThreadResponse,
     ownerInstanceId = this.ensureLocalInstanceId(),
@@ -1246,6 +1347,8 @@ export class DesktopFederationRuntime {
       localInstanceId: this.ensureLocalInstanceId(),
       ownerInstanceId,
       response,
+      resolveInstance: (instanceId) =>
+        this.resolveThreadMessageOriginInstance(instanceId),
       resolveThread: async (source) => {
         const resolveOnInstance = async (instanceId: FederationInstanceId) => {
           if (instanceId === this.ensureLocalInstanceId()) {
@@ -1561,6 +1664,8 @@ export class DesktopFederationRuntime {
     registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
+      resolveSourceInstance: (instanceId) =>
+        this.resolveThreadMessageOriginInstance(instanceId),
       onEnvironmentSetupProgress: (event, targetInstanceId) => {
         this.sendEnvironmentSetupProgress(event, targetInstanceId);
       },

@@ -15,6 +15,7 @@ import type {
   CancelQueuedTurnResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
+  CelestialIconId,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
@@ -136,6 +137,76 @@ export type FederatedTranscriptImageResponse = {
 export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
 };
+
+type ResolvedSourceInstance = {
+  label: string;
+  celestialIcon?: CelestialIconId;
+};
+
+function authenticateMessageOrigin(params: {
+  messageOrigin: AppServerThreadMessageOrigin | undefined;
+  resolveSourceInstance?: (
+    instanceId: string,
+  ) => ResolvedSourceInstance | undefined;
+  sourceInstanceId: string;
+}): AppServerThreadMessageOrigin | undefined {
+  const sourceThread = params.messageOrigin?.sourceThread;
+  if (!params.messageOrigin || !sourceThread) {
+    return params.messageOrigin;
+  }
+
+  let sourceInstance: ResolvedSourceInstance | undefined;
+  try {
+    sourceInstance = params.resolveSourceInstance?.(params.sourceInstanceId);
+  } catch {
+    // The authenticated instance id remains useful when display metadata is
+    // temporarily unavailable. Never fall back to caller-provided identity.
+  }
+
+  return {
+    ...params.messageOrigin,
+    sourceThread: {
+      backend: sourceThread.backend,
+      instanceId: params.sourceInstanceId,
+      ...(sourceInstance?.label
+        ? { instanceLabel: sourceInstance.label }
+        : {}),
+      ...(sourceInstance?.celestialIcon
+        ? { celestialIcon: sourceInstance.celestialIcon }
+        : {}),
+      threadId: sourceThread.threadId,
+      ...(sourceThread.title ? { title: sourceThread.title } : {}),
+    },
+  };
+}
+
+function authenticateScheduledTurnOrigin<
+  T extends {
+    turn?: { messageOrigin?: AppServerThreadMessageOrigin };
+  },
+>(params: {
+  request: T;
+  resolveSourceInstance?: (
+    instanceId: string,
+  ) => ResolvedSourceInstance | undefined;
+  sourceInstanceId: string;
+}): T {
+  const messageOrigin = params.request.turn?.messageOrigin;
+  if (!params.request.turn || !messageOrigin) {
+    return params.request;
+  }
+  return {
+    ...params.request,
+    turn: {
+      ...params.request.turn,
+      messageOrigin: authenticateMessageOrigin({
+        messageOrigin,
+        resolveSourceInstance: params.resolveSourceInstance,
+        sourceInstanceId: params.sourceInstanceId,
+      }),
+    },
+  };
+}
 
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationSnapshot: "backend.getNavigationSnapshot",
@@ -449,6 +520,9 @@ export type FederationBackendOperations = {
 export function registerFederationBackendHandlers(params: {
   router: FederationRouter;
   backend: FederationBackendOperations;
+  resolveSourceInstance?: (
+    instanceId: string,
+  ) => ResolvedSourceInstance | undefined;
   onEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
     targetInstanceId: string,
@@ -625,23 +699,14 @@ export function registerFederationBackendHandlers(params: {
     FEDERATION_BACKEND_METHODS.startTurn,
     async (envelope) => {
       const request = envelope.params as FederationStartTurnRequest;
-      const messageOrigin = request.messageOrigin;
-      const sourceThread = messageOrigin?.sourceThread;
+      const messageOrigin = authenticateMessageOrigin({
+        messageOrigin: request.messageOrigin,
+        resolveSourceInstance: params.resolveSourceInstance,
+        sourceInstanceId: envelope.sourceInstanceId,
+      });
       return await params.backend.startTurn({
         ...request,
-        ...(messageOrigin && sourceThread
-          ? {
-              messageOrigin: {
-                ...messageOrigin,
-                sourceThread: {
-                  ...sourceThread,
-                  // The authenticated envelope sender is authoritative. Do
-                  // not accept a caller-supplied provenance owner here.
-                  instanceId: envelope.sourceInstanceId,
-                },
-              },
-            }
-          : {}),
+        ...(messageOrigin ? { messageOrigin } : {}),
       });
     },
   );
@@ -668,17 +733,29 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
-    async (envelope) =>
-      await params.backend.createScheduledThreadAction(
-        envelope.params as CreateScheduledThreadActionRequest,
-      ),
+    async (envelope) => {
+      const request = envelope.params as CreateScheduledThreadActionRequest;
+      return await params.backend.createScheduledThreadAction(
+        authenticateScheduledTurnOrigin({
+          request,
+          resolveSourceInstance: params.resolveSourceInstance,
+          sourceInstanceId: envelope.sourceInstanceId,
+        }),
+      );
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
-    async (envelope) =>
-      await params.backend.updateScheduledThreadAction(
-        envelope.params as UpdateScheduledThreadActionRequest,
-      ),
+    async (envelope) => {
+      const request = envelope.params as UpdateScheduledThreadActionRequest;
+      return await params.backend.updateScheduledThreadAction(
+        authenticateScheduledTurnOrigin({
+          request,
+          resolveSourceInstance: params.resolveSourceInstance,
+          sourceInstanceId: envelope.sourceInstanceId,
+        }),
+      );
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction,
@@ -704,10 +781,18 @@ export function registerFederationBackendHandlers(params: {
   if (params.backend.controlActiveTurn) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.controlActiveTurn,
-      async (envelope) =>
-        await params.backend.controlActiveTurn!(
-          envelope.params as ControlActiveTurnRequest,
-        ),
+      async (envelope) => {
+        const request = envelope.params as ControlActiveTurnRequest;
+        const messageOrigin = authenticateMessageOrigin({
+          messageOrigin: request.messageOrigin,
+          resolveSourceInstance: params.resolveSourceInstance,
+          sourceInstanceId: envelope.sourceInstanceId,
+        });
+        return await params.backend.controlActiveTurn!({
+          ...request,
+          ...(messageOrigin ? { messageOrigin } : {}),
+        });
+      },
     );
   }
   params.router.registerHandler(

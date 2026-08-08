@@ -3,6 +3,7 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
+  CelestialIconId,
   FederationInstanceId,
 } from "@pwragent/shared";
 
@@ -16,6 +17,11 @@ type FederatedSourceThreadRef = {
 type ResolvedFederatedSourceThread = {
   instanceId: FederationInstanceId;
   thread: AppServerThreadSummary;
+};
+
+type ResolvedFederatedSourceInstance = {
+  label: string;
+  celestialIcon?: CelestialIconId;
 };
 
 type HydratedSourceThread = NonNullable<
@@ -37,6 +43,9 @@ export async function hydrateFederatedThreadMessageOrigins(params: {
   resolveThread: (
     ref: FederatedSourceThreadRef,
   ) => Promise<ResolvedFederatedSourceThread | undefined>;
+  resolveInstance: (
+    instanceId: FederationInstanceId,
+  ) => ResolvedFederatedSourceInstance | undefined;
 }): Promise<AppServerReadThreadResponse> {
   const sources = [
     ...params.response.replay.entries.flatMap((entry) =>
@@ -56,6 +65,8 @@ export async function hydrateFederatedThreadMessageOrigins(params: {
     string,
     {
       discoverAcrossInstances: boolean;
+      fallbackCelestialIcon?: CelestialIconId;
+      fallbackInstanceLabel?: string;
       fallbackTitle?: string;
       instanceId: FederationInstanceId;
       source: HydratedSourceThread;
@@ -71,11 +82,15 @@ export async function hydrateFederatedThreadMessageOrigins(params: {
     const existing = sourcesByKey.get(key);
     if (existing) {
       existing.discoverAcrossInstances ||= source.instanceId === undefined;
+      existing.fallbackInstanceLabel ||= source.instanceLabel?.trim();
+      existing.fallbackCelestialIcon ||= source.celestialIcon;
       existing.fallbackTitle ||= source.title?.trim();
       continue;
     }
     sourcesByKey.set(key, {
       discoverAcrossInstances: source.instanceId === undefined,
+      fallbackCelestialIcon: source.celestialIcon,
+      fallbackInstanceLabel: source.instanceLabel?.trim() || undefined,
       fallbackTitle: source.title?.trim() || undefined,
       instanceId,
       source,
@@ -97,11 +112,26 @@ export async function hydrateFederatedThreadMessageOrigins(params: {
         // Provenance identity is still useful and click-to-mount remains
         // available when a peer cannot hydrate the display title.
       }
+      const instanceId = resolved?.instanceId ?? sourceGroup.instanceId;
+      let instance: ResolvedFederatedSourceInstance | undefined;
+      try {
+        instance = params.resolveInstance(instanceId);
+      } catch {
+        // Preserve any already-hydrated identity metadata when peer metadata
+        // is temporarily unavailable.
+      }
       hydratedByKey.set(key, normalizeSourceThread({
         localInstanceId: params.localInstanceId,
         source: sourceGroup.source,
-        instanceId: resolved?.instanceId ?? sourceGroup.instanceId,
-        title: resolved?.thread.title || sourceGroup.fallbackTitle,
+        instanceId,
+        instanceLabel: instance?.label ?? sourceGroup.fallbackInstanceLabel,
+        celestialIcon:
+          instance?.celestialIcon ?? sourceGroup.fallbackCelestialIcon,
+        title:
+          resolved?.thread.titleSource === "fallback"
+          && sourceGroup.fallbackTitle
+            ? sourceGroup.fallbackTitle
+            : resolved?.thread.title || sourceGroup.fallbackTitle,
       }));
     }),
   );
@@ -147,13 +177,20 @@ function normalizeSourceThread(params: {
   localInstanceId: FederationInstanceId;
   source: HydratedSourceThread;
   instanceId: FederationInstanceId;
+  instanceLabel?: string;
+  celestialIcon?: CelestialIconId;
   title?: string;
 }): HydratedSourceThread {
+  const remote = params.instanceId !== params.localInstanceId;
   return {
     backend: params.source.backend,
-    ...(params.instanceId === params.localInstanceId
-      ? {}
-      : { instanceId: params.instanceId }),
+    ...(remote ? { instanceId: params.instanceId } : {}),
+    ...(remote && params.instanceLabel
+      ? { instanceLabel: params.instanceLabel }
+      : {}),
+    ...(remote && params.celestialIcon
+      ? { celestialIcon: params.celestialIcon }
+      : {}),
     threadId: params.source.threadId,
     ...(params.title ? { title: params.title } : {}),
   };

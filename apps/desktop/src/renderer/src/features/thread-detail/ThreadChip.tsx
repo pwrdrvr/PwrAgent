@@ -13,9 +13,9 @@ export { threadCopyTargets } from "../chrome/ThreadChipContextMenu";
 
 type ThreadChipProps = {
   /**
-   * Link text the author wrote, used only when the resolved thread has no
-   * title. The chip prefers the thread's live title so a renamed thread does
-   * not keep showing whatever it was called when the link was written.
+   * Link text the author wrote or title hydrated with message provenance.
+   * The chip prefers the thread's live title unless navigation still knows
+   * only a fallback title from before the thread received its real name.
    */
   fallbackLabel?: string;
   link: ResolvedThreadLink;
@@ -29,7 +29,11 @@ export function ThreadChip(props: ThreadChipProps) {
     useState<ChipContextMenuPosition>();
   const tooltipController = useViewportTooltip({ className: "viewport-tooltip" });
 
-  const label = link.title.trim() || props.fallbackLabel?.trim() || link.threadId;
+  const liveTitle = link.title.trim();
+  const fallbackLabel = props.fallbackLabel?.trim();
+  const label = link.titleSource === "fallback" && fallbackLabel
+    ? fallbackLabel
+    : liveTitle || fallbackLabel || link.threadId;
   const tooltip = link.gitBranch
     ? `${label}\n${link.gitBranch} — open thread`
     : `${label}\nOpen thread`;
