@@ -451,6 +451,24 @@ jobs:
         with:
           node-version: 24.x
 
+      - name: Clear leftover Electron state from previous jobs
+        # This runner is a persistent Tart guest, not a fresh VM per job, so a
+        # previous job's leaked Electron tree and its macOS saved application
+        # state both survive into this one. The saved state is the harmful
+        # half: after an abnormal exit AppKit puts up a modal "unexpectedly
+        # quit while reopening windows" alert before any window exists, which
+        # is exactly how this lane times out having run 0 tests. Force-killing
+        # an orphan is itself what arms that alert, so the reap and the state
+        # clearing ship together. The step always reports what it found (zero
+        # included) so the log carries evidence next time. Process matching is
+        # scoped to this runner's own workspace: the guest is shared with
+        # PwrSnap and with operator work, and neither may become collateral.
+        # Windows lanes are GitHub-hosted (fresh VM per job), so they need no
+        # equivalent.
+        shell: bash
+        timeout-minutes: 5
+        run: bash ./scripts/ci/macos-e2e-pre-run-cleanup.sh
+
       - name: Run desktop replay-backed Electron tests
         # Tart's AppleParavirtGPU can reset under Electron load. The early
         # PWRAGENT_E2E_DISABLE_GPU gate selects software rendering before
