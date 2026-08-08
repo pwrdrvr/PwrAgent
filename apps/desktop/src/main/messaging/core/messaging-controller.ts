@@ -818,7 +818,10 @@ export class MessagingController {
   private readonly capabilityProfile: MessagingCapabilityProfile;
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
-  private readonly assistantStreamDeliveryQueues = new Map<string, Promise<void>>();
+  private readonly assistantStreamDeliveryQueues = new Map<
+    string,
+    Promise<MessagingDeliveryResult>
+  >();
   private readonly assistantStreamCancellationFailures = new Set<string>();
   private readonly assistantStreamCancellationSignals = new Map<
     string,
@@ -828,7 +831,10 @@ export class MessagingController {
     string,
     MessagingCancellationSignal
   >();
-  private readonly workingUpdateDeliveries = new Map<string, Set<Promise<void>>>();
+  private readonly workingUpdateDeliveries = new Map<
+    string,
+    Set<Promise<MessagingDeliveryResult>>
+  >();
   private readonly workingUpdateSurfaces = new Map<
     string,
     Map<string, MessagingSurfaceRef>
@@ -5709,7 +5715,9 @@ export class MessagingController {
   ): Promise<void> {
     const deliveries = this.assistantStreamBufferKeysForEvent(event, binding)
       .map((bufferKey) => this.assistantStreamDeliveryQueues.get(bufferKey))
-      .filter((delivery): delivery is Promise<void> => Boolean(delivery));
+      .filter(
+        (delivery): delivery is Promise<MessagingDeliveryResult> => Boolean(delivery),
+      );
     if (deliveries.length === 0) {
       return;
     }
@@ -5747,30 +5755,28 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     isFinal: boolean,
   ): Promise<MessagingDeliveryResult> {
-    let result: MessagingDeliveryResult | undefined;
     const previous = this.assistantStreamDeliveryQueues.get(bufferKey) ?? Promise.resolve();
     const delivery = previous
       .catch(() => undefined)
-      .then(async () => {
+      .then(async (): Promise<MessagingDeliveryResult> => {
         const latest = this.assistantStreamBuffers.get(bufferKey);
         if (!latest) {
-          return;
+          return {
+            channel: binding.channel.channel,
+            deliveredAt: this.now(),
+            outcome: "discarded",
+          };
         }
-        result = await this.deliverAssistantStreamBuffer(latest, binding, isFinal);
+        return await this.deliverAssistantStreamBuffer(latest, binding, isFinal);
       });
     this.assistantStreamDeliveryQueues.set(bufferKey, delivery);
     try {
-      await delivery;
+      return await delivery;
     } finally {
       if (this.assistantStreamDeliveryQueues.get(bufferKey) === delivery) {
         this.assistantStreamDeliveryQueues.delete(bufferKey);
       }
     }
-    return result ?? {
-      channel: binding.channel.channel,
-      deliveredAt: this.now(),
-      outcome: "discarded",
-    };
   }
 
   private async deliverAssistantStreamBuffer(
@@ -5903,7 +5909,7 @@ export class MessagingController {
     turnId: string,
   ): Promise<boolean> {
     const cancellationKey = this.turnProseKey(binding.id, turnId);
-    const deliveries = new Set<Promise<void>>();
+    const deliveries = new Set<Promise<MessagingDeliveryResult>>();
     const surfaces = new Map<string, MessagingSurfaceRef>();
     this.assistantStreamCancellationFailures.delete(cancellationKey);
     this.assistantStreamCancellationSignals.get(cancellationKey)?.cancel();
@@ -5922,11 +5928,25 @@ export class MessagingController {
         this.assistantStreamBuffers.delete(bufferKey);
       }
     }
-    await Promise.allSettled(deliveries);
+    const deliveryResults = await Promise.allSettled(deliveries);
+    for (const deliveryResult of deliveryResults) {
+      if (
+        deliveryResult.status === "fulfilled"
+        && deliveryResult.value.surface
+        && isVisibleAssistantStreamDelivery(deliveryResult.value)
+      ) {
+        surfaces.set(
+          messagingSurfaceKey(deliveryResult.value.surface),
+          deliveryResult.value.surface,
+        );
+      }
+    }
 
     // A delivery already awaiting its adapter can finish after the buffers are
-    // cleared. The delivery guard retracts a newly-created surface; make one
-    // final sweep for an existing surface before reporting private success.
+    // cleared. Retain the settled delivery result above so the cancellation
+    // path owns a surface created between the delivery guard's post-adapter
+    // check and the caller recording it, then make one final sweep for existing
+    // surfaces.
     for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
       if (
         bufferKey.startsWith(`${binding.id}\0`)
@@ -6006,19 +6026,31 @@ export class MessagingController {
     const key = this.turnProseKey(binding.id, turnId);
     this.workingUpdateCancellationFailures.delete(key);
     this.workingUpdateCancellationSignals.get(key)?.cancel();
-    await Promise.allSettled(this.workingUpdateDeliveries.get(key) ?? []);
+    const deliveryResults = await Promise.allSettled(
+      this.workingUpdateDeliveries.get(key) ?? [],
+    );
 
-    const surfaces = this.workingUpdateSurfaces.get(key);
-    if (surfaces) {
-      for (const surface of surfaces.values()) {
-        const dismissed = await this.dismissTerminalPrivateResponseSurface(
-          binding,
-          turnId,
-          surface,
+    const surfaces = new Map(this.workingUpdateSurfaces.get(key) ?? []);
+    for (const deliveryResult of deliveryResults) {
+      if (
+        deliveryResult.status === "fulfilled"
+        && deliveryResult.value.surface
+        && isVisibleAssistantStreamDelivery(deliveryResult.value)
+      ) {
+        surfaces.set(
+          messagingSurfaceKey(deliveryResult.value.surface),
+          deliveryResult.value.surface,
         );
-        if (!dismissed) {
-          this.workingUpdateCancellationFailures.add(key);
-        }
+      }
+    }
+    for (const surface of surfaces.values()) {
+      const dismissed = await this.dismissTerminalPrivateResponseSurface(
+        binding,
+        turnId,
+        surface,
+      );
+      if (!dismissed) {
+        this.workingUpdateCancellationFailures.add(key);
       }
     }
 
@@ -15380,7 +15412,7 @@ export class MessagingController {
     );
     const guardedIsCancelled = () =>
       isTaskMonitorCancelled() || cancellation.isCancelled();
-    const deliveryPromise = (async () => {
+    const deliveryPromise = (async (): Promise<MessagingDeliveryResult> => {
       const result = await this.deliver(intent, binding, undefined, {
         isCancelled: guardedIsCancelled,
         whenCancelled: cancellation.whenCancelled,
@@ -15412,6 +15444,7 @@ export class MessagingController {
         }
         surfaces.set(messagingSurfaceKey(result.surface), result.surface);
       }
+      return result;
     })();
     let deliveries = this.workingUpdateDeliveries.get(cancellationKey);
     if (!deliveries) {
