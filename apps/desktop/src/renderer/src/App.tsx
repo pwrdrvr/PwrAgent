@@ -2240,6 +2240,7 @@ function DesktopAppShell(props: {
           desktopApi={desktopApi}
           durableNotices={appNotices.durable}
           onDismissDurable={dismissAppNotice}
+          onOpenThread={showThreadFromLink}
           transientNotices={[
             {
               notice: navigation.archiveThreadNotice,

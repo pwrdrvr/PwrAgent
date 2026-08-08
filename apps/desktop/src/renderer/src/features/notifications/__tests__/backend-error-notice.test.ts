@@ -32,6 +32,11 @@ describe("resolveBackendErrorNotice", () => {
       },
       title: "Known Codex issue",
       tone: "warning",
+      threadLink: {
+        backend: "codex",
+        threadId: "thread-1",
+        title: "Fix the flaky test",
+      },
     });
 
     const succeeded = resolveBackendErrorNotice(
@@ -102,6 +107,11 @@ describe("resolveBackendErrorNotice", () => {
       title: "Turn failed",
       message: "stream disconnected before completion",
       detail: "Fix the flaky test",
+      threadLink: {
+        backend: "codex",
+        threadId: "thread-1",
+        title: "Fix the flaky test",
+      },
       copyText: "stream disconnected before completion",
     });
   });
@@ -121,6 +131,11 @@ describe("resolveBackendErrorNotice", () => {
       id: "system-error:codex:thread-1",
       title: "Agent backend error",
       detail: "Codex thread",
+      threadLink: {
+        backend: "codex",
+        threadId: "thread-1",
+        title: "Codex thread",
+      },
     });
   });
 

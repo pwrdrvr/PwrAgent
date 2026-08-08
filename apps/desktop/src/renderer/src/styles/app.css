@@ -5722,6 +5722,12 @@ textarea,
   color: var(--text-secondary);
 }
 
+.app-notice-toast__thread-link {
+  display: flex;
+  min-width: 0;
+  margin-top: 8px;
+}
+
 .app-notice-toast__status {
   display: flex;
   align-items: flex-start;
