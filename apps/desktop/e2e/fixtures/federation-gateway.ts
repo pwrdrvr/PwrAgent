@@ -7,6 +7,7 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
+  CodexEnvironmentOption,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   LinkedDirectorySummary,
@@ -60,6 +61,7 @@ export type GatewayDirectorySeed = {
   label: string;
   path: string;
   threadIds?: string[];
+  codexEnvironmentOptions?: CodexEnvironmentOption[];
 };
 
 export type InProcessFederationGateway = {
@@ -335,6 +337,7 @@ export async function startInProcessFederationGateway(params: {
           prompt: "",
           workMode: "local",
           branchName: "main",
+          codexEnvironmentOptions: directory?.codexEnvironmentOptions,
           createdAt: now,
           updatedAt: now,
         },

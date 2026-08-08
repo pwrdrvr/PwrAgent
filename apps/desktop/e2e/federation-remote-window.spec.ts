@@ -240,6 +240,20 @@ test.describe("federation remote window", () => {
             label: "EnvironmentRepo",
             path: fixtureRepo,
             threadIds: ["remote-kimi-parent"],
+            codexEnvironmentOptions: [
+              {
+                id: "environment",
+                name: "PwrAgent",
+                sourcePath: path.join(
+                  fixtureRepo,
+                  ".codex",
+                  "environments",
+                  "environment.toml",
+                ),
+                setupScript: "printf federation-child-environment",
+                actions: [],
+              },
+            ],
           },
         ],
         threads: [
