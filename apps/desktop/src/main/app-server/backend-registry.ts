@@ -6373,6 +6373,7 @@ export class DesktopBackendRegistry {
     string,
     ReviewSubAgentRecord
   >();
+  private readonly managedReviewOutputByReviewTurn = new Map<string, string>();
   private readonly codexNativeSubAgentParents = new Map<string, string>();
   private readonly codexNativeSubAgentReconciliations = new Map<
     string,
@@ -19960,6 +19961,7 @@ export class DesktopBackendRegistry {
   }): Promise<void> {
     const completedAt =
       completedAtFromTerminalNotification(params.notification) ?? Date.now();
+    const completedItemOutput = this.takeManagedReviewOutput(params.record);
     if (params.method === "turn/completed") {
       const output = await this.readManagedReviewOutput(
         params.record,
@@ -19967,6 +19969,7 @@ export class DesktopBackendRegistry {
           AppServerNotification,
           { method: "turn/completed" }
         >,
+        completedItemOutput,
       );
       const parsed = parseManagedReviewOutput(output);
       const review = parsed
@@ -20089,6 +20092,7 @@ export class DesktopBackendRegistry {
   private async readManagedReviewOutput(
     record: ReviewSubAgentRecord,
     notification: Extract<AppServerNotification, { method: "turn/completed" }>,
+    completedItemOutput?: string,
   ): Promise<string | undefined> {
     const terminalOutput = notification.params.turn?.output
       ?.map((item) => item.text)
@@ -20097,6 +20101,9 @@ export class DesktopBackendRegistry {
       .trim();
     if (terminalOutput) {
       return terminalOutput;
+    }
+    if (completedItemOutput?.trim()) {
+      return completedItemOutput.trim();
     }
     try {
       const replay = await this.readThread({
@@ -20115,6 +20122,47 @@ export class DesktopBackendRegistry {
       });
       return undefined;
     }
+  }
+
+  private rememberManagedReviewOutput(event: AgentEvent): void {
+    if (
+      event.notification.method !== "item/completed"
+      || readNotificationItemType(event.notification) !== "agentMessage"
+    ) {
+      return;
+    }
+    const params = readRecord(event.notification.params);
+    const reviewThreadId = readNonEmptyString(params?.threadId);
+    const turnId = readNonEmptyString(params?.turnId);
+    const output = textFragmentsFromCodexNotification(event.notification)
+      .at(-1)
+      ?.trim();
+    if (!reviewThreadId || !turnId || !output) {
+      return;
+    }
+    const record = this.findManagedReviewForChildRequest({
+      backend: event.backend,
+      reviewThreadId,
+      turnId,
+    });
+    if (record?.mode !== "managed") {
+      return;
+    }
+    this.managedReviewOutputByReviewTurn.set(
+      buildReviewSubAgentKey(event.backend, reviewThreadId, record.turnId),
+      output,
+    );
+  }
+
+  private takeManagedReviewOutput(record: ReviewSubAgentRecord): string | undefined {
+    const key = buildReviewSubAgentKey(
+      record.backend,
+      record.reviewThreadId,
+      record.turnId,
+    );
+    const output = this.managedReviewOutputByReviewTurn.get(key);
+    this.managedReviewOutputByReviewTurn.delete(key);
+    return output;
   }
 
   private findActiveReviewSubAgentForTerminal(params: {
@@ -27458,6 +27506,7 @@ export class DesktopBackendRegistry {
     event = await this.withThreadMessageContext(event);
     this.rememberFileChangeApprovalContext(event);
     event = this.withEmbeddedFileChangeApprovalContext(event);
+    this.rememberManagedReviewOutput(event);
 
     if (event.backend === "codex") {
       this.recordTaskMonitorActivity(event.notification);

@@ -1506,6 +1506,7 @@ class MockBackendClient {
       replay?: AppServerThreadReplay;
       readThreadReplays?: AppServerThreadReplay[];
       readThreadError?: Error;
+      readThreadErrorsByThreadId?: Record<string, Error>;
       readThreadDelay?: Promise<unknown>;
       skills?: Array<{
         commands?: AppServerAvailableCommandSummary[];
@@ -1684,8 +1685,13 @@ class MockBackendClient {
     if (this.options.readThreadDelay) {
       await this.options.readThreadDelay;
     }
-    if (this.options.readThreadError) {
-      throw this.options.readThreadError;
+    const readThreadError =
+      (_params
+        ? this.options.readThreadErrorsByThreadId?.[_params.threadId]
+        : undefined)
+      ?? this.options.readThreadError;
+    if (readThreadError) {
+      throw readThreadError;
     }
     if (replay) {
       return replay;
@@ -17951,6 +17957,11 @@ command = "pnpm dev"
           supportsReasoning: true,
         },
       ],
+      readThreadErrorsByThreadId: {
+        "managed-review-child": new Error(
+          "ephemeral threads do not support includeTurns",
+        ),
+      },
       startThreadResult: { threadId: "managed-review-child" },
     });
     const overlayStore = createOverlayStoreMock({
@@ -18083,6 +18094,23 @@ command = "pnpm dev"
       },
     });
     await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "managed-review-child",
+        turnId: "turn-1",
+        item: {
+          id: "review-output",
+          type: "agentMessage",
+          text: JSON.stringify({
+            findings: [],
+            overall_correctness: "patch is correct",
+            overall_explanation: "No blocking findings.",
+            overall_confidence_score: 0.96,
+          }),
+        },
+      },
+    });
+    await codexClient.emit({
       method: "turn/completed",
       params: {
         threadId: "managed-review-child",
@@ -18090,15 +18118,7 @@ command = "pnpm dev"
         turn: {
           id: "turn-1",
           status: "completed",
-          output: [{
-            type: "text",
-            text: JSON.stringify({
-              findings: [],
-              overall_correctness: "patch is correct",
-              overall_explanation: "No blocking findings.",
-              overall_confidence_score: 0.96,
-            }),
-          }],
+          output: [],
         },
       },
     });
@@ -18149,6 +18169,9 @@ command = "pnpm dev"
         }),
       }),
     ]);
+    expect(codexClient.readThreadCalls).not.toContainEqual(
+      expect.objectContaining({ threadId: "managed-review-child" }),
+    );
     const hydratedParent = await registry.readThread({
       backend: "codex",
       threadId: "thread-parent",
