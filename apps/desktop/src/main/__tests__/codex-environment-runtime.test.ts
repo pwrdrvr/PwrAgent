@@ -11,6 +11,7 @@ import {
   startLocalCodexEnvironmentAction,
   stopCodexEnvironmentDetachedCommand,
 } from "../app-server/codex-environment-runtime";
+import { WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
 
 const mainLogEntries = vi.hoisted(
@@ -219,13 +220,17 @@ describe("codex environment runtime", () => {
         },
       );
 
+      // The run registers only after the Windows Job becomes ready, so this
+      // poll must honor the same cold-start allowance as the test timeout.
+      // The helper's 10s default would reintroduce the narrowed contract
+      // whenever this test is the first detach launch to pay the cold start.
       await expectEventually(async () => {
         const result = stopCodexEnvironmentDetachedCommand(runId, "stop");
         if (!result.found) {
           throw new Error("Detached process is not registered yet");
         }
         return result;
-      });
+      }, isWindows ? WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS : 10_000);
 
       if (isWindows) {
         const exit = await detachedExit;
