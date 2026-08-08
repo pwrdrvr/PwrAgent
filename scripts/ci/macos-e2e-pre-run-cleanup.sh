@@ -73,8 +73,14 @@ marker="/Electron.app/"
 self_pid="${REAP_SELF_PID:-$$}"
 injected_table="${REAP_PS_SNAPSHOT_FILE:-}"
 
-snapshot_file=$(mktemp -t macos-e2e-cleanup)
-matches_file=$(mktemp -t macos-e2e-cleanup-matches)
+# Spell the template out rather than using `mktemp -t NAME`. BSD mktemp
+# appends the X's for you; GNU mktemp treats the argument as the template and
+# fails with "too few X's". The script only ever runs for real on macOS, but
+# its unit tests run on every platform's Test job.
+tmp_root="${TMPDIR:-/tmp}"
+tmp_root="${tmp_root%/}"
+snapshot_file=$(mktemp "$tmp_root/macos-e2e-cleanup.XXXXXXXX")
+matches_file=$(mktemp "$tmp_root/macos-e2e-cleanup-matches.XXXXXXXX")
 trap 'rm -f "$snapshot_file" "$matches_file"' EXIT
 
 summary() {
