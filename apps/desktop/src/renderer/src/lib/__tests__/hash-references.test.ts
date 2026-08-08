@@ -49,6 +49,21 @@ describe("findHashReferenceTrigger", () => {
     expect(findHashReferenceTrigger("repo#123", 8)).toBeUndefined();
     expect(findHashReferenceTrigger("#first\nplain", 12)).toBeUndefined();
   });
+
+  it("ends a numeric PR reference at the first whitespace", () => {
+    const activeDraft = "Check PR #1349";
+    expect(findHashReferenceTrigger(activeDraft, activeDraft.length)).toEqual({
+      start: 9,
+      end: activeDraft.length,
+      query: "1349",
+    });
+
+    expect(findHashReferenceTrigger("Check PR #1349 ", 15)).toBeUndefined();
+    const continuingDraft = "Check PR #1349 before merging";
+    expect(
+      findHashReferenceTrigger(continuingDraft, continuingDraft.length),
+    ).toBeUndefined();
+  });
 });
 
 describe("filterHashReferenceCandidates", () => {
