@@ -7995,6 +7995,12 @@ script = "echo setup"
 
   it("isolates a selected PwrSnap stdio bridge from global Codex MCP config", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
+    Object.assign(codexClient, {
+      readConfiguredMcpServerNames: vi.fn(async () => [
+        "pwrsnap",
+        "pwragent_pwrsnap",
+      ]),
+    });
     const overlayStore = createOverlayStoreMock();
     const bindThread = vi.fn();
     const registerBridge = vi.fn(async () => ({
@@ -8059,6 +8065,51 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("does not create transport-less PwrSnap disable entries", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const readConfiguredMcpServerNames = vi.fn(async () => ["pwrsnap"]);
+    Object.assign(codexClient, { readConfiguredMcpServerNames });
+    const registerBridge = vi.fn(async () => ({
+      server: {
+        name: "pwrsnap",
+        command: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+        args: ["/app/mcp-connection-bridge.js"],
+        env: {
+          ELECTRON_RUN_AS_NODE: "1",
+          PWRAGENT_MCP_CONNECTION_SOCKET: "/tmp/pwragent.sock",
+          PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
+        },
+      },
+      bindThread: vi.fn(),
+      revoke: vi.fn(),
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      mcpConnectionService: { registerBridge },
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      mcpConnectionIds: [PWRSNAP_MCP_CONNECTION_ID],
+    });
+
+    expect(readConfiguredMcpServerNames).toHaveBeenCalledWith({
+      cwd: "/tmp/pwragent-scratch",
+    });
+    const mcpServers = (
+      codexClient.lastStartThreadParams?.config as {
+        mcp_servers?: Record<string, unknown>;
+      }
+    )?.mcp_servers;
+    expect(mcpServers?.pwrsnap).toEqual({ enabled: false });
+    expect(mcpServers).not.toHaveProperty("pwragent_pwrsnap");
+
+    await registry.close();
+  });
+
   it("revokes a PwrSnap bridge when Codex thread creation fails", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     vi.spyOn(codexClient, "startThread").mockRejectedValueOnce(
@@ -8096,6 +8147,48 @@ script = "echo setup"
 
     expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined);
     expect(revoke).toHaveBeenCalledTimes(1);
+    await registry.close();
+  });
+
+  it("explains rejected PwrSnap MCP transports without implying PwrSnap was down", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    vi.spyOn(codexClient, "startThread").mockRejectedValueOnce(
+      new Error(
+        "json-rpc error (-32600): failed to load configuration: invalid transport in mcp_servers.pwragent_pwrsnap",
+      ),
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      mcpConnectionService: {
+        registerBridge: async () => ({
+          server: {
+            name: "pwrsnap",
+            command: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+            args: ["/app/mcp-connection-bridge.js"],
+            env: {
+              ELECTRON_RUN_AS_NODE: "1",
+              PWRAGENT_MCP_CONNECTION_SOCKET: "/tmp/pwragent.sock",
+              PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
+            },
+          },
+          bindThread: vi.fn(),
+          revoke: vi.fn(),
+        }),
+      },
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await expect(
+      registry.startThread({
+        backend: "codex",
+        mcpConnectionIds: [PWRSNAP_MCP_CONNECTION_ID],
+      }),
+    ).rejects.toThrow(
+      "PwrSnap was not contacted: Codex rejected PwrAgent's temporary MCP configuration. Update PwrAgent and retry the thread.",
+    );
+
     await registry.close();
   });
 

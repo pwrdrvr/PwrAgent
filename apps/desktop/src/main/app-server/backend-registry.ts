@@ -567,6 +567,9 @@ function assistantOutputForTurn(
 type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
+  readConfiguredMcpServerNames?(params?: {
+    cwd?: string;
+  }): Promise<string[]>;
   listThreads(
     params?: {
       archived?: boolean;
@@ -5809,33 +5812,57 @@ function buildCodexConnectionMcpServerName(
 
 function buildCodexConnectionMcpConfig(
   registrations: McpConnectionBridgeRegistration[],
+  inheritedServerNames?: readonly string[],
 ): CodexThreadStartParams["config"] | undefined {
   if (registrations.length === 0) return undefined;
+  const inheritedNames = new Set(inheritedServerNames ?? []);
   return {
     mcp_servers: Object.fromEntries(
-      registrations.flatMap(({ server }) => [
+      registrations.flatMap(({ server }) => {
         // Codex recursively merges thread config over the operator's global
-        // config. Disable both the original name and our former fixed alias,
-        // then give this grant a stable hashed key so inherited HTTP fields
-        // cannot turn the stdio bridge into an invalid mixed transport.
-        [server.name, { enabled: false }],
-        [
+        // config. Disable only aliases that were actually inherited: a new
+        // `{ enabled: false }` entry has no command or URL, which Codex
+        // correctly rejects as a transport-less MCP server. The bridge itself
+        // always receives a unique hashed name so it cannot mix with an
+        // inherited HTTP server.
+        const aliases = [
+          server.name,
           `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}`,
-          { enabled: false },
-        ],
-        [
-          buildCodexConnectionMcpServerName(server),
-          {
-            enabled: true,
-            command: server.command,
-            args: server.args,
-            env: server.env,
-            tool_timeout_sec: MCP_CONNECTION_TOOL_TIMEOUT_SECONDS,
-          },
-        ],
-      ]),
+        ].filter((name) => inheritedNames.has(name));
+        return [
+          ...aliases.map((name) => [name, { enabled: false }] as const),
+          [
+            buildCodexConnectionMcpServerName(server),
+            {
+              enabled: true,
+              command: server.command,
+              args: server.args,
+              env: server.env,
+              tool_timeout_sec: MCP_CONNECTION_TOOL_TIMEOUT_SECONDS,
+            },
+          ] as const,
+        ];
+      }),
     ),
   } as CodexThreadStartParams["config"];
+}
+
+function userActionablePwrSnapMcpConfigError(
+  error: unknown,
+  registrations: McpConnectionBridgeRegistration[],
+): unknown {
+  if (
+    !registrations.some(({ server }) => server.name === PWRSNAP_MCP_CONNECTION_ID)
+    || !(error instanceof Error)
+    || !error.message.includes("invalid transport in mcp_servers.")
+  ) {
+    return error;
+  }
+  return new Error(
+    "PwrSnap was not contacted: Codex rejected PwrAgent's temporary MCP configuration. Update PwrAgent and retry the thread. If this still happens after updating, repair or remove the named MCP server in Codex configuration. Details: "
+      + error.message,
+    { cause: error },
+  );
 }
 
 function mergeCodexThreadConfigs(
@@ -10306,6 +10333,9 @@ export class DesktopBackendRegistry {
         : [];
     const connectionMcpConfig = buildCodexConnectionMcpConfig(
       mcpConnectionRegistrations,
+      backend === "codex" && mcpConnectionRegistrations.length > 0
+        ? await this.readConfiguredCodexMcpServerNames(cwd)
+        : undefined,
     );
     const codexMcpConfig = mergeCodexThreadConfigs(
       pdfMcpConfig,
@@ -10394,7 +10424,10 @@ export class DesktopBackendRegistry {
               : String(rollbackError),
         });
       });
-      throw error;
+      throw userActionablePwrSnapMcpConfigError(
+        error,
+        mcpConnectionRegistrations,
+      );
     }
     pdfMcpRegistration?.bindThread(result.threadId);
     for (const registration of mcpConnectionRegistrations) {
@@ -11162,6 +11195,27 @@ export class DesktopBackendRegistry {
     return registrations;
   }
 
+  private async readConfiguredCodexMcpServerNames(
+    cwd?: string,
+  ): Promise<string[] | undefined> {
+    if (!this.codexClient.readConfiguredMcpServerNames) {
+      return undefined;
+    }
+    try {
+      return await this.codexClient.readConfiguredMcpServerNames(
+        cwd ? { cwd } : undefined,
+      );
+    } catch (error) {
+      // A compatibility fallback must not prevent a selected connection from
+      // starting. Without an inventory, omit disable entries rather than
+      // creating a transport-less MCP config record.
+      backendRegistryLog.warn("connection_mcp_config_inventory_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
   private async registerAcpMcpConnections(
     connectionIds: string[] | undefined,
     threadId?: string,
@@ -11354,6 +11408,14 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
+      cwd =
+        params.backend === "codex"
+          ? await this.resolveThreadEnvironmentCwd(
+              params.backend,
+              params.threadId,
+              overlay,
+            )
+          : undefined;
       const hasPdfMcpToolCatalog =
         params.backend === "codex" && this.hasPdfMcpToolCatalog(overlay);
       if (hasPdfMcpToolCatalog) {
@@ -11372,7 +11434,10 @@ export class DesktopBackendRegistry {
         );
         codexMcpConfig = mergeCodexThreadConfigs(
           codexMcpConfig,
-          buildCodexConnectionMcpConfig(registrations),
+          buildCodexConnectionMcpConfig(
+            registrations,
+            await this.readConfiguredCodexMcpServerNames(cwd),
+          ),
         );
       }
       const preparedPdfInput = await preparePdfTurnInput({
@@ -11400,14 +11465,6 @@ export class DesktopBackendRegistry {
           : params.reasoningEffort ?? overlay?.reasoningEffort,
         fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
       });
-      cwd =
-        params.backend === "codex"
-          ? await this.resolveThreadEnvironmentCwd(
-              params.backend,
-              params.threadId,
-              overlay,
-            )
-          : undefined;
       await this.emit({
         backend: params.backend,
         notification: {
