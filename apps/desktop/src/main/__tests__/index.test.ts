@@ -136,6 +136,9 @@ const messagingLeaseStartMock = vi.fn<() => Promise<void>>();
 const messagingLeaseShutdownSyncMock = vi.fn();
 const getRuntimeMessagingLeaseCoordinatorMock = vi.fn();
 const getExistingRuntimeMessagingLeaseCoordinatorMock = vi.fn();
+const federationLeaseShutdownSyncMock = vi.fn();
+const getRuntimeFederationLeaseCoordinatorMock = vi.fn();
+const getExistingRuntimeFederationLeaseCoordinatorMock = vi.fn();
 const requestBindingRevokeAllForThreadMock = vi.fn();
 const setMessagingArchiveCleanerMock = vi.fn();
 const setMessagingAgentToolServiceMock = vi.fn();
@@ -455,6 +458,12 @@ vi.mock("../runtime-messaging-lease", () => ({
     getExistingRuntimeMessagingLeaseCoordinatorMock,
 }));
 
+vi.mock("../runtime-federation-lease", () => ({
+  getRuntimeFederationLeaseCoordinator: getRuntimeFederationLeaseCoordinatorMock,
+  getExistingRuntimeFederationLeaseCoordinator:
+    getExistingRuntimeFederationLeaseCoordinatorMock,
+}));
+
 vi.mock("../state/app-state", () => ({
   initializeAppState: initializeAppStateMock,
   disposeAppState: disposeAppStateMock,
@@ -480,6 +489,10 @@ vi.mock("../profile", () => ({
 const runtimeMessagingLeaseCoordinatorMock = {
   start: messagingLeaseStartMock,
   shutdownSync: messagingLeaseShutdownSyncMock,
+};
+
+const runtimeFederationLeaseCoordinatorMock = {
+  shutdownSync: federationLeaseShutdownSyncMock,
 };
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -672,6 +685,15 @@ describe("bootstrapApp", () => {
     getExistingRuntimeMessagingLeaseCoordinatorMock.mockReset();
     getExistingRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(
       runtimeMessagingLeaseCoordinatorMock,
+    );
+    federationLeaseShutdownSyncMock.mockReset();
+    getRuntimeFederationLeaseCoordinatorMock.mockReset();
+    getRuntimeFederationLeaseCoordinatorMock.mockReturnValue(
+      runtimeFederationLeaseCoordinatorMock,
+    );
+    getExistingRuntimeFederationLeaseCoordinatorMock.mockReset();
+    getExistingRuntimeFederationLeaseCoordinatorMock.mockReturnValue(
+      runtimeFederationLeaseCoordinatorMock,
     );
     requestBindingRevokeAllForThreadMock.mockReset();
     setMessagingArchiveCleanerMock.mockReset();
@@ -1821,10 +1843,11 @@ describe("bootstrapApp", () => {
     );
   });
 
-  it("does not create the messaging lease coordinator on early SIGTERM", async () => {
+  it("does not create the lease coordinators on early SIGTERM", async () => {
     whenReadyMock.mockReturnValue(new Promise(() => {}));
     isAppStateInitializedMock.mockReturnValue(false);
     getExistingRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(null);
+    getExistingRuntimeFederationLeaseCoordinatorMock.mockReturnValue(null);
 
     await import("../index");
 
@@ -1839,11 +1862,13 @@ describe("bootstrapApp", () => {
 
     expect(getRuntimeMessagingLeaseCoordinatorMock).not.toHaveBeenCalled();
     expect(messagingLeaseShutdownSyncMock).not.toHaveBeenCalled();
+    expect(getRuntimeFederationLeaseCoordinatorMock).not.toHaveBeenCalled();
+    expect(federationLeaseShutdownSyncMock).not.toHaveBeenCalled();
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
     expect(quitMock).toHaveBeenCalledTimes(1);
   });
 
-  it("releases the messaging lease synchronously on SIGTERM", async () => {
+  it("releases the messaging and federation leases synchronously on SIGTERM", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
     await import("../index");
@@ -1859,11 +1884,13 @@ describe("bootstrapApp", () => {
     await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
 
     expect(messagingLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
     expect(quitMock).toHaveBeenCalledTimes(1);
 
     appEventHandlers.get("before-quit")?.();
     expect(messagingLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips messaging runtime startup when messaging is disabled for the app instance", async () => {

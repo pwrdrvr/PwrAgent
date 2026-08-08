@@ -165,6 +165,10 @@ import {
 import { getPwrSnapConnectionService } from "../mcp-connections/pwrsnap-connection-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
+import {
+  getExistingRuntimeFederationLeaseCoordinator,
+  getRuntimeFederationLeaseCoordinator,
+} from "../runtime-federation-lease";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import {
   createFederationEnrollmentInvite,
@@ -836,6 +840,22 @@ export class DesktopFederationRuntime {
     health.localProfileName = isAppStateInitialized()
       ? getAppStateDb().getMeta("profile_name") || undefined
       : undefined;
+    // A live holder elsewhere keeps this instance's federation runtime
+    // stopped; surface that (with the holder's identity) the same way the
+    // messaging lease does, instead of a bare "disconnected".
+    const federationLeaseSnapshot = isAppStateInitialized()
+      ? getExistingRuntimeFederationLeaseCoordinator()?.snapshot()
+      : undefined;
+    if (
+      health.enabled
+      && !federationLeaseSnapshot?.leaseHeld
+      && federationLeaseSnapshot?.leaseHolder
+    ) {
+      health.status = "degraded";
+      health.unavailableReason =
+        federationLeaseSnapshot.disabledReason ?? health.unavailableReason;
+      health.leaseHolder = federationLeaseSnapshot.leaseHolder;
+    }
     return health;
   }
 
@@ -1539,7 +1559,22 @@ export class DesktopFederationRuntime {
       this.localHostInfo = undefined;
     }
     const mode = settings.federation.mode.value;
-    if (mode === "disabled") {
+    // The profile-scoped lease decides which app instance may run federation
+    // for this profile: instances sharing a profile present the same
+    // federation instance identity, so without the lease two of them evict
+    // each other from the gateway in a connect/replace loop.
+    if (isAppStateInitialized()) {
+      const leaseGate = await getRuntimeFederationLeaseCoordinator().applyMode(
+        this,
+        mode,
+      );
+      if (!leaseGate.enabled) {
+        if (leaseGate.disabledReasonKind === "lease_held") {
+          this.lastConnectionError = leaseGate.disabledReason;
+        }
+        return;
+      }
+    } else if (mode === "disabled") {
       return;
     }
     this.stopping = false;

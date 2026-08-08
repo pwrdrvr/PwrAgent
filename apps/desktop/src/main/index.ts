@@ -136,6 +136,10 @@ import {
   getExistingRuntimeMessagingLeaseCoordinator,
   getRuntimeMessagingLeaseCoordinator,
 } from "./runtime-messaging-lease";
+import {
+  getExistingRuntimeFederationLeaseCoordinator,
+  getRuntimeFederationLeaseCoordinator,
+} from "./runtime-federation-lease";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import {
   disposeAppState,
@@ -468,6 +472,10 @@ function disposeMainProcessResourcesSync(): void {
     getExistingRuntimeMessagingLeaseCoordinator() ??
     (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
   runtimeMessagingLeaseCoordinator?.shutdownSync();
+  const runtimeFederationLeaseCoordinator =
+    getExistingRuntimeFederationLeaseCoordinator() ??
+    (isAppStateInitialized() ? getRuntimeFederationLeaseCoordinator() : null);
+  runtimeFederationLeaseCoordinator?.shutdownSync();
 }
 
 async function closeRendererWindowsBeforeResourceShutdown(
