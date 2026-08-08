@@ -8,6 +8,7 @@ import type {
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
+  FEDERATION_LOAD_STATUS_TIMEOUT_MS,
   FederationRemoteBackendClient,
   registerFederationBackendHandlers,
   type FederationBackendOperations,
@@ -129,6 +130,56 @@ describe("federation backend bridge", () => {
     await expect(pending).resolves.toMatchObject({
       availability: "running",
       configured: true,
+    });
+  });
+
+  it("queries on-demand load through thread_navigation with a tight deadline", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    const pending = client.getLoadStatus();
+    const request = sent.at(-1)!;
+    expect(request).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.getLoadStatus,
+      params: {},
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.getLoadStatus
+      ],
+    ).toBe("thread_navigation");
+    // Load queries carry the short leash, not the default 30s one —
+    // fleet fan-outs degrade on a slow peer instead of stalling.
+    expect(request.deadlineAt).toBe(1_000 + FEDERATION_LOAD_STATUS_TIMEOUT_MS);
+
+    rpc.receiveEnvelope({
+      id: "response-load",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        loadAvg1: 2.5,
+        loadAvg5: 1.75,
+        loadAvg15: 1.5,
+        availableMemoryBytes: 8_000_000_000,
+        freeDiskBytes: 250_000_000_000,
+        sampledAt: 1_050,
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      loadAvg1: 2.5,
+      availableMemoryBytes: 8_000_000_000,
+      sampledAt: 1_050,
     });
   });
 
@@ -2073,6 +2124,7 @@ describe("federation backend bridge", () => {
       trustCodexProject: vi.fn(),
       setCelestialIcon: vi.fn(),
       starMapIntake: vi.fn(),
+      getLoadStatus: vi.fn(),
     };
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
@@ -2345,6 +2397,7 @@ describe("federation backend bridge", () => {
         trustCodexProject: vi.fn(),
         setCelestialIcon: vi.fn(),
         starMapIntake: vi.fn(),
+        getLoadStatus: vi.fn(),
       } as FederationBackendOperations,
     });
 

@@ -103,6 +103,8 @@ import type {
   OpenFederationWindowResponse,
   ReadFederationHealthRequest,
   ReadFederationHealthResponse,
+  ReadFederationInstanceLoadRequest,
+  ReadFederationInstanceLoadResponse,
   ReadFederationDiagnosticsRequest,
   ReadFederationDiagnosticsResponse,
   ReadFederationPinImpactRequest,
@@ -496,6 +498,14 @@ export type DesktopApi = {
   readFederationHealth?: (
     request?: ReadFederationHealthRequest,
   ) => Promise<ReadFederationHealthResponse>;
+  /** On-demand load poll for Star Map health indicators. Omitted or
+   *  local instanceId samples locally; a remote id rides the
+   *  short-timeout `backend.getLoadStatus` federation RPC. `load` is
+   *  absent when the instance did not answer — degrade to no
+   *  indicator, never an error. */
+  readFederationInstanceLoad?: (
+    request?: ReadFederationInstanceLoadRequest,
+  ) => Promise<ReadFederationInstanceLoadResponse>;
   readFederationDiagnostics?: (
     request?: ReadFederationDiagnosticsRequest,
   ) => Promise<ReadFederationDiagnosticsResponse>;

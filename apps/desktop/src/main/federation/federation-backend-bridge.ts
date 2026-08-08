@@ -25,6 +25,7 @@ import type {
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
   FederationCapability,
+  FederationLoadStatus,
   FederationRequestEnvelope,
   ForkThreadRequest,
   ForkThreadResponse,
@@ -128,6 +129,14 @@ import { FEDERATION_MAX_FRAME_BYTES } from "./federation-transport";
 
 const FEDERATION_RESPONSE_BYTE_BUDGET =
   FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
+
+/**
+ * Load queries answer from in-memory OS counters plus one statfs, so a
+ * healthy peer replies well inside a second. Callers fan the query out
+ * across the fleet and degrade to "no load block" on timeout — a slow
+ * peer must cost seconds, not the default 30s RPC leash.
+ */
+export const FEDERATION_LOAD_STATUS_TIMEOUT_MS = 2_500;
 
 export type FederationReadTranscriptImageRequest = {
   url: string;
@@ -271,6 +280,7 @@ export const FEDERATION_BACKEND_METHODS = {
   openApplication: "backend.openApplication",
   readMessagingPlatformStatuses: "backend.readMessagingPlatformStatuses",
   readPwrSnapConnectionStatus: "backend.readPwrSnapConnectionStatus",
+  getLoadStatus: "backend.getLoadStatus",
   trustCodexProject: "backend.trustCodexProject",
   setCelestialIcon: "backend.setCelestialIcon",
   starMapIntake: "backend.starMapIntake",
@@ -360,6 +370,13 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // messaging_route stays reserved for messaging-originated remote control.
   [FEDERATION_BACKEND_METHODS.readMessagingPlatformStatuses]: "remote_window",
   [FEDERATION_BACKEND_METHODS.readPwrSnapConnectionStatus]: "pwrsnap_connection",
+  // On-demand load readings (CPU load averages, available RAM, free
+  // disk) are read-only health facts at the same sensitivity tier as
+  // the browse-level grants, and the Star Map surface that polls them
+  // already rides thread_navigation for its event class. A dedicated
+  // capability would buy no isolation and cost every peer a handshake
+  // re-advertisement.
+  [FEDERATION_BACKEND_METHODS.getLoadStatus]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.trustCodexProject]: "environment_actions",
   // Celestial icon overrides are directed at the gateway (the assignment
   // coordinator). No dedicated capability exists for federation-level
@@ -525,6 +542,7 @@ export type FederationBackendOperations = {
   ): Promise<OpenDesktopApplicationResponse>;
   readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]>;
   readPwrSnapConnectionStatus(): Promise<PwrSnapConnectionStatus>;
+  getLoadStatus(): Promise<FederationLoadStatus>;
   trustCodexProject(
     request: TrustCodexProjectRequest,
   ): Promise<TrustCodexProjectResponse>;
@@ -1010,6 +1028,10 @@ export function registerFederationBackendHandlers(params: {
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.readPwrSnapConnectionStatus,
     async () => await params.backend.readPwrSnapConnectionStatus(),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.getLoadStatus,
+    async () => await params.backend.getLoadStatus(),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.openApplication,
@@ -1555,6 +1577,14 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<PwrSnapConnectionStatus>({
       method: FEDERATION_BACKEND_METHODS.readPwrSnapConnectionStatus,
       params: {},
+    });
+  }
+
+  async getLoadStatus(): Promise<FederationLoadStatus> {
+    return await this.rpc.request<FederationLoadStatus>({
+      method: FEDERATION_BACKEND_METHODS.getLoadStatus,
+      params: {},
+      timeoutMs: FEDERATION_LOAD_STATUS_TIMEOUT_MS,
     });
   }
 

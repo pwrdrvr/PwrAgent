@@ -27,6 +27,7 @@ import type {
   FederationHostInfo,
   FederationInstanceId,
   FederationInstanceRole,
+  FederationLoadStatus,
   FederationPeerSummary,
   FederationPinDisposition,
   FederationProtocolEnvelope,
@@ -181,7 +182,10 @@ import {
   encodeFederationInvite,
 } from "./federation-enrollment";
 import { FederatedSearchService } from "./federated-search-service";
-import { collectFederationHostInfo } from "./federation-host-info";
+import {
+  collectFederationHostInfo,
+  collectFederationLoadStatus,
+} from "./federation-host-info";
 import { RemoteThreadSummaryCache } from "./remote-thread-summary-cache";
 import { hydrateFederatedThreadMessageOrigins } from "./federated-thread-origin-hydrator";
 import {
@@ -4296,6 +4300,9 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async readPwrSnapConnectionStatus(): Promise<PwrSnapConnectionStatus> {
       return await getPwrSnapConnectionService().readStatus();
+    },
+    async getLoadStatus(): Promise<FederationLoadStatus> {
+      return await collectFederationLoadStatus();
     },
     async trustCodexProject(
       request: TrustCodexProjectRequest,

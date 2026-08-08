@@ -279,6 +279,8 @@ import type {
   OpenDesktopPwrAgentProfileResponse,
   ReadFederationHealthRequest,
   ReadFederationHealthResponse,
+  ReadFederationInstanceLoadRequest,
+  ReadFederationInstanceLoadResponse,
   ReadFederationDiagnosticsRequest,
   ReadFederationDiagnosticsResponse,
   ReadFederationPinImpactRequest,
@@ -474,6 +476,7 @@ import {
   PATH_REVEAL_CHANNEL,
   BACKEND_LIST_CHANNEL,
   FEDERATION_GET_HEALTH_CHANNEL,
+  FEDERATION_READ_INSTANCE_LOAD_CHANNEL,
   FEDERATION_GET_DIAGNOSTICS_CHANNEL,
   FEDERATION_GENERATE_INVITE_CHANNEL,
   FEDERATION_IMPORT_INVITE_CHANNEL,
@@ -900,6 +903,10 @@ const desktopApi = Object.freeze({
     request?: ReadFederationHealthRequest,
   ): Promise<ReadFederationHealthResponse> =>
     await ipcRenderer.invoke(FEDERATION_GET_HEALTH_CHANNEL, request),
+  readFederationInstanceLoad: async (
+    request?: ReadFederationInstanceLoadRequest,
+  ): Promise<ReadFederationInstanceLoadResponse> =>
+    await ipcRenderer.invoke(FEDERATION_READ_INSTANCE_LOAD_CHANNEL, request),
   readFederationDiagnostics: async (
     request?: ReadFederationDiagnosticsRequest,
   ): Promise<ReadFederationDiagnosticsResponse> =>

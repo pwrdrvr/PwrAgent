@@ -6,6 +6,7 @@ import type {
   FederationHostInfo,
   FederationInstanceDescriptor,
   FederationInstanceId,
+  FederationLoadStatus,
   FederationRemoteTarget,
   FederationThreadSearchResultSummary,
   ListFederationInstancesResult,
@@ -32,7 +33,10 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
 import { FederatedSearchService } from "./federated-search-service";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
-import { collectFederationHostInfo } from "./federation-host-info";
+import {
+  collectFederationHostInfo,
+  collectFederationLoadStatus,
+} from "./federation-host-info";
 import {
   defaultInstanceLabel,
   getDesktopFederationRuntime,
@@ -80,20 +84,24 @@ export function createFederationAgentToolsHandler(
   options: {
     runtime?: () => DesktopFederationRuntime;
     collectHostInfo?: () => Promise<FederationHostInfo>;
+    collectLoadStatus?: () => Promise<FederationLoadStatus>;
     targetStore?: RemoteThreadTargetStore;
   } = {},
 ): PwrAgentFederationHandler {
   const runtime = options.runtime ?? getDesktopFederationRuntime;
   const collectHostInfo = options.collectHostInfo ?? collectFederationHostInfo;
+  const collectLoadStatus =
+    options.collectLoadStatus ?? collectFederationLoadStatus;
   const cursors = new Map<string, InstanceListCursorEntry>();
   return async (request) => {
     try {
       if (request.operation === "list_federation_instances") {
-        return listFederationInstances(
+        return await listFederationInstances(
           runtime(),
           request.args,
           cursors,
           collectHostInfo,
+          collectLoadStatus,
         );
       }
       if (request.operation === "list_instance_projects") {
@@ -127,6 +135,7 @@ async function listFederationInstances(
   args: ListFederationInstancesToolArgs,
   cursors: Map<string, InstanceListCursorEntry>,
   collectHostInfo: () => Promise<FederationHostInfo>,
+  collectLoadStatus: () => Promise<FederationLoadStatus>,
 ): Promise<PwrAgentFederationResponse> {
   const limit = args.limit ?? DEFAULT_INSTANCE_PAGE_SIZE;
   pruneExpiredCursors(cursors);
@@ -167,6 +176,12 @@ async function listFederationInstances(
   const instances = [local, ...peers].filter((instance) =>
     matchesInstanceQuery(instance, args.query),
   );
+  // Loads are sampled once for the whole listing, so continuation pages
+  // serve readings at most one cursor TTL (~60s) old — the staleness a
+  // token-paged listing already accepts.
+  const listed = args.includeLoad
+    ? await attachInstanceLoads({ runtime, instances, collectLoadStatus })
+    : instances;
   return ok(
     pageInstances({
       cursors,
@@ -174,11 +189,63 @@ async function listFederationInstances(
         expiresAt: Date.now() + INSTANCE_CURSOR_TTL_MS,
         offset: 0,
         federationEnabled: health.enabled,
-        instances,
+        instances: listed,
       },
       limit,
     }),
   );
+}
+
+/**
+ * Fan the on-demand load query out concurrently: the local instance (a
+ * gateway answers for itself) samples directly, connected peers ride the
+ * short-timeout `backend.getLoadStatus` RPC — relayed peers included,
+ * through the same envelope relay as every backend RPC. Any instance
+ * that fails or times out just omits `load`; a slow peer must never
+ * fail the listing.
+ */
+async function attachInstanceLoads(params: {
+  runtime: DesktopFederationRuntime;
+  instances: FederationInstanceDescriptor[];
+  collectLoadStatus: () => Promise<FederationLoadStatus>;
+}): Promise<FederationInstanceDescriptor[]> {
+  return await Promise.all(
+    params.instances.map(async (instance) => {
+      const load = await queryInstanceLoad(params, instance);
+      return load ? { ...instance, load } : instance;
+    }),
+  );
+}
+
+async function queryInstanceLoad(
+  params: {
+    runtime: DesktopFederationRuntime;
+    collectLoadStatus: () => Promise<FederationLoadStatus>;
+  },
+  instance: FederationInstanceDescriptor,
+): Promise<FederationLoadStatus | undefined> {
+  if (
+    !instance.isLocal
+    && (
+      instance.status !== "connected"
+      || !instance.capabilities.includes("thread_navigation")
+    )
+  ) {
+    return undefined;
+  }
+  try {
+    return instance.isLocal
+      ? await params.collectLoadStatus()
+      : await params.runtime
+          .remoteBackend({ scope: "remote", instanceId: instance.instanceId })
+          .getLoadStatus();
+  } catch (error) {
+    log.debug("instance load query failed", {
+      instanceId: instance.instanceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
 }
 
 function pageInstances(params: {

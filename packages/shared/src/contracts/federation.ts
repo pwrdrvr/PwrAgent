@@ -129,6 +129,26 @@ export type FederationHostInfo = {
   machineId?: string;
 };
 
+/**
+ * Live load reading sampled on the owning instance at answer time.
+ * Deliberately a sibling of {@link FederationHostInfo}, not an extension:
+ * host facts are static and advertised on handshake, load is queried on
+ * demand (`backend.getLoadStatus`) and never gossiped. Instances sharing
+ * `FederationHostInfo.machineId` run on the same hardware and report the
+ * same underlying load — dedupe by machineId when aggregating.
+ * `loadAvg*` are 0 on Windows (Node's `os.loadavg()` contract);
+ * `freeDiskBytes` measures the volume holding the PwrAgent root and is
+ * omitted when the read fails.
+ */
+export type FederationLoadStatus = {
+  loadAvg1: number;
+  loadAvg5: number;
+  loadAvg15: number;
+  availableMemoryBytes: number;
+  freeDiskBytes?: number;
+  sampledAt: number;
+};
+
 export type FederationPeerSummary = {
   id: FederationPeerId;
   label: string;
@@ -310,6 +330,26 @@ export type ReadFederationHealthRequest = Record<string, never>;
 
 export type ReadFederationHealthResponse = {
   health: FederationHealthStatus;
+};
+
+/**
+ * Renderer poll for one instance's live load (Star Map health
+ * indicators). An omitted `instanceId` — or the local instance's own id —
+ * samples locally; a remote id rides the `backend.getLoadStatus`
+ * federation RPC.
+ */
+export type ReadFederationInstanceLoadRequest = {
+  instanceId?: FederationInstanceId;
+};
+
+/**
+ * `load` is absent when the peer is not connected, has not granted
+ * `thread_navigation`, or did not answer within the short load-query
+ * timeout. A polling health surface degrades to "no indicator" — this
+ * response never carries an error.
+ */
+export type ReadFederationInstanceLoadResponse = {
+  load?: FederationLoadStatus;
 };
 
 export type FederationTailscaleMode = "serve" | "funnel";

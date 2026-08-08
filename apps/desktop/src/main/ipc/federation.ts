@@ -13,6 +13,8 @@ import type {
   ResetFederationEnrollmentResponse,
   ReadFederationHealthRequest,
   ReadFederationHealthResponse,
+  ReadFederationInstanceLoadRequest,
+  ReadFederationInstanceLoadResponse,
   ReadFederationDiagnosticsRequest,
   ReadFederationDiagnosticsResponse,
   ReadFederationPinImpactRequest,
@@ -35,6 +37,7 @@ import {
 import {
   FEDERATION_GET_HEALTH_CHANNEL,
   FEDERATION_GET_DIAGNOSTICS_CHANNEL,
+  FEDERATION_READ_INSTANCE_LOAD_CHANNEL,
   FEDERATION_GENERATE_INVITE_CHANNEL,
   FEDERATION_IMPORT_INVITE_CHANNEL,
   FEDERATION_OPEN_WINDOW_CHANNEL,
@@ -74,6 +77,7 @@ function peerAllowsEventClass(
 export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_OPEN_WINDOW_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GET_HEALTH_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_READ_INSTANCE_LOAD_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GET_DIAGNOSTICS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GENERATE_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_IMPORT_INVITE_CHANNEL);
@@ -232,6 +236,39 @@ export function registerFederationIpcHandlers(): void {
     },
   );
   ipcMain.handle(
+    FEDERATION_READ_INSTANCE_LOAD_CHANNEL,
+    async (
+      _event,
+      request?: ReadFederationInstanceLoadRequest,
+    ): Promise<ReadFederationInstanceLoadResponse> => {
+      const instanceId = request?.instanceId;
+      if (instanceId !== undefined && !isFederationInstanceId(instanceId)) {
+        throw new Error("Invalid federation instance id");
+      }
+      const runtime = getDesktopFederationRuntime();
+      const health = await runtime.health();
+      try {
+        if (!instanceId || instanceId === health.instanceId) {
+          return { load: await runtime.localBackend().getLoadStatus() };
+        }
+        const peer = runtime.connectedPeerTargets().find(
+          (candidate) => candidate.target.instanceId === instanceId,
+        );
+        if (!peer || !peer.capabilities.includes("thread_navigation")) {
+          // Unreachable reads as "no load reading", never an error — a
+          // polling health surface wants a missing indicator, not a
+          // dialog, when a peer drops mid-poll.
+          return {};
+        }
+        return {
+          load: await runtime.remoteBackend(peer.target).getLoadStatus(),
+        };
+      } catch {
+        return {};
+      }
+    },
+  );
+  ipcMain.handle(
     FEDERATION_GENERATE_INVITE_CHANNEL,
     async (
       _event,
@@ -307,6 +344,7 @@ function readPinDisposition(value: unknown): FederationPinDisposition {
 export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_OPEN_WINDOW_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GET_HEALTH_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_READ_INSTANCE_LOAD_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GET_DIAGNOSTICS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_GENERATE_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_IMPORT_INVITE_CHANNEL);

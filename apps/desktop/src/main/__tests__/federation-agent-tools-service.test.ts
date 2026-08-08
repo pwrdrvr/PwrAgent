@@ -3,6 +3,7 @@ import type {
   CreateInstanceThreadResult,
   FederationHealthStatus,
   FederationHostInfo,
+  FederationLoadStatus,
   ListFederationInstancesResult,
   ListInstanceProjectsResult,
   MaterializeDirectoryLaunchpadRequest,
@@ -220,6 +221,140 @@ describe("federation agent tools service", () => {
       ok: false,
       error: { code: "invalid_arguments" },
     });
+  });
+
+  it("attaches live load readings only to instances that answer includeLoad", async () => {
+    const localLoad: FederationLoadStatus = {
+      loadAvg1: 0.5,
+      loadAvg5: 0.4,
+      loadAvg15: 0.3,
+      availableMemoryBytes: 32_000_000_000,
+      freeDiskBytes: 400_000_000_000,
+      sampledAt: 1_000,
+    };
+    const studioLoad: FederationLoadStatus = {
+      loadAvg1: 6.5,
+      loadAvg5: 5.0,
+      loadAvg15: 4.25,
+      availableMemoryBytes: 2_000_000_000,
+      sampledAt: 1_050,
+    };
+    const remoteBackend = vi.fn(
+      (target: { instanceId: string }) =>
+        ({
+          getLoadStatus: async () => {
+            if (target.instanceId === "pwr_studio") {
+              return studioLoad;
+            }
+            throw new Error("Federation request timed out: backend.getLoadStatus");
+          },
+        }) as unknown as ReturnType<DesktopFederationRuntime["remoteBackend"]>,
+    );
+    const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
+      collectLoadStatus: async () => localLoad,
+      runtime: buildRuntime({
+        health: async () =>
+          buildHealth({
+            peers: [
+              {
+                id: "pwr_studio",
+                label: "Studio Mac",
+                role: "client",
+                status: "connected",
+                capabilities: ["thread_navigation"],
+              },
+              {
+                id: "pwr_slow",
+                label: "Slow Mini",
+                role: "client",
+                status: "connected",
+                capabilities: ["thread_navigation"],
+              },
+              {
+                id: "pwr_nocap",
+                label: "Locked-Down Box",
+                role: "client",
+                status: "connected",
+                capabilities: ["federated_search"],
+              },
+              {
+                id: "pwr_offline",
+                label: "Offline Mini",
+                role: "client",
+                status: "disconnected",
+                capabilities: ["thread_navigation"],
+              },
+            ],
+          }),
+        remoteBackend:
+          remoteBackend as unknown as DesktopFederationRuntime["remoteBackend"],
+      }),
+    });
+
+    const response = await handler({
+      operation: "list_federation_instances",
+      context,
+      args: { includeLoad: true },
+    });
+
+    expect(response.ok).toBe(true);
+    const data = (response as { ok: true; data: ListFederationInstancesResult })
+      .data;
+    const byId = new Map(
+      data.instances.map((instance) => [instance.instanceId, instance]),
+    );
+    expect(byId.get("pwr_local")?.load).toEqual(localLoad);
+    expect(byId.get("pwr_studio")?.load).toEqual(studioLoad);
+    // Timed-out, capability-less, and disconnected peers degrade to no
+    // load block — the listing itself never fails.
+    expect(byId.get("pwr_slow")?.load).toBeUndefined();
+    expect(byId.get("pwr_nocap")?.load).toBeUndefined();
+    expect(byId.get("pwr_offline")?.load).toBeUndefined();
+    // Only load-eligible peers are queried at all.
+    expect(remoteBackend.mock.calls.map(([target]) => target.instanceId).sort())
+      .toEqual(["pwr_slow", "pwr_studio"]);
+  });
+
+  it("does not fan out load queries unless includeLoad is set", async () => {
+    const remoteBackend = vi.fn();
+    const collectLoadStatus = vi.fn();
+    const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
+      collectLoadStatus,
+      runtime: buildRuntime({
+        health: async () =>
+          buildHealth({
+            peers: [
+              {
+                id: "pwr_studio",
+                label: "Studio Mac",
+                role: "client",
+                status: "connected",
+                capabilities: ["thread_navigation"],
+              },
+            ],
+          }),
+        remoteBackend:
+          remoteBackend as unknown as DesktopFederationRuntime["remoteBackend"],
+      }),
+    });
+
+    const response = await handler({
+      operation: "list_federation_instances",
+      context,
+      args: {},
+    });
+
+    expect(response.ok).toBe(true);
+    const data = (response as { ok: true; data: ListFederationInstancesResult })
+      .data;
+    expect(data.instances.every((instance) => instance.load === undefined))
+      .toBe(true);
+    expect(remoteBackend).not.toHaveBeenCalled();
+    expect(collectLoadStatus).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown instance-list cursor", async () => {
