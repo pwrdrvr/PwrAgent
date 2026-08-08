@@ -189,6 +189,58 @@ describe("PrChip", () => {
     expect(chip).toHaveAttribute("aria-label", expect.stringContaining("closed without merge"));
   });
 
+  it("opens a structured status card on hover", () => {
+    const chip = renderChip(basePr({
+      title: "fix(desktop): honor selected review project cwd",
+      additions: 38,
+      deletions: 1204,
+      changedFiles: 44,
+      commitCount: 23,
+      createdAt: Date.now() - (21 * 24 * 60 * 60 * 1000),
+    }));
+
+    fireEvent.mouseEnter(chip);
+
+    const card = document.querySelector(".pr-status-card") as HTMLElement;
+    expect(card).not.toBeNull();
+    expect(card).toHaveAttribute("role", "tooltip");
+    expect(card.textContent).toContain("fix(desktop): honor selected review project cwd");
+    expect(card.textContent).toContain("pwrdrvr/PwrAgent#743");
+    expect(card.textContent).toContain("+38");
+    expect(card.textContent).toContain("1,204");
+    expect(card.textContent).toContain("44 files");
+    expect(card.textContent).toContain("23 commits");
+    expect(card.textContent).toContain("21d ago");
+
+    fireEvent.mouseLeave(chip);
+    expect(document.querySelector(".pr-status-card")).toBeNull();
+  });
+
+  it("speaks the card's stats in the chip's accessible name", () => {
+    // The card is portal-rendered with nothing pointing at it via
+    // aria-describedby, so without this it would be sighted-only.
+    const chip = renderChip(basePr({
+      additions: 412,
+      deletions: 198,
+      changedFiles: 18,
+      commitCount: 7,
+    }));
+
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      "Open pwrdrvr/PwrAgent#743 (ready for review · checks passing,"
+        + " 412 added, 198 removed, 18 files, 7 commits) in browser",
+    );
+  });
+
+  it("keeps the accessible name unchanged for a PR with no stats", () => {
+    const chip = renderChip(basePr());
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      "Open pwrdrvr/PwrAgent#743 (ready for review · checks passing) in browser",
+    );
+  });
+
   it("defers draft + conflict to sibling pills when withStatusPills is set", () => {
     // In the Pull Requests card the chip sits next to explicit pills, so the
     // dot must stay the check-state color (agreeing with the "Checks …" pill)

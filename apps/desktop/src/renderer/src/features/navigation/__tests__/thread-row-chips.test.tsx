@@ -498,7 +498,7 @@ describe("ThreadRow chip flow", () => {
     if (prIdx >= 0 && reactionIdx >= 0) expect(prIdx).toBeLessThan(reactionIdx);
   });
 
-  it("shows the PR title and status in the shared viewport tooltip", () => {
+  it("shows the PR title and status in the shared hover card", () => {
     renderRow({
       thread: {
         ...baseThread,
@@ -524,11 +524,13 @@ describe("ThreadRow chip flow", () => {
     fireEvent.mouseEnter(prChip);
 
     const tooltip = screen.getByRole("tooltip");
-    expect(tooltip).toHaveClass("viewport-tooltip");
+    expect(tooltip).toHaveClass("pr-status-card");
     expect(tooltip).toHaveTextContent("Retain thread pull request history");
-    expect(tooltip).toHaveTextContent(
-      "pwrdrvr/PwrAgent#123 — ready for review · checks passing",
-    );
+    expect(tooltip).toHaveTextContent("pwrdrvr/PwrAgent#123");
+    expect(tooltip).toHaveTextContent("ready for review · checks passing");
+    // This row's PR predates the stats fields, so the card shows no sections at
+    // all rather than zeros.
+    expect(tooltip.querySelector(".pr-status-card__section")).toBeNull();
   });
 
   it("marks Agent threads and explains their messaging role", () => {
@@ -833,10 +835,11 @@ describe("ThreadRow chip flow", () => {
 
     fireEvent.mouseEnter(prChip);
 
-    expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "pwrdrvr/PwrAgent#542 — merged",
-    );
-    expect(screen.getByRole("tooltip")).not.toHaveTextContent("status unknown");
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveTextContent("pwrdrvr/PwrAgent#542");
+    expect(tooltip.querySelector(".pr-status-card__phase")).toHaveTextContent("merged");
+    expect(tooltip.querySelector(".pr-status-card__dot--merged")).not.toBeNull();
+    expect(tooltip).not.toHaveTextContent("status unknown");
   });
 
   it("renders dirty-tree line counts and unpushed-commit chips from gitWorkingState", () => {

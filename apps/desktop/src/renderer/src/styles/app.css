@@ -4422,31 +4422,42 @@ textarea,
   transform: translateY(-1px);
 }
 
-.pr-chip--passing .pr-chip__dot {
+/* The hover card's dot shares these rules rather than restating the tokens, so
+   the chip and the card it opens can never drift to different hues. The card's
+   selectors carry an extra `.pr-status-card` qualifier (0,2,0) so they outrank
+   `.pr-status-card__dot`'s default gray, which is declared later in the file. */
+.pr-chip--passing .pr-chip__dot,
+.pr-status-card .pr-status-card__dot--passing {
   background: var(--status-ok);
 }
 
-.pr-chip--failing .pr-chip__dot {
+.pr-chip--failing .pr-chip__dot,
+.pr-status-card .pr-status-card__dot--failing {
   background: var(--status-error);
 }
 
 /* A failed check does not make its sibling jobs terminal. Keep the error hue,
    but use the existing gentle status pulse to say that the rollup is still
-   moving. Only the dot animates — the PR chip stays still and legible. */
+   moving. Only the dot animates — the PR chip stays still and legible. The
+   hover card has no counterpart: it says "checks still running" in words, and a
+   pulsing dot inside an already-transient card is noise. */
 .pr-chip--checks-running .pr-chip__dot {
   animation: status-blink 1.6s ease-in-out infinite;
 }
 
-.pr-chip--pending .pr-chip__dot {
+.pr-chip--pending .pr-chip__dot,
+.pr-status-card .pr-status-card__dot--pending {
   background: var(--status-warning);
 }
 
-.pr-chip--merged .pr-chip__dot {
+.pr-chip--merged .pr-chip__dot,
+.pr-status-card .pr-status-card__dot--merged {
   /* Desaturated violet — distinct from accent without competing with it. */
   background: var(--brand-purple);
 }
 
-.pr-chip--closed .pr-chip__dot {
+.pr-chip--closed .pr-chip__dot,
+.pr-status-card .pr-status-card__dot--closed {
   /* Black, by product choice (not GitHub's red). The hairline ring keeps it
      legible on dark surfaces where pure black would vanish into the chip. */
   background: var(--status-closed);
@@ -4459,7 +4470,8 @@ textarea,
    (e.g. `pr-chip--pending pr-chip--conflicting`, 0,2,0) regardless of source
    order — a reorder or auto-format can't silently flip it back. Only set on
    OPEN PRs, so it never competes with the merged/closed dots. */
-.pr-chip.pr-chip--conflicting .pr-chip__dot {
+.pr-chip.pr-chip--conflicting .pr-chip__dot,
+.pr-status-card .pr-status-card__dot--conflicting {
   background: var(--status-error);
 }
 
@@ -4479,6 +4491,176 @@ textarea,
   background: var(--danger-soft);
   color: var(--danger-text);
   outline: none;
+}
+
+/* Portal-rendered hover card for a PR chip (rendered by useViewportTooltip).
+   A structured status card — diff meter + stat rows — instead of a text-blob
+   tooltip, deliberately built to the same measurements and rhythm as
+   `.context-usage-card` so the app's two hover cards read as one family.
+   Every section inside is optional; see PrStatusCard.tsx for why. */
+.pr-status-card {
+  position: fixed;
+  z-index: 90;
+  width: 272px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--popover-bg);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  pointer-events: none;
+  text-align: left;
+}
+
+.pr-status-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pr-status-card__eyebrow,
+.pr-status-card__section-title {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pr-status-card__phase {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Two lines of title, then ellipsis: a conventional-commit subject fits, and a
+   PR whose author wrote a paragraph cannot push the status line off-screen. */
+.pr-status-card__title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  margin-top: 6px;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.pr-status-card__identity {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.pr-status-card__status {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 7px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.pr-status-card__dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  /* Default gray covers `unknown`, matching .pr-chip__dot. */
+  background: var(--status-suspended);
+}
+
+.pr-status-card__diff {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pr-status-card__additions {
+  margin-right: 6px;
+  color: var(--success-text);
+  font-weight: 600;
+}
+
+.pr-status-card__deletions {
+  color: var(--danger-text);
+  font-weight: 600;
+}
+
+.pr-status-card__files {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Additions and deletions split one bar proportionally — the structural echo
+   of `.context-usage-card__meter`, and the fastest way to read "mostly
+   deletions" without parsing digits. */
+.pr-status-card__diff-meter {
+  display: flex;
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  overflow: hidden;
+}
+
+.pr-status-card__diff-fill--additions {
+  height: 100%;
+  background: var(--status-ok);
+}
+
+.pr-status-card__diff-fill--deletions {
+  height: 100%;
+  background: var(--status-error);
+}
+
+.pr-status-card__caption {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.pr-status-card__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pr-status-card__section-title {
+  margin-bottom: 2px;
+}
+
+.pr-status-card__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pr-status-card__row-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.pr-status-card__row-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .pr-detach-warning-modal {

@@ -1084,6 +1084,16 @@ function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
       candidate.headRefName === pr.headRefName &&
       candidate.headSha === pr.headSha &&
       JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
+      // Hover-card fields. They belong here for the same reason as every field
+      // above: this comparison decides whether a snapshot is republished, so a
+      // poll whose only movement is "+412 → +530" must not be judged unchanged.
+      candidate.additions === pr.additions &&
+      candidate.deletions === pr.deletions &&
+      candidate.changedFiles === pr.changedFiles &&
+      candidate.commitCount === pr.commitCount &&
+      candidate.createdAt === pr.createdAt &&
+      candidate.mergedAt === pr.mergedAt &&
+      candidate.closedAt === pr.closedAt &&
       candidate.url === pr.url
     );
   });
