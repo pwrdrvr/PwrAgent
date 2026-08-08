@@ -1060,7 +1060,16 @@ function filterDetachedPullRequests(
   return prs.filter((pr) => !detached.has(getPrStatusKey(pr)));
 }
 
-function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
+/**
+ * Whether two PR lists are the same for snapshot purposes.
+ *
+ * This decides whether a navigation snapshot is republished, so a field that
+ * clients RENDER but this function ignores becomes a silent staleness bug: the
+ * value moves, the snapshot is judged unchanged, and no window ever hears about
+ * it. Add every displayed field here. Exported for the test that pins exactly
+ * that.
+ */
+export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
   if (left.length !== right.length) {
     return false;
   }

@@ -1224,6 +1224,45 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps the PR chip and its hover card on one set of dot-color rules", () => {
+    // The card's dot must never disagree with the chip that opened it, so the
+    // two share declarations rather than each naming tokens. Restating a color
+    // in a card-only rule is how they drift; this fails if anyone does.
+    for (const [chipSelector, cardSelector] of [
+      [".pr-chip--passing .pr-chip__dot", ".pr-status-card .pr-status-card__dot--passing"],
+      [".pr-chip--failing .pr-chip__dot", ".pr-status-card .pr-status-card__dot--failing"],
+      [".pr-chip--pending .pr-chip__dot", ".pr-status-card .pr-status-card__dot--pending"],
+      [".pr-chip--merged .pr-chip__dot", ".pr-status-card .pr-status-card__dot--merged"],
+      [".pr-chip--closed .pr-chip__dot", ".pr-status-card .pr-status-card__dot--closed"],
+      [
+        ".pr-chip.pr-chip--conflicting .pr-chip__dot",
+        ".pr-status-card .pr-status-card__dot--conflicting",
+      ],
+    ]) {
+      const escaped = chipSelector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      expect(css).toMatch(
+        new RegExp(`${escaped},\\s*\\n${cardSelector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{`)
+      );
+    }
+
+    // The card's dot modifiers carry an extra `.pr-status-card` qualifier so
+    // they outrank `.pr-status-card__dot`'s default gray, which is declared
+    // later in the file. Drop the qualifier and every dot goes gray.
+    expect(css).not.toMatch(/\n\.pr-status-card__dot--\w+\s*[,{]/);
+  });
+
+  it("layers the PR hover card above the full-window Star Map", () => {
+    // PR chips render inside `.app-shell__star-map-layer` (z-index 120), and
+    // `.app-shell` opens no stacking context, so a portal at the usual 90
+    // paints underneath the map.
+    const layer = extractRuleBody(css, ".app-shell__star-map-layer");
+    const card = extractRuleBody(css, ".pr-status-card");
+    const layerZ = Number(layer.match(/z-index:\s*(\d+);/)?.[1]);
+    const cardZ = Number(card.match(/z-index:\s*(\d+);/)?.[1]);
+    expect(Number.isFinite(layerZ)).toBe(true);
+    expect(cardZ).toBeGreaterThan(layerZ);
+  });
+
   it("keeps thinking scanner variants on one shared visible sweep", () => {
     expect(css).not.toContain("--thinking-scanner-progress");
     expect(css).not.toContain("--thinking-scanner-full-offset");

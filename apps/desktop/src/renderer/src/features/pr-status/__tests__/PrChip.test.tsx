@@ -216,29 +216,49 @@ describe("PrChip", () => {
     expect(document.querySelector(".pr-status-card")).toBeNull();
   });
 
-  it("speaks the card's stats in the chip's accessible name", () => {
-    // The card is portal-rendered with nothing pointing at it via
-    // aria-describedby, so without this it would be sighted-only.
+  it("mounts no card at all until the chip is hovered", () => {
+    // A sidebar renders hundreds of these. The card element is built on every
+    // render but must stay an inert object — nothing in the document — until
+    // `show` hands it to the portal.
     const chip = renderChip(basePr({
       additions: 412,
       deletions: 198,
       changedFiles: 18,
       commitCount: 7,
     }));
+    expect(document.querySelector(".pr-status-card")).toBeNull();
 
-    expect(chip).toHaveAttribute(
-      "aria-label",
-      "Open pwrdrvr/PwrAgent#743 (ready for review · checks passing,"
-        + " 412 added, 198 removed, 18 files, 7 commits) in browser",
-    );
+    fireEvent.mouseEnter(chip);
+    expect(document.querySelector(".pr-status-card")).not.toBeNull();
+
+    fireEvent.mouseLeave(chip);
+    expect(document.querySelector(".pr-status-card")).toBeNull();
   });
 
-  it("keeps the accessible name unchanged for a PR with no stats", () => {
-    const chip = renderChip(basePr());
+  it("describes the chip with the card rather than inflating its name", () => {
+    // The numbers are a description, not this control's identity: a name
+    // carrying them makes every chip in a list read like a paragraph. The
+    // portal lives outside the chip's subtree, so the id reference is what
+    // makes the card audible at all.
+    const chip = renderChip(basePr({ additions: 412, deletions: 198 }));
+
     expect(chip).toHaveAttribute(
       "aria-label",
       "Open pwrdrvr/PwrAgent#743 (ready for review · checks passing) in browser",
     );
+    // Nothing to point at while hidden — a dangling reference is worse than none.
+    expect(chip).not.toHaveAttribute("aria-describedby");
+
+    fireEvent.mouseEnter(chip);
+
+    const describedBy = chip.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const card = document.getElementById(describedBy!);
+    expect(card).toHaveClass("pr-status-card");
+    expect(card?.textContent).toContain("412");
+
+    fireEvent.mouseLeave(chip);
+    expect(chip).not.toHaveAttribute("aria-describedby");
   });
 
   it("defers draft + conflict to sibling pills when withStatusPills is set", () => {

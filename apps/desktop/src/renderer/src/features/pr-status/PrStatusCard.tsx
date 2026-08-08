@@ -1,4 +1,5 @@
 import type { PrSummary } from "@pwragent/shared";
+import { DiffStat } from "../../lib/DiffStat";
 import { formatRunningDurationMs } from "../../lib/format-duration";
 import {
   prPhaseLabel,
@@ -65,18 +66,13 @@ export function PrStatusCard(props: {
         <div className="pr-status-card__section">
           <span className="pr-status-card__section-title">Changes</span>
           <div className="pr-status-card__diff">
-            <span>
-              {changes.additions !== undefined ? (
-                <span className="pr-status-card__additions">
-                  {`+${formatCount(changes.additions)}`}
-                </span>
-              ) : null}
-              {changes.deletions !== undefined ? (
-                <span className="pr-status-card__deletions">
-                  {`−${formatCount(changes.deletions)}`}
-                </span>
-              ) : null}
-            </span>
+            {changes.diff ? (
+              <DiffStat
+                additions={changes.diff.additions}
+                removals={changes.diff.deletions}
+                className="pr-status-card__diff-stat"
+              />
+            ) : <span />}
             {changes.files ? (
               <span className="pr-status-card__files">{changes.files}</span>
             ) : null}
@@ -113,35 +109,6 @@ export function PrStatusCard(props: {
   );
 }
 
-/**
- * Compact spoken form of the card's data, appended to the chip's accessible
- * name. `useViewportTooltip` renders into a portal that nothing points at with
- * `aria-describedby`, so without this the card would be sighted-only.
- */
-export function prStatsAccessibleSummary(
-  pr: PrSummary,
-  now: number = Date.now(),
-): string {
-  const parts: string[] = [];
-  const changes = readPrChanges(pr);
-  if (changes?.additions !== undefined) {
-    parts.push(`${formatCount(changes.additions)} added`);
-  }
-  if (changes?.deletions !== undefined) {
-    parts.push(`${formatCount(changes.deletions)} removed`);
-  }
-  if (changes?.files) {
-    parts.push(changes.files);
-  }
-  if (changes?.commits) {
-    parts.push(changes.commits);
-  }
-  for (const row of readPrTimeline(pr, now)) {
-    parts.push(`${row.label.toLowerCase()} ${row.value}`);
-  }
-  return parts.join(", ");
-}
-
 function resolveDotState(pr: PrSummary, withStatusPills: boolean): string {
   const chipState = resolveChipState(pr);
   const isOpen = resolveLifecycleState(pr) === "open";
@@ -152,8 +119,12 @@ function resolveDotState(pr: PrSummary, withStatusPills: boolean): string {
 }
 
 type PrChanges = {
-  additions?: number;
-  deletions?: number;
+  /**
+   * Additions and deletions travel as a PAIR. They come from one fetch, so a
+   * provider that answers with one and not the other is malformed rather than
+   * partially informative — and `DiffStat` renders `+A -R` as a unit anyway.
+   */
+  diff?: { additions: number; deletions: number };
   files?: string;
   commits?: string;
   meter?: { additionsPercent: number };
@@ -164,35 +135,29 @@ function readPrChanges(pr: PrSummary): PrChanges | undefined {
   const deletions = readCount(pr.deletions);
   const changedFiles = readCount(pr.changedFiles);
   const commitCount = readCount(pr.commitCount);
-  if (
-    additions === undefined
-    && deletions === undefined
-    && changedFiles === undefined
-    && commitCount === undefined
-  ) {
+  const hasDiff = additions !== undefined && deletions !== undefined;
+  if (!hasDiff && changedFiles === undefined && commitCount === undefined) {
     return undefined;
   }
 
   const changes: PrChanges = {};
-  if (additions !== undefined) {
-    changes.additions = additions;
-  }
-  if (deletions !== undefined) {
-    changes.deletions = deletions;
-  }
   if (changedFiles !== undefined) {
     changes.files = pluralize(changedFiles, "file");
   }
   if (commitCount !== undefined) {
     changes.commits = pluralize(commitCount, "commit");
   }
+  if (!hasDiff) {
+    return changes;
+  }
+
+  changes.diff = { additions, deletions };
 
   // The meter is the point of the section — it says "mostly deletions" before
-  // anyone reads a digit — but it can only be honest when both halves are known
-  // and something actually changed.
-  const total = (additions ?? 0) + (deletions ?? 0);
-  if (additions !== undefined && deletions !== undefined && total > 0) {
-    // Floor each visible segment at 2% so a +2/−900 PR still shows green.
+  // anyone reads a digit — but only when something actually changed.
+  const total = additions + deletions;
+  if (total > 0) {
+    // Floor each visible segment at 2% so a +2/-900 PR still shows green.
     const raw = (additions / total) * 100;
     const additionsPercent =
       additions > 0 && raw < 2
@@ -265,10 +230,6 @@ function formatSpan(ms: number): string {
   return formatRunningDurationMs(Math.max(0, ms));
 }
 
-function formatCount(value: number): string {
-  return value.toLocaleString("en-US");
-}
-
 function pluralize(count: number, noun: string): string {
-  return `${formatCount(count)} ${noun}${count === 1 ? "" : "s"}`;
+  return `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
 }

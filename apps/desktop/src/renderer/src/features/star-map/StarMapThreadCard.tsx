@@ -91,7 +91,13 @@ export function StarMapThreadCard(props: {
   // Cards live inside the clipped, transformed canvas, and a native
   // `title` cannot be styled, times out differently per platform, and
   // does not wrap on macOS Electron — see UI-THEME.md.
-  const titleTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // Same layering problem the PR chip's card has: this tooltip portals to
+  // document.body while the card that opened it lives inside the Star Map
+  // layer (z-index 120, in the root stacking context), so the default
+  // `.viewport-tooltip` layer of 90 paints underneath the map.
+  const titleTooltip = useViewportTooltip({
+    className: "viewport-tooltip star-map-card__tooltip",
+  });
   const left = props.baseSlot.dx + (props.offset?.dx ?? 0);
   const top = props.baseSlot.dy + (props.offset?.dy ?? 0);
   const style: CSSProperties = {

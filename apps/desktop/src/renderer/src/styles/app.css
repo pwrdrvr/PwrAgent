@@ -4500,7 +4500,14 @@ textarea,
    Every section inside is optional; see PrStatusCard.tsx for why. */
 .pr-status-card {
   position: fixed;
-  z-index: 90;
+  /* 140, not the 90 most portal tooltips use, because PR chips render inside
+     the Star Map layer (`.app-shell__star-map-layer`, z-index 120) as well as
+     the normal shell. `.app-shell` is `position: relative` with `z-index: auto`
+     and so opens no stacking context, which puts that layer in the ROOT
+     stacking context alongside this portal — at 90 the card paints UNDER the
+     map it was opened from. Same reason `.messaging-status-tooltip` sits at
+     140 over the Settings overlay. */
+  z-index: 140;
   width: 272px;
   max-width: calc(100vw - 32px);
   padding: 12px 14px;
@@ -4584,15 +4591,11 @@ textarea,
   font-variant-numeric: tabular-nums;
 }
 
-.pr-status-card__additions {
-  margin-right: 6px;
-  color: var(--success-text);
-  font-weight: 600;
-}
-
-.pr-status-card__deletions {
-  color: var(--danger-text);
-  font-weight: 600;
+/* The shared `+A -R` primitive, one step up from its 11px default so it can
+   carry the section the way the context card's percentage does. Colors, font,
+   and spacing stay DiffStat's — this only sets scale. */
+.pr-status-card__diff-stat {
+  font-size: 13px;
 }
 
 .pr-status-card__files {
@@ -15826,6 +15829,13 @@ a.transcript-message__messaging-origin:focus-visible {
    this one title-bar tooltip an explicit layer above the overlay and Windows
    app title bar without raising every viewport tooltip globally. */
 .messaging-status-tooltip {
+  z-index: 140;
+}
+
+/* Star Map thread-card title tooltip — same escape, same fix: its trigger sits
+   inside `.app-shell__star-map-layer` (z-index 120), which shares the root
+   stacking context with this portal because `.app-shell` opens none. */
+.star-map-card__tooltip {
   z-index: 140;
 }
 

@@ -15,7 +15,7 @@ import {
   resolveChipState,
   resolveLifecycleState,
 } from "./pr-chip-state";
-import { PrStatusCard, prStatsAccessibleSummary } from "./PrStatusCard";
+import { PrStatusCard } from "./PrStatusCard";
 
 type PrChipProps = {
   pr: PrSummary;
@@ -55,9 +55,11 @@ export function PrChip(props: PrChipProps) {
     : `#${pr.number}`;
   const chipState = resolveChipState(pr);
   const status = prStatusLabel(pr);
-  const stats = prStatsAccessibleSummary(pr);
-  const accessibleStatus = stats ? `${status}, ${stats}` : status;
+  // Creating this element is not rendering it: it stays an inert object until
+  // `show` hands it to the portal on hover/focus, so a sidebar full of chips
+  // mounts exactly zero cards.
   const card = <PrStatusCard pr={pr} withStatusPills={props.withStatusPills} />;
+  const tooltipVisible = tooltipController.visible;
 
   // Status updates keep arriving while the pointer rests on a chip, so push
   // fresh numbers into an already-open card instead of freezing it at
@@ -66,6 +68,9 @@ export function PrChip(props: PrChipProps) {
   // The guard is not optional: a React element is a new object on every render,
   // so feeding one straight into `update` would set state on every render that
   // very update caused. Compare the card's DATA and push only when it moved.
+  // Tracking the key while hidden (rather than skipping the effect entirely)
+  // is what keeps a hidden chip from pushing stale-keyed content on its next
+  // hover — `show` already hands over a freshly built card at that point.
   const cardKey = [
     pr.org,
     pr.repo,
@@ -84,14 +89,15 @@ export function PrChip(props: PrChipProps) {
   ].join("|");
   const pushedCardKeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (pushedCardKeyRef.current === cardKey) {
+    const moved = pushedCardKeyRef.current !== cardKey;
+    pushedCardKeyRef.current = cardKey;
+    if (!moved || !tooltipVisible) {
       return;
     }
-    pushedCardKeyRef.current = cardKey;
     updateTooltip(
       <PrStatusCard pr={pr} withStatusPills={props.withStatusPills} />,
     );
-  }, [cardKey, pr, props.withStatusPills, updateTooltip]);
+  }, [cardKey, pr, props.withStatusPills, tooltipVisible, updateTooltip]);
 
   // Draft and merge-conflict ride ALONGSIDE the check-state dot color rather
   // than replacing it: an OPEN draft keeps its real status color and gains a
@@ -144,9 +150,12 @@ export function PrChip(props: PrChipProps) {
         role="button"
         tabIndex={0}
         aria-haspopup="menu"
-        aria-label={
-          `Open ${pr.org}/${pr.repo}#${pr.number} (${accessibleStatus}) in browser`
-        }
+        aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
+        // The card's numbers are a DESCRIPTION, not part of this control's
+        // name — packing them into the label makes every chip in a sidebar
+        // read like a paragraph. The portal sits outside this subtree, so
+        // pointing at it by id is what makes the card audible at all.
+        aria-describedby={tooltipVisible ? tooltipController.tooltipId : undefined}
         className={className}
         data-pr-chip=""
         data-pr-url={pr.url}
