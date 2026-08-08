@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPendingRequestActions,
   buildPendingRequestResponse,
+  deriveInboxState,
 } from "@pwragent/shared";
 import { AcpAgentClient } from "../acp/acp-client";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
@@ -2922,6 +2923,65 @@ describe("AcpAgentClient", () => {
     // entries — the normalizer's readAcpTopicTitle fallthrough at line 118
     // routes them to thread metadata instead.
     expect(client.readReplay(session.sessionId).entries).toEqual([]);
+  });
+
+  it("does not mark a seen Grok thread unread for last_turn_summary metadata", async () => {
+    let now = 1000;
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => now,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    now = 1100;
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Finished the requested work." },
+    });
+    const seenUpdatedAt =
+      store.getSession("acp:grok", session.sessionId)?.updatedAt ?? 0;
+    expect(seenUpdatedAt).toBe(1100);
+
+    now = 1200;
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "last_turn_summary",
+        summary: "Requested work complete",
+      },
+    });
+
+    const metadata = store.getSession("acp:grok", session.sessionId);
+    expect(metadata?.updatedAt).toBe(seenUpdatedAt);
+    expect(
+      deriveInboxState({
+        firstSnapshot: false,
+        isNewThread: false,
+        overlay: {
+          backend: "acp:grok",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          lastSeenUpdatedAt: seenUpdatedAt,
+          threadId: session.sessionId,
+        },
+        thread: {
+          id: session.sessionId,
+          linkedDirectories: [],
+          source: "acp:grok",
+          title: "ACP session",
+          titleSource: "fallback",
+          updatedAt: metadata?.updatedAt,
+        },
+      }),
+    ).toMatchObject({ inInbox: false });
   });
 
   it("distinguishes known tool progress from standalone tool updates", async () => {

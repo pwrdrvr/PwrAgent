@@ -47,6 +47,9 @@ export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
     || kind === "pending_interaction"
     || kind === "interaction_resolved"
     || kind === "response_completed"
+    // Grok publishes this after its canonical `turn_completed` update as
+    // session metadata. It is not a second lifecycle event or transcript item.
+    || kind === "last_turn_summary"
   );
 }
 
