@@ -24123,7 +24123,9 @@ export class DesktopBackendRegistry {
       );
     }
 
-    const pendingThread = this.pendingStartedThreads.get(`${backend}:${threadId}`);
+    const pendingThread = this.pendingStartedThreads.get(
+      buildThreadIdentityKey(backend, threadId),
+    );
     const childCwd =
       resolveThreadWorkspaceCwd(pendingThread) ||
       createdLinkedDirectory?.worktreePath ||

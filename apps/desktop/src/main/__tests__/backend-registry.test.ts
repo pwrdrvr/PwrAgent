@@ -22191,6 +22191,127 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("reports the allocated worktree cwd in ACP handoff prompts", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const repoPath = expectedDir("/repo/app");
+    const worktreePath = expectedDir("/worktrees/grok-child");
+    const parentDirectory = {
+      id: repoPath,
+      kind: "local" as const,
+      label: "app",
+      path: repoPath,
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "codex-parent",
+          title: "Codex parent",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [parentDirectory],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:codex-parent": {
+          backend: "codex",
+          threadId: "codex-parent",
+          executionMode: "default",
+          extraLinkedDirectories: [parentDirectory],
+        },
+      },
+    });
+    const startPrompt = vi.fn((params: Parameters<KimiStartPrompt>[0]) => ({
+      sessionId: params.sessionId,
+      turnId: "grok-turn-1",
+    }));
+    const { acpClient, registry } = createKimiAcpRegistry({
+      acpBackendId,
+      codexClient,
+      overlayStore,
+      sessionId: "grok-child",
+      startPrompt,
+      gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
+          kind: "worktree" as const,
+          branch: cwd === worktreePath ? "HEAD" : "main",
+          hasCommits: true,
+          headHasCommit: true,
+          worktreeCreationAvailable: true,
+        })),
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "codex-parent",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "codex-parent",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          backend: acpBackendId,
+          task: "Investigate the migration race.",
+          title: "Migration race",
+          workspaceMode: "new_worktree",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: worktreePath }),
+    );
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.workspace).toMatchObject({
+      mode: "new_worktree",
+      cwd: worktreePath,
+      linkedDirectory: {
+        kind: "worktree",
+        path: repoPath,
+        worktreePath,
+      },
+      git: {
+        kind: "git_worktree",
+        worktreeCreationAvailable: true,
+      },
+    });
+    expect(startPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining(`- CWD: ${worktreePath}`),
+      }),
+    );
+    expect(startPrompt.mock.calls[0]?.[0].prompt).not.toContain(
+      `- CWD: ${repoPath}`,
+    );
+
+    await registry.close();
+  });
+
   it("groups a Codex handoff under its Kimi parent", async () => {
     const acpBackendId = "acp:kimi" as AcpBackendId;
     const parentDirectory = {
