@@ -8905,7 +8905,6 @@ describe("CodexAppServerClient", () => {
           threadId: "thread-2",
           target: { type: "baseBranch", branch: "main" },
           delivery: "inline",
-          cwd: "/Users/example/project",
         },
       })
     );

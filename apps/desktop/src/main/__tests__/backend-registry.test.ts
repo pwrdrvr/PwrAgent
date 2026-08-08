@@ -17887,6 +17887,7 @@ command = "pnpm dev"
       threadId: "thread-env",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      cwd: "/repo/app",
       model: "gpt-5.5",
       reasoningEffort: "high",
       serviceTier: "priority",
@@ -18223,30 +18224,71 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("passes the selected review cwd to the Codex client", async () => {
+  it("starts reviews for a selected secondary project in that workspace", async () => {
     const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["review/start"] },
+      initializeResult: {
+        methods: ["thread/start", "turn/start", "review/start"],
+      },
+      startThreadResult: { threadId: "selected-project-review" },
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
-        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        initializeError: new Error("grok unavailable"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-parent": {
+            backend: "codex",
+            threadId: "thread-parent",
+            executionMode: "full-access",
+            extraLinkedDirectories: [
+              {
+                id: "/repo/primary",
+                kind: "worktree",
+                label: "primary",
+                path: "/repo/primary",
+                worktreePath: "/worktrees/primary",
+              },
+              {
+                id: "/repo/selected",
+                kind: "local",
+                label: "selected",
+                path: "/repo/selected",
+              },
+            ],
+          },
+        },
+      }),
+      resolveManagedReviewEnabled: () => false,
     });
 
-    await registry.startReview({
+    const response = await registry.startReview({
       backend: "codex",
-      threadId: "thread-1",
-      target: { type: "baseBranch", branch: "main" },
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "origin/main" },
       delivery: "inline",
-      cwd: "/repo/selected-worktree",
+      cwd: "/repo/selected",
     });
 
-    expect(codexClient.lastStartReviewParams).toMatchObject({
-      threadId: "thread-1",
-      cwd: "/repo/selected-worktree",
-      target: { type: "baseBranch", branch: "main" },
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-parent",
+      reviewThreadId: "selected-project-review",
+      turnId: "turn-1",
+    });
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      cwd: "/repo/selected",
+      ephemeral: true,
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "selected-project-review",
+      cwd: "/repo/selected",
+    });
+    expect(codexClient.lastStartTurnParams?.input[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("against base branch 'origin/main'"),
     });
 
     await registry.close();
@@ -25829,10 +25871,13 @@ script = "printf setup"
       },
     });
 
-    expect(codexClient.lastStartReviewParams).toEqual({
-      threadId: "parent-thread",
-      target: { type: "baseBranch", branch: "main" },
-      delivery: "inline",
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      cwd: "/repo/pwragent",
+      ephemeral: true,
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
       cwd: "/repo/pwragent",
     });
 

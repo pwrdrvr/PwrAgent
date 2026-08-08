@@ -236,10 +236,6 @@ const MCP_RESOURCE_IMAGE_MIME_TYPES = new Set([
 ]);
 const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
-type CodexReviewStartPayload = CodexReviewStartParams & {
-  cwd?: string;
-};
-
 type CodexClientOptions = {
   command?: string;
   args?: string[];
@@ -6527,18 +6523,12 @@ function buildReviewStartPayload(params: {
   threadId: string;
   target: AppServerReviewTarget;
   delivery?: AppServerReviewDelivery;
-  cwd?: string;
-}): CodexReviewStartPayload {
-  const payload: CodexReviewStartPayload = {
+}): CodexReviewStartParams {
+  return {
     threadId: params.threadId,
     target: params.target,
     delivery: params.delivery ?? "inline",
   };
-  const cwd = params.cwd?.trim();
-  if (cwd) {
-    payload.cwd = cwd;
-  }
-  return payload;
 }
 
 function buildThreadSettingsUpdatePayload(params: {

@@ -11931,8 +11931,9 @@ export class DesktopBackendRegistry {
     if (isAcpBackendId(params.backend)) {
       throw new Error("Selected backend does not support review/start");
     }
-    const managedMode =
+    const managedReviewExperiment =
       params.backend === "codex" && this.resolveManagedReviewEnabledFn();
+    let managedMode = managedReviewExperiment;
     const reserveCodexReviewStart = params.backend === "codex";
     if (reserveCodexReviewStart) {
       if (this.threadHasActiveTurn(params.threadId)) {
@@ -11956,13 +11957,27 @@ export class DesktopBackendRegistry {
             })
           : undefined;
       if (params.backend === "codex") {
-        cwd =
-          params.cwd?.trim()
-          || await this.resolveThreadEnvironmentCwd(
-            params.backend,
-            params.threadId,
-            overlay,
-          );
+        const threadCwd = await this.resolveThreadEnvironmentCwd(
+          params.backend,
+          params.threadId,
+          overlay,
+        );
+        const requestedCwd = params.cwd?.trim();
+        cwd = requestedCwd || threadCwd;
+        const normalizedRequestedCwd = normalizeLinkedDirectoryIdentityPath(
+          requestedCwd,
+        );
+        const normalizedThreadCwd = normalizeLinkedDirectoryIdentityPath(
+          threadCwd,
+        );
+        // Codex review/start has no cwd field. When the operator selects a
+        // linked project other than the parent thread's workspace, start the
+        // review as a managed child so both thread/start and turn/start are
+        // explicitly rooted in the selected project.
+        managedMode = managedReviewExperiment || Boolean(
+          normalizedRequestedCwd
+          && normalizedRequestedCwd !== normalizedThreadCwd,
+        );
       }
       const requestedModelSettings: ModelSettings = managedMode
         ? {
