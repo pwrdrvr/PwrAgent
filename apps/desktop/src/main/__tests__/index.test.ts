@@ -1920,6 +1920,62 @@ describe("bootstrapApp", () => {
     );
   });
 
+  it("releases the federation lease from will-quit when the federation shutdown phase rejects", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    disposeDesktopFederationRuntimeMock.mockRejectedValue(new Error("boom"));
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const sigtermHandler = processEventHandlers.get("SIGTERM");
+    expect(sigtermHandler).toBeTypeOf("function");
+    if (!sigtermHandler) {
+      return;
+    }
+
+    sigtermHandler("SIGTERM");
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
+
+    // The barrier's federation phase failed before its post-stop release.
+    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(federationLeaseShutdownSyncMock).not.toHaveBeenCalled();
+
+    // The final sync hook must still release, or a replacement instance
+    // stays blocked until the lease TTL expires.
+    appEventHandlers.get("will-quit")?.();
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the federation lease from process exit when the federation shutdown phase hangs", async () => {
+    vi.useFakeTimers();
+    startupProfilerInstance.start.mockResolvedValue();
+    disposeDesktopFederationRuntimeMock.mockReturnValue(
+      new Promise(() => {}),
+    );
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const sigtermHandler = processEventHandlers.get("SIGTERM");
+    expect(sigtermHandler).toBeTypeOf("function");
+    if (!sigtermHandler) {
+      return;
+    }
+
+    sigtermHandler("SIGTERM");
+    await flushMicrotasks();
+    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+
+    // The federation phase runs out its timeout (and the barrier its
+    // global deadline) without ever reaching the post-stop release.
+    await vi.advanceTimersByTimeAsync(13_000);
+    await flushMicrotasks();
+    expect(federationLeaseShutdownSyncMock).not.toHaveBeenCalled();
+
+    processEventHandlers.get("exit")?.();
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+  });
+
   it("skips messaging runtime startup when messaging is disabled for the app instance", async () => {
     vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", "1");
     startupProfilerInstance.start.mockResolvedValue();
