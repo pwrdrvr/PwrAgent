@@ -876,6 +876,12 @@ export type AppServerReadThreadResponse = {
   fetchedAt: number;
   threadId: ThreadIdentifier;
   replay: AppServerThreadReplay;
+  /**
+   * A server request still awaiting an operator response. This lets a freshly
+   * loaded renderer recover an input or approval prompt that arrived while it
+   * was restarting or disconnected from main-process events.
+   */
+  pendingRequest?: AppServerPendingRequestNotification;
   pricing?: {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];

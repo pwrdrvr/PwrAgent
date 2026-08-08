@@ -1697,6 +1697,8 @@ function normalizePositivePullRequestNumber(value: unknown): number | undefined 
 }
 
 type PendingServerRequest = {
+  backend: AppServerBackendKind;
+  notification: AppServerPendingRequestNotification;
   resolve: (response: SubmitServerRequestRequest["response"]) => void;
   reject: (error: Error) => void;
 };
@@ -8232,11 +8234,16 @@ export class DesktopBackendRegistry {
             threadId: request.threadId,
           })
         : { lines: [], summaries: [] };
+    const pendingRequest = this.pendingServerRequestForThread({
+      backend,
+      threadId: request.threadId,
+    });
     return {
       backend,
       fetchedAt: Date.now(),
       pricing,
       threadId: request.threadId,
+      ...(pendingRequest ? { pendingRequest } : {}),
       ...(replayWithMessageOrigins.threadStatus
         ? { threadStatus: replayWithMessageOrigins.threadStatus }
         : {}),
@@ -9965,6 +9972,10 @@ export class DesktopBackendRegistry {
             threadId: request.threadId,
           })
         : undefined;
+    const pendingRequest = this.pendingServerRequestForThread({
+      backend,
+      threadId: request.threadId,
+    });
 
     return {
       backend,
@@ -9972,6 +9983,7 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       pricing,
       ...(toolAccounting ? { toolAccounting } : {}),
+      ...(pendingRequest ? { pendingRequest } : {}),
       ...(replayWithMessageOrigins.threadStatus
         ? { threadStatus: replayWithMessageOrigins.threadStatus }
         : {}),
@@ -14986,6 +14998,22 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private pendingServerRequestForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): AppServerPendingRequestNotification | undefined {
+    let pendingRequest: AppServerPendingRequestNotification | undefined;
+    for (const pending of this.pendingServerRequests.values()) {
+      if (
+        pending.backend === params.backend
+        && pending.notification.params.threadId === params.threadId
+      ) {
+        pendingRequest = pending.notification;
+      }
+    }
+    return pendingRequest;
+  }
+
   private async requestHandoffCwdTrustConfirmation(params: {
     backend: AppServerBackendKind;
     cwd: string;
@@ -15003,44 +15031,50 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       requestId,
     });
+    const notification: AppServerPendingRequestNotification = {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: params.threadId,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+        ...(params.itemId ? { itemId: params.itemId } : {}),
+        requestId,
+        questions: [
+          {
+            id: HANDOFF_CWD_TRUST_QUESTION_ID,
+            header: "Trust directory",
+            question: `Trust ${normalizedCwd} and allow Default Access agent threads to read, write, and delete files in it?`,
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: HANDOFF_CWD_TRUST_APPROVE_LABEL,
+                description:
+                  "Trust this directory for future Default Access agent work.",
+              },
+              {
+                label: params.cancelLabel ?? "Cancel handoff",
+                description:
+                  params.cancelDescription ??
+                  "Do not add this directory or start the handoff.",
+              },
+            ],
+          },
+        ],
+      },
+    };
 
     const response = await new Promise<SubmitServerRequestRequest["response"]>(
       (resolve, reject) => {
-        this.pendingServerRequests.set(key, { resolve, reject });
+        this.pendingServerRequests.set(key, {
+          backend: params.backend,
+          notification,
+          resolve,
+          reject,
+        });
 
         void this.emit({
           backend: params.backend,
-          notification: {
-            method: "item/tool/requestUserInput",
-            params: {
-              threadId: params.threadId,
-              ...(params.turnId ? { turnId: params.turnId } : {}),
-              ...(params.itemId ? { itemId: params.itemId } : {}),
-              requestId,
-              questions: [
-                {
-                  id: HANDOFF_CWD_TRUST_QUESTION_ID,
-                  header: "Trust directory",
-                  question: `Trust ${normalizedCwd} and allow Default Access agent threads to read, write, and delete files in it?`,
-                  isOther: false,
-                  isSecret: false,
-                  options: [
-                    {
-                      label: HANDOFF_CWD_TRUST_APPROVE_LABEL,
-                      description:
-                        "Trust this directory for future Default Access agent work.",
-                    },
-                    {
-                      label: params.cancelLabel ?? "Cancel handoff",
-                      description:
-                        params.cancelDescription ??
-                        "Do not add this directory or start the handoff.",
-                    },
-                  ],
-                },
-              ],
-            },
-          },
+          notification,
         }).catch((error) => {
           backendRegistryLog.error(
             "failed to publish handoff cwd trust request; keeping request pending",
@@ -22036,7 +22070,12 @@ export class DesktopBackendRegistry {
     });
 
     return await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
-      this.pendingServerRequests.set(key, { resolve, reject });
+      this.pendingServerRequests.set(key, {
+        backend,
+        notification: routedRequest,
+        resolve,
+        reject,
+      });
 
       void this.emit({
         backend,

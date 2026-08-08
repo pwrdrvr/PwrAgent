@@ -3829,6 +3829,27 @@ export function useThreadSessionState(params: {
             current.response,
             current.loadedOlderHistory
           );
+          const hydratedPendingRequest = response.pendingRequest;
+          const hydratedPendingUserInput =
+            hydratedPendingRequest && isRequestUserInputNotification(hydratedPendingRequest)
+              ? createQuestionnaireState(hydratedPendingRequest)
+              : undefined;
+          const hydratedPendingMcpInteraction =
+            hydratedPendingRequest && isMcpElicitationNotification(hydratedPendingRequest)
+              ? createMcpElicitationState(hydratedPendingRequest)
+              : undefined;
+          const hydratedApprovalRequest =
+            hydratedPendingRequest && isApprovalRequestNotification(hydratedPendingRequest)
+              ? hydratedPendingRequest
+              : undefined;
+          const hydratedPendingInteraction = Boolean(
+            hydratedPendingUserInput
+            || hydratedPendingMcpInteraction
+            || hydratedApprovalRequest
+          );
+          const hydratedPendingTurnId = hydratedPendingRequest
+            ? readNotificationTurnId(hydratedPendingRequest)
+            : undefined;
           const hydratedCompletedTurn = didHydrateCompletedTurn(
             current.response,
             responseWithLoadedHistory
@@ -3871,6 +3892,7 @@ export function useThreadSessionState(params: {
             responseThreadStatus === "idle"
             && thinkingReasons.length > 0
             && !hasPendingInteraction(current)
+            && !hydratedPendingInteraction
             && !ownUpdateStillSettling
             && !reviewUpdateStillSettling
             && !responseHasInProgressTurn(
@@ -3911,12 +3933,16 @@ export function useThreadSessionState(params: {
 
           return {
             ...currentAfterStaleThinking,
-            activeTurnId: shouldClearStaleThinking
+            activeTurnId: hydratedPendingTurnId ?? (shouldClearStaleThinking
               ? undefined
               : shouldAdoptHydratedTurn
                 ? trailingInProgressTurn.id
-                : current.activeTurnId,
-            activeTurnStartedAt: shouldClearStaleThinking
+                : current.activeTurnId),
+            activeTurnStartedAt: hydratedPendingTurnId
+              ? current.activeTurnId === hydratedPendingTurnId
+                ? current.activeTurnStartedAt
+                : undefined
+              : shouldClearStaleThinking
               ? undefined
               : shouldAdoptHydratedTurn
                 ? trailingInProgressTurn.startedAt
@@ -3924,7 +3950,7 @@ export function useThreadSessionState(params: {
                     ? current.activeTurnStartedAt
                     : undefined)
                 : current.activeTurnStartedAt,
-            backendReportedActive,
+            backendReportedActive: hydratedPendingInteraction || backendReportedActive,
             error: undefined,
             expectOwnUpdate: false,
             failedHydrationVersion: undefined,
@@ -3944,9 +3970,24 @@ export function useThreadSessionState(params: {
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
               : current.pendingAssistantMessage,
-            pendingStatusText: shouldClearStaleThinking
-              ? undefined
-              : current.pendingStatusText,
+            pendingMcpInteraction: hydratedPendingInteraction
+              ? hydratedPendingMcpInteraction
+              : current.pendingMcpInteraction,
+            pendingRequest: hydratedPendingInteraction
+              ? hydratedApprovalRequest
+              : current.pendingRequest,
+            pendingStatusText: hydratedPendingUserInput
+              ? "Waiting for input"
+              : hydratedPendingMcpInteraction
+                ? "Waiting for MCP approval"
+                : hydratedApprovalRequest
+                  ? "Waiting for approval"
+                  : shouldClearStaleThinking
+                    ? undefined
+                    : current.pendingStatusText,
+            pendingUserInput: hydratedPendingInteraction
+              ? hydratedPendingUserInput
+              : current.pendingUserInput,
             response: responseWithLoadedHistory,
             staleThinkingRecheckAt:
               ownUpdateStillSettling || reviewUpdateStillSettling

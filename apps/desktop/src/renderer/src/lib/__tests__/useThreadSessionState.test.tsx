@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
   AppServerBackendKind,
   AppServerReadThreadResponse,
+  AppServerToolRequestUserInputNotification,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadMessage,
@@ -8091,6 +8092,68 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingUserInput).toBeUndefined();
     expect(result.current.inputRequestThreadKeys).toEqual({});
     expect(result.current.pendingStatusText).toBe("Thinking");
+  });
+
+  it("recovers pending user input from thread hydration after a renderer restart", async () => {
+    const pendingRequest: AppServerToolRequestUserInputNotification = {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "input-1",
+        requestId: "input-request-1",
+        questions: [
+          {
+            id: "approach",
+            header: "Approach",
+            question: "Which path should I take?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Small patch (Recommended)",
+                description: "Keep this scoped.",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const desktopApi: DesktopApi = {
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        pendingRequest,
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    expect(result.current.activeTurnId).toBe("turn-1");
+    expect(result.current.pendingStatusText).toBe("Waiting for input");
+    expect(result.current.inputRequestThreadKeys).toEqual({
+      "codex:thread-1": true,
+    });
+    expect(result.current.pendingUserInput).toMatchObject({
+      requestId: "input-request-1",
+      questions: [{ id: "approach" }],
+    });
   });
 
   it("does not reintroduce thinking when a request resolves after turn completion", async () => {
