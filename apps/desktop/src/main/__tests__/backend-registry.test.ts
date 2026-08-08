@@ -2083,6 +2083,14 @@ type KimiSendControlPrompt = (params: {
   prompt: string;
 }) => Promise<{ text: string }>;
 
+type KimiStartSession = (params: {
+  acpRuntime?: BackendAcpSessionRuntimeState;
+  cwd?: string;
+  executionMode: "default" | "full-access";
+  hidden?: boolean;
+  title?: string;
+}) => Promise<AcpSessionMetadata>;
+
 type KimiStartPrompt = (params: {
   sessionId: string;
   prompt: string;
@@ -2117,7 +2125,9 @@ function createKimiAcpRegistry(options?: {
     typeof createAcpAvailableCommandsStoreMock
   > | null;
   acpAvailableCommandProbeTimeoutMs?: number;
+  acpAvailableCommandProbeBudgetMs?: number;
   availableCommandsOnSessionStart?: AppServerAvailableCommandSummary[];
+  startSession?: KimiStartSession;
 }) {
   const acpBackendId =
     options?.installedAgent?.backendId
@@ -2154,6 +2164,9 @@ function createKimiAcpRegistry(options?: {
       hidden?: boolean;
       title?: string;
     }) => {
+      if (options?.startSession) {
+        return await options.startSession(params);
+      }
       const resolvedSessionId = params.hidden
         ? `${sessionId}:title-helper:${sessions.length + 1}`
         : sessionId;
@@ -2212,6 +2225,7 @@ function createKimiAcpRegistry(options?: {
     acpAvailableCommandsStore: options?.acpAvailableCommandsStore,
     acpAvailableCommandProbeTimeoutMs:
       options?.acpAvailableCommandProbeTimeoutMs,
+    acpAvailableCommandProbeBudgetMs: options?.acpAvailableCommandProbeBudgetMs,
   });
   return {
     acpBackendId,
@@ -3372,6 +3386,39 @@ describe("DesktopBackendRegistry", () => {
     expect(acpAvailableCommandsStore.records).toEqual([
       expect.objectContaining({ repositoryPath, commands: [] }),
     ]);
+  });
+
+  it("gives up on an ACP probe whose session never opens", async () => {
+    // `session/new` inherits the transport's ten-minute default request
+    // timeout and `getClient` awaits an unbounded `initialize()`, so a wedged
+    // agent must not be able to hold `listSkills` open: the renderer skips any
+    // request while one is in flight, which would strand the `/` menu on
+    // PwrAgent's own commands with no way to retry.
+    const { registry, acpClient } = createKimiAcpRegistry({
+      acpBackendId: "acp:grok" as AcpBackendId,
+      acpAvailableCommandsStore: null,
+      acpAvailableCommandProbeBudgetMs: 5,
+      startSession: () => new Promise<AcpSessionMetadata>(() => {}),
+    });
+
+    await expect(
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: "/repo",
+        cwds: ["/repo"],
+      }),
+    ).resolves.toEqual({ data: [{ skills: [], commands: [] }] });
+
+    // The stuck attempt is still running; the next request must resolve from
+    // it rather than start a second probe alongside it.
+    await expect(
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: "/repo",
+        cwds: ["/repo"],
+      }),
+    ).resolves.toEqual({ data: [{ skills: [], commands: [] }] });
+    expect(acpClient.startSession).toHaveBeenCalledTimes(1);
   });
 
   it("backs off ACP command probes with no cache to remember the miss", async () => {

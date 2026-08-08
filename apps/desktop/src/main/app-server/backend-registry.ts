@@ -6189,12 +6189,23 @@ const MAX_ACCEPTED_THREAD_CONTROL_REQUESTS = 512;
 
 /**
  * How long a command-discovery probe waits for the agent's
- * `available_commands_update` after `session/new` before giving up. Agents that
- * advertise commands do so as part of session setup, so this only has to cover
- * one notification hop — the (much slower) agent process spawn is already
- * awaited inside `session/new`.
+ * `available_commands_update` once its session is open. Agents that advertise
+ * commands do so as part of session setup, so this only has to cover one
+ * notification hop.
  */
 const ACP_AVAILABLE_COMMAND_PROBE_TIMEOUT_MS = 5_000;
+/**
+ * Ceiling on a whole probe attempt, spawn included.
+ *
+ * Nothing under `startSession` is bounded on a timescale a composer can wait
+ * on: `getClient` awaits an unbounded `initialize()`, and `session/new` inherits
+ * the ACP stdio transport's ten-minute default request timeout. A wedged agent
+ * would otherwise leave `listSkills` unresolved — and because the renderer
+ * skips any request while one is in flight, the `/` menu would sit on
+ * PwrAgent's own commands with no way to retry. Generous enough for a cold
+ * agent process spawn, short enough that a stuck one is a blip.
+ */
+const ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS = 15_000;
 /**
  * Backoff after a probe that produced nothing (agent unavailable, auth
  * required, or an agent that simply advertises no commands). Without it every
@@ -6339,6 +6350,7 @@ export class DesktopBackendRegistry {
   // `rememberAcpAvailableCommands` for the write-through.
   private readonly acpAvailableCommandsStore?: AcpAvailableCommandsStoreLike;
   private readonly acpAvailableCommandProbeTimeoutMs: number;
+  private readonly acpAvailableCommandProbeBudgetMs: number;
   private readonly acpAvailableCommandProbes = new Map<
     string,
     Promise<AppServerAvailableCommandSummary[]>
@@ -6692,6 +6704,7 @@ export class DesktopBackendRegistry {
     acpSessionStore?: AcpSessionStoreLike | null;
     acpAvailableCommandsStore?: AcpAvailableCommandsStoreLike | null;
     acpAvailableCommandProbeTimeoutMs?: number;
+    acpAvailableCommandProbeBudgetMs?: number;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     isAcpAgentEnabled?: (registryId: string) => boolean;
     createAcpClient?: AcpClientFactory;
@@ -6891,6 +6904,9 @@ export class DesktopBackendRegistry {
     this.acpAvailableCommandProbeTimeoutMs =
       options?.acpAvailableCommandProbeTimeoutMs
       ?? ACP_AVAILABLE_COMMAND_PROBE_TIMEOUT_MS;
+    this.acpAvailableCommandProbeBudgetMs =
+      options?.acpAvailableCommandProbeBudgetMs
+      ?? ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS;
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
     this.gitDirectoryService =
       options?.gitDirectoryService ??
@@ -8070,11 +8086,56 @@ export class DesktopBackendRegistry {
       return [];
     }
 
-    const probe = this.runAcpAvailableCommandProbe(params).finally(() => {
+    const attempt = this.runAcpAvailableCommandProbe(params);
+    const probe = this.withAcpAvailableCommandProbeDeadline(params, attempt);
+    this.acpAvailableCommandProbes.set(probeKey, probe);
+    // Cleanup follows the attempt rather than the deadline. Clearing the entry
+    // when the deadline fires would let the next request start a second probe
+    // alongside the stuck one; leaving it means later requests resolve
+    // instantly from the already-settled deadline, and the pair only reopens
+    // once the attempt itself finally gives up.
+    void attempt.finally(() => {
       this.acpAvailableCommandProbes.delete(probeKey);
     });
-    this.acpAvailableCommandProbes.set(probeKey, probe);
     return await probe;
+  }
+
+  /**
+   * Bound a probe attempt so a wedged agent cannot hold `listSkills` open.
+   *
+   * The attempt is not cancelled — ACP has no way to abandon an in-flight
+   * `session/new`, and there is nothing to clean up: the session is hidden, so
+   * a late arrival costs nothing and still writes its commands through to the
+   * cache for the next request.
+   */
+  private async withAcpAvailableCommandProbeDeadline(
+    params: { backend: AcpBackendId; repositoryPath: string },
+    attempt: Promise<AppServerAvailableCommandSummary[]>,
+  ): Promise<AppServerAvailableCommandSummary[]> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<AppServerAvailableCommandSummary[]>(
+      (resolve) => {
+        timer = setTimeout(() => {
+          backendRegistryLog.warn("ACP available-command probe exceeded budget", {
+            backend: params.backend,
+            budgetMs: this.acpAvailableCommandProbeBudgetMs,
+            repositoryPath: params.repositoryPath,
+          });
+          this.acpAvailableCommandProbeCooldowns.set(
+            `${params.backend}:${params.repositoryPath}`,
+            Date.now() + ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS,
+          );
+          resolve([]);
+        }, this.acpAvailableCommandProbeBudgetMs);
+        timer.unref?.();
+      },
+    );
+
+    try {
+      return await Promise.race([attempt, deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async runAcpAvailableCommandProbe(params: {
