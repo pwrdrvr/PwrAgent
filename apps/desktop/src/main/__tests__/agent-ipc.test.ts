@@ -141,6 +141,12 @@ const registry = {
       accepted: true,
     }),
   ),
+  applyThreadModelMigration: vi.fn(
+    async (request: ApplyThreadModelMigrationRequest) => ({
+      ...request,
+      status: "acknowledged-new-thread" as const,
+    }),
+  ),
   getLatestCodexConfigWarning: vi.fn(() => ({})),
 };
 
@@ -240,12 +246,6 @@ const federationMock = vi.hoisted(() => {
       async (request: SendThreadPrAutoDispatchNowRequest) => ({
         ...request,
         accepted: true,
-      }),
-    ),
-    applyThreadModelMigration: vi.fn(
-      async (request: ApplyThreadModelMigrationRequest) => ({
-        ...request,
-        status: "acknowledged-new-thread" as const,
       }),
     ),
     checkThreadBranchDrift: vi.fn(
@@ -410,6 +410,7 @@ describe("agent ipc", () => {
     registry.setThreadPrAutoDispatch.mockClear();
     registry.cancelThreadPrAutoDispatch.mockClear();
     registry.sendThreadPrAutoDispatchNow.mockClear();
+    registry.applyThreadModelMigration.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     federationMock.runtime.hydrateLiveThreadMessageOrigin.mockReset();
     federationMock.runtime.hydrateLiveThreadMessageOrigin.mockImplementation(
@@ -727,14 +728,7 @@ describe("agent ipc", () => {
       fingerprint: "fingerprint-1",
     });
     expect(registry.sendThreadPrAutoDispatchNow).not.toHaveBeenCalled();
-    expect(
-      federationMock.remoteBackend.applyThreadModelMigration,
-    ).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "thread-1",
-      threadCreatedAt: 1_000,
-      threadModel: "gpt-5-codex",
-    });
+    expect(registry.applyThreadModelMigration).not.toHaveBeenCalled();
     expect(federationMock.remoteBackend.checkThreadBranchDrift).toHaveBeenCalledWith({
       backend: "codex",
       expectedBranch: "feature/expected",
@@ -812,6 +806,37 @@ describe("agent ipc", () => {
       includeUnavailable: true,
     });
     expect(registry.listBackends).not.toHaveBeenCalled();
+    disposeAgentIpcHandlers();
+  });
+
+  it("refuses to apply this instance's model migration to a remote thread", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
+      "../ipc/agent-ipc"
+    );
+    const { AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    registerAgentIpcHandlers();
+
+    // Migration configuration and acknowledgement state are profile-local.
+    // Forwarding this request would apply this instance's migration policy to
+    // a thread owned by another instance.
+    expect(
+      await handlers.get(AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL)?.({}, {
+        backend: "codex",
+        federationTarget: { scope: "remote", instanceId: "client_one" },
+        threadId: "thread-1",
+        threadCreatedAt: 1_000,
+        threadModel: "gpt-5-codex",
+      }),
+    ).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      status: "not-owner",
+    });
+    expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+    expect(registry.applyThreadModelMigration).not.toHaveBeenCalled();
+
     disposeAgentIpcHandlers();
   });
 

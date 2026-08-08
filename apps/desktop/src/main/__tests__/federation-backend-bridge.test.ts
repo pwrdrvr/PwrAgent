@@ -17,6 +17,15 @@ import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 
 describe("federation backend bridge", () => {
+  it("does not expose profile-local thread model migrations over federation", () => {
+    expect(FEDERATION_BACKEND_METHODS).not.toHaveProperty(
+      "applyThreadModelMigration",
+    );
+    expect(FederationRemoteBackendClient.prototype).not.toHaveProperty(
+      "applyThreadModelMigration",
+    );
+  });
+
   it("routes thread reactions through the thread-navigation capability", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -1040,60 +1049,6 @@ describe("federation backend bridge", () => {
     });
   });
 
-  it("routes thread model migrations over RPC with turn_control authorization", async () => {
-    const sent: FederationProtocolEnvelope[] = [];
-    const rpc = new FederationRpcEndpoint({
-      localInstanceId: "viewer_one",
-      remoteInstanceId: "owner_one",
-      sendEnvelope: (envelope) => sent.push(envelope),
-      now: () => 1_000,
-    });
-    const client = new FederationRemoteBackendClient(rpc);
-
-    const pending = client.applyThreadModelMigration({
-      backend: "codex",
-      threadId: "thread-1",
-      threadCreatedAt: 900,
-      threadModel: "gpt-5.5",
-    });
-    const request = sent.at(-1)!;
-    expect(request).toMatchObject({
-      kind: "request",
-      method: FEDERATION_BACKEND_METHODS.applyThreadModelMigration,
-      params: {
-        backend: "codex",
-        threadId: "thread-1",
-        threadCreatedAt: 900,
-        threadModel: "gpt-5.5",
-      },
-    });
-    expect(
-      FEDERATION_BACKEND_METHOD_CAPABILITIES[
-        FEDERATION_BACKEND_METHODS.applyThreadModelMigration
-      ],
-    ).toBe("turn_control");
-
-    rpc.receiveEnvelope({
-      id: "response-migration",
-      kind: "response",
-      requestId: request.id,
-      protocolVersion: 1,
-      sourceInstanceId: "owner_one",
-      targetInstanceId: "viewer_one",
-      createdAt: 1_100,
-      result: {
-        backend: "codex",
-        threadId: "thread-1",
-        status: "applied",
-      },
-    });
-    await expect(pending).resolves.toMatchObject({
-      backend: "codex",
-      threadId: "thread-1",
-      status: "applied",
-    });
-  });
-
   it("routes PR detach over RPC with turn_control authorization", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -2074,10 +2029,6 @@ describe("federation backend bridge", () => {
       cancelThreadExecutionModeQueue: vi.fn(),
       setAcpSessionRuntimeOption: vi.fn(),
       setThreadModelSettings: vi.fn(),
-      applyThreadModelMigration: vi.fn(async (request) => ({
-        ...request,
-        status: "acknowledged-new-thread" as const,
-      })),
       checkThreadBranchDrift: vi.fn(),
       updateThreadExpectedBranch: vi.fn(),
       retainThreadBranchDrift: vi.fn(),
@@ -2213,24 +2164,6 @@ describe("federation backend bridge", () => {
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
       envelope: {
-        id: "migration-request",
-        kind: "request",
-        method: FEDERATION_BACKEND_METHODS.applyThreadModelMigration,
-        params: {
-          backend: "codex",
-          threadId: "thread-1",
-          threadCreatedAt: 1_000,
-          threadModel: "gpt-5.6-sol",
-        },
-        protocolVersion: 1,
-        sourceInstanceId: "gateway_one",
-        targetInstanceId: "client_one",
-        createdAt: 1_150,
-      },
-    });
-    await router.routeEnvelope({
-      sourcePeerId: "gateway_one",
-      envelope: {
         id: "env-request",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.runCodexEnvironmentAction,
@@ -2284,12 +2217,6 @@ describe("federation backend bridge", () => {
       requestId: "approval-1",
       response: { decision: "approve" },
     });
-    expect(backend.applyThreadModelMigration).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "thread-1",
-      threadCreatedAt: 1_000,
-      threadModel: "gpt-5.6-sol",
-    });
     expect(backend.runCodexEnvironmentAction).toHaveBeenCalledWith({
       actionId: "start",
       backend: "codex",
@@ -2319,11 +2246,6 @@ describe("federation backend bridge", () => {
         kind: "response",
         requestId: "approval-request",
         result: { requestId: "approval-1" },
-      },
-      {
-        kind: "response",
-        requestId: "migration-request",
-        result: { status: "acknowledged-new-thread" },
       },
       {
         kind: "response",
@@ -2387,7 +2309,6 @@ describe("federation backend bridge", () => {
         cancelThreadExecutionModeQueue: vi.fn(),
         setAcpSessionRuntimeOption: vi.fn(),
         setThreadModelSettings: vi.fn(),
-        applyThreadModelMigration: vi.fn(),
         checkThreadBranchDrift: vi.fn(),
         updateThreadExpectedBranch: vi.fn(),
         retainThreadBranchDrift: vi.fn(),
