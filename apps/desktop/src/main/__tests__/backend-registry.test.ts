@@ -508,10 +508,12 @@ function createOverlayStoreMock(params?: {
       backend,
       threadId,
       entry,
+      pendingContext,
     }: {
-      backend: "codex" | "grok";
+      backend: AppServerBackendKind;
       threadId: string;
       entry: NonNullable<ThreadOverlayState["managedReviewEntries"]>[number];
+      pendingContext?: boolean;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -533,6 +535,37 @@ function createOverlayStoreMock(params?: {
       const next = {
         ...current,
         managedReviewEntries: nextEntries,
+        pendingManagedReviewContextEntryIds: pendingContext
+          ? [
+              ...(current.pendingManagedReviewContextEntryIds ?? []),
+              entry.id,
+            ].filter((id, index, ids) => ids.indexOf(id) === index)
+          : current.pendingManagedReviewContextEntryIds,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    consumeManagedReviewContexts: async ({
+      backend,
+      threadId,
+      entryIds,
+    }: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      entryIds: string[];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key);
+      if (!current) {
+        return undefined;
+      }
+      const consumed = new Set(entryIds);
+      const remaining = (current.pendingManagedReviewContextEntryIds ?? [])
+        .filter((id) => !consumed.has(id));
+      const next = {
+        ...current,
+        pendingManagedReviewContextEntryIds:
+          remaining.length > 0 ? remaining : undefined,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -18354,7 +18387,8 @@ command = "pnpm dev"
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "Kimi parent",
+      title: "ACP session",
+      titleSource: "fallback",
       cwd: "/repo/worktree",
       createdAt: 1000,
       updatedAt: 1000,
@@ -18376,13 +18410,14 @@ command = "pnpm dev"
       sessionId: params.sessionId,
       turnId: params.turnId ?? `turn-${startPrompt.mock.calls.length}`,
     }));
-    const { acpClient, registry } = createKimiAcpRegistry({
+    const firstRegistry = createKimiAcpRegistry({
       acpBackendId,
       overlayStore,
       sessionId: parentThreadId,
       sessions,
       startPrompt,
     });
+    const { acpClient, registry } = firstRegistry;
 
     const response = await registry.startReview({
       backend: acpBackendId,
@@ -18438,17 +18473,62 @@ command = "pnpm dev"
       },
     });
 
-    const nextTurn = await registry.startTurn({
+    const completedOverlay = await overlayStore.getThreadOverlayState({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+    });
+    expect(completedOverlay?.pendingManagedReviewContextEntryIds).toEqual([
+      `managed-review:${response.turnId}:result`,
+    ]);
+    await registry.close();
+
+    const followupStartPrompt = vi.fn(
+      (params: Parameters<KimiStartPrompt>[0]) => ({
+        sessionId: params.sessionId,
+        turnId: params.turnId ?? "followup-turn",
+      }),
+    );
+    const followup = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore,
+      sessionId: parentThreadId,
+      sessions,
+      startPrompt: followupStartPrompt,
+    });
+    const scheduleTitleGeneration = vi.spyOn(
+      followup.registry as unknown as {
+        scheduleThreadTitleGeneration(params: {
+          backend: AppServerBackendKind;
+          threadId: string;
+          input: AppServerTurnInputItem[];
+        }): void;
+      },
+      "scheduleThreadTitleGeneration",
+    );
+
+    const nextTurn = await followup.registry.startTurn({
       backend: acpBackendId,
       threadId: parentThreadId,
       input: [{ type: "text", text: "Continue after review" }],
     });
-    const nextPrompt = startPrompt.mock.calls.at(-1)?.[0].prompt;
+    const nextPrompt = followupStartPrompt.mock.calls.at(-1)?.[0].prompt;
     expect(nextPrompt).toContain("PwrAgent review sub-agent results");
     expect(nextPrompt).toContain(reviewOutput);
     expect(nextPrompt).toContain("Continue after review");
+    expect(scheduleTitleGeneration).toHaveBeenCalledWith({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      input: [{ type: "text", text: "Continue after review" }],
+    });
+    const consumedOverlay = await overlayStore.getThreadOverlayState({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+    });
+    expect(
+      consumedOverlay?.pendingManagedReviewContextEntryIds,
+    ).toBeUndefined();
 
-    await (registry as unknown as {
+    await (followup.registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
     }).emit({
       backend: acpBackendId,
@@ -18465,14 +18545,98 @@ command = "pnpm dev"
         },
       },
     });
-    await registry.startTurn({
+    await followup.registry.startTurn({
       backend: acpBackendId,
       threadId: parentThreadId,
       input: [{ type: "text", text: "One more turn" }],
     });
-    expect(startPrompt.mock.calls.at(-1)?.[0].prompt).toBe("One more turn");
+    expect(followupStartPrompt.mock.calls.at(-1)?.[0].prompt).toBe("One more turn");
 
+    await followup.registry.close();
+  });
+
+  it("routes direct and controlled Kimi review cancellation to the hidden child", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "kimi-review-parent";
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: acpBackendId,
+      sessionId: parentThreadId,
+      title: "Kimi review parent",
+      cwd: "/repo/worktree",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+    }];
+    const startPrompt = vi.fn((params: Parameters<KimiStartPrompt>[0]) => ({
+      sessionId: params.sessionId,
+      turnId: `review-turn-${startPrompt.mock.calls.length}`,
+    }));
+    const { acpClient, registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: parentThreadId,
+      sessions,
+      startPrompt,
+    });
+
+    const directReview = await registry.startReview({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+    await registry.interruptTurn({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: directReview.turnId,
+    });
+    expect(acpClient.cancelSession).toHaveBeenLastCalledWith(
+      directReview.reviewThreadId,
+    );
     await registry.close();
+
+    const controlledSessions: AcpSessionMetadata[] = [{
+      ...sessions[0]!,
+    }];
+    const controlledStartPrompt = vi.fn(
+      (params: Parameters<KimiStartPrompt>[0]) => ({
+        sessionId: params.sessionId,
+        turnId: "controlled-review-turn",
+      }),
+    );
+    const controlled = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: parentThreadId,
+      sessions: controlledSessions,
+      startPrompt: controlledStartPrompt,
+    });
+    const controlledReview = await controlled.registry.startReview({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+    await expect(controlled.registry.controlActiveTurn({
+      operation: "stop",
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      requestId: "stop-kimi-review",
+      expectedTurnId: controlledReview.turnId,
+    })).resolves.toMatchObject({
+      ok: true,
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: controlledReview.turnId,
+      disposition: "interrupted",
+    });
+    expect(controlled.acpClient.cancelSession).toHaveBeenLastCalledWith(
+      controlledReview.reviewThreadId,
+    );
+    expect(controlled.acpClient.cancelSession).not.toHaveBeenCalledWith(
+      parentThreadId,
+    );
+
+    await controlled.registry.close();
   });
 
   it("rejects Codex review start while the thread has an active turn", async () => {

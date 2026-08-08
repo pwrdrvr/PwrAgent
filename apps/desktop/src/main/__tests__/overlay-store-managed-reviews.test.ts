@@ -85,9 +85,10 @@ describe("SqliteOverlayStore — managed review entries", () => {
         },
       });
       await store.upsertManagedReviewEntry({
-        backend: "codex",
+        backend: "acp:kimi",
         threadId: "thread-1",
         entry: result,
+        pendingContext: true,
       });
       stateDb.close();
 
@@ -95,10 +96,24 @@ describe("SqliteOverlayStore — managed review entries", () => {
       const reopenedStore = new SqliteOverlayStore(reopened);
       try {
         const overlay = await reopenedStore.getThreadOverlayState({
-          backend: "codex",
+          backend: "acp:kimi",
           threadId: "thread-1",
         });
         expect(overlay?.managedReviewEntries).toEqual([result]);
+        expect(overlay?.pendingManagedReviewContextEntryIds).toEqual([
+          result.id,
+        ]);
+
+        await reopenedStore.consumeManagedReviewContexts({
+          backend: "acp:kimi",
+          threadId: "thread-1",
+          entryIds: [result.id],
+        });
+        const consumed = await reopenedStore.getThreadOverlayState({
+          backend: "acp:kimi",
+          threadId: "thread-1",
+        });
+        expect(consumed?.pendingManagedReviewContextEntryIds).toBeUndefined();
       } finally {
         reopened.close();
       }
