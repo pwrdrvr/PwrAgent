@@ -451,6 +451,18 @@ jobs:
         with:
           node-version: 24.x
 
+      - name: Reap orphaned Electron processes from previous jobs
+        # This runner is a persistent Tart guest, not a fresh VM per job, so a
+        # previous job's leaked Electron tree survives into this one. The step
+        # always reports what it found (zero included) so the log carries
+        # evidence next time this lane misbehaves. It is scoped to this
+        # runner's own workspace: the guest is shared with PwrSnap and with
+        # operator work, and neither may become collateral. Windows lanes are
+        # GitHub-hosted (fresh VM per job), so they need no equivalent.
+        shell: bash
+        timeout-minutes: 5
+        run: ./scripts/ci/reap-orphan-electron-macos.sh
+
       - name: Run desktop replay-backed Electron tests
         # Tart's AppleParavirtGPU can reset under Electron load. The early
         # PWRAGENT_E2E_DISABLE_GPU gate selects software rendering before
