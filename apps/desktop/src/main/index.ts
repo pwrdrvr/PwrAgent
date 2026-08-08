@@ -136,6 +136,10 @@ import {
   getExistingRuntimeMessagingLeaseCoordinator,
   getRuntimeMessagingLeaseCoordinator,
 } from "./runtime-messaging-lease";
+import {
+  getExistingRuntimeFederationLeaseCoordinator,
+  getRuntimeFederationLeaseCoordinator,
+} from "./runtime-federation-lease";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import {
   disposeAppState,
@@ -206,6 +210,12 @@ if (process.env.PWRAGENT_E2E_DISABLE_GPU === "1") {
 }
 
 let mainProcessResourcesDisposed = false;
+// Idempotent separately from mainProcessResourcesDisposed: if the graceful
+// barrier's federation phase rejected or hung past its timeout, the sync
+// dispose already ran (with the release skipped) by the time will-quit /
+// process-exit fire, and this flag is what keeps their lease-release
+// fallback reachable instead of stranding the lease for its full TTL.
+let federationLeaseReleasedSync = false;
 let mainProcessShutdownComplete = false;
 let mainProcessShutdownPromise: Promise<void> | undefined;
 let rendererWindowShutdownPromise: Promise<void> | undefined;
@@ -424,7 +434,31 @@ function prewarmInitialThreadList(): void {
     });
 }
 
-function disposeMainProcessResourcesSync(): void {
+function releaseFederationLeaseSync(): void {
+  if (federationLeaseReleasedSync) {
+    return;
+  }
+  federationLeaseReleasedSync = true;
+  const runtimeFederationLeaseCoordinator =
+    getExistingRuntimeFederationLeaseCoordinator()
+    ?? (isAppStateInitialized() ? getRuntimeFederationLeaseCoordinator() : null);
+  runtimeFederationLeaseCoordinator?.shutdownSync();
+}
+
+function disposeMainProcessResourcesSync(options?: {
+  releaseFederationLease?: boolean;
+}): void {
+  // On the graceful path the federation lease is released by the shutdown
+  // barrier AFTER the runtime stops (that call passes
+  // releaseFederationLease: false), so a replacement instance cannot
+  // acquire it while the old listener is still bound. Every other call
+  // releases now — process termination is imminent — and this attempt sits
+  // ahead of the mainProcessResourcesDisposed early-return so the
+  // will-quit/process-exit fallback still fires when the barrier's
+  // federation phase rejected or timed out before its own release.
+  if (options?.releaseFederationLease ?? true) {
+    releaseFederationLeaseSync();
+  }
   if (mainProcessResourcesDisposed) {
     return;
   }
@@ -574,7 +608,15 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
     {
       name: "federation",
       timeoutMs: FEDERATION_SHUTDOWN_TIMEOUT_MS,
-      run: disposeDesktopFederationRuntime,
+      run: async () => {
+        await disposeDesktopFederationRuntime();
+        // Release the profile lease only after the listener is down: a
+        // replacement that acquired while the old socket was still bound
+        // would hit EADDRINUSE, keep the lease, and stay degraded even
+        // after this process exits. If this phase rejects or times out,
+        // the will-quit/process-exit sync dispose releases instead.
+        releaseFederationLeaseSync();
+      },
     },
     {
       name: "app-server",
@@ -595,7 +637,7 @@ async function disposeMainProcessResources(source: string): Promise<void> {
     // them first so in-flight renderer work cannot cross the boundary where
     // IPC handlers and their backing stores are disposed.
     await closeRendererWindowsBeforeResourceShutdown(source);
-    disposeMainProcessResourcesSync();
+    disposeMainProcessResourcesSync({ releaseFederationLease: false });
     await runMainProcessShutdownBarrier(source);
     // Keep the scheduler subscribed until the app-server registry is closed.
     // A queued registry entry can otherwise start after its durable lease was

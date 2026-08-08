@@ -425,6 +425,14 @@ export function FederationSettings(props: FederationSettingsProps) {
   const connectionRemediation = effectiveHealth.unavailableReason
     ? remediationForConnectionFailure(effectiveHealth.unavailableReason)
     : undefined;
+  const leaseHolderLabel = effectiveHealth.leaseHolder
+    ? [
+        effectiveHealth.leaseHolder.cwdHint,
+        effectiveHealth.leaseHolder.processId
+          ? `pid ${effectiveHealth.leaseHolder.processId}`
+          : undefined,
+      ].filter(Boolean).join(" - ")
+    : undefined;
 
   return (
     <SettingsSectionStack paneId="federation" aria-label="Federation settings">
@@ -1009,6 +1017,11 @@ export function FederationSettings(props: FederationSettingsProps) {
           {effectiveHealth.unavailableReason ? (
             <p className="settings-row__error">
               {effectiveHealth.unavailableReason}
+            </p>
+          ) : null}
+          {effectiveHealth.leaseHolder ? (
+            <p className="federation-security-note">
+              {`Federation is off here because another PwrAgent instance holds this profile's federation lease${leaseHolderLabel ? ` (${leaseHolderLabel})` : ""}. Close that instance or wait for its lease to expire, then change a federation setting to try again.`}
             </p>
           ) : null}
           {connectionRemediation ? (

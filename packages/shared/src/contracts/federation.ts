@@ -302,6 +302,20 @@ export type FederationHealthStatus = {
    * {@link formatFederationPeerDisplayLabel}.
    */
   localProfileName?: string;
+  /**
+   * Another live app instance holding this profile's federation lease.
+   * Present when this instance keeps its federation runtime stopped because
+   * the profile is already served elsewhere (mirrors the messaging lease
+   * holder surface). The instanceId is the app-runtime lease owner id, not
+   * a federation instance id.
+   */
+  leaseHolder?: {
+    instanceId: string;
+    processId?: number;
+    cwdHint?: string;
+    startedAt?: number;
+    expiresAt: number;
+  };
   peers: FederationPeerSummary[];
   clientEnrollment?: FederationClientEnrollment;
 };
