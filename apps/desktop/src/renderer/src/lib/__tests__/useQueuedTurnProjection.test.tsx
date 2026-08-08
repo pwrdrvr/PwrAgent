@@ -19,6 +19,54 @@ function buildThread(
 }
 
 describe("useQueuedTurnProjection", () => {
+  it("keeps an acknowledged local queue entry until a snapshot observes it", () => {
+    const { result: storeResult } = renderHook(() => useComposerDraftStore());
+    const store = storeResult.current;
+    const scopeKey = "thread:codex:thread-1";
+    store.setQueuedTurns(scopeKey, [
+      {
+        id: "local-acknowledged",
+        queueEntryId: "entry-1",
+        text: "wait for admission",
+        imageAttachments: [],
+        fileAttachments: [],
+      },
+    ]);
+
+    const projection = renderHook(
+      (props: { threads: NavigationThreadSummary[] }) =>
+        useQueuedTurnProjection({
+          composerDraftStore: store,
+          threads: props.threads,
+        }),
+      {
+        initialProps: {
+          // This navigation snapshot predates the queue acknowledgement.
+          threads: [buildThread([])],
+        },
+      },
+    );
+
+    expect(store.getQueuedTurn(scopeKey)?.id).toBe("local-acknowledged");
+
+    projection.rerender({
+      threads: [
+        buildThread([
+          {
+            queueEntryId: "entry-1",
+            origin: "manual",
+            displayText: "wait for admission",
+            createdAt: 1_000,
+            position: 0,
+          },
+        ]),
+      ],
+    });
+    projection.rerender({ threads: [buildThread([])] });
+
+    expect(store.getQueuedTurn(scopeKey)).toBeUndefined();
+  });
+
   it("mirrors FIFO entries from the snapshot and prunes dispatched ones", () => {
     const { result: storeResult } = renderHook(() => useComposerDraftStore());
     const store = storeResult.current;
