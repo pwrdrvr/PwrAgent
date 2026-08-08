@@ -5532,6 +5532,133 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad?.directoryKey).toBe(directoryKey);
   });
 
+  it("does not let a same-key viewer launchpad replace remote branch authority", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner-one",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const directoryKey = "directory:/shared/PwrAgent";
+    const ownerGitStatus = {
+      currentBranch: "owner/main",
+      branches: ["owner/main", "owner/release"],
+      branchDetails: [
+        { name: "owner/main", lastCommitAt: 200 },
+        { name: "owner/release", lastCommitAt: 100 },
+      ],
+      baseBranches: ["owner/main", "owner/release", "origin/release"],
+      baseBranchDetails: [
+        { name: "origin/release", lastCommitAt: 90 },
+      ],
+      syncState: "in-sync" as const,
+    };
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      federationTarget,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:remote-thread"],
+      threads: [{
+        id: "remote-thread",
+        title: "Remote work",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        projectKey: "/shared/PwrAgent",
+        inbox: { inInbox: true },
+        updatedAt: 1,
+      }],
+      directories: [{
+        key: directoryKey,
+        kind: "directory",
+        label: "Owner PwrAgent",
+        path: "/shared/PwrAgent",
+        threadKeys: ["codex:remote-thread"],
+        needsAttentionCount: 0,
+        gitStatus: ownerGitStatus,
+      }],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "Viewer PwrAgent",
+        directoryPath: "/shared/PwrAgent",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "viewer-persisted draft",
+        workMode: "local" as const,
+        branchName: "viewer/local-only",
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: snapshot.launchpadDefaults,
+      gitStatus: ownerGitStatus,
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot: vi.fn(async () => snapshot),
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("remote-thread");
+    });
+    await act(async () => {
+      await result.current.createThread();
+    });
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      federationTarget,
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "Owner PwrAgent",
+      directoryPath: "/shared/PwrAgent",
+      gitStatus: ownerGitStatus,
+      currentBranch: "owner/main",
+      preferredBackend: undefined,
+    });
+    expect(result.current.selectedDirectory?.label).toBe("Owner PwrAgent");
+    expect(result.current.selectedDirectory?.gitStatus).toEqual(ownerGitStatus);
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      prompt: "viewer-persisted draft",
+      directoryLabel: "Owner PwrAgent",
+      branchName: "owner/main",
+    });
+
+    ensureDirectoryLaunchpad.mockResolvedValueOnce({
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "Viewer PwrAgent",
+        directoryPath: "/shared/PwrAgent",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "remote base draft",
+        workMode: "local" as const,
+        branchName: "origin/release",
+        createdAt: 1,
+        updatedAt: 3,
+      },
+      defaults: snapshot.launchpadDefaults,
+      gitStatus: ownerGitStatus,
+    });
+    await act(async () => {
+      await result.current.openDirectoryLaunchpad(result.current.directories[0]!);
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      prompt: "remote base draft",
+      branchName: "origin/release",
+    });
+  });
+
   it("forces a directory-less workspace draft even when a directory is in context", async () => {
     const directoryKey = "directory:/Users/test/PwrAgent";
     const workspaceKey = "workspace:/Users/test/.pwragent/projects";
@@ -7482,11 +7609,13 @@ describe("useThreadNavigation", () => {
     });
 
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      federationTarget: undefined,
       directoryKey: "subthread:codex:thread-parent:same-worktree",
       directoryKind: "directory",
       directoryLabel: "app",
       directoryPath: "/repo/app/.worktrees/parent/app",
       gitStatusSourcePath: "/repo/app",
+      currentBranch: "feature/parent",
       parentThreadId: "thread-parent",
       parentThreadBackend: "codex",
       parentThreadTitle: "Worktree parent",

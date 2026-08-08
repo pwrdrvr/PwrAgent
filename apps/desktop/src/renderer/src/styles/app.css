@@ -19032,6 +19032,14 @@ a.transcript-message__messaging-origin:focus-visible {
   outline: none;
 }
 
+.project-picker__row:disabled,
+.reference-picker__row:disabled,
+.composer__autocomplete-option:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+  opacity: 0.6;
+}
+
 /* Leading 12px column — empty until the row is the current
    selection, then a ✓. */
 .project-picker__row-check,

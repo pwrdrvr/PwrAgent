@@ -923,6 +923,65 @@ describe("DesktopMessagingBackendBridge", () => {
     expect(unsubscribeLocal).toHaveBeenCalledOnce();
     expect(unsubscribeRemote).toHaveBeenCalledOnce();
   });
+
+  it("reads launchpad branch inventory from the owner filesystem", async () => {
+    const ownerGitStatus = {
+      currentBranch: "owner/main",
+      branches: ["owner/main", "owner/release"],
+      syncState: "in-sync" as const,
+    };
+    const readDirectoryStatusEntries = vi.fn(() => (async function* () {
+      yield {
+        directoryKey: "directory:/shared/PwrAgent",
+        gitStatus: ownerGitStatus,
+      };
+    })());
+    const ensureDirectoryLaunchpad = vi.fn(async (request: {
+      currentBranch?: string;
+    }) => ({
+      launchpad: {
+        directoryKey: "directory:/shared/PwrAgent",
+        directoryKind: "directory" as const,
+        directoryLabel: "PwrAgent",
+        directoryPath: "/shared/PwrAgent",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        branchName: request.currentBranch,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const registry = {
+      ensureDirectoryLaunchpad,
+      readDirectoryStatusEntries,
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    const response = await bridge.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/shared/PwrAgent",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/shared/PwrAgent",
+      currentBranch: "viewer/local-only",
+    });
+
+    expect(readDirectoryStatusEntries).toHaveBeenCalledWith([
+      expect.objectContaining({
+        key: "directory:/shared/PwrAgent",
+        path: "/shared/PwrAgent",
+      }),
+    ]);
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ currentBranch: "owner/main" }),
+    );
+    expect(response.gitStatus).toEqual(ownerGitStatus);
+    expect(response.launchpad.branchName).toBe("owner/main");
+  });
 });
 
 function createBridge(replay: AppServerThreadReplay): DesktopMessagingBackendBridge {

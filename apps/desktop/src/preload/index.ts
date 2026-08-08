@@ -172,6 +172,7 @@ import type {
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
   RenderComposerPdfPreviewResponse,
+  ListRecentFileReferencesRequest,
   ListRecentFileReferencesResponse,
   RecordRecentFileReferencesRequest,
   DetachThreadPullRequestRequest,
@@ -1648,8 +1649,13 @@ const desktopApi = Object.freeze({
       NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
       request,
     ),
-  listRecentFileReferences: async (): Promise<ListRecentFileReferencesResponse> =>
-    await ipcRenderer.invoke(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL),
+  listRecentFileReferences: async (
+    request: ListRecentFileReferencesRequest = {},
+  ): Promise<ListRecentFileReferencesResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
+      request,
+    ),
   recordRecentFileReferences: async (
     request: RecordRecentFileReferencesRequest,
   ): Promise<void> =>

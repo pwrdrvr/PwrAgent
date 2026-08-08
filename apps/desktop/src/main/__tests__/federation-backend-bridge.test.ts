@@ -17,6 +17,14 @@ import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 
 describe("federation backend bridge", () => {
+  it("negotiates launchpad metadata separately from environment actions", () => {
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad
+      ],
+    ).toBe("launchpad_metadata");
+  });
+
   it("does not expose profile-local thread model migrations over federation", () => {
     expect(FEDERATION_BACKEND_METHODS).not.toHaveProperty(
       "applyThreadModelMigration",
@@ -2050,6 +2058,10 @@ describe("federation backend bridge", () => {
       setCodexThreadEnvironment: vi.fn(),
       materializeDirectoryLaunchpad: vi.fn(),
       refreshDirectoryGitStatuses: vi.fn(),
+      ensureDirectoryLaunchpad: vi.fn(),
+      listRecentFileReferences: vi.fn(),
+      recordRecentFileReferences: vi.fn(),
+      attachDirectoryToThread: vi.fn(),
       listWorktreeUnpublishedCommits: vi.fn(),
       getWorktreeUnpublishedCommitDiff: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
@@ -2317,6 +2329,10 @@ describe("federation backend bridge", () => {
         stopCodexEnvironmentAction: vi.fn(),
         setCodexThreadEnvironment: vi.fn(),
         refreshDirectoryGitStatuses: vi.fn(),
+        ensureDirectoryLaunchpad: vi.fn(),
+        listRecentFileReferences: vi.fn(),
+        recordRecentFileReferences: vi.fn(),
+        attachDirectoryToThread: vi.fn(),
         listWorktreeUnpublishedCommits: vi.fn(),
         getWorktreeUnpublishedCommitDiff: vi.fn(),
         materializeDirectoryLaunchpad: vi.fn(),

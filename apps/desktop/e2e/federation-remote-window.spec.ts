@@ -418,7 +418,7 @@ test.describe("federation remote window", () => {
       await remote.getByRole("textbox", { name: "New thread" }).fill(submittedPrompt);
       await expect
         .poll(
-          async () => await remote.evaluate(async (directoryKey) => {
+          async () => await remote.evaluate(async ({ directoryKey, instanceId }) => {
             const api = (window as typeof window & {
               pwragent?: {
                 ensureDirectoryLaunchpad?: (request: unknown) => Promise<{
@@ -428,13 +428,20 @@ test.describe("federation remote window", () => {
             }).pwragent;
             if (!api?.ensureDirectoryLaunchpad) return "missing-api";
             const response = await api.ensureDirectoryLaunchpad({
+              federationTarget: {
+                scope: "remote",
+                instanceId,
+              },
               directoryKey,
               directoryKind: "directory",
               directoryLabel: "FixtureRepo",
               directoryPath: "/remote/FixtureRepo",
             });
             return response.launchpad.prompt;
-          }, "directory:/remote/FixtureRepo"),
+          }, {
+            directoryKey: "directory:/remote/FixtureRepo",
+            instanceId: gateway!.instanceId,
+          }),
           { timeout: 15_000 },
         )
         .toBe(submittedPrompt);

@@ -29,6 +29,8 @@ import type {
   ForkThreadRequest,
   ForkThreadResponse,
   GetNavigationSnapshotRequest,
+  EnsureDirectoryLaunchpadRequest,
+  EnsureDirectoryLaunchpadResponse,
   GetWorktreeUnpublishedCommitDiffRequest,
   GetWorktreeUnpublishedCommitDiffResponse,
   HandoffThreadWorkspaceRequest,
@@ -37,6 +39,7 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListRecentFileReferencesResponse,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
   ListWorktreeUnpublishedCommitsRequest,
@@ -64,10 +67,13 @@ import type {
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  AttachDirectoryToThreadRequest,
+  AttachDirectoryToThreadResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
+  RecordRecentFileReferencesRequest,
   ResolveThreadRequest,
   ResolveThreadResponse,
   RetainThreadBranchDriftRequest,
@@ -252,6 +258,10 @@ export const FEDERATION_BACKEND_METHODS = {
   stopCodexEnvironmentAction: "backend.stopCodexEnvironmentAction",
   setCodexThreadEnvironment: "backend.setCodexThreadEnvironment",
   refreshDirectoryGitStatuses: "backend.refreshDirectoryGitStatuses",
+  ensureDirectoryLaunchpad: "backend.ensureDirectoryLaunchpad",
+  listRecentFileReferences: "backend.listRecentFileReferences",
+  recordRecentFileReferences: "backend.recordRecentFileReferences",
+  attachDirectoryToThread: "backend.attachDirectoryToThread",
   listWorktreeUnpublishedCommits: "backend.listWorktreeUnpublishedCommits",
   getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
@@ -335,6 +345,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad]: "launchpad_metadata",
+  [FEDERATION_BACKEND_METHODS.listRecentFileReferences]: "remote_window",
+  [FEDERATION_BACKEND_METHODS.recordRecentFileReferences]: "remote_window",
+  [FEDERATION_BACKEND_METHODS.attachDirectoryToThread]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
@@ -481,6 +495,16 @@ export type FederationBackendOperations = {
   refreshDirectoryGitStatuses(
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse>;
+  ensureDirectoryLaunchpad(
+    request: EnsureDirectoryLaunchpadRequest,
+  ): Promise<EnsureDirectoryLaunchpadResponse>;
+  listRecentFileReferences(): Promise<ListRecentFileReferencesResponse>;
+  recordRecentFileReferences(
+    request: RecordRecentFileReferencesRequest,
+  ): Promise<void>;
+  attachDirectoryToThread(
+    request: AttachDirectoryToThreadRequest,
+  ): Promise<AttachDirectoryToThreadResponse>;
   listWorktreeUnpublishedCommits(
     request: ListWorktreeUnpublishedCommitsRequest,
   ): Promise<ListWorktreeUnpublishedCommitsResponse>;
@@ -905,6 +929,31 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.refreshDirectoryGitStatuses(
         envelope.params as RefreshDirectoryGitStatusesRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad,
+    async (envelope) =>
+      await params.backend.ensureDirectoryLaunchpad(
+        envelope.params as EnsureDirectoryLaunchpadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.listRecentFileReferences,
+    async () => await params.backend.listRecentFileReferences(),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.recordRecentFileReferences,
+    async (envelope) =>
+      await params.backend.recordRecentFileReferences(
+        envelope.params as RecordRecentFileReferencesRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.attachDirectoryToThread,
+    async (envelope) =>
+      await params.backend.attachDirectoryToThread(
+        envelope.params as AttachDirectoryToThreadRequest,
       ),
   );
   params.router.registerHandler(
@@ -1396,6 +1445,40 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<RefreshDirectoryGitStatusesResponse> {
     return await this.rpc.request<RefreshDirectoryGitStatusesResponse>({
       method: FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses,
+      params: request,
+    });
+  }
+
+  async ensureDirectoryLaunchpad(
+    request: EnsureDirectoryLaunchpadRequest,
+  ): Promise<EnsureDirectoryLaunchpadResponse> {
+    return await this.rpc.request<EnsureDirectoryLaunchpadResponse>({
+      method: FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad,
+      params: request,
+    });
+  }
+
+  async listRecentFileReferences(): Promise<ListRecentFileReferencesResponse> {
+    return await this.rpc.request<ListRecentFileReferencesResponse>({
+      method: FEDERATION_BACKEND_METHODS.listRecentFileReferences,
+      params: {},
+    });
+  }
+
+  async recordRecentFileReferences(
+    request: RecordRecentFileReferencesRequest,
+  ): Promise<void> {
+    await this.rpc.request<void>({
+      method: FEDERATION_BACKEND_METHODS.recordRecentFileReferences,
+      params: request,
+    });
+  }
+
+  async attachDirectoryToThread(
+    request: AttachDirectoryToThreadRequest,
+  ): Promise<AttachDirectoryToThreadResponse> {
+    return await this.rpc.request<AttachDirectoryToThreadResponse>({
+      method: FEDERATION_BACKEND_METHODS.attachDirectoryToThread,
       params: request,
     });
   }

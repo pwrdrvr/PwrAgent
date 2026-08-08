@@ -307,20 +307,46 @@ function upsertLaunchpadDirectory(
   options?: {
     gitStatus?: NavigationDirectoryGitStatus | null;
     gitStatusSourcePath?: string;
+    preserveExistingDirectoryAuthority?: boolean;
   },
 ): NavigationSnapshot["directories"] {
   let foundDirectory = false;
   const existingDirectory = directories.find(
     (directory) => directory.key === launchpad.directoryKey,
   );
-  const displayLabel = displayLaunchpadDirectoryLabel(
-    launchpad,
-    existingDirectory,
-  );
-  const normalizedLaunchpad =
-    displayLabel === launchpad.directoryLabel
-      ? launchpad
-      : { ...launchpad, directoryLabel: displayLabel };
+  const displayLabel = options?.preserveExistingDirectoryAuthority
+    && existingDirectory
+    ? existingDirectory.label
+    : displayLaunchpadDirectoryLabel(launchpad, existingDirectory);
+  const authoritativeBranchNames = new Set([
+    ...(existingDirectory?.gitStatus?.branches ?? []),
+    ...(existingDirectory?.gitStatus?.branchDetails ?? []).map(
+      (branch) => branch.name,
+    ),
+    ...(existingDirectory?.gitStatus?.baseBranches ?? []),
+    ...(existingDirectory?.gitStatus?.baseBranchDetails ?? []).map(
+      (branch) => branch.name,
+    ),
+  ]);
+  const branchName =
+    options?.preserveExistingDirectoryAuthority
+    && existingDirectory
+    && authoritativeBranchNames.size > 0
+    && launchpad.branchName
+    && !authoritativeBranchNames.has(launchpad.branchName)
+      ? existingDirectory.gitStatus?.currentBranch
+      : launchpad.branchName;
+  const normalizedLaunchpad = {
+    ...launchpad,
+    ...(options?.preserveExistingDirectoryAuthority && existingDirectory
+      ? {
+          directoryKind: existingDirectory.kind,
+          directoryLabel: existingDirectory.label,
+          directoryPath: existingDirectory.path,
+          branchName,
+        }
+      : { directoryLabel: displayLabel }),
+  };
   const sourceDirectory = findLaunchpadSourceDirectory(
     directories,
     normalizedLaunchpad,
@@ -405,6 +431,7 @@ function resolveCreateThreadTargetDirectory(args: {
   directoryKind: NavigationDirectorySummary["kind"];
   directoryLabel: string;
   directoryPath?: string;
+  gitStatus?: NavigationDirectoryGitStatus;
 } {
   const { directories, selectedDirectory, selectedThreadKey, forceWorkspace } = args;
 
@@ -414,6 +441,7 @@ function resolveCreateThreadTargetDirectory(args: {
       directoryKind: selectedDirectory.kind,
       directoryLabel: selectedDirectory.label,
       directoryPath: selectedDirectory.path,
+      gitStatus: selectedDirectory.gitStatus,
     };
   }
 
@@ -430,6 +458,7 @@ function resolveCreateThreadTargetDirectory(args: {
           directoryKind: threadDirectory.kind,
           directoryLabel: threadDirectory.label,
           directoryPath: threadDirectory.path,
+          gitStatus: threadDirectory.gitStatus,
         };
       }
     }
@@ -441,6 +470,7 @@ function resolveCreateThreadTargetDirectory(args: {
     directoryKind: "workspace",
     directoryLabel: workspaceDirectory?.label ?? ROOT_NEW_THREAD_WORKSPACE_LABEL,
     directoryPath: workspaceDirectory?.path,
+    gitStatus: workspaceDirectory?.gitStatus,
   };
 }
 
@@ -2065,6 +2095,7 @@ function applyLaunchpadUpdate(
   options?: {
     gitStatus?: NavigationDirectoryGitStatus | null;
     gitStatusSourcePath?: string;
+    preserveExistingDirectoryAuthority?: boolean;
   },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
@@ -2090,9 +2121,12 @@ function applyLaunchpadUpdateIfMissing(
   snapshot: NavigationSnapshot | undefined,
   launchpad: NavigationLaunchpadDraft,
   defaults: NavigationSnapshot["launchpadDefaults"],
+  options?: {
+    preserveExistingDirectoryAuthority?: boolean;
+  },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
-    return applyLaunchpadUpdate(snapshot, launchpad, defaults);
+    return applyLaunchpadUpdate(snapshot, launchpad, defaults, options);
   }
 
   if (snapshot.directories.some(
@@ -2102,7 +2136,7 @@ function applyLaunchpadUpdateIfMissing(
     return snapshot;
   }
 
-  return applyLaunchpadUpdate(snapshot, launchpad, defaults);
+  return applyLaunchpadUpdate(snapshot, launchpad, defaults, options);
 }
 
 function mergeLaunchpadUpdateResponse(
@@ -2570,7 +2604,11 @@ export function useThreadNavigation(
    * sidebar association.
    */
   attachDirectoryPathsToThread: (
-    target: { backend: AppServerBackendKind; threadId: string },
+    target: {
+      backend: AppServerBackendKind;
+      federationTarget?: FederationTarget;
+      threadId: string;
+    },
     paths: string[],
   ) => Promise<void>;
   pickDirectoryError?: string;
@@ -2717,6 +2755,7 @@ export function useThreadNavigation(
     desktopApi?.sendThreadPrAutoDispatchNow;
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
   const enabled = options.enabled ?? true;
+  const rendererFederationTarget = readRendererFederationTarget();
   const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
@@ -4220,7 +4259,9 @@ export function useThreadNavigation(
       const launchpads = Object.values(localLaunchpads);
       const currentDirectories = launchpads.reduce(
         (nextDirectories, launchpad) =>
-          upsertLaunchpadDirectory(nextDirectories, launchpad),
+          upsertLaunchpadDirectory(nextDirectories, launchpad, {
+            preserveExistingDirectoryAuthority: Boolean(rendererFederationTarget),
+          }),
         state.response?.directories ?? [],
       );
 
@@ -4246,6 +4287,7 @@ export function useThreadNavigation(
       optimisticThread,
       state.response?.directories,
       state.response?.threads,
+      rendererFederationTarget,
     ]
   );
 
@@ -4404,10 +4446,15 @@ export function useThreadNavigation(
 
       void desktopApi.refreshDirectoryGitStatuses({
         directoryKeys,
+        federationTarget: rendererFederationTarget,
         force: true,
       });
     },
-    [desktopApi?.refreshDirectoryGitStatuses, directories]
+    [
+      desktopApi?.refreshDirectoryGitStatuses,
+      directories,
+      rendererFederationTarget,
+    ]
   );
 
   useEffect(() => {
@@ -4650,10 +4697,15 @@ export function useThreadNavigation(
         });
         const directoryKey = targetDirectory.directoryKey;
         const response = await desktopApi.ensureDirectoryLaunchpad({
+          federationTarget: rendererFederationTarget,
           directoryKey,
           directoryKind: targetDirectory.directoryKind,
           directoryLabel: targetDirectory.directoryLabel,
           directoryPath: targetDirectory.directoryPath,
+          ...(targetDirectory.gitStatus
+            ? { gitStatus: targetDirectory.gitStatus }
+            : {}),
+          currentBranch: targetDirectory.gitStatus?.currentBranch,
           preferredBackend: backend,
         });
         let launchpad = response.launchpad;
@@ -4684,9 +4736,14 @@ export function useThreadNavigation(
             current.response,
             launchpad,
             defaults,
-            ensuredGitStatus !== undefined
-              ? { gitStatus: ensuredGitStatus }
-              : undefined,
+            {
+              preserveExistingDirectoryAuthority: Boolean(
+                rendererFederationTarget,
+              ),
+              ...(ensuredGitStatus !== undefined
+                ? { gitStatus: ensuredGitStatus }
+                : {}),
+            },
           ),
         }));
         const selectionKey = buildLaunchpadSelectionKey(directoryKey);
@@ -4701,6 +4758,11 @@ export function useThreadNavigation(
             current.response,
             pendingLaunchpad,
             defaults,
+            {
+              preserveExistingDirectoryAuthority: Boolean(
+                rendererFederationTarget,
+              ),
+            },
           ),
         }));
         setSelectedItemKey(selectionKey);
@@ -4724,6 +4786,7 @@ export function useThreadNavigation(
       selectedDirectory,
       selectedThreadKey,
       takePendingDirectoryGitStatus,
+      rendererFederationTarget,
     ]
   );
 
@@ -4873,11 +4936,23 @@ export function useThreadNavigation(
 
       try {
         const response = await desktopApi.ensureDirectoryLaunchpad({
+          federationTarget:
+            parent.federation?.ref.target ?? rendererFederationTarget,
           directoryKey,
           directoryKind: directory.directoryKind,
           directoryLabel: directory.directoryLabel,
           directoryPath: launchpadDirectoryPath,
           gitStatusSourcePath: directory.gitStatusSourcePath,
+          ...(parent.federation
+            ? {
+                gitStatus: stateRef.current.response?.directories.find(
+                  (entry) =>
+                    entry.path === directory.gitStatusSourcePath
+                    || entry.path === directory.directoryPath,
+                )?.gitStatus,
+              }
+            : {}),
+          currentBranch: directory.branchName,
           parentThreadId: groupRoot.id,
           parentThreadBackend: groupRoot.source,
           parentThreadTitle: groupRoot.title,
@@ -4941,7 +5016,12 @@ export function useThreadNavigation(
         setCreatingThread(undefined);
       }
     },
-    [desktopApi, resolveGroupRoot, takePendingDirectoryGitStatus],
+    [
+      desktopApi,
+      rendererFederationTarget,
+      resolveGroupRoot,
+      takePendingDirectoryGitStatus,
+    ],
   );
 
   const forkThread = useCallback(
@@ -5075,10 +5155,12 @@ export function useThreadNavigation(
 
       try {
         const response = await desktopApi.ensureDirectoryLaunchpad({
+          federationTarget: rendererFederationTarget,
           directoryKey: directory.key,
           directoryKind: directory.kind,
           directoryLabel: directory.label,
           directoryPath: directory.path,
+          ...(directory.gitStatus ? { gitStatus: directory.gitStatus } : {}),
           currentBranch: directory.gitStatus?.currentBranch,
           preferredBackend,
         });
@@ -5091,7 +5173,15 @@ export function useThreadNavigation(
           response: applyLaunchpadUpdate(
             current.response,
             response.launchpad,
-            response.defaults
+            response.defaults,
+            {
+              ...(response.gitStatus !== undefined
+                ? { gitStatus: response.gitStatus }
+                : {}),
+              preserveExistingDirectoryAuthority: Boolean(
+                rendererFederationTarget,
+              ),
+            },
           ),
         }));
         setSelectedItemKey(buildLaunchpadSelectionKey(directory.key));
@@ -5099,7 +5189,7 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi]
+    [desktopApi, rendererFederationTarget]
   );
 
   // Switch the composer to the directory-less "workspace" launchpad. Backs the
@@ -5135,6 +5225,9 @@ export function useThreadNavigation(
       // path navigates to the new directory's launchpad immediately
       // so the composer focuses the just-added directory without an
       // extra click.
+      if (rendererFederationTarget) {
+        return;
+      }
       if (
         !desktopApi?.pickDirectoryFromDisk ||
         !desktopApi?.registerDirectoryFromDisk
@@ -5206,7 +5299,7 @@ export function useThreadNavigation(
         setPickingDirectory(false);
       }
     },
-    [desktopApi, refresh],
+    [desktopApi, refresh, rendererFederationTarget],
   );
 
   const pickDirectoryForReference = useCallback(async (): Promise<
@@ -5218,6 +5311,9 @@ export function useThreadNavigation(
     // the caller mints a chip in place instead of moving to the new
     // launchpad. Same cancel-vs-failure split as the sibling: cancel is
     // silent, validation failure surfaces via `pickDirectoryError`.
+    if (rendererFederationTarget) {
+      return undefined;
+    }
     if (
       !desktopApi?.pickDirectoryFromDisk ||
       !desktopApi?.registerDirectoryFromDisk
@@ -5264,7 +5360,7 @@ export function useThreadNavigation(
     } finally {
       setPickingDirectory(false);
     }
-  }, [desktopApi]);
+  }, [desktopApi, rendererFederationTarget]);
 
   const addProjectDirectory = useCallback(async (): Promise<void> => {
     const picked = await pickDirectoryForReference();
@@ -5274,6 +5370,9 @@ export function useThreadNavigation(
   }, [pickDirectoryForReference, updateBrowseMode]);
 
   const pickAndAttachDirectoryToSelectedThread = useCallback(async (): Promise<void> => {
+    if (rendererFederationTarget) {
+      return;
+    }
     if (
       !desktopApi?.pickDirectoryFromDisk ||
       !desktopApi.attachDirectoryToThread
@@ -5311,11 +5410,15 @@ export function useThreadNavigation(
     } finally {
       setPickingDirectory(false);
     }
-  }, [desktopApi, refresh, selectedThread]);
+  }, [desktopApi, refresh, rendererFederationTarget, selectedThread]);
 
   const attachDirectoryPathsToThread = useCallback(
     async (
-      target: { backend: AppServerBackendKind; threadId: string },
+      target: {
+        backend: AppServerBackendKind;
+        federationTarget?: FederationTarget;
+        threadId: string;
+      },
       paths: string[],
     ): Promise<void> => {
       // Composer `@`-reference links (no OS dialog — the paths are already
@@ -5332,6 +5435,8 @@ export function useThreadNavigation(
         try {
           const result = await desktopApi.attachDirectoryToThread({
             backend: target.backend,
+            federationTarget:
+              target.federationTarget ?? rendererFederationTarget,
             threadId: target.threadId,
             path,
             preferredBackend: target.backend,
@@ -5363,7 +5468,7 @@ export function useThreadNavigation(
         }
       }
     },
-    [desktopApi, refresh],
+    [desktopApi, refresh, rendererFederationTarget],
   );
 
   const clearPickDirectoryError = useCallback((): void => {
@@ -5790,6 +5895,7 @@ export function useThreadNavigation(
           try {
             const attachResult = await desktopApi.attachDirectoryToThread?.({
               backend: response.backend,
+              federationTarget,
               threadId: response.threadId,
               path,
               preferredBackend: response.backend,

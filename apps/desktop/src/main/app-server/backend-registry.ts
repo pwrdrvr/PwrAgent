@@ -15165,10 +15165,17 @@ export class DesktopBackendRegistry {
 
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
+    options?: {
+      /**
+       * A remote viewer may persist the draft here, but its matching local path
+       * is never a valid source of environment/filesystem metadata.
+       */
+      skipFilesystemInspection?: boolean;
+    },
   ): Promise<EnsureDirectoryLaunchpadResponse> {
-    const codexEnvironmentOptions = await listCodexEnvironmentOptions(
-      request.directoryPath,
-    );
+    const codexEnvironmentOptions = options?.skipFilesystemInspection
+      ? []
+      : await listCodexEnvironmentOptions(request.directoryPath);
     const existing = await this.overlayStore.getDirectoryLaunchpad({
       directoryKey: request.directoryKey,
     });

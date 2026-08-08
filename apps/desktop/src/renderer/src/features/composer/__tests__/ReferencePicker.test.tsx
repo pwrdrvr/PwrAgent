@@ -12,6 +12,7 @@ import {
   ReferencePicker,
   type ReferencePickerProps,
 } from "../ReferencePicker";
+import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 
 afterEach(() => {
   cleanup();
@@ -222,6 +223,27 @@ describe("ReferencePicker", () => {
     expect(onPickDirectoryFromDisk).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "Add file…" }));
     expect(onPickFileFromDisk).toHaveBeenCalledOnce();
+  });
+
+  it("keeps native add rows visible but disabled in remote viewers", () => {
+    const onPickDirectoryFromDisk = vi.fn();
+    const onPickFileFromDisk = vi.fn();
+    renderPicker({
+      nativePickingDisabled: true,
+      onPickDirectoryFromDisk,
+      onPickFileFromDisk,
+    });
+
+    const directory = screen.getByRole("button", { name: "Add directory…" });
+    const file = screen.getByRole("button", { name: "Add file…" });
+    expect(directory).toBeDisabled();
+    expect(file).toBeDisabled();
+    expect(directory).toHaveAttribute("title", REMOTE_NATIVE_PICKER_TOOLTIP);
+    expect(file).toHaveAttribute("data-tooltip", REMOTE_NATIVE_PICKER_TOOLTIP);
+    fireEvent.click(directory);
+    fireEvent.click(file);
+    expect(onPickDirectoryFromDisk).not.toHaveBeenCalled();
+    expect(onPickFileFromDisk).not.toHaveBeenCalled();
   });
 
   it("calls onClose when Escape is pressed", () => {
