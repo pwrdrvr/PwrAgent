@@ -633,6 +633,30 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(/\.star-map-card:focus-visible\s*\{/);
   });
 
+  // The three focusable controls in the Star Map "View" popover: the chip that
+  // opens it, each button of the layout switch, and the "Reset view" action.
+  // They are ordinary `<button>`s, so they are tab-reachable whether or not
+  // anyone styles the focused state — the layout switch shipped without a
+  // `:focus-visible` rule at all and keyboard users simply had no idea where
+  // focus was. Nothing automated caught it: axe cannot evaluate focus
+  // visibility (it is not a computable property of the resting DOM), so the
+  // a11y gate was green the whole time. This assertion IS the guard.
+  //
+  // All three name `--focus-ring` at 1px, matching the star-map card ring
+  // above. Dropping one, or drifting a token/offset, is a design decision —
+  // change this test in the same commit so it is reviewed, not accidental.
+  it("draws every Star Map view-popover focus ring from the focus-ring token", () => {
+    for (const selector of [
+      ".star-map__filter-chip:focus-visible",
+      ".star-map__layout-option:focus-visible",
+      ".star-map__view-action:focus-visible",
+    ]) {
+      const ring = extractRuleBody(css, selector);
+      expect(ring).toContain("outline: 2px solid var(--focus-ring);");
+      expect(ring).toContain("outline-offset: 1px;");
+    }
+  });
+
   it("keeps long directory names from crowding the count and expand control", () => {
     const summaryRule = extractRuleBody(css, ".directory-row__summary");
     const summaryMetaRule = extractRuleBody(css, ".directory-row__summary-meta");
