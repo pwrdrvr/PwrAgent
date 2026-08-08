@@ -36608,6 +36608,146 @@ script = "printf setup"
     },
   );
 
+  it("does not adopt an ACP branch change from a terminal event without a known active turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-stale-turn-branch-"));
+    const repo = path.join(root, "app");
+    await mkdir(repo, { recursive: true });
+    await git(repo, ["init", "-b", "main"]);
+    await git(repo, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "init",
+    ]);
+    await git(repo, ["switch", "--detach", "HEAD"]);
+
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const sessionId = "grok-session-stale-turn";
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`${acpBackendId}:${sessionId}`]: {
+          backend: acpBackendId,
+          threadId: sessionId,
+          executionMode: "full-access",
+          gitBranch: "HEAD",
+          observedGitBranch: "HEAD",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId,
+      overlayStore,
+    });
+    const eventMethods: string[] = [];
+    registry.onEvent((event) => {
+      eventMethods.push(event.notification.method);
+    });
+
+    try {
+      await registry.startThread({
+        backend: acpBackendId,
+        cwd: repo,
+        executionMode: "full-access",
+      });
+      await git(repo, ["switch", "-c", "fix/grok-stale-turn"]);
+
+      // No startTurn: a stale terminal notification for a turn the registry
+      // never saw start must not rewrite the thread's expected branch.
+      await (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit({
+        backend: acpBackendId,
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: sessionId,
+            turnId: `pending:${sessionId}:999`,
+            turn: {
+              id: `pending:${sessionId}:999`,
+              status: "completed",
+              completedAt: 1002,
+              output: [{ type: "text", text: "Done" }],
+            },
+          },
+        },
+      });
+
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: acpBackendId,
+          threadId: sessionId,
+        }),
+      ).resolves.toMatchObject({
+        gitBranch: "HEAD",
+        observedGitBranch: "HEAD",
+      });
+      expect(eventMethods).not.toContain("thread/branch/updated");
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("releases an ACP thread when the terminal turn id drifts from turn/started", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const sessionId = "grok-session-drifted-terminal";
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId,
+    });
+
+    try {
+      await registry.startThread({
+        backend: acpBackendId,
+        cwd: "/repo/project",
+        executionMode: "full-access",
+      });
+      await registry.startTurn({
+        backend: acpBackendId,
+        threadId: sessionId,
+        input: [{ type: "text", text: "do work" }],
+      });
+
+      // onPromptError emits only turn/failed — no following idle status —
+      // and the session normalizer may report a different pending turn id
+      // than turn/started. The terminal boundary must still release the
+      // thread's active-turn keys or every future turn is rejected.
+      await (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit({
+        backend: acpBackendId,
+        notification: {
+          method: "turn/failed",
+          params: {
+            threadId: sessionId,
+            turnId: `pending:${sessionId}:drifted`,
+            turn: {
+              id: `pending:${sessionId}:drifted`,
+              status: "failed",
+              completedAt: 1002,
+              error: { message: "prompt failed" },
+            },
+          },
+        },
+      });
+
+      await expect(
+        registry.startTurn({
+          backend: acpBackendId,
+          threadId: sessionId,
+          input: [{ type: "text", text: "retry after failure" }],
+        }),
+      ).resolves.toMatchObject({
+        backend: acpBackendId,
+        threadId: sessionId,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("notifies listeners when the renderer adopts a new expected branch", async () => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
