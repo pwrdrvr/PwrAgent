@@ -17728,7 +17728,24 @@ a.transcript-message__messaging-origin:focus-visible {
   pointer-events: none;
 }
 
-.composer-tiptap-input__mention {
+/* Inline mention chips inside the composer: `$skill`, `@file`, `@directory`,
+   `#thread`, and PR pills. They interrupt running prose, so they are sized in
+   `em` off the paragraph (14px/1.6) rather than off the chip primitives —
+   `.chip` (24px / 12px) and `.pr-chip` (22px / 11px) are row-and-header
+   geometry and do not belong in a sentence.
+
+   Qualified with `.composer-tiptap-input__editor` so this block outranks
+   `.chip` / `.pr-chip` / `.thread-chip` (each 0,1,0) on specificity instead of
+   on source order. The geometry used to depend on this block sitting later in
+   the file; moving `.thread-chip`'s `height: 22px` below it would silently
+   resize every composer chip.
+
+   ALIGNMENT (see the ::before strut below): every chip's own label sits on the
+   paragraph's baseline, so a chip reads as a word in the sentence rather than a
+   badge floating over it. Do not swap this for a `vertical-align` nudge — a
+   length here is measured from the chip's *synthesized* baseline, which differs
+   per chip kind and is what made them disagree in the first place. */
+.composer-tiptap-input__editor .composer-tiptap-input__mention {
   display: inline-flex;
   height: 1.35em;
   gap: 0.35em;
@@ -17736,7 +17753,30 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 0 0.5em;
   font-size: inherit;
   line-height: normal;
-  vertical-align: 0.13em;
+  vertical-align: baseline;
+}
+
+/* Zero-width baseline strut, and the whole reason these chips line up.
+   An inline-flex box takes its baseline from its FIRST flex item, so each
+   chip kind used to hand the line a different one: the `$`/`@` chips gave
+   their label's text baseline, `#thread` gave the bottom edge of its 1em SVG
+   icon (1.75px higher), and the PR pill gave the bottom edge of its 8px dot
+   (1.25px lower). One shared `vertical-align` offset therefore landed in three
+   different places — a 3.0px spread on an 18.9px chip.
+
+   A zero-width-space item in front makes that first baseline the chip font's
+   own text baseline in every kind, so `vertical-align: baseline` above lands
+   each chip's label exactly on the paragraph's baseline. Measured box spread
+   after this change: 0.5px, and that remainder is the PR pill's mono metrics
+   holding ITS label on the baseline — the labels themselves agree.
+
+   The negative inline-end margin cancels the one `gap` the strut would
+   otherwise open in front of the icon/dot; it must stay equal to `gap` above.
+   Generated content never enters the ProseMirror document, so the strut
+   cannot reach the draft, the clipboard, or the text the composer sends. */
+.composer-tiptap-input__editor .composer-tiptap-input__mention::before {
+  content: "\200b";
+  margin-inline-end: -0.35em;
 }
 
 .composer-tiptap-input__mention.thread-chip {
