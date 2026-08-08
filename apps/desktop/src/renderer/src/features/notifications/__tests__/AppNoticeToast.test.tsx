@@ -201,6 +201,9 @@ describe("AppNoticeToast", () => {
     expect(screen.getAllByRole("button")).toHaveLength(2);
     expect(screen.queryByRole("button", { name: "Copy notice" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Dismiss notice" })).toBeNull();
+    expect(
+      container.querySelector(".app-notice-toast__actions"),
+    ).toHaveAttribute("data-custom-actions", "true");
     expect(container.querySelector(".app-notice-toast__timer")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Leave disabled" }));

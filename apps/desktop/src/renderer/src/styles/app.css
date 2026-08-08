@@ -5752,6 +5752,11 @@ textarea,
   align-self: start;
 }
 
+.app-notice-toast__actions[data-custom-actions="true"] {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
 .app-notice-toast__navigation {
   display: flex;
   grid-column: 1 / -1;
