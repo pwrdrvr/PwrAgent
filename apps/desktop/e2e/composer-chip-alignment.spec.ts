@@ -33,10 +33,57 @@ import { launchElectronApp } from "./fixtures/electron-app";
  * carrying an attached PR, and no E2E fixture seeds one today.
  */
 const specDir = path.dirname(fileURLToPath(import.meta.url));
-const fixturePath = path.resolve(
+const sharedFixturePath = path.resolve(
   specDir,
   "fixtures/skill-autocomplete-interactions/replay.fixture.json",
 );
+
+/**
+ * The shared fixture holds exactly one thread, and the `#` picker leaves
+ * the thread you are writing in out of its own results — so on that
+ * fixture the popover has nothing to offer and never opens. This spec
+ * needs a second thread; the other two specs on that fixture do not, and
+ * one of them (`docs-site-screenshots.inspect.spec.ts`) captures the
+ * sidebar, where an extra row would change a committed PNG.
+ *
+ * The Inbox lens shows every thread regardless of `inbox.inInbox` (which
+ * `buildNavigationSnapshot` recomputes anyway), so there is no way to add
+ * a thread to the fixture and keep it out of that capture. Derive a
+ * two-thread copy here instead, and leave the shared fixture alone.
+ */
+async function writeTwoThreadFixture(): Promise<{
+  cleanup: () => Promise<void>;
+  fixturePath: string;
+}> {
+  const { mkdtemp, readFile, rm, writeFile } = await import("node:fs/promises");
+  const os = await import("node:os");
+
+  const fixture = JSON.parse(await readFile(sharedFixturePath, "utf8"));
+  const threadList = fixture.steps.find(
+    (step: { method?: string }) => step.method === "thread/list",
+  );
+  if (!threadList || !Array.isArray(threadList.result)) {
+    throw new Error("shared fixture no longer has a thread/list step");
+  }
+  threadList.result.push({
+    ...threadList.result[0],
+    id: "thread-hash-reference-target",
+    title: "Hash reference target",
+    summary: "Referenceable sibling for the composer # picker",
+    // Older than the thread under test, so candidate order is fixed.
+    updatedAt: 1759000000000,
+  });
+
+  const tmpRoot = await mkdtemp(
+    path.join(os.tmpdir(), "pwragent-chip-alignment-"),
+  );
+  const fixturePath = path.join(tmpRoot, "replay.fixture.json");
+  await writeFile(fixturePath, JSON.stringify(fixture));
+  return {
+    cleanup: () => rm(tmpRoot, { force: true, recursive: true }),
+    fixturePath,
+  };
+}
 
 /** Chips must agree this closely on where they sit within their line. */
 const OFFSET_TOLERANCE_PX = 0.5;
@@ -118,8 +165,9 @@ async function composerMetrics(paragraph: Locator): Promise<ComposerMetrics> {
 }
 
 test("composer chips of every structure sit at one height in the prose", async () => {
+  const fixture = await writeTwoThreadFixture();
   const app = await launchElectronApp({
-    fixturePath,
+    fixturePath: fixture.fixturePath,
     windowSize: {
       width: 1180,
       height: 760,
@@ -217,5 +265,6 @@ test("composer chips of every structure sit at one height in the prose", async (
     ).toBeLessThanOrEqual(HEIGHT_TOLERANCE_PX);
   } finally {
     await app.close();
+    await fixture.cleanup();
   }
 });
