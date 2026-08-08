@@ -27,6 +27,7 @@ export type ChipContextMenuItem =
   | ChipContextMenuActionItem;
 
 type ChipContextMenuProps = {
+  className?: string;
   items: ChipContextMenuItem[];
   onClose: () => void;
   position: ChipContextMenuPosition;
@@ -90,7 +91,10 @@ export function ChipContextMenu(props: ChipContextMenuProps) {
   return createPortal(
     <div
       ref={menuRef}
-      className="thread-context-menu chip-context-menu"
+      className={[
+        "thread-context-menu chip-context-menu",
+        props.className,
+      ].filter(Boolean).join(" ")}
       role="menu"
       style={{ left: position.x, top: position.y }}
       onClick={(event) => event.stopPropagation()}

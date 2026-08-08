@@ -625,6 +625,9 @@ function DesktopAppShell(props: {
       ) {
         return;
       }
+      const instanceId = event.federationTarget?.scope === "remote"
+        ? event.federationTarget.instanceId
+        : undefined;
       // Params are cast explicitly: the AppServerNotification union is too
       // wide for the discriminant to narrow `params` reliably here.
       if (event.notification.method === "turn/failed") {
@@ -646,6 +649,7 @@ function DesktopAppShell(props: {
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",
             errorMessage,
+            ...(instanceId ? { instanceId } : {}),
             threadLabel: labelForThread(event.backend, params.threadId),
           },
         });
@@ -667,6 +671,7 @@ function DesktopAppShell(props: {
           signal: {
             kind: "codex-invalid-id-recovery",
             failureMessage: params.failureMessage,
+            ...(instanceId ? { instanceId } : {}),
             recoveryError: params.recoveryError,
             status: params.status,
             threadId: params.threadId,
@@ -689,6 +694,7 @@ function DesktopAppShell(props: {
           signal: {
             kind: "system-error",
             backend: event.backend,
+            ...(instanceId ? { instanceId } : {}),
             threadId: params.threadId ?? "unknown",
             threadLabel: labelForThread(event.backend, params.threadId),
           },
@@ -2257,6 +2263,7 @@ function DesktopAppShell(props: {
           desktopApi={desktopApi}
           durableNotices={appNotices.durable}
           onDismissDurable={dismissAppNotice}
+          onOpenThread={showThreadFromLink}
           transientNotices={[
             {
               notice: navigation.archiveThreadNotice,

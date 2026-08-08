@@ -7,6 +7,8 @@ import {
 } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ResolvedThreadLink } from "../../lib/thread-links";
+import { ThreadChip } from "../thread-detail/ThreadChip";
 
 const AUTO_DISMISS_MS = 9_000;
 
@@ -21,6 +23,7 @@ export type AppNoticeToastNotice = {
   title: string;
   message: string;
   detail?: string;
+  threadLink?: ResolvedThreadLink;
   copyText?: string;
   tone?: "neutral" | "warning" | "success" | "error";
   status?: {
@@ -41,6 +44,7 @@ export function AppNoticeToast(props: {
   };
   notice?: AppNoticeToastNotice;
   onDismiss: () => void;
+  onOpenThread?: (link: ResolvedThreadLink) => void;
 }) {
   const [paused, setPaused] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
@@ -126,7 +130,16 @@ export function AppNoticeToast(props: {
           </p>
         ) : null}
         <p className="app-notice-toast__message">{props.notice.message}</p>
-        {props.notice.detail ? (
+        {props.notice.threadLink && props.onOpenThread ? (
+          <div className="app-notice-toast__thread-link">
+            <ThreadChip
+              contextMenuClassName="app-notice-toast__thread-menu"
+              fallbackLabel={props.notice.detail}
+              link={props.notice.threadLink}
+              onOpen={props.onOpenThread}
+            />
+          </div>
+        ) : props.notice.detail ? (
           <p className="app-notice-toast__detail">{props.notice.detail}</p>
         ) : null}
       </div>

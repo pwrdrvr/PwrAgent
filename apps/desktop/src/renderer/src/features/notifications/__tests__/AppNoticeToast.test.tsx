@@ -71,6 +71,59 @@ describe("AppNoticeToast", () => {
     );
   });
 
+  it("renders an originating thread as an actionable thread chip", () => {
+    const onOpenThread = vi.fn();
+    const threadLink = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      title: "Fix the flaky test",
+    };
+
+    render(
+      <AppNoticeToast
+        notice={{
+          ...notice,
+          detail: threadLink.title,
+          threadLink,
+        }}
+        onDismiss={vi.fn()}
+        onOpenThread={onOpenThread}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread Fix the flaky test" }),
+    );
+    expect(onOpenThread).toHaveBeenCalledWith(threadLink);
+  });
+
+  it("opens its thread-chip context menu above the toast layer", () => {
+    const threadLink = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      title: "Fix the flaky test",
+    };
+
+    render(
+      <AppNoticeToast
+        notice={{
+          ...notice,
+          detail: threadLink.title,
+          threadLink,
+        }}
+        onDismiss={vi.fn()}
+        onOpenThread={vi.fn()}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Open thread Fix the flaky test" }),
+    );
+    expect(screen.getByRole("menu")).toHaveClass(
+      "app-notice-toast__thread-menu",
+    );
+  });
+
   it("marks warning notices for high-contrast styling", () => {
     render(
       <AppNoticeToast

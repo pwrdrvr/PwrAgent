@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ResolvedThreadLink } from "../../lib/thread-links";
 import { AppNoticeToast, type AppNoticeToastNotice } from "./AppNoticeToast";
 
 export function AppNoticeStack(props: {
@@ -7,6 +8,7 @@ export function AppNoticeStack(props: {
   desktopApi?: Pick<DesktopApi, "copyText">;
   durableNotices: readonly AppNoticeToastNotice[];
   onDismissDurable: (id: string) => void;
+  onOpenThread?: (link: ResolvedThreadLink) => void;
   transientNotices?: readonly {
     notice?: AppNoticeToastNotice;
     onDismiss: () => void;
@@ -53,12 +55,14 @@ export function AppNoticeStack(props: {
             desktopApi={props.desktopApi}
             notice={notice}
             onDismiss={onDismiss}
+            onOpenThread={props.onOpenThread}
           />
         ) : null
       )}
       <AppNoticeToast
         desktopApi={props.desktopApi}
         notice={activeNotice}
+        onOpenThread={props.onOpenThread}
         navigation={activeNotice && durableNotices.length > 1
           ? {
               current: activeIndex + 1,
