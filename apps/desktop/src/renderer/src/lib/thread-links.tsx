@@ -1,4 +1,5 @@
 import {
+  buildThreadIdentityKey,
   isThreadLinkId,
   parseThreadUrl,
   type AppServerBackendKind,
@@ -44,7 +45,10 @@ export type ThreadLinkContextValue = {
 function threadLinkKey(
   link: Pick<ResolvedThreadLink, "backend" | "instanceId" | "threadId">,
 ): string {
-  return `${link.instanceId ?? "local"}:${link.backend}:${link.threadId}`;
+  return `${link.instanceId ?? "local"}:${buildThreadIdentityKey(
+    link.backend,
+    link.threadId,
+  )}`;
 }
 
 function threadSummaryLink(thread: NavigationThreadSummary): ResolvedThreadLink {
@@ -252,7 +256,7 @@ export function ThreadLinkProvider(props: {
 
     for (const thread of threadsRef.current) {
       const link = threadSummaryLink(thread);
-      byIdentity.set(`${thread.source}:${thread.id}`, link);
+      byIdentity.set(buildThreadIdentityKey(thread.source, thread.id), link);
       if (link.instanceId) {
         byFederatedIdentity.set(threadLinkKey(link), link);
       }
@@ -288,7 +292,9 @@ export function ThreadLinkProvider(props: {
             };
           }
         } else if (ref.backend) {
-          resolved = byIdentity.get(`${ref.backend}:${ref.threadId}`);
+          resolved = byIdentity.get(
+            buildThreadIdentityKey(ref.backend, ref.threadId),
+          );
         } else {
           resolved = byThreadId.get(ref.threadId);
         }

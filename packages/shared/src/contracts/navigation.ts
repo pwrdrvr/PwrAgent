@@ -1049,6 +1049,18 @@ export function buildThreadIdentityKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
 ): string {
+  return `${backend}:${threadId}`;
+}
+
+/**
+ * Pre-v48 representation retained only at compatibility boundaries such as
+ * protocol-v1 federation and the shared profile database. Internal and public
+ * identities use `buildThreadIdentityKey`.
+ */
+export function buildLegacyEncodedThreadIdentityKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+): string {
   return `${encodeURIComponent(backend)}:${threadId}`;
 }
 
@@ -1068,14 +1080,20 @@ export function isSubthreadLaunchpadKey(directoryKey: string): boolean {
 export function parseThreadIdentityKey(
   threadKey: string,
 ): ThreadIdentityKeyParts | undefined {
-  const separatorIndex = threadKey.indexOf(":");
+  const separatorIndex = threadKey.startsWith(ACP_BACKEND_ID_PREFIX)
+    ? threadKey.indexOf(":", ACP_BACKEND_ID_PREFIX.length)
+    : threadKey.indexOf(":");
   if (separatorIndex <= 0) {
     return undefined;
   }
 
+  const backendPart = threadKey.slice(0, separatorIndex);
   let backend: string;
   try {
-    backend = decodeURIComponent(threadKey.slice(0, separatorIndex));
+    // Accept the pre-v48 percent-encoded ACP representation on read so
+    // persisted state and copied links remain usable. New keys keep the ACP
+    // backend id intact and are parsed structurally above.
+    backend = decodeURIComponent(backendPart);
   } catch {
     return undefined;
   }
@@ -1090,6 +1108,24 @@ export function parseThreadIdentityKey(
   };
 }
 
+export function normalizeThreadIdentityKey(
+  threadKey: string,
+): string | undefined {
+  const parsed = parseThreadIdentityKey(threadKey);
+  return parsed
+    ? buildThreadIdentityKey(parsed.backend, parsed.threadId)
+    : undefined;
+}
+
+export function encodeLegacyThreadIdentityKey(
+  threadKey: string,
+): string | undefined {
+  const parsed = parseThreadIdentityKey(threadKey);
+  return parsed
+    ? buildLegacyEncodedThreadIdentityKey(parsed.backend, parsed.threadId)
+    : undefined;
+}
+
 export type NavigationSnapshot = {
   backend: AppServerBackendScope;
   fetchedAt: number;
@@ -1101,6 +1137,38 @@ export type NavigationSnapshot = {
   directories: NavigationDirectorySummary[];
   launchpadDefaults: NavigationLaunchpadDefaults;
 };
+
+/** Normalize thread-key fields received from pre-v48 stores or older peers. */
+export function normalizeNavigationSnapshotThreadKeys(
+  snapshot: NavigationSnapshot,
+): NavigationSnapshot {
+  const normalize = (threadKey: string): string =>
+    normalizeThreadIdentityKey(threadKey) ?? threadKey;
+  return {
+    ...snapshot,
+    inboxThreadKeys: snapshot.inboxThreadKeys.map(normalize),
+    directories: snapshot.directories.map((directory) => ({
+      ...directory,
+      threadKeys: directory.threadKeys.map(normalize),
+    })),
+  };
+}
+
+/** Preserve the protocol-v1 wire representation for older federation peers. */
+export function encodeNavigationSnapshotThreadKeysForProtocolV1(
+  snapshot: NavigationSnapshot,
+): NavigationSnapshot {
+  const encode = (threadKey: string): string =>
+    encodeLegacyThreadIdentityKey(threadKey) ?? threadKey;
+  return {
+    ...snapshot,
+    inboxThreadKeys: snapshot.inboxThreadKeys.map(encode),
+    directories: snapshot.directories.map((directory) => ({
+      ...directory,
+      threadKeys: directory.threadKeys.map(encode),
+    })),
+  };
+}
 
 export type GetNavigationSnapshotRequest = {
   backend?: AppServerBackendScope;

@@ -119,6 +119,10 @@ import type {
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
+import {
+  encodeNavigationSnapshotThreadKeysForProtocolV1,
+  normalizeNavigationSnapshotThreadKeys,
+} from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 import {
@@ -566,8 +570,10 @@ export function registerFederationBackendHandlers(params: {
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
     async (envelope) =>
-      await params.backend.getNavigationSnapshot(
-        (envelope.params ?? {}) as GetNavigationSnapshotRequest,
+      encodeNavigationSnapshotThreadKeysForProtocolV1(
+        await params.backend.getNavigationSnapshot(
+          (envelope.params ?? {}) as GetNavigationSnapshotRequest,
+        ),
       ),
   );
   params.router.registerHandler(
@@ -1076,10 +1082,12 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
   ): Promise<NavigationSnapshot> {
-    return await this.rpc.request<NavigationSnapshot>({
-      method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
-      params: request,
-    });
+    return normalizeNavigationSnapshotThreadKeys(
+      await this.rpc.request<NavigationSnapshot>({
+        method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
+        params: request,
+      }),
+    );
   }
 
   async listThreads(

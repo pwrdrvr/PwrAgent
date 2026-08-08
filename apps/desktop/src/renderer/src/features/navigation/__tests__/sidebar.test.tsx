@@ -1007,7 +1007,7 @@ describe("Sidebar", () => {
     };
     const directory: NavigationDirectorySummary = {
       ...directories[0]!,
-      threadKeys: ["acp%3Akimi:kimi-parent", "codex:codex-child"],
+      threadKeys: ["acp:kimi:kimi-parent", "codex:codex-child"],
     };
 
     const { container } = render(
@@ -3831,7 +3831,7 @@ describe("Sidebar", () => {
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
-        selectedItemKey="acp%3Agemini:session-1"
+        selectedItemKey="acp:gemini:session-1"
         threads={[acpThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -5259,9 +5259,9 @@ describe("Sidebar thread pinning Move items", () => {
     fireEvent.click(moveDown);
     // Global, interleaved new order: grok-middle now above the codex pin.
     expect(onReorderThreadPins).toHaveBeenCalledWith([
-      "acp%3Agrok:grok-middle",
+      "acp:grok:grok-middle",
       "codex:codex-top",
-      "acp%3Agrok:grok-bottom",
+      "acp:grok:grok-bottom",
     ]);
   });
 

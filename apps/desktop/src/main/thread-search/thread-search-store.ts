@@ -1,6 +1,8 @@
 import type BetterSqlite3 from "better-sqlite3";
 import {
-  buildThreadIdentityKey,
+  buildLegacyEncodedThreadIdentityKey,
+  encodeLegacyThreadIdentityKey,
+  normalizeThreadIdentityKey,
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type LinkedDirectorySummary,
@@ -47,7 +49,10 @@ export class ThreadSearchStore {
   }
 
   upsertThread(thread: AppServerThreadSummary, indexedAt = Date.now()): void {
-    const identityKey = buildThreadIdentityKey(thread.source, thread.id);
+    const identityKey = buildLegacyEncodedThreadIdentityKey(
+      thread.source,
+      thread.id,
+    );
     const directoryLabels = thread.linkedDirectories
       .map((directory) => directory.label)
       .join(" ");
@@ -141,7 +146,10 @@ export class ThreadSearchStore {
     backend: AppServerBackendKind;
     threadId: string;
   }): void {
-    const identityKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const identityKey = buildLegacyEncodedThreadIdentityKey(
+      params.backend,
+      params.threadId,
+    );
     const transaction = this.db.transaction(() => {
       this.db
         .prepare("DELETE FROM thread_search_fts WHERE identity_key = ?")
@@ -158,7 +166,11 @@ export class ThreadSearchStore {
     includeArchived: boolean;
     retainedIdentityKeys: string[];
   }): void {
-    const retained = new Set(params.retainedIdentityKeys);
+    const retained = new Set(
+      params.retainedIdentityKeys.map((threadKey) =>
+        encodeLegacyThreadIdentityKey(threadKey) ?? threadKey
+      ),
+    );
     const rows = this.db
       .prepare(
         `SELECT identity_key, backend, thread_id, archived_at
@@ -248,7 +260,8 @@ export class ThreadSearchStore {
     return {
       backend: row.backend,
       threadId: row.thread_id,
-      identityKey: row.identity_key,
+      identityKey:
+        normalizeThreadIdentityKey(row.identity_key) ?? row.identity_key,
       title: row.title,
       ...(row.title_source ? { titleSource: row.title_source } : {}),
       ...(row.summary ? { summary: row.summary } : {}),

@@ -1048,7 +1048,7 @@ describe("DesktopFederationRuntime", () => {
 
     runtime.broadcastStarMapArrangement([{
       instanceId: "owner_one",
-      threadKey: "codex:thread-1",
+      threadKey: "acp:grok:thread-1",
       dx: 10,
       dy: 20,
       updatedAt: 1_000,
@@ -1059,6 +1059,9 @@ describe("DesktopFederationRuntime", () => {
       method: "federation.starMapArrangement",
       sourceInstanceId: "owner_one",
       targetInstanceId: "viewer_one",
+      params: {
+        entries: [{ threadKey: "acp%3Agrok:thread-1" }],
+      },
     }]);
     expect(unrelated).toEqual([]);
   });

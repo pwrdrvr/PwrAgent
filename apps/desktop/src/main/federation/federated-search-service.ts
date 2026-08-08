@@ -6,7 +6,10 @@ import type {
   FederationInstanceId,
   FederationPeerSummary,
 } from "@pwragent/shared";
-import { buildFederatedThreadRef } from "@pwragent/shared";
+import {
+  buildFederatedThreadRef,
+  buildThreadIdentityKey,
+} from "@pwragent/shared";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
 
 export type FederatedSearchPeer = {
@@ -236,7 +239,7 @@ async function listFederatedSearchThreads(
   const byIdentity = new Map<string, AppServerThreadSummary>();
   for (const thread of responses.flatMap((response) => response.threads)) {
     if (matchesFederatedSearchFilters(thread, request)) {
-      byIdentity.set(`${thread.source}:${thread.id}`, thread);
+      byIdentity.set(buildThreadIdentityKey(thread.source, thread.id), thread);
     }
   }
   return [...byIdentity.values()];

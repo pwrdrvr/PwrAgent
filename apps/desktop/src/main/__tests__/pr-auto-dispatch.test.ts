@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildPullRequestStatusKey,
+  buildThreadIdentityKey,
   materializeNavigationThreads,
   type AppServerTurnInputItem,
   type PrAutoDispatchBudgetConfig,
@@ -940,6 +941,41 @@ describe("PrAutoDispatchCoordinator", () => {
     attached = false;
     await runCountdown();
     expect(submitTurnIfIdle).not.toHaveBeenCalled();
+  });
+
+  it("cancels the canonical ACP timer when a pull request recovers", async () => {
+    const backend = "acp:grok" as const;
+    const threadId = "grok-thread-1";
+    await store.setThreadPrAutoDispatchEnabled({
+      backend,
+      threadId,
+      enabled: true,
+    });
+    const harness = createHarness();
+    const failing = pr();
+
+    const scheduled = await harness.coordinator.handleStatusSnapshot({
+      pr: failing,
+      threadKeys: [buildThreadIdentityKey(backend, threadId)],
+      observedAt: clock,
+      backgroundPollingEnabled: true,
+    });
+    expect(scheduled[0]?.status).toBe("scheduled");
+    expect(vi.getTimerCount()).toBe(1);
+
+    const passing = pr({
+      state: "passing",
+      checkState: "passing",
+    });
+    const recovered = await harness.coordinator.handleStatusSnapshot({
+      pr: passing,
+      threadKeys: [buildThreadIdentityKey(backend, threadId)],
+      observedAt: clock,
+      backgroundPollingEnabled: true,
+    });
+
+    expect(recovered[0]?.status).toBe("not-actionable");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("re-arms a deferred CI repair after restarted checks finish failing", async () => {

@@ -716,7 +716,7 @@ type QueuedTurnAction = {
 /**
  * Per-binding tracking of a posted "permissions queued" audit message so
  * we can edit it in place when the queue resolves (cancelled / applied).
- * One controller-side map keyed by `${backend}:${threadId}` is enough —
+ * One controller-side map keyed by `buildThreadIdentityKey` is enough —
  * only one queued mode change can exist per thread at a time, and the
  * registry's queueCleared notification is per-thread.
  */
@@ -927,7 +927,7 @@ export class MessagingController {
    * Per-thread map of the most-recent "permissions queued" audit message
    * we posted to each bound conversation. Cleared when the queue resolves
    * (cancelled or applied) and we successfully edit the messages in
-   * place. Keyed by `${backend}:${threadId}`.
+   * place. Keyed by `buildThreadIdentityKey`.
    */
   private readonly pendingQueueAuditMessages = new Map<
     string,
@@ -5360,7 +5360,7 @@ export class MessagingController {
     backend: AppServerBackendKind,
     threadId: ThreadIdentifier,
   ): string {
-    return `${backend}:${threadId}`;
+    return buildThreadIdentityKey(backend, threadId);
   }
 
   private async handleBackendRequestResolved(event: AgentEvent): Promise<void> {
@@ -18509,7 +18509,7 @@ function agentMessagingThreadKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
 ): string {
-  return `${backend}:${threadId}`;
+  return buildThreadIdentityKey(backend, threadId);
 }
 
 function agentMessagingQueueKey(

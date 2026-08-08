@@ -101,6 +101,29 @@ describe("ThreadSearchStore", () => {
     ).toEqual(["session_e31f5e66-7410-4235-aa19-3bbb63ee8c3d"]);
   });
 
+  it("keeps ACP search identities raw in results and encoded in shared storage", () => {
+    store.upsertThread(threadSummary({
+      id: "session-1",
+      source: "acp:gemini",
+      title: "Gemini session",
+    }));
+
+    expect(
+      store.search({ query: "Gemini", limit: 10 })[0]?.identityKey,
+    ).toBe("acp:gemini:session-1");
+    expect(
+      stateDb.raw.prepare(
+        "SELECT identity_key FROM thread_search_documents",
+      ).pluck().all(),
+    ).toEqual(["acp%3Agemini:session-1"]);
+
+    store.pruneMissingThreads({
+      includeArchived: false,
+      retainedIdentityKeys: ["acp:gemini:session-1"],
+    });
+    expect(store.search({ query: "Gemini", limit: 10 })).toHaveLength(1);
+  });
+
   it("falls back to recent projection rows for filter-only searches", () => {
     store.upsertThread(
       threadSummary({ id: "old", title: "Old", updatedAt: 1_000 }),

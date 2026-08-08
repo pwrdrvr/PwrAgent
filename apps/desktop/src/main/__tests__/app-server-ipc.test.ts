@@ -298,7 +298,7 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
       ...thread,
     }),
   ) as unknown[],
-  inboxThreadKeys: ["acp%3Agrok:thread-1"],
+  inboxThreadKeys: ["acp:grok:thread-1"],
   directories: [
     {
       key: "directory:/repo/app",
@@ -1956,7 +1956,7 @@ describe("app server ipc", () => {
         expect.objectContaining({ source: "codex", id: "thread-1" }),
         expect.objectContaining({ source: "acp:grok", id: "thread-1" }),
       ],
-      inboxThreadKeys: ["acp%3Agrok:thread-1"],
+      inboxThreadKeys: ["acp:grok:thread-1"],
       directories: [
         {
           key: "directory:/repo/app",
@@ -2057,7 +2057,7 @@ describe("app server ipc", () => {
     // instead of always trailing every local key.
     expect(response.inboxThreadKeys).toEqual([
       "codex:remote-1",
-      "acp%3Agrok:thread-1",
+      "acp:grok:thread-1",
     ]);
     // A newly appearing remote row must defeat the unchanged optimization.
     expect(response.unchanged).toBe(false);

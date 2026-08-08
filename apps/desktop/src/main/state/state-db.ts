@@ -3,13 +3,14 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import {
+  encodeLegacyThreadIdentityKey,
   estimateTokenUsageCost,
   resolveOpenAiPricingServiceTier,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 47;
+export const CURRENT_STATE_DB_USER_VERSION = 49;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1371,6 +1372,17 @@ LEFT JOIN federation_peers
     if ((db.pragma("user_version", { simple: true }) as number) < 47) {
       db.transaction(() => {
         db.exec(REMOTE_DIRECTORY_OVERLAY_SCHEMA);
+        db.pragma("user_version = 47");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 48) {
+      db.transaction(() => {
+        db.pragma("user_version = 48");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 49) {
+      db.transaction(() => {
+        migrateRawThreadIdentityKeysToLegacyStorage(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1524,6 +1536,171 @@ LEFT JOIN federation_peers
 
   deleteSecret(key: string): void {
     this.db.prepare("DELETE FROM secrets WHERE key = ?").run(key);
+  }
+}
+
+function migrateRawThreadIdentityKeysToLegacyStorage(
+  db: BetterSqlite3.Database,
+): void {
+  const encode = (value: string): string =>
+    encodeLegacyThreadIdentityKey(value) ?? value;
+
+  if (tableExists(db, "threads")) {
+    const threadRows = db
+      .prepare("SELECT thread_id FROM threads")
+      .all() as Array<{ thread_id: string }>;
+    const threadExists = db.prepare(
+      "SELECT 1 FROM threads WHERE thread_id = ?",
+    );
+    const updateThread = db.prepare(
+      "UPDATE threads SET thread_id = ? WHERE thread_id = ?",
+    );
+    const deleteThread = db.prepare("DELETE FROM threads WHERE thread_id = ?");
+    for (const row of threadRows) {
+      const encoded = encode(row.thread_id);
+      if (encoded === row.thread_id) continue;
+      if (threadExists.get(encoded)) {
+        // A v48 process may have created the raw row after an older process
+        // created the encoded row. Prefer the newer representation's payload
+        // while restoring the shared physical key older clients can read.
+        deleteThread.run(encoded);
+      }
+      updateThread.run(encoded, row.thread_id);
+    }
+  }
+
+  if (tableExists(db, "backends")) {
+    const backendRows = db
+      .prepare("SELECT scope, payload FROM backends")
+      .all() as Array<{ payload: string; scope: string }>;
+    const updateBackend = db.prepare(
+      "UPDATE backends SET payload = ? WHERE scope = ?",
+    );
+    for (const row of backendRows) {
+      try {
+        const payload = JSON.parse(row.payload) as {
+          knownThreadKeys?: unknown;
+        };
+        if (!Array.isArray(payload.knownThreadKeys)) continue;
+        const knownThreadKeys = [...new Set(
+          payload.knownThreadKeys.map((value) =>
+            typeof value === "string" ? encode(value) : value
+          ),
+        )];
+        updateBackend.run(
+          JSON.stringify({ ...payload, knownThreadKeys }),
+          row.scope,
+        );
+      } catch {
+        // Leave malformed legacy rows untouched; normal store reads already
+        // treat them as unusable rather than blocking startup.
+      }
+    }
+  }
+
+  if (tableExists(db, "thread_search_documents")) {
+    const searchRows = db
+      .prepare("SELECT identity_key FROM thread_search_documents")
+      .all() as Array<{ identity_key: string }>;
+    const searchDocumentExists = db.prepare(
+      "SELECT 1 FROM thread_search_documents WHERE identity_key = ?",
+    );
+    const updateSearchDocument = db.prepare(
+      `UPDATE thread_search_documents
+       SET identity_key = ?
+       WHERE identity_key = ?`,
+    );
+    const deleteSearchDocument = db.prepare(
+      "DELETE FROM thread_search_documents WHERE identity_key = ?",
+    );
+    const updateSearchFts = tableExists(db, "thread_search_fts")
+      ? db.prepare(
+          `UPDATE thread_search_fts
+           SET identity_key = ?
+           WHERE identity_key = ?`,
+        )
+      : undefined;
+    const deleteSearchFts = tableExists(db, "thread_search_fts")
+      ? db.prepare(
+          "DELETE FROM thread_search_fts WHERE identity_key = ?",
+        )
+      : undefined;
+    for (const row of searchRows) {
+      const encoded = encode(row.identity_key);
+      if (encoded === row.identity_key) continue;
+      if (searchDocumentExists.get(encoded)) {
+        deleteSearchFts?.run(encoded);
+        deleteSearchDocument.run(encoded);
+      }
+      updateSearchFts?.run(encoded, row.identity_key);
+      updateSearchDocument.run(encoded, row.identity_key);
+    }
+  }
+
+  if (!tableExists(db, "star_map_arrangement")) {
+    return;
+  }
+  const arrangementRows = db
+    .prepare("SELECT entry_key, payload FROM star_map_arrangement")
+    .all() as Array<{ entry_key: string; payload: string }>;
+  const readArrangement = db.prepare(
+    "SELECT payload FROM star_map_arrangement WHERE entry_key = ?",
+  );
+  const deleteArrangement = db.prepare(
+    "DELETE FROM star_map_arrangement WHERE entry_key = ?",
+  );
+  const putArrangement = db.prepare(
+    `INSERT OR REPLACE INTO star_map_arrangement(entry_key, payload)
+     VALUES (?, ?)`,
+  );
+  for (const row of arrangementRows) {
+    try {
+      const entry = JSON.parse(row.payload) as {
+        instanceId?: unknown;
+        threadKey?: unknown;
+        updatedAt?: unknown;
+      };
+      if (
+        typeof entry.instanceId !== "string"
+        || typeof entry.threadKey !== "string"
+      ) {
+        continue;
+      }
+      const threadKey = encode(entry.threadKey);
+      const entryKey = `${entry.instanceId} ${threadKey}`;
+      if (threadKey === entry.threadKey && entryKey === row.entry_key) continue;
+
+      const current = readArrangement.get(entryKey) as
+        | { payload: string }
+        | undefined;
+      const currentUpdatedAt = current
+        ? readArrangementUpdatedAt(current.payload)
+        : Number.NEGATIVE_INFINITY;
+      const incomingUpdatedAt =
+        typeof entry.updatedAt === "number"
+          ? entry.updatedAt
+          : Number.NEGATIVE_INFINITY;
+      deleteArrangement.run(row.entry_key);
+      if (!current || incomingUpdatedAt > currentUpdatedAt) {
+        putArrangement.run(
+          entryKey,
+          JSON.stringify({ ...entry, threadKey }),
+        );
+      }
+    } catch {
+      // Preserve malformed rows for the normal defensive reader to ignore.
+    }
+  }
+}
+
+function readArrangementUpdatedAt(payload: string): number {
+  try {
+    const parsed = JSON.parse(payload) as { updatedAt?: unknown };
+    return typeof parsed.updatedAt === "number"
+      ? parsed.updatedAt
+      : Number.NEGATIVE_INFINITY;
+  } catch {
+    return Number.NEGATIVE_INFINITY;
   }
 }
 

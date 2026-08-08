@@ -396,7 +396,7 @@ function buildNavigationSnapshot(): NavigationSnapshot {
         latestUpdatedAt: 120_500,
         needsAttentionCount: 0,
         path: "/repo/pwragent/packages/messaging",
-        threadKeys: ["acp%3Agrok:thread-2"],
+        threadKeys: ["acp:grok:thread-2"],
       },
     ],
     launchpadDefaults: {

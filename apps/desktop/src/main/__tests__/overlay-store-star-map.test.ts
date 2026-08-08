@@ -37,6 +37,25 @@ describe("star map arrangement overlay", () => {
     expect(entries).toEqual([entry({})]);
   });
 
+  it("keeps ACP keys raw in memory and encoded in shared storage", async () => {
+    const acpEntry = entry({ threadKey: "acp:gemini:t1" });
+
+    await store.mergeStarMapArrangement([acpEntry]);
+
+    expect(await store.readStarMapArrangement()).toEqual([acpEntry]);
+    expect(
+      stateDb.raw.prepare(
+        "SELECT entry_key, payload FROM star_map_arrangement",
+      ).get(),
+    ).toEqual({
+      entry_key: "pwr_local acp%3Agemini:t1",
+      payload: JSON.stringify({
+        ...acpEntry,
+        threadKey: "acp%3Agemini:t1",
+      }),
+    });
+  });
+
   it("merges last-writer-wins per card and reports accepted deltas", async () => {
     await store.mergeStarMapArrangement([entry({})]);
     const older = await store.mergeStarMapArrangement([

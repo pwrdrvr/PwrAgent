@@ -73,6 +73,7 @@ import {
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
   buildFederatedThreadRef,
+  encodeLegacyThreadIdentityKey,
   federationEndpointAcceptsCloudflareCredentials,
   isCelestialIconAssignment,
   isCelestialIconId,
@@ -83,6 +84,7 @@ import {
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
   mergeCelestialIconAssignments,
+  normalizeNavigationSnapshotThreadKeys,
   pickCelestialIcon,
   resolveThreadTerminalCwd,
   type AppServerListSkillsRequest,
@@ -380,6 +382,16 @@ type FederationStarMapArrangementNotification = {
     entries: StarMapArrangementEntry[];
   };
 };
+
+function encodeStarMapEntriesForProtocolV1(
+  entries: StarMapArrangementEntry[],
+): StarMapArrangementEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    threadKey:
+      encodeLegacyThreadIdentityKey(entry.threadKey) ?? entry.threadKey,
+  }));
+}
 
 type FederationEventSubscriptionNotification = {
   method: typeof FEDERATION_EVENT_SUBSCRIPTION_METHOD;
@@ -1507,10 +1519,12 @@ export class DesktopFederationRuntime {
     request: { backend?: AppServerListThreadsRequest["backend"]; filter?: string },
   ): Promise<NavigationSnapshot> {
     const backend = this.remoteBackend(target);
-    const response = await backend.getNavigationSnapshot({
-      backend: request.backend,
-      filter: request.filter,
-    });
+    const response = normalizeNavigationSnapshotThreadKeys(
+      await backend.getNavigationSnapshot({
+        backend: request.backend,
+        filter: request.filter,
+      }),
+    );
     // visiblePeers reads the app-state db (local instance id); during
     // early boot or in store-injected test harnesses that db may be
     // absent — fall back to the bare store record (mirrors the menu's
@@ -3198,6 +3212,7 @@ export class DesktopFederationRuntime {
     entries: StarMapArrangementEntry[],
   ): void {
     if (!this.router || entries.length === 0) return;
+    const protocolEntries = encodeStarMapEntriesForProtocolV1(entries);
     for (const [subscriberInstanceId, subscription] of
       this.incomingEventSubscriptions) {
       if (!subscription.eventClasses.has("star_map")) {
@@ -3208,7 +3223,7 @@ export class DesktopFederationRuntime {
           id: `federation-star-map:${randomUUID()}`,
           kind: "notification",
           method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
-          params: { entries },
+          params: { entries: protocolEntries },
           protocolVersion: FEDERATION_PROTOCOL_VERSION,
           sourceInstanceId: this.ensureLocalInstanceId(),
           targetInstanceId: subscriberInstanceId,
@@ -3245,7 +3260,9 @@ export class DesktopFederationRuntime {
             id: `federation-star-map:${randomUUID()}`,
             kind: "notification",
             method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
-            params: { entries },
+            params: {
+              entries: encodeStarMapEntriesForProtocolV1(entries),
+            },
             protocolVersion: FEDERATION_PROTOCOL_VERSION,
             sourceInstanceId: this.ensureLocalInstanceId(),
             targetInstanceId: subscriberInstanceId,
