@@ -534,9 +534,9 @@ async function renderExplicitComposerPdfPreview(
  * group — its home directory — never every group it can match. Duplicating
  * the row made selection "jump" groups, because `selectedDirectory` resolves
  * to the first directory containing the key, which is whichever sorts first,
- * not the group the user clicked in. Home preference matches
- * `pickHomeDirectory`: repo checkouts (`kind: "local"`) before worktrees,
- * then the owner's linked-directory order.
+ * not the group the user clicked in. The owner's `projectKey` is authoritative
+ * when it identifies a linked directory; fallback preference is a local
+ * checkout before a worktree, then linked-directory order.
  *
  * Remote threads whose project has no local counterpart stay ungrouped and
  * surface only in the Updated / Created lenses.
@@ -544,12 +544,15 @@ async function renderExplicitComposerPdfPreview(
 /**
  * The single local directory group a remote thread belongs to, by project
  * identity (directory label / path basename — peer paths never match viewer
- * paths). Home preference mirrors `pickHomeDirectory`: repo checkouts
- * (`kind: "local"`) before worktree links, then the owner's linked order.
+ * paths). When the owner's projectKey identifies one of its linked
+ * directories, that primary project wins even if a secondary @-referenced
+ * directory is a local checkout. Otherwise, home preference mirrors
+ * `pickHomeDirectory`: repo checkouts (`kind: "local"`) before worktree
+ * links, then the owner's linked order.
  */
 function findRemoteHomeDirectoryIndex(
   directories: ReadonlyArray<{ label: string; path?: string }>,
-  linkedDirectories: NavigationThreadSummary["linkedDirectories"] | undefined,
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
 ): number | undefined {
   const directoryIndexByName = new Map<string, number>();
   directories.forEach((directory, index) => {
@@ -564,14 +567,21 @@ function findRemoteHomeDirectoryIndex(
       }
     }
   });
-  const linkedByHomePreference = [...(linkedDirectories ?? [])].sort(
-    (left, right) => {
+  const projectKey = thread.projectKey;
+  const linkedDirectories = thread.linkedDirectories ?? [];
+  const primaryProjectDirectory = projectKey
+    ? linkedDirectories.find((directory) =>
+        linkedDirectoryMatchesProjectKey(directory, projectKey)
+      )
+    : undefined;
+  const linkedByHomePreference = primaryProjectDirectory
+    ? [primaryProjectDirectory]
+    : [...linkedDirectories].sort((left, right) => {
       if (left.kind !== right.kind) {
         return left.kind === "worktree" ? 1 : -1;
       }
       return 0;
-    },
-  );
+    });
   for (const linked of linkedByHomePreference) {
     const names = [linked.label, path.basename(linked.path)]
       .map((name) => (name ?? "").trim().toLowerCase())
@@ -584,6 +594,24 @@ function findRemoteHomeDirectoryIndex(
     }
   }
   return undefined;
+}
+
+function linkedDirectoryMatchesProjectKey(
+  directory: Pick<LinkedDirectorySummary, "path" | "worktreePath">,
+  projectKey: string,
+): boolean {
+  const normalizedProjectKey = normalizeFederatedPath(projectKey);
+  if (!normalizedProjectKey) {
+    return false;
+  }
+  return [directory.path, directory.worktreePath].some(
+    (candidate) => normalizeFederatedPath(candidate) === normalizedProjectKey,
+  );
+}
+
+function normalizeFederatedPath(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized || undefined;
 }
 
 function attachRemoteThreadsToLocalDirectories(
@@ -601,7 +629,7 @@ function attachRemoteThreadsToLocalDirectories(
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
     const homeIndex = findRemoteHomeDirectoryIndex(
       directories,
-      thread.linkedDirectories,
+      thread,
     );
     if (homeIndex === undefined) {
       continue;
@@ -5978,7 +6006,7 @@ class DesktopAppServerService {
       const directories = [...this.lastDirectoriesByKey.values()];
       const homeIndex = findRemoteHomeDirectoryIndex(
         directories,
-        targetSummary?.linkedDirectories,
+        targetSummary ?? { linkedDirectories: [] },
       );
       const home = homeIndex === undefined ? undefined : directories[homeIndex];
       if (!home?.directoryThreadsCollapsed) {
