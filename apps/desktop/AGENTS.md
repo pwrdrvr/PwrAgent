@@ -574,6 +574,23 @@ Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation.
   (`tooltip-target` + `data-tooltip`) are only for elements whose ancestors
   all render with `overflow: visible`; otherwise they get clipped or lose
   z-order fights against the main surface.
+  - **Structured hover cards pass their own class instead of
+    `.viewport-tooltip`.** The hook takes a `ReactNode`, so a card with
+    sections and meters (`.context-usage-card`, `.pr-status-card`) styles
+    itself; keep new ones on those two's measurements so the app's hover
+    cards stay one family. Plain text tooltips keep `.viewport-tooltip`.
+  - **Check the layer your trigger lives in.** The portal renders on
+    `document.body`, and `.app-shell` opens no stacking context, so
+    full-window layers (Settings and Star Map at `z-index: 120`) sit in the
+    same root stacking context and will paint OVER a tooltip left at the
+    default 90. Anything reachable from those surfaces needs an explicit
+    higher layer — see `.messaging-status-tooltip`, `.pr-status-card`, and
+    `.star-map-card__tooltip`.
+  - **A card with content worth hearing needs `aria-describedby`.** Point the
+    trigger at the hook's `tooltipId` while `visible`; nothing else references
+    the portal, so an unwired card is sighted-only. Do not solve this by
+    stuffing the data into the trigger's `aria-label` — that changes the
+    control's name, not its description.
 - Use the project-local [desktop E2E fixture seeding skill](../../.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when capturing or refreshing replay-backed desktop E2E fixtures.
 
 ## Third-Party Brand Assets

@@ -353,6 +353,30 @@ export type PrSummary = {
    * branch is deleted.
    */
   commitShas?: string[];
+  /**
+   * Diff size, commit count, and lifecycle timestamps for the PR hover card.
+   *
+   * Every one of these is OPTIONAL and stays that way. Three separate sources
+   * legitimately omit them: a federated peer on a build that predates them, a
+   * row cached before the fields existed, and — permanently — any PR that
+   * reached a terminal lifecycle before the upgrade, because
+   * `collectPrPollTargets` drops terminal PRs from the poll rotation and
+   * nothing ever refreshes that row again. Readers MUST treat absence as "not
+   * known" and render nothing, never as zero.
+   */
+  additions?: number;
+  deletions?: number;
+  changedFiles?: number;
+  /**
+   * Total commits on the PR. Distinct from `commitShas`, which the GraphQL
+   * transport only ever populates with the head commit.
+   */
+  commitCount?: number;
+  /** Epoch milliseconds. Immutable, so age stays exact without re-polling. */
+  createdAt?: number;
+  /** Epoch milliseconds; set only on the matching terminal lifecycle. */
+  mergedAt?: number;
+  closedAt?: number;
   url: string;
 };
 

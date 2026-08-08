@@ -133,6 +133,12 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
  * names and output remain deliberately excluded.
  * Later pages are fetched only when this page cannot already prove a check is
  * running.
+ *
+ * The diff/commit/timestamp block feeding the chip hover card is free: GitHub
+ * prices GraphQL by connection, so plain scalars add no rate-limit points, and
+ * `totalCount` rides the `commits` connection this fragment already selects.
+ * `updatedAt` is deliberately absent — it moves on every comment and label,
+ * which would churn snapshot equality for something no surface displays.
  */
 const PR_STATUS_FRAGMENT = `
 fragment PrStatus on PullRequest {
@@ -144,9 +150,16 @@ fragment PrStatus on PullRequest {
   mergeable
   baseRefName
   headRefName
+  additions
+  deletions
+  changedFiles
+  createdAt
+  mergedAt
+  closedAt
   headRepository { name }
   headRepositoryOwner { login }
   commits(last: 1) {
+    totalCount
     nodes {
       commit {
         id
@@ -207,9 +220,17 @@ export type GraphqlPrNode = {
   mergeable?: string | null;
   baseRefName?: string | null;
   headRefName?: string | null;
+  additions?: number | null;
+  deletions?: number | null;
+  changedFiles?: number | null;
+  /** ISO-8601 timestamps; converted to epoch ms at this boundary. */
+  createdAt?: string | null;
+  mergedAt?: string | null;
+  closedAt?: string | null;
   headRepository?: { name?: string | null } | null;
   headRepositoryOwner?: { login?: string | null } | null;
   commits?: {
+    totalCount?: number | null;
     nodes?: (
       | {
         commit?: GraphqlCommit | null;
@@ -434,8 +455,46 @@ export function mapGraphqlPrNode(
     mergeState: deriveMergeState(shaped),
     ...(headSha ? { headSha } : {}),
     ...(commitShas.length > 0 ? { commitShas } : {}),
+    ...readPrCount(node.additions, "additions"),
+    ...readPrCount(node.deletions, "deletions"),
+    ...readPrCount(node.changedFiles, "changedFiles"),
+    ...readPrCount(node.commits?.totalCount, "commitCount"),
+    ...readPrTimestamp(node.createdAt, "createdAt"),
+    ...readPrTimestamp(node.mergedAt, "mergedAt"),
+    ...readPrTimestamp(node.closedAt, "closedAt"),
     url: node.url,
   };
+}
+
+/**
+ * Carry a hover-card count only when the provider actually answered with one.
+ * A key left off means "not known" everywhere downstream; writing `0` instead
+ * would claim a PR changes nothing, which is a different (and usually false)
+ * statement.
+ */
+function readPrCount<K extends string>(
+  value: number | null | undefined,
+  key: K,
+): Partial<Record<K, number>> {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return {};
+  }
+  return { [key]: Math.trunc(value) } as Record<K, number>;
+}
+
+/** Same contract as `readPrCount`, converting ISO-8601 to epoch milliseconds. */
+function readPrTimestamp<K extends string>(
+  value: string | null | undefined,
+  key: K,
+): Partial<Record<K, number>> {
+  if (!value) {
+    return {};
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return {};
+  }
+  return { [key]: parsed } as Record<K, number>;
 }
 
 function getHeadCommit(node: GraphqlPrNode): GraphqlCommit | undefined {

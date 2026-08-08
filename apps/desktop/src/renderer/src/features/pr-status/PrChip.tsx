@@ -9,6 +9,13 @@ import type { PrSummary } from "@pwragent/shared";
 import { CloseIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { PrChipContextMenu } from "./PrChipContextMenu";
+import {
+  prStatusLabel,
+  resolveCheckState,
+  resolveChipState,
+  resolveLifecycleState,
+} from "./pr-chip-state";
+import { PrStatusCard } from "./PrStatusCard";
 
 type PrChipProps = {
   pr: PrSummary;
@@ -40,22 +47,57 @@ export function PrChip(props: PrChipProps) {
     anchorTop?: number;
   }>();
   const tooltipController = useViewportTooltip({
-    className: "viewport-tooltip",
+    className: "pr-status-card",
   });
   const updateTooltip = tooltipController.update;
   const label = props.showRepoPrefix
     ? `${pr.org}/${pr.repo}#${pr.number}`
     : `#${pr.number}`;
-  const identity = `${pr.org}/${pr.repo}#${pr.number}`;
-  const title = pr.title?.trim();
   const chipState = resolveChipState(pr);
   const status = prStatusLabel(pr);
-  const tooltip = title
-    ? `${title}\n${identity} — ${status}`
-    : `${identity} — ${status}`;
+  // Creating this element is not rendering it: it stays an inert object until
+  // `show` hands it to the portal on hover/focus, so a sidebar full of chips
+  // mounts exactly zero cards.
+  const card = <PrStatusCard pr={pr} withStatusPills={props.withStatusPills} />;
+  const tooltipVisible = tooltipController.visible;
+
+  // Status updates keep arriving while the pointer rests on a chip, so push
+  // fresh numbers into an already-open card instead of freezing it at
+  // hover-time values (same behavior the context-window card has).
+  //
+  // The guard is not optional: a React element is a new object on every render,
+  // so feeding one straight into `update` would set state on every render that
+  // very update caused. Compare the card's DATA and push only when it moved.
+  // Tracking the key while hidden (rather than skipping the effect entirely)
+  // is what keeps a hidden chip from pushing stale-keyed content on its next
+  // hover — `show` already hands over a freshly built card at that point.
+  const cardKey = [
+    pr.org,
+    pr.repo,
+    pr.number,
+    pr.title,
+    status,
+    chipState,
+    props.withStatusPills,
+    pr.additions,
+    pr.deletions,
+    pr.changedFiles,
+    pr.commitCount,
+    pr.createdAt,
+    pr.mergedAt,
+    pr.closedAt,
+  ].join("|");
+  const pushedCardKeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    updateTooltip(tooltip);
-  }, [tooltip, updateTooltip]);
+    const moved = pushedCardKeyRef.current !== cardKey;
+    pushedCardKeyRef.current = cardKey;
+    if (!moved || !tooltipVisible) {
+      return;
+    }
+    updateTooltip(
+      <PrStatusCard pr={pr} withStatusPills={props.withStatusPills} />,
+    );
+  }, [cardKey, pr, props.withStatusPills, tooltipVisible, updateTooltip]);
 
   // Draft and merge-conflict ride ALONGSIDE the check-state dot color rather
   // than replacing it: an OPEN draft keeps its real status color and gains a
@@ -109,6 +151,11 @@ export function PrChip(props: PrChipProps) {
         tabIndex={0}
         aria-haspopup="menu"
         aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
+        // The card's numbers are a DESCRIPTION, not part of this control's
+        // name — packing them into the label makes every chip in a sidebar
+        // read like a paragraph. The portal sits outside this subtree, so
+        // pointing at it by id is what makes the card audible at all.
+        aria-describedby={tooltipVisible ? tooltipController.tooltipId : undefined}
         className={className}
         data-pr-chip=""
         data-pr-url={pr.url}
@@ -134,13 +181,13 @@ export function PrChip(props: PrChipProps) {
           }
         }}
         onDragStart={(event) => event.preventDefault()}
-        onFocus={(event) => tooltipController.show(event.currentTarget, tooltip)}
+        onFocus={(event) => tooltipController.show(event.currentTarget, card)}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             handleActivate(event);
           }
         }}
-        onMouseEnter={(event) => tooltipController.show(event.currentTarget, tooltip)}
+        onMouseEnter={(event) => tooltipController.show(event.currentTarget, card)}
         onMouseLeave={tooltipController.hide}
       >
         <span className="pr-chip__dot" aria-hidden="true" />
@@ -177,89 +224,3 @@ export function PrChip(props: PrChipProps) {
   );
 }
 
-function prStatusLabel(pr: PrSummary): string {
-  if (
-    pr.state === "unknown"
-    && !pr.checkState
-    && !pr.lifecycleState
-    && !pr.reviewState
-    && !pr.mergeState
-  ) {
-    return "status unknown";
-  }
-
-  const lifecycleState = resolveLifecycleState(pr);
-  const parts: string[] = [];
-  if (lifecycleState === "merged") {
-    parts.push("merged");
-    return parts.join(" · ");
-  } else if (lifecycleState === "closed") {
-    parts.push("closed without merge");
-    return parts.join(" · ");
-  } else if (pr.reviewState === "draft") {
-    parts.push("draft");
-  } else {
-    parts.push("ready for review");
-  }
-
-  if (pr.mergeState === "conflicting") {
-    parts.push("merge conflict");
-  }
-
-  parts.push(checkStateTooltipLabel(resolveCheckState(pr), pr.checksStillRunning));
-  return parts.join(" · ");
-}
-
-function resolveChipState(
-  pr: PrSummary,
-): NonNullable<PrSummary["checkState"]> | "merged" | "closed" {
-  const lifecycleState = resolveLifecycleState(pr);
-  if (lifecycleState === "merged" || lifecycleState === "closed") {
-    return lifecycleState;
-  }
-  return resolveCheckState(pr);
-}
-
-function resolveLifecycleState(pr: PrSummary): NonNullable<PrSummary["lifecycleState"]> {
-  if (pr.lifecycleState) {
-    return pr.lifecycleState;
-  }
-  if (pr.state === "merged" || pr.state === "closed") {
-    return pr.state;
-  }
-  return "open";
-}
-
-function resolveCheckState(pr: PrSummary): NonNullable<PrSummary["checkState"]> {
-  return pr.checkState ?? normalizeLegacyCheckState(pr.state);
-}
-
-function normalizeLegacyCheckState(state: PrSummary["state"]): NonNullable<PrSummary["checkState"]> {
-  if (
-    state === "passing"
-    || state === "failing"
-    || state === "pending"
-    || state === "unknown"
-  ) {
-    return state;
-  }
-  return "unknown";
-}
-
-function checkStateTooltipLabel(
-  state: NonNullable<PrSummary["checkState"]>,
-  checksStillRunning: boolean | undefined,
-): string {
-  switch (state) {
-    case "passing":
-      return "checks passing";
-    case "failing":
-      return checksStillRunning
-        ? "checks failing · checks still running"
-        : "checks failing";
-    case "pending":
-      return "checks pending";
-    case "unknown":
-      return "status unknown";
-  }
-}

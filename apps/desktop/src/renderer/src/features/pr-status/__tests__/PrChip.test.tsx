@@ -189,6 +189,78 @@ describe("PrChip", () => {
     expect(chip).toHaveAttribute("aria-label", expect.stringContaining("closed without merge"));
   });
 
+  it("opens a structured status card on hover", () => {
+    const chip = renderChip(basePr({
+      title: "fix(desktop): honor selected review project cwd",
+      additions: 38,
+      deletions: 1204,
+      changedFiles: 44,
+      commitCount: 23,
+      createdAt: Date.now() - (21 * 24 * 60 * 60 * 1000),
+    }));
+
+    fireEvent.mouseEnter(chip);
+
+    const card = document.querySelector(".pr-status-card") as HTMLElement;
+    expect(card).not.toBeNull();
+    expect(card).toHaveAttribute("role", "tooltip");
+    expect(card.textContent).toContain("fix(desktop): honor selected review project cwd");
+    expect(card.textContent).toContain("pwrdrvr/PwrAgent#743");
+    expect(card.textContent).toContain("+38");
+    expect(card.textContent).toContain("1,204");
+    expect(card.textContent).toContain("44 files");
+    expect(card.textContent).toContain("23 commits");
+    expect(card.textContent).toContain("21d ago");
+
+    fireEvent.mouseLeave(chip);
+    expect(document.querySelector(".pr-status-card")).toBeNull();
+  });
+
+  it("mounts no card at all until the chip is hovered", () => {
+    // A sidebar renders hundreds of these. The card element is built on every
+    // render but must stay an inert object — nothing in the document — until
+    // `show` hands it to the portal.
+    const chip = renderChip(basePr({
+      additions: 412,
+      deletions: 198,
+      changedFiles: 18,
+      commitCount: 7,
+    }));
+    expect(document.querySelector(".pr-status-card")).toBeNull();
+
+    fireEvent.mouseEnter(chip);
+    expect(document.querySelector(".pr-status-card")).not.toBeNull();
+
+    fireEvent.mouseLeave(chip);
+    expect(document.querySelector(".pr-status-card")).toBeNull();
+  });
+
+  it("describes the chip with the card rather than inflating its name", () => {
+    // The numbers are a description, not this control's identity: a name
+    // carrying them makes every chip in a list read like a paragraph. The
+    // portal lives outside the chip's subtree, so the id reference is what
+    // makes the card audible at all.
+    const chip = renderChip(basePr({ additions: 412, deletions: 198 }));
+
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      "Open pwrdrvr/PwrAgent#743 (ready for review · checks passing) in browser",
+    );
+    // Nothing to point at while hidden — a dangling reference is worse than none.
+    expect(chip).not.toHaveAttribute("aria-describedby");
+
+    fireEvent.mouseEnter(chip);
+
+    const describedBy = chip.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const card = document.getElementById(describedBy!);
+    expect(card).toHaveClass("pr-status-card");
+    expect(card?.textContent).toContain("412");
+
+    fireEvent.mouseLeave(chip);
+    expect(chip).not.toHaveAttribute("aria-describedby");
+  });
+
   it("defers draft + conflict to sibling pills when withStatusPills is set", () => {
     // In the Pull Requests card the chip sits next to explicit pills, so the
     // dot must stay the check-state color (agreeing with the "Checks …" pill)

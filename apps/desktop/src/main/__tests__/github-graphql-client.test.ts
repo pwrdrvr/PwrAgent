@@ -87,6 +87,25 @@ describe("buildBatchedPrQuery", () => {
     expect(query).toContain("state targetUrl");
   });
 
+  it("asks for the hover-card stats, which cost no rate-limit points", () => {
+    // GitHub prices GraphQL by connection, so these scalars are free, and
+    // totalCount rides the commits connection the fragment already selects.
+    const { query } = buildBatchedPrQuery([
+      { owner: "pwrdrvr", repo: "PwrAgent", number: 981 },
+    ]);
+
+    expect(query).toContain("additions");
+    expect(query).toContain("deletions");
+    expect(query).toContain("changedFiles");
+    expect(query).toContain("createdAt");
+    expect(query).toContain("mergedAt");
+    expect(query).toContain("closedAt");
+    expect(query).toContain("commits(last: 1) {\n    totalCount");
+    // Deliberately not requested: it moves on every comment and label, and no
+    // surface shows it.
+    expect(query).not.toContain("updatedAt");
+  });
+
   it("passes every input as a variable rather than interpolating it", () => {
     const { query, variables } = buildBatchedPrQuery([
       // A repo name that would rewrite the document if it were interpolated.
@@ -287,6 +306,64 @@ describe("mapGraphqlPrNode", () => {
     );
     expect(summary.org).toBe("contributor");
     expect(summary.repo).toBe("PwrAgent-fork");
+  });
+
+  it("carries diff, commit, and timestamp stats for the hover card", () => {
+    const summary = mapGraphqlPrNode(
+      node({
+        additions: 412,
+        deletions: 198,
+        changedFiles: 18,
+        createdAt: "2026-07-31T12:00:00Z",
+        commits: {
+          totalCount: 7,
+          nodes: [{ commit: { oid: "a".repeat(40) } }],
+        },
+      }),
+    );
+
+    expect(summary.additions).toBe(412);
+    expect(summary.deletions).toBe(198);
+    expect(summary.changedFiles).toBe(18);
+    expect(summary.commitCount).toBe(7);
+    // ISO-8601 is converted at this boundary; everything downstream is epoch ms.
+    expect(summary.createdAt).toBe(Date.parse("2026-07-31T12:00:00Z"));
+  });
+
+  it("records the terminal timestamp GitHub actually reported", () => {
+    const merged = mapGraphqlPrNode(
+      node({ state: "MERGED", mergedAt: "2026-08-01T09:30:00Z" }),
+    );
+    expect(merged.mergedAt).toBe(Date.parse("2026-08-01T09:30:00Z"));
+    expect(merged.closedAt).toBeUndefined();
+  });
+
+  it("omits hover-card stats entirely when the provider returns none", () => {
+    // Absent must stay absent all the way to the renderer: a `0` here would
+    // claim the PR changes nothing, which is a different (and false) statement.
+    const summary = mapGraphqlPrNode(node());
+
+    expect(summary).not.toHaveProperty("additions");
+    expect(summary).not.toHaveProperty("deletions");
+    expect(summary).not.toHaveProperty("changedFiles");
+    expect(summary).not.toHaveProperty("commitCount");
+    expect(summary).not.toHaveProperty("createdAt");
+  });
+
+  it("drops nonsense counts and unparseable timestamps", () => {
+    const summary = mapGraphqlPrNode(
+      node({
+        additions: -3,
+        deletions: Number.NaN,
+        createdAt: "not a date",
+        commits: { totalCount: null, nodes: [{ commit: { oid: "a".repeat(40) } }] },
+      }),
+    );
+
+    expect(summary).not.toHaveProperty("additions");
+    expect(summary).not.toHaveProperty("deletions");
+    expect(summary).not.toHaveProperty("createdAt");
+    expect(summary).not.toHaveProperty("commitCount");
   });
 
   it("omits title when blank rather than writing an empty string", () => {
