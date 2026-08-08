@@ -8174,11 +8174,11 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("explains rejected PwrSnap MCP transports without implying PwrSnap was down", async () => {
+  it("explains Codex's rejected PwrSnap MCP transport without implying PwrSnap was down", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     vi.spyOn(codexClient, "startThread").mockRejectedValueOnce(
       new Error(
-        "json-rpc error (-32600): failed to load configuration: invalid transport in mcp_servers.pwragent_pwrsnap",
+        "json-rpc error (-32600): failed to load configuration: invalid transport\nin `mcp_servers.pwragent_pwrsnap`",
       ),
     );
     const registry = new DesktopBackendRegistry({

@@ -5855,7 +5855,7 @@ function userActionablePwrSnapMcpConfigError(
   if (
     !registrations.some(({ server }) => server.name === PWRSNAP_MCP_CONNECTION_ID)
     || !(error instanceof Error)
-    || !error.message.includes("invalid transport in mcp_servers.")
+    || !/invalid transport\s+in\s+`?mcp_servers\./.test(error.message)
   ) {
     return error;
   }
