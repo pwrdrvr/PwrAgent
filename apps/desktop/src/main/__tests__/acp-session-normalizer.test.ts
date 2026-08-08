@@ -1429,6 +1429,41 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("updates tool progress without splitting a streaming assistant message", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "agent_message_chunk", content: "Before " },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "background-tool",
+        title: "Background check",
+        status: "completed",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: { sessionUpdate: "agent_message_chunk", content: "after" },
+    });
+
+    expect(
+      replay.entries.filter((entry) => entry.type === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        id: "assistant:session-1:0",
+        role: "assistant",
+        text: "Before after",
+      }),
+    ]);
+  });
+
   it("treats Grok turn_completed as an idempotent turn finish", () => {
     const normalizer = new AcpSessionReplayNormalizer();
     normalizer.recordUserPrompt({

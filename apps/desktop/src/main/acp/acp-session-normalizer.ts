@@ -41,26 +41,12 @@ export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
   return backendId !== "acp:qwen" && backendId !== "acp:grok";
 }
 
-export function shouldSurfaceAcpThoughtsAsTransientMessages(
-  backendId: string,
-): boolean {
-  return backendId === "acp:grok";
-}
-
 export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
   return (
     kind === "tool_call_delta_chunk"
     || kind === "pending_interaction"
     || kind === "interaction_resolved"
   );
-}
-
-export function formatAcpTransientThoughtMessage(
-  text: string,
-): string | undefined {
-  const beforeCodeFence = text.split("```", 1)[0] ?? "";
-  const compact = beforeCodeFence.replace(/\s+/gu, " ").trim();
-  return compact || undefined;
 }
 
 type InferredAcpTurn = {
@@ -359,8 +345,14 @@ export class AcpSessionReplayNormalizer {
     } else if (readAcpTopicTitle(update.update)) {
       // Topic updates are thread metadata, not transcript entries.
     } else {
-      this.activeAssistantMessageId = undefined;
-      this.activeAssistantMessagePhase = undefined;
+      // A tool_call is the semantic boundary between assistant messages.
+      // Later tool_call_update notifications may arrive while the provider is
+      // already streaming the next assistant message, so they must update the
+      // activity without fragmenting that message.
+      if (kind !== "tool_call_update") {
+        this.activeAssistantMessageId = undefined;
+        this.activeAssistantMessagePhase = undefined;
+      }
       if (kind === "plan") {
         this.removeCurrentAgentWaitingActivity();
         this.upsertPlan(update, createdAt);

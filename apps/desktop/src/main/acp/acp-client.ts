@@ -955,6 +955,7 @@ export class AcpAgentClient {
       !isAssistantTextUpdate
       && activeTurn
       && !isGrokTransientUpdateKind(updateKind)
+      && updateKind !== "tool_call_update"
     ) {
       activeTurn.activeAssistantMessageItemId = undefined;
       activeTurn.activeAssistantMessagePhase = undefined;

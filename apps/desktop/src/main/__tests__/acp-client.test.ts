@@ -2919,7 +2919,7 @@ describe("AcpAgentClient", () => {
     expect(client.readReplay(session.sessionId).entries).toEqual([]);
   });
 
-  it("preserves a Grok assistant stream across transient vendor updates", async () => {
+  it("preserves a Grok assistant stream across non-boundary vendor updates", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({
       "session/prompt": promptResponse.promise,
@@ -2959,6 +2959,7 @@ describe("AcpAgentClient", () => {
       "tool_call_delta_chunk",
       "pending_interaction",
       "interaction_resolved",
+      "tool_call_update",
     ]) {
       transport.emitVendorNotification({
         method: "_x.ai/session_notification",
@@ -2979,7 +2980,11 @@ describe("AcpAgentClient", () => {
       "assistant:turn-1:0",
       "assistant:turn-1:0",
     ]);
-    expect(client.readReplay(session.sessionId).entries).toEqual([
+    expect(
+      client
+        .readReplay(session.sessionId)
+        .entries.filter((entry) => entry.type === "message"),
+    ).toEqual([
       expect.objectContaining({
         type: "message",
         role: "user",
