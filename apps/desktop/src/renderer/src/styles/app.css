@@ -20367,19 +20367,6 @@ a.transcript-message__messaging-origin:focus-visible {
   border-radius: 6px;
 }
 
-.composer__autocomplete--directories
-  .composer__autocomplete-option:not(.composer__autocomplete-option--action):hover,
-.composer__autocomplete--directories
-  .composer__autocomplete-option:not(.composer__autocomplete-option--action).is-active {
-  background: var(--accent-soft);
-  color: var(--accent-bright);
-}
-
-.composer__autocomplete--directories
-  .composer__autocomplete-option.is-active::before {
-  display: none;
-}
-
 .composer__autocomplete--directories .composer__autocomplete-title {
   overflow: hidden;
   font-size: 14px;
@@ -20428,25 +20415,16 @@ a.transcript-message__messaging-origin:focus-visible {
   text-align: left;
 }
 
-.composer__autocomplete-option:hover {
-  background: var(--bg-panel-hover);
-}
-
+/* Popover highlight, shared with `.project-picker__row`,
+   `.branch-picker__option`, and `.reference-picker__row`. A transient
+   "which row would Enter take" cue is an accent tint, NOT the thread-row
+   selection language (left bar + border + --bg-row-active) — that one
+   marks a persistent selection you navigated to and can leave. Keeping
+   the two apart is what stops the accent from meaning two things. */
+.composer__autocomplete-option:hover,
 .composer__autocomplete-option.is-active {
-  border-color: var(--accent-border);
-  background: var(--bg-row-active);
-}
-
-.composer__autocomplete-option.is-active::before {
-  position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: 5px;
-  width: 3px;
-  border-radius: 999px;
-  background: var(--accent);
-  content: "";
-  pointer-events: none;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
 }
 
 .composer__autocomplete-title {
@@ -20459,9 +20437,12 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* Kind icons keep their intrinsic size so only the label absorbs the
-   row's shrinking. */
+   row's shrinking. They stay muted through hover/active — same as
+   `.reference-picker__row-icon` — so the row's accent tint reads as one
+   signal instead of lighting up every glyph on the row. */
 .composer__autocomplete-title > svg {
   flex: none;
+  color: var(--text-muted);
 }
 
 /* Free-text names (thread titles, branches, PR subjects) get one line and
@@ -20477,22 +20458,13 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: nowrap;
 }
 
+/* The typed run, emphasized inside the candidate's label. Weight — not
+   color alone — carries this: on the hovered/active row the whole label
+   is already `--accent-bright`, so a color-only highlight vanishes
+   exactly on the row the operator is looking at. */
 .composer__autocomplete-match {
   color: var(--accent-bright);
-}
-
-.composer__autocomplete-token {
-  display: inline-flex;
-  width: 18px;
-  height: 18px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--accent-border);
-  border-radius: 5px;
-  color: var(--accent-bright);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1;
+  font-weight: 700;
 }
 
 .composer__autocomplete-source {
@@ -20514,13 +20486,19 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: nowrap;
 }
 
+/* First-party commands outrank provider ones, but a row badge is
+   metadata — it earns a stronger *neutral*, not the accent. The accent
+   on a row belongs to the selection tint and the typed run. */
 .composer__autocomplete-source--pwragent {
-  border-color: var(--accent-border);
-  color: var(--accent-bright);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
 }
 
+/* Outline-only, like every other badge here. A filled chip is darker
+   than the accent tint behind it, so on the active row it reads as a
+   hole punched in the highlight. */
 .composer__autocomplete-source--provider {
-  background: var(--bg-panel);
+  background: transparent;
 }
 
 .composer__autocomplete-meta {
@@ -20589,8 +20567,10 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 500;
 }
 
+/* Follow the row's own hover color instead of pinning a neutral — the
+   row tints to `--accent-bright` like every other option. */
 .composer__autocomplete-option--action:hover .composer__autocomplete-title {
-  color: var(--text-primary);
+  color: inherit;
 }
 
 .composer__review-config {

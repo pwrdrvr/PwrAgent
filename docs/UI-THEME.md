@@ -323,6 +323,46 @@ Do not use tangerine for:
 
 The accent should feel like a trading-terminal signal: exact, limited, and useful.
 
+### Accent ramp: one signal per row
+
+The palette has held one tangerine since the theme shipped — `--accent` has never changed value. Drift comes from the *ramp being spent without a rule*, not from stale colors. Each step has exactly one job:
+
+| Token | Job | Never |
+|---|---|---|
+| `--accent` | Solid fills, and the thread-row selection bar | Text |
+| `--accent-border` | Outline of a **selected** container | Idle chrome, badges |
+| `--accent-soft` | Fill of a **highlighted** row or surface | Large panels |
+| `--accent-bright` | Text on an accent tint, and the typed run in a picker | Body copy, metadata |
+
+**The rule: a row carries its selection treatment plus at most one more accent element.** Badges, kind icons, boxed sigils, and counts rank via neutrals (`--border-strong` + `--text-primary` for emphasis, `--border-subtle` + `--text-secondary` for ordinary metadata). A row showing a bar, an outline, a boxed glyph, a highlighted match, and a pill all in tangerine has no signal left — everything is emphasized, so nothing is.
+
+### The two selection languages are not interchangeable
+
+Both are tangerine; they answer different questions. Picking the wrong one is what made the composer autocompletes look like four unrelated controls.
+
+**Popover highlight — "Enter lands here."** Transient, follows the cursor or arrow keys, gone when the popover closes.
+
+```css
+background: var(--accent-soft);
+color: var(--accent-bright);
+```
+
+Used by `.project-picker__row`, `.branch-picker__option`, `.reference-picker__row`, and every `.composer__autocomplete-option`. No bar, no outline.
+
+**Row selection — "this is what you're looking at."** Persistent, survives navigation, coexists with hover.
+
+```css
+border-color: var(--accent-border);
+background: var(--bg-row-active);
+/* plus the 3px ::before bar in var(--accent) */
+```
+
+Used by `.thread-row.is-selected` and its derivatives. Do not lend the bar to a popover.
+
+**Consequence for match highlighting:** on a highlighted row the label is already `--accent-bright`, so a color-only "typed run" highlight vanishes on exactly the row being read. Emphasize the match with **weight** (`font-weight: 700`) so it survives both states.
+
+`apps/desktop/src/renderer/src/styles/__tests__/theme-contract.test.tsx` locks all of the above for the autocomplete family. Changing it deliberately means changing the test in the same commit.
+
 ## Typography
 
 Use a restrained desktop typography system:
