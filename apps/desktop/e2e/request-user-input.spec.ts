@@ -71,3 +71,23 @@ test("answers request_user_input questionnaires with back and next navigation", 
     await app.close();
   }
 });
+
+test("restores a pending questionnaire after the renderer reloads", async () => {
+  const app = await openRequestUserInputReplay();
+
+  try {
+    await app.window.reload();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Request user input replay"
+      })
+    ).toBeVisible();
+    await expect(app.window.getByRole("group", { name: "Pending input" })).toBeVisible();
+    await expect(app.window.getByText("Question 1 of 2")).toBeVisible();
+    await expect(app.window.getByRole("status")).toContainText("Waiting for input");
+  } finally {
+    await app.close();
+  }
+});
