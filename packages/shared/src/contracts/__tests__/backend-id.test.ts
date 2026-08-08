@@ -16,7 +16,7 @@ import {
 describe("backend identity helpers", () => {
   it("recognizes built-in and ACP backend ids", () => {
     expect(isAppServerBuiltinBackendKind("codex")).toBe(true);
-    expect(isAppServerBuiltinBackendKind("grok")).toBe(true);
+    expect(isAppServerBuiltinBackendKind("grok")).toBe(false);
     expect(isAppServerBuiltinBackendKind("acp:gemini")).toBe(false);
 
     expect(isAcpBackendId("acp:gemini")).toBe(true);
@@ -25,7 +25,7 @@ describe("backend identity helpers", () => {
     expect(isAcpBackendId("acp:bad id")).toBe(false);
 
     expect(isAppServerBackendKind("codex")).toBe(true);
-    expect(isAppServerBackendKind("grok")).toBe(true);
+    expect(isAppServerBackendKind("grok")).toBe(false);
     expect(isAppServerBackendKind("acp:gemini")).toBe(true);
     expect(isAppServerBackendKind("unknown")).toBe(false);
   });
@@ -36,11 +36,8 @@ describe("backend identity helpers", () => {
     expect(() => buildAcpBackendId("../bad")).toThrow("Invalid ACP registry id");
   });
 
-  it("keeps legacy built-in thread keys stable", () => {
+  it("keeps built-in thread keys stable", () => {
     expect(buildThreadIdentityKey("codex", "thread-1")).toBe("codex:thread-1");
-    expect(buildThreadIdentityKey("grok", "thread:with:colon")).toBe(
-      "grok:thread:with:colon",
-    );
   });
 
   it("keeps ACP backend ids intact and parses them structurally", () => {
@@ -132,10 +129,7 @@ describe("backend identity helpers", () => {
       backend: "codex",
       threadId: "thread-1",
     });
-    expect(parseThreadIdentityKey("grok:thread:with:colon")).toEqual({
-      backend: "grok",
-      threadId: "thread:with:colon",
-    });
+    expect(parseThreadIdentityKey("grok:thread:with:colon")).toBeUndefined();
   });
 
   it("rejects malformed thread identity keys", () => {

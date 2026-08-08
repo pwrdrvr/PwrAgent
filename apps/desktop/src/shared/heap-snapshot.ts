@@ -45,9 +45,8 @@ function formatBytes(bytes: number): string {
 
 /**
  * A heap snapshot is a byte-for-byte dump of everything the process is holding,
- * and the main process holds decrypted secrets: the xAI API key and every
- * messaging bot token are live strings there the moment `safeStorage` unseals
- * them. `strings main.heapsnapshot | grep -i xai` recovers the key.
+ * and the main process holds decrypted messaging credentials as live strings
+ * the moment `safeStorage` unseals them.
  *
  * That makes a snapshot path something you must never hand to anyone casually —
  * not a bug report, not an issue, not a coding-agent session. Every surface that

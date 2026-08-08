@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import type { AppServerBackendKind, NavigationLaunchpadDefaults } from "@pwragent/shared";
+import type { NavigationLaunchpadDefaults } from "@pwragent/shared";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 async function assertTangerineFocusRing(locator: Locator) {
@@ -35,7 +35,7 @@ async function selectComposerOption(params: {
 }
 
 async function createProviderSelectorFixture(params: {
-  backend: AppServerBackendKind;
+  backend: "codex";
   launchpadDefaults?: NavigationLaunchpadDefaults;
 }): Promise<{
   cleanup: () => Promise<void>;
@@ -82,7 +82,7 @@ async function createProviderSelectorFixture(params: {
             method: "initialize",
             result: {
               serverInfo: {
-                name: params.backend === "codex" ? "Replay Codex" : "Replay Grok",
+                name: "Replay Codex",
                 version: "1.0.0",
               },
               methods: ["thread/list", "thread/read", "skills/list", "thread/start", "turn/start"],
@@ -102,23 +102,9 @@ async function createProviderSelectorFixture(params: {
     "utf8",
   );
 
-  // The agent-core Grok provider is gated behind the experimental flag
-  // (default off — see desktop-config.ts:resolveAgentCoreGrokEnabled).
-  // When the test scenario primarily exercises that provider (i.e.
-  // `backend === "grok"`), flip the flag on so the provider is visible
-  // and instantiable. Scenarios that pass `backend: "codex"` with a
-  // sticky Grok launchpad default intentionally test the
-  // grok-unavailable fallback path and leave the flag off.
-  const homeEnv = params.launchpadDefaults ? { HOME: rootDir } : undefined;
-  const flagEnv =
-    params.backend === "grok"
-      ? { PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK: "1" }
-      : undefined;
-  const env =
-    homeEnv || flagEnv ? { ...(homeEnv ?? {}), ...(flagEnv ?? {}) } : undefined;
   return {
     fixturePath,
-    env,
+    env: params.launchpadDefaults ? { HOME: rootDir } : undefined,
     cleanup: async () => {
       await rm(rootDir, { recursive: true, force: true });
     },
@@ -153,13 +139,13 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
   }
 });
 
-test("OpenAI new-thread launchpad wins when sticky Grok defaults are unavailable", async () => {
+test("OpenAI new-thread launchpad wins when sticky ACP Grok defaults are unavailable", async () => {
   const fixture = await createProviderSelectorFixture({
     backend: "codex",
     launchpadDefaults: {
-      backend: "grok",
+      backend: "acp:grok",
       executionMode: "default",
-      model: "grok-4.20-reasoning",
+      model: "grok-4.5",
       reasoningEffort: "medium",
       workMode: "local",
     },
@@ -173,7 +159,7 @@ test("OpenAI new-thread launchpad wins when sticky Grok defaults are unavailable
     await app.window.getByRole("button", { name: "New thread" }).click();
     await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
 
-    await expect(app.window.getByText("Grok", { exact: true })).toHaveCount(0);
+    await expect(app.window.getByText("Grok CLI", { exact: true })).toHaveCount(0);
     await expect(app.window.getByText("OpenAI", { exact: true }).first()).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
@@ -189,60 +175,6 @@ test("OpenAI new-thread launchpad wins when sticky Grok defaults are unavailable
       )
     ).toHaveCount(0);
     await expect(prompt).toBeEnabled();
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
-
-test("Grok new-thread selector hides reasoning for Grok 4.20 models", async () => {
-  const fixture = await createProviderSelectorFixture({
-    backend: "grok",
-    launchpadDefaults: {
-      backend: "grok",
-      executionMode: "default",
-      model: "grok-4.20-reasoning",
-      reasoningEffort: "medium",
-    },
-  });
-  const app = await launchElectronApp({
-    fixturePath: fixture.fixturePath,
-    env: fixture.env,
-  });
-
-  try {
-    await app.window.getByRole("button", { name: "New thread" }).click();
-    await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
-
-    const settings = app.window.getByLabel("New thread settings");
-    const providerSelect = settings.getByLabel("Provider");
-    const modelSelect = settings.getByLabel("Model", { exact: true });
-    await expect(providerSelect).toHaveAttribute("data-value", "grok");
-    await expect(modelSelect).toHaveAttribute("data-value", "grok-4.20-reasoning");
-    await expect(
-      settings.getByLabel("Reasoning", { exact: true }),
-    ).toHaveCount(0);
-    await expect(settings.getByRole("option", { name: /^Default$/ })).toHaveCount(0);
-    await assertTangerineFocusRing(providerSelect);
-    await assertTangerineFocusRing(modelSelect);
-
-    await selectComposerOption({
-      select: modelSelect,
-      window: app.window,
-      option: "Grok 4.20 Non-Reasoning",
-    });
-    await expect(
-      settings.getByLabel("Reasoning", { exact: true }),
-    ).toHaveCount(0);
-
-    await selectComposerOption({
-      select: modelSelect,
-      window: app.window,
-      option: "Grok 4.20 Reasoning",
-    });
-    await expect(
-      settings.getByLabel("Reasoning", { exact: true }),
-    ).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();

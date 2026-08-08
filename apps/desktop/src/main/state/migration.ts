@@ -11,7 +11,6 @@ import { migrateMessagingStoreData } from "../messaging/core/messaging-migration
 import {
   resolveActiveProfileName,
   resolveActiveProfilePath,
-  resolvePwragentRoot,
 } from "../profile";
 import { getNativeBinding } from "./native-binding.js";
 import { StateDb } from "./state-db.js";
@@ -27,7 +26,6 @@ type LegacyPaths = {
   overlayState?: string;
   settingsSecrets?: string;
   desktopConfig?: string;
-  grokAppServerConfig?: string;
 };
 
 export function findLegacyPaths(options?: {
@@ -62,9 +60,6 @@ export function findLegacyPaths(options?: {
 
   const configPath = path.join(xdgConfigHome, "pwragnt", "config.toml");
   if (fs.existsSync(configPath)) paths.desktopConfig = configPath;
-
-  const grokPath = path.join(xdgConfigHome, "grok-app-server", "config.toml");
-  if (fs.existsSync(grokPath)) paths.grokAppServerConfig = grokPath;
 
   return paths;
 }
@@ -105,8 +100,7 @@ export function migrateIfNeeded(options?: {
     legacy.messagingState ||
     legacy.overlayState ||
     legacy.settingsSecrets ||
-    legacy.desktopConfig ||
-    legacy.grokAppServerConfig;
+    legacy.desktopConfig;
 
   if (!hasAnySources) {
     const stateDb = StateDb.open(dbPath, {
@@ -206,7 +200,6 @@ export function migrateIfNeeded(options?: {
   fs.renameSync(tmpDbPath, dbPath);
 
   copyConfig(legacy.desktopConfig, options);
-  copyGrokConfig(legacy.grokAppServerConfig, options);
 
   // Legacy files are intentionally left in place. The old app code may still
   // be running against them on other branches. Cleanup happens post-merge
@@ -542,18 +535,6 @@ function copyConfig(
 ): void {
   if (!srcPath) return;
   const destPath = resolveActiveProfilePath("config.toml", options);
-  if (fs.existsSync(destPath)) return;
-  fs.mkdirSync(path.dirname(destPath), { recursive: true });
-  fs.copyFileSync(srcPath, destPath);
-}
-
-function copyGrokConfig(
-  srcPath: string | undefined,
-  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
-): void {
-  if (!srcPath) return;
-  const root = resolvePwragentRoot(options);
-  const destPath = path.join(root, "grok-app-server", "config.toml");
   if (fs.existsSync(destPath)) return;
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
   fs.copyFileSync(srcPath, destPath);

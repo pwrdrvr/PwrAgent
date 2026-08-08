@@ -45,7 +45,7 @@ const federationMock = vi.hoisted(() => {
       seenUpdatedAt: request.seenUpdatedAt,
     })),
     setThreadReaction: vi.fn(async (request: {
-      backend?: "codex" | "grok";
+      backend?: "codex" | "acp:grok";
       threadId: string;
     }) => ({
       backend: request.backend ?? "codex",
@@ -166,7 +166,7 @@ const resolveGitHubReposForDirectory = vi.hoisted(() =>
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const listThreads = vi.fn(async (request?: {
   archived?: boolean;
-  backend?: "codex" | "grok";
+  backend?: "codex" | "acp:grok";
   filter?: string;
   forceRefresh?: boolean;
   limit?: number;
@@ -197,7 +197,7 @@ const listThreads = vi.fn(async (request?: {
           id: "thread-1",
           title: "Thread one (Grok)",
           titleSource: "explicit" as const,
-          source: "grok" as const,
+          source: "acp:grok" as const,
           linkedDirectories: [],
           updatedAt: 1000,
         },
@@ -283,7 +283,7 @@ const renameThread = vi.fn(async (request: RenameThreadRequest) => ({
   renamedAt: 3000,
 }));
 const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
-  backend: (params as { backend: "all" | "codex" | "grok" }).backend,
+  backend: (params as { backend: "all" | "codex" | "acp:grok" }).backend,
   fetchedAt: 1234,
   unchanged: false,
   // Mirror the real reconcile: every materialized row carries a derived
@@ -292,13 +292,13 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
   threads: (params as { threads: Array<{ source: string; id: string }> }).threads.map(
     (thread) => ({
       inbox:
-        `${thread.source}:${thread.id}` === "grok:thread-1"
+        `${thread.source}:${thread.id}` === "acp:grok:thread-1"
           ? { inInbox: true, reason: "updated-since-seen" as const }
           : { inInbox: false },
       ...thread,
     }),
   ) as unknown[],
-  inboxThreadKeys: ["grok:thread-1"],
+  inboxThreadKeys: ["acp:grok:thread-1"],
   directories: [
     {
       key: "directory:/repo/app",
@@ -530,7 +530,7 @@ const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   seenUpdatedAt: request.seenUpdatedAt,
 }));
 const setThreadReactionOverlay = vi.fn(async (request: {
-  backend: "codex" | "grok";
+  backend: "codex" | "acp:grok";
   threadId: string;
   emoji: string;
 }) => ({
@@ -570,7 +570,7 @@ const registerDirectoryFromDiskService = vi.fn(async (request: { path: string })
 const getThreadOverlayState = vi.fn();
 const getThreadOverlayStates = vi.fn(async () => ({}));
 const addLinkedDirectory = vi.fn(async (request: {
-  backend: "codex" | "grok";
+  backend: "codex" | "acp:grok";
   threadId: string;
   directory: unknown;
 }) => ({
@@ -580,7 +580,7 @@ const addLinkedDirectory = vi.fn(async (request: {
   extraLinkedDirectories: [request.directory],
 }));
 const removeLinkedDirectory = vi.fn(async (request: {
-  backend: "codex" | "grok";
+  backend: "codex" | "acp:grok";
   threadId: string;
   directory: unknown;
 }) => ({
@@ -590,7 +590,7 @@ const removeLinkedDirectory = vi.fn(async (request: {
   extraLinkedDirectories: [],
 }));
 const setThreadPullRequests = vi.fn(async (request: {
-  backend: "codex" | "grok";
+  backend: "codex" | "acp:grok";
   threadId: string;
   prs: PrSummary[];
   fetchedAt?: number;
@@ -605,7 +605,7 @@ const setThreadPullRequests = vi.fn(async (request: {
   prsRefreshKey: request.refreshKey,
 }));
 const addThreadPullRequestReference = vi.fn(async (request: {
-  backend: "codex" | "grok";
+  backend: "codex" | "acp:grok";
   threadId: string;
   pr: PrSummary;
 }) => ({
@@ -1939,7 +1939,7 @@ describe("app server ipc", () => {
       queuedTurnsByThreadKey: {},
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
-        expect.objectContaining({ source: "grok", id: "thread-1" }),
+        expect.objectContaining({ source: "acp:grok", id: "thread-1" }),
       ],
       workspaceRoots: [
         path.join(os.homedir(), ".pwragent", "profiles", "default", "projects"),
@@ -1954,9 +1954,9 @@ describe("app server ipc", () => {
       unchanged: false,
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
-        expect.objectContaining({ source: "grok", id: "thread-1" }),
+        expect.objectContaining({ source: "acp:grok", id: "thread-1" }),
       ],
-      inboxThreadKeys: ["grok:thread-1"],
+      inboxThreadKeys: ["acp:grok:thread-1"],
       directories: [
         {
           key: "directory:/repo/app",
@@ -2057,7 +2057,7 @@ describe("app server ipc", () => {
     // instead of always trailing every local key.
     expect(response.inboxThreadKeys).toEqual([
       "codex:remote-1",
-      "grok:thread-1",
+      "acp:grok:thread-1",
     ]);
     // A newly appearing remote row must defeat the unchanged optimization.
     expect(response.unchanged).toBe(false);
@@ -2176,7 +2176,7 @@ describe("app server ipc", () => {
     // Two local project groups; "agent-kit" sorts before "PwrAgent", which is
     // what made the duplicated row "jump" groups on selection.
     reconcileNavigationSnapshot.mockImplementationOnce(async (params: unknown) => ({
-      backend: (params as { backend: "all" | "codex" | "grok" }).backend,
+      backend: (params as { backend: "all" | "codex" | "acp:grok" }).backend,
       fetchedAt: 1234,
       unchanged: false,
       threads: (params as { threads: object[] }).threads.map((thread) => ({
@@ -2376,7 +2376,7 @@ describe("app server ipc", () => {
     // last snapshot build (never a fresh snapshot) — warm the cache with a
     // snapshot whose "app" group reports Directory Threads collapsed.
     reconcileNavigationSnapshot.mockImplementationOnce(async (params: unknown) => ({
-      backend: (params as { backend: "all" | "codex" | "grok" }).backend,
+      backend: (params as { backend: "all" | "codex" | "acp:grok" }).backend,
       fetchedAt: 1234,
       unchanged: false,
       threads: (params as { threads: unknown[] }).threads,
@@ -2877,7 +2877,7 @@ describe("app server ipc", () => {
       fetchedAt: expect.any(Number),
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
-        expect.objectContaining({ source: "grok", id: "thread-1" }),
+        expect.objectContaining({ source: "acp:grok", id: "thread-1" }),
       ],
       workspaceRoots: [
         path.join(os.homedir(), ".pwragent", "profiles", "default", "projects"),
@@ -3188,16 +3188,16 @@ describe("app server ipc", () => {
     registerAppServerIpcHandlers();
 
     const response = await handlers.get(APP_SERVER_RESTORE_THREAD_CHANNEL)?.({}, {
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
     } satisfies RestoreThreadRequest);
 
     expect(restoreThread).toHaveBeenCalledWith({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
     });
     expect(response).toEqual({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       restoredAt: 3000,
     });
@@ -3307,18 +3307,18 @@ describe("app server ipc", () => {
     registerAppServerIpcHandlers();
 
     const response = await handlers.get(APP_SERVER_RENAME_THREAD_CHANNEL)?.({}, {
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       name: "Renamed thread",
     } satisfies RenameThreadRequest);
 
     expect(renameThread).toHaveBeenCalledWith({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       name: "Renamed thread",
     });
     expect(response).toEqual({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       renamedAt: 3000,
     });
@@ -3362,19 +3362,19 @@ describe("app server ipc", () => {
     registerAppServerIpcHandlers();
 
     const response = await handlers.get(NAVIGATION_MARK_THREAD_SEEN_CHANNEL)?.({}, {
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       seenUpdatedAt: 3000,
     } satisfies MarkThreadSeenRequest);
 
     expect(markThreadSeen).toHaveBeenCalledWith({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       seenAt: undefined,
       seenUpdatedAt: 3000,
     });
     expect(response).toEqual({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       seenAt: 2000,
       seenUpdatedAt: 3000,

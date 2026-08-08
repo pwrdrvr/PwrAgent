@@ -34,7 +34,7 @@ export type StringReplacement = ProtocolCaptureStringReplacement;
 export type DeriveReplayFixtureOptions = {
   capturePath: string;
   scenario: string;
-  backend?: "codex" | "grok";
+  backend?: "codex";
   sourceCaptureId?: string;
   threadId?: string;
   startSequence?: number;
@@ -60,7 +60,7 @@ export type ExportSessionCaptureOptions = {
   captureId?: string;
   sessionId?: string;
   threadId?: string;
-  backend?: "codex" | "grok";
+  backend?: "codex";
 };
 
 export type ExportedSessionCapture = {
@@ -211,8 +211,8 @@ export async function deriveReplayFixtureFromCapture(
   };
 }
 
-function toReplayBackend(value: string | undefined): "codex" | "grok" | undefined {
-  return value === "codex" || value === "grok" ? value : undefined;
+function toReplayBackend(value: string | undefined): "codex" | undefined {
+  return value === "codex" ? value : undefined;
 }
 
 export async function writeReplayFixtureArtifacts(
@@ -340,7 +340,7 @@ function resolveCaptureIndexEntry(
 function parseSessionSelector(
   options: ExportSessionCaptureOptions
 ): {
-  backend: "codex" | "grok";
+  backend: "codex";
   threadId: string;
 } | undefined {
   const rawSelector = options.sessionId?.trim() || options.threadId?.trim();
@@ -352,7 +352,7 @@ function parseSessionSelector(
     const [backend, ...threadParts] = rawSelector.split(":");
     const threadId = threadParts.join(":").trim();
     if (
-      (backend === "codex" || backend === "grok")
+      backend === "codex"
       && threadId
     ) {
       return {

@@ -51,7 +51,7 @@ describe("protocol log observer", () => {
   it("includes caller diagnostics on requests and attributed responses", () => {
     const info = vi.fn();
     const observer = createProtocolLogObserver({
-      backend: "grok",
+      backend: "acp:grok",
       logger: { info },
     });
 
@@ -79,7 +79,7 @@ describe("protocol log observer", () => {
     );
 
     expect(info).toHaveBeenNthCalledWith(1, "message", {
-      backend: "grok",
+      backend: "acp:grok",
       callerReason: "backend-summary",
       direction: "out",
       id: "rpc-1",
@@ -88,7 +88,7 @@ describe("protocol log observer", () => {
       ownerId: "model-catalog-1",
     });
     expect(info).toHaveBeenNthCalledWith(2, "message", {
-      backend: "grok",
+      backend: "acp:grok",
       callerReason: "backend-summary",
       direction: "in",
       id: "rpc-1",

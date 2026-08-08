@@ -91,6 +91,7 @@ pnpm dev
 
 - Do **not** override `HOME` or set `NODE_ENV` — the app needs the real user data directory to load saved threads and Keychain secrets.
 - Messaging adapters are guarded by a profile-scoped sqlite lease. If another live instance already owns messaging for the active profile, this process stays usable but leaves messaging stopped.
+- The federation runtime is guarded by a parallel profile-scoped lease (lease key `profile-federation`, independent of the messaging lease). If another live instance already runs federation for the active profile, this process keeps its federation runtime stopped and reports the holder in federation health instead of fighting over the shared instance identity.
 - Use `pnpm dev:no-messaging` when you explicitly want to guarantee that this app process never starts messaging adapters.
 - For visual verification of UI changes, either command can show real threads in the sidebar and thread detail pane; prefer `dev:no-messaging` when the UI work does not need live messaging.
 - If the app starts but shows no threads, you are likely running from the wrong directory or with overridden env vars.

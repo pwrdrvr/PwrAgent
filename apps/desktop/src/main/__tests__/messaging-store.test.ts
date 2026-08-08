@@ -790,7 +790,7 @@ describe("MessagingStore", () => {
     await store.upsertBinding(
       buildBinding({
         id: "binding-grok",
-        backend: "grok",
+        backend: "acp:grok",
         channel: {
           channel: "telegram",
           conversation: { id: "chat-grok", kind: "dm" },

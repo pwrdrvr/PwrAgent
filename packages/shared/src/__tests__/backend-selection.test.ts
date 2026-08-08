@@ -17,8 +17,8 @@ describe("backend selection helpers", () => {
         label: "Gemini CLI",
         source: "acp",
       }),
-      backendSummary("grok", { available: true, createThread: false }),
-      backendSummary("grok", {
+      backendSummary("acp:grok", { available: true, createThread: false }),
+      backendSummary("acp:kimi", {
         available: true,
         createThread: true,
         executionModeAvailable: false,
@@ -49,7 +49,7 @@ describe("backend selection helpers", () => {
 
   it("falls back to Codex before the first selectable backend", () => {
     const backends = [
-      backendSummary("grok", { available: true, createThread: true }),
+      backendSummary("acp:grok", { available: true, createThread: true }),
       backendSummary("codex", { available: true, createThread: true }),
     ];
 
@@ -62,7 +62,7 @@ describe("backend selection helpers", () => {
     expect(
       resolveNewThreadBackend([
         backendSummary("codex", { available: false, createThread: true }),
-        backendSummary("grok", { available: true, createThread: false }),
+        backendSummary("acp:grok", { available: true, createThread: false }),
       ]),
     ).toBeUndefined();
   });

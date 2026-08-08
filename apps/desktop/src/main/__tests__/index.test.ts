@@ -136,6 +136,9 @@ const messagingLeaseStartMock = vi.fn<() => Promise<void>>();
 const messagingLeaseShutdownSyncMock = vi.fn();
 const getRuntimeMessagingLeaseCoordinatorMock = vi.fn();
 const getExistingRuntimeMessagingLeaseCoordinatorMock = vi.fn();
+const federationLeaseShutdownSyncMock = vi.fn();
+const getRuntimeFederationLeaseCoordinatorMock = vi.fn();
+const getExistingRuntimeFederationLeaseCoordinatorMock = vi.fn();
 const requestBindingRevokeAllForThreadMock = vi.fn();
 const setMessagingArchiveCleanerMock = vi.fn();
 const setMessagingAgentToolServiceMock = vi.fn();
@@ -456,6 +459,12 @@ vi.mock("../runtime-messaging-lease", () => ({
     getExistingRuntimeMessagingLeaseCoordinatorMock,
 }));
 
+vi.mock("../runtime-federation-lease", () => ({
+  getRuntimeFederationLeaseCoordinator: getRuntimeFederationLeaseCoordinatorMock,
+  getExistingRuntimeFederationLeaseCoordinator:
+    getExistingRuntimeFederationLeaseCoordinatorMock,
+}));
+
 vi.mock("../state/app-state", () => ({
   initializeAppState: initializeAppStateMock,
   disposeAppState: disposeAppStateMock,
@@ -481,6 +490,10 @@ vi.mock("../profile", () => ({
 const runtimeMessagingLeaseCoordinatorMock = {
   start: messagingLeaseStartMock,
   shutdownSync: messagingLeaseShutdownSyncMock,
+};
+
+const runtimeFederationLeaseCoordinatorMock = {
+  shutdownSync: federationLeaseShutdownSyncMock,
 };
 
 vi.mock("../app-server/backend-registry", () => ({
@@ -673,6 +686,15 @@ describe("bootstrapApp", () => {
     getExistingRuntimeMessagingLeaseCoordinatorMock.mockReset();
     getExistingRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(
       runtimeMessagingLeaseCoordinatorMock,
+    );
+    federationLeaseShutdownSyncMock.mockReset();
+    getRuntimeFederationLeaseCoordinatorMock.mockReset();
+    getRuntimeFederationLeaseCoordinatorMock.mockReturnValue(
+      runtimeFederationLeaseCoordinatorMock,
+    );
+    getExistingRuntimeFederationLeaseCoordinatorMock.mockReset();
+    getExistingRuntimeFederationLeaseCoordinatorMock.mockReturnValue(
+      runtimeFederationLeaseCoordinatorMock,
     );
     requestBindingRevokeAllForThreadMock.mockReset();
     setMessagingArchiveCleanerMock.mockReset();
@@ -1822,10 +1844,11 @@ describe("bootstrapApp", () => {
     );
   });
 
-  it("does not create the messaging lease coordinator on early SIGTERM", async () => {
+  it("does not create the lease coordinators on early SIGTERM", async () => {
     whenReadyMock.mockReturnValue(new Promise(() => {}));
     isAppStateInitializedMock.mockReturnValue(false);
     getExistingRuntimeMessagingLeaseCoordinatorMock.mockReturnValue(null);
+    getExistingRuntimeFederationLeaseCoordinatorMock.mockReturnValue(null);
 
     await import("../index");
 
@@ -1840,11 +1863,13 @@ describe("bootstrapApp", () => {
 
     expect(getRuntimeMessagingLeaseCoordinatorMock).not.toHaveBeenCalled();
     expect(messagingLeaseShutdownSyncMock).not.toHaveBeenCalled();
+    expect(getRuntimeFederationLeaseCoordinatorMock).not.toHaveBeenCalled();
+    expect(federationLeaseShutdownSyncMock).not.toHaveBeenCalled();
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
     expect(quitMock).toHaveBeenCalledTimes(1);
   });
 
-  it("releases the messaging lease synchronously on SIGTERM", async () => {
+  it("releases the messaging and federation leases synchronously on SIGTERM", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
     await import("../index");
@@ -1860,11 +1885,95 @@ describe("bootstrapApp", () => {
     await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
 
     expect(messagingLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
     expect(quitMock).toHaveBeenCalledTimes(1);
 
     appEventHandlers.get("before-quit")?.();
     expect(messagingLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the federation runtime before releasing its lease on graceful shutdown", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const sigtermHandler = processEventHandlers.get("SIGTERM");
+    expect(sigtermHandler).toBeTypeOf("function");
+    if (!sigtermHandler) {
+      return;
+    }
+
+    sigtermHandler("SIGTERM");
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
+
+    // A replacement instance must not be able to acquire the profile lease
+    // while this process's listener is still bound (EADDRINUSE deadlock).
+    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+    expect(
+      disposeDesktopFederationRuntimeMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      federationLeaseShutdownSyncMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("releases the federation lease from will-quit when the federation shutdown phase rejects", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    disposeDesktopFederationRuntimeMock.mockRejectedValue(new Error("boom"));
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const sigtermHandler = processEventHandlers.get("SIGTERM");
+    expect(sigtermHandler).toBeTypeOf("function");
+    if (!sigtermHandler) {
+      return;
+    }
+
+    sigtermHandler("SIGTERM");
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
+
+    // The barrier's federation phase failed before its post-stop release.
+    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(federationLeaseShutdownSyncMock).not.toHaveBeenCalled();
+
+    // The final sync hook must still release, or a replacement instance
+    // stays blocked until the lease TTL expires.
+    appEventHandlers.get("will-quit")?.();
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the federation lease from process exit when the federation shutdown phase hangs", async () => {
+    vi.useFakeTimers();
+    startupProfilerInstance.start.mockResolvedValue();
+    disposeDesktopFederationRuntimeMock.mockReturnValue(
+      new Promise(() => {}),
+    );
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const sigtermHandler = processEventHandlers.get("SIGTERM");
+    expect(sigtermHandler).toBeTypeOf("function");
+    if (!sigtermHandler) {
+      return;
+    }
+
+    sigtermHandler("SIGTERM");
+    await flushMicrotasks();
+    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+
+    // The federation phase runs out its timeout (and the barrier its
+    // global deadline) without ever reaching the post-stop release.
+    await vi.advanceTimersByTimeAsync(13_000);
+    await flushMicrotasks();
+    expect(federationLeaseShutdownSyncMock).not.toHaveBeenCalled();
+
+    processEventHandlers.get("exit")?.();
+    expect(federationLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips messaging runtime startup when messaging is disabled for the app instance", async () => {

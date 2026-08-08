@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import type {
   DesktopFederationMode,
   DesktopSettingsSnapshot,
+  FederationHealthStatus,
   FederationPeerSummary,
 } from "@pwragent/shared";
+import type { RuntimeFederationLeaseSnapshot } from "../runtime-federation-lease";
 import {
+  applyFederationLeaseSnapshot,
   buildFederationHealthStatus,
   publicPeerSummary,
 } from "../federation/federation-health";
@@ -95,6 +98,98 @@ describe("federation health", () => {
     summary.capabilities.push("thread_detail");
 
     expect(peer.capabilities).toEqual(["thread_navigation"]);
+  });
+});
+
+describe("applyFederationLeaseSnapshot", () => {
+  const stoppedHealth = (): FederationHealthStatus => ({
+    enabled: true,
+    role: "client",
+    status: "disconnected",
+    peers: [],
+  });
+  const leaseHeldElsewhere = (
+    overrides: Partial<RuntimeFederationLeaseSnapshot> = {},
+  ): RuntimeFederationLeaseSnapshot => ({
+    instanceId: "instance-b",
+    leaseHeld: false,
+    disabledReasonKind: "lease_held",
+    disabledReason:
+      "Federation is already active in another PwrAgent instance for this profile.",
+    ...overrides,
+  });
+
+  it("reports the live holder as degraded with its identity", () => {
+    const health = stoppedHealth();
+
+    applyFederationLeaseSnapshot(
+      health,
+      leaseHeldElsewhere({
+        leaseHolder: {
+          instanceId: "instance-a",
+          processId: 123,
+          cwdHint: "PwrAgnt-a",
+          expiresAt: 31_000,
+        },
+      }),
+    );
+
+    expect(health).toMatchObject({
+      status: "degraded",
+      unavailableReason:
+        "Federation is already active in another PwrAgent instance for this profile.",
+      leaseHolder: {
+        instanceId: "instance-a",
+        processId: 123,
+        cwdHint: "PwrAgnt-a",
+      },
+    });
+  });
+
+  it("keeps the lease-held reason after the holder's lease record disappears", () => {
+    // The holder released or expired, so snapshot() no longer carries
+    // leaseHolder — but this instance is still deliberately stopped and
+    // health must keep saying why instead of reverting to "disconnected".
+    const health = stoppedHealth();
+
+    applyFederationLeaseSnapshot(health, leaseHeldElsewhere());
+
+    expect(health).toMatchObject({
+      status: "degraded",
+      unavailableReason:
+        "Federation is already active in another PwrAgent instance for this profile.",
+    });
+    expect(health.leaseHolder).toBeUndefined();
+  });
+
+  it("leaves health untouched while this instance holds the lease", () => {
+    const health = stoppedHealth();
+
+    applyFederationLeaseSnapshot(
+      health,
+      leaseHeldElsewhere({ leaseHeld: true, disabledReasonKind: undefined }),
+    );
+
+    expect(health).toMatchObject({
+      status: "disconnected",
+    });
+    expect(health.unavailableReason).toBeUndefined();
+  });
+
+  it("leaves disabled-mode health untouched", () => {
+    const health: FederationHealthStatus = {
+      enabled: false,
+      role: "client",
+      status: "disabled",
+      peers: [],
+    };
+
+    applyFederationLeaseSnapshot(health, leaseHeldElsewhere());
+
+    expect(health).toMatchObject({
+      status: "disabled",
+    });
+    expect(health.unavailableReason).toBeUndefined();
   });
 });
 

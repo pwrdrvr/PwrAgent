@@ -24,18 +24,6 @@ graph TD
         Shell --> ConfigTOML
     end
 
-    subgraph AgentCore["Grok child process (outside Electron main)"]
-        direction TB
-        GrokSrv[Grok App Server]
-        RolloutJSONL[rollout.jsonl<br/>per thread]
-        ThreadTOML[thread.toml<br/>per thread]
-        GrokConfig[grok-app-server/config.toml]
-
-        GrokSrv --> RolloutJSONL
-        GrokSrv --> ThreadTOML
-        GrokSrv --> GrokConfig
-    end
-
     subgraph Captures["Protocol Captures (dev-only)"]
         direction TB
         Observer[Protocol Observer]
@@ -46,17 +34,14 @@ graph TD
         Observer --> CaptureIndex
     end
 
-    Shell -.->|JSON-RPC over stdio| GrokSrv
     Shell -.->|opt-in recording| Observer
 ```
 
 **Desktop** uses sqlite for structured persistent state (messaging, overlay,
 secrets, launchpad defaults, and thread metadata). It must not store full
-thread conversation history in sqlite. The separate **Grok child process**
-hosts Agent-Core and uses append-only JSONL files for thread conversation
-history plus flat TOML for per-thread configuration. The two processes
-communicate over bidirectional JSON-RPC via stdio — they do not share a
-database or an in-process runtime.
+thread conversation history in sqlite. Codex and installed ACP agents own
+their conversation history; the desktop stores only the metadata and overlay
+state needed to present and resume those threads.
 
 See [thread-history-persistence.md](thread-history-persistence.md) for the
 history storage boundary, including ACP provider restore and JSONL fallback
@@ -74,27 +59,8 @@ rules.
             ├── state.db                   # sqlite: all persistent state (WAL mode)
             ├── state.db-wal               # sqlite write-ahead log
             ├── state.db-shm               # sqlite shared memory
-            ├── grok-app-server/
-            │   └── threads/
-            │       └── <thread-id>/
-            │           ├── rollout.jsonl  # append-only agent history
-            │           └── thread.toml    # per-thread agent configuration
             └── protocol-captures/         # dev-only: captured protocol sessions
 ```
-
-The Grok child uses the active profile's
-`state/grok-app-server/` directory by default. An explicit `state_root` in
-Grok config still wins. Existing default-profile installations that already
-have legacy `${XDG_STATE_HOME:-~/.local/state}/grok-app-server/threads/` data
-continue using that root so upgrades do not hide their threads. The later
-legacy `~/.pwragent/grok-app-server/threads/` location is probed next. An
-explicit `PWRAGENT_HOME` keeps both config and legacy-state lookup anchored
-under that root.
-
-Grok runtime config remains at `~/.config/grok-app-server/config.toml`
-(or the matching XDG config location). When `PWRAGENT_HOME` is set, its
-root-level `grok-app-server/config.toml` is used. Environment variables
-`XAI_API_KEY`, `GROK_MODEL`, and `XAI_BASE_URL` override the TOML values.
 
 ## Environment Variables
 

@@ -96,4 +96,41 @@ describe("desktop E2E pre-flight canary", () => {
     expect(message).toContain("RUNNER_NAME unset");
     expect(message).not.toContain("undefined");
   });
+
+  // A hang and a diagnosed rejection need opposite responses, and the
+  // sick-guest narrative is actively misleading for the second: it sends an
+  // operator to recycle a healthy guest while the real cause — a missing
+  // onboarding seed, say — sits under "Underlying error:" twenty lines down.
+  it("drops the sick-guest narrative when the harness rejected with a diagnosis", () => {
+    const message = describeCanaryFailure({
+      timeoutMs: 60_000,
+      runnerName: "some-runner",
+      detail: "PwrAgent first-run onboarding wizard is showing",
+      timedOut: false,
+    });
+
+    expect(message).toContain("onboarding wizard is showing");
+    expect(message).toContain("NOT the guest needing to be recycled");
+    expect(message).toContain("some-runner");
+    expect(message).not.toContain("property of the machine");
+    expect(message).not.toContain("recycle the guest.");
+    // Reporting the budget as though it elapsed misreads an instant failure.
+    expect(message).not.toContain("60000ms");
+  });
+
+  it("keeps the timeout narrative when the canary gave up waiting", () => {
+    const message = describeCanaryFailure({
+      timeoutMs: 60_000,
+      detail: "timed out after 60000ms",
+      timedOut: true,
+    });
+    expect(message).toContain("timed out after 60000ms, before any test ran");
+    expect(message).toContain("property of the machine");
+  });
+
+  // The two branches are only useful if the caller can tell them apart.
+  it("classifies the canary rejection instead of assuming a timeout", () => {
+    expect(globalSetupCode).toContain("timedOut:");
+    expect(globalSetupCode).toMatch(/timedOut:\s*detail === timeoutMessage/);
+  });
 });

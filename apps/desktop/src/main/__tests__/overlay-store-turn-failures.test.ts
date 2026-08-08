@@ -203,7 +203,7 @@ describe("SqliteOverlayStore — turn failure log", () => {
       failure: buildFailure({ id: "codex-1", turnId: "turn-c" }),
     });
     await store.appendTurnFailure({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       failure: buildFailure({ id: "grok-1", turnId: "turn-g" }),
     });
@@ -213,7 +213,7 @@ describe("SqliteOverlayStore — turn failure log", () => {
       threadId: "thread-1",
     });
     const grok = await store.getThreadOverlayState({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
     });
 

@@ -7826,8 +7826,10 @@ export class CodexAppServerClient {
    * generation path; the output record is identified by `isMatch`.
    */
   async generateStructuredObject(params: {
+    model?: string;
     prompt: string;
     schema: Record<string, unknown>;
+    system?: string;
     isMatch: StructuredRecordPredicate;
     timeoutMs?: number;
   }): Promise<ThreadTitleAdapterResult> {
@@ -7905,8 +7907,10 @@ export class CodexAppServerClient {
   }
 
   private async runHelperStructuredTurn(params: {
+    model?: string;
     prompt: string;
     schema: Record<string, unknown>;
+    system?: string;
     isMatch: StructuredRecordPredicate;
     timeoutMs?: number;
   }): Promise<ThreadTitleAdapterResult> {
@@ -7917,6 +7921,8 @@ export class CodexAppServerClient {
     let helperTurnCompleted = false;
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
+    const helperModel = params.model?.trim() || DEFAULT_CODEX_THREAD_TITLE_MODEL;
+    const helperSystem = params.system?.trim() || "";
     const protocolCompatibility = this.getProtocolCompatibility();
     try {
       const mcpServerNames = await this.readHelperMcpServerNames(
@@ -7940,8 +7946,8 @@ export class CodexAppServerClient {
               cwd: helperWorkspaceDir,
               runtimeWorkspaceRoots: [helperWorkspaceDir],
               environments: [],
-              baseInstructions: "",
-              model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+              baseInstructions: helperSystem,
+              model: helperModel,
               serviceTier: null,
               ephemeral: true,
               config: helperConfig,
@@ -7953,8 +7959,8 @@ export class CodexAppServerClient {
               cwd: helperWorkspaceDir,
               runtimeWorkspaceRoots: [helperWorkspaceDir],
               environments: [],
-              baseInstructions: "",
-              model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+              baseInstructions: helperSystem,
+              model: helperModel,
               serviceTier: null,
               ephemeral: true,
               config: legacyHelperConfig,
@@ -8013,7 +8019,7 @@ export class CodexAppServerClient {
             {
               threadId: helperThreadId,
               input: [{ type: "text", text: params.prompt, text_elements: [] }],
-              model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+              model: helperModel,
               serviceTier: null,
               reasoningEffort: "low",
               outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
@@ -8033,7 +8039,7 @@ export class CodexAppServerClient {
           object: immediateObject,
           helperThreadId,
           ...(helperTurnId ? { helperTurnId } : {}),
-          model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+          model: helperModel,
           reasoningEffort: "low",
           ...(tokenUsage !== undefined ? { tokenUsage } : {}),
         };
@@ -8057,7 +8063,7 @@ export class CodexAppServerClient {
         object: helperResult.object,
         helperThreadId,
         helperTurnId,
-        model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
+        model: helperModel,
         reasoningEffort: "low",
         ...(helperResult.tokenUsage !== undefined
           ? { tokenUsage: helperResult.tokenUsage }

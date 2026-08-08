@@ -18,7 +18,11 @@ import type {
   MessagingSurfaceAction,
   MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
-import { isAcpBackendId, shortenDerivedThreadTitle } from "@pwragent/shared";
+import {
+  isAcpBackendId,
+  isAppServerBackendKind,
+  shortenDerivedThreadTitle,
+} from "@pwragent/shared";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
@@ -1231,7 +1235,8 @@ export function handoffRequestFromValue(
     return undefined;
   }
   if (
-    (value.backend !== "codex" && value.backend !== "grok") ||
+    typeof value.backend !== "string" ||
+    !isAppServerBackendKind(value.backend) ||
     typeof value.threadId !== "string" ||
     typeof value.repositoryPath !== "string" ||
     typeof value.sourcePath !== "string"

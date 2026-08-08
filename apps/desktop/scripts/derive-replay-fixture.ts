@@ -102,13 +102,13 @@ function parseInteger(
 
 function parseBackend(
   values: string[] | undefined
-): "codex" | "grok" | undefined {
+): "codex" | undefined {
   const value = optionalString(values);
   if (!value) {
     return undefined;
   }
-  if (value !== "codex" && value !== "grok") {
-    throw new Error("--backend must be codex or grok");
+  if (value !== "codex") {
+    throw new Error("--backend must be codex");
   }
   return value;
 }

@@ -992,7 +992,7 @@ const ACP_REGISTRY_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 export function isAppServerBuiltinBackendKind(
   value: string,
 ): value is AppServerBuiltinBackendKind {
-  return value === "codex" || value === "grok";
+  return value === "codex";
 }
 
 export function buildAcpBackendId(registryId: string): AcpBackendId {

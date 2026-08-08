@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationDirectorySummary } from "@pwragent/shared";
 
-const generateGrokObject = vi.fn();
+const generateStructuredObject = vi.fn();
 const materializeDirectoryLaunchpad = vi.fn();
 const publishLocalEvent = vi.fn(async () => undefined);
 const getNavigationSnapshot = vi.fn();
 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({
-    generateGrokObject,
+    generateStructuredObject,
     materializeDirectoryLaunchpad,
     publishLocalEvent,
   }),
@@ -56,8 +56,9 @@ beforeEach(() => {
 });
 
 describe("dispatchStarMapIntake", () => {
-  it("creates a thread in the Grok-resolved directory with the request as first turn", async () => {
-    generateGrokObject.mockResolvedValue({
+  it("creates a thread in the backend-resolved directory with the request as first turn", async () => {
+    generateStructuredObject.mockResolvedValue({
+      status: "ok",
       object: {
         title: "Investigate PwrSnap issue",
         directoryKey: "dir-snap",
@@ -93,8 +94,11 @@ describe("dispatchStarMapIntake", () => {
     expect(phases).toEqual(["resolving", "creating", "done"]);
   });
 
-  it("falls back to a deterministic label match when Grok is unavailable", async () => {
-    generateGrokObject.mockRejectedValue(new Error("grok unavailable"));
+  it("falls back to a deterministic label match when structured generation is unavailable", async () => {
+    generateStructuredObject.mockResolvedValue({
+      status: "unavailable",
+      reason: "acp:grok_structured_generation_unavailable",
+    });
 
     const response = await dispatchStarMapIntake({
       requestId: "req-2",
@@ -109,7 +113,8 @@ describe("dispatchStarMapIntake", () => {
   });
 
   it("asks for disambiguation when no directory clearly matches", async () => {
-    generateGrokObject.mockResolvedValue({
+    generateStructuredObject.mockResolvedValue({
+      status: "ok",
       object: { title: "Do a thing", directoryKey: null, confidence: 0.1 },
     });
 
@@ -136,11 +141,12 @@ describe("dispatchStarMapIntake", () => {
     });
 
     expect(response.status).toBe("created");
-    expect(generateGrokObject).not.toHaveBeenCalled();
+    expect(generateStructuredObject).not.toHaveBeenCalled();
   });
 
   it("reports creation failures with a failed status event", async () => {
-    generateGrokObject.mockResolvedValue({
+    generateStructuredObject.mockResolvedValue({
+      status: "ok",
       object: { title: "T", directoryKey: "dir-snap", confidence: 0.9 },
     });
     materializeDirectoryLaunchpad.mockRejectedValue(

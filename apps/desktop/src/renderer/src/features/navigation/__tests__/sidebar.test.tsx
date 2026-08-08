@@ -105,8 +105,8 @@ const backends: BackendSummary[] = [
     ],
   },
   {
-    kind: "grok",
-    label: "Grok app server",
+    kind: "acp:grok",
+    label: "Grok",
     available: false,
     methods: [],
     capabilities: {
@@ -131,10 +131,10 @@ const backends: BackendSummary[] = [
         label: "Default Access",
         available: false,
         isDefault: true,
-        unavailableReason: "XAI_API_KEY is not set",
+        unavailableReason: "Grok CLI is not installed",
       },
     ],
-    unavailableReason: "XAI_API_KEY is not set",
+    unavailableReason: "Grok CLI is not installed",
   },
 ];
 
@@ -5208,14 +5208,14 @@ describe("Sidebar thread pinning Move items", () => {
       ...sharedThread,
       id: "grok-middle",
       title: "Grok middle pin",
-      source: "grok" as const,
+      source: "acp:grok" as const,
       pinnedRank: "2048",
     };
     const grokBottom = {
       ...sharedThread,
       id: "grok-bottom",
       title: "Grok bottom pin",
-      source: "grok" as const,
+      source: "acp:grok" as const,
       pinnedRank: "3072",
     };
 
@@ -5259,9 +5259,9 @@ describe("Sidebar thread pinning Move items", () => {
     fireEvent.click(moveDown);
     // Global, interleaved new order: grok-middle now above the codex pin.
     expect(onReorderThreadPins).toHaveBeenCalledWith([
-      "grok:grok-middle",
+      "acp:grok:grok-middle",
       "codex:codex-top",
-      "grok:grok-bottom",
+      "acp:grok:grok-bottom",
     ]);
   });
 

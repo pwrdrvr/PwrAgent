@@ -13800,7 +13800,7 @@ export class MessagingController {
     if (listed?.backends.length) {
       return [...new Set(listed.backends.map((backend) => backend.kind))];
     }
-    return ["codex", "grok"];
+    return ["codex"];
   }
 
   private async reconcileActiveTurnFromBackendStatus(

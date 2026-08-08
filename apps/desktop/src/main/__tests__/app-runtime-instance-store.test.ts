@@ -386,4 +386,256 @@ describe("AppRuntimeInstanceStore", () => {
     expect(store.getInstance("recent-exited")).toBeDefined();
     expect(store.getInstance("old-exited")).toBeUndefined();
   });
+
+  it("acquires the federation lease without touching messaging lease state", () => {
+    store.recordInstanceStart({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt",
+      startedAt: 1_000,
+      desiredMessagingEnabled: false,
+    });
+
+    const result = store.acquireFederationLease({
+      instanceId: "instance-a",
+      now: 1_000,
+      ttlMs: 30_000,
+    });
+
+    expect(result.acquired).toBe(true);
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      acquiredAt: 1_000,
+      heartbeatAt: 1_000,
+      expiresAt: 31_000,
+      status: "active",
+    });
+    // The federation lease must not flip the messaging desired/effective
+    // columns or claim the messaging lease key.
+    expect(store.getMessagingLease()).toBeUndefined();
+    const instance = store.getInstance("instance-a");
+    expect(instance).toMatchObject({
+      desiredMessagingEnabled: false,
+      effectiveMessagingEnabled: false,
+    });
+    expect(instance).not.toHaveProperty("disabledReason");
+  });
+
+  it("holds the messaging and federation leases independently", () => {
+    store.recordInstanceStart({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt-a",
+      startedAt: 1_000,
+      desiredMessagingEnabled: true,
+    });
+    store.recordInstanceStart({
+      instanceId: "instance-b",
+      profileName: "dev",
+      processId: 456,
+      cwd: "/tmp/PwrAgnt-b",
+      startedAt: 2_000,
+      desiredMessagingEnabled: true,
+    });
+    store.acquireMessagingLease({
+      instanceId: "instance-a",
+      now: 1_000,
+      ttlMs: 30_000,
+    });
+
+    // Messaging is held by instance-a, but that must not block instance-b's
+    // federation lease (and vice versa).
+    expect(
+      store.acquireFederationLease({
+        instanceId: "instance-b",
+        now: 2_000,
+        ttlMs: 30_000,
+      }).acquired,
+    ).toBe(true);
+    expect(
+      store.acquireFederationLease({
+        instanceId: "instance-a",
+        now: 2_000,
+        ttlMs: 30_000,
+      }),
+    ).toMatchObject({
+      acquired: false,
+      reason: "held",
+      holder: { ownerInstanceId: "instance-b" },
+    });
+    expect(
+      store.acquireMessagingLease({
+        instanceId: "instance-b",
+        now: 2_000,
+        ttlMs: 30_000,
+      }),
+    ).toMatchObject({
+      acquired: false,
+      reason: "held",
+      holder: { ownerInstanceId: "instance-a" },
+    });
+  });
+
+  it("denies a second instance the federation lease while the holder is live", () => {
+    store.recordInstanceStart({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt-a",
+      startedAt: 1_000,
+      desiredMessagingEnabled: false,
+    });
+    store.recordInstanceStart({
+      instanceId: "instance-b",
+      profileName: "dev",
+      processId: 456,
+      cwd: "/tmp/PwrAgnt-b",
+      startedAt: 2_000,
+      desiredMessagingEnabled: false,
+    });
+    store.acquireFederationLease({
+      instanceId: "instance-a",
+      now: 1_000,
+      ttlMs: 30_000,
+    });
+
+    const result = store.acquireFederationLease({
+      instanceId: "instance-b",
+      now: 2_000,
+      ttlMs: 30_000,
+    });
+
+    expect(result).toMatchObject({
+      acquired: false,
+      reason: "held",
+      holder: {
+        ownerInstanceId: "instance-a",
+        expiresAt: 31_000,
+      },
+    });
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      status: "active",
+    });
+  });
+
+  it("renews the federation lease without changing the original acquisition time", () => {
+    store.recordInstanceStart({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt",
+      startedAt: 1_000,
+      desiredMessagingEnabled: false,
+    });
+    store.acquireFederationLease({
+      instanceId: "instance-a",
+      now: 1_000,
+      ttlMs: 30_000,
+    });
+
+    expect(
+      store.renewFederationLease({
+        instanceId: "instance-a",
+        now: 11_000,
+        ttlMs: 30_000,
+      }),
+    ).toBe(true);
+
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      acquiredAt: 1_000,
+      heartbeatAt: 11_000,
+      expiresAt: 41_000,
+      status: "active",
+    });
+  });
+
+  it("lets another instance acquire the federation lease after the holder expires", () => {
+    store.recordInstanceStart({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt-a",
+      startedAt: 1_000,
+      desiredMessagingEnabled: false,
+    });
+    store.recordInstanceStart({
+      instanceId: "instance-b",
+      profileName: "dev",
+      processId: 456,
+      cwd: "/tmp/PwrAgnt-b",
+      startedAt: 40_000,
+      desiredMessagingEnabled: false,
+    });
+    store.acquireFederationLease({
+      instanceId: "instance-a",
+      now: 1_000,
+      ttlMs: 30_000,
+    });
+
+    const result = store.acquireFederationLease({
+      instanceId: "instance-b",
+      now: 40_000,
+      ttlMs: 30_000,
+    });
+
+    expect(result.acquired).toBe(true);
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-b",
+      acquiredAt: 40_000,
+      heartbeatAt: 40_000,
+      expiresAt: 70_000,
+      status: "active",
+    });
+  });
+
+  it("releases the federation lease only for the current holder", () => {
+    store.recordInstanceStart({
+      instanceId: "instance-a",
+      profileName: "dev",
+      processId: 123,
+      cwd: "/tmp/PwrAgnt-a",
+      startedAt: 1_000,
+      desiredMessagingEnabled: false,
+    });
+    store.recordInstanceStart({
+      instanceId: "instance-b",
+      profileName: "dev",
+      processId: 456,
+      cwd: "/tmp/PwrAgnt-b",
+      startedAt: 2_000,
+      desiredMessagingEnabled: false,
+    });
+    store.acquireFederationLease({
+      instanceId: "instance-a",
+      now: 1_000,
+      ttlMs: 30_000,
+    });
+
+    expect(
+      store.releaseFederationLease({
+        instanceId: "instance-b",
+        now: 2_000,
+      }),
+    ).toBe(false);
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      status: "active",
+    });
+
+    expect(
+      store.releaseFederationLease({
+        instanceId: "instance-a",
+        now: 3_000,
+      }),
+    ).toBe(true);
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      status: "released",
+      releasedAt: 3_000,
+    });
+  });
 });

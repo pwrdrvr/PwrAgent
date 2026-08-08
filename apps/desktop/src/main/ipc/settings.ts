@@ -128,7 +128,6 @@ async function refreshModelBackendsIfNeeded(params: {
 }): Promise<void> {
   if (
     params.patch?.models?.codex?.path !== undefined
-    || params.secret === "grokApiKey"
   ) {
     await disposeDesktopBackendRegistry();
     return;
@@ -874,7 +873,6 @@ function getCredentialTester(
         resolveService().resolveFeishuTenantUrlSync(),
       resolveLineChannelAccessToken: () =>
         resolveService().resolveLineChannelAccessTokenSync(),
-      resolveGrokApiKey: () => resolveService().resolveGrokApiKey(),
       resolveCodexCommand: async () => {
         try {
           return (await resolveService().resolveCodexCommand()).command;

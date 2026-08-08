@@ -4,6 +4,7 @@ import { useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
+  AppServerBackendKind,
   AppServerNotification,
   AppServerThreadActivityEntry,
   AppServerPendingRequestNotification,
@@ -397,8 +398,8 @@ describe("ThreadView", () => {
             ],
           },
           {
-            kind: "grok",
-            label: "Grok app server",
+            kind: "acp:grok",
+            label: "Grok",
             available: false,
             methods: [],
             capabilities: {
@@ -421,10 +422,10 @@ describe("ThreadView", () => {
                 label: "Default Access",
                 available: false,
                 isDefault: true,
-                unavailableReason: "XAI_API_KEY is not set",
+                unavailableReason: "Grok CLI is not installed",
               },
             ],
-            unavailableReason: "XAI_API_KEY is not set"
+            unavailableReason: "Grok CLI is not installed"
           }
         ]}
         composerDisabled={false}
@@ -3382,7 +3383,7 @@ describe("ThreadView", () => {
     };
     let agentEventHandler:
       | ((event: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           notification: AppServerNotification;
         }) => void)
       | undefined;
@@ -3453,7 +3454,7 @@ describe("ThreadView", () => {
 
     await act(async () => {
       agentEventHandler?.({
-        backend: "grok",
+        backend: "acp:grok",
         notification: {
           method: "mcpServer/startupStatus/updated",
           params: {

@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import type {
   AgentEvent,
+  AppServerBackendKind,
   CreateScheduledThreadActionRequest,
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
@@ -804,9 +805,7 @@ describe("App", () => {
         },
         diffCondensation: {
           enabled: { value: false, source: "default" },
-          model: { value: "auto", source: "default" },
         },
-        agentCoreGrok: { value: false, source: "default" },
       },
       imageUploads: {
         pastedImageMaxPatches: { value: 1536, source: "default" },
@@ -978,9 +977,6 @@ describe("App", () => {
             effectiveCodexHome: "/home/example/.codex",
             profiles: [],
           },
-        },
-        grok: {
-          apiKey: { configured: false, source: "unset", writable: true },
         },
       },
       acpAgents: {
@@ -1278,8 +1274,8 @@ describe("App", () => {
               ],
             },
             {
-              kind: "grok",
-              label: "Grok app server",
+              kind: "acp:grok",
+              label: "Grok",
               available: true,
               methods: ["thread/list", "thread/read"],
               capabilities: {
@@ -1426,7 +1422,7 @@ describe("App", () => {
     expect(screen.getByText("darwin")).toBeInTheDocument();
     // Provider availability now lives under its own context-rail tab.
     fireEvent.click(within(context).getByRole("tab", { name: "AI provider info" }));
-    expect(screen.getByText("Grok app server")).toBeInTheDocument();
+    expect(screen.getByText("Grok")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toBeEnabled();
     expect(
       screen.queryByText("This thread's backend is unavailable right now. You can keep drafting, but send is unavailable.")
@@ -1652,14 +1648,14 @@ describe("App", () => {
     const materializeDirectoryLaunchpad = vi.fn(
       () =>
         new Promise<{
-          backend: "grok";
+          backend: "acp:grok";
           threadId: string;
           executionMode: "default";
           workMode: "local";
         }>((resolve) => {
           resolveMaterializeLaunchpad = () => {
             resolve({
-              backend: "grok" as const,
+              backend: "acp:grok" as const,
               threadId: "thread-2",
               executionMode: "default" as const,
               workMode: "local" as const,
@@ -1672,7 +1668,7 @@ describe("App", () => {
         backend,
         threadId
       }: {
-        backend: "codex" | "grok";
+        backend: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend,
@@ -1684,7 +1680,7 @@ describe("App", () => {
       directoryKey: "workspace:new-thread",
       directoryKind: "workspace" as const,
       directoryLabel: "Workspaces",
-      backend: "grok" as const,
+      backend: "acp:grok" as const,
       executionMode: "default" as const,
       prompt: "",
       workMode: "local" as const,
@@ -1739,8 +1735,8 @@ describe("App", () => {
               ],
             },
             {
-              kind: "grok",
-              label: "Grok app server",
+              kind: "acp:grok",
+              label: "Grok",
               available: true,
               methods: ["thread/list", "thread/read", "thread/start", "turn/start"],
               capabilities: {
@@ -1779,7 +1775,7 @@ describe("App", () => {
               inboxThreadKeys: ["codex:thread-1"],
               directories: [],
               launchpadDefaults: {
-                backend: "grok",
+                backend: "acp:grok",
                 executionMode: "default",
               },
               threads: [
@@ -1809,7 +1805,7 @@ describe("App", () => {
             inboxThreadKeys: ["grok:thread-2"],
             directories: [],
             launchpadDefaults: {
-              backend: "grok",
+              backend: "acp:grok",
               executionMode: "default",
             },
             threads: [
@@ -1818,7 +1814,7 @@ describe("App", () => {
                 title: "Investigate Grok thread",
                 titleSource: "explicit",
                 summary: "Start a new thread on Grok",
-                source: "grok",
+                source: "acp:grok",
                 executionMode: "default",
                 linkedDirectories: [],
                 inbox: {
@@ -1847,7 +1843,7 @@ describe("App", () => {
           backend,
           threadId
         }: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend,
@@ -1860,15 +1856,15 @@ describe("App", () => {
           backend,
           threadId
         }: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           threadId: string;
         }) => {
           const userText =
-            backend === "grok"
+            backend === "acp:grok"
               ? "Start a Grok-backed thread from the sidebar."
               : "Open the desktop plan and build the Codex client.";
           const assistantText =
-            backend === "grok"
+            backend === "acp:grok"
               ? "The Grok thread is live and selected."
               : "The Codex client is wired and the thread browser is live.";
 
@@ -1919,7 +1915,7 @@ describe("App", () => {
         ensureDirectoryLaunchpad: async () => ({
           launchpad: launchpadState,
           defaults: {
-            backend: "grok" as const,
+            backend: "acp:grok" as const,
             executionMode: "default" as const,
           },
         }),
@@ -1940,7 +1936,7 @@ describe("App", () => {
           return {
             launchpad: launchpadState,
             defaults: {
-              backend: "grok" as const,
+              backend: "acp:grok" as const,
               executionMode: "default" as const,
             },
           };
@@ -2020,7 +2016,7 @@ describe("App", () => {
     await clickButton("Send");
 
     expect(startTurn).toHaveBeenCalledWith({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-2",
       input: [{ type: "text", text: "Can you check the plugin sdk boundary?" }],
       executionMode: "default",
@@ -2422,8 +2418,8 @@ describe("App", () => {
           fetchedAt: Date.now(),
           backends: [
             {
-              kind: "grok",
-              label: "Grok app server",
+              kind: "acp:grok",
+              label: "Grok",
               available: true,
               methods: ["thread/list", "thread/read", "turn/start"],
               capabilities: {
@@ -2462,7 +2458,7 @@ describe("App", () => {
               title: "Use X Search to find stats on huntharo's latest tweets for me",
               titleSource: "explicit",
               summary,
-              source: "grok",
+              source: "acp:grok",
               executionMode: "default",
               linkedDirectories: [],
               inbox: {
@@ -2474,14 +2470,14 @@ describe("App", () => {
           ]
         }),
         markThreadSeen: async () => ({
-          backend: "grok",
+          backend: "acp:grok",
           threadId: "thread-1",
           seenAt: Date.now()
         }),
         onAgentEvent: () => () => undefined,
         onWindowFocus: () => () => undefined,
         readThread: async () => ({
-          backend: "grok",
+          backend: "acp:grok",
           fetchedAt: Date.now(),
           threadId: "thread-1",
           replay: {
@@ -2519,7 +2515,7 @@ describe("App", () => {
         }),
         platform: "darwin",
         startTurn: async () => ({
-          backend: "grok",
+          backend: "acp:grok",
           threadId: "thread-1",
           turnId: "turn-1"
         }),
@@ -2553,7 +2549,7 @@ describe("App", () => {
   it("falls back from loading chrome when a selected thread disappears after refresh", async () => {
     const agentEventListeners = new Set<
       (event: {
-        backend: "codex" | "grok";
+        backend: AppServerBackendKind;
         notification: {
           method: string;
           params: Record<string, unknown>;
@@ -2638,7 +2634,7 @@ describe("App", () => {
         }),
         onAgentEvent: (
           listener: (event: {
-            backend: "codex" | "grok";
+            backend: AppServerBackendKind;
             notification: {
               method: string;
               params: Record<string, unknown>;
@@ -2736,7 +2732,7 @@ describe("App", () => {
     }));
     const agentEventListeners = new Set<
       (event: {
-        backend: "codex" | "grok";
+        backend: AppServerBackendKind;
         notification: {
           method: string;
           params: Record<string, unknown>;
@@ -2774,7 +2770,7 @@ describe("App", () => {
         backend,
         threadId
       }: {
-        backend: "codex" | "grok";
+        backend: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend,
@@ -2830,7 +2826,7 @@ describe("App", () => {
           backend,
           threadId
         }: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend,
@@ -2839,7 +2835,7 @@ describe("App", () => {
         }),
         onAgentEvent: (
           listener: (event: {
-            backend: "codex" | "grok";
+            backend: AppServerBackendKind;
             notification: {
               method: string;
               params: Record<string, unknown>;
@@ -2856,7 +2852,7 @@ describe("App", () => {
           backend,
           threadId
         }: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend,
@@ -3029,7 +3025,7 @@ describe("App", () => {
     }));
     const agentEventListeners = new Set<
       (event: {
-        backend: "codex" | "grok";
+        backend: AppServerBackendKind;
         notification: {
           method: string;
           params: Record<string, unknown>;
@@ -3067,7 +3063,7 @@ describe("App", () => {
         backend,
         threadId
       }: {
-        backend: "codex" | "grok";
+        backend: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend,
@@ -3123,7 +3119,7 @@ describe("App", () => {
           backend,
           threadId
         }: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend,
@@ -3132,7 +3128,7 @@ describe("App", () => {
         }),
         onAgentEvent: (
           listener: (event: {
-            backend: "codex" | "grok";
+            backend: AppServerBackendKind;
             notification: {
               method: string;
               params: Record<string, unknown>;
@@ -3149,7 +3145,7 @@ describe("App", () => {
           backend,
           threadId
         }: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend,
@@ -3321,7 +3317,7 @@ describe("App", () => {
         backend,
         threadId,
       }: {
-        backend: "codex" | "grok";
+        backend: AppServerBackendKind;
         threadId: string;
       }) => ({
         backend,
@@ -3435,7 +3431,7 @@ describe("App", () => {
           backend,
           threadId,
         }: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend,
@@ -3604,7 +3600,7 @@ describe("App", () => {
           backend,
           threadId,
         }: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend,
@@ -3618,7 +3614,7 @@ describe("App", () => {
           backend,
           threadId,
         }: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend,
@@ -4103,7 +4099,7 @@ describe("App", () => {
           backend,
           threadId,
         }: {
-          backend: "codex" | "grok";
+          backend: AppServerBackendKind;
           threadId: string;
         }) => ({
           backend,

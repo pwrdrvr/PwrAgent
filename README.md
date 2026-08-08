@@ -57,22 +57,21 @@ pnpm dev:no-messaging   # full UI, no live messaging adapters
 pnpm dev                # full UI + live messaging
 ```
 
-Grok app-server credentials live in `~/.config/grok-app-server/config.toml` or the equivalent env vars. Full dev workflow, test strategy, replay fixtures, and diagnostics in **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+Codex and ACP CLI setup, the full development workflow, test strategy, replay fixtures, and diagnostics are documented in **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 ## How it's built
 
 | Layer | Stack | Where it lives |
 |---|---|---|
 | Desktop shell | Electron + TypeScript + React + TipTap composer | `apps/desktop/` |
-| Grok process host | Bidirectional JSON-RPC stdio executable, packaged with desktop | `apps/grok-app-server/` |
 | Codex protocol | Codex App Server protocol contracts | `@pwrdrvr/codex-app-server-protocol` |
-| Agent core | Provider-agnostic coding-agent runtime (currently Grok / xAI) | `packages/agent-core/` |
+| ACP integration | Installed coding-agent CLIs, including Grok Build | `apps/desktop/src/main/acp/` |
 | Messaging interface | Capability-profile contract; one shape, six providers | `packages/messaging/interface/` |
 | Messaging providers | Telegram, Discord, Slack, Mattermost, Feishu / Lark, LINE | `packages/messaging/providers/*/` |
 | Shared types | Cross-package contracts and helpers | `packages/shared/` |
-| Local persistence | sqlite WAL via `better-sqlite3`, forward-compatible config TOML | `apps/desktop/src/main/state/`, `packages/agent-core/src/persistence/` |
+| Local persistence | sqlite WAL via `better-sqlite3`, forward-compatible config TOML | `apps/desktop/src/main/state/` |
 
-The dependency graph is **strictly layered and enforced** by `dependency-cruiser`: leaf (`shared`) → mid-tier (`messaging/*`, `agent-core`) → process hosts. The renderer can only import `@pwragent/shared`, and the entire desktop app is forbidden from importing `@pwragent/agent-core`; Grok reaches it only through the separate app-server process. CI fails any boundary violation — see [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs).
+The dependency graph is **strictly layered and enforced** by `dependency-cruiser`: leaf (`shared`) → mid-tier (`messaging/*`) → desktop. The renderer can only import `@pwragent/shared`; other package access crosses the IPC bridge. CI fails any boundary violation — see [`.dependency-cruiser.cjs`](.dependency-cruiser.cjs).
 
 Architecture deep-dive: **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 

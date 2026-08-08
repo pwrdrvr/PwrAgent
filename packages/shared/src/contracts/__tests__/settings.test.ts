@@ -109,11 +109,6 @@ describe("desktop settings contracts", () => {
         },
         diffCondensation: {
           enabled: { value: false, source: "default" },
-          model: { value: "auto", source: "default" },
-        },
-        agentCoreGrok: {
-          value: false,
-          source: "default",
         },
       },
       imageUploads: {
@@ -349,13 +344,6 @@ describe("desktop settings contracts", () => {
             profileRoot: "/home/example/.codex/profiles",
             effectiveCodexHome: "/home/example/.codex",
             profiles: [],
-          },
-        },
-        grok: {
-          apiKey: {
-            configured: false,
-            source: "unset",
-            writable: true,
           },
         },
       },

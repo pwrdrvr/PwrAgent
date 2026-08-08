@@ -1,6 +1,6 @@
 import type { BackendModelOption } from "@pwragent/shared";
 
-export type BackendModelCatalogBackend = "codex" | "grok";
+export type BackendModelCatalogBackend = "codex";
 
 export type BackendModelCatalogCallerReason =
   | "backend-summary"
@@ -27,7 +27,6 @@ export class BackendModelCatalog {
   private readonly ownerId = `backend-model-catalog-${++catalogSequence}`;
   private readonly states: Record<BackendModelCatalogBackend, ModelState> = {
     codex: {},
-    grok: {},
   };
 
   constructor(
@@ -77,6 +76,5 @@ export class BackendModelCatalog {
     }
 
     this.states.codex = {};
-    this.states.grok = {};
   }
 }

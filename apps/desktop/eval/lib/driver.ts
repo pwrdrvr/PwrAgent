@@ -17,7 +17,7 @@ import {
   type AppServerTurnInputItem,
 } from "@pwragent/shared";
 
-/** A backend kind as the app reports it: "codex" | "grok" | `acp:${id}`. */
+/** A backend kind as the app reports it: "codex" or `acp:${id}`. */
 export type BackendKind = string;
 export type ExecutionMode = "default" | "full-access";
 export type ModelOptions = {

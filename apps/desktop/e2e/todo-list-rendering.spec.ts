@@ -53,36 +53,6 @@ test("renders a persisted Codex task plan when the thread is selected", async ()
   }
 });
 
-test("renders the Grok task plan contract with mixed step states", async () => {
-  const app = await openThreadByTitle(
-    path.resolve(
-      todoListSpecDir,
-      "fixtures/grok-todo-list/replay.fixture.json"
-    ),
-    "Grok to-do list replay",
-    { PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK: "1" }
-  );
-
-  try {
-    const transcript = app.window.getByRole("region", { name: "Transcript" });
-    const plan = transcript.getByRole("group", { name: "Task plan" });
-
-    await expect(plan).toBeVisible();
-    await expect(plan).toContainText("1 out of 3 tasks completed");
-    await expect(plan).toContainText(
-      "Checking the shared contract and renderer before summarizing the dependency."
-    );
-    await expect(plan).toContainText("Inspect contract type");
-    await expect(plan).toContainText("Inspect renderer usage");
-    await expect(plan).toContainText("Summarize dependency");
-    await expect(plan.getByText("Completed", { exact: true })).toBeVisible();
-    await expect(plan.getByText("In progress", { exact: true })).toBeVisible();
-    await expect(plan.getByText("Pending", { exact: true })).toBeVisible();
-  } finally {
-    await app.close();
-  }
-});
-
 test("renders live plan updates from turn/plan/updated notifications", async () => {
   const app = await openThreadByTitle(
     path.resolve(

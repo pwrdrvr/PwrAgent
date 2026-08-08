@@ -101,6 +101,8 @@ import {
   type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
   type DesktopApplicationsSnapshot,
+  type DesktopFederationMode,
+  type DesktopSettingsSnapshot,
   type HandoffThreadWorkspaceRequest,
   type GetWorktreeUnpublishedCommitDiffRequest,
   type GetWorktreeUnpublishedCommitDiffResponse,
@@ -173,6 +175,10 @@ import { getPwrSnapConnectionService } from "../mcp-connections/pwrsnap-connecti
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
 import {
+  getExistingRuntimeFederationLeaseCoordinator,
+  getRuntimeFederationLeaseCoordinator,
+} from "../runtime-federation-lease";
+import {
   listRecentFileReferencePaths,
   recordRecentFileReferencePaths,
 } from "../state/recent-file-references-store";
@@ -199,6 +205,7 @@ import {
   type FederationStartTurnRequest,
 } from "./federation-backend-bridge";
 import {
+  applyFederationLeaseSnapshot,
   buildFederationHealthStatus,
   publicPeerSummary,
 } from "./federation-health";
@@ -871,6 +878,14 @@ export class DesktopFederationRuntime {
     health.localProfileName = isAppStateInitialized()
       ? getAppStateDb().getMeta("profile_name") || undefined
       : undefined;
+    // A live holder elsewhere keeps this instance's federation runtime
+    // stopped; surface that (with the holder's identity while it is still
+    // live) the same way the messaging lease does, instead of a bare
+    // "disconnected".
+    const federationLeaseSnapshot = isAppStateInitialized()
+      ? getExistingRuntimeFederationLeaseCoordinator()?.snapshot()
+      : undefined;
+    applyFederationLeaseSnapshot(health, federationLeaseSnapshot);
     return health;
   }
 
@@ -1679,10 +1694,49 @@ export class DesktopFederationRuntime {
       this.localHostInfo = undefined;
     }
     const mode = settings.federation.mode.value;
+    // The profile-scoped lease decides which app instance may run federation
+    // for this profile: instances sharing a profile present the same
+    // federation instance identity, so without the lease two of them evict
+    // each other from the gateway in a connect/replace loop.
+    if (isAppStateInitialized()) {
+      const leaseCoordinator = getRuntimeFederationLeaseCoordinator();
+      const leaseGate = await leaseCoordinator.applyMode(this, mode);
+      if (!leaseGate.enabled) {
+        if (leaseGate.disabledReasonKind === "lease_held") {
+          this.lastConnectionError = leaseGate.disabledReason;
+        }
+        return;
+      }
+      try {
+        await this.startAfterLeaseAcquired(mode, settings);
+      } catch (error) {
+        // A startup failure after acquisition (e.g. unreadable federation
+        // key material) must not keep renewing the profile lease with no
+        // runtime behind it: release so another instance can take over,
+        // mirroring the messaging lease's startup-failure cleanup.
+        await leaseCoordinator.releaseAfterStartupFailure(this);
+        throw error;
+      }
+      return;
+    }
     if (mode === "disabled") {
       return;
     }
+    await this.startAfterLeaseAcquired(mode, settings);
+  }
+
+  private async startAfterLeaseAcquired(
+    mode: DesktopFederationMode,
+    settings: DesktopSettingsSnapshot,
+  ): Promise<void> {
     this.stopping = false;
+    // Startup fence: losing the profile lease mid-startup makes the
+    // heartbeat stop this runtime, which flips `stopping` and bumps
+    // `walkEpoch`. A stale startup continuation must not create or publish
+    // sockets afterwards (the same guard connectToGateway uses per attempt).
+    const startupEpoch = this.walkEpoch;
+    const startupAborted = (): boolean =>
+      this.stopping || this.walkEpoch !== startupEpoch;
 
     const localInstanceId = this.ensureLocalInstanceId();
     const router = new FederationRouter({
@@ -1757,6 +1811,7 @@ export class DesktopFederationRuntime {
 
     const noise =
       await getDesktopSettingsService().getOrCreateFederationNoiseStaticKeyPair();
+    if (startupAborted()) return;
     const noiseStatic = noiseKeyPairFromRawPrivate(
       Buffer.from(noise.privateKeyBase64, "base64"),
     );
@@ -1764,7 +1819,8 @@ export class DesktopFederationRuntime {
     if (mode === "gateway" || mode === "dual") {
       const gatewayIdentity = await getDesktopSettingsService()
         .getOrCreateFederationIdentityKeyPair();
-      this.server = new FederationGatewayWebSocketServer({
+      if (startupAborted()) return;
+      const server = new FederationGatewayWebSocketServer({
         gatewayInstanceId: localInstanceId,
         gatewayPrivateKeyPem: gatewayIdentity.privateKeyPem,
         gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,
@@ -1782,16 +1838,25 @@ export class DesktopFederationRuntime {
         onEnvelope: (envelope, connection) =>
           void this.receiveEnvelope(envelope, connection.peerId),
       });
+      this.server = server;
       try {
-        const started = await this.server.start();
+        const started = await server.start();
+        if (startupAborted()) {
+          // The lease was lost while the listener was binding; tear down
+          // the socket we just created instead of publishing it. stop()
+          // may already have cleared this.server, so go through the local.
+          if (this.server === server) this.server = undefined;
+          await server.stop().catch(() => undefined);
+          return;
+        }
         this.listenUrl = started.url;
         log.info("federation gateway listening", { url: started.url });
       } catch (error) {
         this.gatewayListenerError = redactFederationDiagnostic(
           error instanceof Error ? error.message : String(error),
         );
-        await this.server.stop().catch(() => undefined);
-        this.server = undefined;
+        await server.stop().catch(() => undefined);
+        if (this.server === server) this.server = undefined;
         log.error("federation gateway failed to listen", {
           error: this.gatewayListenerError,
         });

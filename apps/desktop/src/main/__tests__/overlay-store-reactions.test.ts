@@ -172,7 +172,7 @@ describe("SqliteOverlayStore — thread reactions", () => {
       present: true,
     });
     await store.setThreadReaction({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
       emoji: "❌",
       present: true,
@@ -183,7 +183,7 @@ describe("SqliteOverlayStore — thread reactions", () => {
       threadId: "thread-1",
     });
     const grok = await store.getThreadOverlayState({
-      backend: "grok",
+      backend: "acp:grok",
       threadId: "thread-1",
     });
 

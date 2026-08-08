@@ -20,8 +20,6 @@ const log = getMainLogger("pwragent:credential-tester");
 
 /**
  * Default per-probe timeout. The Codex subprocess is bounded here.
- * The Grok HTTP probe wraps fetch in an AbortController capped at
- * this value.
  *
  * Telegram / Discord probes are dispatched through the messaging
  * runtime, which delegates to the provider's real library (grammy /
@@ -52,7 +50,6 @@ export interface CredentialTesterDependencies {
   /** Returns the configured Mattermost server URL (settings/env merged).
    *  Used together with the bot token to target the `users/me` probe. */
   resolveMattermostServerUrl: () => string | undefined;
-  resolveGrokApiKey: () => Promise<string | undefined>;
   resolveCodexCommand: () => Promise<string | undefined>;
   /**
    * Routes Telegram / Discord credential validation through the
@@ -67,23 +64,13 @@ export interface CredentialTesterDependencies {
   validateMessagingCredentials: (
     request: CredentialValidationRequest,
   ) => Promise<MessagingCredentialValidationResult>;
-  /** Override `fetch` for testing. Defaults to `globalThis.fetch`.
-   *  Only used by the Grok probe — the agent SDK has no smoke-check API,
-   *  so the tester falls back to a direct `GET /v1/models`. */
-  fetch?: typeof fetch;
   /** Override the codex `--version` runner. Defaults to spawning the binary. */
   runCodexVersion?: (
     command: string,
   ) => Promise<{ stdout: string; stderr: string }>;
-  /** Override the probe timeout (ms). Applied to the Grok HTTP fetch
-   *  and the Codex subprocess; messaging probes use their library's
-   *  own timeout. */
+  /** Override the probe timeout (ms). Applied to the Codex subprocess;
+   *  messaging probes use their library's own timeout. */
   timeoutMs?: number;
-}
-
-interface GrokModelsResponse {
-  data?: Array<{ id?: string }>;
-  error?: { message?: string };
 }
 
 /**
@@ -106,10 +93,6 @@ interface GrokModelsResponse {
  *   are loaded on first invocation and cached by Node's module
  *   registry, so subsequent tests reuse the same module without
  *   re-loading.
- * - **Grok**: direct `GET https://api.x.ai/v1/models` via fetch. The
- *   agent SDK hosted by the Grok child process doesn't expose a
- *   smoke-check API (no `models.list()`), so raw fetch is the right
- *   choice here.
  * - **Codex**: spawn `<resolved-path> --version`. There's no library
  *   to use; Codex is a binary.
  */
@@ -117,10 +100,9 @@ export class CredentialTester {
   private readonly deps: Required<
     Omit<
       CredentialTesterDependencies,
-      "fetch" | "runCodexVersion" | "timeoutMs"
+      "runCodexVersion" | "timeoutMs"
     >
   > & {
-    fetch: typeof fetch;
     runCodexVersion: NonNullable<
       CredentialTesterDependencies["runCodexVersion"]
     >;
@@ -142,12 +124,8 @@ export class CredentialTester {
       resolveFeishuTenantUrl: dependencies.resolveFeishuTenantUrl,
       resolveLineChannelAccessToken: dependencies.resolveLineChannelAccessToken,
       resolveMattermostServerUrl: dependencies.resolveMattermostServerUrl,
-      resolveGrokApiKey: dependencies.resolveGrokApiKey,
       resolveCodexCommand: dependencies.resolveCodexCommand,
       validateMessagingCredentials: dependencies.validateMessagingCredentials,
-      fetch:
-        dependencies.fetch
-        ?? ((input, init) => globalThis.fetch(input, init)),
       runCodexVersion:
         dependencies.runCodexVersion ?? defaultRunCodexVersion,
       timeoutMs: dependencies.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
@@ -208,8 +186,6 @@ export class CredentialTester {
         return await this.testTelegram(startedAt);
       case "discord":
         return await this.testDiscord(startedAt);
-      case "grok":
-        return await this.testGrok(startedAt);
       case "codex":
         return await this.testCodex(startedAt);
       case "mattermost":
@@ -314,51 +290,6 @@ export class CredentialTester {
     return liftMessagingResult("line", result);
   }
 
-  private async testGrok(
-    startedAt: number,
-  ): Promise<SettingsCredentialTestResult> {
-    const apiKey = await this.deps.resolveGrokApiKey();
-    if (!apiKey) {
-      return unset("grok", startedAt);
-    }
-    // The agent SDK hosted by the Grok child process does not expose a
-    // non-disruptive smoke-check API — it is a model factory, not a
-    // control-plane client. There is no `models.list()` equivalent, so
-    // a direct `GET /v1/models` is the right call here.
-    const { json, status, durationMs } = await this.fetchJson<GrokModelsResponse>({
-      url: "https://api.x.ai/v1/models",
-      method: "GET",
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    const testedAt = Date.now();
-    if (status === 200 && Array.isArray(json?.data)) {
-      const ids = json.data
-        .map((entry) => entry.id)
-        .filter((id): id is string => Boolean(id));
-      const detail =
-        ids.length === 0
-          ? "no models reported"
-          : ids.slice(0, 3).join(", ") + (ids.length > 3 ? `, +${ids.length - 3} more` : "");
-      return {
-        kind: "grok",
-        status: "ok",
-        testedAt,
-        durationMs,
-        account: "api.x.ai",
-        detail,
-      };
-    }
-    return {
-      kind: "grok",
-      status: "failed",
-      testedAt,
-      durationMs,
-      errorMessage: clipString(
-        json?.error?.message ?? `HTTP ${status} from api.x.ai/v1/models`,
-      ),
-    };
-  }
-
   private async testCodex(
     startedAt: number,
   ): Promise<SettingsCredentialTestResult> {
@@ -414,42 +345,6 @@ export class CredentialTester {
     }
   }
 
-  /**
-   * Helper for the Grok probe. Times out via AbortController so the
-   * renderer never hangs longer than `timeoutMs`. Parses JSON
-   * best-effort; non-JSON responses fall through to a string with
-   * status code only.
-   */
-  private async fetchJson<T>(input: {
-    url: string;
-    method: "GET";
-    headers?: Record<string, string>;
-  }): Promise<{ json: T | undefined; status: number; durationMs: number }> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.deps.timeoutMs);
-    const startedAt = Date.now();
-    try {
-      const response = await this.deps.fetch(input.url, {
-        method: input.method,
-        headers: input.headers,
-        signal: controller.signal,
-      });
-      const text = await response.text();
-      let json: T | undefined;
-      try {
-        json = text ? (JSON.parse(text) as T) : undefined;
-      } catch {
-        json = undefined;
-      }
-      return {
-        json,
-        status: response.status,
-        durationMs: Date.now() - startedAt,
-      };
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
 }
 
 /**

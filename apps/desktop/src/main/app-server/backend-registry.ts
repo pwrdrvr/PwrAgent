@@ -304,11 +304,6 @@ import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-s
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import {
-  GrokAppServerClient,
-  type GrokGenerateObjectRequest,
-  type GrokGenerateObjectResult,
-} from "../grok-app-server/client";
-import {
   buildAutomationInspectionDynamicToolErrorResponse,
   handleAutomationInspectionDynamicToolCall,
   isAutomationInspectionDynamicToolCall,
@@ -420,7 +415,6 @@ import {
 } from "./tool-invocation-accounting";
 import {
   ThreadTitleGenerationService,
-  GrokThreadTitleGenerator,
   type ThreadTitleGenerator,
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
@@ -430,7 +424,6 @@ import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
-import { resolveAgentCoreGrokEnabled } from "../settings/desktop-config";
 import {
   BackendModelCatalog,
   type BackendModelCatalogCallerReason,
@@ -606,14 +599,13 @@ type BackendClient = {
   }): Promise<{ threadId: string }>;
   generateTitle?: ThreadTitleGenerator["generateTitle"];
   generateStructuredObject?(params: {
+    model?: string;
     prompt: string;
     schema: Record<string, unknown>;
+    system?: string;
     isMatch: (record: Record<string, unknown>) => boolean;
     timeoutMs?: number;
   }): ReturnType<ThreadTitleGenerator["generateTitle"]>;
-  generateObject?(
-    params: GrokGenerateObjectRequest,
-  ): Promise<GrokGenerateObjectResult>;
   listSkills(params?: {
     cwd?: string;
     cwds?: string[];
@@ -1799,7 +1791,6 @@ function normalizeWorktreePathForComparison(worktreePath: string): string {
 
 const BACKEND_LABELS: Record<AppServerBackendKind, string> = {
   codex: "OpenAI",
-  grok: "AgentCore - Grok",
 };
 
 const OPENAI_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"];
@@ -1808,7 +1799,6 @@ const OPENAI_GPT56_ULTRA_REASONING_EFFORTS = [
   ...OPENAI_GPT56_REASONING_EFFORTS,
   "ultra",
 ];
-const GROK_REASONING_EFFORTS = ["low", "medium", "high"];
 const DEFAULT_REASONING_EFFORT = "medium";
 
 const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
@@ -1873,50 +1863,6 @@ const OPENAI_FALLBACK_MODELS: BackendModelOption[] = [
     reasoningEfforts: OPENAI_REASONING_EFFORTS,
     supportsReasoning: true,
     supportsSteering: true,
-  },
-];
-
-const GROK_FALLBACK_MODELS: BackendModelOption[] = [
-  {
-    id: "grok-4.20-reasoning",
-    label: "Grok 4.20 Reasoning",
-    current: true,
-    supportsReasoning: false,
-    supportsSteering: false,
-  },
-  {
-    id: "grok-4.20-non-reasoning",
-    label: "Grok 4.20 Non-Reasoning",
-    supportsReasoning: false,
-    supportsSteering: false,
-  },
-  {
-    id: "grok-4-1-fast-reasoning",
-    label: "Grok 4.1 Fast Reasoning",
-    supportsReasoning: false,
-    supportsFast: true,
-    supportsSteering: false,
-  },
-  {
-    id: "grok-4-1-fast-non-reasoning",
-    label: "Grok 4.1 Fast Non-Reasoning",
-    supportsReasoning: false,
-    supportsFast: true,
-    supportsSteering: false,
-  },
-  {
-    id: "grok-4-fast-reasoning",
-    label: "Grok 4 Fast Reasoning",
-    supportsReasoning: false,
-    supportsFast: true,
-    supportsSteering: false,
-  },
-  {
-    id: "grok-4-fast-non-reasoning",
-    label: "Grok 4 Fast Non-Reasoning",
-    supportsReasoning: false,
-    supportsFast: true,
-    supportsSteering: false,
   },
 ];
 
@@ -2436,7 +2382,7 @@ function parseActiveTurnKey(
   const backendSeparator = key.indexOf(":");
   if (backendSeparator <= 0) return undefined;
   const backend = key.slice(0, backendSeparator);
-  if (backend !== "codex" && backend !== "grok") return undefined;
+  if (backend !== "codex") return undefined;
   const parsed = parseThreadTurnKeyBody(
     key.slice(backendSeparator + 1),
   );
@@ -4359,10 +4305,6 @@ function inferSupportsReasoning(
   }
 
   const id = model.id.toLowerCase();
-  if (backend === "grok") {
-    return id.includes("reasoning");
-  }
-
   return id.startsWith("gpt-5") || id.startsWith("o");
 }
 
@@ -4390,7 +4332,7 @@ function inferSupportsSteering(
 }
 
 function getBackendFallbackModels(backend: AppServerBackendKind): BackendModelOption[] {
-  return backend === "codex" ? OPENAI_FALLBACK_MODELS : GROK_FALLBACK_MODELS;
+  return backend === "codex" ? OPENAI_FALLBACK_MODELS : [];
 }
 
 function getPreferredModelId(
@@ -4398,7 +4340,7 @@ function getPreferredModelId(
   models?: BackendModelOption[],
 ): string {
   if (backend !== "codex") {
-    return "grok-4.20-reasoning";
+    return models?.find((model) => model.current)?.id ?? models?.[0]?.id ?? "";
   }
 
   if (models?.some((model) => model.id === "gpt-5.6-terra")) {
@@ -4433,7 +4375,7 @@ function sortReasoningEfforts(
           ...OPENAI_GPT56_REASONING_EFFORTS,
           "ultra",
         ]
-      : GROK_REASONING_EFFORTS
+      : efforts
     ).map((effort, index) => [effort, index]),
   );
   return [...efforts].sort((left, right) => {
@@ -4534,7 +4476,7 @@ function buildLaunchpadOptions(
       ? sortReasoningEfforts(
           backend,
           modelReasoningEfforts ??
-            (backend === "codex" ? OPENAI_REASONING_EFFORTS : GROK_REASONING_EFFORTS),
+            (backend === "codex" ? OPENAI_REASONING_EFFORTS : []),
         )
       : undefined,
     supportsFastMode,
@@ -5743,15 +5685,33 @@ function isNonEmptyStructuredValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-function resolveGrokApiKeyForLiveClient(): string | undefined {
-  try {
-    return getDesktopSettingsService().resolveGrokApiKeySync();
-  } catch (error) {
-    backendRegistryLog.warn("grok_api_key_unavailable", {
-      reason: error instanceof Error ? error.message : String(error),
-    });
-    return undefined;
+function schemaPropertyAllowsNull(
+  schema: Record<string, unknown>,
+  key: string,
+): boolean {
+  const properties = schema.properties;
+  if (!properties || typeof properties !== "object") {
+    return false;
   }
+  const property = (properties as Record<string, unknown>)[key];
+  if (!property || typeof property !== "object") {
+    return false;
+  }
+  const type = (property as Record<string, unknown>).type;
+  return type === "null" || (Array.isArray(type) && type.includes("null"));
+}
+
+function structuredRequiredFieldMatches(
+  schema: Record<string, unknown>,
+  record: Record<string, unknown>,
+  key: string,
+): boolean {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) {
+    return false;
+  }
+  return record[key] === null
+    ? schemaPropertyAllowsNull(schema, key)
+    : isNonEmptyStructuredValue(record[key]);
 }
 
 function buildCodexParentDynamicToolSpecs(
@@ -6278,7 +6238,6 @@ function buildCodexInvalidIdRecoveryCooldownMessage(
 
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
-  private readonly grokClient: BackendClient;
   private readonly overlayStore: BackendRegistryOverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkingStateService: GitWorkingStateService;
@@ -6637,7 +6596,6 @@ export class DesktopBackendRegistry {
 
   constructor(options?: {
     codexClient?: BackendClient;
-    grokClient?: BackendClient;
     overlayStore?: BackendRegistryOverlayStoreLike;
     gitDirectoryService?: GitDirectoryService;
     gitWorkingStateService?: GitWorkingStateService;
@@ -6683,7 +6641,6 @@ export class DesktopBackendRegistry {
     >;
     resolveCodexFastAllowed?: () => boolean;
     resolvePdfAnalysisEnabled?: () => boolean;
-    resolveGrokApiKey?: () => string | undefined;
     acpWorktreeRepositoryResolver?: (
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
@@ -6708,22 +6665,6 @@ export class DesktopBackendRegistry {
       codexCapture?.observer,
       createProtocolLogObserverFromEnv({
         backend: "codex",
-      }),
-    ]);
-    const grokCapture = options?.grokClient
-      || replayClients
-      ? undefined
-      : createProtocolCaptureFromEnv({
-          backend: "grok",
-          backendInstance: "default",
-        });
-    if (grokCapture) {
-      this.captureStores.push(grokCapture.store);
-    }
-    const grokObserver = createCompositeJsonRpcObserver([
-      grokCapture?.observer,
-      createProtocolLogObserverFromEnv({
-        backend: "grok",
       }),
     ]);
     const createsLiveCodexClient =
@@ -6818,15 +6759,6 @@ export class DesktopBackendRegistry {
       createDefaultCodexEnvironmentHydrationStore();
     const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
     this.localFilePrivateStorageRoots = codexHome ? [codexHome] : [];
-    const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
-    const isLiveGrokAvailable = (): boolean => resolveAgentCoreGrokEnabled();
-    const resolveLiveGrokApiKey = (): string | undefined => {
-      if (!isLiveGrokAvailable()) {
-        return undefined;
-      }
-      return (options?.resolveGrokApiKey ?? resolveGrokApiKeyForLiveClient)();
-    };
-
     const clientVersion =
       typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
     this.codexClient =
@@ -6857,14 +6789,6 @@ export class DesktopBackendRegistry {
         // `describeCodexBackend` catches via `Promise.allSettled` and
         // surfaces as `available: false` with a clean reason.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
-      });
-    this.grokClient =
-      options?.grokClient ??
-      replayClients?.grokClient ??
-      new GrokAppServerClient({
-        resolveApiKey: resolveLiveGrokApiKey,
-        connectionObserver: grokObserver,
-        isAvailable: isLiveGrokAvailable,
       });
     this.acpWorktreeRepositoryResolver =
       options?.acpWorktreeRepositoryResolver ??
@@ -6978,14 +6902,6 @@ export class DesktopBackendRegistry {
                           this.codexClient.generateTitle!(params),
                       }
                     : undefined,
-                  grok: createsLiveGrokClient
-                    ? new GrokThreadTitleGenerator({
-                        client: {
-                          generateObject: async (request) =>
-                            await this.generateGrokObject(request),
-                        },
-                      })
-                    : undefined,
                 },
                 generatorResolver: (backend) => {
                   if (!isAcpBackendId(backend)) {
@@ -7025,12 +6941,11 @@ export class DesktopBackendRegistry {
     this.threadInspectionSearchService =
       options && "threadSearchService" in options
         ? options.threadSearchService ?? null
-        : options?.codexClient || options?.grokClient || replayClients
+        : options?.codexClient || replayClients
           ? null
           : undefined;
     this.modelCatalog = new BackendModelCatalog({
       codex: this.codexClient,
-      grok: this.grokClient,
     });
     this.threadTurnQueue = new ThreadTurnQueue({
       startTurn: async (entry) => await this.startTurnNow(entry),
@@ -7075,7 +6990,6 @@ export class DesktopBackendRegistry {
       options?.isBootstrapMode ?? (() => getAppStateMode() === "bootstrap");
 
     this.subscribeClient("codex", this.codexClient);
-    this.subscribeClient("grok", this.grokClient);
 
     // Kick off a one-shot scan of persisted codexEnvironmentRuntime
     // entries: zombie "started" runs from a prior session become
@@ -7618,25 +7532,12 @@ export class DesktopBackendRegistry {
     if (request.refreshModels === true) {
       this.modelCatalog.invalidate();
       this.invalidateAcpBackendDiscovery();
-    } else if (request.refreshModels === "codex" || request.refreshModels === "grok") {
-      this.modelCatalog.invalidate(request.refreshModels);
+    } else if (request.refreshModels === "codex") {
+      this.modelCatalog.invalidate("codex");
     } else if (request.refreshModels && isAcpBackendId(request.refreshModels)) {
       this.invalidateAcpBackendDiscovery();
     }
-    const agentCoreGrokEnabled = resolveAgentCoreGrokEnabled();
-    // When the experimental agent-core Grok feature is off, omit the backend
-    // entirely rather than emitting a disabled placeholder — a turned-off
-    // experimental feature isn't an app server, so it shouldn't clutter the
-    // provider list (or any backend picker). Settings → Experimental is where
-    // it gets enabled.
-    const summaries = (
-      await Promise.all([
-        this.describeCodexBackend(),
-        agentCoreGrokEnabled
-          ? this.describeSingleBackend("grok", this.grokClient)
-          : Promise.resolve(undefined),
-      ])
-    ).filter((summary): summary is BackendSummary => summary !== undefined);
+    const summaries = [await this.describeCodexBackend()];
     const acpSummaries = await this.acpBackend.describeInstalledBackends();
 
     return {
@@ -7699,28 +7600,18 @@ export class DesktopBackendRegistry {
       return [];
     }
     // Gate the deferred Codex probe. When the first-run wizard hasn't
-    // picked a Codex profile model yet, an explicit codex query returns
-    // empty; an unfiltered query falls through to the grok-only path so
-    // grok threads still load and the renderer can render a clean
-    // "Finish setup to see your threads" empty state for Codex without
-    // contaminating it with arbitrary-identity Codex data.
+    // picked a Codex profile model yet, Codex returns empty while installed
+    // ACP threads remain available through the aggregate path.
     if (
       (params.backend === "codex" || params.backend === undefined) &&
       this.isCodexBootstrapDeferredFn()
     ) {
-      if (params.backend === "codex") {
-        return [];
-      }
-      return await this.listThreads({ ...params, backend: "grok" }).catch(
-        () => [],
-      );
+      if (params.backend === "codex") return [];
     }
     const normalizedParams = {
       ...params,
       enrichDirectories:
         params.enrichDirectories ?? shouldEnrichThreadDirectories(params.callerReason),
-      agentCoreGrokEnabled:
-        params.backend === undefined ? resolveAgentCoreGrokEnabled() : undefined,
     };
     const cacheKey = this.buildThreadListCacheKey(normalizedParams);
     const now = Date.now();
@@ -7840,7 +7731,6 @@ export class DesktopBackendRegistry {
   }
 
   private async readThreadList(params: {
-    agentCoreGrokEnabled?: boolean;
     archived?: boolean;
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
@@ -7880,30 +7770,6 @@ export class DesktopBackendRegistry {
       return threads;
     }
 
-    if (params.backend === "grok") {
-      const threads = await this.filterArchivedThreadsPresentInActiveList({
-        archived: params.archived,
-        backend: "grok",
-        diagnostics,
-        filter: params.filter,
-        threads: this.withPendingStartedThreads(
-          "grok",
-          await this.grokClient.listThreads({
-            archived: params.archived,
-            filter: params.filter,
-          }, diagnostics),
-          params,
-        ),
-      });
-      this.scheduleThreadListArchiveStateCleanup({
-        backend: "grok",
-        filter: params.filter,
-        archived: params.archived,
-        threads,
-      });
-      return threads;
-    }
-
     if (params.backend && isAcpBackendId(params.backend)) {
       return this.listInstalledAcpThreads(
         params.backend,
@@ -7923,15 +7789,6 @@ export class DesktopBackendRegistry {
         maxPages: params.maxPages,
         skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
       }),
-      params.agentCoreGrokEnabled === true
-        ? this.listThreads({
-            backend: "grok",
-            archived: params.archived,
-            callerReason: params.callerReason,
-            enrichDirectories: params.enrichDirectories,
-            filter: params.filter,
-          }).catch(() => [])
-        : Promise.resolve([]),
       this.listAllInstalledAcpThreads(params.filter, params.archived),
     ]);
 
@@ -7955,27 +7812,14 @@ export class DesktopBackendRegistry {
     }
 
     try {
-      const activeThreads =
-        params.backend === "codex"
-          ? await this.listCodexThreads({
-              archived: false,
-              enrichDirectories: false,
-              filter: params.filter,
-            }, {
-              ...params.diagnostics,
-              callerReason: `${params.diagnostics.callerReason}:active-archive-filter`,
-            })
-          : this.withPendingStartedThreads(
-              "grok",
-              await this.grokClient.listThreads({
-                archived: false,
-                filter: params.filter,
-              }, {
-                ...params.diagnostics,
-                callerReason: `${params.diagnostics.callerReason}:active-archive-filter`,
-              }),
-              { archived: false, filter: params.filter },
-            );
+      const activeThreads = await this.listCodexThreads({
+        archived: false,
+        enrichDirectories: false,
+        filter: params.filter,
+      }, {
+        ...params.diagnostics,
+        callerReason: `${params.diagnostics.callerReason}:active-archive-filter`,
+      });
       const activeThreadIds = new Set(activeThreads.map((thread) => thread.id));
       const filteredThreads = params.threads.filter(
         (thread) => !activeThreadIds.has(thread.id),
@@ -8941,12 +8785,9 @@ export class DesktopBackendRegistry {
     let archivedAt: number;
     let codexRolloutMissing = false;
     try {
-      result =
-        backend === "codex"
-          ? await this.withCodexThreadClient(request.threadId, async (client) =>
-              await this.archiveWithClient(client, request.threadId),
-            )
-          : await this.archiveWithClient(this.grokClient, request.threadId);
+      result = await this.withCodexThreadClient(request.threadId, async (client) =>
+        await this.archiveWithClient(client, request.threadId),
+      );
       archivedAt = Date.now();
     } catch (error) {
       if (
@@ -9086,12 +8927,9 @@ export class DesktopBackendRegistry {
       backend,
       threadId: request.threadId,
     });
-    const result =
-      backend === "codex"
-        ? await this.withCodexThreadClient(request.threadId, async (client) =>
-            await this.restoreWithClient(client, request.threadId),
-          )
-        : await this.restoreWithClient(this.grokClient, request.threadId);
+    const result = await this.withCodexThreadClient(request.threadId, async (client) =>
+      await this.restoreWithClient(client, request.threadId),
+    );
     if (backend === "codex") {
       await this.overlayStore.setThreadArchiveTombstone({
         backend,
@@ -9385,11 +9223,7 @@ export class DesktopBackendRegistry {
         await this.renameWithClient(client, request.threadId, request.name),
       );
     } else {
-      result = await this.renameWithClient(
-        this.grokClient,
-        request.threadId,
-        request.name,
-      );
+      throw new Error(`Unsupported backend: ${backend}`);
     }
     const agent = await this.getThreadAgentMetadata({
       backend,
@@ -9824,39 +9658,27 @@ export class DesktopBackendRegistry {
     }
 
     const codexStatusObservationSequence =
-      backend === "codex"
-        ? this.reserveCodexThreadStatusObservationSequence()
-        : undefined;
+      this.reserveCodexThreadStatusObservationSequence();
 
-    const replay =
-      backend === "codex"
-        ? await this.withCodexThreadClient(
-            request.threadId,
-            async (client) =>
-              await client.readThread({
-                threadId: request.threadId,
-                includeTurns: request.includeTurns,
-                before: request.before,
-                limit: request.limit,
-              }),
-            // Reads are execution-mode-agnostic; skip the routing diagnostic so
-            // content search (one readThread per thread) doesn't spew it.
-            undefined,
-            false,
-          )
-        : await this.grokClient.readThread({
-            threadId: request.threadId,
-            includeTurns: request.includeTurns,
-            before: request.before,
-            limit: request.limit,
-          });
-    if (backend === "codex") {
-      this.reconcileBackendCodexThreadStatus(
-        request.threadId,
-        replay.threadStatus,
-        codexStatusObservationSequence,
-      );
-    }
+    const replay = await this.withCodexThreadClient(
+      request.threadId,
+      async (client) =>
+        await client.readThread({
+          threadId: request.threadId,
+          includeTurns: request.includeTurns,
+          before: request.before,
+          limit: request.limit,
+        }),
+      // Reads are execution-mode-agnostic; skip the routing diagnostic so
+      // content search (one readThread per thread) doesn't spew it.
+      undefined,
+      false,
+    );
+    this.reconcileBackendCodexThreadStatus(
+      request.threadId,
+      replay.threadStatus,
+      codexStatusObservationSequence,
+    );
 
     if (
       backend === "codex" &&
@@ -11606,40 +11428,34 @@ export class DesktopBackendRegistry {
       );
     }
     try {
-      result =
-        params.backend === "codex"
-          ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
-              if (this.closed) {
-                throw new Error("Desktop backend registry closed before turn start");
-              }
-              const effectiveMode = params.executionMode ?? mode;
-              const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
-              const started = await client.startTurn({
-                threadId: params.threadId,
-                input,
-                ...(cwd ? { cwd } : {}),
-                collaborationMode: params.collaborationMode,
-                ...turnParams,
-                approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
-                sandbox: params.sandbox ?? modeSettings.sandbox,
-                ...(overlay?.codexEnvironmentRuntime
-                  ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
-                  : {}),
-                ...(codexMcpConfig ? { config: codexMcpConfig } : {}),
-                defaultModeRequestUserInput:
-                  this.resolveCodexDefaultModeRequestUserInputFn(),
-              });
-              activeTurnMode = effectiveMode;
-              return started;
-            }, params.executionMode)
-          : await this.grokClient.startTurn({
+      result = await this.withCodexThreadClient(
+        params.threadId,
+        async (client, mode) => {
+          if (this.closed) {
+            throw new Error("Desktop backend registry closed before turn start");
+          }
+          const effectiveMode = params.executionMode ?? mode;
+          const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
+          const started = await client.startTurn({
               threadId: params.threadId,
               input,
-              model: turnParams.model,
-              serviceTier: turnParams.serviceTier,
-              reasoningEffort: turnParams.reasoningEffort,
-              fastMode: turnParams.fastMode,
-            });
+              ...(cwd ? { cwd } : {}),
+              collaborationMode: params.collaborationMode,
+              ...turnParams,
+              approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
+              sandbox: params.sandbox ?? modeSettings.sandbox,
+              ...(overlay?.codexEnvironmentRuntime
+                ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+                : {}),
+              ...(codexMcpConfig ? { config: codexMcpConfig } : {}),
+              defaultModeRequestUserInput:
+                this.resolveCodexDefaultModeRequestUserInputFn(),
+          });
+          activeTurnMode = effectiveMode;
+          return started;
+        },
+        params.executionMode,
+      );
     } catch (error) {
       await this.emit({
         backend: params.backend,
@@ -11727,11 +11543,6 @@ export class DesktopBackendRegistry {
     this.activeTurnKeys.delete(
       buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
     );
-    if (params.backend === "grok") {
-      this.activeTurnKeys.add(
-        buildActiveTurnKey(params.backend, result.threadId, result.turnId),
-      );
-    }
     if (
       params.backend === "codex"
       && activeTurnMode
@@ -13013,16 +12824,13 @@ export class DesktopBackendRegistry {
             ? this.activeCodexTurnModes.get(requestedCodexTurnModeKey)
             : undefined)
         : undefined;
-    const result =
-      params.backend === "codex" && activeCodexTurnMode
-        ? await this.getClient("codex", activeCodexTurnMode).interruptTurn(
-            interruptParams,
-          )
-        : params.backend === "codex"
-          ? await this.withCodexThreadClient(params.threadId, async (client) =>
-              await client.interruptTurn(interruptParams),
-            )
-        : await this.grokClient.interruptTurn(params);
+    const result = activeCodexTurnMode
+      ? await this.getClient("codex", activeCodexTurnMode).interruptTurn(
+          interruptParams,
+        )
+      : await this.withCodexThreadClient(params.threadId, async (client) =>
+          await client.interruptTurn(interruptParams),
+        );
 
     if (params.backend === "codex") {
       const activeTurnModeKey = buildActiveTurnModeKey(result.threadId, result.turnId);
@@ -13175,6 +12983,11 @@ export class DesktopBackendRegistry {
     turnId: string;
     itemId?: string;
   }> {
+    if (isAcpBackendId(params.backend)) {
+      throw new Error(
+        "ACP backend " + params.backend + " does not support thread compaction",
+      );
+    }
     const compactWithClient = async (
       client: BackendClient,
     ): Promise<{ threadId: string; turnId: string; itemId?: string }> => {
@@ -13186,10 +12999,10 @@ export class DesktopBackendRegistry {
       });
     };
 
-    const result =
-      params.backend === "codex"
-        ? await this.withCodexThreadClient(params.threadId, compactWithClient)
-        : await compactWithClient(this.grokClient);
+    const result = await this.withCodexThreadClient(
+      params.threadId,
+      compactWithClient,
+    );
 
     return {
       backend: params.backend,
@@ -13231,6 +13044,11 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
+    if (isAcpBackendId(params.backend)) {
+      throw new Error(
+        "ACP backend " + params.backend + " does not support turn steering",
+      );
+    }
     const input = await enrichLocalFileInputs(params.input, {
       privateStorageRoots: this.localFilePrivateStorageRoots,
     });
@@ -13257,10 +13075,10 @@ export class DesktopBackendRegistry {
 
     let result: { threadId: string; turnId: string };
     try {
-      result =
-        params.backend === "codex"
-          ? await this.withActiveCodexThreadClient(params.threadId, steerWithClient)
-          : await steerWithClient(this.grokClient);
+      result = await this.withActiveCodexThreadClient(
+        params.threadId,
+        steerWithClient,
+      );
     } catch (error) {
       this.forgetPendingThreadMessageContext(pendingMessageContextId);
       throw error;
@@ -16436,7 +16254,6 @@ export class DesktopBackendRegistry {
           }
         },
       },
-      { name: "grok", close: () => this.grokClient.close() },
       ...this.captureStores.splice(0).map((store, index) => ({
         name: `capture-${index}`,
         close: () => store.close(),
@@ -16488,10 +16305,7 @@ export class DesktopBackendRegistry {
       return await this.resolveModelSettings(backend, settings, "review-start");
     }
 
-    const models =
-      backend === "codex"
-        ? await this.readCodexDefaultModelsOnce("review-start")
-        : await this.readGrokDefaultModelsOnce("review-start");
+    const models = await this.readCodexDefaultModelsOnce("review-start");
     const launchpadOptions = buildLaunchpadOptions(backend, models, {
       allowFallbackModels: false,
     });
@@ -16513,11 +16327,13 @@ export class DesktopBackendRegistry {
 
   /**
    * One-shot structured generation using the operator's configured backend
-   * (launchpad default), reusing the existing per-backend one-shot paths. Codex
-   * runs an ephemeral helper turn; Grok uses the xAI ephemeral caller. Backends
-   * without a one-shot path (ACP) return "unavailable" rather than failing.
+   * (launchpad default), unless a caller explicitly requests Codex. Codex runs
+   * an ephemeral helper turn. Backends without a one-shot path (ACP) return
+   * "unavailable" rather than failing.
    */
   async generateStructuredObject(params: {
+    backend?: "codex";
+    model?: string;
     system: string;
     prompt: string;
     schema: Record<string, unknown>;
@@ -16527,44 +16343,35 @@ export class DesktopBackendRegistry {
     { status: "ok"; object: unknown } | { status: "unavailable" | "failed"; reason: string }
   > {
     const defaults = await this.overlayStore.getLaunchpadDefaults();
-    const backend = await this.resolveLaunchpadBackend(defaults.backend);
+    const backend = params.backend === "codex"
+      ? (await this.listBackends({ includeUnavailable: true })).backends.find(
+          (summary) => summary.kind === "codex",
+        )
+      : await this.resolveLaunchpadBackend(defaults.backend);
     const requiredKeys = schemaRequiredKeys(params.schema);
 
-    if (backend.kind === "codex" && this.codexClient.generateStructuredObject) {
+    if (
+      backend?.kind === "codex"
+      && backend.available
+      && this.codexClient.generateStructuredObject
+    ) {
       return await this.codexClient.generateStructuredObject({
+        system: params.system,
+        model: params.model,
         prompt: params.prompt,
         schema: params.schema,
         isMatch: (record) =>
-          requiredKeys.every((key) => isNonEmptyStructuredValue(record[key])),
+          requiredKeys.every((key) =>
+            structuredRequiredFieldMatches(params.schema, record, key)
+          ),
         timeoutMs: params.timeoutMs,
       });
     }
 
-    if (backend.kind === "grok") {
-      try {
-        const result = await this.generateGrokObject(params);
-        return { status: "ok", object: result.object };
-      } catch (error) {
-        return {
-          status: "failed",
-          reason: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }
-
     return {
       status: "unavailable",
-      reason: `${backend.kind}_structured_generation_unavailable`,
+      reason: `${params.backend ?? backend?.kind ?? "backend"}_structured_generation_unavailable`,
     };
-  }
-
-  async generateGrokObject(
-    params: GrokGenerateObjectRequest,
-  ): Promise<GrokGenerateObjectResult> {
-    if (!this.grokClient.generateObject) {
-      throw new Error("grok structured generation is unavailable");
-    }
-    return await this.grokClient.generateObject(params);
   }
 
   private async resolveLaunchpadBackend(
@@ -16712,12 +16519,6 @@ export class DesktopBackendRegistry {
     return this.modelCatalog.readModels("codex", callerReason);
   }
 
-  private readGrokDefaultModelsOnce(
-    callerReason: BackendModelCatalogCallerReason,
-  ): Promise<BackendModelOption[]> {
-    return this.modelCatalog.readModels("grok", callerReason);
-  }
-
   private async getBackendLaunchpadOptions(
     backend: AppServerBackendKind,
     callerReason: BackendModelCatalogCallerReason,
@@ -16726,12 +16527,7 @@ export class DesktopBackendRegistry {
       return this.acpBackend.getLaunchpadOptions(backend);
     }
 
-    if (backend === "codex") {
-      const models = await this.readCodexDefaultModelsOnce(callerReason).catch(() => []);
-      return buildLaunchpadOptions(backend, models);
-    }
-
-    const models = await this.readGrokDefaultModelsOnce(callerReason).catch(() => []);
+    const models = await this.readCodexDefaultModelsOnce(callerReason).catch(() => []);
     return buildLaunchpadOptions(backend, models);
   }
 
@@ -17453,18 +17249,18 @@ export class DesktopBackendRegistry {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     executionMode: ThreadExecutionMode = "default",
   ): BackendClient {
-    if (backend === "grok") {
-      return this.grokClient;
-    }
     if (isAcpBackendId(backend)) {
       throw new Error(`ACP backend ${backend} is not available through the built-in client router`);
+    }
+
+    if (backend !== "codex") {
+      throw new Error(`Backend ${backend} is not available through the built-in client router`);
     }
 
     return this.codexClient;
   }
 
   private buildThreadListCacheKey(params: {
-    agentCoreGrokEnabled?: boolean;
     archived?: boolean;
     backend?: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
@@ -17475,21 +17271,19 @@ export class DesktopBackendRegistry {
     maxPages?: number;
     skipArchivedMetadataRefresh?: boolean;
   }): string {
+    const includesCodex = params.backend === undefined || params.backend === "codex";
     const codexDirectoryBackfill =
-      params.backend === "grok" ||
-      params.archived ||
-      params.enrichDirectories !== false
-        ? undefined
-        : shouldBackfillCodexDirectoryRelationships(params.callerReason);
+      includesCodex
+      && !params.archived
+      && params.enrichDirectories === false
+        ? shouldBackfillCodexDirectoryRelationships(params.callerReason)
+        : undefined;
 
     return JSON.stringify({
-      agentCoreGrokEnabled:
-        params.backend === undefined ? params.agentCoreGrokEnabled === true : undefined,
       archived: params.archived === true,
       backend: params.backend ?? "all",
       codexDirectoryBackfill,
-      enrichDirectories:
-        params.backend === "grok" ? undefined : params.enrichDirectories === true,
+      enrichDirectories: params.enrichDirectories === true,
       filter: params.filter?.trim() ?? "",
       limit: params.limit,
       maxPages: params.maxPages,
@@ -17499,7 +17293,6 @@ export class DesktopBackendRegistry {
 
   private findReusableThreadListCache(
     params: {
-      agentCoreGrokEnabled?: boolean;
       archived?: boolean;
       backend?: AppServerBackendKind;
       callerReason?: ThreadListCallerReason;
@@ -17522,8 +17315,9 @@ export class DesktopBackendRegistry {
       return exact;
     }
 
+    const includesCodex = params.backend === undefined || params.backend === "codex";
     if (
-      params.backend !== "codex" ||
+      !includesCodex ||
       params.archived === true ||
       params.enrichDirectories !== false ||
       shouldBackfillCodexDirectoryRelationships(params.callerReason)
@@ -20364,10 +20158,7 @@ export class DesktopBackendRegistry {
   ): Promise<BackendSummary> {
     try {
       const initialize = await client.getInitializeResult();
-      const models =
-        kind === "grok"
-          ? await this.readGrokDefaultModelsOnce("backend-summary").catch(() => [])
-          : await readClientModels(client).catch(() => []);
+      const models = await readClientModels(client).catch(() => []);
       const methods = Array.isArray(initialize.methods)
         ? initialize.methods.filter((method): method is string => typeof method === "string")
         : [];
@@ -21185,8 +20976,6 @@ export class DesktopBackendRegistry {
         await this.withCodexThreadClient(params.threadId, async (client) => {
           await updateWithClient(client);
         });
-      } else {
-        await updateWithClient(this.grokClient);
       }
     } catch (error) {
       backendRegistryLog.warn("thread git metadata update failed after handoff", {
@@ -27717,10 +27506,23 @@ export class DesktopBackendRegistry {
           record: managedReview,
         });
       }
+      const genericActiveTurnKeyPrefix =
+        `${event.backend}:${notification.params.threadId}:`;
+      const hadGenericActiveTurn = Array.from(this.activeTurnKeys).some((key) =>
+        key.startsWith(genericActiveTurnKeyPrefix),
+      );
       if (turnId) {
-        this.activeTurnKeys.delete(
-          buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
-        );
+        if (isAcpBackendId(event.backend)) {
+          for (const key of Array.from(this.activeTurnKeys)) {
+            if (key.startsWith(genericActiveTurnKeyPrefix)) {
+              this.activeTurnKeys.delete(key);
+            }
+          }
+        } else {
+          this.activeTurnKeys.delete(
+            buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
+          );
+        }
         const steerKeyPrefix = buildSteerTurnKeyPrefix({
           backend: event.backend,
           threadId: notification.params.threadId,
@@ -27731,6 +27533,12 @@ export class DesktopBackendRegistry {
             this.acceptedSteerRequests.delete(key);
           }
         }
+      }
+      if (isAcpBackendId(event.backend) && hadGenericActiveTurn) {
+        await this.adoptThreadBranchChangeFromActiveTurn({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+        });
       }
       if (event.backend === "codex" && turnId) {
         const activeTurnModeKey = buildActiveTurnModeKey(
@@ -27886,6 +27694,7 @@ export class DesktopBackendRegistry {
         this.threadHasActiveCodexReviewTurn(threadId);
       const endedTurnIds = new Set<string>();
       const genericKeyPrefix = `${event.backend}:${event.notification.params.threadId}:`;
+      let hadGenericActiveTurn = false;
       for (const key of Array.from(this.activeTurnKeys)) {
         if (key.startsWith(genericKeyPrefix)) {
           const parsed = parseActiveTurnKey(key);
@@ -27898,6 +27707,7 @@ export class DesktopBackendRegistry {
           ) {
             continue;
           }
+          hadGenericActiveTurn = true;
           if (parsed?.turnId && !parsed.turnId.startsWith("pending:")) {
             endedTurnIds.add(parsed.turnId);
           }
@@ -27906,6 +27716,12 @@ export class DesktopBackendRegistry {
       }
       if (event.backend !== "codex") {
         if (isAcpBackendId(event.backend)) {
+          if (hadGenericActiveTurn) {
+            await this.adoptThreadBranchChangeFromActiveTurn({
+              backend: event.backend,
+              threadId: event.notification.params.threadId,
+            });
+          }
           if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
             await this.flushQueuedExecutionModeIfPresent(
               event.notification.params.threadId,

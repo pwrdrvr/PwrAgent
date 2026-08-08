@@ -60,50 +60,6 @@ const REPLAY_CODEX_MODELS: BackendModelOption[] = [
   },
 ];
 
-const REPLAY_GROK_MODELS: BackendModelOption[] = [
-  {
-    id: "grok-4.20-reasoning",
-    label: "Grok 4.20 Reasoning",
-    current: true,
-    supportsReasoning: false,
-    supportsSteering: false,
-  },
-  {
-    id: "grok-4.20-non-reasoning",
-    label: "Grok 4.20 Non-Reasoning",
-    supportsReasoning: false,
-    supportsSteering: false,
-  },
-  {
-    id: "grok-4-1-fast-reasoning",
-    label: "Grok 4.1 Fast Reasoning",
-    supportsReasoning: false,
-    supportsFast: true,
-    supportsSteering: false,
-  },
-  {
-    id: "grok-4-1-fast-non-reasoning",
-    label: "Grok 4.1 Fast Non-Reasoning",
-    supportsReasoning: false,
-    supportsFast: true,
-    supportsSteering: false,
-  },
-  {
-    id: "grok-4-fast-reasoning",
-    label: "Grok 4 Fast Reasoning",
-    supportsReasoning: false,
-    supportsFast: true,
-    supportsSteering: false,
-  },
-  {
-    id: "grok-4-fast-non-reasoning",
-    label: "Grok 4 Fast Non-Reasoning",
-    supportsReasoning: false,
-    supportsFast: true,
-    supportsSteering: false,
-  },
-];
-
 export class ReplayClient {
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
@@ -179,7 +135,7 @@ export class ReplayClient {
 
   async listModels(): Promise<BackendModelOption[]> {
     await this.ensureInitialized();
-    return this.backend === "grok" ? REPLAY_GROK_MODELS : REPLAY_CODEX_MODELS;
+    return REPLAY_CODEX_MODELS;
   }
 
   onNotification(

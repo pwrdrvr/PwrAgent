@@ -106,7 +106,7 @@ Write `packages/messaging/providers/<channel>/tsconfig.json`:
 
 `pnpm install` to add the package to the workspace.
 
-> **Boundary:** your provider package **may import `@pwragent/messaging-interface` and your platform's SDK only**. It must not import desktop code, agent-core, the shared package, or other provider packages. `pnpm lint:boundaries` enforces this — if you accidentally cross a line, the lint job fails. See [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md) for the exact rules.
+> **Boundary:** your provider package **may import `@pwragent/messaging-interface` and your platform's SDK only**. It must not import desktop code, the shared package, or other provider packages. `pnpm lint:boundaries` enforces this — if you accidentally cross a line, the lint job fails. See [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md) for the exact rules.
 
 ## Step 2 — Declare the capability profile
 
@@ -541,9 +541,8 @@ This list looks duplicative with the workspace dependency declaration in
 package importable; the `electron.vite.config.ts` `exclude` makes it
 get bundled. Both are required.
 
-`@pwragent/agent-core` is intentionally absent. Dependency Cruiser forbids
-desktop from importing it, and its runtime belongs exclusively in the
-separate Grok app-server process.
+Only workspace packages that the desktop imports belong in this list.
+Dependency Cruiser enforces the renderer and package-layer boundaries.
 
 ### 8.5 — Settings UI (recommended for parity with the existing providers)
 

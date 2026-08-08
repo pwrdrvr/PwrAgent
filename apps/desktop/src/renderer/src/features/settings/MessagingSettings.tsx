@@ -25,6 +25,7 @@ import {
   validateTelegramPositiveId,
   type DesktopAuthorizedContact,
   type AppServerBackendKind,
+  type DesktopSettingsSecretState,
   type DesktopMessagingAuthorizationMode,
   type DesktopMessagingSlackChannelUserAccessMode,
   type DesktopMessagingSlackDmAccessMode,
@@ -3426,7 +3427,7 @@ function SecretField(props: {
   sub?: ReactNode;
   help?: ReactNode;
   secret: DesktopSettingsSecretName;
-  state: DesktopSettingsSnapshot["models"]["grok"]["apiKey"];
+  state: DesktopSettingsSecretState;
   /**
    * Optional generator. When provided, a "Generate" button appears
    * that fills the input with the produced value. Used by the Mattermost HMAC field

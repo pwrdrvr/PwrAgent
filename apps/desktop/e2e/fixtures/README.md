@@ -128,8 +128,6 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
   plan
 - `codex-directory-parity/`: Codex startup directory list matches Codex Desktop
   for stale-root exclusion and deleted-worktree inclusion
-- `grok-todo-list/`: Grok-backed task plan rendering contract for the shared
-  transcript plan UI
 - `live-plan-updates/`: live `turn/plan/updated` rendering for in-flight task
   plan UI
 - `live-agent-messages/`: live assistant commentary stream items, tool usage,

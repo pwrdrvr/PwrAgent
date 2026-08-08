@@ -7804,6 +7804,82 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("forwards structured helper system instructions and the requested model", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadMcpServerStatusResult = { data: [], nextCursor: null };
+    MockTransport.threadStartResult = {
+      thread: { id: "structured-helper" },
+      instructionSources: [],
+    };
+    MockTransport.turnStartResult = {
+      thread: { id: "structured-helper" },
+      turn: {
+        id: "structured-turn",
+        output: [
+          {
+            type: "text",
+            text: JSON.stringify({ decisions: [] }),
+          },
+        ],
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    await expect(client.generateStructuredObject({
+      system: "Keep behavioral and uncertain changes visible.",
+      prompt: "Classify these serialized diff hunks.",
+      model: "gpt-5.6-luna",
+      schema: {
+        type: "object",
+        required: ["decisions"],
+        properties: { decisions: { type: "array" } },
+      },
+      isMatch: (record) => Array.isArray(record.decisions),
+      timeoutMs: 5_000,
+    })).resolves.toMatchObject({
+      status: "ok",
+      object: { decisions: [] },
+      model: "gpt-5.6-luna",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const requests = transport?.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    ) ?? [];
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/start",
+        params: expect.objectContaining({
+          baseInstructions: "Keep behavioral and uncertain changes visible.",
+          model: "gpt-5.6-luna",
+        }),
+      }),
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "turn/start",
+        params: expect.objectContaining({
+          input: [
+            {
+              type: "text",
+              text: "Classify these serialized diff hunks.",
+              text_elements: [],
+            },
+          ],
+          model: "gpt-5.6-luna",
+        }),
+      }),
+    );
+
+    await client.close();
+  });
+
   it("uses a fresh helper thread for every title and unsubscribes each one", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({

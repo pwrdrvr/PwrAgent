@@ -119,29 +119,4 @@ describe("PwrSnapConnectionPrompt", () => {
     });
     fireEvent.click(toggle);
     await waitFor(() => expect(onEnabledChange).toHaveBeenCalledWith(true));
-  });
-
-  it("keeps the switch visible but disabled for a non-MCP backend", async () => {
-    render(
-      <PwrSnapConnectionPrompt
-        backend="grok"
-        desktopApi={{
-          readPwrSnapConnectionStatus: async () => ({
-            connectionId: "pwrsnap",
-            displayName: "PwrSnap",
-            availability: "running",
-            configured: true,
-          }),
-        }}
-        enabled={true}
-        onEnabledChange={vi.fn()}
-      />,
-    );
-
-    const toggle = await screen.findByRole("switch", {
-      name: "Use PwrSnap in this thread",
-    });
-    expect((toggle as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/Choose Codex or an ACP agent/)).toBeTruthy();
-  });
-});
+  });});

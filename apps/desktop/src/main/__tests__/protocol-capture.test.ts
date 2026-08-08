@@ -102,12 +102,12 @@ describe("ProtocolCaptureStore", () => {
     const rootDir = await createTempDir();
     cleanupPaths.push(rootDir);
     const store = new ProtocolCaptureStore({
-      backend: "grok",
+      backend: "acp:grok",
       captureId: "diagnostic-capture",
       rootDir
     });
     const observer = createProtocolCaptureObserver({
-      backend: "grok",
+      backend: "acp:grok",
       store
     });
 
@@ -273,7 +273,7 @@ describe("ProtocolCaptureStore", () => {
       rootDir,
     });
     const grokStore = new ProtocolCaptureStore({
-      backend: "grok",
+      backend: "acp:grok",
       captureId: "grok-capture",
       rootDir,
     });
@@ -308,7 +308,7 @@ describe("ProtocolCaptureStore", () => {
       threadIds: ["codex-thread"],
     });
     expect(index["grok-capture"]).toMatchObject({
-      backend: "grok",
+      backend: "acp:grok",
       threadIds: ["grok-thread"],
     });
   });
@@ -408,7 +408,7 @@ describe("ProtocolCaptureStore", () => {
       capturePath,
       [
         JSON.stringify({
-          backend: "grok",
+          backend: "acp:grok",
           backendInstance: "default",
           captureId: "startup-grok",
           diagnostics: {
@@ -425,7 +425,7 @@ describe("ProtocolCaptureStore", () => {
           raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"initialize","params":{}}',
         }),
         JSON.stringify({
-          backend: "grok",
+          backend: "acp:grok",
           backendInstance: "default",
           captureId: "startup-grok",
           diagnostics: {
@@ -442,7 +442,7 @@ describe("ProtocolCaptureStore", () => {
           raw: '{"jsonrpc":"2.0","id":"rpc-2","method":"model/list","params":{}}',
         }),
         JSON.stringify({
-          backend: "grok",
+          backend: "acp:grok",
           backendInstance: "default",
           captureId: "startup-grok",
           direction: "outbound",
@@ -456,7 +456,7 @@ describe("ProtocolCaptureStore", () => {
         }),
         "{malformed",
         JSON.stringify({
-          backend: "grok",
+          backend: "acp:grok",
           backendInstance: "default",
           captureId: "startup-grok",
           direction: "outbound",
@@ -475,13 +475,13 @@ describe("ProtocolCaptureStore", () => {
     const analysis = await analyzeProtocolCaptureTraffic({ capturePath });
 
     expect(analysis.malformedRecordCount).toBe(1);
-    expect(analysis.backendInstances).toEqual(["grok:default"]);
-    expect(analysis.summaries.grok?.requestCounts).toMatchObject({
+    expect(analysis.backendInstances).toEqual(["acp:grok:default"]);
+    expect(analysis.summaries["acp:grok"]?.requestCounts).toMatchObject({
       initialize: 1,
       "model/list": 1,
       "thread/list": 2,
     });
-    expect(analysis.summaries.grok?.requests["model/list"]).toMatchObject({
+    expect(analysis.summaries["acp:grok"]?.requests["model/list"]).toMatchObject({
       count: 1,
       callerReasons: ["backend-summary"],
       ownerIds: ["model-catalog-1"],

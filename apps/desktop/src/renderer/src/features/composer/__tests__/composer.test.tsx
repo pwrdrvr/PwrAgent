@@ -3350,7 +3350,7 @@ describe("Composer", () => {
     render(
       <Composer
         backends={[
-          backendSummary("grok", {
+          backendSummary("acp:grok", {
             models: [
               {
                 id: "grok-4.20-reasoning",
@@ -3371,7 +3371,7 @@ describe("Composer", () => {
           directoryKind: "directory",
           directoryLabel: "Repo",
           directoryPath: "/repo",
-          backend: "grok",
+          backend: "acp:grok",
           executionMode: "default",
           prompt: "",
           workMode: "local",
