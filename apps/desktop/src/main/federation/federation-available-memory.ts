@@ -30,8 +30,11 @@ export async function readAvailableMemoryBytes(options?: {
   platform?: NodeJS.Platform;
   runVmStat?: () => Promise<string>;
   readMemInfo?: () => Promise<string>;
+  /** Injectable so tests can pin the fallback; it moves under a live OS. */
+  readFreeMemory?: () => number;
 }): Promise<number> {
   const platform = options?.platform ?? process.platform;
+  const freeMemory = options?.readFreeMemory ?? (() => os.freemem());
   try {
     if (platform === "darwin") {
       const parsed = parseVmStatAvailableBytes(
@@ -47,7 +50,7 @@ export async function readAvailableMemoryBytes(options?: {
   } catch {
     // Sampling is best-effort; the fallback below is always available.
   }
-  return os.freemem();
+  return freeMemory();
 }
 
 async function runVmStat(): Promise<string> {

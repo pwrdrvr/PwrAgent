@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import os from "node:os";
 import {
   parseMemAvailableBytes,
   parseVmStatAvailableBytes,
@@ -65,21 +64,32 @@ describe("federation available memory", () => {
 
   it("falls back to free memory when sampling fails", async () => {
     // A wrong-but-present number beats a missing metric on a health card,
-    // and os.freemem() is only ever pessimistic.
+    // and free memory is only ever pessimistic.
     await expect(
       readAvailableMemoryBytes({
         platform: "darwin",
         runVmStat: async () => {
           throw new Error("vm_stat: command not found");
         },
+        readFreeMemory: () => 4_096,
       }),
-    ).resolves.toBe(os.freemem());
+    ).resolves.toBe(4_096);
+  });
+
+  it("falls back when vm_stat answers with something unparsable", async () => {
+    await expect(
+      readAvailableMemoryBytes({
+        platform: "darwin",
+        runVmStat: async () => "surprise",
+        readFreeMemory: () => 4_096,
+      }),
+    ).resolves.toBe(4_096);
   });
 
   it("uses free memory directly where it already means available", async () => {
     // Windows' os.freemem() maps to GlobalMemoryStatusEx.ullAvailPhys.
     await expect(
-      readAvailableMemoryBytes({ platform: "win32" }),
-    ).resolves.toBe(os.freemem());
+      readAvailableMemoryBytes({ platform: "win32", readFreeMemory: () => 4_096 }),
+    ).resolves.toBe(4_096);
   });
 });

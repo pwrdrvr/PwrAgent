@@ -665,8 +665,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
         slots: instance.cardSlots,
         cardWidth: ORBIT_CARD_WIDTH,
         // Above the body, at a radius that does not depend on how many
-        // cards the rings hold — so opening it disturbs nothing.
-        loadSlot: { dx: 0, dy: ORBIT_LOAD_CARD_DY },
+        // cards the rings hold — so opening it disturbs nothing. Gated on
+        // membership like the lanes branch: without the check the card
+        // rendered forever in this lens, and dismissing it only flipped the
+        // toggle that reads the same membership.
+        loadSlot: loadCardInstances.has(instance.instanceId)
+          ? { dx: 0, dy: ORBIT_LOAD_CARD_DY }
+          : undefined,
         // Rings grow their radius, so orbit's canvas is already sized by
         // `computeOrbitPlacement`; only lanes derive theirs from content.
         contentBottom: 0,

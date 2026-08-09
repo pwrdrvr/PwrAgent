@@ -65,6 +65,13 @@ function unreadThread(id: string): NavigationThreadSummary {
   } as unknown as NavigationThreadSummary;
 }
 
+function seedLayout(layout: "lanes" | "orbit" | "projects") {
+  window.localStorage.setItem(
+    "pwragent.starMap.viewPreferences",
+    JSON.stringify({ layout }),
+  );
+}
+
 describe("StarMapScreen", () => {
   // Filter selection and view preferences both persist to localStorage,
   // so without this a test that clicks a chip silently changes the
@@ -170,6 +177,69 @@ describe("StarMapScreen", () => {
       screen.getByRole("button", { name: /^Hide load for/ }),
     ).toBeTruthy();
   });
+
+  // Both lenses place the load card themselves, so a membership check
+  // present in one and missing in the other is invisible to a single-lens
+  // test — which is exactly how the orbit lens shipped a card that could
+  // not be dismissed while its toggle flipped happily.
+  for (const layout of ["lanes", "orbit"] as const) {
+    it(`removes the load card for good when dismissed (${layout})`, async () => {
+      seedLayout(layout);
+      const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
+      const desktopApi: DesktopApi = {
+        ...buildDesktopApi(),
+        readStarMapArrangement: vi.fn(async () => ({
+          entries: [
+            {
+              instanceId: "pwr_local",
+              threadKey: "system:load",
+              dx: 0,
+              dy: 0,
+              updatedAt: 10,
+              by: "pwr_local",
+            },
+          ],
+        })),
+        setStarMapCardPosition,
+        readFederationInstanceLoad: vi.fn(async () => ({})),
+      };
+      const { container } = render(
+        <StarMapScreen
+          desktopApi={desktopApi}
+          localThreads={[unreadThread("t1")]}
+          sessionKeys={{}}
+          localInstanceLabel="Mac-Mini-M4"
+          floating={false}
+          onClose={() => undefined}
+          onOpenLocalThread={() => undefined}
+          onFocusLocalInstance={() => undefined}
+        />,
+      );
+      await waitFor(() => {
+        expect(container.querySelector(".star-map-load-card")).not.toBeNull();
+      });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: /^Remove load card/ }),
+      );
+
+      await waitFor(() => {
+        expect(container.querySelector(".star-map-load-card")).toBeNull();
+      });
+      // The toggle and the card must agree: both read the same membership.
+      expect(
+        screen.getByRole("button", { name: /^Show load for/ }).getAttribute(
+          "aria-pressed",
+        ),
+      ).toBe("false");
+      expect(setStarMapCardPosition).toHaveBeenCalledWith({
+        instanceId: "pwr_local",
+        threadKey: "system:load",
+        dx: null,
+        dy: null,
+      });
+    });
+  }
 
   it("removes the load card for good when dismissed", async () => {
     const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
