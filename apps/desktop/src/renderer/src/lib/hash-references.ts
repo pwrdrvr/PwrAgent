@@ -22,6 +22,39 @@ const PULL_REQUEST_CANDIDATE_LIMIT = 6;
 const THREAD_LABEL_LENGTH_LIMIT = 72;
 const THREAD_TOOLTIP_LENGTH_LIMIT = 300;
 
+/**
+ * How long a `#` query may get, with nothing to show for it, before the
+ * `#` stops being an autocomplete anchor and goes back to being prose.
+ *
+ * Zero results is safe to treat as *terminal* rather than transient
+ * because matching is monotonic: `threadMatchesQuery` is a set of
+ * `includes(needle)` tests over fixed haystacks (title, id, branch,
+ * agent metadata, PR numbers, directory labels), so extending a query
+ * can only ever narrow the result set. A query matching nothing at
+ * eight characters cannot start matching at nine. Without this, a `#`
+ * anywhere in a sentence keeps the picker armed — and the federated
+ * search re-firing — for the whole rest of the line.
+ */
+export const HASH_ANCHOR_COLD_QUERY_LENGTH = 8;
+
+/**
+ * Identity for a `#` anchor that has gone cold.
+ *
+ * This is the query's leading run, deliberately NOT the `#`'s offset in
+ * the document. An offset shifts the moment the operator edits anything
+ * earlier in the line, which would silently re-arm a retired anchor
+ * mid-sentence — the exact symptom being fixed. The leading run is
+ * stable both as the query grows to the right and as text before the
+ * `#` changes.
+ *
+ * Two anchors sharing a leading run collapse to one entry. That is
+ * harmless: by the monotonicity above, if the run matched nothing for
+ * one of them it matches nothing for the other.
+ */
+export function hashReferenceAnchorKey(query: string): string {
+  return query.slice(0, HASH_ANCHOR_COLD_QUERY_LENGTH).toLowerCase();
+}
+
 /** Collapse a free-text thread title onto one line. */
 export function collapseHashReferenceWhitespace(
   value: string | undefined,

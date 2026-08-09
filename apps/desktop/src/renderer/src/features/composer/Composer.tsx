@@ -108,6 +108,8 @@ import {
   findHashReferenceTrigger,
   formatHashReferenceThreadLabel,
   formatHashReferenceThreadTooltip,
+  hashReferenceAnchorKey,
+  HASH_ANCHOR_COLD_QUERY_LENGTH,
 } from "../../lib/hash-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
 import {
@@ -4492,15 +4494,40 @@ export function Composer(props: ComposerProps) {
   const trigger = findSkillTrigger(draft, selectionStart);
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
   const directoryRefTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
-  const hashReferenceTrigger = findHashReferenceTrigger(draft, selectionStart);
+  // `#` is the one trigger whose query spans spaces — thread titles have
+  // spaces in them — so unlike `@` and `$` nothing retires it. Left alone,
+  // a `#` anywhere in a sentence keeps the picker armed and the federated
+  // search re-firing for the whole rest of the line. Anchors that have
+  // gone cold are remembered here and their `#` reads as prose again.
+  const [coldHashAnchors, setColdHashAnchors] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const rawHashReferenceTrigger = findHashReferenceTrigger(draft, selectionStart);
+  const rawHashReferenceQuery = rawHashReferenceTrigger?.query;
+  const hashReferenceTrigger =
+    rawHashReferenceTrigger
+    && !coldHashAnchors.has(hashReferenceAnchorKey(rawHashReferenceTrigger.query))
+      ? rawHashReferenceTrigger
+      : undefined;
   const {
+    available: federatedHashSearchAvailable,
     loading: federatedHashSearchLoading,
     results: federatedHashSearchResults,
+    settledQuery: federatedHashSearchSettledQuery,
   } = useFederatedThreadSearch({
     query: hashReferenceTrigger?.query ?? "",
     limit: FEDERATED_THREAD_SEARCH_LIMIT,
     search: props.desktopApi?.jumpSearchRemoteThreads,
   });
+  // Have the peers answered about *this* query? `loading` is set inside
+  // the hook's effect, so for one commit after a keystroke it still reads
+  // `false` while holding the previous query's results — long enough for
+  // a retirement check to mistake it for a settled empty answer and kill
+  // the anchor before the search ever left the building.
+  const federatedHashSearchSettled =
+    !federatedHashSearchAvailable
+    || (!federatedHashSearchLoading
+      && federatedHashSearchSettledQuery === (rawHashReferenceQuery ?? "").trim());
   const filteredSkills = useMemo(() => {
     if (!trigger) {
       return [];
@@ -5031,6 +5058,48 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     setActiveHashReferenceIndex(0);
   }, [hashReferenceTrigger?.query, props.launchpad?.directoryKey, props.thread?.id]);
+
+  // Retire a `#` that has run long with nothing to show. Matching is
+  // monotonic (see HASH_ANCHOR_COLD_QUERY_LENGTH), so an empty result set
+  // past the threshold is terminal for this anchor, not a lull — every
+  // longer query is a subset of one that already matched nothing.
+  useEffect(() => {
+    if (
+      rawHashReferenceQuery === undefined
+      || rawHashReferenceQuery.length < HASH_ANCHOR_COLD_QUERY_LENGTH
+      // A slow peer must not retire a live anchor: "empty" only counts
+      // once the federated search has answered for this exact query,
+      // otherwise the anchor dies a beat before the remote rows land.
+      || !federatedHashSearchSettled
+      || filteredHashReferenceOptions.length > 0
+    ) {
+      return;
+    }
+
+    const key = hashReferenceAnchorKey(rawHashReferenceQuery);
+    setColdHashAnchors((current) =>
+      current.has(key) ? current : new Set(current).add(key),
+    );
+  }, [
+    federatedHashSearchSettled,
+    filteredHashReferenceOptions.length,
+    rawHashReferenceQuery,
+  ]);
+
+  // Cold anchors belong to one composing session. Forget them when the
+  // draft empties (sent or cleared) or the composer switches threads, so
+  // a run that matched nothing an hour ago cannot suppress a `#` against
+  // a thread list that has moved on since.
+  useEffect(() => {
+    if (draft.trim().length > 0) {
+      return;
+    }
+    setColdHashAnchors((current) => (current.size === 0 ? current : new Set()));
+  }, [draft]);
+
+  useEffect(() => {
+    setColdHashAnchors((current) => (current.size === 0 ? current : new Set()));
+  }, [props.launchpad?.directoryKey, props.thread?.id]);
 
   useEffect(() => {
     if (!dismissedAutocompleteKey) {

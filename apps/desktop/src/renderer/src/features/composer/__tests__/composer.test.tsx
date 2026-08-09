@@ -30,6 +30,7 @@ import {
   DEFAULT_DESKTOP_AGENT_THREAD,
 } from "../../../lib/agent-thread";
 import { normalizeImageFile } from "../../../lib/image-normalization";
+import { FEDERATED_THREAD_SEARCH_DEBOUNCE_MS } from "../../../lib/useFederatedThreadSearch";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { Composer } from "../Composer";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
@@ -79,6 +80,21 @@ beforeAll(() => {
   Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
   Range.prototype.getBoundingClientRect ??= () => emptyRect;
 });
+
+/**
+ * Drive the federated thread search past its debounce and let the
+ * resulting promise chain land.
+ *
+ * Requires `vi.useFakeTimers()` in the calling test. Proving a search
+ * did NOT fire means waiting out the debounce, and doing that on the
+ * wall clock costs real seconds per assertion; advancing fake timers
+ * makes the same proof instant and exact.
+ */
+async function settleFederatedSearch(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(FEDERATED_THREAD_SEARCH_DEBOUNCE_MS * 2);
+  });
+}
 
 async function flushReactUpdates(): Promise<void> {
   await act(async () => {
@@ -2261,6 +2277,312 @@ describe("Composer", () => {
     expect(screen.queryByText("Run setup")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
+  });
+
+  it("retires a `#` anchor that runs long with nothing to match", async () => {
+    // `#` is the only trigger whose query spans spaces, so before this it
+    // stayed armed for the whole rest of the line: every keystroke after a
+    // `#` re-ran the federated search and the popover sat there showing
+    // "Searching other instances…" over ordinary prose.
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [] }));
+    vi.useFakeTimers();
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          jumpSearchRemoteThreads,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #validate acp" } });
+
+    // Settles: local matched nothing and the peer answered nothing, past
+    // the threshold, so the anchor is cold and the popover is gone.
+    await settleFederatedSearch();
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("listbox", { name: "Threads and pull requests" }),
+    ).not.toBeInTheDocument();
+
+    // Now type the rest of the reported sentence one keystroke at a time.
+    // This is the actual bug: not "one more edit re-fires", but that the
+    // anchor stayed armed for every character to end of line.
+    let value = "Ask #validate acp";
+    for (const character of " sdk asdg asd asdg sdg sdg sadg sd gas dgsg") {
+      value += character;
+      fireEvent.change(textbox, { target: { value } });
+    }
+    await settleFederatedSearch();
+
+    // Still exactly the one search from before the anchor went cold.
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("listbox", { name: "Threads and pull requests" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a later `#` on the same line working after an earlier one retires", async () => {
+    // Retiring is per-anchor, not per-composer. A cold `#` earlier in the
+    // sentence must not swallow a genuine reference typed after it.
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: "019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+      title: "Bob's Best Thread 3000",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, targetThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #validate acp sdk" } });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("listbox", { name: "Threads and pull requests" }),
+      ).not.toBeInTheDocument();
+    });
+
+    fireEvent.change(textbox, {
+      target: { value: "Ask #validate acp sdk #Bob" },
+    });
+
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    expect(
+      within(listbox).getByRole("button", { name: /#Bob's Best Thread 3000/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("forgets cold `#` anchors when the draft is cleared", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [] }));
+    vi.useFakeTimers();
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          jumpSearchRemoteThreads,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #validate acp" } });
+    await settleFederatedSearch();
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(1);
+
+    // Control. Without this step the assertion below passes even with
+    // retirement removed entirely — every keystroke would search, landing
+    // on the same final count for the wrong reason.
+    fireEvent.change(textbox, { target: { value: "Ask #validate acp sdk" } });
+    await settleFederatedSearch();
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(1);
+
+    // Sending or clearing ends the composing session the cold set belongs
+    // to, so the same run is allowed to search again against a thread list
+    // that may well have moved on.
+    fireEvent.change(textbox, { target: { value: "" } });
+    await settleFederatedSearch();
+    fireEvent.change(textbox, { target: { value: "Ask #validate acp" } });
+    await settleFederatedSearch();
+
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(2);
+  });
+
+  it("forgets cold `#` anchors when the composer switches threads", async () => {
+    const threadOne: NavigationThreadSummary = {
+      id: "thread-one",
+      title: "First thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const threadTwo: NavigationThreadSummary = {
+      id: "thread-two",
+      title: "Second thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [] }));
+    vi.useFakeTimers();
+
+    const composer = (thread: NavigationThreadSummary) => (
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          jumpSearchRemoteThreads,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+        threads={[threadOne, threadTwo]}
+      />
+    );
+    const { rerender } = render(composer(threadOne));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+      target: { value: "Ask #validate acp" },
+    });
+    await settleFederatedSearch();
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(1);
+
+    // Control, same reason as the draft-cleared case: without it the
+    // final count is reached whether or not retirement exists at all.
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+      target: { value: "Ask #validate acp sdk" },
+    });
+    await settleFederatedSearch();
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(1);
+
+    rerender(composer(threadTwo));
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+      target: { value: "Ask #validate acp" },
+    });
+    await settleFederatedSearch();
+
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-arms a cold `#` anchor once the query is short again", async () => {
+    // The escape hatch. A retired anchor is keyed by the query's leading
+    // run, so deleting back past that run yields a different (shorter)
+    // key that was never retired — the same reason parking the caret
+    // right of the `#` re-arms it.
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: "019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+      title: "Bob's Best Thread 3000",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, targetThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    // Mistyped past the threshold — the apostrophe means this matches
+    // nothing, so the anchor goes cold on key "bobs bes".
+    fireEvent.change(textbox, { target: { value: "Ask #Bobs Best Thrxxx" } });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("listbox", { name: "Threads and pull requests" }),
+      ).not.toBeInTheDocument();
+    });
+
+    fireEvent.change(textbox, { target: { value: "Ask #Bob" } });
+
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    expect(
+      within(listbox).getByRole("button", { name: /#Bob's Best Thread 3000/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a long multi-word `#` query armed while it still matches", async () => {
+    // The threshold must not punish a legitimate long title — the query
+    // spans spaces precisely because thread titles do.
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: "019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+      title: "Bob's Best Thread 3000",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, targetThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    // 16 characters of query — twice the cold threshold — and still a match.
+    fireEvent.change(textbox, { target: { value: "Ask #Bob's Best Thread" } });
+
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    expect(
+      within(listbox).getByRole("button", { name: /#Bob's Best Thread 3000/ }),
+    ).toBeInTheDocument();
   });
 
   it("inserts a hash-prefixed thread chip from the inline thread picker", async () => {

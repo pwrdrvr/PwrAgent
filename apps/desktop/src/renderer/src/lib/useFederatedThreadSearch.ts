@@ -16,9 +16,21 @@ export function useFederatedThreadSearch(params: {
   available: boolean;
   loading: boolean;
   results: NavigationThreadSummary[];
+  /**
+   * The (trimmed) query `results` actually answer.
+   *
+   * `loading` alone cannot tell a caller "the peers have replied about
+   * *this* query": it is set from inside an effect, so for one commit
+   * after the query changes it still reads `false` while carrying the
+   * previous query's results. A caller that treats that frame as a
+   * settled empty answer acts on the wrong query. Compare against this
+   * instead.
+   */
+  settledQuery: string;
 } {
   const [results, setResults] = useState<NavigationThreadSummary[]>([]);
   const [loading, setLoading] = useState(false);
+  const [settledQuery, setSettledQuery] = useState("");
   const generationRef = useRef(0);
   const query = params.query.trim();
   const search = params.search ?? getDesktopApi()?.jumpSearchRemoteThreads;
@@ -34,6 +46,8 @@ export function useFederatedThreadSearch(params: {
     if (!query || !available || !search) {
       setResults([]);
       setLoading(false);
+      // Nothing to ask, so this query is answered the moment it arrives.
+      setSettledQuery(query);
       return;
     }
 
@@ -49,6 +63,7 @@ export function useFederatedThreadSearch(params: {
           }
           setResults(response.results);
           setLoading(false);
+          setSettledQuery(query);
         })
         .catch(() => {
           if (generationRef.current !== generation) {
@@ -56,10 +71,11 @@ export function useFederatedThreadSearch(params: {
           }
           setResults([]);
           setLoading(false);
+          setSettledQuery(query);
         });
     }, FEDERATED_THREAD_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [available, params.limit, query, search]);
 
-  return { available, loading, results };
+  return { available, loading, results, settledQuery };
 }
