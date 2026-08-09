@@ -1571,6 +1571,48 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("keeps an unrecognized update from splitting a streaming assistant message", () => {
+    // Failing to classify an update is not evidence that it ended the
+    // assistant's message. session_info_update and last_turn_summary were two
+    // instances of this; the next extension kind a provider adds must not tear
+    // the reply the operator is watching stream into two bubbles.
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "agent_message_chunk", content: "Overall: " },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: { sessionUpdate: "some_future_grok_update", detail: "opaque" },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: "the patch is fine.",
+      },
+    });
+
+    // The breadcrumb still lands — an unknown kind is worth surfacing — but it
+    // sorts after the completed message instead of running through it.
+    expect(
+      replay.entries.map((entry) =>
+        entry.type === "message"
+          ? `${entry.id}:${entry.text}`
+          : entry.type === "activity"
+            ? entry.summary
+            : entry.type
+      ),
+    ).toEqual([
+      "assistant:session-1:0:Overall: the patch is fine.",
+      "ACP update: some_future_grok_update",
+    ]);
+  });
+
   it("ignores transient Grok interaction updates without splitting text", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
