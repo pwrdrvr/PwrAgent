@@ -64,20 +64,7 @@ async function setTranscriptScrollTop(locator: Locator, targetScrollTop: number)
   }, targetScrollTop);
 }
 
-async function scrollTranscriptToTop(locator: Locator) {
-  // Use a trusted wheel gesture for the second navigation in this scenario.
-  // TranscriptList deliberately disables bottom glue in its onWheel handler;
-  // assigning scrollTop directly can otherwise race the viewport-restoration
-  // layout effect and snap back to the previously restored middle position.
-  await locator.hover();
-  await locator.page().mouse.wheel(0, -100_000);
-  await expect
-    .poll(async () => await locator.evaluate((element) => element.scrollTop))
-    .toBe(0);
-  return await readScrollMetrics(locator);
-}
-
-async function reselectLongThread(page: Page, transcript: Locator) {
+async function selectCompanionThread(page: Page, transcript: Locator) {
   await page
     .getByRole("button", { name: /Short companion thread/i })
     .first()
@@ -89,9 +76,16 @@ async function reselectLongThread(page: Page, transcript: Locator) {
     })
   ).toBeVisible();
   await expect(
-    transcript.getByText("Short companion thread message 2.")
+    transcript.getByText(
+      "Short companion thread message 20: top viewport marker."
+    )
   ).toBeVisible();
+  await expect(
+    transcript.getByText("Long thread message 180: final transcript marker.")
+  ).toHaveCount(0);
+}
 
+async function selectLongThread(page: Page, transcript: Locator) {
   await page
     .getByRole("button", { name: /Long scroll stability thread/i })
     .first()
@@ -106,7 +100,9 @@ async function reselectLongThread(page: Page, transcript: Locator) {
     transcript.getByText("Long thread message 180: final transcript marker.")
   ).toBeVisible();
   await expect(
-    transcript.getByText("Short companion thread message 2.")
+    transcript.getByText(
+      "Short companion thread message 20: top viewport marker."
+    )
   ).toHaveCount(0);
 }
 
@@ -168,56 +164,76 @@ test("opens a long transcript without drift and restores saved scroll positions 
       expectStableSeries(initialSeries, "long-thread initial open");
     });
 
-    await test.step("restore a saved middle viewport after reselect", async () => {
-      const currentMetrics = await readScrollMetrics(list);
-      const targetScrollTop = Math.max(
-        320,
-        Math.floor(currentMetrics.maxScrollTop / 3)
-      );
-      const savedViewport = await setTranscriptScrollTop(list, targetScrollTop);
+    const savedTopViewport = await test.step(
+      "save two distinct viewports before reselecting either thread",
+      async () => {
+        const currentMetrics = await readScrollMetrics(list);
+        const targetScrollTop = Math.max(
+          320,
+          Math.floor(currentMetrics.maxScrollTop / 3)
+        );
+        const savedViewport = await setTranscriptScrollTop(
+          list,
+          targetScrollTop
+        );
 
-      await expect
-        .poll(async () => await list.evaluate((element) => Math.round(element.scrollTop)))
-        .toBe(savedViewport.scrollTop);
-      await reselectLongThread(app.window, transcript);
+        await expect
+          .poll(async () =>
+            await list.evaluate((element) => Math.round(element.scrollTop))
+          )
+          .toBe(savedViewport.scrollTop);
+
+        await selectCompanionThread(app.window, transcript);
+        await expect
+          .poll(async () =>
+            await list.evaluate(
+              (element) => element.scrollHeight > element.clientHeight + 200
+            )
+          )
+          .toBe(true);
+
+        const topViewport = await setTranscriptScrollTop(list, 0);
+        expect(topViewport.scrollTop).toBe(0);
+
+        const topSeries = await collectScrollSamples(list);
+        expectStableSeries(topSeries, "companion-thread saved top viewport");
+        expect(Math.max(...topSeries)).toBeLessThanOrEqual(4);
+
+        await selectLongThread(app.window, transcript);
+
+        const restoredSeries = await collectScrollSamples(list);
+        expectStableSeries(restoredSeries, "long-thread middle viewport restore");
+
+        const restoredMetrics = await readScrollMetrics(list);
+        expect(
+          Math.abs(restoredMetrics.scrollTop - savedViewport.scrollTop)
+        ).toBeLessThanOrEqual(4);
+        expect(
+          Math.abs(
+            restoredMetrics.distanceFromBottom - savedViewport.distanceFromBottom
+          )
+        ).toBeLessThanOrEqual(4);
+        expect(restoredMetrics.scrollTop).toBeLessThan(
+          restoredMetrics.maxScrollTop - 24
+        );
+
+        return topViewport;
+      }
+    );
+
+    await test.step("restore the companion thread at an exact scrollTop of zero", async () => {
+      await selectCompanionThread(app.window, transcript);
 
       const restoredSeries = await collectScrollSamples(list);
-      expectStableSeries(restoredSeries, "long-thread middle viewport restore");
-
-      const restoredMetrics = await readScrollMetrics(list);
-      expect(
-        Math.abs(restoredMetrics.scrollTop - savedViewport.scrollTop)
-      ).toBeLessThanOrEqual(4);
-      expect(
-        Math.abs(
-          restoredMetrics.distanceFromBottom - savedViewport.distanceFromBottom
-        )
-      ).toBeLessThanOrEqual(4);
-      expect(restoredMetrics.scrollTop).toBeLessThan(
-        restoredMetrics.maxScrollTop - 24
-      );
-    });
-
-    await test.step("restore an exact scrollTop of zero after reselect", async () => {
-      const savedViewport = await scrollTranscriptToTop(list);
-      expect(savedViewport.scrollTop).toBe(0);
-
-      const savedSeries = await collectScrollSamples(list);
-      expectStableSeries(savedSeries, "long-thread saved top viewport");
-      expect(Math.max(...savedSeries)).toBeLessThanOrEqual(4);
-
-      await reselectLongThread(app.window, transcript);
-
-      const restoredSeries = await collectScrollSamples(list);
-      expectStableSeries(restoredSeries, "long-thread top viewport restore");
+      expectStableSeries(restoredSeries, "companion-thread top viewport restore");
       expect(Math.max(...restoredSeries)).toBeLessThanOrEqual(4);
 
       const restoredMetrics = await readScrollMetrics(list);
-      expect(restoredMetrics.maxScrollTop).toBeGreaterThan(2000);
+      expect(restoredMetrics.maxScrollTop).toBeGreaterThan(200);
       expect(restoredMetrics.scrollTop).toBeLessThanOrEqual(4);
       expect(
         Math.abs(
-          restoredMetrics.distanceFromBottom - savedViewport.distanceFromBottom
+          restoredMetrics.distanceFromBottom - savedTopViewport.distanceFromBottom
         )
       ).toBeLessThanOrEqual(4);
     });
