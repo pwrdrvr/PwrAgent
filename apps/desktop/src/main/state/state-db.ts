@@ -1484,6 +1484,14 @@ LEFT JOIN federation_peers
       this.db
         .prepare("DELETE FROM acp_available_commands WHERE observed_at < ?")
         .run(now - ACP_AVAILABLE_COMMANDS_RETENTION_MS);
+      // Empty rows are inert — the read path ignores them so a probe can
+      // re-run — but they are never written any more, so any still on disk
+      // came from a build that mistook a timed-out probe for "this agent has
+      // no commands". `upsert` always writes `JSON.stringify(commands)`, so
+      // the empty array is exactly this literal.
+      this.db
+        .prepare("DELETE FROM acp_available_commands WHERE payload = '[]'")
+        .run();
       this.db
         .prepare(
           "DELETE FROM bindings WHERE revoked_at IS NOT NULL AND revoked_at < ?",

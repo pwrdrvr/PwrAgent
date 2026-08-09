@@ -2124,7 +2124,6 @@ function createKimiAcpRegistry(options?: {
   acpAvailableCommandsStore?: ReturnType<
     typeof createAcpAvailableCommandsStoreMock
   > | null;
-  acpAvailableCommandProbeTimeoutMs?: number;
   acpAvailableCommandProbeBudgetMs?: number;
   availableCommandsOnSessionStart?: AppServerAvailableCommandSummary[];
   startSession?: KimiStartSession;
@@ -2223,8 +2222,6 @@ function createKimiAcpRegistry(options?: {
       ? { threadTitleGenerationService: options.threadTitleGenerationService }
       : {}),
     acpAvailableCommandsStore: options?.acpAvailableCommandsStore,
-    acpAvailableCommandProbeTimeoutMs:
-      options?.acpAvailableCommandProbeTimeoutMs,
     acpAvailableCommandProbeBudgetMs: options?.acpAvailableCommandProbeBudgetMs,
   });
   return {
@@ -3371,7 +3368,7 @@ describe("DesktopBackendRegistry", () => {
     const { registry, acpClient } = createKimiAcpRegistry({
       acpBackendId: "acp:grok" as AcpBackendId,
       acpAvailableCommandsStore,
-      acpAvailableCommandProbeTimeoutMs: 1,
+      acpAvailableCommandProbeBudgetMs: 5,
     });
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -3468,7 +3465,7 @@ describe("DesktopBackendRegistry", () => {
     const { registry, acpClient } = createKimiAcpRegistry({
       acpBackendId: "acp:grok" as AcpBackendId,
       acpAvailableCommandsStore: null,
-      acpAvailableCommandProbeTimeoutMs: 1,
+      acpAvailableCommandProbeBudgetMs: 5,
     });
 
     for (let attempt = 0; attempt < 3; attempt += 1) {

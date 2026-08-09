@@ -96,6 +96,28 @@ describe("AcpAvailableCommandsStore", () => {
   // ahead of it on every open and already carries this table's DDL. What is
   // worth pinning is the observable outcome — an older profile database gains
   // the table and lands on the current user_version.
+  it("purges empty rows left by a build that recorded failed probes", () => {
+    // Nothing writes these any more; the read path already ignores them so a
+    // probe can re-run. This is the sweep that gets them off disk.
+    store.upsert({
+      backendId: "acp:kimi",
+      repositoryPath: "/repo",
+      commands: [],
+      observedAt: 1000,
+    });
+    store.upsert({
+      backendId: "acp:grok",
+      repositoryPath: "/repo",
+      commands: COMMANDS,
+      observedAt: 1000,
+    });
+
+    stateDb.cleanupExpired(2000);
+
+    expect(store.get("acp:kimi", "/repo")).toBeUndefined();
+    expect(store.get("acp:grok", "/repo")?.commands).toEqual(COMMANDS);
+  });
+
   it("converges an older profile database onto the current schema", () => {
     const dbPath = path.join(tempDir, "migrated.db");
     const seeded = StateDb.open(dbPath);
