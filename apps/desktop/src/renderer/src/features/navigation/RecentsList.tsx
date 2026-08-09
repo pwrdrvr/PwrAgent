@@ -14,7 +14,7 @@ import {
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
-  type DropIndicatorState,
+  useDropIndicatorState,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
@@ -93,9 +93,7 @@ type RecentsListProps = {
  * the same global pinned-key list.
  */
 export function RecentsList(props: RecentsListProps) {
-  const [dropIndicator, setDropIndicator] = useState<
-    DropIndicatorState | undefined
-  >(undefined);
+  const [dropIndicator, setDropIndicator] = useDropIndicatorState();
   const [draggedThreadKey, setDraggedThreadKey] = useState<string | undefined>(
     undefined,
   );
@@ -167,6 +165,7 @@ export function RecentsList(props: RecentsListProps) {
                 const draggedThread = draggedKey ? threadByKey.get(draggedKey) : undefined;
                 if (
                   !draggedThread
+                  || draggedKey === childKey
                   || resolveThreadParentKey(draggedThread, threadByKey) !== parentKey
                 ) {
                   event.dataTransfer.dropEffect = "none";

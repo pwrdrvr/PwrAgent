@@ -36,7 +36,7 @@ import {
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
-  type DropIndicatorState,
+  useDropIndicatorState,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -279,9 +279,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [unpinnedExpandedByKey, setUnpinnedExpandedByKey] = useState<
     Record<string, boolean>
   >({});
-  const [dropIndicator, setDropIndicator] = useState<
-    DropIndicatorState | undefined
-  >(undefined);
+  const [dropIndicator, setDropIndicator] = useDropIndicatorState();
   const [dividerDropTarget, setDividerDropTarget] = useState<
     string | undefined
   >(undefined);
@@ -296,9 +294,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [draggedSubthreadKey, setDraggedSubthreadKey] = useState<
     string | undefined
   >(undefined);
-  const [subthreadDropIndicator, setSubthreadDropIndicator] = useState<
-    DropIndicatorState | undefined
-  >(undefined);
+  const [subthreadDropIndicator, setSubthreadDropIndicator] =
+    useDropIndicatorState();
   // Directory drag/drop state (plan 2026-05-09-002 Unit K). Mirrors
   // the per-thread state above but tracks directory keys rather
   // than thread keys. The `directoriesPinnedDividerDropTarget`
@@ -307,9 +304,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [draggedDirectoryKey, setDraggedDirectoryKey] = useState<
     string | undefined
   >(undefined);
-  const [directoryDropIndicator, setDirectoryDropIndicator] = useState<
-    DropIndicatorState | undefined
-  >(undefined);
+  const [directoryDropIndicator, setDirectoryDropIndicator] =
+    useDropIndicatorState();
   const [directoriesPinnedDividerDropTarget, setDirectoriesPinnedDividerDropTarget] =
     useState(false);
   const previousSelectedItemKeyRef = useRef<string | undefined>(undefined);
@@ -780,6 +776,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   : undefined;
                 if (
                   !draggedThread
+                  || draggedSubthreadKey === childKey
                   || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
                 ) {
                   event.dataTransfer.dropEffect = "none";
@@ -1268,6 +1265,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                             if (
                               !draggedThreadKey ||
                               !draggedThread ||
+                              draggedThreadKey === threadKey ||
                               !directory.threadKeys.includes(draggedThreadKey)
                             ) {
                               event.dataTransfer.dropEffect = "none";

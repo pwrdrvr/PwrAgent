@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted } from "@pwragent/shared";
 import {
@@ -102,6 +102,10 @@ export function ThreadMetaChips({
   const pinTooltipText = pinIsActionable ? "Click to unpin" : "Pinned";
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
+  const branchTooltip = useMemo(
+    () => branchChip ? formatBranchTooltip(branchChip, gitWorking) : undefined,
+    [branchChip, gitWorking],
+  );
   const hasDirtyState = Boolean(
     gitWorking &&
       (gitWorking.dirtyFiles > 0 ||
@@ -394,7 +398,7 @@ export function ThreadMetaChips({
             kind: thread.gitBranch ? "expected" : "current",
           })}
           className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
-          tooltipText={formatBranchTooltip(branchChip, gitWorking)}
+          tooltipText={branchTooltip}
           value={branchChip}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
