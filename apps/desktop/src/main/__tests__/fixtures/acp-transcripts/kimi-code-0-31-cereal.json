@@ -1,0 +1,782 @@
+[
+ {
+  "sessionUpdate": "available_commands_update",
+  "availableCommands": [
+   {
+    "name": "compact",
+    "description": "Compact the conversation context",
+    "input": {
+     "hint": "<optional custom summarization instructions>"
+    }
+   },
+   {
+    "name": "status",
+    "description": "Show current session status"
+   },
+   {
+    "name": "usage",
+    "description": "Show session token usage"
+   },
+   {
+    "name": "mcp",
+    "description": "Show MCP server status"
+   },
+   {
+    "name": "tasks",
+    "description": "List background tasks"
+   },
+   {
+    "name": "help",
+    "description": "Show available ACP commands"
+   },
+   {
+    "name": "check-kimi-code-docs",
+    "description": "Answer questions about the Kimi Code product using the official documentation — CLI usage, configuration, slash commands, features, membership and quota, API onboarding, third-party tool setup, and error codes. Use when the user asks how Kimi Code works, how to set something up, or what a Kimi Code error message means."
+   },
+   {
+    "name": "custom-theme",
+    "description": "Create or edit a kimi-code custom color theme — a JSON file under the resolved KIMI_CODE_HOME data directory that recolors the TUI. Use when the user wants their own theme, asks for a specific palette or mood, or wants to tweak an existing custom theme's colors."
+   },
+   {
+    "name": "import-from-cc-codex",
+    "description": "Import Claude Code and Codex instructions, skills, and MCP settings into Kimi Code."
+   },
+   {
+    "name": "mcp-config",
+    "description": "Configure MCP servers and handle MCP OAuth login."
+   },
+   {
+    "name": "sub-skill",
+    "description": "Discover and reorganize the skill inventory into hierarchical sub-skill bundles. Use when the user asks to review, group, or consolidate skills into a parent bundle."
+   },
+   {
+    "name": "sub-skill.consolidate",
+    "description": "Apply an approved sub-skill grouping by moving user-specified skills into a parent bundle, with timestamped backups of every modified directory."
+   },
+   {
+    "name": "sub-skill.review",
+    "description": "Analyze the available skill set and recommend candidate groups that could be consolidated into sub-skill bundles. Read-only — proposes a plan, does not move files."
+   },
+   {
+    "name": "update-config",
+    "description": "Inspect or edit kimi-code's own config — `config.toml` (model, provider, permission, hooks) and `tui.toml` (theme, editor, notifications, auto-update). Use when the user asks what a setting does or wants to change one."
+   },
+   {
+    "name": "write-goal",
+    "description": "Help the user craft a well-specified `/goal` objective for goal mode — turn a rough intention into a completion contract with a clear finish line, proof, boundaries, and stop rule. Use when the user asks for help writing, refining, or improving a goal."
+   },
+   {
+    "name": "skill:datadog-investigator",
+    "description": "Investigate Datadog alerts, incidents, and service behavior using a consistent evidence-first workflow. Use this when a user wants help triaging an alert, gathering logs and traces, or turning a Datadog signal into clear findings or follow-up actions."
+   },
+   {
+    "name": "skill:find-skills",
+    "description": "Helps users discover and install agent skills when they ask questions like \"how do I do X\", \"find a skill for X\", \"is there a skill that can...\", or express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable skill."
+   },
+   {
+    "name": "skill:slidev",
+    "description": "Create and present web-based slidedecks for developers using Slidev with Markdown, Vue components, code highlighting, animations, and interactive features. Use when building technical presentations, conference talks, code walkthroughs, teaching materials, or developer decks."
+   }
+  ]
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "We"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " need"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " answer"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " simple"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " question"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "."
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " Need"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " final"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " answer"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "."
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " User"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " asks"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " favorite"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " breakfast"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " cereal"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "."
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " As"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " AI"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " no"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " personal"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " preferences"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": ","
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " but"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " can"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " say"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " if"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " I"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " had"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " to"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " pick"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": ","
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " maybe"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " something"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "."
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " Need"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " concise"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "."
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " Could"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " mention"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " I"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " don't"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " eat"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": ","
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " but"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " a"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " solid"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " pick"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " is"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "..."
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " Need"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " maybe"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " favorite"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "?"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " Avoid"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " over"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "expl"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "aining"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "."
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " Need"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " maybe"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " no"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " tools"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "."
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " Final"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " in"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": " English"
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": "."
+  }
+ },
+ {
+  "sessionUpdate": "agent_thought_chunk",
+  "content": {
+   "type": "text",
+   "text": ""
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": "I"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " don"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": "’t"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " eat"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " breakfast"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": ","
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " but"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " if"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " I"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " had"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " to"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " pick"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " a"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " cereal"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " to"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " recommend"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": ":"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " plain"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " Cheer"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": "ios"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " —"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " dependable"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": ","
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " not"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " too"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " sweet"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": ","
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " and"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " good"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " with"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": " fruit"
+  }
+ },
+ {
+  "sessionUpdate": "agent_message_chunk",
+  "content": {
+   "type": "text",
+   "text": "."
+  }
+ }
+]

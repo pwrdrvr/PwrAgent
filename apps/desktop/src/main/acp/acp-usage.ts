@@ -25,15 +25,16 @@ export type AcpUsageEnvelope = {
  *
  * Every ACP agent known to report usage reports it per model call, which folds
  * to per turn: Grok on `response_completed`, Qwen on
- * `agent_message_chunk._meta.usage`. Whether Gemini or Kimi report anything is
- * untested — the `acp-transcripts` fixtures are normalizer-parity captures
- * with no completed turn in them, so they cannot answer it (grok-build.json
- * carries no usage either, and Grok certainly reports). Codex is the outlier
- * among what we do know: it sends this field meaning a session-cumulative
- * total, which is why `deriveLiveThreadTokenUsage` can read `total - last` as
- * "the context this turn inherited". For ACP that subtraction lands on zero on
- * a turn's first call, which is equally correct: the turn did start from
- * nothing.
+ * `agent_message_chunk._meta.usage`. Kimi Code 0.31.1 reports none at all —
+ * `kimi-code-0-31-cereal.json` is a full captured turn with no usage anywhere,
+ * so a Kimi thread cannot be priced. Gemini is still untested; the
+ * `acp-transcripts` parity captures cannot answer it, since they hold no
+ * completed turn (grok-build.json carries no usage either, and Grok certainly
+ * reports). Codex is the outlier among the reporters: it sends this field
+ * meaning a session-cumulative total, which is why
+ * `deriveLiveThreadTokenUsage` can read `total - last` as "the context this
+ * turn inherited". For ACP that subtraction lands on zero on a turn's first
+ * call, which is equally correct: the turn did start from nothing.
  *
  * If a future agent reports cumulative instead, do NOT quietly widen this
  * function to accept both. The shapes are indistinguishable from a single

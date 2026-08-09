@@ -9,10 +9,11 @@ import {
   type AcpTokenUsage,
 } from "../acp/acp-usage";
 
-const fixturePath = path.join(
+const fixtureDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
-  "fixtures/acp-transcripts/qwen-tool-usage.json",
+  "fixtures/acp-transcripts",
 );
+const fixturePath = path.join(fixtureDir, "qwen-tool-usage.json");
 
 describe("ACP usage normalization", () => {
   it("aggregates every Qwen model-call envelope in a tool-using turn", () => {
@@ -182,6 +183,43 @@ describe("ACP usage normalization", () => {
       });
       expect(turnTotal && foldAcpTurnUsage(folded, turnTotal)).toEqual(folded);
     });
+  });
+
+  // Whether Kimi reports usage was previously "unknown", and before that it
+  // was wrongly asserted to be "no" on the strength of a fixture that could
+  // not have shown usage either way. This is a purpose-made capture: a real
+  // `kimi acp` turn end to end, driven with a prompt chosen to need no tools
+  // ("tell me your favorite breakfast cereal"), recorded off the wire.
+  //
+  // Kimi Code 0.31.1 sends no usage anywhere in a complete turn. It tracks
+  // tokens internally — `/usage` is in its advertised command list — but does
+  // not put them on the ACP wire, so PwrAgent has nothing to price a Kimi
+  // thread from. Recapture and revisit when Kimi's ACP surface changes.
+  it("finds no token usage in a complete Kimi Code 0.31.1 turn", () => {
+    const updates = JSON.parse(
+      readFileSync(
+        path.join(fixtureDir, "kimi-code-0-31-cereal.json"),
+        "utf8",
+      ),
+    ) as Array<Record<string, unknown>>;
+
+    // A real turn: the agent thought, answered, and advertised its commands.
+    expect(updates.length).toBeGreaterThan(50);
+    expect(
+      new Set(updates.map((update) => update.sessionUpdate)),
+    ).toEqual(
+      new Set([
+        "available_commands_update",
+        "agent_thought_chunk",
+        "agent_message_chunk",
+      ]),
+    );
+    expect(
+      updates.flatMap((update) => {
+        const envelope = readAcpUsageEnvelope(update);
+        return envelope ? [envelope] : [];
+      }),
+    ).toEqual([]);
   });
 
   it("recovers the selected ACP model from session runtime state", () => {
