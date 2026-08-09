@@ -5283,6 +5283,48 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("keeps launchpad updates stable across remote viewer rerenders", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner-instance",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: typeof federationTarget;
+    }).__pwragentFederationTarget = federationTarget;
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot: vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        federationTarget,
+        inboxThreadKeys: [],
+        threads: [],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })),
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result, rerender } = renderHook(() =>
+      useThreadNavigation(desktopApi)
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    const initialUpdateDirectoryLaunchpad =
+      result.current.updateDirectoryLaunchpad;
+
+    rerender();
+
+    expect(result.current.updateDirectoryLaunchpad).toBe(
+      initialUpdateDirectoryLaunchpad,
+    );
+  });
+
   it("keeps server-confirmed settingsTouchedAt after sticky launchpad updates", async () => {
     const defaults: NavigationLaunchpadDefaults = {
       backend: "codex" as const,

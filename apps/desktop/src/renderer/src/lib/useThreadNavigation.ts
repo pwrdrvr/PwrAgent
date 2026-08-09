@@ -2773,6 +2773,7 @@ export function useThreadNavigation(
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
   const enabled = options.enabled ?? true;
   const rendererFederationTarget = readRendererFederationTarget();
+  const isRendererFederationWindow = Boolean(rendererFederationTarget);
   const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
@@ -5599,9 +5600,8 @@ export function useThreadNavigation(
                   response.launchpad,
                   patch,
                   {
-                    preserveOwnerCodexEnvironmentMetadata: Boolean(
-                      rendererFederationTarget,
-                    ),
+                    preserveOwnerCodexEnvironmentMetadata:
+                      isRendererFederationWindow,
                   },
                 ),
               }
@@ -5618,9 +5618,8 @@ export function useThreadNavigation(
               response.launchpad,
               patch,
               {
-                preserveOwnerCodexEnvironmentMetadata: Boolean(
-                  rendererFederationTarget,
-                ),
+                preserveOwnerCodexEnvironmentMetadata:
+                  isRendererFederationWindow,
               },
             ),
             response.defaults
@@ -5636,9 +5635,8 @@ export function useThreadNavigation(
               response.launchpad,
               patch,
               {
-                preserveOwnerCodexEnvironmentMetadata: Boolean(
-                  rendererFederationTarget,
-                ),
+                preserveOwnerCodexEnvironmentMetadata:
+                  isRendererFederationWindow,
               },
             ),
           );
@@ -5650,7 +5648,7 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi, rendererFederationTarget]
+    [desktopApi, isRendererFederationWindow]
   );
 
   const resetDirectoryLaunchpad = useCallback(
