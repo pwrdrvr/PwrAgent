@@ -100,7 +100,10 @@ const NAVIGATION_ACTIVITY_EVENTS = [
 ] as const;
 
 function normalizeBrowseMode(value: unknown): BrowseMode {
-  return value === "inbox" || value === "recents" || value === "directories"
+  return value === "attention"
+    || value === "inbox"
+    || value === "recents"
+    || value === "directories"
     ? value
     : DEFAULT_BROWSE_MODE;
 }
@@ -4480,7 +4483,11 @@ export function useThreadNavigation(
       !selectedThread ||
       selectedThread.inbox.reason !== "updated-since-seen" ||
       !viewForeground ||
-      !threadViewVisible
+      !threadViewVisible ||
+      // The Attention lens is a work queue: opening something to look at it
+      // must not silently empty the queue. Only a reply clears unread there
+      // (see `markThreadsSeen`, called from the composer on a sent turn).
+      browseMode === "attention"
     ) {
       return;
     }
@@ -4514,6 +4521,7 @@ export function useThreadNavigation(
 
     setPendingSeenThreadKey(threadKey);
   }, [
+    browseMode,
     pendingSeenThreadKey,
     retainedUnreadThread,
     selectedThread,
@@ -4532,11 +4540,25 @@ export function useThreadNavigation(
     setSetThreadExecutionModeError(undefined);
     setSetThreadModelSettingsError(undefined);
     setSelectedItemKey(threadKey);
-    setPendingSeenThreadKey(threadKey);
-    if (thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen") {
-      setRetainedUnreadThread(thread);
+    // Focusing a thread from the Attention work queue must not empty the
+    // queue — only a reply does. Every other lens marks seen on focus.
+    //
+    // `retainedUnreadThread` is skipped along with it, and deliberately: it
+    // holds the cookie visible on a thread that HAS been marked seen and then
+    // clears it on the way out (`releaseRetainedUnreadThread`). With nothing
+    // marked seen here, retaining would do no work on arrival and would clear
+    // the thread on departure — the exact behavior this lens exists to avoid.
+    //
+    // Scoped to these two statements rather than an early return, so that
+    // anything added to the end of this function later still runs in every
+    // lens.
+    if (browseMode !== "attention") {
+      setPendingSeenThreadKey(threadKey);
+      if (thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen") {
+        setRetainedUnreadThread(thread);
+      }
     }
-  }, [refreshThreadDirectoryGitStatuses, releaseRetainedUnreadThread]);
+  }, [browseMode, refreshThreadDirectoryGitStatuses, releaseRetainedUnreadThread]);
 
   const markThreadsSeen = useCallback(
     async (candidateThreads: NavigationThreadSummary[]): Promise<void> => {

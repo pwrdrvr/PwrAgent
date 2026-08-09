@@ -192,7 +192,14 @@ accidental.
 ## Current Product Direction
 
 - Threads are first-class and may exist without a directory.
-- Inbox, Recents, and Directories share the thread lens switch.
+- Attention, Inbox, Recents, and Directories share the thread lens switch. The
+  tabs are icon-only; the lens name lives in `aria-label` and the tooltip.
+- Attention is the work-queue lens: threads with a live turn or waiting to be
+  reviewed, in recent-activity order. Its tab is two indicators with counts
+  (scanner + in-progress, cookie + unread) rather than an icon, and each goes
+  grey at zero so the tab reads as "nothing running, nothing unread" without
+  being opened. A zero is shown, never hidden — a vanishing count makes an
+  idle tab look like a broken one.
 - Inbox is the default browsing lens: all threads in recent-activity order.
 - Recents shows all threads in thread-creation order so active threads do not
   jump around.
@@ -205,6 +212,28 @@ accidental.
   unpinned threads by thread creation time.
 - Unread state remains available as the orange cookie marker on thread rows
   wherever they appear.
+- **Unread clears on focus everywhere except the Attention lens.** There,
+  focusing a thread deliberately leaves the cookie in place and only a reply
+  clears it (the composer reports sends and steers via
+  `onUserRepliedToThread`, which routes to `markThreadsSeen`). The rule is
+  scoped to that lens rather than global on purpose: a global "only a reply
+  clears unread" would stop every lens's unread count draining on its own, so
+  a thread you read and decide not to answer would sit unread until you
+  explicitly marked it read. Scoping it keeps ordinary browsing unchanged and
+  confines the work-queue semantics to the surface that asked for them. The
+  `retainedUnreadThread` mechanism is skipped in this lens for the same
+  reason — it exists to release (clear) a thread on the way out.
+- The exemption belongs to the **lens, not the thread**: leaving Attention
+  while an unread thread stays selected marks it seen, because the operator is
+  now browsing rather than working a queue. Carrying "never auto-clear" out
+  with the thread would leak a rule nobody asked for into every other lens.
+  Both halves are pinned by tests in `useThreadNavigation.test.tsx`.
+- Reply reporting is **acceptance-gated**, not intent-gated: the composer
+  calls `onUserRepliedToThread` only after `startTurn` / `steerTurn` resolves,
+  and `useQueuedTurnRelease` does the same when it drains a turn the operator
+  queued earlier. Reporting before the await would drop a thread out of the
+  queue for a message that never left the machine — the exact loss this lens
+  exists to prevent.
 - A thread may be associated with multiple linked Git directories.
 
 ## Dependency Boundary Enforcement

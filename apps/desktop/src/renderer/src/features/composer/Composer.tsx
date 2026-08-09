@@ -238,6 +238,12 @@ type ComposerProps = {
   showEnvActionAnchors?: boolean;
   onBeforeSendTurn?: () => void;
   onPendingStatusChange?: (status?: string) => void;
+  /**
+   * The operator replied to this thread (sent a turn, or steered a running
+   * one). The Attention lens treats this as its only unread-clearing signal,
+   * because focusing a thread from a work queue must not empty the queue.
+   */
+  onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
   onRefreshNavigation?: () => Promise<void>;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
@@ -6306,6 +6312,11 @@ export function Composer(props: ComposerProps) {
           ? Boolean(currentSettings?.fastMode)
           : undefined,
       });
+      // Only once the turn is actually accepted. Reporting the reply before
+      // the await would clear the thread out of the Attention work queue even
+      // when the send threw — a message that never left, on a lens whose whole
+      // purpose is to not lose work silently.
+      props.onUserRepliedToThread?.(props.thread);
       if (response.queueStatus === "queued") {
         const queueEntryId = response.queueEntryId ?? response.turnId;
         if (backendQueueSubmission) {
@@ -7042,6 +7053,10 @@ export function Composer(props: ComposerProps) {
         setReviewConfig(undefined);
       }
       const response = await responsePromise;
+      // Steering is a reply too, and like the send path this only counts once
+      // the backend has taken it — a throw below must leave the thread in the
+      // Attention queue.
+      props.onUserRepliedToThread?.(props.thread);
       if (response.disposition === "scheduled" && response.scheduledAction) {
         const action = response.scheduledAction;
         const failureMessage = scheduledActionFailureMessage(action);

@@ -411,7 +411,15 @@ export function buildPullRequestStatusKey(
 }
 
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
-export type NavigationBrowseMode = "inbox" | "recents" | "directories";
+/**
+ * `attention` is the work-queue lens: threads with a live turn or waiting to
+ * be reviewed. The other three are browsing lenses over every thread.
+ */
+export type NavigationBrowseMode =
+  | "attention"
+  | "inbox"
+  | "recents"
+  | "directories";
 export type LaunchpadWorkMode = "local" | "worktree";
 
 export type CodexEnvironmentOption = {

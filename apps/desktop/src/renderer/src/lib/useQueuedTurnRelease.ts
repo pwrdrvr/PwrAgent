@@ -160,6 +160,14 @@ export function useQueuedTurnRelease(params: {
   desktopApi?: DesktopApi;
   selectedThread?: NavigationThreadSummary;
   threads: NavigationThreadSummary[];
+  /**
+   * A queued reply reaching the backend is still the operator replying — it
+   * is the same composer submit, just deferred past a running turn. The
+   * Attention lens clears unread on reply and nothing else, so without this
+   * a thread the operator answered while it was busy would sit in the work
+   * queue forever. Same contract as the composer's own prop.
+   */
+  onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
 }): void {
   const paramsRef = useRef(params);
   const inFlightScopeKeysRef = useRef(new Set<string>());
@@ -435,6 +443,7 @@ export function useQueuedTurnRelease(params: {
               ? Boolean(releaseThread.fastMode)
               : undefined,
         });
+        releaseState.onUserRepliedToThread?.(releaseThread);
       } catch (error) {
         restoreQueuedTurn(
           releaseState.composerDraftStore,

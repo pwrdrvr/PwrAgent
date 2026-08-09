@@ -480,7 +480,10 @@ const LEGACY_HANDOFF_AGENT_INSTRUCTIONS =
 export function normalizeNavigationBrowseMode(
   value: unknown,
 ): NavigationBrowseMode {
-  return value === "inbox" || value === "recents" || value === "directories"
+  return value === "attention"
+    || value === "inbox"
+    || value === "recents"
+    || value === "directories"
     ? value
     : DEFAULT_NAVIGATION_BROWSE_MODE;
 }

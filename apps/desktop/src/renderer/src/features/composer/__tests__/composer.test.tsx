@@ -16871,6 +16871,87 @@ describe("Composer", () => {
     });
   });
 
+  it("reports the reply so the Attention lens can clear unread", async () => {
+    // Focusing a thread from the Attention work queue deliberately leaves it
+    // unread; sending is the signal that clears it. If this stops firing, a
+    // replied-to thread stays in that queue forever.
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const onUserRepliedToThread = vi.fn();
+    const thread = {
+      id: "thread-1",
+      title: "Build Codex client",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "updated-since-seen" as const },
+    };
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+        onUserRepliedToThread={onUserRepliedToThread}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Ship it" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalled();
+    });
+    expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
+  });
+
+  it("does not report a reply the backend refused", async () => {
+    // The whole point of the Attention lens is that work is never dropped
+    // silently. Reporting on send-intent rather than on acceptance would pull
+    // a thread out of that queue for a message that never left the machine.
+    const startTurn = vi.fn(async () => {
+      throw new Error("backend unavailable");
+    });
+    const onUserRepliedToThread = vi.fn();
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "updated-since-seen" },
+        }}
+        onUserRepliedToThread={onUserRepliedToThread}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Ship it" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalled();
+    });
+    expect(onUserRepliedToThread).not.toHaveBeenCalled();
+  });
+
   it("sends pasted images with the reply", async () => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
