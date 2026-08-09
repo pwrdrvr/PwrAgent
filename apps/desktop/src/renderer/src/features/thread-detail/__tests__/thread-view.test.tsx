@@ -7,12 +7,14 @@ import type {
   AppServerBackendKind,
   AppServerNotification,
   AppServerThreadActivityEntry,
+  AppServerThreadEntry,
   AppServerPendingRequestNotification,
   MessagingPlatformStatus,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
   StartReviewRequest,
+  ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -895,6 +897,161 @@ describe("ThreadView", () => {
     await waitFor(() => {
       expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
     });
+  });
+
+  it("loads older transcript pages before showing historical tool output", async () => {
+    const targetTime = 1_800_000_000_000;
+    const loadOlder = vi.fn();
+    let loadedPageCount = 0;
+    const recentEntries = Array.from({ length: 5 }, (_, index) => ({
+      type: "message" as const,
+      id: `recent-message-${index}`,
+      role: "assistant" as const,
+      text: `Recent history ${index}`,
+      turn: {
+        id: `turn-recent-${index}`,
+        status: "completed" as const,
+        completedAt: targetTime + index + 1,
+      },
+    }));
+    const selectedThread = buildTimestampTargetThread(
+      "thread-tool-history",
+      "Historical tool output",
+    );
+    const toolAccounting: ThreadToolAccounting = {
+      alerts: [],
+      invocations: [
+        {
+          backend: "codex",
+          category: "shell",
+          debugLines: 0,
+          errorLines: 0,
+          estimatedOutputTokens: 50,
+          infoLines: 2,
+          invocationId: "invocation-old-1",
+          itemId: "tool-old-1",
+          noisy: false,
+          normalizedCommand: "old historical command",
+          observedAt: targetTime,
+          outputChars: 200,
+          outputLines: 2,
+          outputTruncated: false,
+          status: "completed",
+          threadId: selectedThread.id,
+          toolName: "commandExecution",
+          turnId: "turn-target",
+          updatedAt: targetTime,
+          warningLines: 0,
+        },
+      ],
+      summaries: [
+        {
+          category: "shell",
+          debugLines: 0,
+          errorLines: 0,
+          estimatedOutputTokens: 50,
+          infoLines: 2,
+          invocationCount: 1,
+          lastObservedAt: targetTime,
+          noisyInvocationCount: 0,
+          outputChars: 200,
+          outputLines: 2,
+          toolName: "commandExecution",
+          warningLines: 0,
+        },
+      ],
+    };
+
+    function Harness() {
+      const [entries, setEntries] = useState<AppServerThreadEntry[]>(recentEntries);
+      const [hasPreviousPage, setHasPreviousPage] = useState(true);
+      return (
+        <ThreadView
+          activeContextTab="tool-calls"
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          clearPendingRequest={() => undefined}
+          composerDisabled={false}
+          contextRailPinned
+          desktopApi={{}}
+          loading={false}
+          loadingMore={false}
+          messageCount={entries.length}
+          onLoadOlder={async () => {
+            loadOlder();
+            loadedPageCount += 1;
+            if (loadedPageCount === 1) {
+              setEntries((current) => [
+                {
+                  type: "message",
+                  id: "message-intermediate",
+                  role: "assistant",
+                  text: "Intermediate older page",
+                  turn: {
+                    id: "turn-intermediate",
+                    status: "completed",
+                    completedAt: targetTime - 1,
+                  },
+                },
+                ...current,
+              ]);
+              return;
+            }
+            setEntries((current) => [
+              {
+                type: "activity",
+                id: "activity-tool-old-1",
+                summary: "Ran historical command",
+                details: [
+                  {
+                    id: "tool-old-1-1",
+                    kind: "command",
+                    label: "old historical command",
+                    command: {
+                      displayCommand: "old historical command",
+                      rawCommand: "/bin/zsh -lc 'old historical command'",
+                      output: "historical captured output",
+                      exitCode: 0,
+                    },
+                  },
+                ],
+                turn: {
+                  id: "turn-target",
+                  status: "completed",
+                  completedAt: targetTime,
+                },
+              },
+              ...current,
+            ]);
+            setHasPreviousPage(false);
+          }}
+          removeOptimisticMessage={(_id) => undefined}
+          selectedThread={selectedThread}
+          skills={[]}
+          threadToolAccountingEnabled
+          toolAccounting={toolAccounting}
+          transcriptEntries={entries}
+          transcriptPagination={{
+            supportsPagination: true,
+            hasPreviousPage,
+            previousCursor: hasPreviousPage ? "cursor-1" : undefined,
+          }}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const instances = screen.getByRole("list", { name: "Command instances" });
+    fireEvent.click(within(instances).getByRole("button", { name: "Details" }));
+
+    expect(screen.getByText("Loading captured output…")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(loadOlder).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText(/historical captured output/)).toBeInTheDocument();
+    expect(screen.queryByText(/unavailable in transcript history/)).not.toBeInTheDocument();
   });
 
   it("pages manual find through hidden in-memory transcript history", async () => {

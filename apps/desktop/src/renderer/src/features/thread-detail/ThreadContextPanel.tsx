@@ -20,6 +20,7 @@ import type {
   CodexEnvironmentActionRun,
   ThreadPricingSummary,
   ThreadToolAccounting,
+  ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type { WindowPointerSnapshot } from "../../../../shared/window-pointer";
@@ -111,6 +112,8 @@ type ThreadContextPanelProps = {
   };
   toolAccounting?: ThreadToolAccounting;
   toolCallEntries?: AppServerThreadEntry[];
+  loadingToolCallDetailItemId?: string;
+  onRequestToolCallDetails?: (invocation: ThreadToolInvocationRecord) => void;
   pricingDisplayOptions?: {
     codexCredits: boolean;
     usd: boolean;
@@ -748,6 +751,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         return (
           <ToolCallsPanel
             entries={props.toolCallEntries}
+            loadingDetailItemId={props.loadingToolCallDetailItemId}
+            onRequestInvocationDetails={props.onRequestToolCallDetails}
             onScrollToTurn={props.onScrollToTurn}
             toolAccounting={props.toolAccounting}
           />

@@ -810,7 +810,7 @@ describe("ThreadContextPanel", () => {
         summary: "Ran 1 command",
         details: [
           {
-            id: "tool-1",
+            id: "tool-1-1",
             kind: "command",
             label: "poll session 40500",
             status: "completed",
@@ -853,6 +853,87 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/full captured output/)).toBeInTheDocument();
     expect(screen.getAllByText(/6,000/).length).toBeGreaterThan(0);
+  });
+
+  it("matches ACP transcript command details to their accounting item", () => {
+    const toolAccounting: ThreadToolAccounting = {
+      alerts: [],
+      invocations: [
+        {
+          backend: "acp:grok",
+          category: "search",
+          debugLines: 0,
+          errorLines: 0,
+          estimatedOutputTokens: 25,
+          infoLines: 1,
+          invocationId: "invocation-acp-1",
+          itemId: "tool-acp-1",
+          noisy: false,
+          normalizedCommand: "search source tree",
+          observedAt: 1_800_000_060_000,
+          outputChars: 100,
+          outputLines: 1,
+          outputTruncated: false,
+          status: "completed",
+          threadId: "thread-1",
+          toolName: "code_search",
+          turnId: "turn-1",
+          updatedAt: 1_800_000_060_000,
+          warningLines: 0,
+        },
+      ],
+      summaries: [
+        {
+          category: "search",
+          debugLines: 0,
+          errorLines: 0,
+          estimatedOutputTokens: 25,
+          infoLines: 1,
+          invocationCount: 1,
+          lastObservedAt: 1_800_000_060_000,
+          noisyInvocationCount: 0,
+          outputChars: 100,
+          outputLines: 1,
+          toolName: "code_search",
+          warningLines: 0,
+        },
+      ],
+    };
+    const toolCallEntries: AppServerThreadEntry[] = [
+      {
+        type: "activity",
+        id: "tool-acp-1",
+        summary: "Searched code",
+        details: [
+          {
+            id: "tool-acp-1:detail",
+            kind: "read",
+            label: "Searched code",
+            command: {
+              displayCommand: "search source tree",
+              source: "tool",
+              output: "ACP captured output",
+              exitCode: 0,
+            },
+          },
+        ],
+      },
+    ];
+
+    renderPanel({
+      activeTab: "tool-calls",
+      pinned: true,
+      threadToolAccountingEnabled: true,
+      toolAccounting,
+      toolCallEntries,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const instances = screen.getByRole("list", { name: "Command instances" });
+    fireEvent.click(within(instances).getByRole("button", { name: "Details" }));
+
+    expect(screen.getByText(/ACP captured output/)).toBeInTheDocument();
+    expect(screen.queryByText(/unavailable in transcript history/)).not.toBeInTheDocument();
   });
 
   it("hides the Tool calls tab while its experimental flag is off", () => {

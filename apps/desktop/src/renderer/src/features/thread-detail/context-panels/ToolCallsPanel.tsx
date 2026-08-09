@@ -16,6 +16,8 @@ import {
 
 type ToolCallsPanelProps = {
   entries?: AppServerThreadEntry[];
+  loadingDetailItemId?: string;
+  onRequestInvocationDetails?: (invocation: ThreadToolInvocationRecord) => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   toolAccounting?: ThreadToolAccounting;
 };
@@ -36,8 +38,11 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
   const accounting = props.toolAccounting;
   const totals = aggregateToolAccounting(accounting);
   const detailsByItemId = useMemo(
-    () => collectCommandDetails(props.entries ?? []),
-    [props.entries],
+    () => collectCommandDetails(
+      props.entries ?? [],
+      accounting?.invocations ?? [],
+    ),
+    [accounting?.invocations, props.entries],
   );
 
   return (
@@ -146,7 +151,9 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
                       detailsByItemId={detailsByItemId}
                       expandedInvocation={expandedInvocation}
                       invocations={invocations}
+                      loadingDetailItemId={props.loadingDetailItemId}
                       onExpandedInvocationChange={setExpandedInvocation}
+                      onRequestInvocationDetails={props.onRequestInvocationDetails}
                       onScrollToTurn={props.onScrollToTurn}
                       totalCount={summary.invocationCount}
                     />
@@ -165,7 +172,9 @@ function ToolInvocationList(props: {
   detailsByItemId: Map<string, AppServerThreadActivityDetail>;
   expandedInvocation?: string;
   invocations: ThreadToolInvocationRecord[];
+  loadingDetailItemId?: string;
   onExpandedInvocationChange: (invocationId: string | undefined) => void;
+  onRequestInvocationDetails?: (invocation: ThreadToolInvocationRecord) => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   totalCount: number;
 }) {
@@ -189,7 +198,8 @@ function ToolInvocationList(props: {
         {props.invocations.map((invocation) => {
           const expanded = props.expandedInvocation === invocation.invocationId;
           const transcriptDetail = props.detailsByItemId.get(invocation.itemId);
-          const detail = transcriptDetail ?? buildFallbackDetail(invocation);
+          const loadingDetail =
+            props.loadingDetailItemId === invocation.itemId;
           return (
             <li
               key={invocation.invocationId}
@@ -205,11 +215,14 @@ function ToolInvocationList(props: {
                   type="button"
                   className="button button--ghost tool-call-row__details"
                   aria-expanded={expanded}
-                  onClick={() =>
+                  onClick={() => {
+                    if (!expanded && !transcriptDetail) {
+                      props.onRequestInvocationDetails?.(invocation);
+                    }
                     props.onExpandedInvocationChange(
                       expanded ? undefined : invocation.invocationId,
-                    )
-                  }
+                    );
+                  }}
                 >
                   {expanded ? "Hide" : "Details"}
                 </button>
@@ -233,7 +246,18 @@ function ToolInvocationList(props: {
               />
               {expanded ? (
                 <div className="tool-call-instance__detail">
-                  <TranscriptCommandOutput detail={detail} />
+                  {transcriptDetail ? (
+                    <TranscriptCommandOutput detail={transcriptDetail} />
+                  ) : (
+                    <p
+                      className="tool-call-instance__detail-status"
+                      aria-live="polite"
+                    >
+                      {loadingDetail
+                        ? "Loading captured output…"
+                        : "Captured output is unavailable in transcript history."}
+                    </p>
+                  )}
                 </div>
               ) : null}
             </li>
@@ -246,38 +270,44 @@ function ToolInvocationList(props: {
 
 function collectCommandDetails(
   entries: AppServerThreadEntry[],
+  invocations: ThreadToolInvocationRecord[],
 ): Map<string, AppServerThreadActivityDetail> {
   const detailsByItemId = new Map<string, AppServerThreadActivityDetail>();
+  const itemIds = [...new Set(invocations.map((invocation) => invocation.itemId))]
+    .sort((left, right) => right.length - left.length);
   for (const entry of entries) {
     if (entry.type !== "activity") {
       continue;
     }
     for (const detail of entry.details) {
-      if (detail.kind === "command" && detail.command) {
-        detailsByItemId.set(detail.id, detail);
+      if (!detail.command) {
+        continue;
+      }
+      const itemId = itemIds.find((candidate) =>
+        detailMatchesInvocationItem(detail.id, candidate),
+      );
+      if (!itemId) {
+        continue;
+      }
+      const current = detailsByItemId.get(itemId);
+      if (
+        !current
+        || (current.command?.output === undefined
+          && detail.command.output !== undefined)
+      ) {
+        detailsByItemId.set(itemId, detail);
       }
     }
   }
   return detailsByItemId;
 }
 
-function buildFallbackDetail(
-  invocation: ThreadToolInvocationRecord,
-): AppServerThreadActivityDetail {
-  const command = invocation.normalizedCommand ?? invocation.toolName;
-  return {
-    id: invocation.itemId,
-    kind: "command",
-    label: command,
-    status: invocation.status === "pending" ? "in_progress" : invocation.status,
-    command: {
-      displayCommand: command,
-      rawCommand: command,
-      ...(invocation.exitCode !== undefined
-        ? { exitCode: invocation.exitCode }
-        : {}),
-    },
-  };
+function detailMatchesInvocationItem(detailId: string, itemId: string): boolean {
+  return (
+    detailId === itemId
+    || detailId.startsWith(`${itemId}-`)
+    || detailId.startsWith(`${itemId}:`)
+  );
 }
 
 function aggregateToolAccounting(
