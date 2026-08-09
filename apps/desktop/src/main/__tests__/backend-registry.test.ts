@@ -18129,12 +18129,89 @@ command = "pnpm dev"
       itemId: "managed-review:cmd-1",
     });
 
+    // Streamed accounting is coalesced, so nothing is written on the hot path.
+    expect(upsertThreadToolInvocation).not.toHaveBeenCalled();
+
+    await registry.close();
+
     // The forwarded copy is a view of activity the child already recorded.
-    // Running it back through the pipeline would bill the same command twice
-    // and write a second sqlite row per streamed chunk.
+    // Running it back through the pipeline would bill the same command twice,
+    // so the flush writes the child's row and only the child's row.
     expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
     expect(upsertThreadToolInvocation.mock.calls[0]?.[0]).toMatchObject({
       invocation: { threadId: "managed-review-child" },
+    });
+  });
+
+  it("coalesces streamed command output into one accounting write", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const upsertThreadToolInvocation = vi.fn(
+      async (params: { invocation: unknown }) => params.invocation,
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      upsertThreadToolInvocation,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: overlayStore as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    const deltas = ["first chunk\n", "second chunk\n", "third chunk\n"];
+    for (const delta of deltas) {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/commandExecution/outputDelta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "cmd-1",
+            delta,
+          },
+        },
+      } as AgentEvent);
+    }
+
+    // Codex streams 8 KiB chunks at hundreds per second; none of them may cost
+    // a sqlite read+write inline in the event pipeline.
+    expect(upsertThreadToolInvocation).not.toHaveBeenCalled();
+
+    await emit({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "cmd-1",
+            type: "commandExecution",
+            command: "find / -xdev",
+            status: "completed",
+            exitCode: 0,
+          },
+        },
+      },
+    } as AgentEvent);
+
+    // The accumulated stream lands first: the store stops summing once a row
+    // is terminal, so a delta written after the completion is under-counted.
+    expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(2);
+    expect(upsertThreadToolInvocation.mock.calls[0]?.[0]).toMatchObject({
+      invocation: {
+        itemId: "cmd-1",
+        outputChars: deltas.reduce((sum, delta) => sum + delta.length, 0),
+        status: "in_progress",
+      },
+    });
+    expect(upsertThreadToolInvocation.mock.calls[1]?.[0]).toMatchObject({
+      invocation: { itemId: "cmd-1", status: "completed" },
     });
 
     await registry.close();

@@ -208,6 +208,48 @@ export function buildToolOutputMetrics(
   };
 }
 
+/**
+ * Fold one streamed `item/commandExecution/outputDelta` record into the
+ * running accumulator for the same invocation.
+ *
+ * Codex emits fixed 8 KiB output deltas — a `find /` style command measured at
+ * ~444 deltas/second — and each one used to become its own sqlite read+write
+ * on the main process, inline in the event pipeline. Accumulating in memory
+ * and writing once per flush window keeps the totals identical while turning
+ * thousands of writes into a handful.
+ *
+ * The summing rules mirror `mergeThreadToolInvocationForUpsert` in
+ * `overlay-store-sqlite.ts` for the in-progress case, so a coalesced record
+ * merges onto the stored row exactly as the individual deltas would have.
+ */
+export function mergeStreamedToolInvocationDeltas(
+  accumulated: ThreadToolInvocationRecord,
+  incoming: ThreadToolInvocationRecord,
+): ThreadToolInvocationRecord {
+  const outputChars = accumulated.outputChars + incoming.outputChars;
+  return {
+    ...incoming,
+    debugLines: accumulated.debugLines + incoming.debugLines,
+    errorLines: accumulated.errorLines + incoming.errorLines,
+    estimatedOutputTokens: Math.ceil(outputChars / OUTPUT_TOKEN_CHAR_RATIO),
+    infoLines: accumulated.infoLines + incoming.infoLines,
+    observedAt: Math.max(accumulated.observedAt, incoming.observedAt),
+    outputChars,
+    outputLines: accumulated.outputLines + incoming.outputLines,
+    outputTruncated: accumulated.outputTruncated || incoming.outputTruncated,
+    ...(accumulated.startedAt !== undefined || incoming.startedAt !== undefined
+      ? {
+          startedAt: Math.min(
+            accumulated.startedAt ?? accumulated.observedAt,
+            incoming.startedAt ?? incoming.observedAt,
+          ),
+        }
+      : {}),
+    updatedAt: Math.max(accumulated.updatedAt, incoming.updatedAt),
+    warningLines: accumulated.warningLines + incoming.warningLines,
+  };
+}
+
 export function normalizeToolInvocationCommand(params: {
   args?: Record<string, unknown>;
   command?: string;

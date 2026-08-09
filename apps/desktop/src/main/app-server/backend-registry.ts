@@ -230,6 +230,7 @@ import {
   type ThreadOverlayState,
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
+  type ThreadToolInvocationRecord,
   type ThreadUsageLineRecord,
   type PrSummary,
   type WorktreeSnapshotSummary,
@@ -414,6 +415,7 @@ import {
 } from "./protocol-log-observer";
 import {
   detectNoisyPolling,
+  mergeStreamedToolInvocationDeltas,
   toolAccountingLookbackSince,
   toolInvocationFromNotification,
 } from "./tool-invocation-accounting";
@@ -6298,6 +6300,16 @@ type PendingCodexInvalidIdRecovery = CodexRetryableTurnStart & {
 
 const CODEX_INVALID_ID_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
 
+// How long streamed command-output accounting is held in memory before it is
+// written. Measured against `codex app-server`: a `find / -xdev` turn produced
+// 3,693 fixed 8 KiB `item/commandExecution/outputDelta` notifications over
+// 8.3s — ~444/second, 30 MB of output. One sqlite read+write per delta cost
+// 50-120ms of blocking main-process time per second of streaming, awaited
+// inline in `emit()` before any listener saw the event. Folding into a single
+// write per 250ms window (~110 deltas) drops that to under ~12ms/s and takes
+// it off the hot path entirely.
+const TOOL_INVOCATION_DELTA_FLUSH_INTERVAL_MS = 250;
+
 function isCodexInvalidIdRecoveryCooldownActive(
   attemptedAt: number,
   now: number,
@@ -6517,6 +6529,24 @@ export class DesktopBackendRegistry {
     TaskMonitorDelegationRecord
   >();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
+  /**
+   * Streamed command-output accounting waiting to be written, keyed by
+   * invocation id. Deltas fold together here instead of each one paying a
+   * sqlite read+write on the event hot path; see
+   * `TOOL_INVOCATION_DELTA_FLUSH_INTERVAL_MS`.
+   */
+  private readonly pendingToolInvocationDeltas = new Map<
+    string,
+    ThreadToolInvocationRecord
+  >();
+  private pendingToolInvocationDeltaTimer: NodeJS.Timeout | undefined;
+  /**
+   * Serializes every flush so a timer-driven write can never land after the
+   * `item/completed` write it accumulated before — the store keeps the
+   * terminal status and stops summing once a row is terminal, so an
+   * out-of-order delta flush would silently under-count the command's output.
+   */
+  private toolInvocationDeltaFlushChain: Promise<void> = Promise.resolve();
   /**
    * Best-effort cache of thread labels keyed by `buildThreadIdentityKey`, used
    * only to label native attention/terminal notifications so multiple
@@ -16794,6 +16824,13 @@ export class DesktopBackendRegistry {
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
     }
+    if (this.pendingToolInvocationDeltaTimer) {
+      clearTimeout(this.pendingToolInvocationDeltaTimer);
+      this.pendingToolInvocationDeltaTimer = undefined;
+    }
+    // A command streaming at quit time has accounting worth up to one flush
+    // window sitting in memory; write it before the store goes away.
+    await this.flushStreamedToolInvocationDeltas();
     for (const reconciliation of this.codexNativeSubAgentReconciliations.values()) {
       if (reconciliation.timer) {
         clearTimeout(reconciliation.timer);
@@ -20690,6 +20727,21 @@ export class DesktopBackendRegistry {
       return;
     }
 
+    if (event.notification.method === "item/commandExecution/outputDelta") {
+      // Streamed output never notifies anyone (`shouldNotify` stays false for
+      // deltas) and never triggers noisy-polling detection (that only looks at
+      // `write_stdin`), so nothing downstream needs this write to have landed
+      // before the event reaches listeners. Accumulate and let the flush timer
+      // write it.
+      this.bufferStreamedToolInvocationDelta(invocation);
+      return;
+    }
+
+    // Land accumulated stream output before the lifecycle row: the store stops
+    // summing once a row is terminal, so a delta flushed after `item/completed`
+    // would be dropped down to a MAX() and under-count the command.
+    await this.flushStreamedToolInvocationDeltas();
+
     const stored = await this.overlayStore.upsertThreadToolInvocation({
       invocation,
     });
@@ -20732,6 +20784,65 @@ export class DesktopBackendRegistry {
         backend: stored.backend,
         threadId: stored.threadId,
       });
+    }
+  }
+
+  private bufferStreamedToolInvocationDelta(
+    invocation: ThreadToolInvocationRecord,
+  ): void {
+    const accumulated = this.pendingToolInvocationDeltas.get(
+      invocation.invocationId,
+    );
+    this.pendingToolInvocationDeltas.set(
+      invocation.invocationId,
+      accumulated
+        ? mergeStreamedToolInvocationDeltas(accumulated, invocation)
+        : invocation,
+    );
+
+    if (this.pendingToolInvocationDeltaTimer) {
+      return;
+    }
+    this.pendingToolInvocationDeltaTimer = setTimeout(() => {
+      this.pendingToolInvocationDeltaTimer = undefined;
+      void this.flushStreamedToolInvocationDeltas();
+    }, TOOL_INVOCATION_DELTA_FLUSH_INTERVAL_MS);
+    this.pendingToolInvocationDeltaTimer.unref?.();
+  }
+
+  /**
+   * Write every accumulated stream-output record. Callers get a promise for
+   * their own flush *and* for any flush already in flight, so the terminal
+   * `item/completed` write always follows the deltas it came after.
+   */
+  private flushStreamedToolInvocationDeltas(): Promise<void> {
+    const flushed = this.toolInvocationDeltaFlushChain.then(() =>
+      this.writePendingToolInvocationDeltas(),
+    );
+    this.toolInvocationDeltaFlushChain = flushed.catch(() => undefined);
+    return flushed;
+  }
+
+  private async writePendingToolInvocationDeltas(): Promise<void> {
+    if (
+      this.pendingToolInvocationDeltas.size === 0
+      || typeof this.overlayStore.upsertThreadToolInvocation !== "function"
+    ) {
+      return;
+    }
+    const pending = [...this.pendingToolInvocationDeltas.values()];
+    this.pendingToolInvocationDeltas.clear();
+    for (const invocation of pending) {
+      try {
+        await this.overlayStore.upsertThreadToolInvocation({ invocation });
+      } catch (error) {
+        backendRegistryLog.warn("tool invocation output accounting write failed", {
+          backend: invocation.backend,
+          error: error instanceof Error ? error.message : String(error),
+          invocationId: invocation.invocationId,
+          threadId: invocation.threadId,
+        });
+      }
     }
   }
 
