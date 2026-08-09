@@ -220,6 +220,167 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("waits for earlier live usage before crossing a terminal durability boundary", async () => {
+    const overlayLookupStarted = createDeferred();
+    const releaseOverlayLookup = createDeferred();
+    const readOverlay = store.getThreadOverlayState.bind(store);
+    vi.spyOn(store, "getThreadOverlayState").mockImplementationOnce(
+      async (params) => {
+        overlayLookupStarted.resolve();
+        await releaseOverlayLookup.promise;
+        return await readOverlay(params);
+      },
+    );
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    let usageEmit = Promise.resolve();
+    let terminalEmit = Promise.resolve();
+    let terminalDelivered = false;
+    registry.onEvent((event) => {
+      if (event.notification.method === "turn/completed") {
+        terminalDelivered = true;
+      }
+    });
+
+    try {
+      usageEmit = emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-terminal-race",
+        turnId: "turn-terminal-race",
+      }));
+      await overlayLookupStarted.promise;
+
+      terminalEmit = emit(
+        buildTurnCompletedEvent("thread-terminal-race", "turn-terminal-race"),
+      );
+      await waitForAsyncWork();
+
+      expect(terminalDelivered).toBe(false);
+      expect(batchWrite).not.toHaveBeenCalled();
+
+      releaseOverlayLookup.resolve();
+      await Promise.all([usageEmit, terminalEmit]);
+
+      expect(batchWrite).toHaveBeenCalledTimes(1);
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-terminal-race",
+        })).lines[0],
+      ).toMatchObject({ inputTokens: 1_000 });
+    } finally {
+      releaseOverlayLookup.resolve();
+      await Promise.allSettled([usageEmit, terminalEmit]);
+      await registry.close();
+    }
+  });
+
+  it("persists pre-close live usage after a delayed lookup and ignores new usage", async () => {
+    const overlayLookupStarted = createDeferred();
+    const releaseOverlayLookup = createDeferred();
+    const readOverlay = store.getThreadOverlayState.bind(store);
+    const overlayLookup = vi
+      .spyOn(store, "getThreadOverlayState")
+      .mockImplementationOnce(async (params) => {
+        overlayLookupStarted.resolve();
+        await releaseOverlayLookup.promise;
+        return await readOverlay(params);
+      });
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    let usageEmit = Promise.resolve();
+    let postCloseEmit = Promise.resolve();
+    let closePromise: Promise<void> | undefined;
+    let closeSettled = false;
+
+    try {
+      usageEmit = emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-close-race",
+        turnId: "turn-close-race",
+      }));
+      await overlayLookupStarted.promise;
+
+      closePromise = registry.close().finally(() => {
+        closeSettled = true;
+      });
+      postCloseEmit = emit(buildLiveUsageEvent({
+        inputTokens: 2_000,
+        threadId: "thread-close-race",
+        turnId: "turn-close-race",
+      }));
+      await postCloseEmit;
+      await waitForAsyncWork();
+
+      expect(closeSettled).toBe(false);
+      expect(overlayLookup).toHaveBeenCalledTimes(1);
+      expect(batchWrite).not.toHaveBeenCalled();
+
+      releaseOverlayLookup.resolve();
+      await Promise.all([usageEmit, closePromise]);
+
+      expect(batchWrite).toHaveBeenCalledTimes(1);
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-close-race",
+        })).lines[0],
+      ).toMatchObject({ inputTokens: 1_000 });
+    } finally {
+      releaseOverlayLookup.resolve();
+      closePromise ??= registry.close();
+      await Promise.allSettled([usageEmit, postCloseEmit, closePromise]);
+    }
+  });
+
+  it("releases the terminal barrier when earlier live usage derivation fails", async () => {
+    vi.spyOn(store, "getThreadOverlayState").mockRejectedValueOnce(
+      new Error("overlay unavailable"),
+    );
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    try {
+      const usageEmit = emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-usage-error",
+        turnId: "turn-usage-error",
+      }));
+      const usageRejected = expect(usageEmit).rejects.toThrow(
+        "overlay unavailable",
+      );
+      const terminalEmit = emit(
+        buildTurnCompletedEvent("thread-usage-error", "turn-usage-error"),
+      );
+
+      await Promise.all([
+        usageRejected,
+        expect(terminalEmit).resolves.toBeUndefined(),
+      ]);
+      expect(batchWrite).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("flushes coalesced live usage on the bounded timer", async () => {
     vi.useFakeTimers();
     const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
@@ -493,6 +654,10 @@ function createDeferred(): {
     resolve = promiseResolve;
   });
   return { promise, resolve };
+}
+
+async function waitForAsyncWork(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function buildInvocation(invocationId: string) {

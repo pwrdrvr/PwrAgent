@@ -6335,6 +6335,12 @@ type PendingLiveThreadUsageLine = {
   observationSequence: number;
 };
 
+type LiveThreadUsageEmitWork = {
+  observationSequence: number;
+  settled: Promise<void>;
+  settle: () => void;
+};
+
 function isCodexInvalidIdRecoveryCooldownActive(
   attemptedAt: number,
   now: number,
@@ -6558,6 +6564,12 @@ export class DesktopBackendRegistry {
     PendingLiveThreadUsageLine
   >();
   private liveThreadUsageObservationSequence = 0;
+  /**
+   * Usage notifications overlap at the JSON-RPC transport. Register each one
+   * before `emit` first yields so a later terminal event or close can capture
+   * an exact arrival-ordered durability barrier.
+   */
+  private readonly liveThreadUsageEmitWork = new Set<LiveThreadUsageEmitWork>();
   private pendingLiveThreadUsageTimer: NodeJS.Timeout | undefined;
   /**
    * Serializes timer, terminal, retry, and shutdown drains. A caller awaiting
@@ -16877,6 +16889,11 @@ export class DesktopBackendRegistry {
 
   async close(): Promise<void> {
     this.closed = true;
+    // `closed` rejects observations that enter from this point forward. The
+    // snapshot was registered synchronously at each earlier usage emit's
+    // entry, so waiting it cannot miss work still deriving its sqlite row.
+    const liveThreadUsageEmitBarrier =
+      this.waitForLiveThreadUsageEmitWork();
     this.acceptedSteerRequests.clear();
     this.acceptedThreadControlRequests.clear();
     this.acceptedActiveTurnControlRequests.clear();
@@ -16888,6 +16905,7 @@ export class DesktopBackendRegistry {
     // Live usage and command output may each have one bounded window sitting
     // in memory. `closed` prevents either drain from re-arming its timer; the
     // serialized flush chains ensure no write survives close().
+    await liveThreadUsageEmitBarrier;
     await this.flushLiveThreadUsageLines();
     // A command streaming at quit time has accounting worth up to one flush
     // window sitting in memory; write it before the store goes away. The flush
@@ -19379,19 +19397,48 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private registerLiveThreadUsageEmitWork(): LiveThreadUsageEmitWork {
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const work = {
+      observationSequence: ++this.liveThreadUsageObservationSequence,
+      settled,
+      settle,
+    };
+    this.liveThreadUsageEmitWork.add(work);
+    return work;
+  }
+
+  private finishLiveThreadUsageEmitWork(
+    work: LiveThreadUsageEmitWork,
+  ): void {
+    if (!this.liveThreadUsageEmitWork.delete(work)) {
+      return;
+    }
+    work.settle();
+  }
+
+  private async waitForLiveThreadUsageEmitWork(): Promise<void> {
+    const pending = Array.from(
+      this.liveThreadUsageEmitWork,
+      (work) => work.settled,
+    );
+    await Promise.all(pending);
+  }
+
   private async recordLiveThreadUsage(
     event: AgentEvent,
     observationSequence?: number,
   ): Promise<void> {
     const notification = event.notification;
-    if (notification.method !== "thread/tokenUsage/updated") {
+    if (
+      notification.method !== "thread/tokenUsage/updated"
+      || observationSequence === undefined
+    ) {
       return;
     }
-    if (this.closed) {
-      return;
-    }
-    const resolvedObservationSequence =
-      observationSequence ?? ++this.liveThreadUsageObservationSequence;
     const threadId = notification.params.threadId;
     if (!threadId) {
       return;
@@ -19483,9 +19530,6 @@ export class DesktopBackendRegistry {
       const batchesLiveUsage =
         typeof this.overlayStore.upsertThreadUsageLines === "function";
       if (!batchesLiveUsage) {
-        if (this.closed) {
-          return;
-        }
         await this.overlayStore.upsertThreadUsageLine({ line });
       }
       // Best-effort: a failure here must never block the load-bearing pricing
@@ -19514,7 +19558,7 @@ export class DesktopBackendRegistry {
         this.bufferLiveThreadUsageLine({
           backend: event.backend,
           line,
-          observationSequence: resolvedObservationSequence,
+          observationSequence,
         });
         return;
       }
@@ -19528,9 +19572,6 @@ export class DesktopBackendRegistry {
   private bufferLiveThreadUsageLine(
     pending: PendingLiveThreadUsageLine,
   ): void {
-    if (this.closed) {
-      return;
-    }
     const existing = this.pendingLiveThreadUsageLines.get(
       pending.line.usageLineId,
     );
@@ -28424,11 +28465,42 @@ export class DesktopBackendRegistry {
     } as AgentEvent);
   }
 
-  private async emit(event: AgentEvent): Promise<void> {
-    const liveThreadUsageObservationSequence =
-      event.notification.method === "thread/tokenUsage/updated"
-        ? ++this.liveThreadUsageObservationSequence
+  private emit(event: AgentEvent): Promise<void> {
+    const isLiveThreadUsage =
+      event.notification.method === "thread/tokenUsage/updated";
+    if (isLiveThreadUsage && this.closed) {
+      return Promise.resolve();
+    }
+    const liveThreadUsageWork = isLiveThreadUsage
+      ? this.registerLiveThreadUsageEmitWork()
+      : undefined;
+    const method = event.notification.method;
+    const precedingLiveThreadUsageBarrier =
+      method === "turn/completed"
+      || method === "turn/failed"
+      || method === "turn/cancelled"
+        ? this.waitForLiveThreadUsageEmitWork()
         : undefined;
+    const emitted = this.emitAfterLiveThreadUsageRegistration(
+      event,
+      liveThreadUsageWork,
+      precedingLiveThreadUsageBarrier,
+    );
+    return liveThreadUsageWork
+      ? emitted.finally(() => {
+          // Earlier pipeline stages may reject before usage derivation. Always
+          // release the terminal/close barrier; the successful path finishes
+          // before listener fan-out to avoid a listener-driven close deadlock.
+          this.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
+        })
+      : emitted;
+  }
+
+  private async emitAfterLiveThreadUsageRegistration(
+    event: AgentEvent,
+    liveThreadUsageWork: LiveThreadUsageEmitWork | undefined,
+    precedingLiveThreadUsageBarrier: Promise<void> | undefined,
+  ): Promise<void> {
     await this.forwardManagedReviewActivity(event);
     event = await this.withThreadMessageContext(event);
     this.rememberFileChangeApprovalContext(event);
@@ -28527,6 +28599,7 @@ export class DesktopBackendRegistry {
       // A terminal event is the turn's explicit durability boundary. Flush all
       // coalesced turns in one transaction before terminal state reaches any
       // listener, even when several turns were active concurrently.
+      await precedingLiveThreadUsageBarrier;
       await this.flushLiveThreadUsageLines();
       const notification = event.notification as {
         params: {
@@ -28889,7 +28962,7 @@ export class DesktopBackendRegistry {
 
     await this.recordLiveThreadUsage(
       event,
-      liveThreadUsageObservationSequence,
+      liveThreadUsageWork?.observationSequence,
     );
     await this.recordToolInvocationAccounting(event);
     this.forgetCompletedTurnReplayObservations(event);
@@ -28902,6 +28975,9 @@ export class DesktopBackendRegistry {
     this.notifyForAttentionRequired(event);
     await this.notifyForTerminalOutcome(event);
 
+    if (liveThreadUsageWork) {
+      this.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
+    }
     await this.emitToListeners(event);
   }
 
