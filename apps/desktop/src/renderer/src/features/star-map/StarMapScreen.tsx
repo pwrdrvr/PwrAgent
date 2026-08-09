@@ -13,6 +13,7 @@ import {
   formatFederationPeerDisplayLabelParts,
   isRemoteFederationTarget,
   STAR_MAP_LOAD_CARD_KEY,
+  STAR_MAP_LOAD_CARD_POSITION_KEY,
   type FederationPeerSummary,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -116,6 +117,13 @@ const LANE_CANVAS_PADDING = 120;
  * many thread cards the rings hold.
  */
 const ORBIT_LOAD_CARD_DY = -150;
+/**
+ * The load card paints above every thread card in its cloud. Thread cards
+ * take z 0..n by stack position, so a load card left at 0 ends up UNDER the
+ * cards it sits among — and an operator-summoned readout hiding behind a
+ * thread card reads as a broken button.
+ */
+const STAR_MAP_LOAD_CARD_Z = LANE_MAX_CARDS_PER_INSTANCE + 10;
 /**
  * Chat cards float above the map chrome (close button, filters, view
  * options) so a card being read is never underneath a control strip.
@@ -1422,11 +1430,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
             baseSlot={loadSlot}
             offset={arrangement.offsetFor(
               position.instanceId,
-              STAR_MAP_LOAD_CARD_KEY,
+              STAR_MAP_LOAD_CARD_POSITION_KEY,
             )}
             width={position.cardWidth}
             centered={orbitMode}
-            stackIndex={0}
+            stackIndex={STAR_MAP_LOAD_CARD_Z}
             sharedWith={sharedMachineLabels.get(position.instanceId)}
             drag={
               health?.instanceId
@@ -1436,7 +1444,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     onCommitOffset: (offset) =>
                       arrangement.setCardPosition(
                         position.instanceId,
-                        STAR_MAP_LOAD_CARD_KEY,
+                        STAR_MAP_LOAD_CARD_POSITION_KEY,
                         offset,
                       ),
                   }

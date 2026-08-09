@@ -64,10 +64,13 @@ describe("StarMapLoadCard", () => {
     expect(metric("CPU")).toBe("150%");
   });
 
-  it("falls back to the raw average when the core count is unknown", () => {
+  it("relabels the raw average so it cannot be read as a percentage", () => {
+    // A peer on an older build reports no core count, because the figure is
+    // sampled on the machine it describes. "CPU 2.50" would read as a
+    // percentage; "CPU load 2.50" cannot.
     renderCard({ load: buildLoad({ loadAvg1: 2.5, cpuCount: undefined }) });
 
-    expect(metric("CPU")).toBe("2.50");
+    expect(metric("CPU load")).toBe("2.50");
   });
 
   it("reads three zero load averages as not reported, not as idle", () => {

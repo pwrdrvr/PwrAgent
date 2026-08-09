@@ -41,6 +41,17 @@ export type StarMapArrangementEntry = {
  */
 export const STAR_MAP_LOAD_CARD_KEY = "system:load";
 
+/**
+ * Where a load card sits, kept separate from whether it is shown.
+ *
+ * Membership and position cannot share one entry: closing a card has to
+ * un-place it, and the only "absent" value an entry has is the null-pair
+ * tombstone — which is also how a card forgets its offset. Sharing them made
+ * closing a card destroy the spot the operator had dragged it to, so
+ * reopening dumped it back on top of whatever sits at the default.
+ */
+export const STAR_MAP_LOAD_CARD_POSITION_KEY = "system:load:position";
+
 export function starMapArrangementEntryKey(
   entry: Pick<StarMapArrangementEntry, "instanceId" | "threadKey">,
 ): string {

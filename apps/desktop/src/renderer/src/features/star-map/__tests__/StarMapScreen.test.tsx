@@ -171,6 +171,211 @@ describe("StarMapScreen", () => {
     ).toBeTruthy();
   });
 
+  it("removes the load card for good when dismissed", async () => {
+    const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
+    let emit: ((event: unknown) => void) | undefined;
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      onAgentEvent: vi.fn((listener: (event: unknown) => void) => {
+        emit = listener;
+        return () => undefined;
+      }),
+      readStarMapArrangement: vi.fn(async () => ({
+        entries: [
+          {
+            instanceId: "pwr_local",
+            threadKey: "system:load",
+            dx: 30,
+            dy: 40,
+            updatedAt: 10,
+            by: "pwr_local",
+          },
+        ],
+      })),
+      setStarMapCardPosition,
+      readFederationInstanceLoad: vi.fn(async () => ({})),
+    } as unknown as DesktopApi;
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).not.toBeNull();
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Remove load card/ }),
+    );
+
+    // Dismiss must UNPLACE the card, not merely clear its drag offset —
+    // otherwise it reappears at its default spot, which is the one place a
+    // dragged-away card was moved to escape.
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).toBeNull();
+    });
+    expect(setStarMapCardPosition).toHaveBeenCalledWith({
+      instanceId: "pwr_local",
+      threadKey: "system:load",
+      dx: null,
+      dy: null,
+    });
+
+    // And it stays gone once the durable tombstone echoes back off the bus.
+    emit?.({
+      notification: {
+        method: "starMap/arrangement/changed",
+        params: {
+          entries: [
+            {
+              instanceId: "pwr_local",
+              threadKey: "system:load",
+              dx: null,
+              dy: null,
+              updatedAt: 20,
+              by: "pwr_local",
+            },
+          ],
+        },
+      },
+    });
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).toBeNull();
+    });
+  });
+
+  it("keeps a dragged load card's position across close and reopen", async () => {
+    const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readStarMapArrangement: vi.fn(async () => ({
+        entries: [
+          // Shown...
+          {
+            instanceId: "pwr_local",
+            threadKey: "system:load",
+            dx: 0,
+            dy: 0,
+            updatedAt: 10,
+            by: "pwr_local",
+          },
+          // ...and dragged well away from its default spot.
+          {
+            instanceId: "pwr_local",
+            threadKey: "system:load:position",
+            dx: -120,
+            dy: 260,
+            updatedAt: 10,
+            by: "pwr_local",
+          },
+        ],
+      })),
+      setStarMapCardPosition,
+      readFederationInstanceLoad: vi.fn(async () => ({})),
+    };
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    const shell = async () =>
+      await waitFor(() => {
+        const node = container.querySelector<HTMLElement>(
+          ".star-map-load-shell",
+        );
+        if (!node) throw new Error("no load card");
+        return node;
+      });
+
+    const placed = await shell();
+    const left = placed.style.left;
+    const top = placed.style.top;
+    expect(left).not.toBe("0px");
+
+    fireEvent.click(screen.getByRole("button", { name: /^Remove load card/ }));
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-shell")).toBeNull();
+    });
+    // Closing writes ONLY the membership key. Position lives under its own
+    // key, so a close cannot forget where the operator put the card.
+    expect(setStarMapCardPosition).toHaveBeenCalledWith({
+      instanceId: "pwr_local",
+      threadKey: "system:load",
+      dx: null,
+      dy: null,
+    });
+    expect(setStarMapCardPosition).not.toHaveBeenCalledWith(
+      expect.objectContaining({ threadKey: "system:load:position" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Show load for/ }));
+    const reopened = await shell();
+    expect(reopened.style.left).toBe(left);
+    expect(reopened.style.top).toBe(top);
+  });
+
+  it("paints the load card above the thread cards it sits among", async () => {
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readStarMapArrangement: vi.fn(async () => ({
+        entries: [
+          {
+            instanceId: "pwr_local",
+            threadKey: "system:load",
+            dx: 0,
+            dy: 0,
+            updatedAt: 10,
+            by: "pwr_local",
+          },
+        ],
+      })),
+      setStarMapCardPosition: vi.fn(async () => ({ entries: [] })),
+      readFederationInstanceLoad: vi.fn(async () => ({})),
+    };
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[unreadThread("t1"), unreadThread("t2")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    const load = await waitFor(() => {
+      const node = container.querySelector<HTMLElement>(".star-map-load-shell");
+      if (!node) throw new Error("no load card");
+      return node;
+    });
+    const threadZ = [
+      ...container.querySelectorAll<HTMLElement>(".star-map-card-shell"),
+    ]
+      .filter((shell) => shell.dataset.threadKey)
+      .map((shell) => Number(shell.style.zIndex));
+
+    // An operator-summoned readout hiding behind a thread card reads as a
+    // broken button, so it outranks every card in its cloud.
+    expect(threadZ.length).toBeGreaterThan(0);
+    expect(Number(load.style.zIndex)).toBeGreaterThan(Math.max(...threadZ));
+  });
+
   it("does not move a single thread card when the load card opens", async () => {
     const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
     const desktopApi: DesktopApi = {

@@ -109,6 +109,15 @@ export function StarMapLoadCard(props: {
     : load.cpuCount
       ? `${Math.round((load.loadAvg1 / load.cpuCount) * 100)}%`
       : load.loadAvg1.toFixed(2);
+  /**
+   * Without a core count there is no percentage to show, and a bare "3.40"
+   * under a "CPU" label reads like one. The label carries the unit instead
+   * so the two cases cannot be confused — a peer on an older build reports
+   * no core count, since the figure is sampled on the machine it describes.
+   */
+  const cpuLabel = load && loadAvgReported && !load.cpuCount
+    ? "CPU load"
+    : "CPU";
   const cpuDetail = !load
     ? ""
     : !loadAvgReported
@@ -142,9 +151,9 @@ export function StarMapLoadCard(props: {
           <>
             <dl className="star-map-load-card__metrics">
               <div>
-                <dt>CPU</dt>
+                <dt>{cpuLabel}</dt>
                 <dd
-                  aria-label={`CPU: ${cpuValue}. ${cpuDetail}`}
+                  aria-label={`${cpuLabel}: ${cpuValue}. ${cpuDetail}`}
                   onMouseEnter={(event) =>
                     cpuTooltip.show(event.currentTarget, cpuDetail)
                   }
