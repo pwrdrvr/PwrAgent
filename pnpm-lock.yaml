@@ -103,8 +103,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@pwrdrvr/agent-acp':
-        specifier: ^0.12.0
-        version: 0.12.3
+        specifier: ^0.13.0
+        version: 0.13.0(zod@4.3.6)
       '@pwrdrvr/agent-client':
         specifier: ^0.6.1
         version: 0.6.1
@@ -341,8 +341,10 @@ packages:
   '@adobe/css-tools@4.4.4':
     resolution: {integrity: sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg==}
 
-  '@agentclientprotocol/sdk@0.4.5':
-    resolution: {integrity: sha512-1cKCZvy6xJ+9n7BkUzrgFfj+waJOj21HaiYvbE4elxBCT7WAHAk5zaQ5cQfmw876TZoEP062Vxy7qkYp1rzEfw==}
+  '@agentclientprotocol/sdk@1.3.0':
+    resolution: {integrity: sha512-i3h/efaeuMUFAO1HSfo97QZQnnvMd7wWBYtBsdL6UMZg3a78sk3Ffya5Xu7C7tYsXomXoDXJBAzQF2PcFKAhIQ==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
 
   '@asamuzakjp/css-color@5.1.11':
     resolution: {integrity: sha512-KVw6qIiCTUQhByfTd78h2yD1/00waTmm9uy/R7Ck/ctUyAPj+AEDLkQIdJW0T8+qGgj3j5bpNKK7Q3G+LedJWg==}
@@ -1051,8 +1053,8 @@ packages:
   '@protobufjs/utf8@1.1.2':
     resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
 
-  '@pwrdrvr/agent-acp@0.12.3':
-    resolution: {integrity: sha512-pjZLp3XKQYPkUNdrE9z2t+lMs3y64/KoANqQKAYcgzG4zdGt2NCCsk9hJo2kg7NMW6W4tKhbhn+TPG78XZLQlg==}
+  '@pwrdrvr/agent-acp@0.13.0':
+    resolution: {integrity: sha512-PHPLX++fnS1mWRruQV7eUJEDmcphKGCDUsVEcEmqYSObDbn6BqOKYAsmVaYJu3TnAdF0k5GJbmnbvALz/Jv3Lg==}
 
   '@pwrdrvr/agent-client@0.6.1':
     resolution: {integrity: sha512-Q8jyGN9c3BfGTW1ba3baFliaF0bWpabV2rYgKmgwZypB3BoPiraZ3qv4X4piHNKVHJ+XK8PdNtyGC78c6sLHNA==}
@@ -4407,9 +4409,6 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
-
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
@@ -4420,9 +4419,9 @@ snapshots:
 
   '@adobe/css-tools@4.4.4': {}
 
-  '@agentclientprotocol/sdk@0.4.5':
+  '@agentclientprotocol/sdk@1.3.0(zod@4.3.6)':
     dependencies:
-      zod: 3.25.76
+      zod: 4.3.6
 
   '@asamuzakjp/css-color@5.1.11':
     dependencies:
@@ -5135,11 +5134,13 @@ snapshots:
 
   '@protobufjs/utf8@1.1.2': {}
 
-  '@pwrdrvr/agent-acp@0.12.3':
+  '@pwrdrvr/agent-acp@0.13.0(zod@4.3.6)':
     dependencies:
-      '@agentclientprotocol/sdk': 0.4.5
+      '@agentclientprotocol/sdk': 1.3.0(zod@4.3.6)
       '@pwrdrvr/agent-core': 0.2.0
       '@pwrdrvr/agent-transport': 0.1.6
+    transitivePeerDependencies:
+      - zod
 
   '@pwrdrvr/agent-client@0.6.1':
     dependencies:
@@ -8938,8 +8939,6 @@ snapshots:
   zod-validation-error@4.0.2(zod@4.3.6):
     dependencies:
       zod: 4.3.6
-
-  zod@3.25.76: {}
 
   zod@4.3.6: {}
 
