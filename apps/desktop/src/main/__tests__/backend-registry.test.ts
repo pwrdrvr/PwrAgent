@@ -56,6 +56,7 @@ import type {
   TaskMonitorResponse,
   ThreadExecutionMode,
   ThreadOverlayState,
+  ThreadToolAccounting,
   ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -326,7 +327,13 @@ function createOverlayStoreMock(params?: {
   executionMode?: "default" | "full-access";
   launchpadDefaults?: NavigationLaunchpadDefaults;
   overlays?: Record<string, ThreadOverlayState>;
+  toolAccounting?: ThreadToolAccounting;
 }) {
+  const toolAccounting: ThreadToolAccounting = params?.toolAccounting ?? {
+    alerts: [],
+    invocations: [],
+    summaries: [],
+  };
   const initialOverlay = params?.executionMode
     ? {
         backend: "codex" as const,
@@ -420,6 +427,7 @@ function createOverlayStoreMock(params?: {
       ),
       summaries: [],
     }),
+    readThreadToolAccounting: async () => toolAccounting,
     upsertThreadMessageOrigin,
     readThreadMessageOrigins: async ({
       backend,
@@ -5171,6 +5179,84 @@ describe("DesktopBackendRegistry", () => {
     expect(
       viewOnly.replay.entries.some((entry) => entry.type === "review"),
     ).toBe(false);
+
+    await registry.close();
+  });
+
+  it("includes persisted tool accounting when reading ACP threads", async () => {
+    // The Pricing panel's "Tool output" section renders
+    // `response.toolAccounting`. Live `thread/toolAccounting/updated` events
+    // patch it into the session while a turn runs, and any readThread replaces
+    // the whole response — so a read that omits the field erases the section.
+    // On an ACP thread that is exactly what the operator sees: tool output
+    // during the turn, gone the moment it ends. The Codex read path has always
+    // returned this; the ACP path did not.
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const threadId = "grok-tool-accounting";
+    const toolAccounting: ThreadToolAccounting = {
+      alerts: [],
+      invocations: [
+        {
+          backend: acpBackendId,
+          threadId,
+          itemId: "item-1",
+          invocationId: "inv-1",
+          toolName: "shell",
+          category: "shell",
+          status: "completed",
+          observedAt: 3_000,
+          updatedAt: 3_000,
+          outputChars: 2_200,
+          outputLines: 23,
+          estimatedOutputTokens: 550,
+          warningLines: 0,
+          errorLines: 0,
+          infoLines: 1,
+          debugLines: 0,
+          outputTruncated: false,
+          noisy: false,
+        },
+      ],
+      summaries: [
+        {
+          category: "shell",
+          toolName: "shell",
+          invocationCount: 11,
+          outputChars: 36_000,
+          outputLines: 606,
+          estimatedOutputTokens: 8_974,
+          warningLines: 0,
+          errorLines: 0,
+          infoLines: 1,
+          debugLines: 0,
+          noisyInvocationCount: 0,
+          lastObservedAt: 3_000,
+        },
+      ],
+    };
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore: createOverlayStoreMock({ toolAccounting }),
+      sessionId: threadId,
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: threadId,
+          title: "ACP session",
+          createdAt: 1_000,
+          updatedAt: 4_000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+    });
+
+    const response = await registry.readThread({
+      backend: acpBackendId,
+      threadId,
+    });
+
+    expect(response.toolAccounting).toEqual(toolAccounting);
 
     await registry.close();
   });
