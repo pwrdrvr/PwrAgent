@@ -2531,17 +2531,23 @@ describe("DesktopSettingsService", () => {
     const initial = await service.readSettingsProjection();
     expect(initial.acpAgents.gemini.enabled).toBe(true);
     expect(initial.acpAgents.kimi.enabled).toBe(true);
+    expect(initial.acpAgents["claude-acp"]?.enabled).toBe(true);
 
     await service.writeConfigPatchTargeted({
-      acpAgents: { kimi: { enabled: false } },
+      acpAgents: {
+        kimi: { enabled: false },
+        "claude-acp": { enabled: false },
+      },
     });
 
     const tomlOnDisk = fs.readFileSync(configPath, "utf8");
     expect(tomlOnDisk).toContain("[acp_agents.kimi]");
     expect(tomlOnDisk).toContain("enabled = false");
+    expect(tomlOnDisk).toContain("[acp_agents.claude-acp]");
 
     const snapshot = await service.readSettingsProjection();
     expect(snapshot.acpAgents.kimi.enabled).toBe(false);
+    expect(snapshot.acpAgents["claude-acp"]?.enabled).toBe(false);
     // Untouched agents stay enabled.
     expect(snapshot.acpAgents.gemini.enabled).toBe(true);
   });
@@ -3927,6 +3933,35 @@ describe("DesktopSettingsService", () => {
     expect(written).toContain("# keep this operator comment");
     expect(written).toContain("thread_tool_accounting = true");
     expect(written).toContain("managed_review = true");
+  });
+
+  it("defaults experimental Claude ACP to off and persists an explicit opt-in", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).experimental.claudeAcp).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(service.resolveClaudeAcpExperimentalEnabled()).toBe(false);
+
+    await service.writeConfigPatch({
+      experimental: { claudeAcp: true },
+    });
+
+    expect((await service.readSettings()).experimental.claudeAcp).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(service.resolveClaudeAcpExperimentalEnabled()).toBe(true);
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "claude_acp = true",
+    );
   });
 
   it("preserves unknown sections written by other builds when saving a patch", async () => {

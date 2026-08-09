@@ -83,6 +83,7 @@ export const THREAD_MIGRATION_RETRY_CHANNEL = "thread-migration:retry";
 export const FOCUSED_DIFF_ANALYZE_CHANNEL = "focused-diff:analyze";
 export const BACKEND_LIST_CHANNEL = "backend:list";
 export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";
+export const ACP_AGENT_INSTALL_CHANNEL = "acp-agents:install";
 export const ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL =
   "acp-agents:acknowledge-update";
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";

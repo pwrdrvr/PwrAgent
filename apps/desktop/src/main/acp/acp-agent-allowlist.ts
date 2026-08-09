@@ -40,6 +40,13 @@ const BANNED_ACP_REGISTRY_IDS = new Set(["codex-acp"]);
  */
 export const DEFAULT_ACP_AGENT_ALLOWLIST: AcpAgentAllowlistRule[] = [
   {
+    id: "managed-claude-agent-acp-0.60.0",
+    registryId: "claude-acp",
+    versions: ["0.60.0"],
+    distributionKinds: ["npx"],
+    allowedPackageNames: ["@agentclientprotocol/claude-agent-acp@0.60.0"],
+  },
+  {
     id: "local-grok-cli",
     registryId: "grok",
     distributionKinds: ["local"],

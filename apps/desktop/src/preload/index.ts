@@ -125,6 +125,8 @@ import type {
   HandoffThreadWorkspaceResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
+  InstallAcpAgentRequest,
+  InstallAcpAgentResponse,
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
   NavigationBrowseMode,
@@ -500,6 +502,7 @@ import {
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
+  ACP_AGENT_INSTALL_CHANNEL,
   ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
   AUTOMATIONS_CREATE_CHANNEL,
   AUTOMATIONS_DELETE_CHANNEL,
@@ -1173,6 +1176,10 @@ const desktopApi = Object.freeze({
     request?: ListAcpAgentSettingsRequest,
   ): Promise<ListAcpAgentSettingsResponse> =>
     await ipcRenderer.invoke(ACP_AGENTS_LIST_CHANNEL, request),
+  installAcpAgent: async (
+    request: InstallAcpAgentRequest,
+  ): Promise<InstallAcpAgentResponse> =>
+    await ipcRenderer.invoke(ACP_AGENT_INSTALL_CHANNEL, request),
   acknowledgeAcpAgentUpdate: async (
     request: AcknowledgeAcpAgentUpdateRequest,
   ): Promise<AcknowledgeAcpAgentUpdateResponse> =>

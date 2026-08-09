@@ -147,6 +147,30 @@ describe("ProviderStatusPanel", () => {
     expect(screen.getByText("Managed by provider")).toBeInTheDocument();
   });
 
+  it("shows the owning-instance credential boundary for managed Claude", () => {
+    render(
+      <ProviderStatusPanel
+        backends={[
+          {
+            ...kimiBackend,
+            kind: "acp:claude-acp",
+            label: "Claude Agent",
+            acp: {
+              ...kimiBackend.acp!,
+              registryId: "claude-acp",
+              authStatus: "authenticated",
+              credentialScope: "owning-instance",
+              supportLevel: "experimental",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Owning instance only")).toBeInTheDocument();
+    expect(screen.getByText("Experimental")).toBeInTheDocument();
+  });
+
   it("shows Grok subscription and included-credit usage from ACP billing", () => {
     render(<ProviderStatusPanel backends={[grokAcpBackend]} />);
 

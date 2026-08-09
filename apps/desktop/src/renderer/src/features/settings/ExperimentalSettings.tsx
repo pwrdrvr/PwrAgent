@@ -35,6 +35,11 @@ const DEFAULT_MANAGED_REVIEW = {
   source: "default" as const,
 };
 
+const DEFAULT_CLAUDE_ACP = {
+  value: false,
+  source: "default" as const,
+};
+
 const DEFAULT_THREAD_TOOL_ACCOUNTING = {
   value: false,
   source: "default" as const,
@@ -64,6 +69,7 @@ export function ExperimentalSettings(props: {
     enabled: boolean,
   ) => Promise<void>;
   onManagedReviewChange: (enabled: boolean) => Promise<void>;
+  onClaudeAcpChange: (enabled: boolean) => Promise<void>;
 }) {
   const [tokenMiserWriteTarget, setTokenMiserWriteTarget] = useState<
     boolean | undefined
@@ -115,6 +121,8 @@ export function ExperimentalSettings(props: {
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
   const managedReview =
     props.snapshot.experimental.managedReview ?? DEFAULT_MANAGED_REVIEW;
+  const claudeAcp =
+    props.snapshot.experimental.claudeAcp ?? DEFAULT_CLAUDE_ACP;
   const discontinuedEnabledCount =
     (condensation.enabled.value ? 1 : 0) +
     (liveTranscriptEventFiltering.value ? 1 : 0);
@@ -210,6 +218,33 @@ export function ExperimentalSettings(props: {
               }
             />
           ) : null}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Claude Agent through ACP"
+        description="Expose the community-maintained Claude ACP adapter under AI Providers. This integration and its authentication paths are experimental and may change or be removed."
+        chip={claudeAcp.value ? "On" : "Off"}
+        chipKind={claudeAcp.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable experimental Claude ACP"
+            sub="Allow this PwrAgent instance to install and run the pinned Claude adapter with local credentials."
+            help="When off, Claude is absent from AI Providers, backend discovery, and federation capabilities. Subscription use through a third-party product may require separate authorization under Anthropic's terms."
+            source={sourceBadge(claudeAcp)}
+            control={
+              <SettingsSwitch
+                checked={claudeAcp.value}
+                disabled={props.saving}
+                label="Enable experimental Claude ACP"
+                onChange={(enabled) => {
+                  void props.onClaudeAcpChange(enabled);
+                }}
+              />
+            }
+          />
         </div>
       </SettingsSection>
 

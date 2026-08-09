@@ -504,6 +504,90 @@ describe("federation backend bridge", () => {
     ]);
   });
 
+  it("federates Claude capability metadata without credential material", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    const pending = client.listBackends();
+    const request = sent.at(-1)!;
+    expect(request).toMatchObject({
+      method: FEDERATION_BACKEND_METHODS.listBackends,
+      params: {},
+    });
+    expect(JSON.stringify(request)).not.toMatch(
+      /ANTHROPIC_API_KEY|accessToken|refreshToken|claude\.ai/i,
+    );
+
+    rpc.receiveEnvelope({
+      id: "backends-response",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        fetchedAt: 1_050,
+        backends: [
+          {
+            kind: "acp:claude-acp",
+            source: "acp",
+            label: "Claude Agent",
+            available: true,
+            acp: {
+              registryId: "claude-acp",
+              version: "0.60.0",
+              distributionKinds: ["npx"],
+              installStatus: "installed",
+              authStatus: "authenticated",
+              verificationStatus: "verified",
+              credentialScope: "owning-instance",
+              supportLevel: "experimental",
+            },
+            methods: ["session/new", "session/prompt"],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: true,
+              approvalRequests: true,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [],
+          },
+        ],
+      },
+    });
+
+    const result = await pending;
+    expect(result).toMatchObject({
+      backends: [
+        {
+          kind: "acp:claude-acp",
+          acp: {
+            credentialScope: "owning-instance",
+            supportLevel: "experimental",
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /ANTHROPIC_API_KEY|accessToken|refreshToken|auth login|--claudeai|--console/i,
+    );
+  });
+
   it("preserves encoded ACP navigation keys on the protocol-v1 wire", async () => {
     const backend = {
       getNavigationSnapshot: vi.fn(async () => ({
