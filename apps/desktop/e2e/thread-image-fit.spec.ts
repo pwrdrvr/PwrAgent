@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
@@ -192,7 +192,26 @@ async function createThreadImageFitFixture(): Promise<{
   };
 }
 
-test("fits wide pasted transcript images without cropping", async () => {
+async function readImageMetrics(image: Locator) {
+  return await image.evaluate((element) => {
+    const img = element as HTMLImageElement;
+    const rect = img.getBoundingClientRect();
+    const buttonRect = img
+      .closest(".transcript-message__image-button")
+      ?.getBoundingClientRect();
+
+    return {
+      buttonHeight: buttonRect?.height ?? 0,
+      buttonWidth: buttonRect?.width ?? 0,
+      naturalHeight: img.naturalHeight,
+      naturalWidth: img.naturalWidth,
+      renderedHeight: rect.height,
+      renderedWidth: rect.width,
+    };
+  });
+}
+
+test("fits wide, small, and tiny pasted transcript images", async () => {
   const fixture = await createThreadImageFitFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -203,142 +222,60 @@ test("fits wide pasted transcript images without cropping", async () => {
   });
 
   try {
-    await app.window
-      .getByRole("button", { name: /Fix Composer Auto Saves/i })
-      .first()
-      .click();
+    await test.step("open the replay-backed image thread", async () => {
+      await app.window
+        .getByRole("button", { name: /Fix Composer Auto Saves/i })
+        .first()
+        .click();
 
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Fix Composer Auto Saves",
-      })
-    ).toBeVisible();
-
-    const image = app.window.getByAltText("Thread rename focus screenshot");
-    await expect(image).toBeVisible();
-
-    const metrics = await image.evaluate((element) => {
-      const img = element as HTMLImageElement;
-      const rect = img.getBoundingClientRect();
-      const buttonRect = img
-        .closest(".transcript-message__image-button")
-        ?.getBoundingClientRect();
-
-      return {
-        buttonHeight: buttonRect?.height ?? 0,
-        buttonWidth: buttonRect?.width ?? 0,
-        naturalHeight: img.naturalHeight,
-        naturalWidth: img.naturalWidth,
-        renderedHeight: rect.height,
-        renderedWidth: rect.width,
-      };
+      await expect(
+        app.window.getByRole("heading", {
+          level: 2,
+          name: "Fix Composer Auto Saves",
+        })
+      ).toBeVisible();
     });
 
-    const naturalRatio = metrics.naturalWidth / metrics.naturalHeight;
-    const renderedRatio = metrics.renderedWidth / metrics.renderedHeight;
+    await test.step("fit the wide image without cropping", async () => {
+      const image = app.window.getByAltText("Thread rename focus screenshot");
+      await expect(image).toBeVisible();
 
-    expect(metrics.naturalWidth).toBe(848);
-    expect(metrics.naturalHeight).toBe(372);
-    expect(Math.abs(renderedRatio - naturalRatio)).toBeLessThan(0.05);
-    expect(metrics.renderedWidth).toBeLessThanOrEqual(metrics.buttonWidth);
-    expect(metrics.renderedHeight).toBeLessThanOrEqual(metrics.buttonHeight);
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
+      const metrics = await readImageMetrics(image);
+      const naturalRatio = metrics.naturalWidth / metrics.naturalHeight;
+      const renderedRatio = metrics.renderedWidth / metrics.renderedHeight;
 
-test("keeps small pasted transcript images at intrinsic size", async () => {
-  const fixture = await createThreadImageFitFixture();
-  const app = await launchElectronApp({
-    fixturePath: fixture.fixturePath,
-    windowSize: {
-      width: 1280,
-      height: 720,
-    },
-  });
-
-  try {
-    await app.window
-      .getByRole("button", { name: /Fix Composer Auto Saves/i })
-      .first()
-      .click();
-
-    const image = app.window.getByAltText("Small intrinsic screenshot");
-    await expect(image).toBeVisible();
-
-    const metrics = await image.evaluate((element) => {
-      const img = element as HTMLImageElement;
-      const rect = img.getBoundingClientRect();
-      const buttonRect = img
-        .closest(".transcript-message__image-button")
-        ?.getBoundingClientRect();
-
-      return {
-        buttonHeight: buttonRect?.height ?? 0,
-        buttonWidth: buttonRect?.width ?? 0,
-        naturalHeight: img.naturalHeight,
-        naturalWidth: img.naturalWidth,
-        renderedHeight: rect.height,
-        renderedWidth: rect.width,
-      };
+      expect(metrics.naturalWidth).toBe(848);
+      expect(metrics.naturalHeight).toBe(372);
+      expect(Math.abs(renderedRatio - naturalRatio)).toBeLessThan(0.05);
+      expect(metrics.renderedWidth).toBeLessThanOrEqual(metrics.buttonWidth);
+      expect(metrics.renderedHeight).toBeLessThanOrEqual(metrics.buttonHeight);
     });
 
-    expect(metrics.naturalWidth).toBe(80);
-    expect(metrics.naturalHeight).toBe(40);
-    expect(metrics.renderedWidth).toBeCloseTo(80, 0);
-    expect(metrics.renderedHeight).toBeCloseTo(40, 0);
-    expect(metrics.buttonWidth).toBeLessThanOrEqual(100);
-    expect(metrics.buttonHeight).toBeLessThanOrEqual(60);
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
+    await test.step("keep the small image at intrinsic size", async () => {
+      const image = app.window.getByAltText("Small intrinsic screenshot");
+      await expect(image).toBeVisible();
 
-test("keeps tiny pasted transcript image buttons easy to hit", async () => {
-  const fixture = await createThreadImageFitFixture();
-  const app = await launchElectronApp({
-    fixturePath: fixture.fixturePath,
-    windowSize: {
-      width: 1280,
-      height: 720,
-    },
-  });
-
-  try {
-    await app.window
-      .getByRole("button", { name: /Fix Composer Auto Saves/i })
-      .first()
-      .click();
-
-    const image = app.window.getByAltText("Tiny intrinsic screenshot");
-    await expect(image).toBeVisible();
-
-    const metrics = await image.evaluate((element) => {
-      const img = element as HTMLImageElement;
-      const rect = img.getBoundingClientRect();
-      const buttonRect = img
-        .closest(".transcript-message__image-button")
-        ?.getBoundingClientRect();
-
-      return {
-        buttonHeight: buttonRect?.height ?? 0,
-        buttonWidth: buttonRect?.width ?? 0,
-        naturalHeight: img.naturalHeight,
-        naturalWidth: img.naturalWidth,
-        renderedHeight: rect.height,
-        renderedWidth: rect.width,
-      };
+      const metrics = await readImageMetrics(image);
+      expect(metrics.naturalWidth).toBe(80);
+      expect(metrics.naturalHeight).toBe(40);
+      expect(metrics.renderedWidth).toBeCloseTo(80, 0);
+      expect(metrics.renderedHeight).toBeCloseTo(40, 0);
+      expect(metrics.buttonWidth).toBeLessThanOrEqual(100);
+      expect(metrics.buttonHeight).toBeLessThanOrEqual(60);
     });
 
-    expect(metrics.naturalWidth).toBe(12);
-    expect(metrics.naturalHeight).toBe(8);
-    expect(metrics.renderedWidth).toBeCloseTo(12, 0);
-    expect(metrics.renderedHeight).toBeCloseTo(8, 0);
-    expect(metrics.buttonWidth).toBeGreaterThanOrEqual(44);
-    expect(metrics.buttonHeight).toBeGreaterThanOrEqual(44);
+    await test.step("keep the tiny image intrinsic with an accessible hit target", async () => {
+      const image = app.window.getByAltText("Tiny intrinsic screenshot");
+      await expect(image).toBeVisible();
+
+      const metrics = await readImageMetrics(image);
+      expect(metrics.naturalWidth).toBe(12);
+      expect(metrics.naturalHeight).toBe(8);
+      expect(metrics.renderedWidth).toBeCloseTo(12, 0);
+      expect(metrics.renderedHeight).toBeCloseTo(8, 0);
+      expect(metrics.buttonWidth).toBeGreaterThanOrEqual(44);
+      expect(metrics.buttonHeight).toBeGreaterThanOrEqual(44);
+    });
   } finally {
     await app.close();
     await fixture.cleanup();
