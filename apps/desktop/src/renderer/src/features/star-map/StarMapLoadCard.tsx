@@ -62,6 +62,7 @@ export function StarMapLoadCard(props: {
 }) {
   const load = props.load;
   const cpuTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const memoryTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const [, setTick] = useState(0);
 
   // Staleness has to advance on its own: a peer that stops answering stops
@@ -118,6 +119,26 @@ export function StarMapLoadCard(props: {
   const cpuLabel = load && loadAvgReported && !load.cpuCount
     ? "CPU load"
     : "CPU";
+  /**
+   * A share of installed RAM, because the absolute figure alone does not say
+   * whether it is a lot: "2.4 GB" means nothing until you know the box has
+   * 16 GB. Falls back to the absolute value when total RAM is unknown (an
+   * older peer does not report it).
+   */
+  const memoryValue = !load
+    ? "—"
+    : load.totalMemoryBytes
+      ? `${Math.round(
+          (load.availableMemoryBytes / load.totalMemoryBytes) * 100,
+        )}%`
+      : formatByteCount(load.availableMemoryBytes);
+  const memoryDetail = !load
+    ? ""
+    : load.totalMemoryBytes
+      ? `${formatByteCount(load.availableMemoryBytes)} available of ${formatByteCount(
+          load.totalMemoryBytes,
+        )} — reclaimable cache included`
+      : "";
   const cpuDetail = !load
     ? ""
     : !loadAvgReported
@@ -168,8 +189,27 @@ export function StarMapLoadCard(props: {
                 </dd>
               </div>
               <div>
-                <dt>Free RAM</dt>
-                <dd>{formatByteCount(load.availableMemoryBytes)}</dd>
+                <dt>RAM free</dt>
+                <dd
+                  aria-label={`RAM free: ${memoryValue}${
+                    memoryDetail ? `. ${memoryDetail}` : ""
+                  }`}
+                  onMouseEnter={(event) =>
+                    memoryDetail
+                      ? memoryTooltip.show(event.currentTarget, memoryDetail)
+                      : undefined
+                  }
+                  onMouseLeave={memoryTooltip.hide}
+                  onFocus={(event) =>
+                    memoryDetail
+                      ? memoryTooltip.show(event.currentTarget, memoryDetail)
+                      : undefined
+                  }
+                  onBlur={memoryTooltip.hide}
+                  tabIndex={memoryDetail ? 0 : undefined}
+                >
+                  {memoryValue}
+                </dd>
               </div>
               <div>
                 <dt>Free disk</dt>
@@ -196,6 +236,7 @@ export function StarMapLoadCard(props: {
         ) : null}
       </div>
       {cpuTooltip.tooltipNode}
+      {memoryTooltip.tooltipNode}
     </div>
   );
 }

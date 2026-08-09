@@ -33,7 +33,7 @@ import {
   computeStarMapLayout,
   generateStarField,
   STAR_MAP_BODY_ROW_Y,
-  STAR_MAP_CARD_GAP,
+  STAR_MAP_CLOUD_TOP,
   STAR_MAP_ESTIMATED_CARD_HEIGHT,
   visibleCardCount,
   type StarMapCardSlot,
@@ -676,28 +676,30 @@ export function StarMapScreen(props: StarMapScreenProps) {
       const lane = lanes.get(position.instanceId);
       const threadHeights = lane?.heights.slice(0, lane.count) ?? [];
       const hasLoad = loadCardInstances.has(position.instanceId);
-      // The load card APPENDS below the column. It used to take the slot
-      // nearest the star and push the stack out by one, which moved every
-      // card — including hand-placed ones, whose offsets are relative to a
-      // slot. Appending leaves every existing slot byte-identical, so
-      // opening and closing the card disturbs nothing.
-      const allSlots = computeCardSlots([
-        ...threadHeights,
-        ...(hasLoad ? [STAR_MAP_LOAD_CARD_HEIGHT] : []),
-      ]);
-      const lastSlot = allSlots[allSlots.length - 1];
-      const lastHeight = hasLoad
-        ? STAR_MAP_LOAD_CARD_HEIGHT
-        : threadHeights[threadHeights.length - 1] ?? 0;
+      // Thread slots are computed as if the load card did not exist, so
+      // opening it moves nothing — not the stack, and not the hand-placed
+      // cards whose offsets are relative to a slot. The card lands at the
+      // top of the cloud (painted above, see STAR_MAP_LOAD_CARD_Z) and the
+      // operator drags it wherever they want it; that position is synced,
+      // so it is a one-time move rather than a standing annoyance.
+      // Appending below the column was the other collision-free option and
+      // was worse: on a long column the card opened off-screen, which reads
+      // as a button that does nothing.
+      const slots = computeCardSlots(threadHeights);
+      const lastSlot = slots[slots.length - 1];
       return {
         instanceId: position.instanceId,
         isHub: position.isHub,
         x: position.x,
         y: position.y,
-        slots: allSlots.slice(0, threadHeights.length),
+        slots,
         cardWidth: laneLayout.cardWidth,
-        loadSlot: hasLoad ? allSlots[threadHeights.length] : undefined,
-        contentBottom: lastSlot ? lastSlot.dy + lastHeight : 0,
+        loadSlot: hasLoad ? { dx: 0, dy: STAR_MAP_CLOUD_TOP } : undefined,
+        contentBottom: lastSlot
+          ? lastSlot.dy + (threadHeights[threadHeights.length - 1] ?? 0)
+          : hasLoad
+            ? STAR_MAP_CLOUD_TOP + STAR_MAP_LOAD_CARD_HEIGHT
+            : 0,
       };
     });
   }, [laneLayout, lanes, loadCardInstances, orbit, orbitMode]);
@@ -1401,10 +1403,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
           remote.staleInstanceIds.has(position.instanceId)
             ? " star-map__cloud--stale"
             : ""
-        }${
-          selectedInstanceId && selectedInstanceId !== position.instanceId
-            ? " star-map__cloud--muted"
-            : ""
         }`}
         style={{ left: position.x, top: position.y }}
       >
@@ -1673,11 +1671,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           return (
             <div
               key={position.instanceId}
-              className={`star-map__anchor${
-                selectedInstanceId && selectedInstanceId !== position.instanceId
-                  ? " star-map__anchor--muted"
-                  : ""
-              }`}
+              className="star-map__anchor"
               style={{ left: position.x, top: position.y }}
             >
               <StarMapInstanceCard

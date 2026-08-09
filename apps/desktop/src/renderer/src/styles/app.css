@@ -9488,14 +9488,6 @@ textarea,
   box-shadow: 0 0 0 1px var(--accent);
 }
 
-/* Focusing one instance pushes the rest back rather than hiding them: the
-   topology still has to read as a whole while you work in one system. */
-.star-map__anchor--muted,
-.star-map__cloud--muted {
-  opacity: 0.35;
-  transition: opacity 160ms ease;
-}
-
 /* ==== Instance load card ==== */
 
 .star-map-load-card {

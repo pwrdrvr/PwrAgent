@@ -13,7 +13,8 @@ function buildLoad(
     loadAvg5: 1.75,
     loadAvg15: 1.5,
     cpuCount: 16,
-    availableMemoryBytes: 5_452_595,
+    availableMemoryBytes: 2_576_980_378,
+    totalMemoryBytes: 17_179_869_184,
     diskFreeBytes: 214_748_364_800,
     sampledAt: Date.now(),
     ...overrides,
@@ -54,7 +55,6 @@ describe("StarMapLoadCard", () => {
     renderCard({ load: buildLoad({ loadAvg1: 2.5, cpuCount: 16 }) });
 
     expect(metric("CPU")).toBe("16%");
-    expect(metric("Free RAM")).toBe("5.2 MB");
     expect(metric("Free disk")).toBe("200 GB");
   });
 
@@ -81,6 +81,20 @@ describe("StarMapLoadCard", () => {
     });
 
     expect(metric("CPU")).toBe("—");
+  });
+
+  it("reads RAM as a share of the installed total", () => {
+    // 2.4 GB means nothing until you know the box has 16 GB — and on macOS
+    // the raw "free" figure would have read ~140 MB on a healthy machine.
+    renderCard();
+
+    expect(metric("RAM free")).toBe("15%");
+  });
+
+  it("falls back to absolute RAM when the total is unknown", () => {
+    renderCard({ load: buildLoad({ totalMemoryBytes: undefined }) });
+
+    expect(metric("RAM free")).toBe("2.4 GB");
   });
 
   it("shows a dash when the disk read failed", () => {

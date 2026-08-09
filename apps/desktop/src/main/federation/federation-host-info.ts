@@ -7,6 +7,7 @@ import type {
   FederationLoadStatus,
 } from "@pwragent/shared";
 import { resolvePwragentRoot } from "../profile";
+import { readAvailableMemoryBytes } from "./federation-available-memory";
 
 const MACHINE_ID_FILENAME = "machine-id";
 
@@ -104,7 +105,8 @@ export async function collectFederationLoadStatus(options?: {
     loadAvg5,
     loadAvg15,
     ...(cpuCount > 0 ? { cpuCount } : {}),
-    availableMemoryBytes: os.freemem(),
+    availableMemoryBytes: await readAvailableMemoryBytes(),
+    totalMemoryBytes: os.totalmem(),
     ...(diskFreeBytes !== undefined ? { diskFreeBytes } : {}),
     sampledAt: Date.now(),
   };
