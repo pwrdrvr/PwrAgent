@@ -49,9 +49,12 @@ import { ThreadRow } from "./ThreadRow";
 import {
   formatActiveThreadCount,
   formatReviewThreadCount,
-  isThreadActive,
-  isThreadAwaitingReview,
 } from "./ThreadRowStatus";
+import {
+  buildDirectoryThreadRenderModel,
+  DIRECTORY_UNPINNED_THREAD_CAP,
+  type ExpandedDirectoryThreadRenderModel,
+} from "./directory-thread-render-model";
 
 type DirectoriesListProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
@@ -160,6 +163,18 @@ function buildLaunchpadSelectionKey(directoryKey: string): string {
  */
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
 
+const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: ExpandedDirectoryThreadRenderModel = {
+  cappedUnpinnedThreads: [],
+  childThreadsByParentKey: new Map(),
+  directoryPinnedThreads: [],
+  directoryThreadsCollapsed: false,
+  directoryUnpinnedThreadCount: 0,
+  hiddenUnpinnedCount: 0,
+  overflowUnpinnedThreads: [],
+  selectionOrder: [],
+  unpinnedExpanded: false,
+};
+
 /**
  * The user can pin both `kind: "directory"` and `kind: "workspace"`
  * entries — both are named entries they click in the sidebar. Only
@@ -195,15 +210,6 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
     (launchpad.imageAttachments?.length ?? 0) > 0
   );
 }
-
-/**
- * Cap on how many *unpinned* threads a directory renders before the
- * rest collapse behind a "Show N more" toggle. Pinned threads are never
- * capped — they're user-curated and finite. Without this, a directory
- * with dozens of threads pushes every directory below it off-screen,
- * making the Directories lens slow to scroll past active projects.
- */
-const UNPINNED_THREAD_CAP = 10;
 
 function getDirectoryRowLinkedDirectoryMode(
   thread: NavigationThreadSummary,
@@ -580,7 +586,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         (thread) =>
           buildThreadIdentityKey(thread.source, thread.id) ===
           topLevelThreadKey,
-      ) >= UNPINNED_THREAD_CAP
+      ) >= DIRECTORY_UNPINNED_THREAD_CAP
     ) {
       setUnpinnedExpandedByKey((current) => ({
         ...current,
@@ -633,20 +639,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const expanded =
       expandedByKey[directory.key] ??
       (selectedLaunchpad || selectedThreadInDirectory);
-    const visibleThreads = directory.threadKeys
-      .map((threadKey) => threadsByKey.get(threadKey))
-      .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
-    const activeThreadCount = visibleThreads.filter((thread) =>
-      isThreadActive(thread, props.thinkingThreadKeys),
-    ).length;
-    // A live turn can also be in the Inbox after emitting new output. Keep it
-    // in the activity count only, so a directory never reports the same thread
-    // as both active and waiting to be reviewed.
-    const reviewThreadCount = visibleThreads.filter(
-      (thread) =>
-        isThreadAwaitingReview(thread)
-        && !isThreadActive(thread, props.thinkingThreadKeys),
-    ).length;
+    const threadModel = buildDirectoryThreadRenderModel({
+      directory,
+      expanded,
+      selectedItemKey: props.selectedItemKey,
+      thinkingThreadKeys: props.thinkingThreadKeys,
+      threadsByKey,
+      unpinnedExpanded: unpinnedExpandedByKey[directory.key],
+    });
+    const {
+      activeThreadCount,
+      reviewThreadCount,
+      visibleThreadCount,
+    } = threadModel;
     const directorySummaryLabel = [
       directory.label,
       activeThreadCount > 0 ? formatActiveThreadCount(activeThreadCount) : undefined,
@@ -654,23 +659,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     ]
       .filter((label): label is string => Boolean(label))
       .join(", ");
-    const directoryThreadKeys = new Set(
-      visibleThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
-    );
-    const childThreadsByParentKey = new Map<string, NavigationThreadSummary[]>();
-    for (const thread of visibleThreads) {
-      if (!thread.parentThreadId) continue;
-      const parentKey = resolveThreadParentKey(thread, threadsByKey);
-      if (!parentKey || !directoryThreadKeys.has(parentKey)) continue;
-      const children = childThreadsByParentKey.get(parentKey) ?? [];
-      children.push(thread);
-      childThreadsByParentKey.set(parentKey, children);
-    }
-    const topLevelVisibleThreads = visibleThreads.filter((thread) => {
-      if (!thread.parentThreadId) return true;
-      const parentKey = resolveThreadParentKey(thread, threadsByKey);
-      return !parentKey || !directoryThreadKeys.has(parentKey);
-    });
+    const expandedThreadModel =
+      threadModel.expanded ?? EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
+    const { childThreadsByParentKey } = expandedThreadModel;
     const renderStaticSubthreads = (parent: NavigationThreadSummary): ReactElement | null => {
       const parentKey = buildThreadIdentityKey(parent.source, parent.id);
       const children = sortSubthreadSummaries(parent, childThreadsByParentKey.get(parentKey) ?? []);
@@ -809,64 +800,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
         </div>
       );
     };
-    const directoryPinnedThreads = topLevelVisibleThreads
-      .filter(isPinnedThread)
-      .sort(comparePinnedThreads);
-    const directoryUnpinnedThreads = topLevelVisibleThreads.filter(
-      (thread) => !isPinnedThread(thread),
-    );
-    const cappedUnpinnedThreads = directoryUnpinnedThreads.slice(
-      0,
-      UNPINNED_THREAD_CAP,
-    );
-    const overflowUnpinnedThreads =
-      directoryUnpinnedThreads.slice(UNPINNED_THREAD_CAP);
-    const hiddenUnpinnedCount = overflowUnpinnedThreads.length;
-    // Keep a selected thread visible even when it falls in the collapsed
-    // overflow — otherwise selecting it from another lens and switching to
-    // Directories would leave it hidden with no highlight. An explicit
-    // toggle still wins (`??`), so the user can deliberately collapse.
-    const selectedUnpinnedInOverflow = overflowUnpinnedThreads.some(
-      (thread) =>
-        buildThreadIdentityKey(thread.source, thread.id) ===
-        props.selectedItemKey,
-    );
-    const unpinnedExpanded =
-      unpinnedExpandedByKey[directory.key] ?? selectedUnpinnedInOverflow;
-    // This preference applies only when there is a pinned section to
-    // preserve. Without pinned threads, hiding every row would make an
-    // expanded directory look empty and remove the disclosure control.
-    const directoryThreadsCollapsed =
-      directoryPinnedThreads.length > 0 &&
-      directory.directoryThreadsCollapsed === true;
-    const visibleUnpinnedThreads = directoryThreadsCollapsed
-      ? []
-      : [
-          ...cappedUnpinnedThreads,
-          ...(unpinnedExpanded ? overflowUnpinnedThreads : []),
-        ];
-    // A directory can repeat a thread that is linked to more than one project,
-    // so a Shift range is intentionally scoped to the expanded directory the
-    // user clicked. That makes its extent obvious and excludes hidden rows
-    // behind the directory, pinned/unpinned, and "Show more" disclosures.
-    const selectionOrder = [
-      ...directoryPinnedThreads,
-      ...visibleUnpinnedThreads,
-    ].flatMap((thread) => {
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const children = sortSubthreadSummaries(
-        thread,
-        childThreadsByParentKey.get(threadKey) ?? [],
-      );
-      return [
-        threadKey,
-        ...(thread.subthreadsCollapsed
-          ? []
-          : children.map((child) =>
-              buildThreadIdentityKey(child.source, child.id),
-            )),
-      ];
-    });
+    const {
+      cappedUnpinnedThreads,
+      directoryPinnedThreads,
+      directoryThreadsCollapsed,
+      directoryUnpinnedThreadCount,
+      hiddenUnpinnedCount,
+      overflowUnpinnedThreads,
+      selectionOrder,
+      unpinnedExpanded,
+    } = expandedThreadModel;
     // Render one unpinned thread row. Shared by the always-shown capped
     // slice and the overflow slice so the "Show more / Show less" toggle
     // sits at a fixed pivot between them — collapsing never makes the
@@ -1214,7 +1157,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
             {expanded ? (
               <div className="directory-row__details">
-                {visibleThreads.length > 0 ? (
+                {visibleThreadCount > 0 ? (
                   <div className="sidebar-list sidebar-list--compact directory-row__threads">
                     {directoryPinnedThreads.map((thread) => {
 	                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
@@ -1342,7 +1285,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     })}
 
                     {directoryPinnedThreads.length > 0 &&
-                    directoryUnpinnedThreads.length > 0 ? (
+                    directoryUnpinnedThreadCount > 0 ? (
                       <button
                         type="button"
                         className={`recents-pinned-divider directory-row__thread-divider${
@@ -1408,7 +1351,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           <span>Directory threads</span>
                           {directoryThreadsCollapsed ? (
                             <span className="directory-row__thread-divider-count">
-                              {directoryUnpinnedThreads.length}
+                              {directoryUnpinnedThreadCount}
                             </span>
                           ) : null}
                         </span>
