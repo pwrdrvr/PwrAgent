@@ -321,26 +321,18 @@ describe("describeInstalledAcpBackend", () => {
     ]);
   });
 
-  it("falls back to hardcoded execution modes for Kimi with no runtime mode selector", () => {
+  it.each([
+    { registryId: "kimi", name: "Kimi Code CLI" },
+    { registryId: "grok", name: "Grok CLI" },
+  ])("falls back to hardcoded execution modes for $name with no runtime mode selector", ({
+    registryId,
+    name,
+  }) => {
     const backend = describeInstalledAcpBackend({
       ...buildInstalledAgent(),
-      backendId: "acp:kimi" as AcpBackendId,
-      registryId: "kimi",
-      name: "Kimi Code CLI",
-    });
-
-    expect(backend.executionModes.map((mode) => mode.mode)).toEqual([
-      "default",
-      "full-access",
-    ]);
-  });
-
-  it("keeps hardcoded execution modes for Grok (no runtime mode selector)", () => {
-    const backend = describeInstalledAcpBackend({
-      ...buildInstalledAgent(),
-      backendId: "acp:grok" as AcpBackendId,
-      registryId: "grok",
-      name: "Grok CLI",
+      backendId: `acp:${registryId}` as AcpBackendId,
+      registryId,
+      name,
     });
 
     expect(backend.executionModes.map((mode) => mode.mode)).toEqual([

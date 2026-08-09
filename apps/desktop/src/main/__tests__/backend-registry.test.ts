@@ -7329,7 +7329,6 @@ script = "echo setup"
       expect(sessions[0]?.executionMode).toBe("full-access");
     });
 
-    expect(sessions[0]?.executionMode).toBe("full-access");
     await expect(
       registry.listThreads({ backend: acpBackendId }),
     ).resolves.toEqual([
@@ -38573,46 +38572,37 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("surfaces the single-client startTurn error directly when default mode is explicitly requested", async () => {
+  it.each([
+    {
+      executionMode: "default" as const,
+      input: "This must not silently escalate",
+    },
+    {
+      executionMode: "full-access" as const,
+      input: "This must not silently downgrade",
+    },
+  ])("surfaces the single-client startTurn error directly when $executionMode mode is explicitly requested", async ({
+    executionMode,
+    input,
+  }) => {
+    const error = `thread not loaded on ${executionMode} instance`;
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
-      startTurnError: new Error("thread not loaded on default instance"),
+      startTurnError: new Error(error),
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+      overlayStore: createOverlayStoreMock({ executionMode }),
     });
 
     await expect(
       registry.startTurn({
         backend: "codex",
         threadId: "thread-1",
-        executionMode: "default",
-        input: [{ type: "text", text: "This must not silently escalate" }],
+        executionMode,
+        input: [{ type: "text", text: input }],
       }),
-    ).rejects.toThrow("thread not loaded on default instance");
-
-    await registry.close();
-  });
-
-  it("surfaces the single-client startTurn error directly when full-access mode is explicitly requested", async () => {
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["turn/start"] },
-      startTurnError: new Error("thread not loaded on full-access instance"),
-    });
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
-    });
-
-    await expect(
-      registry.startTurn({
-        backend: "codex",
-        threadId: "thread-1",
-        executionMode: "full-access",
-        input: [{ type: "text", text: "This must not silently downgrade" }],
-      }),
-    ).rejects.toThrow("thread not loaded on full-access instance");
+    ).rejects.toThrow(error);
 
     await registry.close();
   });

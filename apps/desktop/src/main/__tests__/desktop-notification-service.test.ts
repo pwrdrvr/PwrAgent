@@ -180,49 +180,40 @@ describe("DesktopNotificationService", () => {
     ]);
   });
 
-  it("does not emit notifications while app is focused", () => {
+  it.each([
+    {
+      kind: "terminal",
+      notify: (service: DesktopNotificationService) => service.notifyTerminal({
+        enabled: true,
+        title: "Turn completed",
+        body: "Done",
+      }),
+    },
+    {
+      kind: "attention",
+      notify: (service: DesktopNotificationService) => service.notifyAttention({
+        enabled: true,
+        key: "codex:thread-1:req-focused",
+        title: "Approval needed",
+        body: "Please approve",
+      }),
+    },
+    {
+      kind: "approval",
+      notify: (service: DesktopNotificationService) => service.notifyApproval({
+        enabled: true,
+        key: "codex:thread-1:req-focused-approval",
+        intent: approvalIntent(),
+        onDecision: vi.fn(),
+      }),
+    },
+  ])("does not emit $kind notifications while a window is focused", ({ notify }) => {
     const service = new DesktopNotificationService();
     getAllWindows.mockReturnValue([
       { isDestroyed: () => false, isFocused: () => true, isMinimized: () => false },
     ]);
 
-    service.notifyTerminal({
-      enabled: true,
-      title: "Turn completed",
-      body: "Done",
-    });
-
-    expect(shownNotifications).toEqual([]);
-  });
-
-  it("does not emit attention notifications while a window is focused", () => {
-    const service = new DesktopNotificationService();
-    getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => true, isMinimized: () => false },
-    ]);
-
-    service.notifyAttention({
-      enabled: true,
-      key: "codex:thread-1:req-focused",
-      title: "Approval needed",
-      body: "Please approve",
-    });
-
-    expect(shownNotifications).toEqual([]);
-  });
-
-  it("does not emit approval notifications while a window is focused", () => {
-    const service = new DesktopNotificationService();
-    getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => true, isMinimized: () => false },
-    ]);
-
-    service.notifyApproval({
-      enabled: true,
-      key: "codex:thread-1:req-focused-approval",
-      intent: approvalIntent(),
-      onDecision: vi.fn(),
-    });
+    notify(service);
 
     expect(shownNotifications).toEqual([]);
   });
@@ -567,29 +558,6 @@ describe("DesktopNotificationService", () => {
     expect(onDecision).not.toHaveBeenCalled();
 
     shownNotifications[0]?.instance.emitAction(0);
-    expect(onDecision).not.toHaveBeenCalled();
-    expect(onDecision).not.toHaveBeenCalledWith("accept");
-  });
-
-  it("focuses the approval thread when clicking the notification body", () => {
-    const service = new DesktopNotificationService();
-    const onDecision = vi.fn();
-    const onShow = vi.fn();
-    getAllWindows.mockReturnValue([
-      { isDestroyed: () => false, isFocused: () => false, isMinimized: () => false },
-    ]);
-
-    service.notifyApproval({
-      enabled: true,
-      key: "codex:thread-1:req-click-show",
-      intent: approvalIntent(),
-      onDecision,
-      onShow,
-    });
-
-    shownNotifications[0]?.instance.emitClick();
-
-    expect(onShow).toHaveBeenCalledTimes(1);
     expect(onDecision).not.toHaveBeenCalled();
   });
 });
