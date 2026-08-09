@@ -3779,7 +3779,7 @@ describe("app server ipc", () => {
 
     await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
 
-    expect(mockAppServerLog.info).toHaveBeenCalledWith(
+    expect(mockAppServerLog.debug).toHaveBeenCalledWith(
       "threadPullRequestsRefresh:requested",
       expect.objectContaining({
         branch: "fix/live-diff-activity-normalization",
@@ -3788,7 +3788,7 @@ describe("app server ipc", () => {
         trigger: "user",
       }),
     );
-    expect(mockAppServerLog.info).toHaveBeenCalledWith(
+    expect(mockAppServerLog.debug).toHaveBeenCalledWith(
       "threadPullRequestsRefresh:background-start",
       expect.objectContaining({
         previousPrIds: ["github.com/pwrdrvr/pwragent#845"],
@@ -3805,7 +3805,7 @@ describe("app server ipc", () => {
       });
     });
     await vi.waitFor(() => {
-      expect(mockAppServerLog.info).toHaveBeenCalledWith(
+      expect(mockAppServerLog.debug).toHaveBeenCalledWith(
         "threadPullRequestsRefresh:background-complete",
         expect.objectContaining({
           changedThreadCount: 1,
@@ -5631,7 +5631,7 @@ describe("app server ipc", () => {
         expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
       });
       await vi.waitFor(() => {
-        expect(mockAppServerLog.info).toHaveBeenCalledWith(
+        expect(mockAppServerLog.debug).toHaveBeenCalledWith(
           "threadPullRequestsRefresh:background-complete",
           expect.objectContaining({
             fetchedPrIds: ["github.com/pwrdrvr/pwragent#434"],
@@ -5640,7 +5640,7 @@ describe("app server ipc", () => {
           }),
         );
       });
-      mockAppServerLog.info.mockClear();
+      mockAppServerLog.debug.mockClear();
 
       vi.setSystemTime(2_000_000 + 9_000);
       const cooldownResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
@@ -5656,7 +5656,7 @@ describe("app server ipc", () => {
       });
       await Promise.resolve();
       expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
-      expect(mockAppServerLog.info).toHaveBeenCalledWith(
+      expect(mockAppServerLog.debug).toHaveBeenCalledWith(
         "threadPullRequestsRefresh:skipped",
         expect.objectContaining({
           minIntervalMs: 10_000,

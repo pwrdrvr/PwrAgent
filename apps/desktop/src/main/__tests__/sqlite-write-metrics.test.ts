@@ -165,6 +165,50 @@ describe("sqlite write metrics", () => {
     await registry.close();
   });
 
+  it("holds one live token-usage observation to one commit", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            model: "gpt-5.5",
+            tokenUsage: {
+              total: {
+                inputTokens: 80_000,
+                cachedInputTokens: 72_000,
+                outputTokens: 1_000,
+              },
+              last: {
+                inputTokens: 80_000,
+                cachedInputTokens: 72_000,
+                outputTokens: 1_000,
+              },
+            },
+          },
+        },
+      } as AgentEvent);
+    });
+
+    expectSqliteWriteBudget({
+      note: "one completed model request observed through thread token usage",
+      scenario: "live-thread-token-usage",
+      writes,
+    });
+
+    await registry.close();
+  });
+
   it("holds an idle hour of heartbeats to its budget", async () => {
     // The floor the app pays for existing: the profile-runtime heartbeat and
     // the federation lease renewal both tick every 10s against a 45s TTL, each

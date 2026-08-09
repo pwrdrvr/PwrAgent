@@ -36,6 +36,18 @@ function disableConsoleTransport(): void {
   electronLog.transports.console.level = false;
 }
 
+function configureConsoleTransport(): void {
+  const transport = electronLog.transports?.console;
+  if (!transport || transport.level === false) {
+    return;
+  }
+
+  // electron-log defaults this transport to "silly". Keep ordinary dev runs
+  // readable, then raise both live and persisted output when Help → Logs opts
+  // into debug collection.
+  transport.level = debugCollectionEnabled ? "debug" : "info";
+}
+
 function rethrowUnexpectedStdioError(error: unknown): void {
   queueMicrotask(() => {
     throw error;
@@ -99,6 +111,7 @@ export function initializeMainLogger(options?: { profileName?: string }): void {
   initialized = true;
   installStdioErrorHandlers();
   guardConsoleTransport();
+  configureConsoleTransport();
   if (options?.profileName) {
     electronLog.transports.file.fileName = resolveMainLogFileNameForProfile(
       options.profileName,
@@ -167,6 +180,7 @@ export function isMainLogDebugCollectionEnabled(): boolean {
 export function setMainLogDebugCollectionEnabled(enabled: boolean): void {
   debugCollectionEnabled = enabled;
   electronLog.transports.file.level = enabled ? "debug" : "info";
+  configureConsoleTransport();
 }
 
 type CompactField = {

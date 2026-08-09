@@ -95,7 +95,10 @@ describe("initializeMainLogger stdio handling", () => {
       throw makeBrokenPipeError();
     });
 
-    const { initializeMainLogger } = await import("../log");
+    const {
+      initializeMainLogger,
+      setMainLogDebugCollectionEnabled,
+    } = await import("../log");
     initializeMainLogger();
 
     mocks.consoleTransport.level = "silly";
@@ -104,8 +107,36 @@ describe("initializeMainLogger stdio handling", () => {
     expect(mocks.consoleWriteFn).toHaveBeenCalledTimes(1);
     expect(mocks.consoleTransport.level).toBe(false);
 
+    setMainLogDebugCollectionEnabled(true);
+    expect(mocks.consoleTransport.level).toBe(false);
+
     mocks.consoleTransport.writeFn(makeMessage());
     expect(mocks.consoleWriteFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the console at info unless debug collection is enabled", async () => {
+    const {
+      initializeMainLogger,
+      setMainLogDebugCollectionEnabled,
+    } = await import("../log");
+    // The log module disables its console transport when VITEST is present.
+    // Restore electron-log's normal runtime default so this test exercises
+    // initialization outside the unit-test guard.
+    mocks.consoleTransport.level = "silly";
+    initializeMainLogger();
+
+    expect(mocks.consoleTransport.level).toBe("info");
+    expect(mocks.fileTransport.level).toBe("info");
+
+    setMainLogDebugCollectionEnabled(true);
+
+    expect(mocks.consoleTransport.level).toBe("debug");
+    expect(mocks.fileTransport.level).toBe("debug");
+
+    setMainLogDebugCollectionEnabled(false);
+
+    expect(mocks.consoleTransport.level).toBe("info");
+    expect(mocks.fileTransport.level).toBe("info");
   });
 
   it("disables console logging when stdout emits an asynchronous broken-pipe error", async () => {
