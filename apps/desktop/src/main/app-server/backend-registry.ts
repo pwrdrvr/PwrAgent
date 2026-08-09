@@ -6336,9 +6336,11 @@ type PendingLiveThreadUsageLine = {
 };
 
 type LiveThreadUsageEmitWork = {
+  backend: AppServerBackendKind;
   observationSequence: number;
   settled: Promise<void>;
   settle: () => void;
+  threadId: string;
 };
 
 function isCodexInvalidIdRecoveryCooldownActive(
@@ -10354,6 +10356,17 @@ export class DesktopBackendRegistry {
       messageOrigins,
     );
     if (!request.viewOnly && !request.before && shouldAppendTranscriptOverlays) {
+      // Hydration supersedes live rows for the same turn in sqlite. Preserve
+      // that ordering now that live observations are delayed in memory: first
+      // let every already-arrived usage emit derive and buffer its row, then
+      // flush the batch before hydration marks those rows superseded. Without
+      // this boundary, the delayed live insert lands afterward and both rows
+      // remain active in pricing.
+      await this.waitForLiveThreadUsageEmitWork({
+        backend,
+        threadId: request.threadId,
+      });
+      await this.flushLiveThreadUsageLines();
       await this.persistReplayUsageLines(replayWithEnvironment);
     }
     const pricing =
@@ -19397,15 +19410,20 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private registerLiveThreadUsageEmitWork(): LiveThreadUsageEmitWork {
+  private registerLiveThreadUsageEmitWork(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): LiveThreadUsageEmitWork {
     let settle!: () => void;
     const settled = new Promise<void>((resolve) => {
       settle = resolve;
     });
     const work = {
+      backend,
       observationSequence: ++this.liveThreadUsageObservationSequence,
       settled,
       settle,
+      threadId,
     };
     this.liveThreadUsageEmitWork.add(work);
     return work;
@@ -19420,11 +19438,17 @@ export class DesktopBackendRegistry {
     work.settle();
   }
 
-  private async waitForLiveThreadUsageEmitWork(): Promise<void> {
-    const pending = Array.from(
-      this.liveThreadUsageEmitWork,
-      (work) => work.settled,
-    );
+  private async waitForLiveThreadUsageEmitWork(params?: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    const pending = [...this.liveThreadUsageEmitWork]
+      .filter(
+        (work) =>
+          !params
+          || (work.backend === params.backend && work.threadId === params.threadId),
+      )
+      .map((work) => work.settled);
     await Promise.all(pending);
   }
 
@@ -28471,9 +28495,13 @@ export class DesktopBackendRegistry {
     if (isLiveThreadUsage && this.closed) {
       return Promise.resolve();
     }
-    const liveThreadUsageWork = isLiveThreadUsage
-      ? this.registerLiveThreadUsageEmitWork()
-      : undefined;
+    const liveThreadUsageWork =
+      event.notification.method === "thread/tokenUsage/updated"
+        ? this.registerLiveThreadUsageEmitWork(
+            event.backend,
+            event.notification.params.threadId,
+          )
+        : undefined;
     const method = event.notification.method;
     const precedingLiveThreadUsageBarrier =
       method === "turn/completed"

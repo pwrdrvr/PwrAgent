@@ -13,6 +13,13 @@
     "rowsChanged": 30,
     "statements": 30
   },
+  "live-thread-token-usage-timer-windows": {
+    "commits": 10,
+    "note": "10 cumulative live-usage observations separated by full one-second timer windows",
+    "observedWalBytes": 547960,
+    "rowsChanged": 30,
+    "statements": 30
+  },
   "streamed-command-output": {
     "commits": 2,
     "note": "500 streamed output deltas plus the completion for one command",

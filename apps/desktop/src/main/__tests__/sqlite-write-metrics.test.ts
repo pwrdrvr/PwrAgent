@@ -1,7 +1,11 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentEvent } from "@pwragent/shared";
+import type {
+  AgentEvent,
+  AppServerThreadReplay,
+  ThreadUsageLineRecord,
+} from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
@@ -214,6 +218,91 @@ describe("sqlite write metrics", () => {
           turnId: `turn-${turnIndex}`,
         });
       }
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("budgets recurring live usage timer windows", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "clearTimeout", "setTimeout"],
+    });
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        // Ten consecutive one-second windows, each with a fresh cumulative
+        // observation. Unlike the burst budget, this pins the recurring
+        // commit cadence paid when observations do not share a window.
+        for (let window = 1; window <= 10; window += 1) {
+          await emit(buildLiveUsageEvent({
+            inputTokens: window * 1_000,
+            threadId: "timer-thread",
+            turnId: "timer-turn",
+          }));
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+      });
+
+      expect(batchWrite).toHaveBeenCalledTimes(10);
+      expectSqliteWriteBudget({
+        note:
+          "10 cumulative live-usage observations separated by full one-second timer windows",
+        scenario: "live-thread-token-usage-timer-windows",
+        writes,
+      });
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes pending live usage before replay hydration supersedes it", async () => {
+    vi.useFakeTimers();
+    const threadId = "thread-hydration-race";
+    const turnId = "turn-hydration-race";
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({
+        replay: buildHydratedUsageReplay({ threadId, turnId }),
+      }),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    try {
+      await emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId,
+        turnId,
+      }));
+      expect(batchWrite).not.toHaveBeenCalled();
+
+      await registry.readThread({ backend: "codex", threadId });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const pricing = await store.readThreadPricing({
+        backend: "codex",
+        threadId,
+      });
+      expect(pricing.lines).toHaveLength(1);
+      expect(pricing.lines[0]).toMatchObject({
+        source: "hydration",
+        status: "finalized",
+        turnId,
+        usageLineId: `codex:${threadId}:${turnId}:hydration`,
+      });
+      expect(pricing.summaries[0]?.usageLineCount).toBe(1);
     } finally {
       await registry.close();
       vi.useRealTimers();
@@ -645,6 +734,60 @@ function buildTurnCompletedEvent(threadId: string, turnId: string): AgentEvent {
   } as AgentEvent;
 }
 
+function buildHydratedUsageReplay(params: {
+  threadId: string;
+  turnId: string;
+}): AppServerThreadReplay {
+  const usageLine: ThreadUsageLineRecord = {
+    backend: "codex",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 1_200,
+    completedAt: 2_000,
+    createdAt: 2_000,
+    currency: "USD",
+    inputTokens: 1_500,
+    model: "gpt-5.5",
+    outputCostMicros: 0,
+    outputTokens: 150,
+    priceStatus: "unpriced",
+    provider: "openai",
+    reasoningOutputTokens: 0,
+    scope: "turn",
+    source: "hydration",
+    sourceItemId: "hydrated-usage",
+    status: "finalized",
+    threadId: params.threadId,
+    totalCostMicros: 0,
+    totalTokens: 1_650,
+    turnId: params.turnId,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 300,
+    usageLineId: `codex:${params.threadId}:${params.turnId}:hydration`,
+  };
+  return {
+    entries: [
+      {
+        type: "activity",
+        id: "hydrated-usage",
+        summary: "Turn usage: hydrated",
+        status: "completed",
+        createdAt: 2_000,
+        details: [],
+        turn: {
+          id: params.turnId,
+          status: "completed",
+        },
+        usageLine,
+      },
+    ],
+    messages: [],
+    pagination: {
+      hasPreviousPage: false,
+      supportsPagination: false,
+    },
+  };
+}
+
 function createDeferred(): {
   promise: Promise<void>;
   resolve: () => void;
@@ -683,11 +826,24 @@ function buildInvocation(invocationId: string) {
   };
 }
 
-function createStubBackendClient() {
+function createStubBackendClient(options?: {
+  replay?: AppServerThreadReplay;
+}) {
   return {
     close: async () => {},
-    getInitializeResult: async () => ({ methods: [] }),
+    getInitializeResult: async () => ({
+      methods: options?.replay ? ["thread/read"] : [],
+    }),
     onNotification: () => () => {},
     onPendingRequest: () => () => {},
+    readThread: async () =>
+      options?.replay ?? {
+        entries: [],
+        messages: [],
+        pagination: {
+          hasPreviousPage: false,
+          supportsPagination: false,
+        },
+      },
   } as never;
 }
