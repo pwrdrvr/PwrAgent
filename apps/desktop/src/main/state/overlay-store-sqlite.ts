@@ -1000,9 +1000,82 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   async upsertThreadUsageLine(params: {
     line: ThreadUsageLineRecord;
   }): Promise<{ line: ThreadUsageLineRecord; summary: ThreadPricingSummary }> {
+    const { lines, summaries } = await this.upsertThreadUsageLines({
+      lines: [params.line],
+    });
+    const line = lines[0];
+    if (!line) {
+      throw new Error("Thread usage line batch did not persist its input");
+    }
+    const summary = summaries.find(
+      (candidate) =>
+        candidate.backend === line.backend
+        && candidate.currency === line.currency
+        && candidate.provider === line.provider
+        && candidate.threadId === (line.parentThreadId ?? line.threadId),
+    );
+    if (!summary) {
+      throw new Error(
+        `Thread usage line ${line.usageLineId} did not produce a pricing summary`,
+      );
+    }
+    return { line, summary };
+  }
+
+  /**
+   * Persist the latest value for every distinct usage line under one sqlite
+   * transaction. Callers may pass repeated ids; later entries win before any
+   * statement runs, and affected pricing summaries are recomputed once each.
+   */
+  async upsertThreadUsageLines(params: {
+    lines: ThreadUsageLineRecord[];
+  }): Promise<{
+    lines: ThreadUsageLineRecord[];
+    summaries: ThreadPricingSummary[];
+  }> {
+    const latestLinesById = new Map<string, ThreadUsageLineRecord>();
+    for (const line of params.lines) {
+      latestLinesById.set(line.usageLineId, line);
+    }
+    if (latestLinesById.size === 0) {
+      return { lines: [], summaries: [] };
+    }
+
     const now = Date.now();
-    let line = repriceTokenUsageLine(normalizeThreadUsageLine(params.line, now));
-    const upsert = this.stateDb.raw.transaction(() => {
+    const lines = [...latestLinesById.values()].map((line) =>
+      repriceTokenUsageLine(normalizeThreadUsageLine(line, now)),
+    );
+    const summaryTargets = new Map<
+      string,
+      {
+        backend: string;
+        currency: string;
+        provider: string;
+        threadId: string;
+        updatedAt: number;
+      }
+    >();
+    const queueSummary = (target: {
+      backend: string;
+      currency: string;
+      provider: string;
+      threadId: string;
+      updatedAt: number;
+    }): void => {
+      summaryTargets.set(
+        JSON.stringify([
+          target.provider,
+          target.backend,
+          target.threadId,
+          target.currency,
+        ]),
+        target,
+      );
+    };
+    const upsertLine = (
+      inputLine: ThreadUsageLineRecord,
+    ): ThreadUsageLineRecord => {
+      let line = inputLine;
       const existing = this.readThreadUsageLineSync(line.usageLineId);
       if (existing) {
         line = mergeThreadUsageLineForUpsert(line, existing);
@@ -1280,7 +1353,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           existingRollupThreadId !== nextRollupThreadId ||
           existing.currency !== line.currency
         ) {
-          this.recomputeThreadPricingSummarySync({
+          queueSummary({
             backend: existing.backend,
             currency: existing.currency,
             provider: existing.provider,
@@ -1290,16 +1363,27 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         }
       }
 
-      return this.recomputeThreadPricingSummarySync({
+      queueSummary({
         backend: line.backend,
         currency: line.currency,
         provider: line.provider,
         threadId: line.parentThreadId ?? line.threadId,
         updatedAt: now,
       });
+      return line;
+    };
+
+    const upsert = this.stateDb.raw.transaction(() => {
+      for (let index = 0; index < lines.length; index += 1) {
+        lines[index] = upsertLine(lines[index]!);
+      }
+
+      return [...summaryTargets.values()].map((target) =>
+        this.recomputeThreadPricingSummarySync(target),
+      );
     });
 
-    return { line, summary: upsert() };
+    return { lines, summaries: upsert() };
   }
 
   async readThreadPricing(params: {

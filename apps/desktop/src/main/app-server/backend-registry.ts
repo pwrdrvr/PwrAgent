@@ -6287,6 +6287,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   Pick<
     SqliteOverlayStore,
     | "readThreadGitWorkingStateCache"
+    | "upsertThreadUsageLines"
     | "writeThreadGitWorkingStateCacheEntry"
   >
 >;
@@ -6318,6 +6319,29 @@ const CODEX_INVALID_ID_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
 // write per 250ms window (~110 deltas) drops that to under ~12ms/s and takes
 // it off the hot path entirely.
 const TOOL_INVOCATION_DELTA_FLUSH_INTERVAL_MS = 250;
+
+// Token-usage updates are cumulative snapshots, so repeated observations for
+// one turn replace each other in memory. The write budget measures ~64 KiB of
+// WAL for a ten-turn batch: at this one-second ceiling, a pathological nonstop
+// stream is capped near 225 MiB/hour instead of ~900 MiB/hour at 250ms. In
+// practice app-server emits usage at model-request boundaries, not per token,
+// and turn terminals flush immediately; one second keeps pricing UI responsive
+// while allowing concurrent turns to share one sqlite transaction.
+const LIVE_THREAD_USAGE_FLUSH_INTERVAL_MS = 1_000;
+
+type PendingLiveThreadUsageLine = {
+  backend: AppServerBackendKind;
+  line: ThreadUsageLineRecord;
+  observationSequence: number;
+};
+
+type LiveThreadUsageEmitWork = {
+  backend: AppServerBackendKind;
+  observationSequence: number;
+  settled: Promise<void>;
+  settle: () => void;
+  threadId: string;
+};
 
 function isCodexInvalidIdRecoveryCooldownActive(
   attemptedAt: number,
@@ -6532,6 +6556,28 @@ export class DesktopBackendRegistry {
     string,
     ObservedContextReplayCursor
   >();
+  /**
+   * Cumulative live usage waiting for one bulk sqlite transaction. The
+   * observation sequence preserves event arrival order even if an older
+   * event's overlay lookup resolves after a newer event's lookup.
+   */
+  private readonly pendingLiveThreadUsageLines = new Map<
+    string,
+    PendingLiveThreadUsageLine
+  >();
+  private liveThreadUsageObservationSequence = 0;
+  /**
+   * Usage notifications overlap at the JSON-RPC transport. Register each one
+   * before `emit` first yields so a later terminal event or close can capture
+   * an exact arrival-ordered durability barrier.
+   */
+  private readonly liveThreadUsageEmitWork = new Set<LiveThreadUsageEmitWork>();
+  private pendingLiveThreadUsageTimer: NodeJS.Timeout | undefined;
+  /**
+   * Serializes timer, terminal, retry, and shutdown drains. A caller awaiting
+   * a flush therefore also waits for any batch that was already in flight.
+   */
+  private liveThreadUsageFlushChain: Promise<void> = Promise.resolve();
   private readonly taskMonitorDelegations = new Map<
     string,
     TaskMonitorDelegationRecord
@@ -10310,6 +10356,17 @@ export class DesktopBackendRegistry {
       messageOrigins,
     );
     if (!request.viewOnly && !request.before && shouldAppendTranscriptOverlays) {
+      // Hydration supersedes live rows for the same turn in sqlite. Preserve
+      // that ordering now that live observations are delayed in memory: first
+      // let every already-arrived usage emit derive and buffer its row, then
+      // flush the batch before hydration marks those rows superseded. Without
+      // this boundary, the delayed live insert lands afterward and both rows
+      // remain active in pricing.
+      await this.waitForLiveThreadUsageEmitWork({
+        backend,
+        threadId: request.threadId,
+      });
+      await this.flushLiveThreadUsageLines();
       await this.persistReplayUsageLines(replayWithEnvironment);
     }
     const pricing =
@@ -16845,6 +16902,11 @@ export class DesktopBackendRegistry {
 
   async close(): Promise<void> {
     this.closed = true;
+    // `closed` rejects observations that enter from this point forward. The
+    // snapshot was registered synchronously at each earlier usage emit's
+    // entry, so waiting it cannot miss work still deriving its sqlite row.
+    const liveThreadUsageEmitBarrier =
+      this.waitForLiveThreadUsageEmitWork();
     this.acceptedSteerRequests.clear();
     this.acceptedThreadControlRequests.clear();
     this.acceptedActiveTurnControlRequests.clear();
@@ -16853,6 +16915,11 @@ export class DesktopBackendRegistry {
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
     }
+    // Live usage and command output may each have one bounded window sitting
+    // in memory. `closed` prevents either drain from re-arming its timer; the
+    // serialized flush chains ensure no write survives close().
+    await liveThreadUsageEmitBarrier;
+    await this.flushLiveThreadUsageLines();
     // A command streaming at quit time has accounting worth up to one flush
     // window sitting in memory; write it before the store goes away. The flush
     // owns the timer, and `closed` above stops anything re-arming it.
@@ -19343,9 +19410,57 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private async recordLiveThreadUsage(event: AgentEvent): Promise<void> {
+  private registerLiveThreadUsageEmitWork(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): LiveThreadUsageEmitWork {
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const work = {
+      backend,
+      observationSequence: ++this.liveThreadUsageObservationSequence,
+      settled,
+      settle,
+      threadId,
+    };
+    this.liveThreadUsageEmitWork.add(work);
+    return work;
+  }
+
+  private finishLiveThreadUsageEmitWork(
+    work: LiveThreadUsageEmitWork,
+  ): void {
+    if (!this.liveThreadUsageEmitWork.delete(work)) {
+      return;
+    }
+    work.settle();
+  }
+
+  private async waitForLiveThreadUsageEmitWork(params?: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    const pending = [...this.liveThreadUsageEmitWork]
+      .filter(
+        (work) =>
+          !params
+          || (work.backend === params.backend && work.threadId === params.threadId),
+      )
+      .map((work) => work.settled);
+    await Promise.all(pending);
+  }
+
+  private async recordLiveThreadUsage(
+    event: AgentEvent,
+    observationSequence?: number,
+  ): Promise<void> {
     const notification = event.notification;
-    if (notification.method !== "thread/tokenUsage/updated") {
+    if (
+      notification.method !== "thread/tokenUsage/updated"
+      || observationSequence === undefined
+    ) {
       return;
     }
     const threadId = notification.params.threadId;
@@ -19436,9 +19551,14 @@ export class DesktopBackendRegistry {
     }
     if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
       logUnpricedThreadUsageLine(line);
-      await this.overlayStore.upsertThreadUsageLine({ line });
+      const batchesLiveUsage =
+        typeof this.overlayStore.upsertThreadUsageLines === "function";
+      if (!batchesLiveUsage) {
+        await this.overlayStore.upsertThreadUsageLine({ line });
+      }
       // Best-effort: a failure here must never block the load-bearing pricing
-      // push below (the turn line is already persisted).
+      // write/notification path. The bulk path prepares the rare fork baseline
+      // before arming its timer, so the later pricing event includes both.
       try {
         await this.captureForkBaselineUsageLine({
           backend: event.backend,
@@ -19458,11 +19578,140 @@ export class DesktopBackendRegistry {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+      if (batchesLiveUsage) {
+        this.bufferLiveThreadUsageLine({
+          backend: event.backend,
+          line,
+          observationSequence,
+        });
+        return;
+      }
       await this.emitThreadPricingUpdated({
         backend: event.backend,
         threadId: line.parentThreadId ?? line.threadId,
       });
     }
+  }
+
+  private bufferLiveThreadUsageLine(
+    pending: PendingLiveThreadUsageLine,
+  ): void {
+    const existing = this.pendingLiveThreadUsageLines.get(
+      pending.line.usageLineId,
+    );
+    if (
+      !existing
+      || pending.observationSequence > existing.observationSequence
+    ) {
+      this.pendingLiveThreadUsageLines.set(
+        pending.line.usageLineId,
+        pending,
+      );
+    }
+    this.scheduleLiveThreadUsageFlush();
+  }
+
+  private scheduleLiveThreadUsageFlush(): void {
+    if (this.pendingLiveThreadUsageTimer || this.closed) {
+      return;
+    }
+    this.pendingLiveThreadUsageTimer = setTimeout(() => {
+      this.pendingLiveThreadUsageTimer = undefined;
+      void this.flushLiveThreadUsageLines();
+    }, LIVE_THREAD_USAGE_FLUSH_INTERVAL_MS);
+    this.pendingLiveThreadUsageTimer.unref?.();
+  }
+
+  private flushLiveThreadUsageLines(): Promise<void> {
+    const flushed = this.liveThreadUsageFlushChain.then(() =>
+      this.writePendingLiveThreadUsageLines(),
+    );
+    this.liveThreadUsageFlushChain = flushed.catch(() => undefined);
+    return flushed;
+  }
+
+  private async writePendingLiveThreadUsageLines(): Promise<void> {
+    if (this.pendingLiveThreadUsageTimer) {
+      clearTimeout(this.pendingLiveThreadUsageTimer);
+      this.pendingLiveThreadUsageTimer = undefined;
+    }
+    if (
+      this.pendingLiveThreadUsageLines.size === 0
+      || typeof this.overlayStore.upsertThreadUsageLines !== "function"
+    ) {
+      return;
+    }
+
+    const pending = [...this.pendingLiveThreadUsageLines.values()];
+    this.pendingLiveThreadUsageLines.clear();
+    try {
+      await this.overlayStore.upsertThreadUsageLines({
+        lines: pending.map((entry) => entry.line),
+      });
+    } catch (error) {
+      for (const entry of pending) {
+        this.requeueFailedLiveThreadUsageLine(entry);
+      }
+      backendRegistryLog.warn("live thread usage batch write failed", {
+        error: error instanceof Error ? error.message : String(error),
+        lineCount: pending.length,
+        usageLineIds: pending
+          .slice(0, 10)
+          .map((entry) => entry.line.usageLineId),
+      });
+      return;
+    }
+
+    const pricingTargets = new Map<
+      string,
+      { backend: AppServerBackendKind; threadId: string }
+    >();
+    for (const { backend, line } of pending) {
+      const target = {
+        backend,
+        threadId: line.parentThreadId ?? line.threadId,
+      };
+      pricingTargets.set(
+        JSON.stringify([target.backend, target.threadId]),
+        target,
+      );
+    }
+    for (const target of pricingTargets.values()) {
+      try {
+        // The notification embeds a fresh store read, so observers can never
+        // receive pricing for a usage line that has not committed yet.
+        await this.emitThreadPricingUpdated(target);
+      } catch (error) {
+        backendRegistryLog.warn("live thread pricing update failed", {
+          backend: target.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: target.threadId,
+        });
+      }
+    }
+  }
+
+  private requeueFailedLiveThreadUsageLine(
+    pending: PendingLiveThreadUsageLine,
+  ): void {
+    if (this.closed) {
+      // Shutdown already made its one durability attempt. Re-arming here would
+      // let a timer write against a store after the registry has closed.
+      return;
+    }
+    const newer = this.pendingLiveThreadUsageLines.get(
+      pending.line.usageLineId,
+    );
+    if (
+      !newer
+      || pending.observationSequence > newer.observationSequence
+    ) {
+      this.pendingLiveThreadUsageLines.set(
+        pending.line.usageLineId,
+        pending,
+      );
+    }
+    this.scheduleLiveThreadUsageFlush();
   }
 
   /**
@@ -28240,7 +28489,46 @@ export class DesktopBackendRegistry {
     } as AgentEvent);
   }
 
-  private async emit(event: AgentEvent): Promise<void> {
+  private emit(event: AgentEvent): Promise<void> {
+    const isLiveThreadUsage =
+      event.notification.method === "thread/tokenUsage/updated";
+    if (isLiveThreadUsage && this.closed) {
+      return Promise.resolve();
+    }
+    const liveThreadUsageWork =
+      event.notification.method === "thread/tokenUsage/updated"
+        ? this.registerLiveThreadUsageEmitWork(
+            event.backend,
+            event.notification.params.threadId,
+          )
+        : undefined;
+    const method = event.notification.method;
+    const precedingLiveThreadUsageBarrier =
+      method === "turn/completed"
+      || method === "turn/failed"
+      || method === "turn/cancelled"
+        ? this.waitForLiveThreadUsageEmitWork()
+        : undefined;
+    const emitted = this.emitAfterLiveThreadUsageRegistration(
+      event,
+      liveThreadUsageWork,
+      precedingLiveThreadUsageBarrier,
+    );
+    return liveThreadUsageWork
+      ? emitted.finally(() => {
+          // Earlier pipeline stages may reject before usage derivation. Always
+          // release the terminal/close barrier; the successful path finishes
+          // before listener fan-out to avoid a listener-driven close deadlock.
+          this.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
+        })
+      : emitted;
+  }
+
+  private async emitAfterLiveThreadUsageRegistration(
+    event: AgentEvent,
+    liveThreadUsageWork: LiveThreadUsageEmitWork | undefined,
+    precedingLiveThreadUsageBarrier: Promise<void> | undefined,
+  ): Promise<void> {
     await this.forwardManagedReviewActivity(event);
     event = await this.withThreadMessageContext(event);
     this.rememberFileChangeApprovalContext(event);
@@ -28336,6 +28624,11 @@ export class DesktopBackendRegistry {
       event.notification.method === "turn/failed" ||
       event.notification.method === "turn/cancelled"
     ) {
+      // A terminal event is the turn's explicit durability boundary. Flush all
+      // coalesced turns in one transaction before terminal state reaches any
+      // listener, even when several turns were active concurrently.
+      await precedingLiveThreadUsageBarrier;
+      await this.flushLiveThreadUsageLines();
       const notification = event.notification as {
         params: {
           threadId: string;
@@ -28695,7 +28988,10 @@ export class DesktopBackendRegistry {
       }
     }
 
-    await this.recordLiveThreadUsage(event);
+    await this.recordLiveThreadUsage(
+      event,
+      liveThreadUsageWork?.observationSequence,
+    );
     await this.recordToolInvocationAccounting(event);
     this.forgetCompletedTurnReplayObservations(event);
     await this.recordCodexNativeSubAgentActivity(event);
@@ -28707,6 +29003,9 @@ export class DesktopBackendRegistry {
     this.notifyForAttentionRequired(event);
     await this.notifyForTerminalOutcome(event);
 
+    if (liveThreadUsageWork) {
+      this.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
+    }
     await this.emitToListeners(event);
   }
 

@@ -1,8 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentEvent } from "@pwragent/shared";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  AgentEvent,
+  AppServerThreadReplay,
+  ThreadUsageLineRecord,
+} from "@pwragent/shared";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import {
@@ -169,7 +173,8 @@ describe("sqlite write metrics", () => {
     await registry.close();
   });
 
-  it("holds one live token-usage observation to one commit", async () => {
+  it("holds a burst of live token usage to one commit", async () => {
+    vi.useFakeTimers();
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
@@ -178,39 +183,471 @@ describe("sqlite write metrics", () => {
       emit(event: AgentEvent): Promise<void>;
     }).emit.bind(registry);
 
-    const { writes } = await measureSqliteWrites(async () => {
-      await emit({
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        // Fifty cumulative snapshots for each of ten concurrently active
+        // turns. Only the last snapshot per usageLineId belongs in sqlite.
+        for (let index = 0; index < 500; index += 1) {
+          const turnIndex = index % 10;
+          const observation = Math.floor(index / 10) + 1;
+          const inputTokens = observation * 1_000 + turnIndex;
+          await emit(buildLiveUsageEvent({
+            inputTokens,
+            threadId: `thread-${turnIndex}`,
+            turnId: `turn-${turnIndex}`,
+          }));
+        }
+
+        // A terminal notification is an explicit durability boundary. It
+        // drains every pending turn, not only the terminal event's own turn.
+        await emit(buildTurnCompletedEvent("thread-0", "turn-0"));
+      });
+
+      expectSqliteWriteBudget({
+        note:
+          "500 cumulative usage observations across 10 turns, then one terminal flush",
+        scenario: "live-thread-token-usage",
+        writes,
+      });
+
+      for (let turnIndex = 0; turnIndex < 10; turnIndex += 1) {
+        const pricing = await store.readThreadPricing({
+          backend: "codex",
+          threadId: `thread-${turnIndex}`,
+        });
+        expect(pricing.lines).toHaveLength(1);
+        expect(pricing.lines[0]).toMatchObject({
+          inputTokens: 50_000 + turnIndex,
+          threadId: `thread-${turnIndex}`,
+          turnId: `turn-${turnIndex}`,
+        });
+      }
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("budgets recurring live usage timer windows", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "clearTimeout", "setTimeout"],
+    });
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        // Ten consecutive one-second windows, each with a fresh cumulative
+        // observation. Unlike the burst budget, this pins the recurring
+        // commit cadence paid when observations do not share a window.
+        for (let window = 1; window <= 10; window += 1) {
+          await emit(buildLiveUsageEvent({
+            inputTokens: window * 1_000,
+            threadId: "timer-thread",
+            turnId: "timer-turn",
+          }));
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+      });
+
+      expect(batchWrite).toHaveBeenCalledTimes(10);
+      expectSqliteWriteBudget({
+        note:
+          "10 cumulative live-usage observations separated by full one-second timer windows",
+        scenario: "live-thread-token-usage-timer-windows",
+        writes,
+      });
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes pending live usage before replay hydration supersedes it", async () => {
+    vi.useFakeTimers();
+    const threadId = "thread-hydration-race";
+    const turnId = "turn-hydration-race";
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({
+        replay: buildHydratedUsageReplay({ threadId, turnId }),
+      }),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    try {
+      await emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId,
+        turnId,
+      }));
+      expect(batchWrite).not.toHaveBeenCalled();
+
+      await registry.readThread({ backend: "codex", threadId });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const pricing = await store.readThreadPricing({
         backend: "codex",
-        notification: {
-          method: "thread/tokenUsage/updated",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            model: "gpt-5.5",
-            tokenUsage: {
-              total: {
-                inputTokens: 80_000,
-                cachedInputTokens: 72_000,
-                outputTokens: 1_000,
-              },
-              last: {
-                inputTokens: 80_000,
-                cachedInputTokens: 72_000,
-                outputTokens: 1_000,
-              },
-            },
+        threadId,
+      });
+      expect(pricing.lines).toHaveLength(1);
+      expect(pricing.lines[0]).toMatchObject({
+        source: "hydration",
+        status: "finalized",
+        turnId,
+        usageLineId: `codex:${threadId}:${turnId}:hydration`,
+      });
+      expect(pricing.summaries[0]?.usageLineCount).toBe(1);
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for earlier live usage before crossing a terminal durability boundary", async () => {
+    const overlayLookupStarted = createDeferred();
+    const releaseOverlayLookup = createDeferred();
+    const readOverlay = store.getThreadOverlayState.bind(store);
+    vi.spyOn(store, "getThreadOverlayState").mockImplementationOnce(
+      async (params) => {
+        overlayLookupStarted.resolve();
+        await releaseOverlayLookup.promise;
+        return await readOverlay(params);
+      },
+    );
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    let usageEmit = Promise.resolve();
+    let terminalEmit = Promise.resolve();
+    let terminalDelivered = false;
+    registry.onEvent((event) => {
+      if (event.notification.method === "turn/completed") {
+        terminalDelivered = true;
+      }
+    });
+
+    try {
+      usageEmit = emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-terminal-race",
+        turnId: "turn-terminal-race",
+      }));
+      await overlayLookupStarted.promise;
+
+      terminalEmit = emit(
+        buildTurnCompletedEvent("thread-terminal-race", "turn-terminal-race"),
+      );
+      await waitForAsyncWork();
+
+      expect(terminalDelivered).toBe(false);
+      expect(batchWrite).not.toHaveBeenCalled();
+
+      releaseOverlayLookup.resolve();
+      await Promise.all([usageEmit, terminalEmit]);
+
+      expect(batchWrite).toHaveBeenCalledTimes(1);
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-terminal-race",
+        })).lines[0],
+      ).toMatchObject({ inputTokens: 1_000 });
+    } finally {
+      releaseOverlayLookup.resolve();
+      await Promise.allSettled([usageEmit, terminalEmit]);
+      await registry.close();
+    }
+  });
+
+  it("persists pre-close live usage after a delayed lookup and ignores new usage", async () => {
+    const overlayLookupStarted = createDeferred();
+    const releaseOverlayLookup = createDeferred();
+    const readOverlay = store.getThreadOverlayState.bind(store);
+    const overlayLookup = vi
+      .spyOn(store, "getThreadOverlayState")
+      .mockImplementationOnce(async (params) => {
+        overlayLookupStarted.resolve();
+        await releaseOverlayLookup.promise;
+        return await readOverlay(params);
+      });
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    let usageEmit = Promise.resolve();
+    let postCloseEmit = Promise.resolve();
+    let closePromise: Promise<void> | undefined;
+    let closeSettled = false;
+
+    try {
+      usageEmit = emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-close-race",
+        turnId: "turn-close-race",
+      }));
+      await overlayLookupStarted.promise;
+
+      closePromise = registry.close().finally(() => {
+        closeSettled = true;
+      });
+      postCloseEmit = emit(buildLiveUsageEvent({
+        inputTokens: 2_000,
+        threadId: "thread-close-race",
+        turnId: "turn-close-race",
+      }));
+      await postCloseEmit;
+      await waitForAsyncWork();
+
+      expect(closeSettled).toBe(false);
+      expect(overlayLookup).toHaveBeenCalledTimes(1);
+      expect(batchWrite).not.toHaveBeenCalled();
+
+      releaseOverlayLookup.resolve();
+      await Promise.all([usageEmit, closePromise]);
+
+      expect(batchWrite).toHaveBeenCalledTimes(1);
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-close-race",
+        })).lines[0],
+      ).toMatchObject({ inputTokens: 1_000 });
+    } finally {
+      releaseOverlayLookup.resolve();
+      closePromise ??= registry.close();
+      await Promise.allSettled([usageEmit, postCloseEmit, closePromise]);
+    }
+  });
+
+  it("releases the terminal barrier when earlier live usage derivation fails", async () => {
+    vi.spyOn(store, "getThreadOverlayState").mockRejectedValueOnce(
+      new Error("overlay unavailable"),
+    );
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    try {
+      const usageEmit = emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-usage-error",
+        turnId: "turn-usage-error",
+      }));
+      const usageRejected = expect(usageEmit).rejects.toThrow(
+        "overlay unavailable",
+      );
+      const terminalEmit = emit(
+        buildTurnCompletedEvent("thread-usage-error", "turn-usage-error"),
+      );
+
+      await Promise.all([
+        usageRejected,
+        expect(terminalEmit).resolves.toBeUndefined(),
+      ]);
+      expect(batchWrite).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("flushes coalesced live usage on the bounded timer", async () => {
+    vi.useFakeTimers();
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    const pricingEvents: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "thread/pricing/updated") {
+        pricingEvents.push(event);
+      }
+    });
+
+    try {
+      await emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-timer",
+        turnId: "turn-timer",
+      }));
+      await emit(buildLiveUsageEvent({
+        inputTokens: 2_000,
+        threadId: "thread-timer",
+        turnId: "turn-timer",
+      }));
+
+      expect(batchWrite).not.toHaveBeenCalled();
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-timer",
+        })).lines,
+      ).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(batchWrite).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(batchWrite).toHaveBeenCalledTimes(1);
+      expect(batchWrite.mock.calls[0]?.[0].lines).toHaveLength(1);
+      expect(batchWrite.mock.calls[0]?.[0].lines[0]).toMatchObject({
+        inputTokens: 2_000,
+        usageLineId: "codex:thread-timer:turn-timer:live-token-usage",
+      });
+      expect(pricingEvents).toHaveLength(1);
+      expect(pricingEvents[0]?.notification).toMatchObject({
+        method: "thread/pricing/updated",
+        params: {
+          pricing: {
+            lines: [expect.objectContaining({ inputTokens: 2_000 })],
           },
+          threadId: "thread-timer",
         },
-      } as AgentEvent);
-    });
+      });
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
 
-    expectSqliteWriteBudget({
-      note: "one completed model request observed through thread token usage",
-      scenario: "live-thread-token-usage",
-      writes,
+  it("retries a failed batch without overwriting a newer observation", async () => {
+    vi.useFakeTimers();
+    const firstWriteStarted = createDeferred();
+    const releaseFirstWrite = createDeferred();
+    const originalBatchWrite = store.upsertThreadUsageLines.bind(store);
+    const batchWrite = vi
+      .spyOn(store, "upsertThreadUsageLines")
+      .mockImplementationOnce(async () => {
+        firstWriteStarted.resolve();
+        await releaseFirstWrite.promise;
+        throw new Error("disk busy");
+      })
+      .mockImplementation(async (params) => await originalBatchWrite(params));
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
     });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    const flush = (registry as unknown as {
+      flushLiveThreadUsageLines(): Promise<void>;
+    }).flushLiveThreadUsageLines.bind(registry);
 
-    await registry.close();
+    try {
+      await emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-retry",
+        turnId: "turn-retry",
+      }));
+      const firstFlush = flush();
+      await firstWriteStarted.promise;
+
+      // This newer cumulative snapshot arrives while the older batch is in
+      // flight. Requeueing the failed batch must not put 1,000 back on top.
+      await emit(buildLiveUsageEvent({
+        inputTokens: 2_000,
+        threadId: "thread-retry",
+        turnId: "turn-retry",
+      }));
+      releaseFirstWrite.resolve();
+      await firstFlush;
+      await flush();
+
+      expect(batchWrite).toHaveBeenCalledTimes(2);
+      expect(batchWrite.mock.calls[1]?.[0].lines).toHaveLength(1);
+      expect(batchWrite.mock.calls[1]?.[0].lines[0]).toMatchObject({
+        inputTokens: 2_000,
+      });
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-retry",
+        })).lines[0],
+      ).toMatchObject({ inputTokens: 2_000 });
+    } finally {
+      releaseFirstWrite.resolve();
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes live usage on close and ignores post-close writes", async () => {
+    vi.useFakeTimers();
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    let closed = false;
+
+    try {
+      await emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-close",
+        turnId: "turn-close",
+      }));
+      expect(batchWrite).not.toHaveBeenCalled();
+
+      await registry.close();
+      closed = true;
+      expect(batchWrite).toHaveBeenCalledTimes(1);
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-close",
+        })).lines[0],
+      ).toMatchObject({ inputTokens: 1_000 });
+
+      await emit(buildLiveUsageEvent({
+        inputTokens: 2_000,
+        threadId: "thread-close",
+        turnId: "turn-close",
+      }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(batchWrite).toHaveBeenCalledTimes(1);
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-close",
+        })).lines[0],
+      ).toMatchObject({ inputTokens: 1_000 });
+    } finally {
+      if (!closed) {
+        await registry.close();
+      }
+      vi.useRealTimers();
+    }
   });
 
   it("holds messaging and federation for an idle hour without sqlite writes", async () => {
@@ -307,6 +744,124 @@ describe("sqlite write metrics", () => {
   });
 });
 
+function buildLiveUsageEvent(params: {
+  inputTokens: number;
+  threadId: string;
+  turnId: string;
+}): AgentEvent {
+  const cachedInputTokens = Math.max(0, params.inputTokens - 100);
+  return {
+    backend: "codex",
+    notification: {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: params.threadId,
+        turnId: params.turnId,
+        model: "gpt-5.5",
+        tokenUsage: {
+          total: {
+            inputTokens: params.inputTokens,
+            cachedInputTokens,
+            outputTokens: 100,
+          },
+          last: {
+            inputTokens: params.inputTokens,
+            cachedInputTokens,
+            outputTokens: 100,
+          },
+        },
+      },
+    },
+  } as AgentEvent;
+}
+
+function buildTurnCompletedEvent(threadId: string, turnId: string): AgentEvent {
+  return {
+    backend: "codex",
+    notification: {
+      method: "turn/completed",
+      params: {
+        threadId,
+        turnId,
+        turn: {
+          id: turnId,
+          status: "completed",
+          output: [],
+        },
+      },
+    },
+  } as AgentEvent;
+}
+
+function buildHydratedUsageReplay(params: {
+  threadId: string;
+  turnId: string;
+}): AppServerThreadReplay {
+  const usageLine: ThreadUsageLineRecord = {
+    backend: "codex",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 1_200,
+    completedAt: 2_000,
+    createdAt: 2_000,
+    currency: "USD",
+    inputTokens: 1_500,
+    model: "gpt-5.5",
+    outputCostMicros: 0,
+    outputTokens: 150,
+    priceStatus: "unpriced",
+    provider: "openai",
+    reasoningOutputTokens: 0,
+    scope: "turn",
+    source: "hydration",
+    sourceItemId: "hydrated-usage",
+    status: "finalized",
+    threadId: params.threadId,
+    totalCostMicros: 0,
+    totalTokens: 1_650,
+    turnId: params.turnId,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 300,
+    usageLineId: `codex:${params.threadId}:${params.turnId}:hydration`,
+  };
+  return {
+    entries: [
+      {
+        type: "activity",
+        id: "hydrated-usage",
+        summary: "Turn usage: hydrated",
+        status: "completed",
+        createdAt: 2_000,
+        details: [],
+        turn: {
+          id: params.turnId,
+          status: "completed",
+        },
+        usageLine,
+      },
+    ],
+    messages: [],
+    pagination: {
+      hasPreviousPage: false,
+      supportsPagination: false,
+    },
+  };
+}
+
+function createDeferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
+async function waitForAsyncWork(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 function buildInvocation(invocationId: string) {
   return {
     backend: "codex" as const,
@@ -330,11 +885,24 @@ function buildInvocation(invocationId: string) {
   };
 }
 
-function createStubBackendClient() {
+function createStubBackendClient(options?: {
+  replay?: AppServerThreadReplay;
+}) {
   return {
     close: async () => {},
-    getInitializeResult: async () => ({ methods: [] }),
+    getInitializeResult: async () => ({
+      methods: options?.replay ? ["thread/read"] : [],
+    }),
     onNotification: () => () => {},
     onPendingRequest: () => () => {},
+    readThread: async () =>
+      options?.replay ?? {
+        entries: [],
+        messages: [],
+        pagination: {
+          hasPreviousPage: false,
+          supportsPagination: false,
+        },
+      },
   } as never;
 }
