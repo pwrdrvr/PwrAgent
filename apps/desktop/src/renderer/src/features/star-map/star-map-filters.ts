@@ -1,4 +1,4 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import { comparePinnedThreads, type NavigationThreadSummary } from "@pwragent/shared";
 import {
   isAgentThread,
   threadAttentionCategories,
@@ -161,8 +161,32 @@ export function threadPassesFilters(params: {
 }
 
 /**
- * Threads to show, ordered by recent activity. Archived threads never
- * surface on the map regardless of selection.
+ * Whether a pin keeps a thread on the map irrespective of the attention
+ * chips. A pin is the operator saying "keep this in front of me", and the
+ * sidebar's Pins section and the map are meant to agree — so the chips,
+ * which describe transient attention, do not get to hide it.
+ *
+ * `pinned: exclude` is the one thing that still can: an operator asking to
+ * see everything EXCEPT pins has said so explicitly, and a chip that
+ * cannot act would be worse than no chip.
+ */
+function pinOverridesFilters(
+  selection: StarMapFilterSelection,
+  thread: NavigationThreadSummary,
+): boolean {
+  return (
+    isPinnedThread(thread) && filterState(selection, "pinned") !== "exclude"
+  );
+}
+
+/**
+ * Threads to show: pinned threads first in the operator's own pin order,
+ * then everything else by recent activity. Archived threads never surface
+ * on the map regardless of selection.
+ *
+ * Pins sort nearest the star deliberately — the slot closest to the body is
+ * the one that stays put as the column grows, so a curated thread does not
+ * wander as unrelated activity arrives.
  */
 export function selectFilteredThreads(params: {
   selection: StarMapFilterSelection;
@@ -171,14 +195,22 @@ export function selectFilteredThreads(params: {
 }): NavigationThreadSummary[] {
   return params.threads
     .filter((thread) => thread.archivedAt === undefined)
-    .filter((thread) =>
-      threadPassesFilters({
-        selection: params.selection,
-        sessionKeys: params.sessionKeys,
-        thread,
-      }),
+    .filter(
+      (thread) =>
+        pinOverridesFilters(params.selection, thread)
+        || threadPassesFilters({
+          selection: params.selection,
+          sessionKeys: params.sessionKeys,
+          thread,
+        }),
     )
-    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    .sort((left, right) => {
+      const leftPinned = isPinnedThread(left);
+      const rightPinned = isPinnedThread(right);
+      if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
+      if (leftPinned && rightPinned) return comparePinnedThreads(left, right);
+      return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+    });
 }
 
 /**

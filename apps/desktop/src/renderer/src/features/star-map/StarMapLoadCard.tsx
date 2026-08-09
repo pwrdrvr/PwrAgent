@@ -1,0 +1,255 @@
+import { useEffect, useState, type CSSProperties } from "react";
+import type { FederationLoadStatus } from "@pwragent/shared";
+import { formatByteCount } from "../../lib/format-bytes";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import {
+  useStarMapCardDrag,
+  type StarMapCardDrag,
+} from "./useStarMapCardDrag";
+
+/**
+ * Past three missed polls a reading is no longer describing the machine in
+ * front of you. Fresh cards say nothing about their age on purpose — a
+ * ticking "4s ago" in a mission-control view is noise; only the failure is
+ * worth words.
+ */
+const STALE_AFTER_MS = 25_000;
+const STALE_TICK_MS = 5_000;
+
+/**
+ * Nominal height of a load card, used only to extend an instance's canvas
+ * far enough when the card is the sole thing under a body. Nothing reserves
+ * a slot for it any more: the card lands at the top of the cloud, painted
+ * above the stack, so that thread slots stay identical whether it is open or
+ * closed. The card's content is fixed (an eyebrow and three figures), which
+ * is why a constant beats plumbing it through the measured-height map that
+ * variable thread cards need.
+ */
+export const STAR_MAP_LOAD_CARD_HEIGHT = 88;
+
+function formatAge(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s ago`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+  return `${Math.round(ms / 3_600_000)}h ago`;
+}
+
+/**
+ * Live load for one instance, parked in its solar system.
+ *
+ * It is not a thread, so it deliberately does not look like a thread card:
+ * no status cookie, no chips, no open action — three labelled figures and a
+ * dismiss. It is queried on demand while it is open (see
+ * `useStarMapInstanceLoad`), which is why closing it is a real affordance
+ * rather than a cosmetic hide.
+ */
+export function StarMapLoadCard(props: {
+  instanceId: string;
+  instanceLabel: string;
+  load?: FederationLoadStatus;
+  /** Default slot offset from the instance anchor, in px. */
+  baseSlot: { dx: number; dy: number };
+  /** Synced drag offset layered on top of the slot. */
+  offset?: { dx: number; dy: number };
+  width: number;
+  centered?: boolean;
+  stackIndex: number;
+  drag?: StarMapCardDrag;
+  /**
+   * `instanceId::system:load:position` — the card's key in the arrangement
+   * AND in the selection, so the shared group-move path writes its offset
+   * to the right entry without knowing this card exists.
+   */
+  cardKey: string;
+  /** Part of a multi-card selection, so it moves with the others. */
+  selected?: boolean;
+  onToggleSelect?: () => void;
+  /**
+   * Label of another instance on the same physical machine. Two profiles of
+   * one box report byte-identical load, and two cards showing the same
+   * numbers reads as a bug unless the card says why.
+   */
+  sharedWith?: string;
+  onDismiss: () => void;
+}) {
+  const load = props.load;
+  const cpuTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const memoryTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const [, setTick] = useState(0);
+
+  // Staleness has to advance on its own: a peer that stops answering stops
+  // re-rendering this card, and a frozen "just read" is exactly the lie the
+  // stale state exists to prevent.
+  useEffect(() => {
+    if (!load) return;
+    const timer = setInterval(() => setTick((value) => value + 1), STALE_TICK_MS);
+    return () => clearInterval(timer);
+  }, [load]);
+
+  const left = props.baseSlot.dx + (props.offset?.dx ?? 0);
+  const top = props.baseSlot.dy + (props.offset?.dy ?? 0);
+  const style: CSSProperties = {
+    width: props.width,
+    left,
+    top,
+    marginLeft: -props.width / 2,
+    ...(props.centered ? { transform: "translateY(-50%)" } : {}),
+    zIndex: props.stackIndex,
+  };
+
+  const { startDrag } = useStarMapCardDrag({
+    baseSlot: props.baseSlot,
+    offset: props.offset,
+    drag: props.drag,
+    onToggleSelect: props.onToggleSelect,
+  });
+
+  const age = load ? Math.max(0, Date.now() - load.sampledAt) : 0;
+  const stale = load ? age > STALE_AFTER_MS : false;
+  // Node reports 0 for every load average on Windows, so three exact zeros
+  // are "not reported", not an idle machine.
+  const loadAvgReported = load
+    ? load.loadAvg1 !== 0 || load.loadAvg5 !== 0 || load.loadAvg15 !== 0
+    : false;
+  /**
+   * A load average is a queue length, not a percentage, and it means
+   * nothing without the core count — 3.3 is idle on 16 cores and badly
+   * oversubscribed on 2. Dividing by cores gives the figure an operator can
+   * actually read at a glance, and it is allowed to exceed 100%: that is
+   * precisely the "work is queueing" signal worth seeing.
+   */
+  const cpuValue = !load || !loadAvgReported
+    ? "—"
+    : load.cpuCount
+      ? `${Math.round((load.loadAvg1 / load.cpuCount) * 100)}%`
+      : load.loadAvg1.toFixed(2);
+  /**
+   * Without a core count there is no percentage to show, and a bare "3.40"
+   * under a "CPU" label reads like one. The label carries the unit instead
+   * so the two cases cannot be confused — a peer on an older build reports
+   * no core count, since the figure is sampled on the machine it describes.
+   */
+  const cpuLabel = load && loadAvgReported && !load.cpuCount
+    ? "CPU load"
+    : "CPU";
+  /**
+   * A share of installed RAM, because the absolute figure alone does not say
+   * whether it is a lot: "2.4 GB" means nothing until you know the box has
+   * 16 GB. Falls back to the absolute value when total RAM is unknown (an
+   * older peer does not report it).
+   */
+  const memoryValue = !load
+    ? "—"
+    : load.totalMemoryBytes
+      ? `${Math.round(
+          (load.availableMemoryBytes / load.totalMemoryBytes) * 100,
+        )}%`
+      : formatByteCount(load.availableMemoryBytes);
+  const memoryDetail = !load
+    ? ""
+    : load.totalMemoryBytes
+      ? `${formatByteCount(load.availableMemoryBytes)} available of ${formatByteCount(
+          load.totalMemoryBytes,
+        )} — reclaimable cache included`
+      : "";
+  const cpuDetail = !load
+    ? ""
+    : !loadAvgReported
+      ? "This platform does not report load average"
+      : `Load average ${load.loadAvg1.toFixed(2)} over 1 min${
+          load.cpuCount ? ` across ${load.cpuCount} cores` : ""
+        } · 5 min ${load.loadAvg5.toFixed(2)} · 15 min ${load.loadAvg15.toFixed(2)}`;
+
+  return (
+    <div
+      className={`star-map-card-shell star-map-load-shell${
+        stale ? " star-map-load-shell--stale" : ""
+      }${props.selected ? " star-map-card-shell--selected" : ""}`}
+      style={style}
+      data-load-instance-id={props.instanceId}
+      data-card-key={props.cardKey}
+      onPointerDown={startDrag}
+    >
+      <div className="star-map-load-card">
+        <div className="star-map-load-card__head">
+          <span className="star-map-load-card__eyebrow">Load</span>
+          <button
+            type="button"
+            className="star-map-load-card__dismiss"
+            aria-label={`Remove load card for ${props.instanceLabel}`}
+            onClick={props.onDismiss}
+          >
+            ×
+          </button>
+        </div>
+        {load ? (
+          <>
+            <dl className="star-map-load-card__metrics">
+              <div>
+                <dt>{cpuLabel}</dt>
+                <dd
+                  aria-label={`${cpuLabel}: ${cpuValue}. ${cpuDetail}`}
+                  onMouseEnter={(event) =>
+                    cpuTooltip.show(event.currentTarget, cpuDetail)
+                  }
+                  onMouseLeave={cpuTooltip.hide}
+                  onFocus={(event) =>
+                    cpuTooltip.show(event.currentTarget, cpuDetail)
+                  }
+                  onBlur={cpuTooltip.hide}
+                  tabIndex={0}
+                >
+                  {cpuValue}
+                </dd>
+              </div>
+              <div>
+                <dt>RAM free</dt>
+                <dd
+                  aria-label={`RAM free: ${memoryValue}${
+                    memoryDetail ? `. ${memoryDetail}` : ""
+                  }`}
+                  onMouseEnter={(event) =>
+                    memoryDetail
+                      ? memoryTooltip.show(event.currentTarget, memoryDetail)
+                      : undefined
+                  }
+                  onMouseLeave={memoryTooltip.hide}
+                  onFocus={(event) =>
+                    memoryDetail
+                      ? memoryTooltip.show(event.currentTarget, memoryDetail)
+                      : undefined
+                  }
+                  onBlur={memoryTooltip.hide}
+                  tabIndex={memoryDetail ? 0 : undefined}
+                >
+                  {memoryValue}
+                </dd>
+              </div>
+              <div>
+                <dt>Free disk</dt>
+                <dd>
+                  {load.diskFreeBytes !== undefined
+                    ? formatByteCount(load.diskFreeBytes)
+                    : "—"}
+                </dd>
+              </div>
+            </dl>
+            {stale ? (
+              <span className="star-map-load-card__note" role="status">
+                Not responding · last read {formatAge(age)}
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <span className="star-map-load-card__note">Reading…</span>
+        )}
+        {props.sharedWith ? (
+          <span className="star-map-load-card__note">
+            Same machine as {props.sharedWith}
+          </span>
+        ) : null}
+      </div>
+      {cpuTooltip.tooltipNode}
+      {memoryTooltip.tooltipNode}
+    </div>
+  );
+}

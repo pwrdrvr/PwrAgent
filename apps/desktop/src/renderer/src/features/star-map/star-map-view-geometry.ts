@@ -138,3 +138,32 @@ export function centerStarMapView(params: {
     scale: 1,
   };
 }
+
+/**
+ * Where a lens opens.
+ *
+ * Radial lenses centre their canvas: content radiates from the middle, so
+ * the middle is the interesting part. A column lens anchors to the top
+ * instead — its bodies sit on a fixed row and their columns grow downward,
+ * so centring a tall canvas would open the map already scrolled past the
+ * bodies with nothing but card tails on screen.
+ *
+ * Clamped, so a top anchor on a canvas that is shorter than the window
+ * still lands somewhere legal rather than at a negative offset.
+ */
+export function placeStarMapView(params: {
+  canvas: StarMapViewBox;
+  viewport: StarMapViewBox;
+  topAnchored?: boolean;
+}): StarMapView {
+  const centered = centerStarMapView({
+    canvas: params.canvas,
+    viewport: params.viewport,
+  });
+  if (!params.topAnchored) return centered;
+  return clampStarMapView({
+    view: { ...centered, y: 0 },
+    canvas: params.canvas,
+    viewport: params.viewport,
+  });
+}

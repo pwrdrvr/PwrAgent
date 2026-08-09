@@ -145,12 +145,24 @@ export type FederationLoadStatus = {
   loadAvg5: number;
   loadAvg15: number;
   /**
-   * `os.freemem()` — truly free pages only. macOS/Linux keep reclaimable
-   * page cache out of this figure, so it understates what's actually
-   * available to new work; treat "low" thresholds generously on those
-   * platforms rather than alarming on a healthy, cache-warm box.
+   * Cores the load averages are measured against. Carried in the reading
+   * itself because a load average is uninterpretable without it — 3.3 is
+   * idle on a 16-core box and badly oversubscribed on a 2-core one — and
+   * the handshake host block is not available for the local instance.
+   */
+  cpuCount?: number;
+  /**
+   * Memory the instance could hand to new work — reclaimable cache
+   * included, since the kernel will simply drop it under demand.
+   *
+   * Deliberately NOT `os.freemem()`, which on macOS counts only truly free
+   * pages: a healthy 16 GB Mac with a few GB of file cache reports ~140 MB
+   * there while its pressure gauge sits in the green, and presenting that as
+   * free RAM reads as a machine about to die.
    */
   availableMemoryBytes: number;
+  /** Installed RAM, so `availableMemoryBytes` can be read as a share. */
+  totalMemoryBytes?: number;
   /** Live counterpart of the handshake snapshot `FederationHostInfo.diskFreeBytes`. */
   diskFreeBytes?: number;
   sampledAt: number;

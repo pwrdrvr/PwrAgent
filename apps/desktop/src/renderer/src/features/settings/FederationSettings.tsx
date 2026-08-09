@@ -28,6 +28,7 @@ import {
 import { CelestialIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
+import { formatByteCount } from "../../lib/format-bytes";
 import { formatRunningDurationMs } from "../../lib/format-duration";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
@@ -1649,24 +1650,6 @@ function diagnosticEventLabel(kind: FederationDiagnosticEvent["kind"]): string {
 
 function formatTimestamp(value: number): string {
   return new Date(value).toLocaleString();
-}
-
-/**
- * Wire-transfer figure for the peer rows: whole bytes/KB below 1 MB,
- * then one decimal only while the leading digits are scarce (below 10
- * of the unit) — "5.2 MB" carries signal, "200.0 MB" is just noise —
- * so a 200 MB replay habit and a post-compression 40 MB read as
- * obviously different at a glance.
- */
-function formatByteCount(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
-  const mb = value / (1024 * 1024);
-  if (mb < 1024) {
-    return mb < 10 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
-  }
-  const gb = mb / 1024;
-  return gb < 10 ? `${gb.toFixed(1)} GB` : `${Math.round(gb)} GB`;
 }
 
 /**
