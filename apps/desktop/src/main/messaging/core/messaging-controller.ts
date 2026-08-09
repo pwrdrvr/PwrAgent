@@ -2173,11 +2173,14 @@ export class MessagingController {
         return;
       }
       // Scope gate: a command against a conversation already bound to a peer's
-      // thread drives that peer. `resume` is exempt — it only opens the picker,
-      // which filters remote entries itself, and the bind is gated separately.
+      // thread drives that peer. Exempt: `resume`/`agent` only open the picker
+      // (which filters, and the bind is gated at bind time), and `detach` is a
+      // local unbind that must stay available or a scope-revoked actor is
+      // stranded in a conversation they can neither use nor leave.
       if (
         verb !== "resume" &&
         verb !== "agent" &&
+        verb !== "detach" &&
         !(await this.requireRemoteScopeForBinding(
           event,
           await this.options.store.findActiveBindingForChannel(event.channel),
@@ -7689,6 +7692,18 @@ export class MessagingController {
         );
         return;
       }
+      // Scope: the picker hides remote threads from actors without the scope,
+      // but a browse session outlives its render (it is persisted with a TTL),
+      // so the selection is gated too rather than trusting the filter.
+      if (
+        !(await this.requireRemoteScope(
+          event,
+          target.federatedThread?.target,
+          "resume:select:remote-instance",
+        ))
+      ) {
+        return;
+      }
       const requestedExecutionMode = session.preferences?.executionMode;
       const shouldEscalateTarget =
         requestedExecutionMode === "full-access" &&
@@ -10599,23 +10614,26 @@ export class MessagingController {
     ) {
       return;
     }
-    // Scope gate: a binding created while the actor still had remote scope (or
-    // by an operator) must not stay drivable after the scope is revoked.
-    if (
-      !(await this.requireRemoteScopeForBinding(
-        event,
-        await this.options.store.findActiveBindingForChannel(event.channel),
-        `${actionId}:remote-instance`,
-      ))
-    ) {
-      return;
-    }
+    // Detach is exempt: it removes the LOCAL binding record and never touches
+    // the peer. Gating it would strand an actor whose scope was revoked while
+    // bound to a remote thread — unable to act, and unable to let go either.
     if (actionId === "status:detach") {
       await this.detachBinding(event);
       return;
     }
 
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    // Scope gate: a binding created while the actor still had remote scope (or
+    // by an operator) must not stay drivable after the scope is revoked.
+    if (
+      !(await this.requireRemoteScopeForBinding(
+        event,
+        binding,
+        `${actionId}:remote-instance`,
+      ))
+    ) {
+      return;
+    }
     if (!binding) {
       await this.deliver(
         buildErrorIntent({
@@ -14885,6 +14903,22 @@ export class MessagingController {
       targetKind?: MessagingBindingRecord["targetKind"];
     },
   ): Promise<MessagingBindingRecord> {
+    // Scope backstop. EVERY bind funnels through here, so a caller that forgets
+    // the gate still cannot create a remote binding. Interactive entry points
+    // check first and deliver a proper denial; reaching this throw means a path
+    // was missed, so it fails closed loudly (the runtime's inbound dispatch
+    // logs it) instead of quietly binding a peer's thread.
+    if (
+      !(await this.requireRemoteScope(
+        event,
+        target.federatedThread?.target,
+        "bind:remote-instance",
+      ))
+    ) {
+      throw new Error(
+        "Refusing to bind a thread on another instance: actor lacks federation.remote_control.",
+      );
+    }
     const now = this.now();
     const previousBinding = await this.options.store.findActiveBindingForChannel(
       event.channel,
@@ -16685,7 +16719,7 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): RbacResolution | null {
     const provider = this.options.rbacPolicy;
-    if (!provider || !provider.isEnforcing()) {
+    if (!provider) {
       return null;
     }
     const actorId = event.actor.platformUserId;
@@ -16695,11 +16729,17 @@ export class MessagingController {
       : event.channel.conversation.kind === "dm"
         ? { dmBucket: true }
         : { channelBucket: true };
-    return provider.resolve({
+    const input = {
       actorId,
       conversationId: event.channel.conversation.id,
       admittedVia,
-    });
+    };
+    // One policy read when the provider supports it — a gated action asks both
+    // "are we enforcing?" and "what may they do?", and each ask re-reads.
+    if (provider.resolveIfEnforcing) {
+      return provider.resolveIfEnforcing(input);
+    }
+    return provider.isEnforcing() ? provider.resolve(input) : null;
   }
 
   /**

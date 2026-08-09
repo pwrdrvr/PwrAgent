@@ -21568,6 +21568,61 @@ describe("RBAC capability enforcement", () => {
       });
     });
 
+    it("still lets a scope-revoked actor detach, so they are not stranded", async () => {
+      // Detach removes the LOCAL binding and never touches the peer. If the
+      // scope gate covered it, an actor whose scope was revoked could neither
+      // drive the conversation nor leave it.
+      const harness = await createHarness({
+        rbacPolicy: rbacProviderGranting([
+          "message.reply",
+          "thread.status.view",
+          "thread.detach",
+        ]), // no federation.remote_control
+      });
+      const event = buildCommandEvent("/detach");
+      await harness.store.upsertBinding(remoteBinding(event.channel));
+
+      await harness.controller.handleInboundEvent(event);
+
+      expect(harness.delivered.at(-1)).not.toMatchObject({
+        title: "Not permitted",
+      });
+      expect(
+        await harness.store.findActiveBindingForChannel(event.channel),
+      ).toBeUndefined();
+    });
+
+    it("refuses to bind a remote thread even if a caller skips the gate", async () => {
+      // Backstop: bindChannelToThread is the one funnel every bind path goes
+      // through, so a future caller that forgets the entry gate still cannot
+      // create a remote binding.
+      const harness = await createHarness({
+        rbacPolicy: rbacProviderGranting(["message.reply", "thread.resume"]),
+      });
+      const event = buildCommandEvent("/status");
+      await expect(
+        (
+          harness.controller as unknown as {
+            bindChannelToThread: (
+              event: unknown,
+              target: unknown,
+            ) => Promise<unknown>;
+          }
+        ).bindChannelToThread(event, {
+          backend: "codex",
+          threadId: "thread-1",
+          federatedThread: {
+            backend: "codex",
+            target: { scope: "remote", instanceId: "peer-one" },
+            threadId: "thread-1",
+          },
+        }),
+      ).rejects.toThrow(/another instance/i);
+      expect(
+        await harness.store.findActiveBindingForChannel(event.channel),
+      ).toBeUndefined();
+    });
+
     it("blocks an agent tool aimed at another instance", async () => {
       const harness = await createHarness({
         // Power User + Tools, but no federation scope.

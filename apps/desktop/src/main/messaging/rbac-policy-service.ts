@@ -41,6 +41,19 @@ export interface MessagingRbacPolicyProvider {
     conversationId?: string;
     admittedVia?: RbacAdmittedVia;
   }): RbacResolution;
+  /**
+   * `isEnforcing()` and `resolve()` in ONE policy read — `null` means legacy
+   * mode. Every gated action asks both questions, and each separate call
+   * re-reads (and re-fingerprints) the policy; the controller is on the inbound
+   * hot path and now double-gates most actions (capability + federation scope),
+   * so asking separately multiplied the syscalls per message. Optional so an
+   * existing provider stub keeps working — callers fall back to the pair.
+   */
+  resolveIfEnforcing?(input: {
+    actorId: string;
+    conversationId?: string;
+    admittedVia?: RbacAdmittedVia;
+  }): RbacResolution | null;
 }
 
 /**
@@ -78,8 +91,11 @@ export class RbacPolicyService {
    * for edits we did NOT make: a hand-edited `config.toml`, or another app
    * instance sharing this profile. Without it a revoked role kept working in
    * every other instance until restart — revocation that needs a relaunch is
-   * not revocation. The cost is one `statSync` per authorization, which is
-   * far cheaper than re-parsing the config each time.
+   * not revocation. Each call stats the two backing files, so keep reads
+   * coarse: `providerFor` resolves from a single `state()` per authorization
+   * rather than one per `allRoles()` / `attachments()`. Still far cheaper than
+   * re-parsing the config, but not free — don't sprinkle `state()` on the
+   * inbound path.
    */
   private state(): RbacPolicyReadState {
     const fingerprint = rbacPolicySourceFingerprint(this.options);
@@ -114,17 +130,31 @@ export class RbacPolicyService {
 
   /** A provider bound to one platform for controller injection. */
   providerFor(platform: MessagingChannelKind): MessagingRbacPolicyProvider {
+    // Each arm reads the policy ONCE (`state()` re-fingerprints on every call),
+    // so a resolve costs one read instead of one per `allRoles()`/`attachments()`.
+    const resolveFrom = (
+      policy: RbacPolicy,
+      input: {
+        actorId: string;
+        conversationId?: string;
+        admittedVia?: RbacAdmittedVia;
+      },
+    ): RbacResolution =>
+      resolveEffectivePermissions({
+        platform,
+        actorId: input.actorId,
+        conversationId: input.conversationId,
+        admittedVia: input.admittedVia,
+        roles: [...BUILT_IN_ROLES, ...policy.roles],
+        attachments: policy.attachments,
+      });
     return {
       isEnforcing: () => this.isEnforcing(),
-      resolve: (input) =>
-        resolveEffectivePermissions({
-          platform,
-          actorId: input.actorId,
-          conversationId: input.conversationId,
-          admittedVia: input.admittedVia,
-          roles: this.allRoles(),
-          attachments: this.attachments(),
-        }),
+      resolve: (input) => resolveFrom(this.state().policy, input),
+      resolveIfEnforcing: (input) => {
+        const { policy } = this.state();
+        return policy.enforced ? resolveFrom(policy, input) : null;
+      },
     };
   }
 

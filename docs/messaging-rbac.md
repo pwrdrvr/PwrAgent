@@ -303,11 +303,17 @@ removed:
 
 | Surface | Gate |
 |---|---|
-| Binding to a thread (`resume` / attach) | Before the bind, on the target thread's federation ref |
+| Binding to a thread | `bindChannelToThread` — the single funnel every bind path uses. Interactive entry points (callback bind, picker selection) check first so the actor gets a proper denial; the funnel itself throws as a backstop, so a caller that forgets the gate fails closed instead of binding a peer's thread |
 | Status / handoff / skills callbacks | Top-guard, on the active binding |
 | Plain message + media turns | The `message.reply` floor, on the active binding (silent, like the floor itself) |
-| Commands (`/status`, `/detach`, `/schedule`, …) | Verb gate, on the active binding. `resume`/`agent` are exempt — they only open the picker, which filters itself, and the bind is gated separately |
+| Commands (`/status`, `/schedule`, …) | Verb gate, on the active binding |
 | Agent dynamic tools | Added to the required set when the args explicitly target a peer |
+
+**Three exemptions, each deliberate.** `resume` and `agent` only open the
+picker — it filters itself, and the bind is gated at the funnel. **`detach` is
+exempt because it is a local unbind that never touches the peer**: gating it
+would strand an actor whose scope was revoked mid-binding, unable to drive the
+conversation and unable to leave it. Detaching is how they get unstuck.
 
 **The picker filters, it doesn't just refuse.** The resume browser lists thread
 titles and projects, so enforcement alone would still leak a peer's work to an
