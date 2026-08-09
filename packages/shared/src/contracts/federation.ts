@@ -385,7 +385,6 @@ export type FederationHealthStatus = {
     processId?: number;
     cwdHint?: string;
     startedAt?: number;
-    expiresAt: number;
   };
   peers: FederationPeerSummary[];
   clientEnrollment?: FederationClientEnrollment;

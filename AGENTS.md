@@ -56,8 +56,9 @@
   index the row moved (~4 KB/page, and a timestamp column in an index moves on
   every write). Two calibration points: tool accounting once wrote per streamed
   8 KiB chunk, costing 3,693 commits and 58 MB of WAL for one `find /`
-  (PR #1406); the idle heartbeats cost 720 commits and 2.7 MB/hour per running
-  instance, about 65 MB/day. **If the projection looks excessive, say so to the
+  (PR #1406); the former 10-second runtime lease heartbeats cost 720 commits
+  and 2.7 MB/hour per running instance, about 65 MB/day. PID-owned runtime
+  leases now cost zero sqlite commits while idle. **If the projection looks excessive, say so to the
   user rather than shipping it quietly — the right answer is often that the
   design constraint has to change** (batch into one transaction, debounce
   behind a flush window, accumulate in memory and persist on a boundary, or

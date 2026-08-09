@@ -918,7 +918,7 @@ function writeJsonAtomic(filePath: string, value: unknown): void {
   fs.renameSync(tmpPath, filePath);
 }
 
-function isProcessAlive(processId: number): boolean {
+export function isProcessAlive(processId: number): boolean {
   if (!Number.isInteger(processId) || processId <= 0) {
     return false;
   }

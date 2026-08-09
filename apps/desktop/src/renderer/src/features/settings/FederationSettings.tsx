@@ -1025,7 +1025,7 @@ export function FederationSettings(props: FederationSettingsProps) {
           ) : null}
           {effectiveHealth.leaseHolder ? (
             <p className="federation-security-note">
-              {`Federation is off here because another PwrAgent instance holds this profile's federation lease${leaseHolderLabel ? ` (${leaseHolderLabel})` : ""}. Close that instance or wait for its lease to expire, then change a federation setting to try again.`}
+              {`Federation is off here because another PwrAgent instance holds this profile's federation lease${leaseHolderLabel ? ` (${leaseHolderLabel})` : ""}. Close that instance, then change a federation setting to try again.`}
             </p>
           ) : null}
           {connectionRemediation ? (

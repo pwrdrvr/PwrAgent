@@ -4,6 +4,7 @@ import type { StateDb } from "./state-db.js";
 
 const MESSAGING_LEASE_KEY = "profile-messaging";
 const FEDERATION_LEASE_KEY = "profile-federation";
+const PID_OWNED_LEASE_EXPIRES_AT = Number.MAX_SAFE_INTEGER;
 
 export type AppRuntimeMessagingDisabledReason =
   | "explicit_override"
@@ -146,14 +147,6 @@ export class AppRuntimeInstanceStore {
       );
   }
 
-  heartbeatInstance(params: { instanceId: string; now: number }): void {
-    this.stateDb.raw
-      .prepare(
-        "UPDATE app_runtime_instances SET heartbeat_at = ? WHERE instance_id = ?",
-      )
-      .run(params.now, params.instanceId);
-  }
-
   markInstanceExited(params: { instanceId: string; now: number }): void {
     this.stateDb.raw
       .prepare(
@@ -166,8 +159,8 @@ export class AppRuntimeInstanceStore {
 
   acquireMessagingLease(params: {
     instanceId: string;
+    isOwnerAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
     now: number;
-    ttlMs: number;
   }): MessagingLeaseAcquireResult {
     return this.acquireLease({
       leaseKey: MESSAGING_LEASE_KEY,
@@ -192,36 +185,10 @@ export class AppRuntimeInstanceStore {
 
   acquireFederationLease(params: {
     instanceId: string;
+    isOwnerAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
     now: number;
-    ttlMs: number;
   }): FederationLeaseAcquireResult {
     return this.acquireLease({ leaseKey: FEDERATION_LEASE_KEY, ...params });
-  }
-
-  renewMessagingLease(params: {
-    instanceId: string;
-    now: number;
-    ttlMs: number;
-  }): boolean {
-    return this.renewLease({
-      leaseKey: MESSAGING_LEASE_KEY,
-      ...params,
-      onRenewed: () =>
-        this.markDesiredMessaging({
-          instanceId: params.instanceId,
-          desiredMessagingEnabled: true,
-          effectiveMessagingEnabled: true,
-          now: params.now,
-        }),
-    });
-  }
-
-  renewFederationLease(params: {
-    instanceId: string;
-    now: number;
-    ttlMs: number;
-  }): boolean {
-    return this.renewLease({ leaseKey: FEDERATION_LEASE_KEY, ...params });
   }
 
   releaseMessagingLease(params: { instanceId: string; now: number }): boolean {
@@ -254,68 +221,50 @@ export class AppRuntimeInstanceStore {
   private acquireLease(params: {
     leaseKey: string;
     instanceId: string;
+    isOwnerAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
     now: number;
-    ttlMs: number;
     onHeld?: () => void;
     onAcquired?: () => void;
   }): MessagingLeaseAcquireResult {
-    return this.stateDb.raw.transaction(() => {
+    const acquire = this.stateDb.raw.transaction(() => {
       const existing = this.readLease(params.leaseKey);
       if (
         existing
         && existing.status === "active"
         && existing.ownerInstanceId !== params.instanceId
-        && existing.expiresAt > params.now
       ) {
-        params.onHeld?.();
-        return { acquired: false as const, reason: "held" as const, holder: existing };
+        const owner = this.getInstance(existing.ownerInstanceId);
+        if (owner && (params.isOwnerAlive?.(owner) ?? true)) {
+          params.onHeld?.();
+          return {
+            acquired: false as const,
+            reason: "held" as const,
+            holder: existing,
+          };
+        }
       }
 
-      const acquiredAt =
-        existing?.status === "active"
+      if (
+        existing
+        && existing.status === "active"
         && existing.ownerInstanceId === params.instanceId
-        && existing.expiresAt > params.now
-          ? existing.acquiredAt
-          : params.now;
+      ) {
+        params.onAcquired?.();
+        return { acquired: true as const, lease: existing };
+      }
+
       const lease = this.upsertActiveLease({
         leaseKey: params.leaseKey,
         instanceId: params.instanceId,
-        acquiredAt,
+        acquiredAt: params.now,
         now: params.now,
-        ttlMs: params.ttlMs,
       });
       params.onAcquired?.();
       return { acquired: true as const, lease };
-    })();
-  }
-
-  private renewLease(params: {
-    leaseKey: string;
-    instanceId: string;
-    now: number;
-    ttlMs: number;
-    onRenewed?: () => void;
-  }): boolean {
-    return this.stateDb.raw.transaction(() => {
-      const existing = this.readLease(params.leaseKey);
-      if (
-        !existing
-        || existing.status !== "active"
-        || existing.ownerInstanceId !== params.instanceId
-      ) {
-        return false;
-      }
-
-      this.upsertActiveLease({
-        leaseKey: params.leaseKey,
-        instanceId: params.instanceId,
-        acquiredAt: existing.acquiredAt,
-        now: params.now,
-        ttlMs: params.ttlMs,
-      });
-      params.onRenewed?.();
-      return true;
-    })();
+    });
+    // Serialize the read/liveness-check/replace decision so two challengers
+    // cannot both observe one dead owner and claim the same lease.
+    return acquire.immediate();
   }
 
   private releaseLease(params: {
@@ -358,7 +307,6 @@ export class AppRuntimeInstanceStore {
     instanceId: string;
     acquiredAt: number;
     now: number;
-    ttlMs: number;
   }): MessagingRuntimeLeaseRecord {
     this.stateDb.raw
       .prepare(
@@ -379,9 +327,8 @@ export class AppRuntimeInstanceStore {
         params.instanceId,
         params.acquiredAt,
         params.now,
-        params.now + params.ttlMs,
+        PID_OWNED_LEASE_EXPIRES_AT,
       );
-    this.heartbeatInstance({ instanceId: params.instanceId, now: params.now });
     return this.readLease(params.leaseKey)!;
   }
 }

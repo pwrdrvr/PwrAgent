@@ -97,21 +97,23 @@ Single database containing all persistent state. Opened with WAL mode, `synchron
 | `directory_launchpads` | Per-directory launchpad drafts and settings |
 | `threads` | Thread overlay state (seen timestamps, git branch, linked dirs) |
 | `secrets` | `safeStorage`-encrypted secrets (bot tokens, API keys) |
-| `app_runtime_instances` | Per-process startup/heartbeat records for instances using this profile |
-| `messaging_runtime_lease` | Singleton profile lease that allows only one live instance to run messaging adapters |
+| `app_runtime_instances` | Per-process identity and runtime-state records for instances using this profile |
+| `messaging_runtime_lease` | Profile runtime leases, keyed independently for messaging and federation |
 
 ## Multi-Instance Access
 
 Multiple desktop instances can share the same profile's `state.db` safely. sqlite WAL mode serializes writes automatically. No external lockfile is required for normal state access.
 
-Messaging adapters are single-holder per profile. Each desktop process records
-an `app_runtime_instances` heartbeat, and only the process holding the
-`messaging_runtime_lease` starts provider adapters. If the holder exits cleanly,
-it releases the lease during shutdown. If it crashes or is killed, the lease
-expires after missed heartbeats and another instance can acquire it. This lease
-coordinates local processes that share the same profile database; it is not a
+Messaging adapters and federation are each single-holder per profile. One
+runtime lease manager records the desktop process in `app_runtime_instances`;
+both capabilities ask it to acquire their independent row in
+`messaging_runtime_lease`. A challenger checks whether the recorded owner PID
+still exists inside the same immediate sqlite transaction that replaces a dead
+owner. Clean shutdown releases both rows. There is no renewal timer or expiry
+window, so an alive-but-hung owner is not preempted. These leases coordinate
+local processes that share the same profile database; they are not a
 cross-machine distributed lock for two different profile directories or two
-external bot deployments using the same token.
+external deployments using the same credentials or identity.
 
 ## Migration
 

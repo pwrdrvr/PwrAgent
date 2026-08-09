@@ -600,7 +600,6 @@ export type DesktopSettingsSnapshot = {
         processId?: number;
         cwdHint?: string;
         startedAt?: number;
-        expiresAt: number;
       };
     };
   };

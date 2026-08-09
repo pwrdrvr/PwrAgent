@@ -1,12 +1,5 @@
-import { randomUUID } from "node:crypto";
-import {
-  resolveActiveProfileName,
-} from "./profile";
-import { getAppRuntimeInstanceStore } from "./state/app-state";
 import type {
   AppRuntimeMessagingDisabledReason,
-  AppRuntimeInstanceStore,
-  MessagingRuntimeLeaseRecord,
 } from "./state/app-runtime-instance-store";
 import type {
   DesktopMessagingConfig,
@@ -21,10 +14,14 @@ import type {
 } from "./messaging/messaging-runtime";
 import { resolveRuntimeMessagingOverride } from "./runtime-flags";
 import { getMainLogger } from "./log";
+import {
+  getRuntimeLeaseManager,
+  PWRAGENT_INSTANCE_ROOT_ENV,
+  RuntimeLeaseManager,
+  type RuntimeLeaseManagerOptions,
+} from "./runtime-lease-manager";
 
-export const MESSAGING_LEASE_TTL_MS = 30_000;
-export const MESSAGING_LEASE_HEARTBEAT_MS = 10_000;
-export const PWRAGENT_INSTANCE_ROOT_ENV = "PWRAGENT_INSTANCE_ROOT";
+export { PWRAGENT_INSTANCE_ROOT_ENV };
 
 const leaseLog = getMainLogger("pwragent:messaging-lease");
 
@@ -43,7 +40,6 @@ export type RuntimeMessagingLeaseSnapshot = {
     processId?: number;
     cwdHint?: string;
     startedAt?: number;
-    expiresAt: number;
   };
 };
 
@@ -54,47 +50,29 @@ export type RuntimeMessagingLeaseApplyResult = {
   leaseHolder?: RuntimeMessagingLeaseSnapshot["leaseHolder"];
 };
 
-type RuntimeMessagingLeaseCoordinatorOptions = {
-  instanceId?: string;
-  profileName?: string;
-  processId?: number;
-  cwd?: string;
-  now?: () => number;
-  store?: AppRuntimeInstanceStore;
+type RuntimeMessagingLeaseCoordinatorOptions = RuntimeLeaseManagerOptions & {
+  leaseManager?: RuntimeLeaseManager;
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
 };
 
 export class RuntimeMessagingLeaseCoordinator {
-  private readonly instanceId: string;
-  private readonly profileName: string;
-  private readonly processId: number;
-  private readonly cwd: string;
-  private readonly now: () => number;
-  private readonly store: AppRuntimeInstanceStore;
+  private readonly leaseManager: RuntimeLeaseManager;
   private readonly env?: NodeJS.ProcessEnv;
   private readonly argv?: readonly string[];
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private startedRecorded = false;
-  private leaseHeld = false;
 
   constructor(options: RuntimeMessagingLeaseCoordinatorOptions = {}) {
-    this.instanceId = options.instanceId ?? randomUUID();
-    this.profileName = options.profileName ?? resolveActiveProfileName();
-    this.processId = options.processId ?? process.pid;
-    this.cwd =
-      options.cwd
-      ?? options.env?.[PWRAGENT_INSTANCE_ROOT_ENV]
-      ?? process.env[PWRAGENT_INSTANCE_ROOT_ENV]
-      ?? process.cwd();
-    this.now = options.now ?? Date.now;
-    this.store = options.store ?? getAppRuntimeInstanceStore();
+    this.leaseManager =
+      options.leaseManager
+      ?? (hasCustomLeaseManagerOptions(options)
+        ? new RuntimeLeaseManager(options)
+        : getRuntimeLeaseManager());
     this.env = options.env;
     this.argv = options.argv;
   }
 
   get id(): string {
-    return this.instanceId;
+    return this.leaseManager.id;
   }
 
   async start(
@@ -141,7 +119,6 @@ export class RuntimeMessagingLeaseCoordinator {
     config: DesktopMessagingConfig,
     options: { allowStart?: boolean } = {},
   ): Promise<RuntimeMessagingLeaseApplyResult> {
-    const now = this.now();
     const desiredMessagingEnabled = config.enabled !== false;
     this.recordStart({
       desiredMessagingEnabled,
@@ -150,7 +127,7 @@ export class RuntimeMessagingLeaseCoordinator {
     });
 
     if (config.enabled === false) {
-      await this.stopRuntimeAndRelease(runtime, now, "runtime_stopped");
+      await this.stopRuntimeAndRelease(runtime, "runtime_stopped");
       return {
         enabled: false,
         disabledReasonKind: "saved_disabled",
@@ -159,7 +136,7 @@ export class RuntimeMessagingLeaseCoordinator {
     }
 
     if (!desktopMessagingConfigHasRunnableAdapters(config)) {
-      await this.stopRuntimeAndRelease(runtime, now, "no_runnable_adapters");
+      await this.stopRuntimeAndRelease(runtime, "no_runnable_adapters");
       return {
         enabled: false,
         disabledReasonKind: "no_runnable_adapters",
@@ -167,13 +144,15 @@ export class RuntimeMessagingLeaseCoordinator {
       };
     }
 
-    if (options.allowStart === false && !this.leaseHeld && !runtime.isEnabled()) {
-      this.store.markDesiredMessaging({
-        instanceId: this.instanceId,
+    if (
+      options.allowStart === false
+      && !this.leaseManager.snapshot("messaging").leaseHeld
+      && !runtime.isEnabled()
+    ) {
+      this.leaseManager.recordMessagingState({
         desiredMessagingEnabled: true,
         effectiveMessagingEnabled: false,
         disabledReason: "runtime_stopped",
-        now,
       });
       return {
         enabled: false,
@@ -182,30 +161,21 @@ export class RuntimeMessagingLeaseCoordinator {
       };
     }
 
-    const acquire = this.store.acquireMessagingLease({
-      instanceId: this.instanceId,
-      now,
-      ttlMs: MESSAGING_LEASE_TTL_MS,
-    });
+    const acquire = this.leaseManager.acquire("messaging");
     if (!acquire.acquired) {
-      this.stopHeartbeat();
       await runtime.stop();
-      this.leaseHeld = false;
-      const leaseHolder = this.describeLeaseHolder(acquire.holder);
       return {
         enabled: false,
         disabledReasonKind: "lease_held",
         disabledReason: "Messaging is already active in another PwrAgent instance for this profile.",
-        ...(leaseHolder ? { leaseHolder } : {}),
+        leaseHolder: acquire.holder,
       };
     }
 
-    this.leaseHeld = true;
-    this.startHeartbeat(runtime);
     try {
       await runtime.applyConfig(config, { allowStart: true });
     } catch (error) {
-      await this.releaseAfterStartupFailure(runtime, now);
+      await this.releaseAfterStartupFailure(runtime);
       throw error;
     }
     return { enabled: runtime.isEnabled() };
@@ -214,8 +184,7 @@ export class RuntimeMessagingLeaseCoordinator {
   async disableForSession(
     runtime: DesktopMessagingRuntime,
   ): Promise<RuntimeMessagingLeaseApplyResult> {
-    const now = this.now();
-    await this.stopRuntimeAndRelease(runtime, now, "runtime_stopped");
+    await this.stopRuntimeAndRelease(runtime, "runtime_stopped");
     return {
       enabled: false,
       disabledReasonKind: "runtime_stopped",
@@ -224,40 +193,25 @@ export class RuntimeMessagingLeaseCoordinator {
   }
 
   async shutdown(runtime: DesktopMessagingRuntime): Promise<void> {
-    const now = this.now();
-    await this.stopRuntimeAndRelease(runtime, now, "runtime_stopped");
-    this.store.markInstanceExited({ instanceId: this.instanceId, now });
+    await this.stopRuntimeAndRelease(runtime, "runtime_stopped");
   }
 
   shutdownSync(): void {
-    const now = this.now();
-    this.stopHeartbeat();
-    if (this.leaseHeld) {
-      this.store.releaseMessagingLease({ instanceId: this.instanceId, now });
-    }
-    this.store.markInstanceExited({ instanceId: this.instanceId, now });
-    this.leaseHeld = false;
+    this.leaseManager.release("messaging");
   }
 
   snapshot(): RuntimeMessagingLeaseSnapshot {
-    const instance = this.store.getInstance(this.instanceId);
-    const lease = this.store.getMessagingLease();
-    const leaseHolder =
-      lease
-      && lease.status === "active"
-      && lease.ownerInstanceId !== this.instanceId
-      && lease.expiresAt > this.now()
-        ? this.describeLeaseHolder(lease)
-        : undefined;
+    const instance = this.leaseManager.getInstance();
+    const lease = this.leaseManager.snapshot("messaging");
     return {
-      instanceId: this.instanceId,
+      instanceId: lease.instanceId,
       effectiveMessagingEnabled: instance?.effectiveMessagingEnabled ?? false,
       disabledReasonKind: instance?.disabledReason,
       ...(instance?.disabledReason
         ? { disabledReason: runtimeDisabledReasonMessage(instance.disabledReason) }
         : {}),
-      leaseHeld: this.leaseHeld,
-      ...(leaseHolder ? { leaseHolder } : {}),
+      leaseHeld: lease.leaseHeld,
+      ...(lease.leaseHolder ? { leaseHolder: lease.leaseHolder } : {}),
     };
   }
 
@@ -266,74 +220,25 @@ export class RuntimeMessagingLeaseCoordinator {
     effectiveMessagingEnabled: boolean;
     disabledReason?: AppRuntimeMessagingDisabledReason;
   }): void {
-    const now = this.now();
-    if (this.startedRecorded) {
-      this.store.markDesiredMessaging({
-        instanceId: this.instanceId,
-        desiredMessagingEnabled: params.desiredMessagingEnabled,
-        effectiveMessagingEnabled: params.effectiveMessagingEnabled,
-        disabledReason: params.disabledReason,
-        now,
-      });
-      return;
-    }
-    this.store.recordInstanceStart({
-      instanceId: this.instanceId,
-      profileName: this.profileName,
-      processId: this.processId,
-      cwd: this.cwd,
-      startedAt: now,
-      desiredMessagingEnabled: params.desiredMessagingEnabled,
-      effectiveMessagingEnabled: params.effectiveMessagingEnabled,
-      disabledReason: params.disabledReason,
-    });
-    this.startedRecorded = true;
+    this.leaseManager.recordMessagingState(params);
   }
 
   private async stopRuntimeAndRelease(
     runtime: DesktopMessagingRuntime,
-    now: number,
     disabledReason: AppRuntimeMessagingDisabledReason,
   ): Promise<void> {
-    this.stopHeartbeat();
     await runtime.stop();
-    if (this.leaseHeld) {
-      this.store.releaseMessagingLease({ instanceId: this.instanceId, now });
-    }
-    this.store.markDesiredMessaging({
-      instanceId: this.instanceId,
+    this.leaseManager.release("messaging");
+    this.leaseManager.recordMessagingState({
       desiredMessagingEnabled: disabledReason !== "runtime_stopped",
       effectiveMessagingEnabled: false,
       disabledReason,
-      now,
     });
-    this.leaseHeld = false;
-  }
-
-  private startHeartbeat(runtime: DesktopMessagingRuntime): void {
-    if (this.heartbeatTimer) return;
-    this.heartbeatTimer = setInterval(() => {
-      const renewed = this.store.renewMessagingLease({
-        instanceId: this.instanceId,
-        now: this.now(),
-        ttlMs: MESSAGING_LEASE_TTL_MS,
-      });
-      if (!renewed) {
-        void this.stopRuntimeAfterLeaseLoss(runtime).catch((error) => {
-          leaseLog.error("messaging runtime stop failed after lease loss", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
-    }, MESSAGING_LEASE_HEARTBEAT_MS);
-    if (this.heartbeatTimer.unref) this.heartbeatTimer.unref();
   }
 
   private async releaseAfterStartupFailure(
     runtime: DesktopMessagingRuntime,
-    now: number,
   ): Promise<void> {
-    this.stopHeartbeat();
     try {
       await runtime.stop({ preserveStartupFailures: true });
     } catch (error) {
@@ -341,63 +246,28 @@ export class RuntimeMessagingLeaseCoordinator {
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      if (this.leaseHeld) {
-        this.store.releaseMessagingLease({ instanceId: this.instanceId, now });
-      }
-      this.store.markDesiredMessaging({
-        instanceId: this.instanceId,
+      this.leaseManager.release("messaging");
+      this.leaseManager.recordMessagingState({
         desiredMessagingEnabled: true,
         effectiveMessagingEnabled: false,
         disabledReason: "startup_error",
-        now,
-      });
-      this.leaseHeld = false;
-    }
-  }
-
-  private async stopRuntimeAfterLeaseLoss(
-    runtime: DesktopMessagingRuntime,
-  ): Promise<void> {
-    const now = this.now();
-    this.stopHeartbeat();
-    this.leaseHeld = false;
-    try {
-      await runtime.stop();
-    } finally {
-      const lease = this.store.getMessagingLease();
-      const heldByAnotherInstance =
-        lease
-        && lease.status === "active"
-        && lease.ownerInstanceId !== this.instanceId
-        && lease.expiresAt > now;
-      this.store.markDesiredMessaging({
-        instanceId: this.instanceId,
-        desiredMessagingEnabled: true,
-        effectiveMessagingEnabled: false,
-        disabledReason: heldByAnotherInstance ? "lease_held" : "runtime_stopped",
-        now,
       });
     }
   }
+}
 
-  private stopHeartbeat(): void {
-    if (!this.heartbeatTimer) return;
-    clearInterval(this.heartbeatTimer);
-    this.heartbeatTimer = null;
-  }
-
-  private describeLeaseHolder(
-    lease: MessagingRuntimeLeaseRecord,
-  ): RuntimeMessagingLeaseSnapshot["leaseHolder"] {
-    const holder = this.store.getInstance(lease.ownerInstanceId);
-    return {
-      instanceId: lease.ownerInstanceId,
-      ...(holder?.processId ? { processId: holder.processId } : {}),
-      ...(holder?.cwdHint ? { cwdHint: holder.cwdHint } : {}),
-      ...(holder?.startedAt ? { startedAt: holder.startedAt } : {}),
-      expiresAt: lease.expiresAt,
-    };
-  }
+function hasCustomLeaseManagerOptions(
+  options: RuntimeMessagingLeaseCoordinatorOptions,
+): boolean {
+  return Boolean(
+    options.instanceId
+    || options.profileName
+    || options.processId
+    || options.cwd
+    || options.now
+    || options.store
+    || options.processIsAlive,
+  );
 }
 
 let coordinator: RuntimeMessagingLeaseCoordinator | null = null;

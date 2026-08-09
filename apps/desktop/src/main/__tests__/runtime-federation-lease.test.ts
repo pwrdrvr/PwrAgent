@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  FEDERATION_LEASE_HEARTBEAT_MS,
   RuntimeFederationLeaseCoordinator,
   type FederationLeaseRuntime,
 } from "../runtime-federation-lease";
@@ -13,6 +12,7 @@ import { StateDb } from "../state/state-db";
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
 let tempDir: string;
+let liveProcessIds: Set<number>;
 const activeCoordinators: RuntimeFederationLeaseCoordinator[] = [];
 
 function createRuntime(): FederationLeaseRuntime {
@@ -22,9 +22,26 @@ function createRuntime(): FederationLeaseRuntime {
 }
 
 function createCoordinator(
-  options: ConstructorParameters<typeof RuntimeFederationLeaseCoordinator>[0],
+  options: NonNullable<
+    ConstructorParameters<typeof RuntimeFederationLeaseCoordinator>[0]
+  >,
 ): RuntimeFederationLeaseCoordinator {
-  const coordinator = new RuntimeFederationLeaseCoordinator(options);
+  const processId =
+    options.processId
+    ?? (options.instanceId === "instance-b" ? 456 : 123);
+  liveProcessIds.add(processId);
+  const coordinator = new RuntimeFederationLeaseCoordinator({
+    profileName: "dev",
+    processId,
+    cwd:
+      options.cwd
+      ?? (options.instanceId === "instance-b"
+        ? "/tmp/PwrAgnt-b"
+        : "/tmp/PwrAgnt-a"),
+    processIsAlive: (candidateProcessId) =>
+      liveProcessIds.has(candidateProcessId),
+    ...options,
+  });
   activeCoordinators.push(coordinator);
   return coordinator;
 }
@@ -44,6 +61,7 @@ function recordInstance(
 }
 
 beforeEach(() => {
+  liveProcessIds = new Set<number>();
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-federation-lease-"));
   stateDb = StateDb.open(path.join(tempDir, "state.db"), {
     profileName: "dev",
@@ -53,9 +71,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  // Stop heartbeats before closing the DB so a still-scheduled interval
-  // cannot renew against a closed better-sqlite3 connection and fail the
-  // suite with an unhandled exception after every assertion passed.
+  // Release ownership before closing the shared test database.
   for (const coordinator of activeCoordinators.splice(0)) {
     try {
       coordinator.shutdownSync();
@@ -243,7 +259,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     second.shutdownSync();
   });
 
-  it("re-acquires the lease after the holder's lease expires", async () => {
+  it("re-acquires the lease after the holder process exits", async () => {
     let now = 1_000;
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
@@ -259,6 +275,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     });
 
     await first.applyMode(firstRuntime, "gateway");
+    liveProcessIds.delete(123);
     now = 40_000;
     await expect(second.applyMode(secondRuntime, "gateway")).resolves
       .toMatchObject({ enabled: true });
@@ -266,14 +283,12 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     expect(store.getFederationLease()).toMatchObject({
       ownerInstanceId: "instance-b",
       acquiredAt: 40_000,
-      expiresAt: 70_000,
       status: "active",
     });
     second.shutdownSync();
   });
 
-  it("stops the runtime when the heartbeat loses the lease", async () => {
-    vi.useFakeTimers();
+  it("lets a live challenger replace a dead owner without waiting for a TTL", async () => {
     let now = 1_000;
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
@@ -289,17 +304,14 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     });
 
     await first.applyMode(firstRuntime, "client");
-    // The first instance stops renewing (busy event loop, debugger pause,
-    // OS sleep) and the second takes the lease once it expires.
-    now = 32_000;
-    await second.applyMode(secondRuntime, "client");
-    now = 33_000;
-    await vi.advanceTimersByTimeAsync(FEDERATION_LEASE_HEARTBEAT_MS);
+    liveProcessIds.delete(123);
+    now = 2_000;
+    await expect(second.applyMode(secondRuntime, "client")).resolves
+      .toMatchObject({ enabled: true });
 
-    expect(firstRuntime.stop).toHaveBeenCalledTimes(1);
+    expect(firstRuntime.stop).not.toHaveBeenCalled();
     expect(first.snapshot()).toMatchObject({
       leaseHeld: false,
-      disabledReasonKind: "lease_held",
       leaseHolder: { instanceId: "instance-b" },
     });
     expect(store.getFederationLease()).toMatchObject({
@@ -309,7 +321,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     second.shutdownSync();
   });
 
-  it("stops the runtime when lease renewal throws", async () => {
+  it("does not renew a PID-owned lease on a timer", async () => {
     vi.useFakeTimers();
     const runtime = createRuntime();
     const coordinator = createCoordinator({
@@ -317,23 +329,16 @@ describe("RuntimeFederationLeaseCoordinator", () => {
       now: () => 1_000,
       store,
     });
-    const renewLease = vi
-      .spyOn(store, "renewFederationLease")
-      .mockImplementationOnce(() => {
-        throw new Error("database is busy");
-      });
 
     await coordinator.applyMode(runtime, "client");
-    await vi.advanceTimersByTimeAsync(FEDERATION_LEASE_HEARTBEAT_MS);
+    const acquiredLease = store.getFederationLease();
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1_000);
 
-    expect(runtime.stop).toHaveBeenCalledTimes(1);
+    expect(store.getFederationLease()).toEqual(acquiredLease);
+    expect(runtime.stop).not.toHaveBeenCalled();
     expect(coordinator.snapshot()).toMatchObject({
-      leaseHeld: false,
-      disabledReasonKind: "runtime_stopped",
+      leaseHeld: true,
     });
-
-    await vi.advanceTimersByTimeAsync(FEDERATION_LEASE_HEARTBEAT_MS * 3);
-    expect(renewLease).toHaveBeenCalledTimes(1);
   });
 
   it("releases the lease on shutdownSync", async () => {
@@ -354,8 +359,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     });
   });
 
-  it("releases the lease and stops the heartbeat when post-acquisition startup fails", async () => {
-    vi.useFakeTimers();
+  it("releases the lease when post-acquisition startup fails", async () => {
     const runtime = createRuntime();
     const coordinator = createCoordinator({
       instanceId: "instance-a",
@@ -377,8 +381,6 @@ describe("RuntimeFederationLeaseCoordinator", () => {
       disabledReasonKind: "startup_error",
     });
 
-    // The heartbeat must be stopped too: nothing may re-activate the lease.
-    await vi.advanceTimersByTimeAsync(FEDERATION_LEASE_HEARTBEAT_MS * 3);
     expect(store.getFederationLease()).toMatchObject({
       status: "released",
       releasedAt: 1_000,

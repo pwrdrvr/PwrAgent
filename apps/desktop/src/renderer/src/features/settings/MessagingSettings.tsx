@@ -203,7 +203,7 @@ export function MessagingSettings(props: {
       : "Messaging disabled for this app instance";
   const runtimeWarningBody =
     runtimeMessaging.disabledReasonKind === "lease_held"
-      ? `Messaging is off here because another PwrAgent instance holds this profile's messaging lease${leaseHolderLabel ? ` (${leaseHolderLabel})` : ""}. Close that instance or wait for its lease to expire, then flip the master toggle to try again.`
+      ? `Messaging is off here because another PwrAgent instance holds this profile's messaging lease${leaseHolderLabel ? ` (${leaseHolderLabel})` : ""}. Close that instance, then flip the master toggle to try again.`
       : "Messaging is off because the app was launched with the no-messaging flag. You can override this for the current session by flipping the master toggle below, but make sure messaging is off in any other PwrAgent instances first. The override applies to this session only; the saved default is unchanged.";
   const configuredRoutePlatforms = configuredMessagingRoutePlatforms(
     props.snapshot,

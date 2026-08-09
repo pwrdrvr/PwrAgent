@@ -1,11 +1,10 @@
 import type { DesktopFederationMode } from "@pwragent/shared";
-import { getAppRuntimeInstanceStore } from "./state/app-state";
-import type {
-  AppRuntimeInstanceStore,
-  FederationRuntimeLeaseRecord,
-} from "./state/app-runtime-instance-store";
-import { getRuntimeMessagingLeaseCoordinator } from "./runtime-messaging-lease";
 import { getMainLogger } from "./log";
+import {
+  getRuntimeLeaseManager,
+  RuntimeLeaseManager,
+  type RuntimeLeaseManagerOptions,
+} from "./runtime-lease-manager";
 
 /**
  * The slice of DesktopFederationRuntime the coordinator drives. Structural
@@ -15,9 +14,6 @@ import { getMainLogger } from "./log";
 export type FederationLeaseRuntime = {
   stop(): Promise<void>;
 };
-
-export const FEDERATION_LEASE_TTL_MS = 30_000;
-export const FEDERATION_LEASE_HEARTBEAT_MS = 10_000;
 
 const leaseLog = getMainLogger("pwragent:federation-lease");
 
@@ -32,7 +28,6 @@ export type RuntimeFederationLeaseHolder = {
   processId?: number;
   cwdHint?: string;
   startedAt?: number;
-  expiresAt: number;
 };
 
 export type RuntimeFederationLeaseSnapshot = {
@@ -50,10 +45,8 @@ export type RuntimeFederationLeaseApplyResult = {
   leaseHolder?: RuntimeFederationLeaseHolder;
 };
 
-type RuntimeFederationLeaseCoordinatorOptions = {
-  instanceId?: string;
-  now?: () => number;
-  store?: AppRuntimeInstanceStore;
+type RuntimeFederationLeaseCoordinatorOptions = RuntimeLeaseManagerOptions & {
+  leaseManager?: RuntimeLeaseManager;
 };
 
 /**
@@ -64,25 +57,19 @@ type RuntimeFederationLeaseCoordinatorOptions = {
  * them run federation for the profile at a time.
  */
 export class RuntimeFederationLeaseCoordinator {
-  private readonly instanceId: string;
-  private readonly now: () => number;
-  private readonly store: AppRuntimeInstanceStore;
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private leaseHeld = false;
+  private readonly leaseManager: RuntimeLeaseManager;
   private disabledReasonKind: RuntimeFederationDisabledReasonKind | undefined;
 
   constructor(options: RuntimeFederationLeaseCoordinatorOptions = {}) {
-    // Share the messaging lease's owner identity so one app process owns one
-    // app_runtime_instances row and lease-holder lookups resolve to that
-    // row's pid/cwd hint regardless of which lease is being described.
-    this.instanceId =
-      options.instanceId ?? getRuntimeMessagingLeaseCoordinator().id;
-    this.now = options.now ?? Date.now;
-    this.store = options.store ?? getAppRuntimeInstanceStore();
+    this.leaseManager =
+      options.leaseManager
+      ?? (hasCustomLeaseManagerOptions(options)
+        ? new RuntimeLeaseManager(options)
+        : getRuntimeLeaseManager());
   }
 
   get id(): string {
-    return this.instanceId;
+    return this.leaseManager.id;
   }
 
   /**
@@ -94,16 +81,11 @@ export class RuntimeFederationLeaseCoordinator {
    * adapter gate: the federation mode is the whole ladder.
    */
   async applyMode(
-    runtime: FederationLeaseRuntime,
+    _runtime: FederationLeaseRuntime,
     mode: DesktopFederationMode,
   ): Promise<RuntimeFederationLeaseApplyResult> {
-    const now = this.now();
     if (mode === "disabled") {
-      this.stopHeartbeat();
-      if (this.leaseHeld) {
-        this.store.releaseFederationLease({ instanceId: this.instanceId, now });
-      }
-      this.leaseHeld = false;
+      this.leaseManager.release("federation");
       this.disabledReasonKind = "saved_disabled";
       return {
         enabled: false,
@@ -112,42 +94,30 @@ export class RuntimeFederationLeaseCoordinator {
       };
     }
 
-    const acquire = this.store.acquireFederationLease({
-      instanceId: this.instanceId,
-      now,
-      ttlMs: FEDERATION_LEASE_TTL_MS,
-    });
+    const acquire = this.leaseManager.acquire("federation");
     if (!acquire.acquired) {
-      this.stopHeartbeat();
-      this.leaseHeld = false;
       this.disabledReasonKind = "lease_held";
-      const leaseHolder = this.describeLeaseHolder(acquire.holder);
       return {
         enabled: false,
         disabledReasonKind: "lease_held",
         disabledReason:
           "Federation is already active in another PwrAgent instance for this profile.",
-        ...(leaseHolder ? { leaseHolder } : {}),
+        leaseHolder: acquire.holder,
       };
     }
 
-    this.leaseHeld = true;
     this.disabledReasonKind = undefined;
-    this.startHeartbeat(runtime);
     return { enabled: true };
   }
 
   /**
    * Post-acquisition startup failure cleanup, mirroring the messaging
-   * coordinator: stop the heartbeat, tear down any partially started
-   * runtime, and release the lease so another instance can take over the
-   * profile instead of this process renewing it with no runtime behind it.
+   * coordinator: tear down any partially started runtime and release the
+   * lease so another instance can take over the profile.
    */
   async releaseAfterStartupFailure(
     runtime: FederationLeaseRuntime,
   ): Promise<void> {
-    const now = this.now();
-    this.stopHeartbeat();
     try {
       await runtime.stop();
     } catch (error) {
@@ -155,35 +125,20 @@ export class RuntimeFederationLeaseCoordinator {
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      if (this.leaseHeld) {
-        this.store.releaseFederationLease({ instanceId: this.instanceId, now });
-      }
-      this.leaseHeld = false;
+      this.leaseManager.release("federation");
       this.disabledReasonKind = "startup_error";
     }
   }
 
   shutdownSync(): void {
-    const now = this.now();
-    this.stopHeartbeat();
-    if (this.leaseHeld) {
-      this.store.releaseFederationLease({ instanceId: this.instanceId, now });
-    }
-    this.leaseHeld = false;
+    this.leaseManager.release("federation");
   }
 
   snapshot(): RuntimeFederationLeaseSnapshot {
-    const lease = this.store.getFederationLease();
-    const leaseHolder =
-      lease
-      && lease.status === "active"
-      && lease.ownerInstanceId !== this.instanceId
-      && lease.expiresAt > this.now()
-        ? this.describeLeaseHolder(lease)
-        : undefined;
+    const lease = this.leaseManager.snapshot("federation");
     return {
-      instanceId: this.instanceId,
-      leaseHeld: this.leaseHeld,
+      instanceId: lease.instanceId,
+      leaseHeld: lease.leaseHeld,
       ...(this.disabledReasonKind
         ? {
             disabledReasonKind: this.disabledReasonKind,
@@ -192,77 +147,23 @@ export class RuntimeFederationLeaseCoordinator {
             ),
           }
         : {}),
-      ...(leaseHolder ? { leaseHolder } : {}),
+      ...(lease.leaseHolder ? { leaseHolder: lease.leaseHolder } : {}),
     };
   }
+}
 
-  private startHeartbeat(runtime: FederationLeaseRuntime): void {
-    if (this.heartbeatTimer) return;
-    this.heartbeatTimer = setInterval(() => {
-      // Heartbeat must never throw out of the timer callback. A closed
-      // state DB during process/test teardown would otherwise surface as an
-      // unhandled exception after every assertion already passed.
-      let renewed = false;
-      try {
-        renewed = this.store.renewFederationLease({
-          instanceId: this.instanceId,
-          now: this.now(),
-          ttlMs: FEDERATION_LEASE_TTL_MS,
-        });
-      } catch (error) {
-        leaseLog.warn("federation lease heartbeat failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      if (!renewed) {
-        void this.stopRuntimeAfterLeaseLoss(runtime).catch((error) => {
-          leaseLog.error("federation runtime stop failed after lease loss", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
-    }, FEDERATION_LEASE_HEARTBEAT_MS);
-    if (this.heartbeatTimer.unref) this.heartbeatTimer.unref();
-  }
-
-  private async stopRuntimeAfterLeaseLoss(
-    runtime: FederationLeaseRuntime,
-  ): Promise<void> {
-    const now = this.now();
-    this.stopHeartbeat();
-    this.leaseHeld = false;
-    try {
-      await runtime.stop();
-    } finally {
-      const lease = this.store.getFederationLease();
-      this.disabledReasonKind =
-        lease
-        && lease.status === "active"
-        && lease.ownerInstanceId !== this.instanceId
-        && lease.expiresAt > now
-          ? "lease_held"
-          : "runtime_stopped";
-    }
-  }
-
-  private stopHeartbeat(): void {
-    if (!this.heartbeatTimer) return;
-    clearInterval(this.heartbeatTimer);
-    this.heartbeatTimer = null;
-  }
-
-  private describeLeaseHolder(
-    lease: FederationRuntimeLeaseRecord,
-  ): RuntimeFederationLeaseHolder {
-    const holder = this.store.getInstance(lease.ownerInstanceId);
-    return {
-      instanceId: lease.ownerInstanceId,
-      ...(holder?.processId ? { processId: holder.processId } : {}),
-      ...(holder?.cwdHint ? { cwdHint: holder.cwdHint } : {}),
-      ...(holder?.startedAt ? { startedAt: holder.startedAt } : {}),
-      expiresAt: lease.expiresAt,
-    };
-  }
+function hasCustomLeaseManagerOptions(
+  options: RuntimeFederationLeaseCoordinatorOptions,
+): boolean {
+  return Boolean(
+    options.instanceId
+    || options.profileName
+    || options.processId
+    || options.cwd
+    || options.now
+    || options.store
+    || options.processIsAlive,
+  );
 }
 
 let coordinator: RuntimeFederationLeaseCoordinator | null = null;
