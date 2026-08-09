@@ -149,6 +149,69 @@ describe("SqliteOverlayStore tool invocation accounting", () => {
     });
   });
 
+  it("does not double-count streamed output repeated in a completed Codex snapshot", async () => {
+    const deltas = [
+      "[info] starting\n",
+      "[warn] still working\n",
+      "[error] command failed\n",
+    ];
+    for (const [index, delta] of deltas.entries()) {
+      await store.upsertThreadToolInvocation({
+        invocation: toolInvocationFromNotification({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/outputDelta",
+            params: {
+              delta,
+              itemId: "cmd-with-snapshot",
+              threadId: "thread-1",
+              turnId: "turn-1",
+            },
+          },
+          now: 1_800_000_000_000 + index,
+        })!,
+      });
+    }
+
+    const aggregatedOutput = deltas.join("");
+    await store.upsertThreadToolInvocation({
+      invocation: toolInvocationFromNotification({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              aggregatedOutput,
+              exitCode: 1,
+              id: "cmd-with-snapshot",
+              status: "failed",
+              type: "commandExecution",
+            },
+          },
+        },
+        now: 1_800_000_001_000,
+      })!,
+    });
+
+    const accounting = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(accounting.invocations[0]).toMatchObject({
+      errorLines: 1,
+      estimatedOutputTokens: Math.ceil(aggregatedOutput.length / 4),
+      exitCode: 1,
+      infoLines: 1,
+      outputChars: aggregatedOutput.length,
+      outputLines: 3,
+      status: "failed",
+      warningLines: 1,
+    });
+  });
+
   it("records coalesced output deltas identically to per-chunk writes", async () => {
     // Codex streams fixed 8 KiB chunks; the registry folds them in memory and
     // writes once per flush window. The stored totals have to match what a
