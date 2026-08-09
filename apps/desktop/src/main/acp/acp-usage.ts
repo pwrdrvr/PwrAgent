@@ -23,13 +23,17 @@ export type AcpUsageEnvelope = {
  * restarts at zero on every turn. That is the number it sends as
  * `total_token_usage` on `thread/tokenUsage/updated`.
  *
- * Both ACP agents that report usage today report per model call, which folds
+ * Every ACP agent known to report usage reports it per model call, which folds
  * to per turn: Grok on `response_completed`, Qwen on
- * `agent_message_chunk._meta.usage`. Gemini and Kimi report none. Codex is the
- * outlier — it sends the same field meaning a session-cumulative total, which
- * is why `deriveLiveThreadTokenUsage` can read `total - last` as "the context
- * this turn inherited". For ACP that subtraction lands on zero on a turn's
- * first call, which is equally correct: the turn did start from nothing.
+ * `agent_message_chunk._meta.usage`. Whether Gemini or Kimi report anything is
+ * untested — the `acp-transcripts` fixtures are normalizer-parity captures
+ * with no completed turn in them, so they cannot answer it (grok-build.json
+ * carries no usage either, and Grok certainly reports). Codex is the outlier
+ * among what we do know: it sends this field meaning a session-cumulative
+ * total, which is why `deriveLiveThreadTokenUsage` can read `total - last` as
+ * "the context this turn inherited". For ACP that subtraction lands on zero on
+ * a turn's first call, which is equally correct: the turn did start from
+ * nothing.
  *
  * If a future agent reports cumulative instead, do NOT quietly widen this
  * function to accept both. The shapes are indistinguishable from a single

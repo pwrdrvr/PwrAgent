@@ -1408,8 +1408,8 @@ describe("AcpBackendAdapter", () => {
   });
 
   it("restarts the ACP running total on each turn", async () => {
-    // Per turn, not per session — the ACP convention, matching how both
-    // reporting agents emit (Grok per `response_completed`, Qwen per
+    // Per turn, not per session — the ACP convention, matching every agent
+    // known to report (Grok per `response_completed`, Qwen per
     // `agent_message_chunk._meta.usage`). Codex sends the same field meaning a
     // session-cumulative total, so consumers subtract against it; see the note
     // on `AcpUsageEnvelope`. Pinned here so a change to cumulative fails at
