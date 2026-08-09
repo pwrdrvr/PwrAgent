@@ -265,6 +265,42 @@ pnpm --filter @pwragent/desktop exec tsx \
 Works for 2+ frames; the indicator scales horizontally with frame
 count.
 
+## Capturing ACP Protocol Transcripts
+
+`scripts/capture-acp-transcript.mjs` drives a real ACP agent over stdio the
+way `AcpAgentClient` does — same `initialize` params, `session/new`, one
+`session/prompt` — and writes every JSON-RPC frame in both directions to
+stdout:
+
+```bash
+node apps/desktop/scripts/capture-acp-transcript.mjs \
+  --cmd ~/.kimi-code/bin/kimi --args acp \
+  --cwd /tmp/acp-scratch \
+  --prompt "tell me your favorite breakfast cereal" > capture.json
+```
+
+Flags: `--cmd` (required), `--args` (comma-separated), `--cwd`, `--prompt`,
+`--quiet-ms` (drain window after the prompt resolves), `--timeout-ms`,
+`--allow-tools`. Exit code is 0 only on a completed capture.
+
+Reach for this whenever a question about an agent's wire behavior would
+otherwise be answered by reading its source or guessing. **The committed
+`__tests__/fixtures/acp-transcripts/*-build.json` fixtures cannot answer
+turn-end questions** — they are normalizer-parity captures containing no
+completed turn, so grepping them for usage, stop reasons, or totals returns a
+confident wrong answer. That mistake is why
+`kimi-code-0-31-cereal.json` exists: a full captured turn establishing that
+Kimi Code 0.31.1 puts no token usage on the ACP wire.
+
+Two things to know before running it:
+
+- **Permission requests are denied by default.** Pass `--allow-tools` only
+  when tool traffic is the point, and point `--cwd` somewhere disposable when
+  you do — the harness answers on your behalf and the agent acts for real.
+- **Output is raw protocol.** The operator home directory and the capture cwd
+  are rewritten, but an agent can echo anything it read into a transcript.
+  Read a capture before committing it as a fixture.
+
 ## Accessibility
 
 The renderer is audited against WCAG 2.0 / 2.1 / 2.2 Level AA via

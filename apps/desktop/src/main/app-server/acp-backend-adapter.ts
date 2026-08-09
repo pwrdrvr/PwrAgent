@@ -1832,22 +1832,46 @@ export class AcpBackendAdapter {
       }) => {
         const updateKind = readAcpUpdateKind(update);
         const usageEnvelope = readAcpUsageEnvelope(update);
+        let liveUsageNotification: AppServerNotification | undefined;
         if (usageEnvelope && turnId) {
           const usageKey = [agent.backendId, sessionId, turnId].join(":");
           const previousUsage = this.liveTurnUsage.get(usageKey);
-          this.liveTurnUsage.set(usageKey, {
-            model:
-              usageEnvelope.model ??
-              previousUsage?.model ??
-              selectedAcpModel(
-                agent,
-                this.getSession(agent.backendId, sessionId),
-              ),
-            tokenUsage: foldAcpTurnUsage(
-              previousUsage?.tokenUsage,
-              usageEnvelope,
-            ),
-          });
+          const model =
+            usageEnvelope.model ??
+            previousUsage?.model ??
+            selectedAcpModel(
+              agent,
+              this.getSession(agent.backendId, sessionId),
+            );
+          const tokenUsage = foldAcpTurnUsage(
+            previousUsage?.tokenUsage,
+            usageEnvelope,
+          );
+          this.liveTurnUsage.set(usageKey, { model, tokenUsage });
+          // Publish each model call as it lands rather than banking the whole
+          // turn until `turn_finished`. A long turn — a managed review runs
+          // for minutes across a dozen calls — otherwise reports no usage at
+          // all while it runs, which is what leaves the review sub-agent card
+          // blank next to Codex's live one. Session-load replay is excluded:
+          // those envelopes are history, not new spend.
+          //
+          // `totalTokenUsage` here is the running total for THIS TURN, since
+          // `liveTurnUsage` is keyed by turn and dropped at `turn_finished`.
+          // That is the ACP convention; Codex sends a session-cumulative total
+          // in the same field. See the note on `AcpUsageEnvelope` before
+          // changing this payload's shape.
+          if (usageEnvelope.scope === "model-call" && !fromSessionLoad) {
+            liveUsageNotification = acpUsageNotification({
+              envelope: {
+                ...(model ? { model } : {}),
+                scope: "model-call",
+                tokenUsage: usageEnvelope.tokenUsage,
+              },
+              threadId: sessionId,
+              totalTokenUsage: tokenUsage,
+              turnId,
+            });
+          }
         }
         const completedUsage =
           updateKind === "turn_finished" && turnId
@@ -1868,7 +1892,7 @@ export class AcpBackendAdapter {
               totalTokenUsage: completedUsage.tokenUsage,
               turnId,
             })
-          : undefined;
+          : liveUsageNotification;
         const agentMessageDelta =
           updateKind === "agent_message_chunk"
             ? readAcpUpdateText(update)
