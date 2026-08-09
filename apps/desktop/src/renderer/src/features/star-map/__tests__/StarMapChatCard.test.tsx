@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapChatCard } from "../StarMapChatCard";
+import {
+  DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+  DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT,
+} from "../../../lib/thread-history-limits";
 
 const RECT = { left: 40, top: 40, width: 420, height: 520 };
 
@@ -85,6 +89,54 @@ async function typeAndSend(title: string, text: string) {
   fireEvent.keyDown(input, { key: "Enter" });
   return input as HTMLTextAreaElement;
 }
+
+describe("StarMapChatCard transcript loading", () => {
+  it("asks for the last few turns rather than the whole thread", async () => {
+    const desktopApi = buildApi();
+    renderCard({ desktopApi, thread: remoteThread() });
+
+    // No limit means `readThread` replays from the thread's first message.
+    // On a 135 MB thread that is the entire transcript over the bridge.
+    await waitFor(() => {
+      expect(desktopApi.readThread).toHaveBeenCalledWith(
+        expect.objectContaining({
+          limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+        }),
+      );
+    });
+  });
+
+  it("mounts only the newest entries of a long transcript", async () => {
+    const entries = Array.from({ length: 200 }, (_, index) => ({
+      type: "message" as const,
+      id: `m-${index}`,
+      role: "assistant" as const,
+      text: `entry ${index}`,
+    }));
+    const desktopApi = buildApi({
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t",
+        replay: {
+          entries,
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+    } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: remoteThread() });
+
+    // The tail is mounted; the head is held back until the operator scrolls
+    // for it. Rendering all 200 is what makes a big thread unresponsive.
+    await waitFor(() => {
+      expect(screen.getByText("entry 199")).toBeTruthy();
+    });
+    expect(screen.queryByText("entry 0")).toBeNull();
+    expect(
+      screen.queryByText(`entry ${200 - DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT}`),
+    ).toBeTruthy();
+  });
+});
 
 describe("StarMapChatCard federation routing", () => {
   it("hydrates a peer's thread against that peer", async () => {

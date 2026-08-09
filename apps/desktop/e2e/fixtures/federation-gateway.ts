@@ -54,7 +54,35 @@ export type GatewayThreadSeed = {
   source?: AppServerBackendKind;
   executionMode?: AppServerThreadSummary["executionMode"];
   linkedDirectories?: LinkedDirectorySummary[];
+  /**
+   * Needed to reach a Star Map lane: a thread with no attention category
+   * is not on the map at all, and an idle thread with no PR and no
+   * unpushed commits matches none. Same reason `fixtures/star-map/` marks
+   * its threads active.
+   */
+  threadStatus?: "active" | "idle";
+  /**
+   * Serve a large, genuinely paged transcript for this thread instead of
+   * the one-line default. Entries are generated on demand from the
+   * request's `limit` / `before`, so the gateway can answer "how much did
+   * the client actually ask for" rather than only "what did we send".
+   */
+  transcript?: {
+    entryCount: number;
+    /** Padding per entry; entryCount * bytesPerEntry is the notional size. */
+    bytesPerEntry: number;
+  };
 };
+
+/** Entries the fake backend serves per requested turn. */
+const GATEWAY_ENTRIES_PER_TURN = 4;
+
+/**
+ * Ceiling on a single response, so a client that regresses to asking for
+ * everything fails the assertion instead of materialising ~120 MB inside
+ * the Playwright process and taking the runner down with it.
+ */
+const GATEWAY_MAX_RESPONSE_ENTRIES = 400;
 
 export type GatewayDirectorySeed = {
   key: string;
@@ -72,6 +100,16 @@ export type InProcessFederationGateway = {
   url: string;
   /** Requests the canned backend has served, oldest first. */
   calls: { method: string; params: unknown }[];
+  /**
+   * What the paged-transcript backend actually handed over. `bytesServed`
+   * is the transcript payload alone; `unboundedRequests` counts reads that
+   * asked for the thread from its first message.
+   */
+  transcriptStats: {
+    bytesServed: number;
+    entriesServed: number;
+    unboundedRequests: number;
+  };
   /** Current pin rank per thread id (mutated by backend.setThreadPin). */
   pinnedRankByThreadId: Map<string, string | undefined>;
   /** Resolves when a client connection has completed enrollment/auth. */
@@ -118,6 +156,70 @@ export async function startInProcessFederationGateway(params: {
   const threads = [...params.threads];
 
   const calls: { method: string; params: unknown }[] = [];
+  const transcriptStats = {
+    bytesServed: 0,
+    entriesServed: 0,
+    unboundedRequests: 0,
+  };
+
+  /**
+   * A real paging backend over a synthetic transcript.
+   *
+   * Entries are numbered oldest-first; `before` is the index to read
+   * backwards from, and `limit` is in TURNS (what the desktop sends), so
+   * the window is `limit * GATEWAY_ENTRIES_PER_TURN` entries. A request
+   * with no `limit` means "the whole thread from its first message" —
+   * recorded, and clamped so it cannot exhaust the test process.
+   */
+  const servePagedTranscript = (params: {
+    request: AppServerReadThreadRequest;
+    transcript: NonNullable<GatewayThreadSeed["transcript"]>;
+  }): AppServerReadThreadResponse => {
+    const { request, transcript } = params;
+    const requested = (request as { limit?: number }).limit;
+    const before = (request as { before?: string }).before;
+    if (requested === undefined) transcriptStats.unboundedRequests += 1;
+
+    const end = before === undefined
+      ? transcript.entryCount
+      : Math.max(0, Math.min(transcript.entryCount, Number.parseInt(before, 10)));
+    const windowSize = Math.min(
+      requested === undefined
+        ? transcript.entryCount
+        : Math.max(1, requested) * GATEWAY_ENTRIES_PER_TURN,
+      GATEWAY_MAX_RESPONSE_ENTRIES,
+    );
+    const start = Math.max(0, end - windowSize);
+
+    const padding = "x".repeat(Math.max(1, transcript.bytesPerEntry));
+    const entries = [];
+    for (let index = start; index < end; index += 1) {
+      const text = `entry ${index} ${padding}`;
+      transcriptStats.bytesServed += text.length;
+      transcriptStats.entriesServed += 1;
+      entries.push({
+        type: "message" as const,
+        id: `${request.threadId}-e-${index}`,
+        role: "assistant" as const,
+        text,
+      });
+    }
+
+    return {
+      backend: "codex",
+      fetchedAt: Date.now(),
+      threadId: request.threadId,
+      replay: {
+        entries,
+        messages: [],
+        pagination: {
+          supportsPagination: true,
+          hasPreviousPage: start > 0,
+          previousCursor: String(start),
+        },
+      },
+    } as AppServerReadThreadResponse;
+  };
   const pinnedRankByThreadId = new Map<string, string | undefined>(
     threads.map((thread) => [thread.id, thread.pinnedRank]),
   );
@@ -141,6 +243,7 @@ export async function startInProcessFederationGateway(params: {
           : []),
       updatedAt: thread.updatedAt,
       createdAt: thread.updatedAt,
+      ...(thread.threadStatus ? { threadStatus: thread.threadStatus } : {}),
       ...(pinnedRankByThreadId.get(thread.id) !== undefined
         ? { pinnedRank: pinnedRankByThreadId.get(thread.id) }
         : {}),
@@ -196,6 +299,10 @@ export async function startInProcessFederationGateway(params: {
     ): Promise<AppServerReadThreadResponse> {
       calls.push({ method: "readThread", params: request });
       const thread = threads.find((entry) => entry.id === request.threadId);
+      const transcript = thread?.transcript;
+      if (transcript) {
+        return servePagedTranscript({ request, transcript });
+      }
       const text = `Remote transcript for ${thread?.title ?? request.threadId}.`;
       return {
         backend: thread?.source ?? request.backend ?? "codex",
@@ -514,6 +621,7 @@ export async function startInProcessFederationGateway(params: {
     instanceLabel,
     url,
     calls,
+    transcriptStats,
     pinnedRankByThreadId,
     waitForConnection: async (timeoutMs = 15_000) => {
       await waitForConnectionCount(1, timeoutMs);
