@@ -50,7 +50,9 @@ test("captured command output is inspectable from transcript work", async () => 
     await expect(commandActivity).toHaveCount(1);
     await commandActivity.click();
 
-    await expect(transcript.getByText("$ npm view dive")).toBeVisible();
+    await expect(
+      transcript.getByText("$ /bin/zsh -lc 'npm view dive'"),
+    ).toBeVisible();
     await expect(transcript.getByText(/dive@0\.5\.0 \| Proprietary/)).toBeVisible();
     await expect(transcript.getByText(/https:\/\/github\.com\/pvorb\/node-dive#readme/)).toBeVisible();
     await expect(transcript.getByText("Success · ran for 373ms")).toBeVisible();
