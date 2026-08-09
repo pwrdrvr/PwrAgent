@@ -87,6 +87,103 @@ describe("ACP usage normalization", () => {
     });
   });
 
+  // Grok Build reports each model call on `response_completed`, a transient
+  // xAI extension update that never reaches updates.jsonl. It was the only
+  // mid-turn usage Grok emits and the parser ignored it outright, so a long
+  // turn reported nothing at all until it finished.
+  //
+  // Its shape is NOT the turn total's shape. `ResponseUsage` is snake_case and
+  // its `input_tokens` is the *uncached* prompt remainder
+  // (prompt − cache_read − cache_creation), whereas `turn_completed.usage` is
+  // camelCase with an `inputTokens` that includes both. Reading the field
+  // straight across would undercount every running total by the cached
+  // portion, then jump when the turn total landed.
+  describe("Grok response_completed model-call usage", () => {
+    function responseCompleted(usage: Record<string, number>) {
+      return readAcpUsageEnvelope({
+        sessionUpdate: "response_completed",
+        message_id: "msg_1",
+        stop_reason: "tool_use",
+        usage,
+      });
+    }
+
+    it("normalizes the uncached input remainder to an inclusive total", () => {
+      expect(
+        responseCompleted({
+          input_tokens: 300,
+          cache_read_input_tokens: 900,
+          cache_creation_input_tokens: 100,
+          output_tokens: 40,
+          reasoning_tokens: 12,
+        }),
+      ).toEqual({
+        scope: "model-call",
+        tokenUsage: {
+          cachedInputTokens: 900,
+          inputTokens: 1_300,
+          outputTokens: 40,
+          reasoningOutputTokens: 12,
+          totalTokens: 1_340,
+        },
+      });
+    });
+
+    it("ignores a response that carries no usage", () => {
+      expect(
+        readAcpUsageEnvelope({
+          sessionUpdate: "response_completed",
+          stop_reason: "end_turn",
+        }),
+      ).toBeUndefined();
+    });
+
+    it("accumulates to the same totals Grok reports at turn end", () => {
+      // Two model calls whose sums must match what turn_completed would say:
+      // prompt 1,300 + 2,050, of which 900 + 1,800 cached.
+      const folded = [
+        responseCompleted({
+          input_tokens: 300,
+          cache_read_input_tokens: 900,
+          cache_creation_input_tokens: 100,
+          output_tokens: 40,
+          reasoning_tokens: 12,
+        }),
+        responseCompleted({
+          input_tokens: 250,
+          cache_read_input_tokens: 1_800,
+          cache_creation_input_tokens: 0,
+          output_tokens: 60,
+          reasoning_tokens: 30,
+        }),
+      ].reduce<AcpTokenUsage | undefined>(
+        (total, envelope) =>
+          envelope ? foldAcpTurnUsage(total, envelope) : total,
+        undefined,
+      );
+
+      expect(folded).toEqual({
+        cachedInputTokens: 2_700,
+        inputTokens: 3_350,
+        outputTokens: 100,
+        reasoningOutputTokens: 42,
+        totalTokens: 3_450,
+      });
+      // The authoritative turn total still overwrites the running sum.
+      const turnTotal = readAcpUsageEnvelope({
+        sessionUpdate: "turn_completed",
+        usage: {
+          inputTokens: 3_350,
+          cachedReadTokens: 2_700,
+          outputTokens: 100,
+          reasoningTokens: 42,
+          totalTokens: 3_450,
+        },
+      });
+      expect(turnTotal && foldAcpTurnUsage(folded, turnTotal)).toEqual(folded);
+    });
+  });
+
   it("recovers the selected ACP model from session runtime state", () => {
     expect(
       readAcpSelectedModel({

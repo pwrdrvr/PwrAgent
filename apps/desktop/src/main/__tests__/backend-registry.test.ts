@@ -18353,6 +18353,73 @@ command = "pnpm dev"
     await followup.registry.close();
   });
 
+  it("keys an ACP managed review on the ids its usage notifications carry", async () => {
+    // Live sub-agent pricing depends on one join: recordTaskMonitorUsage looks
+    // the review up by (backend, notification.threadId, notification.turnId),
+    // and the ACP adapter stamps those as the child session id and its turn id
+    // (see "reports Grok model-call usage while a turn is still running" in
+    // acp-backend-adapter.test.ts). If startReview ever recorded the parent
+    // thread or a different turn id here, every usage event would miss the
+    // review record and the sub-agent card would silently stay blank again.
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const parentThreadId = "grok-usage-review-parent";
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: acpBackendId,
+      sessionId: parentThreadId,
+      title: "Grok review parent",
+      cwd: "/repo/worktree",
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      executionMode: "default",
+      status: "idle",
+    }];
+    const startPrompt = vi.fn((params: Parameters<KimiStartPrompt>[0]) => ({
+      sessionId: params.sessionId,
+      turnId: "grok-review-turn",
+    }));
+    const overlayStore = createOverlayStoreMock();
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore,
+      sessionId: parentThreadId,
+      sessions,
+      startPrompt,
+    });
+
+    const review = await registry.startReview({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    // The hidden child session the review actually runs in — not the parent.
+    const childSessionId = startPrompt.mock.calls.at(-1)?.[0].sessionId;
+    expect(childSessionId).toBeDefined();
+    expect(childSessionId).not.toBe(parentThreadId);
+    expect(review).toMatchObject({
+      threadId: parentThreadId,
+      reviewThreadId: childSessionId,
+      turnId: "grok-review-turn",
+    });
+
+    // And the sub-agent row the card renders is registered under that child,
+    // waiting for monitorUsage to arrive.
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+    });
+    expect(overlay?.subAgents?.[0]).toMatchObject({
+      monitorId: "review:grok-review-turn",
+      monitorThreadId: childSessionId,
+      monitorTurnId: "grok-review-turn",
+      status: "running",
+    });
+    expect(overlay?.subAgents?.[0]?.monitorUsage).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("routes direct and controlled Kimi review cancellation to the hidden child", async () => {
     const acpBackendId = "acp:kimi" as AcpBackendId;
     const parentThreadId = "kimi-review-parent";

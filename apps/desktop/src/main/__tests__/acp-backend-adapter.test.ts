@@ -1137,37 +1137,272 @@ describe("AcpBackendAdapter", () => {
       transport.emitSessionUpdate(session.sessionId, update);
     }
 
+    // One event per model call as it lands, then the authoritative turn total.
+    // Banking everything until `turn_finished` is what left long ACP turns —
+    // a managed review runs for minutes — reporting no usage at all while the
+    // operator watched them run.
     await vi.waitFor(() => {
       expect(
         events.filter(
           (event) =>
             event.notification.method === "thread/tokenUsage/updated",
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(3);
     });
     const usageEvents = events.filter(
       (event) => event.notification.method === "thread/tokenUsage/updated",
     );
-    expect(usageEvents.at(-1)).toEqual({
-      backend: backendId,
-      notification: {
-        method: "thread/tokenUsage/updated",
-        params: {
-          threadId: session.sessionId,
-          turnId: "turn-usage",
-          model: "qwen3-coder-plus",
-          tokenUsage: {
-            last_token_usage: {
-              input_tokens: 48_851,
-              cached_input_tokens: 20_000,
-              output_tokens: 322,
-              reasoning_output_tokens: 49,
-              total_tokens: 49_173,
+    // Each live event carries this call's own usage plus the running turn
+    // total, which is the pair `deriveLiveThreadTokenUsage` needs to seed a
+    // per-turn baseline and report growth against it.
+    // Partitioned rather than positional: this harness fires the whole canned
+    // fixture without awaiting the adapter's async emit pipeline, so the
+    // interleaving between model calls and prompt resolution is a property of
+    // the test, not of the protocol.
+    //
+    // A live model-call event is the pair `deriveLiveThreadTokenUsage` needs —
+    // this call's own usage plus the running turn total — so it can seed a
+    // per-turn baseline and report growth against it.
+    const liveEvents = usageEvents.filter(
+      (event) =>
+        "tokenUsage" in event.notification.params
+        && Boolean(
+          (event.notification.params.tokenUsage as Record<string, unknown>)
+            .total_token_usage,
+        ),
+    );
+    expect(
+      liveEvents.map((event) => event.notification.params),
+    ).toEqual([
+      {
+        threadId: session.sessionId,
+        turnId: "turn-usage",
+        model: "qwen3-coder-plus",
+        tokenUsage: {
+          last_token_usage: {
+            input_tokens: 23_851,
+            cached_input_tokens: 0,
+            output_tokens: 222,
+            reasoning_output_tokens: 29,
+            total_tokens: 24_073,
+          },
+          total_token_usage: {
+            input_tokens: 23_851,
+            cached_input_tokens: 0,
+            output_tokens: 222,
+            reasoning_output_tokens: 29,
+            total_tokens: 24_073,
+          },
+        },
+      },
+      {
+        threadId: session.sessionId,
+        turnId: "turn-usage",
+        model: "qwen3-coder-plus",
+        tokenUsage: {
+          last_token_usage: {
+            input_tokens: 25_000,
+            cached_input_tokens: 20_000,
+            output_tokens: 100,
+            reasoning_output_tokens: 20,
+            total_tokens: 25_100,
+          },
+          total_token_usage: {
+            input_tokens: 48_851,
+            cached_input_tokens: 20_000,
+            output_tokens: 322,
+            reasoning_output_tokens: 49,
+            total_tokens: 49_173,
+          },
+        },
+      },
+    ]);
+    // The turn total stays authoritative and still arrives without a
+    // `total_token_usage` companion, so it overwrites the turn's line rather
+    // than folding onto it — and `foldObservedContextReplay` ignores it, which
+    // is what keeps the live events from being counted twice as replays.
+    expect(
+      usageEvents.filter((event) => !liveEvents.includes(event)),
+    ).toEqual([
+      {
+        backend: backendId,
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-usage",
+            model: "qwen3-coder-plus",
+            tokenUsage: {
+              last_token_usage: {
+                input_tokens: 48_851,
+                cached_input_tokens: 20_000,
+                output_tokens: 322,
+                reasoning_output_tokens: 49,
+                total_tokens: 49_173,
+              },
             },
           },
         },
       },
+    ]);
+
+    await adapter.close();
+  });
+
+  it("reports Grok model-call usage while a turn is still running", async () => {
+    // Grok Build reports usage only on `response_completed`, a transient
+    // extension update. It was read by nothing, so a long Grok turn produced
+    // no usage event at all until it finished — the reason a managed review's
+    // sub-agent card sat blank for minutes while Codex's showed live spend.
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
     });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "full-access",
+      acpRuntime: { currentModelId: "grok-4.5-build" },
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Review the current checkout against base branch 'main'.",
+      turnId: "review-turn",
+    });
+    // Two model calls of a still-running review. `input_tokens` is the
+    // uncached remainder; cached reads and cache creation are reported apart.
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "response_completed",
+      message_id: "msg_1",
+      stop_reason: "tool_use",
+      usage: {
+        input_tokens: 300,
+        cache_read_input_tokens: 900,
+        cache_creation_input_tokens: 100,
+        output_tokens: 40,
+        reasoning_tokens: 12,
+      },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "response_completed",
+      message_id: "msg_2",
+      stop_reason: "tool_use",
+      usage: {
+        input_tokens: 250,
+        cache_read_input_tokens: 1_800,
+        cache_creation_input_tokens: 0,
+        output_tokens: 60,
+        reasoning_tokens: 30,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        events.filter(
+          (event) => event.notification.method === "thread/tokenUsage/updated",
+        ).length,
+      ).toBeGreaterThanOrEqual(2);
+    });
+    const liveUsage = events
+      .filter(
+        (event) => event.notification.method === "thread/tokenUsage/updated",
+      )
+      .map((event) => event.notification.params)
+      .filter(
+        (params) =>
+          "tokenUsage" in params
+          && Boolean(
+            (params.tokenUsage as Record<string, unknown>).total_token_usage,
+          ),
+      );
+
+    expect(liveUsage).toEqual([
+      {
+        threadId: session.sessionId,
+        turnId: "review-turn",
+        model: "grok-4.5-build",
+        tokenUsage: {
+          last_token_usage: {
+            input_tokens: 1_300,
+            cached_input_tokens: 900,
+            output_tokens: 40,
+            reasoning_output_tokens: 12,
+            total_tokens: 1_340,
+          },
+          total_token_usage: {
+            input_tokens: 1_300,
+            cached_input_tokens: 900,
+            output_tokens: 40,
+            reasoning_output_tokens: 12,
+            total_tokens: 1_340,
+          },
+        },
+      },
+      {
+        threadId: session.sessionId,
+        turnId: "review-turn",
+        model: "grok-4.5-build",
+        tokenUsage: {
+          last_token_usage: {
+            input_tokens: 2_050,
+            cached_input_tokens: 1_800,
+            output_tokens: 60,
+            reasoning_output_tokens: 30,
+            total_tokens: 2_110,
+          },
+          total_token_usage: {
+            input_tokens: 3_350,
+            cached_input_tokens: 2_700,
+            output_tokens: 100,
+            reasoning_output_tokens: 42,
+            total_tokens: 3_450,
+          },
+        },
+      },
+    ]);
 
     await adapter.close();
   });
