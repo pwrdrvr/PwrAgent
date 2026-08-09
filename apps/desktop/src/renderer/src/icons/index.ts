@@ -38,6 +38,7 @@ export { PullRequestIcon } from "./PullRequestIcon";
 export { ServerIcon } from "./ServerIcon";
 export { SearchIcon } from "./SearchIcon";
 export { SettingsIcon } from "./SettingsIcon";
+export { SkillIcon } from "./SkillIcon";
 export { SlackIcon } from "./SlackIcon";
 export { SmileyIcon } from "./SmileyIcon";
 export { StarMapIcon } from "./StarMapIcon";

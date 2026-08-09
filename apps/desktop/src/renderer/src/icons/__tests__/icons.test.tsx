@@ -16,6 +16,7 @@ import {
   PinIcon,
   PopoutIcon,
   SettingsIcon,
+  SkillIcon,
   SmileyIcon,
   TelegramIcon,
   UnlinkedDotIcon,
@@ -44,6 +45,7 @@ const ALL_ICONS = [
   ["PinIcon", PinIcon],
   ["PopoutIcon", PopoutIcon],
   ["MoreVerticalIcon", MoreVerticalIcon],
+  ["SkillIcon", SkillIcon],
 ] as const;
 
 describe("icon library", () => {

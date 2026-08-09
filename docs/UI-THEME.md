@@ -297,6 +297,14 @@ Every shipped icon should be an exported component from that directory.
 - **No emoji as iconography.** Emoji are content (e.g., user reactions),
   never UI chrome. Folder, branch, worktree, settings, platform marks, etc.
   must come from the icon library.
+- **One object per icon, and judge it at ship size.** Icons render at
+  12–16px in chips, picker rows, and meta chips — not at the size you
+  draw them. A mark that needs two objects to read (crossed tools, a
+  document behind a gear) turns to mush or, worse, resolves into a
+  different recognizable glyph. `SkillIcon` is a lone wrench for exactly
+  this reason: the crossed wrench + screwdriver it replaced was clear at
+  24px and read as scissors at 13px. Render a candidate at its real size
+  on the real surface before committing to it.
 
 ## Color Rules
 
