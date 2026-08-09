@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.0 - 2026-08-09
+
+- Thread-Centric Agent Workspace - Shipped the desktop workspace for coding-agent threads, with native Codex sub-agent visibility, per-thread terminals, worktree-aware edits, linked projects, and durable handoffs.
+- Provider Choice and Controls - Added GPT-5.6 Sol, Terra, and Luna; refreshed ACP model discovery; added Kimi thinking and Grok effort controls; and introduced per-provider defaults with accurate pricing and Codex Credits estimates.
+- Review and Pull Request Workflows - Added worktree-aware `/review`, live pull-request chips and polling, branch-aware project discovery, and agent-assisted review and handoff controls.
+- Messaging and Automations - Added Slack and Telegram inbound automations, locked-down Slack authorization, message-origin attribution, configurable Working Updates, and more reliable streamed delivery.
+- Composer and Scheduling - Added scheduled and queued sends, directory and file reference chips, file attachments, better Markdown handling, and stronger draft and launchpad recovery.
+- Operations and Visibility - Added usage and context-replay visibility, opt-in tool-output accounting, sub-agent lifecycle activity, and diagnostics for process and heap investigations.
+- Reliability and Updates - Hardened macOS auto-update handling, release-note publication, packaging, terminal ownership, navigation, and recovery across long-running agent work.
+
 ## v1.0.0-beta.50 - 2026-07-31
 
 - AI Provider Defaults - Added configurable default model, reasoning, access mode, and service tier per provider, applied to new threads and launchpads without overriding saved thread choices.
