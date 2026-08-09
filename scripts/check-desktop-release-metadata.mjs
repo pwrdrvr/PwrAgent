@@ -61,6 +61,24 @@ function assertWorkflowJobRunner(workflow, workflowPath, jobName, expectedRunner
   }
 }
 
+function assertWorkflowStepContinuesOnError(workflow, workflowPath, stepName) {
+  const stepPattern = new RegExp(`^      - name: ${escapeRegex(stepName)}\\n`, "m");
+  const match = workflow.match(stepPattern);
+  if (!match) {
+    fail(`${workflowPath} must contain a ${stepName} step`);
+    return;
+  }
+  const bodyStart = match.index + match[0].length;
+  const remainder = workflow.slice(bodyStart);
+  const nextStepOffset = remainder.search(/^      - name:/m);
+  const stepBody = nextStepOffset === -1
+    ? remainder
+    : remainder.slice(0, nextStepOffset);
+  if (!/^        continue-on-error:\s+true\s*$/m.test(stepBody)) {
+    fail(`${workflowPath} ${stepName} must use continue-on-error: true`);
+  }
+}
+
 const tag = parseTagArg(process.argv.slice(2));
 if (!tag) {
   usage();
@@ -187,6 +205,16 @@ assertWorkflowJobRunner(
   "windows-package",
   "windows-2022",
 );
+for (const stepName of [
+  "Upload release artifacts (debug retention)",
+  "Upload Linux artifacts (debug retention)",
+]) {
+  assertWorkflowStepContinuesOnError(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    stepName,
+  );
+}
 
 for (const expected of [
   "PwrAgent-linux-x64.deb",
