@@ -153,10 +153,10 @@ describe("StarMapChatCard federation routing", () => {
     });
   });
 
-  it("starts a turn on the owning peer, not the viewer", async () => {
+  it("starts a turn on the owning peer and clears the sent draft", async () => {
     const desktopApi = buildApi();
     renderCard({ desktopApi, thread: remoteThread() });
-    await typeAndSend("Remote work", "ship it");
+    const input = await typeAndSend("Remote work", "ship it");
 
     await waitFor(() => {
       expect(desktopApi.startTurn).toHaveBeenCalledWith(
@@ -167,6 +167,9 @@ describe("StarMapChatCard federation routing", () => {
           input: [{ type: "text", text: "ship it" }],
         }),
       );
+    });
+    await waitFor(() => {
+      expect(input.value).toBe("");
     });
   });
 
@@ -187,7 +190,7 @@ describe("StarMapChatCard federation routing", () => {
 });
 
 describe("StarMapChatCard send failures", () => {
-  it("hands the text back to the input when the peer refuses", async () => {
+  it("restores the draft and rolls back its optimistic message when the peer refuses", async () => {
     const desktopApi = buildApi({
       startTurn: vi.fn(async () => {
         throw new Error("peer is offline");
@@ -200,6 +203,14 @@ describe("StarMapChatCard send failures", () => {
     // what they typed.
     await waitFor(() => {
       expect(input.value).toBe("do not lose me");
+    });
+    // The transcript must not keep a message for a turn that never ran.
+    // The composer is excluded because the restored draft lives there and
+    // text queries match textarea content.
+    await waitFor(() => {
+      expect(
+        screen.queryByText("do not lose me", { ignore: "textarea" }),
+      ).toBeNull();
     });
     expect((await screen.findByRole("alert")).textContent).toMatch(
       /peer is offline/,
@@ -220,38 +231,5 @@ describe("StarMapChatCard send failures", () => {
     expect(
       await screen.findByText("in flight", { ignore: "textarea" }),
     ).toBeTruthy();
-  });
-
-  it("rolls the optimistic message back when the turn never started", async () => {
-    const desktopApi = buildApi({
-      startTurn: vi.fn(async () => {
-        throw new Error("nope");
-      }),
-    } as unknown as Partial<DesktopApi>);
-    renderCard({ desktopApi, thread: remoteThread() });
-    await typeAndSend("Remote work", "rolled back");
-
-    // The transcript must not keep a message for a turn that never ran.
-    // The composer is excluded because the restored draft lives there and
-    // text queries match textarea content.
-    await waitFor(() => {
-      expect(
-        screen.queryByText("rolled back", { ignore: "textarea" }),
-      ).toBeNull();
-    });
-    expect((await screen.findByRole("alert")).textContent).toMatch(/nope/);
-  });
-
-  it("clears the draft when the send succeeds", async () => {
-    const desktopApi = buildApi();
-    renderCard({ desktopApi, thread: remoteThread() });
-    const input = await typeAndSend("Remote work", "sent for real");
-
-    await waitFor(() => {
-      expect(desktopApi.startTurn).toHaveBeenCalled();
-    });
-    await waitFor(() => {
-      expect(input.value).toBe("");
-    });
   });
 });

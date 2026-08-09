@@ -82,8 +82,8 @@ describe("icon library", () => {
   });
 
   describe("TelegramIcon", () => {
-    it("renders the official asset as an <img>", () => {
-      const { container } = render(<TelegramIcon />);
+    it("renders the official asset as an <img> and respects size overrides", () => {
+      const { container, rerender } = render(<TelegramIcon />);
       const img = container.querySelector("img");
       expect(img).toBeInTheDocument();
       expect(img).toHaveAttribute("width", "16");
@@ -91,19 +91,16 @@ describe("icon library", () => {
       expect(img).toHaveAttribute("alt", "");
       expect(img?.getAttribute("src") ?? "").toMatch(/svg|image/i);
       expect(container.querySelector("svg")).not.toBeInTheDocument();
-    });
-
-    it("respects size overrides", () => {
-      const { container } = render(<TelegramIcon size={28} />);
-      const img = container.querySelector("img");
-      expect(img).toHaveAttribute("width", "28");
-      expect(img).toHaveAttribute("height", "28");
+      rerender(<TelegramIcon size={28} />);
+      const resizedImg = container.querySelector("img");
+      expect(resizedImg).toHaveAttribute("width", "28");
+      expect(resizedImg).toHaveAttribute("height", "28");
     });
   });
 
   describe("DiscordIcon", () => {
-    it("renders the official asset as an <img>", () => {
-      const { container } = render(<DiscordIcon />);
+    it("renders the official asset as an <img> and respects size overrides", () => {
+      const { container, rerender } = render(<DiscordIcon />);
       const img = container.querySelector("img");
       expect(img).toBeInTheDocument();
       expect(img).toHaveAttribute("width", "16");
@@ -111,6 +108,10 @@ describe("icon library", () => {
       expect(img).toHaveAttribute("alt", "");
       expect(img?.getAttribute("src") ?? "").toMatch(/svg|image/i);
       expect(container.querySelector("svg")).not.toBeInTheDocument();
+      rerender(<DiscordIcon size={28} />);
+      const resizedImg = container.querySelector("img");
+      expect(resizedImg).toHaveAttribute("width", "28");
+      expect(resizedImg).toHaveAttribute("height", "28");
     });
 
     it("renders distinct sources for each variant", () => {
@@ -124,13 +125,6 @@ describe("icon library", () => {
       }
       expect(sources.size).toBe(3);
     });
-
-    it("respects size overrides", () => {
-      const { container } = render(<DiscordIcon size={28} />);
-      const img = container.querySelector("img");
-      expect(img).toHaveAttribute("width", "28");
-      expect(img).toHaveAttribute("height", "28");
-    });
   });
 
   describe("MattermostIcon", () => {
@@ -139,7 +133,7 @@ describe("icon library", () => {
     // asset files verbatim and render them via <img>. The variant prop
     // selects which published colorway the surface needs.
     it("renders an <img> at the requested size", () => {
-      const { container } = render(<MattermostIcon />);
+      const { container, rerender } = render(<MattermostIcon />);
       const img = container.querySelector("img");
       expect(img).toBeInTheDocument();
       expect(img).toHaveAttribute("width", "16");
@@ -149,6 +143,10 @@ describe("icon library", () => {
       const src = img?.getAttribute("src") ?? "";
       expect(src.length).toBeGreaterThan(0);
       expect(src).toMatch(/svg|image/i);
+      rerender(<MattermostIcon size={28} />);
+      const resizedImg = container.querySelector("img");
+      expect(resizedImg).toHaveAttribute("width", "28");
+      expect(resizedImg).toHaveAttribute("height", "28");
     });
 
     it("renders distinct sources for each variant", () => {
@@ -162,13 +160,6 @@ describe("icon library", () => {
       }
       // Three variants → three distinct asset URLs.
       expect(sources.size).toBe(3);
-    });
-
-    it("respects size overrides", () => {
-      const { container } = render(<MattermostIcon size={28} />);
-      const img = container.querySelector("img");
-      expect(img).toHaveAttribute("width", "28");
-      expect(img).toHaveAttribute("height", "28");
     });
   });
 

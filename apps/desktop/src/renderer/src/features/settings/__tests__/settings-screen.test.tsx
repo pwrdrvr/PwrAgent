@@ -1339,9 +1339,15 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("defaults live transcript event filtering off for stale snapshots", async () => {
-    const snapshot = createSnapshot() as any;
-    delete snapshot.experimental.liveTranscriptEventFiltering;
+  it("defaults missing experimental flags off and persists each when enabled", async () => {
+    const snapshot = createSnapshot();
+    const experimental = snapshot.experimental as Partial<
+      typeof snapshot.experimental
+    >;
+    delete experimental.liveTranscriptEventFiltering;
+    delete experimental.codexDefaultModeRequestUserInput;
+    delete experimental.lightweightNavigationRefresh;
+    delete experimental.markdownMathRendering;
     const settings = createSettingsState(snapshot);
 
     render(
@@ -1355,7 +1361,20 @@ describe("SettingsScreen", () => {
     const filteringSwitch = screen.getByRole("switch", {
       name: "Enable live transcript event filtering",
     });
+    const questionsSwitch = screen.getByRole("switch", {
+      name: "Enable Codex skill questions",
+    });
+    const refreshSwitch = screen.getByRole("switch", {
+      name: "Enable lightweight navigation refresh",
+    });
+    const mathSwitch = screen.getByRole("switch", {
+      name: "Enable Markdown math rendering",
+    });
+
     expect(filteringSwitch).toHaveAttribute("aria-checked", "false");
+    expect(questionsSwitch).toHaveAttribute("aria-checked", "false");
+    expect(refreshSwitch).toHaveAttribute("aria-checked", "false");
+    expect(mathSwitch).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(filteringSwitch);
     await waitFor(() => {
@@ -1363,24 +1382,6 @@ describe("SettingsScreen", () => {
         experimental: { liveTranscriptEventFiltering: true },
       });
     });
-  });
-
-  it("defaults Codex skill questions off for stale snapshots", async () => {
-    const snapshot = createSnapshot() as any;
-    delete snapshot.experimental.codexDefaultModeRequestUserInput;
-    const settings = createSettingsState(snapshot);
-
-    render(
-      <SettingsScreen
-        initialSection="experimental"
-        settings={settings}
-      />,
-    );
-
-    const questionsSwitch = screen.getByRole("switch", {
-      name: "Enable Codex skill questions",
-    });
-    expect(questionsSwitch).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(questionsSwitch);
     await waitFor(() => {
@@ -1388,24 +1389,6 @@ describe("SettingsScreen", () => {
         experimental: { codexDefaultModeRequestUserInput: true },
       });
     });
-  });
-
-  it("defaults lightweight navigation refresh off for stale snapshots", async () => {
-    const snapshot = createSnapshot() as any;
-    delete snapshot.experimental.lightweightNavigationRefresh;
-    const settings = createSettingsState(snapshot);
-
-    render(
-      <SettingsScreen
-        initialSection="experimental"
-        settings={settings}
-      />,
-    );
-
-    const refreshSwitch = screen.getByRole("switch", {
-      name: "Enable lightweight navigation refresh",
-    });
-    expect(refreshSwitch).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(refreshSwitch);
     await waitFor(() => {
@@ -1413,24 +1396,6 @@ describe("SettingsScreen", () => {
         experimental: { lightweightNavigationRefresh: true },
       });
     });
-  });
-
-  it("defaults Markdown math rendering off for stale snapshots", async () => {
-    const snapshot = createSnapshot() as any;
-    delete snapshot.experimental.markdownMathRendering;
-    const settings = createSettingsState(snapshot);
-
-    render(
-      <SettingsScreen
-        initialSection="experimental"
-        settings={settings}
-      />,
-    );
-
-    const mathSwitch = screen.getByRole("switch", {
-      name: "Enable Markdown math rendering",
-    });
-    expect(mathSwitch).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(mathSwitch);
     await waitFor(() => {
@@ -4168,7 +4133,7 @@ describe("SettingsScreen", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
-  it("places Exit Settings as the first row of the settings nav (NOT in the title bar)", () => {
+  it("keeps Exit, the General label, and section order in the settings nav", () => {
     // Regression lock for the design contract: Exit Settings lives
     // INSIDE `.settings-nav` (left column), not inside the title-bar
     // strip. Two prior attempts in this branch put it in the strip
@@ -4184,28 +4149,10 @@ describe("SettingsScreen", () => {
     expect(exit.closest(".settings-nav")).not.toBeNull();
     expect(exit.closest(".settings-titlebar")).toBeNull();
     expect(exit).toHaveClass("settings-nav__exit");
-  });
-
-  it("renders a 'General' group label between Exit Settings and the section list", () => {
-    render(
-      <SettingsScreen
-        settings={createSettingsState()}
-        onClose={() => undefined}
-      />,
-    );
 
     const label = document.querySelector(".settings-nav__group-label");
     expect(label).not.toBeNull();
     expect(label?.textContent?.toLowerCase()).toBe("general");
-  });
-
-  it("orders Git and worktree settings after the primary navigation group", () => {
-    render(
-      <SettingsScreen
-        settings={createSettingsState()}
-        onClose={() => undefined}
-      />,
-    );
 
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     const buttons = within(nav)

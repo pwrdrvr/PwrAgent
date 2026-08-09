@@ -31,9 +31,9 @@ const COLOR_LITERAL_RE = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|url\(#/;
 
 describe("celestial icon library", () => {
   it.each(CELESTIAL_ICONS)(
-    "%s renders an SVG with the shared filled-icon defaults",
+    "%s honors the shared filled-icon and accessibility contracts",
     (_name, Icon) => {
-      const { container } = render(<Icon />);
+      const { container, rerender } = render(<Icon />);
       const svg = container.querySelector("svg");
       expect(svg).toBeInTheDocument();
       expect(svg).toHaveAttribute("width", "16");
@@ -44,25 +44,13 @@ describe("celestial icon library", () => {
       expect(svg).not.toHaveAttribute("fill");
       // Decorative by default — no aria-label means hidden from AT.
       expect(svg).toHaveAttribute("aria-hidden", "true");
-    },
-  );
-
-  it.each(CELESTIAL_ICONS)(
-    "%s switches to role=img when an aria-label is supplied",
-    (_name, Icon) => {
-      const { container } = render(<Icon aria-label="Instance icon" />);
-      const svg = container.querySelector("svg");
-      expect(svg).toHaveAttribute("role", "img");
-      expect(svg).toHaveAttribute("aria-label", "Instance icon");
-      expect(svg).toHaveAttribute("aria-hidden", "false");
-    },
-  );
-
-  it.each(CELESTIAL_ICONS)(
-    "%s contains no color literals (currentColor + opacity only)",
-    (_name, Icon) => {
-      const { container } = render(<Icon />);
       expect(container.innerHTML).not.toMatch(COLOR_LITERAL_RE);
+
+      rerender(<Icon aria-label="Instance icon" />);
+      const labelledSvg = container.querySelector("svg");
+      expect(labelledSvg).toHaveAttribute("role", "img");
+      expect(labelledSvg).toHaveAttribute("aria-label", "Instance icon");
+      expect(labelledSvg).toHaveAttribute("aria-hidden", "false");
     },
   );
 
@@ -84,17 +72,20 @@ describe("celestial icon library", () => {
   });
 
   describe("CelestialIcon dispatcher", () => {
-    it.each(CELESTIAL_ICON_IDS)("renders an SVG for id %s", (icon) => {
-      const { container } = render(<CelestialIcon icon={icon} />);
-      const svg = container.querySelector("svg");
-      expect(svg).toBeInTheDocument();
-      expect(svg).toHaveAttribute("viewBox", "0 0 24 24");
-    });
-
-    it("renders a distinct markup per id", () => {
+    it("renders a distinct SVG for every id", () => {
       const markups = new Set<string>();
       for (const icon of CELESTIAL_ICON_IDS) {
         const { container } = render(<CelestialIcon icon={icon} />);
+        const svg = container.querySelector("svg");
+        expect({
+          icon,
+          rendered: svg !== null,
+          viewBox: svg?.getAttribute("viewBox"),
+        }).toEqual({
+          icon,
+          rendered: true,
+          viewBox: "0 0 24 24",
+        });
         markups.add(container.innerHTML);
         cleanup();
       }

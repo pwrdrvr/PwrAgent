@@ -92,15 +92,15 @@ describe("StarMapLoadCard", () => {
     expect(metric("RAM free")).toBe("15%");
   });
 
-  it("falls back to absolute RAM when the total is unknown", () => {
-    renderCard({ load: buildLoad({ totalMemoryBytes: undefined }) });
+  it("falls back when memory total and disk readings are unavailable", () => {
+    renderCard({
+      load: buildLoad({
+        totalMemoryBytes: undefined,
+        diskFreeBytes: undefined,
+      }),
+    });
 
     expect(metric("RAM free")).toBe("2.4 GB");
-  });
-
-  it("shows a dash when the disk read failed", () => {
-    renderCard({ load: buildLoad({ diskFreeBytes: undefined }) });
-
     expect(metric("Free disk")).toBe("—");
   });
 

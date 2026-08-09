@@ -6,11 +6,11 @@ import { SettingsSection } from "../SettingsLayout";
 afterEach(cleanup);
 
 describe("settings section disclosure chevron placement", () => {
-  it("renders the chevron as the first child of the header, before the title block", () => {
+  it("renders its only chevron before the title block and outside header actions", () => {
     const { container } = render(
       <SettingsSection title="Telegram">
         <div>body</div>
-      </SettingsSection>
+      </SettingsSection>,
     );
 
     const header = container.querySelector(".settings-section__header-button");
@@ -19,16 +19,11 @@ describe("settings section disclosure chevron placement", () => {
     const children = [...(header as HTMLElement).children];
     expect(children[0]).toHaveClass("settings-section__chevron");
     expect(children[1]).toHaveClass("settings-section__header-main");
-  });
-
-  it("no longer renders the chevron inside the right-side header actions", () => {
-    const { container } = render(
-      <SettingsSection title="Telegram">
-        <div>body</div>
-      </SettingsSection>
-    );
-
+    expect(
+      header?.querySelectorAll(".settings-section__chevron"),
+    ).toHaveLength(1);
     const actions = container.querySelector(".settings-section__header-actions");
+    expect(actions).not.toBeNull();
     expect(actions?.querySelector(".settings-section__chevron")).toBeNull();
   });
 });

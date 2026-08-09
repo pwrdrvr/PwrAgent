@@ -45,9 +45,13 @@ describe("CompactComposer", () => {
     expect(screen.getByText("gpt-5-codex · high · Full access")).toBeTruthy();
   });
 
-  it("omits the ambient strip when there is nothing to report", () => {
+  it("omits optional ambient and action chrome when unconfigured", () => {
     renderComposer();
+    expect(
+      screen.getByRole("textbox", { name: "Message Thread t1" }),
+    ).toBeTruthy();
     expect(screen.queryByText(/·/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
   });
 
   it("swaps Send for Stop while a turn is running", () => {
@@ -56,11 +60,6 @@ describe("CompactComposer", () => {
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(onInterrupt).toHaveBeenCalledTimes(1);
-  });
-
-  it("hides the kebab when there are no secondary actions", () => {
-    renderComposer();
-    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
   });
 
   it("runs a secondary action and closes the menu", () => {

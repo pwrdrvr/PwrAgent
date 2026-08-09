@@ -105,12 +105,16 @@ describe("hashReferenceAnchorKey", () => {
   });
 });
 
-describe("formatHashReferenceThreadLabel", () => {
-  it("keeps a short title verbatim and falls back to the id when it is blank", () => {
+describe("hash reference thread formatting", () => {
+  it("keeps ordinary titles and id fallbacks in labels and tooltips", () => {
     expect(
       formatHashReferenceThreadLabel(thread("id-1", "Bob's Best Thread 3000")),
     ).toBe("Bob's Best Thread 3000");
     expect(formatHashReferenceThreadLabel(thread("id-1", "   "))).toBe("id-1");
+    expect(
+      formatHashReferenceThreadTooltip(thread("id-1", "Bob's\nBest Thread")),
+    ).toBe("Bob's Best Thread");
+    expect(formatHashReferenceThreadTooltip(thread("id-1", ""))).toBe("id-1");
   });
 
   it("collapses a multi-line prompt title onto one truncated line", () => {
@@ -134,9 +138,6 @@ describe("formatHashReferenceThreadLabel", () => {
     const label = formatHashReferenceThreadLabel(thread("id-1", "x".repeat(200)));
     expect(label).toBe(`${"x".repeat(72)}…`);
   });
-});
-
-describe("formatHashReferenceThreadTooltip", () => {
   it("recovers what the label's ellipsis hid without becoming a wall of text", () => {
     const long = `${"word ".repeat(200)}end`;
     const tooltip = formatHashReferenceThreadTooltip(thread("id-1", long));
@@ -147,13 +148,6 @@ describe("formatHashReferenceThreadTooltip", () => {
     expect(tooltip.length).toBeGreaterThan(
       formatHashReferenceThreadLabel(thread("id-1", long)).length,
     );
-  });
-
-  it("leaves an ordinary title alone and falls back to the id", () => {
-    expect(
-      formatHashReferenceThreadTooltip(thread("id-1", "Bob's\nBest Thread")),
-    ).toBe("Bob's Best Thread");
-    expect(formatHashReferenceThreadTooltip(thread("id-1", ""))).toBe("id-1");
   });
 });
 
