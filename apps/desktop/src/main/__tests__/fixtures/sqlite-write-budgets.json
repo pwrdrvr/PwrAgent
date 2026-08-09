@@ -8,10 +8,10 @@
   },
   "live-thread-token-usage": {
     "commits": 1,
-    "note": "one completed model request observed through thread token usage",
+    "note": "500 cumulative usage observations across 10 turns, then one terminal flush",
     "observedWalBytes": 65920,
-    "rowsChanged": 3,
-    "statements": 3
+    "rowsChanged": 30,
+    "statements": 30
   },
   "streamed-command-output": {
     "commits": 2,

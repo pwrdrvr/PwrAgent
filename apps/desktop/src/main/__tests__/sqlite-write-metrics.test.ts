@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AgentEvent } from "@pwragent/shared";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -165,7 +165,8 @@ describe("sqlite write metrics", () => {
     await registry.close();
   });
 
-  it("holds one live token-usage observation to one commit", async () => {
+  it("holds a burst of live token usage to one commit", async () => {
+    vi.useFakeTimers();
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
@@ -174,39 +175,225 @@ describe("sqlite write metrics", () => {
       emit(event: AgentEvent): Promise<void>;
     }).emit.bind(registry);
 
-    const { writes } = await measureSqliteWrites(async () => {
-      await emit({
-        backend: "codex",
-        notification: {
-          method: "thread/tokenUsage/updated",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            model: "gpt-5.5",
-            tokenUsage: {
-              total: {
-                inputTokens: 80_000,
-                cachedInputTokens: 72_000,
-                outputTokens: 1_000,
-              },
-              last: {
-                inputTokens: 80_000,
-                cachedInputTokens: 72_000,
-                outputTokens: 1_000,
-              },
-            },
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        // Fifty cumulative snapshots for each of ten concurrently active
+        // turns. Only the last snapshot per usageLineId belongs in sqlite.
+        for (let index = 0; index < 500; index += 1) {
+          const turnIndex = index % 10;
+          const observation = Math.floor(index / 10) + 1;
+          const inputTokens = observation * 1_000 + turnIndex;
+          await emit(buildLiveUsageEvent({
+            inputTokens,
+            threadId: `thread-${turnIndex}`,
+            turnId: `turn-${turnIndex}`,
+          }));
+        }
+
+        // A terminal notification is an explicit durability boundary. It
+        // drains every pending turn, not only the terminal event's own turn.
+        await emit(buildTurnCompletedEvent("thread-0", "turn-0"));
+      });
+
+      expectSqliteWriteBudget({
+        note:
+          "500 cumulative usage observations across 10 turns, then one terminal flush",
+        scenario: "live-thread-token-usage",
+        writes,
+      });
+
+      for (let turnIndex = 0; turnIndex < 10; turnIndex += 1) {
+        const pricing = await store.readThreadPricing({
+          backend: "codex",
+          threadId: `thread-${turnIndex}`,
+        });
+        expect(pricing.lines).toHaveLength(1);
+        expect(pricing.lines[0]).toMatchObject({
+          inputTokens: 50_000 + turnIndex,
+          threadId: `thread-${turnIndex}`,
+          turnId: `turn-${turnIndex}`,
+        });
+      }
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes coalesced live usage on the bounded timer", async () => {
+    vi.useFakeTimers();
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    const pricingEvents: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "thread/pricing/updated") {
+        pricingEvents.push(event);
+      }
+    });
+
+    try {
+      await emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-timer",
+        turnId: "turn-timer",
+      }));
+      await emit(buildLiveUsageEvent({
+        inputTokens: 2_000,
+        threadId: "thread-timer",
+        turnId: "turn-timer",
+      }));
+
+      expect(batchWrite).not.toHaveBeenCalled();
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-timer",
+        })).lines,
+      ).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(batchWrite).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(batchWrite).toHaveBeenCalledTimes(1);
+      expect(batchWrite.mock.calls[0]?.[0].lines).toHaveLength(1);
+      expect(batchWrite.mock.calls[0]?.[0].lines[0]).toMatchObject({
+        inputTokens: 2_000,
+        usageLineId: "codex:thread-timer:turn-timer:live-token-usage",
+      });
+      expect(pricingEvents).toHaveLength(1);
+      expect(pricingEvents[0]?.notification).toMatchObject({
+        method: "thread/pricing/updated",
+        params: {
+          pricing: {
+            lines: [expect.objectContaining({ inputTokens: 2_000 })],
           },
+          threadId: "thread-timer",
         },
-      } as AgentEvent);
-    });
+      });
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
 
-    expectSqliteWriteBudget({
-      note: "one completed model request observed through thread token usage",
-      scenario: "live-thread-token-usage",
-      writes,
+  it("retries a failed batch without overwriting a newer observation", async () => {
+    vi.useFakeTimers();
+    const firstWriteStarted = createDeferred();
+    const releaseFirstWrite = createDeferred();
+    const originalBatchWrite = store.upsertThreadUsageLines.bind(store);
+    const batchWrite = vi
+      .spyOn(store, "upsertThreadUsageLines")
+      .mockImplementationOnce(async () => {
+        firstWriteStarted.resolve();
+        await releaseFirstWrite.promise;
+        throw new Error("disk busy");
+      })
+      .mockImplementation(async (params) => await originalBatchWrite(params));
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
     });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    const flush = (registry as unknown as {
+      flushLiveThreadUsageLines(): Promise<void>;
+    }).flushLiveThreadUsageLines.bind(registry);
 
-    await registry.close();
+    try {
+      await emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-retry",
+        turnId: "turn-retry",
+      }));
+      const firstFlush = flush();
+      await firstWriteStarted.promise;
+
+      // This newer cumulative snapshot arrives while the older batch is in
+      // flight. Requeueing the failed batch must not put 1,000 back on top.
+      await emit(buildLiveUsageEvent({
+        inputTokens: 2_000,
+        threadId: "thread-retry",
+        turnId: "turn-retry",
+      }));
+      releaseFirstWrite.resolve();
+      await firstFlush;
+      await flush();
+
+      expect(batchWrite).toHaveBeenCalledTimes(2);
+      expect(batchWrite.mock.calls[1]?.[0].lines).toHaveLength(1);
+      expect(batchWrite.mock.calls[1]?.[0].lines[0]).toMatchObject({
+        inputTokens: 2_000,
+      });
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-retry",
+        })).lines[0],
+      ).toMatchObject({ inputTokens: 2_000 });
+    } finally {
+      releaseFirstWrite.resolve();
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes live usage on close and ignores post-close writes", async () => {
+    vi.useFakeTimers();
+    const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    let closed = false;
+
+    try {
+      await emit(buildLiveUsageEvent({
+        inputTokens: 1_000,
+        threadId: "thread-close",
+        turnId: "turn-close",
+      }));
+      expect(batchWrite).not.toHaveBeenCalled();
+
+      await registry.close();
+      closed = true;
+      expect(batchWrite).toHaveBeenCalledTimes(1);
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-close",
+        })).lines[0],
+      ).toMatchObject({ inputTokens: 1_000 });
+
+      await emit(buildLiveUsageEvent({
+        inputTokens: 2_000,
+        threadId: "thread-close",
+        turnId: "turn-close",
+      }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(batchWrite).toHaveBeenCalledTimes(1);
+      expect(
+        (await store.readThreadPricing({
+          backend: "codex",
+          threadId: "thread-close",
+        })).lines[0],
+      ).toMatchObject({ inputTokens: 1_000 });
+    } finally {
+      if (!closed) {
+        await registry.close();
+      }
+      vi.useRealTimers();
+    }
   });
 
   it("holds an idle hour of heartbeats to its budget", async () => {
@@ -247,6 +434,66 @@ describe("sqlite write metrics", () => {
     });
   });
 });
+
+function buildLiveUsageEvent(params: {
+  inputTokens: number;
+  threadId: string;
+  turnId: string;
+}): AgentEvent {
+  const cachedInputTokens = Math.max(0, params.inputTokens - 100);
+  return {
+    backend: "codex",
+    notification: {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: params.threadId,
+        turnId: params.turnId,
+        model: "gpt-5.5",
+        tokenUsage: {
+          total: {
+            inputTokens: params.inputTokens,
+            cachedInputTokens,
+            outputTokens: 100,
+          },
+          last: {
+            inputTokens: params.inputTokens,
+            cachedInputTokens,
+            outputTokens: 100,
+          },
+        },
+      },
+    },
+  } as AgentEvent;
+}
+
+function buildTurnCompletedEvent(threadId: string, turnId: string): AgentEvent {
+  return {
+    backend: "codex",
+    notification: {
+      method: "turn/completed",
+      params: {
+        threadId,
+        turnId,
+        turn: {
+          id: turnId,
+          status: "completed",
+          output: [],
+        },
+      },
+    },
+  } as AgentEvent;
+}
+
+function createDeferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
 
 function buildInvocation(invocationId: string) {
   return {
