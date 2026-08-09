@@ -34,6 +34,12 @@ import type { ThreadTurnQueueSubmissionResult } from "../app-server/thread-turn-
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const send = vi.fn();
+const mockAppServerLog = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
 // A second subscriber standing in for a federation (remote viewer)
 // window, so PR-authority fan-out can be asserted per window kind.
 const federationWindowSend = vi.fn();
@@ -382,10 +388,18 @@ vi.mock("../scheduled-actions/scheduled-thread-action-service", () => ({
   getScheduledThreadActionService: () => ({ create: vi.fn() }),
 }));
 
+vi.mock("../log", () => ({
+  getMainLogger: vi.fn(() => mockAppServerLog),
+}));
+
 describe("agent ipc", () => {
   beforeEach(() => {
     handlers.clear();
     send.mockReset();
+    mockAppServerLog.debug.mockClear();
+    mockAppServerLog.error.mockClear();
+    mockAppServerLog.info.mockClear();
+    mockAppServerLog.warn.mockClear();
     federationWindowSend.mockReset();
     registry.isPullRequestLocallyMonitored.mockClear();
     registry.isPullRequestLocallyMonitored.mockReturnValue(false);
@@ -1237,6 +1251,18 @@ describe("agent ipc", () => {
     expect(diff).toContain("$.notification.params.diff");
     expect(diff).toContain("protocol-tail");
     expect(diff).not.toContain("x".repeat(60_000));
+    expect(mockAppServerLog.debug).toHaveBeenCalledWith(
+      "agentEvent",
+      expect.objectContaining({
+        method: "turn/diff/updated",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }),
+    );
+    expect(mockAppServerLog.info).not.toHaveBeenCalledWith(
+      "agentEvent",
+      expect.anything(),
+    );
 
     disposeAgentIpcHandlers();
   });

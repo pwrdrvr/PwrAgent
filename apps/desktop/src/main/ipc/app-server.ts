@@ -697,7 +697,7 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
     return;
   }
 
-  appServerLog.info(event, payload);
+  appServerLog.debug(event, payload);
 }
 
 async function hydrateRetainedThreadOverlayData(

@@ -6,6 +6,13 @@
     "rowsChanged": 1080,
     "statements": 1080
   },
+  "live-thread-token-usage": {
+    "commits": 1,
+    "note": "one completed model request observed through thread token usage",
+    "observedWalBytes": 65920,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "streamed-command-output": {
     "commits": 2,
     "note": "500 streamed output deltas plus the completion for one command",

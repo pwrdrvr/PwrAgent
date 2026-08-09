@@ -131,7 +131,7 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
     return;
   }
 
-  appServerLog.info(event, payload);
+  appServerLog.debug(event, payload);
 }
 
 function summarizeTurnInput(input: StartTurnRequest["input"]): Record<string, unknown> {
@@ -244,7 +244,7 @@ function logAgentEventSummary(summary: Record<string, unknown>): void {
 
   const key = coalescedAgentEventLogKey(summary);
   if (!key) {
-    appServerLog.info("agentEvent", summary);
+    appServerLog.debug("agentEvent", summary);
     return;
   }
 
@@ -258,7 +258,7 @@ function logAgentEventSummary(summary: Record<string, unknown>): void {
       latestSummary: summary,
       suppressedCount: 0,
     });
-    appServerLog.info("agentEvent", summary);
+    appServerLog.debug("agentEvent", summary);
     return;
   }
 
