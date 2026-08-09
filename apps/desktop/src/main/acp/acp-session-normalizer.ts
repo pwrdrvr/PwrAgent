@@ -383,35 +383,41 @@ export class AcpSessionReplayNormalizer {
       // Topic updates are thread metadata, not transcript entries.
     } else {
       const toolCallId = readAcpToolCallId(update.update);
-      const updatesKnownToolCall =
-        kind === "tool_call_update"
-        && toolCallId !== undefined
-        && this.knownToolCallIds.has(toolCallId);
       // A tool_call is the semantic boundary between assistant messages.
       // Updates for that known call may arrive while the provider is already
       // streaming the next message, so only those preserve the active bubble.
       // A standalone tool_call_update remains a boundary for providers that
       // use it as their only notification for a tool invocation.
-      if (!updatesKnownToolCall) {
-        this.activeAssistantMessageId = undefined;
-        this.activeAssistantMessagePhase = undefined;
-      }
+      const updatesKnownToolCall =
+        kind === "tool_call_update"
+        && toolCallId !== undefined
+        && this.knownToolCallIds.has(toolCallId);
       if (
         toolCallId
         && (kind === "tool_call" || kind === "tool_call_update")
       ) {
         this.knownToolCallIds.add(toolCallId);
       }
+      // Each branch below ends the active assistant bubble only if that update
+      // really is a message boundary. Doing it up front instead would also end
+      // it for kinds we failed to classify, and not recognizing a kind says
+      // nothing about whether the assistant finished speaking.
       if (kind === "plan") {
+        this.endActiveAssistantMessage();
         this.removeCurrentAgentWaitingActivity();
         this.upsertPlan(update, createdAt);
       } else if (kind === "tool_call" || kind === "tool_call_update") {
+        if (!updatesKnownToolCall) {
+          this.endActiveAssistantMessage();
+        }
         this.removeCurrentAgentWaitingActivity();
         this.upsertActivity(toolActivity(update, kind, createdAt));
       } else if (kind === "file" || kind === "terminal") {
+        this.endActiveAssistantMessage();
         this.removeCurrentAgentWaitingActivity();
         this.upsertActivity(toolActivity(update, kind, createdAt));
       } else if (kind === "turn_started") {
+        this.endActiveAssistantMessage();
         this.knownToolCallIds.clear();
         this.status = "active";
       } else if (kind === "turn_finished") {
@@ -433,6 +439,18 @@ export class AcpSessionReplayNormalizer {
           waitingForAgent: readBoolean(update.update, "waitingForAgent"),
         });
       } else {
+        // An unrecognized kind is worth a breadcrumb — it is how new protocol
+        // traffic gets spotted — but it must not be destructive. The bubble
+        // stays open, so later chunks append to the existing (earlier) message
+        // entry and this activity naturally sorts after the finished message
+        // rather than through the middle of it.
+        //
+        // This trades one failure for a better one. If an unrecognized kind
+        // really was a boundary — a provider naming its tool call something we
+        // do not enumerate — the text after it merges into the earlier bubble
+        // instead of starting a new one. A reply that reads as one paragraph
+        // too many beats a reply torn in half around a placeholder, and the fix
+        // is to enumerate the kind above, which this breadcrumb is what surfaces.
         this.removeCurrentAgentWaitingActivity();
         this.upsertActivity(unknownActivity(update, kind, createdAt));
       }
@@ -550,6 +568,16 @@ export class AcpSessionReplayNormalizer {
         `assistant:${this.currentTurnId ?? update.sessionId}:${this.assistantMessageSequence++}`;
     }
     return this.activeAssistantMessageId;
+  }
+
+  /**
+   * Close the assistant bubble currently being streamed, so the next text
+   * chunk starts a new message entry instead of appending to this one. Call
+   * this only for updates that are genuinely a message boundary.
+   */
+  private endActiveAssistantMessage(): void {
+    this.activeAssistantMessageId = undefined;
+    this.activeAssistantMessagePhase = undefined;
   }
 
   private resetAssistantMessageIfPhaseChanged(
@@ -1422,7 +1450,12 @@ function unknownActivity(
   kind: string,
   createdAt: number,
 ): AppServerThreadActivityEntry {
-  const id = `unknown:${update.sessionId}:${createdAt}`;
+  // The kind is part of the identity, not just the summary. Two different
+  // unrecognized kinds in the same millisecond used to collide on this id, and
+  // upsertActivity merges rather than appends — so the second kind's name was
+  // dropped and the breadcrumb reported only the first. Re-applying the same
+  // update still dedupes, which is what the id is for.
+  const id = `unknown:${update.sessionId}:${createdAt}:${kind}`;
   return {
     type: "activity",
     id,

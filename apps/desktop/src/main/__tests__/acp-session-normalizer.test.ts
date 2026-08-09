@@ -1571,6 +1571,48 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("keeps an unrecognized update from splitting a streaming assistant message", () => {
+    // Failing to classify an update is not evidence that it ended the
+    // assistant's message. session_info_update and last_turn_summary were two
+    // instances of this; the next extension kind a provider adds must not tear
+    // the reply the operator is watching stream into two bubbles.
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "agent_message_chunk", content: "Overall: " },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: { sessionUpdate: "some_future_grok_update", detail: "opaque" },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: "the patch is fine.",
+      },
+    });
+
+    // The breadcrumb still lands — an unknown kind is worth surfacing — but it
+    // sorts after the completed message instead of running through it.
+    expect(
+      replay.entries.map((entry) =>
+        entry.type === "message"
+          ? `${entry.id}:${entry.text}`
+          : entry.type === "activity"
+            ? entry.summary
+            : entry.type
+      ),
+    ).toEqual([
+      "assistant:session-1:0:Overall: the patch is fine.",
+      "ACP update: some_future_grok_update",
+    ]);
+  });
+
   it("ignores transient Grok interaction updates without splitting text", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
@@ -1685,6 +1727,43 @@ describe("AcpSessionReplayNormalizer", () => {
       "assistant:session-1:1:After",
     ]);
   });
+
+  it.each(["plan", "file", "terminal", "turn_started"])(
+    "keeps %s as an assistant message boundary",
+    (sessionUpdate) => {
+      // These kinds really do end the assistant's message. The clear that used
+      // to happen up front for everything now lives in each of their branches,
+      // so each one needs its own guard: the two tool-call tests above pin only
+      // the tool-call pair, and without this dropping any of the other calls is
+      // a silent regression.
+      const normalizer = new AcpSessionReplayNormalizer();
+
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1000,
+        update: { sessionUpdate: "agent_message_chunk", content: "Before" },
+      });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1001,
+        update: { sessionUpdate, title: "Boundary", status: "completed" },
+      });
+      const replay = normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1002,
+        update: { sessionUpdate: "agent_message_chunk", content: "After" },
+      });
+
+      expect(
+        replay.entries.flatMap((entry) =>
+          entry.type === "message" ? [`${entry.id}:${entry.text}`] : []
+        ),
+      ).toEqual([
+        "assistant:session-1:0:Before",
+        "assistant:session-1:1:After",
+      ]);
+    },
+  );
 
   it("treats Grok turn_completed as an idempotent turn finish", () => {
     const normalizer = new AcpSessionReplayNormalizer();
@@ -1810,6 +1889,53 @@ describe("AcpSessionReplayNormalizer", () => {
       type: "activity",
       summary: "ACP update: future_update",
     });
+  });
+
+  it("keeps distinct unknown kinds from colliding on one activity", () => {
+    // The breadcrumb is only useful if it names the kind that arrived. Two
+    // unrecognized kinds in the same millisecond used to share an id, and
+    // upsertActivity merges — so the second one vanished into the first.
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "some_future_grok_update" },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "another_future_update" },
+    });
+
+    expect(
+      replay.entries.flatMap((entry) =>
+        entry.type === "activity" ? [entry.summary] : []
+      ),
+    ).toEqual([
+      "ACP update: some_future_grok_update",
+      "ACP update: another_future_update",
+    ]);
+  });
+
+  it("dedupes a replayed unknown update onto one activity", () => {
+    // The id still has to collapse a re-applied update, which is what makes it
+    // safe to run the same session updates through the normalizer twice.
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const update = {
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "some_future_grok_update" },
+    };
+    normalizer.apply(update);
+    const replay = normalizer.apply(update);
+
+    expect(
+      replay.entries.flatMap((entry) =>
+        entry.type === "activity" ? [entry.summary] : []
+      ),
+    ).toEqual(["ACP update: some_future_grok_update"]);
   });
 
   it("omits model change notifications from transcript replay", () => {
