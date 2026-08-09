@@ -107,12 +107,15 @@ Multiple desktop instances can share the same profile's `state.db` safely. sqlit
 Messaging adapters and federation are each single-holder per profile. One
 runtime lease manager records the desktop process in `app_runtime_instances`;
 both capabilities ask it to acquire their independent row in
-`messaging_runtime_lease`. A challenger checks whether the recorded owner PID
-still exists inside an immediate sqlite transaction. The first confirmed
-absence is persisted on the runtime instance and gives the lease a one-minute
-reclaim deadline; after that deadline a recycled PID cannot revive the old
-owner. Clean shutdown releases both rows. There is no renewal timer, so an
-alive-but-hung owner is not preempted. These leases coordinate
+`messaging_runtime_lease`. A challenger verifies the recorded owner PID,
+runtime instance ID, and start time against its fresh profile runtime marker
+inside an immediate sqlite transaction. The first confirmed absence is
+persisted on the runtime instance and gives the lease a one-minute reclaim
+deadline; after that deadline a recycled PID cannot revive the old owner.
+Rows from older builds use a bounded same-PID marker check until that marker
+expires. Clean shutdown releases both rows. There is no sqlite renewal timer,
+so an alive-but-hung owner is not preempted while its marker remains fresh.
+These leases coordinate
 local processes that share the same profile database; they are not a
 cross-machine distributed lock for two different profile directories or two
 external deployments using the same credentials or identity.

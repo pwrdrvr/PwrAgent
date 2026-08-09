@@ -159,10 +159,12 @@ function hasCustomLeaseManagerOptions(
     options.instanceId
     || options.profileName
     || options.processId
+    || options.startedAt
     || options.cwd
     || options.now
     || options.store
-    || options.processIsAlive,
+    || options.processIsAlive
+    || options.runtimeIdentityIsAlive,
   );
 }
 

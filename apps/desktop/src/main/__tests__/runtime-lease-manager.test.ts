@@ -12,27 +12,42 @@ import { StateDb } from "../state/state-db";
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
 let tempDir: string;
-let liveProcessIds: Set<number>;
+let liveRuntimeIdentities: Map<number, string>;
+
+function runtimeIdentityKey(params: {
+  instanceId: string;
+  startedAt: number;
+}): string {
+  return `${params.instanceId}:${params.startedAt}`;
+}
 
 function createManager(params: {
   instanceId: string;
   processId: number;
   now?: () => number;
 }): RuntimeLeaseManager {
-  liveProcessIds.add(params.processId);
+  const now = params.now ?? (() => 1_000);
+  const startedAt = now();
+  liveRuntimeIdentities.set(
+    params.processId,
+    runtimeIdentityKey({ instanceId: params.instanceId, startedAt }),
+  );
   return new RuntimeLeaseManager({
     cwd: `/tmp/${params.instanceId}`,
     instanceId: params.instanceId,
-    now: params.now ?? (() => 1_000),
+    now,
     processId: params.processId,
-    processIsAlive: (processId) => liveProcessIds.has(processId),
     profileName: "dev",
+    runtimeIdentityIsAlive: (owner) =>
+      liveRuntimeIdentities.get(owner.processId)
+      === runtimeIdentityKey(owner),
+    startedAt,
     store,
   });
 }
 
 beforeEach(() => {
-  liveProcessIds = new Set<number>();
+  liveRuntimeIdentities = new Map<number, string>();
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-runtime-leases-"));
   stateDb = StateDb.open(path.join(tempDir, "state.db"), {
     profileName: "dev",
@@ -69,7 +84,7 @@ describe("RuntimeLeaseManager", () => {
     });
   });
 
-  it("denies both leases while their registered owner PID is alive", () => {
+  it("denies both leases while their registered owner identity is alive", () => {
     const owner = createManager({ instanceId: "instance-a", processId: 123 });
     const challenger = createManager({
       instanceId: "instance-b",
@@ -97,7 +112,7 @@ describe("RuntimeLeaseManager", () => {
       now: () => now,
     });
     owner.acquire("federation");
-    liveProcessIds.delete(123);
+    liveRuntimeIdentities.delete(123);
 
     expect(challenger.acquire("federation")).toMatchObject({
       acquired: false,
@@ -113,7 +128,7 @@ describe("RuntimeLeaseManager", () => {
     // A different process may reuse the PID during the grace period. The
     // durable dead observation remains authoritative, so it cannot revive the
     // original owner after the reclaim deadline.
-    liveProcessIds.add(123);
+    liveRuntimeIdentities.set(123, "unrelated-process:3_000");
     now = 2_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS - 1;
     expect(challenger.acquire("federation")).toMatchObject({ acquired: false });
     now += 1;
@@ -122,6 +137,27 @@ describe("RuntimeLeaseManager", () => {
       ownerInstanceId: "instance-b",
       status: "active",
     });
+  });
+
+  it("starts reclaim grace when a PID was recycled before observation", () => {
+    let now = 2_000;
+    const owner = createManager({ instanceId: "instance-a", processId: 123 });
+    const challenger = createManager({
+      instanceId: "instance-b",
+      processId: 456,
+      now: () => now,
+    });
+    owner.acquire("messaging");
+
+    // The original owner crashes and an unrelated process receives its PID
+    // before any challenger observes an empty PID slot.
+    liveRuntimeIdentities.set(123, "unrelated-process:1_500");
+
+    expect(challenger.acquire("messaging")).toMatchObject({ acquired: false });
+    expect(store.getInstance("instance-a")).toMatchObject({ exitedAt: 2_000 });
+
+    now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+    expect(challenger.acquire("messaging")).toEqual({ acquired: true });
   });
 
   it("reclaims a stale instance that used the current process PID", () => {

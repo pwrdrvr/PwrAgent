@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
 import {
-  isProcessAlive,
+  getProcessRuntimeIdentity,
+  isProfileRuntimeIdentityLive,
   resolveActiveProfileName,
 } from "./profile";
 import { getAppRuntimeInstanceStore } from "./state/app-state";
@@ -36,48 +36,69 @@ export type RuntimeLeaseManagerOptions = {
   instanceId?: string;
   profileName?: string;
   processId?: number;
+  startedAt?: number;
   cwd?: string;
   now?: () => number;
   store?: AppRuntimeInstanceStore;
   env?: NodeJS.ProcessEnv;
   processIsAlive?: (processId: number) => boolean;
+  runtimeIdentityIsAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
 };
 
 /**
  * One process-level owner for every profile-scoped runtime lease.
  *
  * Ownership is registered once in sqlite and remains valid while the owning
- * PID exists. The first challenger that observes the PID absent persists that
+ * process has a fresh profile marker matching its PID, instance ID, and start
+ * time. The first challenger that observes the identity absent persists that
  * fact; after a one-minute safety grace, a challenger may replace the dead
- * owner inside the store's atomic acquisition transaction. A recycled PID
- * cannot revive an owner already observed dead. This deliberately favors
- * single-owner safety over taking work away from a process that is alive but
- * temporarily hung.
+ * owner inside the store's atomic acquisition transaction. This deliberately
+ * favors single-owner safety over taking work away from a process that is
+ * alive but temporarily hung.
  */
 export class RuntimeLeaseManager {
   private readonly instanceId: string;
   private readonly profileName: string;
   private readonly processId: number;
+  private readonly startedAt: number;
   private readonly cwd: string;
   private readonly now: () => number;
   private readonly store: AppRuntimeInstanceStore;
-  private readonly processIsAlive: (processId: number) => boolean;
+  private readonly runtimeIdentityIsAlive: (
+    owner: AppRuntimeInstanceRecord,
+  ) => boolean;
   private readonly heldLeases = new Set<RuntimeLeaseKind>();
   private instanceRecorded = false;
   private instanceExited = false;
 
   constructor(options: RuntimeLeaseManagerOptions = {}) {
-    this.instanceId = options.instanceId ?? randomUUID();
+    this.now = options.now ?? Date.now;
+    const processIdentity = getProcessRuntimeIdentity();
+    this.instanceId = options.instanceId ?? processIdentity.instanceId;
     this.profileName = options.profileName ?? resolveActiveProfileName();
     this.processId = options.processId ?? process.pid;
+    this.startedAt =
+      options.startedAt
+      ?? (options.instanceId ? this.now() : processIdentity.startedAt);
     this.cwd =
       options.cwd
       ?? options.env?.[PWRAGENT_INSTANCE_ROOT_ENV]
       ?? process.env[PWRAGENT_INSTANCE_ROOT_ENV]
       ?? process.cwd();
-    this.now = options.now ?? Date.now;
     this.store = options.store ?? getAppRuntimeInstanceStore();
-    this.processIsAlive = options.processIsAlive ?? isProcessAlive;
+    this.runtimeIdentityIsAlive =
+      options.runtimeIdentityIsAlive
+      ?? (options.processIsAlive
+        ? (owner) => options.processIsAlive!(owner.processId)
+        : (owner) =>
+            isProfileRuntimeIdentityLive(
+              owner.profileName,
+              owner,
+              {
+                env: options.env,
+                now: this.now(),
+              },
+            ));
   }
 
   get id(): string {
@@ -96,7 +117,7 @@ export class RuntimeLeaseManager {
         profileName: this.profileName,
         processId: this.processId,
         cwd: this.cwd,
-        startedAt: now,
+        startedAt: this.startedAt,
         desiredMessagingEnabled: params.desiredMessagingEnabled,
         effectiveMessagingEnabled: params.effectiveMessagingEnabled,
         disabledReason: params.disabledReason,
@@ -206,7 +227,7 @@ export class RuntimeLeaseManager {
     if (owner.processId === this.processId) {
       return owner.instanceId === this.instanceId;
     }
-    return this.processIsAlive(owner.processId);
+    return this.runtimeIdentityIsAlive(owner);
   }
 
   private readLease(kind: RuntimeLeaseKind): MessagingRuntimeLeaseRecord | undefined {

@@ -28,6 +28,7 @@ export const PWRAGENT_PROFILE_AUTO_CREATE_ENV = "PWRAGENT_PROFILE_AUTO_CREATE";
 
 const PROFILE_RUNTIME_HEARTBEAT_INTERVAL_MS = 10_000;
 const PROFILE_RUNTIME_HEARTBEAT_TTL_MS = 45_000;
+const PROFILE_RUNTIME_IDENTITY_PREFIX = "runtime-v2-";
 
 /**
  * Disk location for the throwaway "bootstrap" profile the wizard
@@ -83,7 +84,23 @@ export type ProfileRuntimeMarker = {
   heartbeatAt: number;
 };
 
+export type ProfileRuntimeIdentity = Pick<
+  ProfileRuntimeMarker,
+  "instanceId" | "processId" | "startedAt"
+>;
+
 let cachedProcessActiveProfileName: string | undefined;
+let processRuntimeIdentity: Omit<ProfileRuntimeIdentity, "processId"> | undefined;
+
+export function getProcessRuntimeIdentity(): Omit<ProfileRuntimeIdentity, "processId"> {
+  if (!processRuntimeIdentity) {
+    processRuntimeIdentity = {
+      instanceId: `${PROFILE_RUNTIME_IDENTITY_PREFIX}${randomUUID()}`,
+      startedAt: Date.now(),
+    };
+  }
+  return processRuntimeIdentity;
+}
 
 export function isValidProfileName(name: string): boolean {
   return isCanonicalProfileName(name);
@@ -620,6 +637,7 @@ export function startProfileRuntimeHeartbeat(
     intervalMs?: number;
     now?: () => number;
     processId?: number;
+    startedAt?: number;
   },
 ): ProfileRuntimeHeartbeat {
   const normalizedProfileName = normalizeProfileName(profileName);
@@ -632,7 +650,7 @@ export function startProfileRuntimeHeartbeat(
     instanceId: options?.instanceId ?? randomUUID(),
     processId,
     profileName: normalizedProfileName,
-    startedAt: now(),
+    startedAt: options?.startedAt ?? now(),
     heartbeatAt: now(),
   };
   const markerDir = resolveProfileRuntimeMarkerDir(normalizedProfileName, options);
@@ -710,6 +728,27 @@ export function findLiveProfileRuntimeMarkers(
     markers.push(marker);
   }
   return markers;
+}
+
+export function isProfileRuntimeIdentityLive(
+  profileName: string,
+  identity: ProfileRuntimeIdentity,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string; now?: number },
+): boolean {
+  const markers = findLiveProfileRuntimeMarkers(profileName, options);
+  if (!identity.instanceId.startsWith(PROFILE_RUNTIME_IDENTITY_PREFIX)) {
+    // Runtime rows written before identity-aware leases used an unrelated
+    // random ID for the profile marker. A fresh PwrAgent marker at the same
+    // PID remains a bounded compatibility signal: after a crash it expires
+    // even if the OS has already reassigned that PID to another process.
+    return markers.some((marker) => marker.processId === identity.processId);
+  }
+  return markers.some(
+    (marker) =>
+      marker.instanceId === identity.instanceId
+      && marker.processId === identity.processId
+      && marker.startedAt === identity.startedAt,
+  );
 }
 
 export function requestProfileInstanceFocus(

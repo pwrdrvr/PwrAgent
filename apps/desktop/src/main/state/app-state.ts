@@ -1,6 +1,7 @@
 import {
   ensureBootstrapProfileDir,
   ensureProfileExists,
+  getProcessRuntimeIdentity,
   resolveActiveProfilePath,
   resolveBootstrapProfilePath,
   startProfileRuntimeHeartbeat,
@@ -111,7 +112,11 @@ export function initializeAppState(
     stateDb.startGc();
 
     updateLastUsed(profileName);
-    profileRuntimeHeartbeat = startProfileRuntimeHeartbeat(profileName);
+    const processIdentity = getProcessRuntimeIdentity();
+    profileRuntimeHeartbeat = startProfileRuntimeHeartbeat(profileName, {
+      instanceId: processIdentity.instanceId,
+      startedAt: processIdentity.startedAt,
+    });
   }
 
   messagingStore = new SqliteMessagingStore(stateDb);
