@@ -17,6 +17,7 @@ import {
   ThreadRowStatus,
 } from "../navigation/ThreadRowStatus";
 import { pointerDeltaToCanvas, resolveCardDragOffset } from "./star-map-layout";
+import type { AlignmentGuide } from "./star-map-snapping";
 import {
   visiblePullRequests,
   type StarMapCardFields,
@@ -74,8 +75,38 @@ export function StarMapThreadCard(props: {
      * `scale` times too far and slides out from under the cursor.
      */
     scale: number;
+    /**
+     * Snap a proposed offset against the rest of the arrangement. The
+     * screen owns this because it is the only thing that knows where every
+     * other card sits; the card would otherwise have to reconstruct the
+     * whole map to align with one neighbour.
+     */
+    snap?: (offset: { dx: number; dy: number }) => {
+      dx: number;
+      dy: number;
+      guides: AlignmentGuide[];
+    };
+    /** Guides to draw while this drag is live; empty clears them. */
+    onGuidesChange?: (guides: AlignmentGuide[]) => void;
+    /**
+     * How far this drag has travelled, so the screen can carry the rest of
+     * a multi-card selection along. Fired per frame during the drag and
+     * once more on release, when the movement becomes durable.
+     */
+    onGroupDelta?: (delta: { dx: number; dy: number }) => void;
+    onGroupCommit?: (delta: { dx: number; dy: number }) => void;
     onCommitOffset: (offset: { dx: number; dy: number }) => void;
   };
+  /** `instanceId::threadKey`; unique across clouds. */
+  cardKey: string;
+  /** Part of a multi-card selection, so it moves with the others. */
+  selected?: boolean;
+  /**
+   * Add or remove this card from the selection. Deliberately outside
+   * `drag`: amending a selection has to work before the durable instance
+   * id lands, which is the one thing that gates dragging.
+   */
+  onToggleSelect?: () => void;
   onOpen: (thread: NavigationThreadSummary) => void;
   /** Kebab entries; the kebab is hidden when empty. */
   menuActions?: StarMapCardMenuAction[];
@@ -119,8 +150,21 @@ export function StarMapThreadCard(props: {
   };
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    // Modifier-click amends the selection rather than opening or dragging.
+    // It is the platform convention, and the only way to correct a marquee
+    // that swept up one card too many without starting the sweep over.
+    // Gated on the handler so lenses with no selection (Projects) keep
+    // modifier-click opening the thread instead of doing nothing at all.
+    const toggleSelect = props.onToggleSelect;
+    if (toggleSelect && (event.shiftKey || event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      suppressClickRef.current = true;
+      toggleSelect();
+      return;
+    }
     const drag = props.drag;
-    if (!drag || event.button !== 0) return;
+    if (!drag) return;
     const element = event.currentTarget;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -155,13 +199,19 @@ export function StarMapThreadCard(props: {
         },
         detentRadius: drag.detentRadius,
       });
-      lastDx = resolved.dx;
-      lastDy = resolved.dy;
+      const snapped = drag.snap ? drag.snap(resolved) : undefined;
+      lastDx = snapped ? snapped.dx : resolved.dx;
+      lastDy = snapped ? snapped.dy : resolved.dy;
+      drag.onGuidesChange?.(snapped?.guides ?? []);
       if (!frame) {
         frame = requestAnimationFrame(() => {
           frame = 0;
           element.style.left = `${props.baseSlot.dx + lastDx}px`;
           element.style.top = `${props.baseSlot.dy + lastDy}px`;
+          drag.onGroupDelta?.({
+            dx: lastDx - startOffset.dx,
+            dy: lastDy - startOffset.dy,
+          });
         });
       }
     };
@@ -173,8 +223,13 @@ export function StarMapThreadCard(props: {
         cancelAnimationFrame(frame);
         frame = 0;
       }
+      drag.onGuidesChange?.([]);
       if (dragging) {
         drag.onCommitOffset({ dx: lastDx, dy: lastDy });
+        drag.onGroupCommit?.({
+          dx: lastDx - startOffset.dx,
+          dy: lastDy - startOffset.dy,
+        });
       }
     };
     window.addEventListener("pointermove", move);
@@ -190,9 +245,10 @@ export function StarMapThreadCard(props: {
     <div
       className={`star-map-card-shell${
         props.entering ? " star-map-card-shell--entering" : ""
-      }`}
+      }${props.selected ? " star-map-card-shell--selected" : ""}`}
       style={style}
       data-thread-key={threadKey}
+      data-card-key={props.cardKey}
       onPointerDown={startDrag}
     >
       {/* Top-right, and large: the next card covers this one's bottom, so

@@ -31,6 +31,7 @@ import {
   computeStarMapLayout,
   generateStarField,
   STAR_MAP_BODY_ROW_Y,
+  STAR_MAP_CARD_GAP,
   STAR_MAP_ESTIMATED_CARD_HEIGHT,
   visibleCardCount,
   type StarMapCardSlot,
@@ -53,6 +54,13 @@ import {
   type StarMapFilterKey,
   type StarMapFilterSelection,
 } from "./star-map-filters";
+import {
+  marqueeRect,
+  rectIntersects,
+  resolveSnap,
+  type AlignmentGuide,
+  type SnapRect,
+} from "./star-map-snapping";
 import { buildFederationTopology } from "./star-map-topology";
 import {
   groupThreadsByProject,
@@ -93,6 +101,18 @@ const ORBIT_MAX_CARDS_PER_INSTANCE = 16;
  * options) so a card being read is never underneath a control strip.
  */
 const STAR_MAP_CHAT_CARD_BASE_Z = 40;
+/**
+ * How close an edge has to come before it latches, in SCREEN pixels so the
+ * pull feels identical at every zoom. Wide enough to catch a deliberate
+ * near-miss, tight enough that a card never latches to something the
+ * operator was not aiming at.
+ */
+const SNAP_THRESHOLD_PX = 6;
+/**
+ * How far a press on empty canvas may travel and still count as a click
+ * that clears the selection, rather than a pan the operator abandoned.
+ */
+const CANVAS_CLICK_SLOP_PX = 4;
 
 type StarMapScreenProps = {
   desktopApi?: DesktopApi;
@@ -225,8 +245,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
   });
 
   const startCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!panZoomMode || event.button !== 0) return;
+    if (event.button !== 0) return;
     if (!shouldStartCanvasPan(event.target)) return;
+    // Shift sweeps a fresh selection, Cmd/Ctrl extends the one already
+    // there; everything else pans.
+    if (event.shiftKey) {
+      startMarquee(event, "replace");
+      return;
+    }
+    if (event.metaKey || event.ctrlKey) {
+      startMarquee(event, "add");
+      return;
+    }
+    // A press on empty space that never travels is a click, and a click on
+    // nothing drops the selection. Watched separately from the pan below
+    // because the lanes lens has no pan to hang it off.
+    watchForCanvasClick(event);
+    if (!panZoomMode) return;
     const canvas = canvasRef.current;
     const viewport = viewportRef.current;
     if (!canvas) return;
@@ -933,6 +968,271 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return status;
   };
 
+  const [activeGuides, setActiveGuides] = useState<AlignmentGuide[]>([]);
+
+  /**
+   * Every visible card as an absolute canvas rect, keyed so a dragging
+   * card can exclude itself. Absolute rather than cloud-local so cards
+   * belonging to different instances can still align with each other —
+   * the operator sees one map, not several coordinate systems.
+   */
+  const cardRects = useMemo(() => {
+    const rects = new Map<string, SnapRect>();
+    for (const position of bodies) {
+      const lane = lanes.get(position.instanceId);
+      if (!lane) continue;
+      const visible = lane.threads.slice(0, lane.count);
+      visible.forEach((thread, index) => {
+        const slot = position.slots[index];
+        if (!slot) return;
+        const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+        const offset = arrangement.offsetFor(position.instanceId, threadKey);
+        // `||`, not `??`: an unmeasured card reports 0, and a zero-height
+        // rect is invisible to both snapping and selection.
+        const height = lane.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT;
+        rects.set(`${position.instanceId}::${threadKey}`, {
+          // Cards are centred on their slot horizontally (marginLeft is
+          // -width/2), so the rect's left edge is half a card back.
+          x: position.x + slot.dx + (offset?.dx ?? 0) - position.cardWidth / 2,
+          y: position.y + slot.dy + (offset?.dy ?? 0),
+          width: position.cardWidth,
+          height,
+        });
+      });
+    }
+    return rects;
+  }, [arrangement, bodies, lanes]);
+
+  /**
+   * Build the snap for one card. Threshold is screen-space so the pull
+   * feels the same at every zoom, then converted into the canvas units the
+   * geometry works in — the same reasoning as the drag threshold.
+   */
+  const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
+  const [marquee, setMarquee] = useState<SnapRect | undefined>(undefined);
+  /**
+   * Canvas scale for the overlays drawn inside the transform. The lanes
+   * lens never scales, so it is 1 there.
+   */
+  const overlayScale = panZoomMode && view.scale > 0 ? view.scale : 1;
+
+  /**
+   * A press on empty space that ends without travelling is a click, and a
+   * click on nothing clears the selection. The slop is what separates it
+   * from a pan the operator started and thought better of.
+   */
+  const watchForCanvasClick = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const stop = (pointerEvent: globalThis.PointerEvent) => {
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+        const travelled = Math.hypot(
+          pointerEvent.clientX - startX,
+          pointerEvent.clientY - startY,
+        );
+        if (travelled <= CANVAS_CLICK_SLOP_PX) setSelection(new Set());
+      };
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+    },
+    [],
+  );
+
+  /**
+   * Shift-drag draws a marquee; a plain drag still pans. Both are
+   * click-drag on empty space, so one of them had to take a modifier, and
+   * panning is the far more frequent gesture. Cmd/Ctrl-drag runs the same
+   * sweep in `add` mode, so a selection can be built out of several.
+   */
+  const startMarquee = useCallback(
+    (
+      event: ReactPointerEvent<HTMLDivElement>,
+      mode: "replace" | "add",
+    ) => {
+      const canvas = canvasRef.current;
+      if (!canvas || event.button !== 0) return false;
+      const rect = canvas.getBoundingClientRect();
+      const scale = panZoomMode && view.scale > 0 ? view.scale : 1;
+      const toCanvas = (clientX: number, clientY: number) => ({
+        x: (clientX - rect.left) / scale,
+        y: (clientY - rect.top) / scale,
+      });
+      const origin = toCanvas(event.clientX, event.clientY);
+      event.preventDefault();
+
+      const move = (pointerEvent: globalThis.PointerEvent) => {
+        setMarquee(
+          marqueeRect(origin, toCanvas(pointerEvent.clientX, pointerEvent.clientY)),
+        );
+      };
+      const stop = (pointerEvent: globalThis.PointerEvent) => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+        const box = marqueeRect(
+          origin,
+          toCanvas(pointerEvent.clientX, pointerEvent.clientY),
+        );
+        setSelection((current) => {
+          const hits = mode === "add" ? new Set(current) : new Set<string>();
+          for (const [key, cardRect] of cardRects) {
+            if (rectIntersects(cardRect, box)) hits.add(key);
+          }
+          return hits;
+        });
+        setMarquee(undefined);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+      return true;
+    },
+    [cardRects, panZoomMode, view.scale],
+  );
+
+  /**
+   * Card shells by key. Read from the DOM rather than a selector string:
+   * keys contain `:` and `::`, and escaping them for an attribute selector
+   * is the kind of detail that silently matches nothing.
+   */
+  const shellsByKey = useCallback((): Map<string, HTMLElement> => {
+    const shells = new Map<string, HTMLElement>();
+    for (const node of document.querySelectorAll("[data-card-key]")) {
+      if (!(node instanceof HTMLElement)) continue;
+      const key = node.dataset.cardKey;
+      if (key) shells.set(key, node);
+    }
+    return shells;
+  }, []);
+
+  /**
+   * Carry the rest of the selection along with the card under the pointer.
+   * The DOM is written directly, the same way the dragged card moves
+   * itself — a React state update per frame across N cards is exactly the
+   * cost this surface cannot pay mid-drag.
+   */
+  const moveSelectionBy = useCallback(
+    (draggedKey: string, delta: { dx: number; dy: number }) => {
+      if (!selection.has(draggedKey)) return;
+      const shells = shellsByKey();
+      for (const key of selection) {
+        if (key === draggedKey) continue;
+        const shell = shells.get(key);
+        if (!shell) continue;
+        const origin = shell.dataset.dragOriginLeft
+          ? {
+              left: Number(shell.dataset.dragOriginLeft),
+              top: Number(shell.dataset.dragOriginTop),
+            }
+          : {
+              left: Number.parseFloat(shell.style.left),
+              top: Number.parseFloat(shell.style.top),
+            };
+        shell.dataset.dragOriginLeft = String(origin.left);
+        shell.dataset.dragOriginTop = String(origin.top);
+        shell.style.left = `${origin.left + delta.dx}px`;
+        shell.style.top = `${origin.top + delta.dy}px`;
+      }
+    },
+    [selection, shellsByKey],
+  );
+
+  /** Modifier-click on a card: in if it was out, out if it was in. */
+  const toggleSelected = useCallback((key: string) => {
+    setSelection((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  }, []);
+
+  const commitSelectionMove = useCallback(
+    (draggedKey: string, delta: { dx: number; dy: number }) => {
+      if (!selection.has(draggedKey)) return;
+      const shells = shellsByKey();
+      for (const key of selection) {
+        if (key === draggedKey) continue;
+        const shell = shells.get(key);
+        // No shell means the card is not on the map right now — filtered
+        // out, or on an instance that dropped. It keeps its place in the
+        // selection, because an instance that flaps for twenty seconds
+        // should not silently cost the operator every card it owns; but a
+        // card that is not there does not move, because the offset would
+        // land invisibly and only surface later.
+        if (!shell) continue;
+        delete shell.dataset.dragOriginLeft;
+        delete shell.dataset.dragOriginTop;
+        const separator = key.indexOf("::");
+        if (separator < 0) continue;
+        const instanceId = key.slice(0, separator);
+        const threadKey = key.slice(separator + 2);
+        const current = arrangement.offsetFor(instanceId, threadKey) ?? {
+          dx: 0,
+          dy: 0,
+        };
+        arrangement.setCardPosition(instanceId, threadKey, {
+          dx: current.dx + delta.dx,
+          dy: current.dy + delta.dy,
+        });
+      }
+    },
+    [arrangement, selection, shellsByKey],
+  );
+
+  const snapFor = useCallback(
+    (instanceId: string, threadKey: string, cardWidth: number) => {
+      const selfKey = `${instanceId}::${threadKey}`;
+      if (!cardRects.has(selfKey)) return undefined;
+      // A card carrying a selection must not snap to the rest of it. Those
+      // cards travel rigidly with this one, so their relative offset never
+      // changes and every "alignment" against them is a false latch at
+      // whatever spacing the group already had.
+      const passengers = selection.has(selfKey) ? selection : undefined;
+      const others = [...cardRects.entries()]
+        .filter(([key]) => key !== selfKey && !passengers?.has(key))
+        .map(([, rect]) => rect);
+      if (others.length === 0) return undefined;
+
+      const body = bodies.find((entry) => entry.instanceId === instanceId);
+      const lane = lanes.get(instanceId);
+      const index =
+        lane?.threads.findIndex(
+          (thread) =>
+            buildThreadIdentityKey(thread.source, thread.id) === threadKey,
+        ) ?? -1;
+      const baseSlot = index >= 0 ? body?.slots[index] : undefined;
+      if (!body || !baseSlot) return undefined;
+
+      // See the note in `cardRects`: unmeasured cards report 0, not undefined.
+      const height = lane?.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT;
+      const scale = panZoomMode && view.scale > 0 ? view.scale : 1;
+
+      return (offset: { dx: number; dy: number }) => {
+        const snap = resolveSnap({
+          defaultGap: STAR_MAP_CARD_GAP,
+          moving: {
+            // Cards are centred on their slot (marginLeft is -width/2), so
+            // the rect's left edge sits half a card back.
+            x: body.x + baseSlot.dx + offset.dx - cardWidth / 2,
+            y: body.y + baseSlot.dy + offset.dy,
+            width: cardWidth,
+            height,
+          },
+          others,
+          threshold: SNAP_THRESHOLD_PX / scale,
+        });
+        return {
+          dx: offset.dx + snap.dx,
+          dy: offset.dy + snap.dy,
+          guides: snap.guides,
+        };
+      };
+    },
+    [bodies, cardRects, lanes, panZoomMode, selection, view.scale],
+  );
+
   const renderCloud = (position: {
     instanceId: string;
     x: number;
@@ -996,6 +1296,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
               width={position.cardWidth}
               centered={orbitMode}
               stackIndex={index}
+              cardKey={`${position.instanceId}::${threadKey}`}
+              selected={selection.has(`${position.instanceId}::${threadKey}`)}
+              onToggleSelect={() =>
+                toggleSelected(`${position.instanceId}::${threadKey}`)
+              }
               cardFields={preferences.cardFields}
               menuActions={cardMenuActions(thread, position.instanceId)}
               drag={
@@ -1006,6 +1311,22 @@ export function StarMapScreen(props: StarMapScreenProps) {
                       detentRadius,
                       // Lanes never scales, so this is 1 there.
                       scale: panZoomMode ? view.scale : 1,
+                      snap: snapFor(
+                        position.instanceId,
+                        threadKey,
+                        position.cardWidth,
+                      ),
+                      onGuidesChange: setActiveGuides,
+                      onGroupDelta: (delta) =>
+                        moveSelectionBy(
+                          `${position.instanceId}::${threadKey}`,
+                          delta,
+                        ),
+                      onGroupCommit: (delta) =>
+                        commitSelectionMove(
+                          `${position.instanceId}::${threadKey}`,
+                          delta,
+                        ),
                       onCommitOffset: (offset) =>
                         arrangement.setCardPosition(
                           position.instanceId,
@@ -1060,6 +1381,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.stopPropagation();
+          // Escape unwinds one layer at a time: drop the selection first,
+          // and only close the map once there is nothing left to drop.
+          if (selection.size > 0) {
+            setSelection(new Set());
+            return;
+          }
           props.onClose();
         }
       }}
@@ -1231,6 +1558,45 @@ export function StarMapScreen(props: StarMapScreenProps) {
           );
         })}
         {(projectsMode ? [] : bodies).map((position) => renderCloud(position))}
+        {marquee ? (
+          <div
+            className="star-map__marquee"
+            style={{
+              left: marquee.x,
+              top: marquee.y,
+              width: marquee.width,
+              height: marquee.height,
+              // Drawn inside the zoomed canvas, so its edge is sized in
+              // canvas units to land at a constant thickness on screen.
+              borderWidth: 1 / overlayScale,
+              borderRadius: 4 / overlayScale,
+            }}
+          />
+        ) : null}
+        {activeGuides.length > 0 ? (
+          <svg
+            className="star-map__guides"
+            width={panZoomCanvas.width || viewportSize.width}
+            height={panZoomCanvas.height || viewportSize.height}
+            aria-hidden="true"
+          >
+            {activeGuides.map((guide, index) => (
+              <line
+                className="star-map__guide"
+                key={index}
+                // Same reason as the marquee's border: the canvas scale is
+                // a CSS transform on an ancestor, so the stroke has to be
+                // divided by it by hand.
+                strokeWidth={1 / overlayScale}
+                strokeDasharray={`${3 / overlayScale} ${3 / overlayScale}`}
+                x1={guide.axis === "x" ? guide.at : guide.start}
+                x2={guide.axis === "x" ? guide.at : guide.end}
+                y1={guide.axis === "x" ? guide.start : guide.at}
+                y2={guide.axis === "x" ? guide.end : guide.at}
+              />
+            ))}
+          </svg>
+        ) : null}
         {projectsMode && projectLayout.arms.length > 0 ? (
           <svg
             className="star-map__arms"
@@ -1287,6 +1653,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         instanceIcon={celestialIcons.iconFor(
                           owner === localInstanceId ? undefined : owner,
                         )}
+                        cardKey={`${owner ?? "project"}::${buildThreadIdentityKey(
+                          thread.source,
+                          thread.id,
+                        )}`}
                         baseSlot={slots[index]}
                         // No drag here on purpose: arrangements are keyed
                         // and synced per federation instance, and a project
@@ -1451,6 +1821,26 @@ export function StarMapScreen(props: StarMapScreenProps) {
               </button>
             ) : null}
           </span>
+        </div>
+      ) : null}
+      {/* The only thing on the surface that admits a selection exists.
+          `role="status"` so the count is heard, not just seen — the cards
+          themselves carry no selected state to a screen reader. */}
+      {selection.size > 0 ? (
+        <div className="star-map__selection" role="status" aria-live="polite">
+          <span>
+            {selection.size === 1 ? "1 card selected" : `${selection.size} cards selected`}
+          </span>
+          <span className="star-map__selection-hint" aria-hidden="true">
+            drag to move · ⇧-click to amend
+          </span>
+          <button
+            type="button"
+            className="star-map__selection-clear"
+            onClick={() => setSelection(new Set())}
+          >
+            Clear
+          </button>
         </div>
       ) : null}
       <div className="star-map__filters" role="group" aria-label="Thread filters">

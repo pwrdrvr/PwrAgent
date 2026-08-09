@@ -9792,6 +9792,119 @@ textarea,
   cursor: default;
 }
 
+/* Rubber-band selection. Shift-drag, because a plain drag already pans
+   and panning is the more frequent gesture.
+
+   The band lives inside the zoomed canvas, so its border and radius are
+   written inline as `1 / scale` — a fixed 1px border renders at 0.35px
+   zoomed out, which is exactly when a sweep covers the most cards. */
+.star-map__marquee {
+  position: absolute;
+  z-index: 7;
+  border-style: solid;
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  pointer-events: none;
+}
+
+/* Selection speaks the sidebar's language: the same tinted fill and accent
+   border as `.thread-row.is-selected`, and the same solid accent rail,
+   which is the part that actually reads. The previous 1px ring reused
+   `--accent-border` — the identical token the hover state puts on the
+   border — so a selected card and a hovered one were the same picture. */
+.star-map-card-shell--selected .star-map-card {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+
+.star-map-card-shell--selected .star-map-card::before {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 3px;
+  z-index: 1;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
+}
+
+/* Hover still elevates a selected card. Selection is carried by the rail,
+   so the pointer keeps its own feedback instead of the two fighting over
+   the background. */
+.star-map-card-shell--selected:hover .star-map-card {
+  background: var(--bg-panel-elevated);
+}
+
+/* Selection readout. Bottom-centre, clear of the top chrome, and the only
+   thing on the surface that admits a selection exists: it carries the
+   count, the way to drop it, and — by appearing at all — the hint that the
+   gesture is there to find. */
+.star-map__selection {
+  display: inline-flex;
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  z-index: 8;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 6px 5px 12px;
+  transform: translateX(-50%);
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  box-shadow: var(--shadow-popover);
+}
+
+.star-map__selection-hint {
+  color: var(--text-muted);
+}
+
+.star-map__selection-clear {
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.star-map__selection-clear:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.star-map__selection-clear:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Alignment guides, drawn only while a card is being dragged. They exist
+   so a snap is explainable: without the line, a card latching reads as the
+   drag sticking for no reason. */
+.star-map__guides {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 6;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* Width and dash are written inline as `n / scale` rather than set here.
+   `vector-effect: non-scaling-stroke` would be the obvious answer, but it
+   only cancels transforms *inside* the SVG viewport, and the transform
+   here is a CSS `scale()` on the canvas div above it — so the guide would
+   still thin out to a sub-pixel dotted hairline at MIN_ZOOM. */
+.star-map__guide {
+  stroke: var(--accent-bright);
+  opacity: 0.9;
+}
+
 /* Projects lens: projects seat along spiral arms, each the centre of its
    own little system. Deliberately quiet — a project is a place, not a
    star, and a field of bright orange discs reads as noise rather than as
