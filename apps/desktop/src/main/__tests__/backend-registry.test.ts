@@ -18169,15 +18169,210 @@ command = "pnpm dev"
       itemId: "managed-review:cmd-1",
     });
 
+    // Streamed accounting is coalesced, so nothing is written on the hot path.
+    expect(upsertThreadToolInvocation).not.toHaveBeenCalled();
+
+    await registry.close();
+
     // The forwarded copy is a view of activity the child already recorded.
-    // Running it back through the pipeline would bill the same command twice
-    // and write a second sqlite row per streamed chunk.
+    // Running it back through the pipeline would bill the same command twice,
+    // so the flush writes the child's row and only the child's row.
     expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
     expect(upsertThreadToolInvocation.mock.calls[0]?.[0]).toMatchObject({
       invocation: { threadId: "managed-review-child" },
     });
+  });
+
+  it("coalesces streamed command output into one accounting write", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const upsertThreadToolInvocation = vi.fn(
+      async (params: { invocation: unknown }) => params.invocation,
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      upsertThreadToolInvocation,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: overlayStore as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    const deltas = ["first chunk\n", "second chunk\n", "third chunk\n"];
+    for (const delta of deltas) {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/commandExecution/outputDelta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "cmd-1",
+            delta,
+          },
+        },
+      } as AgentEvent);
+    }
+
+    // Codex streams 8 KiB chunks at hundreds per second; none of them may cost
+    // a sqlite read+write inline in the event pipeline.
+    expect(upsertThreadToolInvocation).not.toHaveBeenCalled();
+
+    await emit({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "cmd-1",
+            type: "commandExecution",
+            command: "find / -xdev",
+            status: "completed",
+            exitCode: 0,
+          },
+        },
+      },
+    } as AgentEvent);
+
+    // The accumulated stream lands first: the store stops summing once a row
+    // is terminal, so a delta written after the completion is under-counted.
+    expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(2);
+    expect(upsertThreadToolInvocation.mock.calls[0]?.[0]).toMatchObject({
+      invocation: {
+        itemId: "cmd-1",
+        outputChars: deltas.reduce((sum, delta) => sum + delta.length, 0),
+        status: "in_progress",
+      },
+    });
+    expect(upsertThreadToolInvocation.mock.calls[1]?.[0]).toMatchObject({
+      invocation: { itemId: "cmd-1", status: "completed" },
+    });
 
     await registry.close();
+  });
+
+  it("flushes buffered command output on the timer, without a lifecycle event", async () => {
+    // A command can stream for minutes before it completes. Nothing else in
+    // this suite exercises the timer — every other case flushes through
+    // `item/completed` or `close()` — so a broken schedule would leave the
+    // whole run green while accounting sat in memory until the command ended.
+    vi.useFakeTimers();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const upsertThreadToolInvocation = vi.fn(
+      async (params: { invocation: unknown }) => params.invocation,
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      upsertThreadToolInvocation,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: overlayStore as never,
+    });
+
+    try {
+      const emit = (registry as unknown as {
+        emit(event: AgentEvent): Promise<void>;
+      }).emit.bind(registry);
+      const streamChunk = async (delta: string): Promise<void> => {
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/outputDelta",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "cmd-1",
+              delta,
+            },
+          },
+        } as AgentEvent);
+      };
+
+      await streamChunk("chunk one\n");
+      await streamChunk("chunk two\n");
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
+      expect(upsertThreadToolInvocation.mock.calls[0]?.[0]).toMatchObject({
+        invocation: { itemId: "cmd-1", outputChars: 20, status: "in_progress" },
+      });
+
+      // The next window has to arm again, or a long command only ever records
+      // its first 250ms of output.
+      await streamChunk("chunk three\n");
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(2);
+      expect(upsertThreadToolInvocation.mock.calls[1]?.[0]).toMatchObject({
+        invocation: { itemId: "cmd-1", outputChars: 12 },
+      });
+
+      await registry.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries buffered command output when the accounting write fails", async () => {
+    vi.useFakeTimers();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const upsertThreadToolInvocation = vi.fn(
+      async (params: { invocation: unknown }) => params.invocation,
+    );
+    upsertThreadToolInvocation.mockRejectedValueOnce(new Error("disk full"));
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      upsertThreadToolInvocation,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: overlayStore as never,
+    });
+
+    try {
+      const emit = (registry as unknown as {
+        emit(event: AgentEvent): Promise<void>;
+      }).emit.bind(registry);
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/commandExecution/outputDelta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "cmd-1",
+            delta: "chunk one\n",
+          },
+        },
+      } as AgentEvent);
+
+      await vi.advanceTimersByTimeAsync(250);
+      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
+
+      // A coalesced record stands in for a whole window of chunks, so dropping
+      // it on a transient failure would lose far more than the per-chunk write
+      // it replaced. It goes back in the buffer and rides the next flush.
+      await vi.advanceTimersByTimeAsync(250);
+      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(2);
+      expect(upsertThreadToolInvocation.mock.calls[1]?.[0]).toMatchObject({
+        invocation: { itemId: "cmd-1", outputChars: 10 },
+      });
+
+      await registry.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("never mirrors the review sub-agent's own prose onto the reviewed thread", async () => {

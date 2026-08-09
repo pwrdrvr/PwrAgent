@@ -6,6 +6,10 @@ import type {
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  mergeStreamedToolInvocationDeltas,
+  toolInvocationFromNotification,
+} from "../app-server/tool-invocation-accounting";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 
@@ -143,6 +147,84 @@ describe("SqliteOverlayStore tool invocation accounting", () => {
       status: "completed",
       warningLines: 3,
     });
+  });
+
+  it("records coalesced output deltas identically to per-chunk writes", async () => {
+    // Codex streams fixed 8 KiB chunks; the registry folds them in memory and
+    // writes once per flush window. The stored totals have to match what a
+    // write per chunk produced, or the coalescing quietly changes accounting.
+    //
+    // This asserts equality with the old behavior, not correctness of the
+    // counters themselves. `outputLines` in particular over-counts, because a
+    // fixed-size chunk boundary lands mid-line and both halves count as lines.
+    // That is pre-existing and deliberately preserved here — if you set out to
+    // fix the line count, this test is measuring the wrong thing for you and
+    // should change with it.
+    const deltas = [
+      "warning: slow step\nbuilding module a\n",
+      "error: module b failed\nretrying\n",
+      "info: done\n",
+    ];
+    const records = deltas.map((delta, index) =>
+      toolInvocationFromNotification({
+        backend: "codex",
+        notification: {
+          method: "item/commandExecution/outputDelta",
+          params: {
+            delta,
+            itemId: "cmd-1",
+            threadId: "thread-per-chunk",
+            turnId: "turn-1",
+          },
+        },
+        now: 1_800_000_000_000 + index * 10,
+      })!,
+    );
+
+    for (const record of records) {
+      await store.upsertThreadToolInvocation({ invocation: record });
+    }
+
+    const coalesced = records
+      .slice(1)
+      .reduce(
+        (accumulated, record) =>
+          mergeStreamedToolInvocationDeltas(accumulated, record),
+        records[0]!,
+      );
+    await store.upsertThreadToolInvocation({
+      invocation: {
+        ...coalesced,
+        invocationId: "coalesced",
+        itemId: "coalesced",
+        threadId: "thread-coalesced",
+      },
+    });
+
+    const perChunk = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-per-chunk",
+    });
+    const single = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-coalesced",
+    });
+
+    expect(perChunk.invocations).toHaveLength(1);
+    expect(single.invocations).toHaveLength(1);
+    expect(single.invocations[0]).toMatchObject({
+      debugLines: perChunk.invocations[0]!.debugLines,
+      errorLines: perChunk.invocations[0]!.errorLines,
+      estimatedOutputTokens: perChunk.invocations[0]!.estimatedOutputTokens,
+      infoLines: perChunk.invocations[0]!.infoLines,
+      observedAt: perChunk.invocations[0]!.observedAt,
+      outputChars: perChunk.invocations[0]!.outputChars,
+      outputLines: perChunk.invocations[0]!.outputLines,
+      warningLines: perChunk.invocations[0]!.warningLines,
+    });
+    expect(single.invocations[0]?.outputChars).toBe(
+      deltas.reduce((sum, delta) => sum + delta.length, 0),
+    );
   });
 });
 
