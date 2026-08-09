@@ -6188,31 +6188,40 @@ class ActiveTurnControlPreconditionError extends Error {
 const MAX_ACCEPTED_THREAD_CONTROL_REQUESTS = 512;
 
 /**
- * How long a command-discovery probe waits for the agent's
- * `available_commands_update` once its session is open. Agents that advertise
- * commands do so as part of session setup, so this only has to cover one
- * notification hop.
- */
-const ACP_AVAILABLE_COMMAND_PROBE_TIMEOUT_MS = 5_000;
-/**
- * Ceiling on a whole probe attempt, spawn included.
+ * Ceiling on a whole command-discovery probe: spawn, `initialize`,
+ * `session/new`, and the wait for `available_commands_update`, together.
  *
- * Nothing under `startSession` is bounded on a timescale a composer can wait
- * on: `getClient` awaits an unbounded `initialize()`, and `session/new` inherits
- * the ACP stdio transport's ten-minute default request timeout. A wedged agent
- * would otherwise leave `listSkills` unresolved — and because the renderer
- * skips any request while one is in flight, the `/` menu would sit on
- * PwrAgent's own commands with no way to retry. Generous enough for a cold
- * agent process spawn, short enough that a stuck one is a blip.
+ * One budget rather than a per-stage timeout, because the stages trade against
+ * each other. Nothing under `startSession` is bounded on a timescale a composer
+ * can wait on — `getClient` awaits an unbounded `initialize()`, and
+ * `session/new` inherits the ACP stdio transport's ten-minute default request
+ * timeout — so the probe needs a hard stop regardless. Splitting that stop into
+ * "spawn budget" and "notification budget" only invents an invariant between
+ * two constants: set the notification wait too close to the total and the
+ * deadline truncates it, reproducing the false-empty this whole path exists to
+ * avoid. Letting the wait consume whatever the spawn did not means a fast agent
+ * gets nearly the entire budget to advertise, and a slow one still cannot hold
+ * `listSkills` past this number.
+ *
+ * The value is a judgement call, not a measurement: the 5s notification wait
+ * this replaced was demonstrably too short for a cold Kimi, but nobody has
+ * timed how long these agents actually take. While it runs the `/` menu is
+ * usable — PwrAgent's own commands render immediately and provider commands
+ * fill in — so overshooting costs a late-arriving section, not a blocked menu.
  */
-const ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS = 15_000;
+const ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS = 20_000;
 /**
  * Backoff after a probe that produced nothing (agent unavailable, auth
- * required, or an agent that simply advertises no commands). Without it every
- * composer focus in that repo would re-spawn the agent to learn the same
- * nothing.
+ * required, or an agent that simply advertises no commands).
+ *
+ * This is the *only* backstop against re-probing such an agent — empty results
+ * are deliberately never persisted — so it is deliberately long. Whether an
+ * agent ships slash commands does not change on a five-minute timescale, and
+ * every expiry costs another operator-visible probe. It still lives in memory
+ * and resets on restart, so a genuinely changed agent is never more than one
+ * relaunch away.
  */
-const ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS = 300_000;
+const ACP_AVAILABLE_COMMAND_PROBE_COOLDOWN_MS = 1_800_000;
 
 /**
  * Match the forward-slashed directory identifiers
@@ -6349,7 +6358,6 @@ export class DesktopBackendRegistry {
   // `resolveAcpAvailableCommands` for the read path and
   // `rememberAcpAvailableCommands` for the write-through.
   private readonly acpAvailableCommandsStore?: AcpAvailableCommandsStoreLike;
-  private readonly acpAvailableCommandProbeTimeoutMs: number;
   private readonly acpAvailableCommandProbeBudgetMs: number;
   private readonly acpAvailableCommandProbes = new Map<
     string,
@@ -6703,7 +6711,6 @@ export class DesktopBackendRegistry {
     acpRolloutStore?: AcpBackendAdapterOptions["acpRolloutStore"];
     acpSessionStore?: AcpSessionStoreLike | null;
     acpAvailableCommandsStore?: AcpAvailableCommandsStoreLike | null;
-    acpAvailableCommandProbeTimeoutMs?: number;
     acpAvailableCommandProbeBudgetMs?: number;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     isAcpAgentEnabled?: (registryId: string) => boolean;
@@ -6901,9 +6908,6 @@ export class DesktopBackendRegistry {
           (isAppStateInitialized()
             ? new AcpAvailableCommandsStore(getAppStateDb())
             : undefined);
-    this.acpAvailableCommandProbeTimeoutMs =
-      options?.acpAvailableCommandProbeTimeoutMs
-      ?? ACP_AVAILABLE_COMMAND_PROBE_TIMEOUT_MS;
     this.acpAvailableCommandProbeBudgetMs =
       options?.acpAvailableCommandProbeBudgetMs
       ?? ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS;
@@ -8021,6 +8025,13 @@ export class DesktopBackendRegistry {
    * it. Cache first (free, and kept fresh by every real session's
    * write-through); a probe only runs when this agent has never reported
    * commands for this repo.
+   *
+   * An empty stored row counts as *no answer*, not as "this agent has no
+   * commands". Treating it as an answer is what turned one slow probe into a
+   * permanently empty `/` menu: the row suppressed every later probe, and only
+   * a real session in that repo could dislodge it. Nothing writes empty rows
+   * any more, and ignoring the ones already on disk lets an affected profile
+   * heal on the next request.
    */
   private async resolveAcpAvailableCommands(params: {
     backend: AcpBackendId;
@@ -8029,25 +8040,14 @@ export class DesktopBackendRegistry {
     const repositoryPaths = await this.resolveAcpCommandRepositoryPaths(
       params.cwds,
     );
-    let observedRepository = false;
     for (const repositoryPath of repositoryPaths) {
       const cached = this.acpAvailableCommandsStore?.get(
         params.backend,
         repositoryPath,
       );
-      if (!cached) {
-        continue;
-      }
-      observedRepository = true;
-      if (cached.commands.length > 0) {
+      if (cached && cached.commands.length > 0) {
         return cached.commands;
       }
-    }
-    if (observedRepository) {
-      // We have watched this agent in this repo and it advertised nothing.
-      // Re-probing would spawn the agent to relearn the same nothing; a real
-      // session's write-through is what corrects this if that ever changes.
-      return [];
     }
 
     const probeTarget = repositoryPaths[0];
@@ -8086,7 +8086,12 @@ export class DesktopBackendRegistry {
       return [];
     }
 
-    const attempt = this.runAcpAvailableCommandProbe(params);
+    // One clock for the whole attempt. `runAcpAvailableCommandProbe` spends
+    // what it needs on the spawn and hands the remainder to the notification
+    // wait; the race below is the hard stop for the stages that can hang
+    // before the wait is ever reached.
+    const deadlineAt = Date.now() + this.acpAvailableCommandProbeBudgetMs;
+    const attempt = this.runAcpAvailableCommandProbe({ ...params, deadlineAt });
     const probe = this.withAcpAvailableCommandProbeDeadline(params, attempt);
     this.acpAvailableCommandProbes.set(probeKey, probe);
     // Cleanup follows the attempt rather than the deadline. Clearing the entry
@@ -8140,6 +8145,7 @@ export class DesktopBackendRegistry {
 
   private async runAcpAvailableCommandProbe(params: {
     backend: AcpBackendId;
+    deadlineAt: number;
     repositoryPath: string;
   }): Promise<AppServerAvailableCommandSummary[]> {
     const probeKey = `${params.backend}:${params.repositoryPath}`;
@@ -8158,20 +8164,24 @@ export class DesktopBackendRegistry {
       });
       const commands = await this.awaitAcpAvailableCommands({
         backend: params.backend,
+        deadlineAt: params.deadlineAt,
         threadId: session.sessionId,
       });
-      // Persist either outcome. On a hit, the write-through for the same
-      // notification normally already did this, but recording it here keeps the
-      // probe self-contained rather than dependent on that ordering. On a miss,
-      // "this agent advertises nothing here" is itself the answer, and storing
-      // it is what stops the next composer focus from spawning the agent again.
-      this.acpAvailableCommandsStore?.upsert({
-        backendId: params.backend,
-        repositoryPath: params.repositoryPath,
-        commands,
-        observedAt: Date.now(),
-      });
       if (commands.length > 0) {
+        // Only a positive observation is durable. The write-through for the
+        // same notification normally already did this, but recording it here
+        // keeps the probe self-contained rather than dependent on that
+        // ordering. An empty result is never persisted — a probe that came up
+        // empty because the agent was slow is indistinguishable from one whose
+        // agent has no commands, and guessing wrong costs the operator a
+        // permanently empty menu. The in-memory cooldown below is what keeps
+        // an empty result from re-spawning the agent on the next keystroke.
+        this.acpAvailableCommandsStore?.upsert({
+          backendId: params.backend,
+          repositoryPath: params.repositoryPath,
+          commands,
+          observedAt: Date.now(),
+        });
         return commands;
       }
     } catch (error) {
@@ -8189,11 +8199,18 @@ export class DesktopBackendRegistry {
     return [];
   }
 
+  /**
+   * Wait for the agent to advertise, for whatever is left of the probe budget
+   * after the spawn. A fast agent gets nearly all of it; a slow one still
+   * cannot push the caller past the deadline.
+   */
   private async awaitAcpAvailableCommands(params: {
     backend: AcpBackendId;
+    deadlineAt: number;
     threadId: string;
   }): Promise<AppServerAvailableCommandSummary[]> {
     const waiterKey = `${params.backend}:${params.threadId}`;
+    const remainingMs = Math.max(0, params.deadlineAt - Date.now());
     return await new Promise<AppServerAvailableCommandSummary[]>((resolve) => {
       let settled = false;
       const settle = (
@@ -8211,10 +8228,7 @@ export class DesktopBackendRegistry {
         }
         resolve(commands);
       };
-      const timer = setTimeout(
-        () => settle([]),
-        this.acpAvailableCommandProbeTimeoutMs,
-      );
+      const timer = setTimeout(() => settle([]), remainingMs);
       timer.unref?.();
 
       const waiters =

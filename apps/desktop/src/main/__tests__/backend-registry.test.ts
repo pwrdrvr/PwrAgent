@@ -2124,7 +2124,6 @@ function createKimiAcpRegistry(options?: {
   acpAvailableCommandsStore?: ReturnType<
     typeof createAcpAvailableCommandsStoreMock
   > | null;
-  acpAvailableCommandProbeTimeoutMs?: number;
   acpAvailableCommandProbeBudgetMs?: number;
   availableCommandsOnSessionStart?: AppServerAvailableCommandSummary[];
   startSession?: KimiStartSession;
@@ -2223,8 +2222,6 @@ function createKimiAcpRegistry(options?: {
       ? { threadTitleGenerationService: options.threadTitleGenerationService }
       : {}),
     acpAvailableCommandsStore: options?.acpAvailableCommandsStore,
-    acpAvailableCommandProbeTimeoutMs:
-      options?.acpAvailableCommandProbeTimeoutMs,
     acpAvailableCommandProbeBudgetMs: options?.acpAvailableCommandProbeBudgetMs,
   });
   return {
@@ -3363,13 +3360,15 @@ describe("DesktopBackendRegistry", () => {
     ]);
   });
 
-  it("records an ACP agent that advertises nothing instead of re-probing it", async () => {
-    const repositoryPath = toTestRepositoryPath("/repo");
+  it("never persists an empty ACP command probe result", async () => {
+    // A probe that came up empty because the agent was slow is
+    // indistinguishable from one whose agent has no commands. Storing that
+    // guess is what left an operator with a permanently empty `/` menu.
     const acpAvailableCommandsStore = createAcpAvailableCommandsStoreMock();
     const { registry, acpClient } = createKimiAcpRegistry({
       acpBackendId: "acp:grok" as AcpBackendId,
       acpAvailableCommandsStore,
-      acpAvailableCommandProbeTimeoutMs: 1,
+      acpAvailableCommandProbeBudgetMs: 5,
     });
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -3382,9 +3381,50 @@ describe("DesktopBackendRegistry", () => {
       ).resolves.toEqual({ data: [{ skills: [], commands: [] }] });
     }
 
+    // Backed off in memory rather than written down.
     expect(acpClient.startSession).toHaveBeenCalledTimes(1);
+    expect(acpAvailableCommandsStore.records).toEqual([]);
+    expect(acpAvailableCommandsStore.upsert).not.toHaveBeenCalled();
+  });
+
+  it("re-probes past an empty ACP cache row left by an older build", async () => {
+    // Regression: builds before this fix persisted `[]` for a probe that timed
+    // out, and that row then suppressed every future probe. Profiles carrying
+    // one must heal on the next request rather than stay empty forever.
+    const repositoryPath = toTestRepositoryPath("/repo");
+    const availableCommands: AppServerAvailableCommandSummary[] = [
+      {
+        name: "compact",
+        backend: "acp:grok",
+        scope: "session",
+        source: "provider",
+      },
+    ];
+    const acpAvailableCommandsStore = createAcpAvailableCommandsStoreMock([
+      {
+        backendId: "acp:grok",
+        repositoryPath,
+        commands: [],
+        observedAt: 1000,
+      },
+    ]);
+    const { registry, acpClient } = createKimiAcpRegistry({
+      acpBackendId: "acp:grok" as AcpBackendId,
+      acpAvailableCommandsStore,
+      availableCommandsOnSessionStart: availableCommands,
+    });
+
+    await expect(
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: "/repo",
+        cwds: ["/repo"],
+      }),
+    ).resolves.toEqual({ data: [{ skills: [], commands: availableCommands }] });
+    expect(acpClient.startSession).toHaveBeenCalledTimes(1);
+    // The poisoned row is replaced by the real observation.
     expect(acpAvailableCommandsStore.records).toEqual([
-      expect.objectContaining({ repositoryPath, commands: [] }),
+      expect.objectContaining({ repositoryPath, commands: availableCommands }),
     ]);
   });
 
@@ -3425,7 +3465,7 @@ describe("DesktopBackendRegistry", () => {
     const { registry, acpClient } = createKimiAcpRegistry({
       acpBackendId: "acp:grok" as AcpBackendId,
       acpAvailableCommandsStore: null,
-      acpAvailableCommandProbeTimeoutMs: 1,
+      acpAvailableCommandProbeBudgetMs: 5,
     });
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
