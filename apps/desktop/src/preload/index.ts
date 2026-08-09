@@ -170,6 +170,8 @@ import type {
   CancelProviderCatalogRefreshRequest,
   ProviderCatalogRefreshState,
   ReadProviderCatalogRefreshResponse,
+  InstallAcpAgentRequest,
+  InstallAcpAgentResponse,
   AcknowledgeAcpAgentUpdateRequest,
   AcknowledgeAcpAgentUpdateResponse,
   NavigationBrowseMode,
@@ -570,6 +572,7 @@ import {
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
+  ACP_AGENT_INSTALL_CHANNEL,
   ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
   PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL,
   PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL,
@@ -1437,6 +1440,10 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL, listener);
     };
   },
+  installAcpAgent: async (
+    request: InstallAcpAgentRequest,
+  ): Promise<InstallAcpAgentResponse> =>
+    await ipcRenderer.invoke(ACP_AGENT_INSTALL_CHANNEL, request),
   acknowledgeAcpAgentUpdate: async (
     request: AcknowledgeAcpAgentUpdateRequest,
   ): Promise<AcknowledgeAcpAgentUpdateResponse> =>

@@ -28,6 +28,8 @@ import type {
   InspectDiscordThreadPermissionsResponse,
   ListDiscordThreadPermissionChannelsRequest,
   ListDiscordThreadPermissionChannelsResponse,
+  InstallAcpAgentRequest,
+  InstallAcpAgentResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
   CancelProviderCatalogRefreshRequest,
@@ -66,6 +68,7 @@ import {
 import {
   ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL,
   ACP_AGENTS_LIST_CHANNEL,
+  ACP_AGENT_INSTALL_CHANNEL,
   ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL,
   PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL,
   PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL,
@@ -144,14 +147,29 @@ import {
 import { isSafeExternalOpenUrl, isSlackAppDeepLink } from "../external-url-policy";
 import { getMainLogger } from "../log";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
-import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp";
+import { BUILT_IN_ACP_STRATEGIES } from "@pwrdrvr/agent-acp";
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
   ensureAcpRuntimeDiscoveryWorkspace,
   probeAcpRuntimeCapabilities,
+  refreshAcpRuntimeCapabilities,
 } from "../acp/acp-capability-probe";
+import {
+  CLAUDE_ACP_BACKEND_ID,
+  CLAUDE_ACP_NAME,
+  CLAUDE_ACP_PACKAGE_NAME,
+  CLAUDE_ACP_REGISTRY_ID,
+  CLAUDE_ACP_REPOSITORY_URL,
+  CLAUDE_ACP_VERSION,
+  claudeAcpManagedRuntimeSummary,
+  claudeAcpPlaceholderSettingsEntry,
+  discoverManagedClaudeAcpRuntime,
+  failedClaudeAcpInstallRecord,
+  installManagedClaudeAcpRuntime,
+  unavailableManagedClaudeAcpRuntime,
+} from "../acp/claude-acp-runtime";
 import { shouldReprobeAcpCapabilities } from "../acp/acp-capability-freshness";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
 import { isPwrAgentOwnedGrokRuntime } from "../acp/grok-cli-update";
@@ -178,6 +196,17 @@ import { normalizeProfileName } from "../profile";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 const ACP_UPDATE_SNOOZE_MS = 24 * 60 * 60_000;
+const SUPPORTED_ACP_AGENT_CATALOG = [
+  ...BUILT_IN_ACP_STRATEGIES,
+  {
+    id: CLAUDE_ACP_REGISTRY_ID,
+    backendId: CLAUDE_ACP_BACKEND_ID,
+    displayName: CLAUDE_ACP_NAME,
+    authors: ["Agent Client Protocol contributors"],
+    license: "Apache-2.0",
+    repositoryUrl: CLAUDE_ACP_REPOSITORY_URL,
+  },
+] as const;
 // Codex profile login now runs through @pwrdrvr/codex-discovery's
 // CodexLoginManager (extracted from this file's inline flow). PwrAgnt owns the
 // instance so the Electron seam — `shell.openExternal` — is injected and the
@@ -195,7 +224,10 @@ function getService(service?: DesktopSettingsService): DesktopSettingsService {
 function invalidateAcpRefreshCacheAfterWrite(
   patch: WriteDesktopSettingsConfigRequest["patch"],
 ): void {
-  if (patch.acpAgents !== undefined) {
+  if (
+    patch.acpAgents !== undefined
+    || patch.experimental?.claudeAcp !== undefined
+  ) {
     recentAcpRefreshes.clear();
   }
   // A config write only invalidates normalized provider state. It is never
@@ -238,6 +270,7 @@ const JOINED_ACP_REFRESH_PHASE = "Waiting for a provider refresh already running
 // Each capability probe launches a whole agent CLI, so a refresh starts a few
 // at a time rather than every installed runtime at once.
 const ACP_PROBE_CONCURRENCY = 4;
+let inFlightClaudeAcpInstall: Promise<InstallAcpAgentResponse> | undefined;
 
 function acpRefreshRegistryIds(
   request: ListAcpAgentSettingsRequest,
@@ -400,6 +433,8 @@ async function listAcpAgentSettingsImpl(
   permit?: ProviderDiscoveryPermit,
   progress?: ProviderCatalogRefreshProgress,
 ): Promise<ListAcpAgentSettingsResponse> {
+  const claudeExperimental =
+    getService(service).resolveClaudeAcpExperimentalEnabled();
   const store = new AcpAgentStore(getAppStateDb());
   const settingsService = getService(service);
   const registryService = new AcpRegistryService();
@@ -447,6 +482,7 @@ async function listAcpAgentSettingsImpl(
     ...(permit ? { permit } : {}),
     providers: settingsService.readProvidersConfig(),
     refreshLocal: request.refresh === true,
+    claudeExperimental,
     ...(request.force === true ? { force: true } : {}),
     ...(request.probeCapabilities === false
       ? { probeCapabilities: false }
@@ -459,6 +495,10 @@ async function listAcpAgentSettingsImpl(
     ? registryService
         .applyAllowlist(snapshot)
         .filter((agent) => agent.allowlist.allowed)
+        .filter(
+          (agent) =>
+            agent.id !== CLAUDE_ACP_REGISTRY_ID || claudeExperimental,
+        )
         .flatMap((agent) => {
           const entry = acpAgentSettingsEntry({
             agent,
@@ -475,28 +515,33 @@ async function listAcpAgentSettingsImpl(
     }
   }
 
-  // Always present every supported provider (Gemini/Grok/Kimi/Qwen) as its own
+  // Always present every supported provider as its own
   // section, even when nothing was discovered for it — they are known providers
   // we support via ACP, so an undiscovered one shows a "Not installed" status
   // instead of vanishing. Fill a placeholder for any built-in strategy that
   // neither the registry nor local discovery produced an entry for. This makes
   // the screen independent of registry availability (offline / cold start).
   const presentBackendIds = new Set(entries.map((entry) => entry.backendId));
-  for (const strategy of BUILT_IN_ACP_STRATEGIES) {
+  for (const strategy of SUPPORTED_ACP_AGENT_CATALOG) {
     if (
       isBannedAcpRegistryId(strategy.id) ||
+      (strategy.id === CLAUDE_ACP_REGISTRY_ID && !claudeExperimental) ||
       presentBackendIds.has(`acp:${strategy.id}`)
     ) {
       continue;
     }
-    entries.push(placeholderAcpAgentSettingsEntry(strategy));
+    entries.push(
+      strategy.id === CLAUDE_ACP_REGISTRY_ID
+        ? claudeAcpPlaceholderSettingsEntry()
+        : placeholderAcpAgentSettingsEntry(strategy),
+    );
     presentBackendIds.add(`acp:${strategy.id}`);
   }
 
   // Stable, predictable order: the built-in catalog order first (Gemini, Grok,
   // Kimi, Qwen), any extra non-catalog entries after in their existing order.
   const catalogOrder = new Map(
-    BUILT_IN_ACP_STRATEGIES.map((strategy, index) => [
+    SUPPORTED_ACP_AGENT_CATALOG.map((strategy, index) => [
       strategy.backendId,
       index,
     ]),
@@ -529,6 +574,71 @@ async function listAcpAgentSettingsImpl(
     fetchedAt: snapshot?.fetchedAt ?? Date.now(),
     entries: orderedEntries,
     ...(error ? { error } : {}),
+  };
+}
+
+async function installAcpAgent(
+  request: InstallAcpAgentRequest,
+  service?: DesktopSettingsService,
+): Promise<InstallAcpAgentResponse> {
+  if (
+    !getService(service).resolveClaudeAcpExperimentalEnabled()
+  ) {
+    throw new Error(
+      "Enable Experimental → Claude Agent through ACP before installing this runtime.",
+    );
+  }
+  if (
+    request?.registryId !== CLAUDE_ACP_REGISTRY_ID
+    || request?.expectedVersion !== CLAUDE_ACP_VERSION
+  ) {
+    throw new Error(
+      `PwrAgent only installs the allowlisted ${CLAUDE_ACP_PACKAGE_NAME}@${CLAUDE_ACP_VERSION} runtime.`,
+    );
+  }
+  if (inFlightClaudeAcpInstall) {
+    return await inFlightClaudeAcpInstall;
+  }
+  const run = installAcpAgentImpl(service).finally(() => {
+    if (inFlightClaudeAcpInstall === run) {
+      inFlightClaudeAcpInstall = undefined;
+    }
+  });
+  inFlightClaudeAcpInstall = run;
+  return await run;
+}
+
+async function installAcpAgentImpl(
+  service?: DesktopSettingsService,
+): Promise<InstallAcpAgentResponse> {
+  const store = new AcpAgentStore(getAppStateDb());
+  const now = Date.now();
+  const previous = store.getInstalledAgent(CLAUDE_ACP_BACKEND_ID);
+  let record: AcpInstalledAgentRecord;
+  try {
+    const env = await getService(service).resolveTerminalSpawnEnvAsync();
+    record = await installManagedClaudeAcpRuntime({ env });
+    if (
+      previous?.installStatus === "installed"
+      && previous.version === record.version
+    ) {
+      record = {
+        ...record,
+        authStatus: previous.authStatus,
+        runtimeCapabilities: previous.runtimeCapabilities,
+        lastDiscoveredAt: previous.lastDiscoveredAt,
+        lastDiscoveryError: previous.lastDiscoveryError,
+        installedAt: previous.installedAt,
+      };
+    }
+  } catch (error) {
+    record = failedClaudeAcpInstallRecord(error, now);
+  }
+  store.upsertInstalledAgent(record);
+  getDesktopBackendRegistry().invalidateAcpBackendDiscovery();
+  return {
+    fetchedAt: now,
+    entry: installedAcpAgentSettingsEntry(record),
   };
 }
 
@@ -636,13 +746,19 @@ async function decorateManagedGrokBuild(
  * when the registry is unavailable.
  */
 function placeholderAcpAgentSettingsEntry(
-  strategy: AcpAgentStrategy,
+  strategy: {
+    id: string;
+    displayName: string;
+    authors: readonly string[];
+    license?: string;
+    repositoryUrl?: string;
+  },
 ): AcpAgentSettingsEntry {
   return {
     backendId: `acp:${strategy.id}`,
     registryId: strategy.id,
     name: strategy.displayName,
-    authors: strategy.authors,
+    authors: [...strategy.authors],
     ...(strategy.license ? { license: strategy.license } : {}),
     ...(strategy.repositoryUrl
       ? { repositoryUrl: strategy.repositoryUrl }
@@ -730,9 +846,15 @@ async function listInstalledAndLocalAcpAgents(
     registryIds?: readonly string[];
     env?: NodeJS.ProcessEnv;
     progress?: ProviderCatalogRefreshProgress;
+    claudeExperimental?: boolean;
   },
 ): Promise<AcpInstalledAgentRecord[]> {
-  const installed = store.listInstalledAgents();
+  const claudeExperimental =
+    options?.claudeExperimental
+    ?? getDesktopConfigStore().read("experimental").claudeAcp === true;
+  const visible = (record: AcpInstalledAgentRecord): boolean =>
+    record.registryId !== CLAUDE_ACP_REGISTRY_ID || claudeExperimental;
+  const installed = store.listInstalledAgents().filter(visible);
   let discovered: AcpInstalledAgentRecord[] = [];
   const progress = options?.progress;
   // Only a provider's final answer is recorded, so a discovery failure can
@@ -808,6 +930,21 @@ async function listInstalledAndLocalAcpAgents(
         };
       });
       progress?.onPhase(undefined);
+      if (claudeExperimental) {
+        const managedClaude = await discoverManagedClaudeAcpRuntime({
+          ...(options?.env ? { env: options.env } : {}),
+        });
+        if (managedClaude) {
+          discovered.push(managedClaude);
+        } else {
+          const cachedClaude = store.getInstalledAgent(CLAUDE_ACP_BACKEND_ID);
+          if (cachedClaude?.installStatus === "installed") {
+            store.upsertInstalledAgent(
+              unavailableManagedClaudeAcpRuntime(cachedClaude),
+            );
+          }
+        }
+      }
       const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
       const now = Date.now();
       // `force` is reserved for explicit UI refresh/login actions. Gemini can
@@ -837,22 +974,41 @@ async function listInstalledAndLocalAcpAgents(
           && record.version !== undefined
           && current.version !== record.version;
         const pwrAgentOwnedGrok = isPwrAgentOwnedGrokRuntime(record);
+        const sameManagedClaudeRuntime =
+          record.registryId === CLAUDE_ACP_REGISTRY_ID
+          && current?.installStatus === "installed"
+          && current.version === record.version;
+        const preserveCachedRuntime =
+          !runtimeVersionChanged
+          && (
+            record.registryId !== CLAUDE_ACP_REGISTRY_ID
+            || sameManagedClaudeRuntime
+          );
         const nextRecord = {
           ...record,
-          runtimeCapabilities: runtimeVersionChanged
-            ? undefined
-            : current?.runtimeCapabilities,
+          authStatus:
+            sameManagedClaudeRuntime
+              ? current.authStatus
+              : record.authStatus,
+          runtimeCapabilities: preserveCachedRuntime
+            ? current?.runtimeCapabilities
+            : undefined,
           update: pwrAgentOwnedGrok ? undefined : current?.update,
           updateCommand: pwrAgentOwnedGrok
             ? undefined
             : current?.updateCommand,
-          lastDiscoveredAt: runtimeVersionChanged
-            ? undefined
-            : current?.lastDiscoveredAt,
-          lastDiscoveryError: runtimeVersionChanged
-            ? undefined
-            : current?.lastDiscoveryError,
-          installedAt: current?.installedAt ?? record.installedAt,
+          lastDiscoveredAt: preserveCachedRuntime
+            ? current?.lastDiscoveredAt
+            : undefined,
+          lastDiscoveryError: preserveCachedRuntime
+            ? current?.lastDiscoveryError
+            : undefined,
+          installedAt:
+            record.registryId === CLAUDE_ACP_REGISTRY_ID
+              ? preserveCachedRuntime
+                ? current?.installedAt ?? record.installedAt
+                : record.installedAt
+              : current?.installedAt ?? record.installedAt,
           updatedAt: Math.max(current?.updatedAt ?? 0, record.updatedAt),
         } satisfies AcpInstalledAgentRecord;
         if (
@@ -868,10 +1024,17 @@ async function listInstalledAndLocalAcpAgents(
         // that are undiscovered, stale, or version-changed (or when forced).
         // Otherwise persist the merged record carrying the cached capabilities
         // without launching anything.
-        if (
-          shouldReprobeAcpCapabilities(current, record.version, now, {
+        const reprobeRequired = shouldReprobeAcpCapabilities(
+          current,
+          record.version,
+          now,
+          {
             ...(options?.force === true ? { force: true } : {}),
-          })
+          },
+        );
+        if (
+          acpAgentEnabledFor(config, record.registryId)
+          && reprobeRequired
         ) {
           toProbe.push(nextRecord);
         } else {
@@ -925,7 +1088,7 @@ async function listInstalledAndLocalAcpAgents(
     }
   }
   const refreshedInstalled = options?.refreshLocal
-    ? store.listInstalledAgents()
+    ? store.listInstalledAgents().filter(visible)
     : installed;
   const allowedInstalled = refreshedInstalled.filter(
     (record) => !isBannedAcpRegistryId(record.registryId),
@@ -938,6 +1101,7 @@ async function listInstalledAndLocalAcpAgents(
     ...discovered.filter(
       (record) =>
         !installedBackendIds.has(record.backendId) &&
+        visible(record) &&
         !isBannedAcpRegistryId(record.registryId),
     ),
   ];
@@ -1034,7 +1198,7 @@ export function installedAcpAgentSettingsEntry(
     websiteUrl: agent?.websiteUrl,
     distributionKind: record.distributionKind,
     distributionSource: record.distributionSource,
-    installable: false,
+    installable: record.registryId === CLAUDE_ACP_REGISTRY_ID,
     installed: record.installStatus === "installed",
     installStatus: record.installStatus,
     authStatus: record.authStatus,
@@ -1057,6 +1221,9 @@ export function installedAcpAgentSettingsEntry(
       : {}),
     ...(record.activeCommand !== undefined
       ? { activeCommand: record.activeCommand }
+      : {}),
+    ...(record.registryId === CLAUDE_ACP_REGISTRY_ID
+      ? { managedRuntime: claudeAcpManagedRuntimeSummary(record) }
       : {}),
   };
 }
@@ -1625,6 +1792,16 @@ export function registerSettingsIpcHandlers(
       const state = catalogRefresh.read();
       return state ? { state } : {};
     },
+  );
+
+  ipcMain.removeHandler(ACP_AGENT_INSTALL_CHANNEL);
+  ipcMain.handle(
+    ACP_AGENT_INSTALL_CHANNEL,
+    async (
+      _event,
+      request: InstallAcpAgentRequest,
+    ): Promise<InstallAcpAgentResponse> =>
+      await installAcpAgent(request, service),
   );
 
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
@@ -2308,6 +2485,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_START_CHANNEL);
   ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_CANCEL_CHANNEL);
   ipcMain.removeHandler(PROVIDER_CATALOG_REFRESH_READ_CHANNEL);
+  ipcMain.removeHandler(ACP_AGENT_INSTALL_CHANNEL);
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
   ipcMain.removeHandler(TOKEN_MISER_READ_USAGE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);

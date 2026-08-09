@@ -1053,6 +1053,10 @@ export class DesktopSettingsService {
           config.experimental?.managedReview,
           false,
         ),
+        claudeAcp: this.resolveConfigBoolean(
+          config.experimental?.claudeAcp,
+          false,
+        ),
         diffCondensation: {
           enabled: this.resolveDiffCondensationEnabled(
             config.experimental?.diffCondensation?.enabled,
@@ -1494,6 +1498,9 @@ export class DesktopSettingsService {
           ),
           enabled: config.acpAgents?.qwen?.enabled ?? true,
         },
+        "claude-acp": {
+          enabled: config.acpAgents?.["claude-acp"]?.enabled ?? true,
+        },
       },
       applications: {
         ...applications,
@@ -1912,6 +1919,13 @@ export class DesktopSettingsService {
   resolveManagedReviewEnabled(): boolean {
     return this.resolveConfigBoolean(
       this.readExperimentalConfig().managedReview,
+      false,
+    ).value;
+  }
+
+  resolveClaudeAcpExperimentalEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.experimental?.claudeAcp,
       false,
     ).value;
   }
