@@ -24,34 +24,30 @@ describe("parseGitHubRemote", () => {
     });
   });
 
-  it("preserves owner/repo casing, since GitHub keys are case-preserving", () => {
-    expect(parseGitHubRemote("git@github.com:PwrDrvr/PwrAgent.git")).toEqual({
-      host: "github.com",
-      owner: "PwrDrvr",
-      repo: "PwrAgent",
-    });
-  });
-
-  it("parses scp-style SSH aliases without an explicit user", () => {
-    expect(parseGitHubRemote("github-work:pwrdrvr/PwrAgent.git")).toEqual({
-      host: "github-work",
-      owner: "pwrdrvr",
-      repo: "PwrAgent",
-    });
+  it.each([
+    [
+      "preserves owner/repo casing, since GitHub keys are case-preserving",
+      "git@github.com:PwrDrvr/PwrAgent.git",
+      { host: "github.com", owner: "PwrDrvr", repo: "PwrAgent" },
+    ],
+    [
+      "parses scp-style SSH aliases without an explicit user",
+      "github-work:pwrdrvr/PwrAgent.git",
+      { host: "github-work", owner: "pwrdrvr", repo: "PwrAgent" },
+    ],
+    [
+      "reports non-github hosts so the caller can skip them",
+      "git@gitlab.com:group/proj.git",
+      { host: "gitlab.com", owner: "group", repo: "proj" },
+    ],
+  ])("%s", (_name, remote, expected) => {
+    expect(parseGitHubRemote(remote)).toEqual(expected);
   });
 
   it("strips embedded credentials and keeps the host", () => {
     expect(
       parseGitHubRemote("https://user:token@github.com/pwrdrvr/PwrAgent.git"),
     ).toEqual({ host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" });
-  });
-
-  it("reports non-github hosts so the caller can skip them", () => {
-    expect(parseGitHubRemote("git@gitlab.com:group/proj.git")).toEqual({
-      host: "gitlab.com",
-      owner: "group",
-      repo: "proj",
-    });
   });
 
   it("rejects remotes that are not a repo root", () => {
