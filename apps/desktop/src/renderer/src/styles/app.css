@@ -9792,6 +9792,22 @@ textarea,
   cursor: default;
 }
 
+/* Rubber-band selection. Shift-drag, because a plain drag already pans
+   and panning is the more frequent gesture. */
+.star-map__marquee {
+  position: absolute;
+  z-index: 7;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  pointer-events: none;
+}
+
+.star-map-card-shell--selected .star-map-card {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
 /* Alignment guides, drawn only while a card is being dragged. They exist
    so a snap is explainable: without the line, a card latching reads as the
    drag sticking for no reason. */

@@ -55,6 +55,8 @@ import {
   type StarMapFilterSelection,
 } from "./star-map-filters";
 import {
+  marqueeRect,
+  rectIntersects,
   resolveSnap,
   type AlignmentGuide,
   type SnapRect,
@@ -238,8 +240,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
   });
 
   const startCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!panZoomMode || event.button !== 0) return;
+    if (event.button !== 0) return;
     if (!shouldStartCanvasPan(event.target)) return;
+    // Shift claims the gesture for selection; everything else pans.
+    if (event.shiftKey) {
+      startMarquee(event);
+      return;
+    }
+    if (!panZoomMode) return;
     const canvas = canvasRef.current;
     const viewport = viewportRef.current;
     if (!canvas) return;
@@ -965,7 +973,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
         if (!slot) return;
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
         const offset = arrangement.offsetFor(position.instanceId, threadKey);
-        const height = lane.heights[index] ?? STAR_MAP_ESTIMATED_CARD_HEIGHT;
+        // `||`, not `??`: an unmeasured card reports 0, and a zero-height
+        // rect is invisible to both snapping and selection.
+        const height = lane.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT;
         rects.set(`${position.instanceId}::${threadKey}`, {
           // Cards are centred on their slot horizontally (marginLeft is
           // -width/2), so the rect's left edge is half a card back.
@@ -984,6 +994,130 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * feels the same at every zoom, then converted into the canvas units the
    * geometry works in — the same reasoning as the drag threshold.
    */
+  const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
+  const [marquee, setMarquee] = useState<SnapRect | undefined>(undefined);
+
+  /**
+   * Shift-drag draws a marquee; a plain drag still pans. Both are
+   * click-drag on empty space, so one of them had to take a modifier, and
+   * panning is the far more frequent gesture.
+   */
+  const startMarquee = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas || event.button !== 0) return false;
+      const rect = canvas.getBoundingClientRect();
+      const scale = panZoomMode && view.scale > 0 ? view.scale : 1;
+      const toCanvas = (clientX: number, clientY: number) => ({
+        x: (clientX - rect.left) / scale,
+        y: (clientY - rect.top) / scale,
+      });
+      const origin = toCanvas(event.clientX, event.clientY);
+      event.preventDefault();
+
+      const move = (pointerEvent: globalThis.PointerEvent) => {
+        setMarquee(
+          marqueeRect(origin, toCanvas(pointerEvent.clientX, pointerEvent.clientY)),
+        );
+      };
+      const stop = (pointerEvent: globalThis.PointerEvent) => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+        const box = marqueeRect(
+          origin,
+          toCanvas(pointerEvent.clientX, pointerEvent.clientY),
+        );
+        const hits = new Set<string>();
+        for (const [key, cardRect] of cardRects) {
+          if (rectIntersects(cardRect, box)) hits.add(key);
+        }
+        setSelection(hits);
+        setMarquee(undefined);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+      return true;
+    },
+    [cardRects, panZoomMode, view.scale],
+  );
+
+  /**
+   * Card shells by key. Read from the DOM rather than a selector string:
+   * keys contain `:` and `::`, and escaping them for an attribute selector
+   * is the kind of detail that silently matches nothing.
+   */
+  const shellsByKey = useCallback((): Map<string, HTMLElement> => {
+    const shells = new Map<string, HTMLElement>();
+    for (const node of document.querySelectorAll("[data-card-key]")) {
+      if (!(node instanceof HTMLElement)) continue;
+      const key = node.dataset.cardKey;
+      if (key) shells.set(key, node);
+    }
+    return shells;
+  }, []);
+
+  /**
+   * Carry the rest of the selection along with the card under the pointer.
+   * The DOM is written directly, the same way the dragged card moves
+   * itself — a React state update per frame across N cards is exactly the
+   * cost this surface cannot pay mid-drag.
+   */
+  const moveSelectionBy = useCallback(
+    (draggedKey: string, delta: { dx: number; dy: number }) => {
+      if (!selection.has(draggedKey)) return;
+      const shells = shellsByKey();
+      for (const key of selection) {
+        if (key === draggedKey) continue;
+        const shell = shells.get(key);
+        if (!shell) continue;
+        const origin = shell.dataset.dragOriginLeft
+          ? {
+              left: Number(shell.dataset.dragOriginLeft),
+              top: Number(shell.dataset.dragOriginTop),
+            }
+          : {
+              left: Number.parseFloat(shell.style.left),
+              top: Number.parseFloat(shell.style.top),
+            };
+        shell.dataset.dragOriginLeft = String(origin.left);
+        shell.dataset.dragOriginTop = String(origin.top);
+        shell.style.left = `${origin.left + delta.dx}px`;
+        shell.style.top = `${origin.top + delta.dy}px`;
+      }
+    },
+    [selection, shellsByKey],
+  );
+
+  const commitSelectionMove = useCallback(
+    (draggedKey: string, delta: { dx: number; dy: number }) => {
+      if (!selection.has(draggedKey)) return;
+      const shells = shellsByKey();
+      for (const key of selection) {
+        if (key === draggedKey) continue;
+        const shell = shells.get(key);
+        if (shell) {
+          delete shell.dataset.dragOriginLeft;
+          delete shell.dataset.dragOriginTop;
+        }
+        const separator = key.indexOf("::");
+        if (separator < 0) continue;
+        const instanceId = key.slice(0, separator);
+        const threadKey = key.slice(separator + 2);
+        const current = arrangement.offsetFor(instanceId, threadKey) ?? {
+          dx: 0,
+          dy: 0,
+        };
+        arrangement.setCardPosition(instanceId, threadKey, {
+          dx: current.dx + delta.dx,
+          dy: current.dy + delta.dy,
+        });
+      }
+    },
+    [arrangement, selection, shellsByKey],
+  );
+
   const snapFor = useCallback(
     (instanceId: string, threadKey: string, cardWidth: number) => {
       const selfKey = `${instanceId}::${threadKey}`;
@@ -1003,7 +1137,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
       const baseSlot = index >= 0 ? body?.slots[index] : undefined;
       if (!body || !baseSlot) return undefined;
 
-      const height = lane?.heights[index] ?? STAR_MAP_ESTIMATED_CARD_HEIGHT;
+      // See the note in `cardRects`: unmeasured cards report 0, not undefined.
+      const height = lane?.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT;
       const scale = panZoomMode && view.scale > 0 ? view.scale : 1;
 
       return (offset: { dx: number; dy: number }) => {
@@ -1093,6 +1228,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
               width={position.cardWidth}
               centered={orbitMode}
               stackIndex={index}
+              cardKey={`${position.instanceId}::${threadKey}`}
+              selected={selection.has(`${position.instanceId}::${threadKey}`)}
               cardFields={preferences.cardFields}
               menuActions={cardMenuActions(thread, position.instanceId)}
               drag={
@@ -1109,6 +1246,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         position.cardWidth,
                       ),
                       onGuidesChange: setActiveGuides,
+                      onGroupDelta: (delta) =>
+                        moveSelectionBy(
+                          `${position.instanceId}::${threadKey}`,
+                          delta,
+                        ),
+                      onGroupCommit: (delta) =>
+                        commitSelectionMove(
+                          `${position.instanceId}::${threadKey}`,
+                          delta,
+                        ),
                       onCommitOffset: (offset) =>
                         arrangement.setCardPosition(
                           position.instanceId,
@@ -1334,6 +1481,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
           );
         })}
         {(projectsMode ? [] : bodies).map((position) => renderCloud(position))}
+        {marquee ? (
+          <div
+            className="star-map__marquee"
+            style={{
+              left: marquee.x,
+              top: marquee.y,
+              width: marquee.width,
+              height: marquee.height,
+            }}
+          />
+        ) : null}
         {activeGuides.length > 0 ? (
           <svg
             className="star-map__guides"
@@ -1409,6 +1567,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         instanceIcon={celestialIcons.iconFor(
                           owner === localInstanceId ? undefined : owner,
                         )}
+                        cardKey={`${owner ?? "project"}::${buildThreadIdentityKey(
+                          thread.source,
+                          thread.id,
+                        )}`}
                         baseSlot={slots[index]}
                         // No drag here on purpose: arrangements are keyed
                         // and synced per federation instance, and a project

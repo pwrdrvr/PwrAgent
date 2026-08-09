@@ -88,8 +88,19 @@ export function StarMapThreadCard(props: {
     };
     /** Guides to draw while this drag is live; empty clears them. */
     onGuidesChange?: (guides: AlignmentGuide[]) => void;
+    /**
+     * How far this drag has travelled, so the screen can carry the rest of
+     * a multi-card selection along. Fired per frame during the drag and
+     * once more on release, when the movement becomes durable.
+     */
+    onGroupDelta?: (delta: { dx: number; dy: number }) => void;
+    onGroupCommit?: (delta: { dx: number; dy: number }) => void;
     onCommitOffset: (offset: { dx: number; dy: number }) => void;
   };
+  /** `instanceId::threadKey`; unique across clouds. */
+  cardKey: string;
+  /** Part of a multi-card selection, so it moves with the others. */
+  selected?: boolean;
   onOpen: (thread: NavigationThreadSummary) => void;
   /** Kebab entries; the kebab is hidden when empty. */
   menuActions?: StarMapCardMenuAction[];
@@ -178,6 +189,10 @@ export function StarMapThreadCard(props: {
           frame = 0;
           element.style.left = `${props.baseSlot.dx + lastDx}px`;
           element.style.top = `${props.baseSlot.dy + lastDy}px`;
+          drag.onGroupDelta?.({
+            dx: lastDx - startOffset.dx,
+            dy: lastDy - startOffset.dy,
+          });
         });
       }
     };
@@ -192,6 +207,10 @@ export function StarMapThreadCard(props: {
       drag.onGuidesChange?.([]);
       if (dragging) {
         drag.onCommitOffset({ dx: lastDx, dy: lastDy });
+        drag.onGroupCommit?.({
+          dx: lastDx - startOffset.dx,
+          dy: lastDy - startOffset.dy,
+        });
       }
     };
     window.addEventListener("pointermove", move);
@@ -207,9 +226,10 @@ export function StarMapThreadCard(props: {
     <div
       className={`star-map-card-shell${
         props.entering ? " star-map-card-shell--entering" : ""
-      }`}
+      }${props.selected ? " star-map-card-shell--selected" : ""}`}
       style={style}
       data-thread-key={threadKey}
+      data-card-key={props.cardKey}
       onPointerDown={startDrag}
     >
       {/* Top-right, and large: the next card covers this one's bottom, so
