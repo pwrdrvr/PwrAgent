@@ -65,10 +65,7 @@ import type {
 } from "../../lib/useIntegratedTerminals";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import type { PendingForkEnvironmentSetup } from "../../lib/useThreadNavigation";
-import {
-  DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT,
-  THREAD_HISTORY_PAGE_LIMIT,
-} from "../../lib/thread-history-limits";
+import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer } from "../composer/Composer";
@@ -1247,12 +1244,6 @@ export function ThreadView(props: ThreadViewProps) {
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
-  // App supplies a session-owned limit in production. Keep a local fallback
-  // for isolated renderers/tests that intentionally omit the owner callbacks.
-  const [
-    uncontrolledTranscriptEntryLimits,
-    setUncontrolledTranscriptEntryLimits,
-  ] = useState(() => new Map<string, number>());
   const [pendingTranscriptTurnTarget, setPendingTranscriptTurnTarget] =
     useState<PendingTranscriptTurnTarget>();
   const transcriptTurnPageLoadsRef = useRef(0);
@@ -1411,98 +1402,30 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadKey = selectedThread
     ? buildThreadIdentityKey(selectedThread.source, selectedThread.id)
     : undefined;
-  const transcriptEntryLimit = selectedThreadKey
-    ? props.renderedTranscriptEntryLimit
-      ?? uncontrolledTranscriptEntryLimits.get(selectedThreadKey)
-      ?? DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT
-    : DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT;
-  const visibleTranscriptEntries = useMemo(
-    () => props.transcriptEntries.slice(-transcriptEntryLimit),
-    [props.transcriptEntries, transcriptEntryLimit],
-  );
   const transcriptEntryCount = props.transcriptEntries.length;
   const onLoadOlder = props.onLoadOlder;
   const onRenderedTranscriptEntryLimitChange =
     props.onRenderedTranscriptEntryLimitChange;
-  const hiddenTranscriptEntryCount =
-    transcriptEntryCount - visibleTranscriptEntries.length;
-  const canLoadServerTranscriptHistory = Boolean(
-    props.transcriptPagination?.supportsPagination
-    && props.transcriptPagination.hasPreviousPage,
-  );
-  const hasMoreTranscriptHistory =
-    hiddenTranscriptEntryCount > 0 || canLoadServerTranscriptHistory;
-  const visibleTranscriptPagination = useMemo<
-    AppServerThreadReplayPagination | undefined
-  >(
-    () =>
-      hiddenTranscriptEntryCount > 0
-        ? {
-            ...(props.transcriptPagination ?? {}),
-            hasPreviousPage: true,
-            supportsPagination: true,
-          }
-        : props.transcriptPagination,
-    [hiddenTranscriptEntryCount, props.transcriptPagination],
-  );
-  const expandTranscriptEntryLimit = useCallback(
-    (minimumLimit: number) => {
-      if (!selectedThreadKey) {
-        return;
-      }
-      const nextLimit = Math.max(transcriptEntryLimit, minimumLimit);
-      if (nextLimit === transcriptEntryLimit) {
-        return;
-      }
-      if (onRenderedTranscriptEntryLimitChange) {
-        onRenderedTranscriptEntryLimitChange(nextLimit);
-        return;
-      }
-      setUncontrolledTranscriptEntryLimits((current) => {
-        const currentLimit =
-          current.get(selectedThreadKey)
-          ?? DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT;
-        if (currentLimit >= minimumLimit) {
-          return current;
-        }
-        const next = new Map(current);
-        next.set(selectedThreadKey, minimumLimit);
-        return next;
-      });
-    },
-    [
-      onRenderedTranscriptEntryLimitChange,
-      selectedThreadKey,
-      transcriptEntryLimit,
-    ],
-  );
-  const loadOlderTranscript = useCallback(async () => {
-    if (hiddenTranscriptEntryCount > 0) {
-      expandTranscriptEntryLimit(
-        Math.min(
-          transcriptEntryCount,
-          transcriptEntryLimit + THREAD_HISTORY_PAGE_LIMIT,
-        ),
-      );
-      return;
-    }
-    if (canLoadServerTranscriptHistory) {
-      // Reserve renderer capacity before the response prepends its page.
-      // Otherwise the newly loaded entries would remain hidden behind the
-      // existing tail window until a second upward scroll.
-      expandTranscriptEntryLimit(
-        transcriptEntryLimit + THREAD_HISTORY_PAGE_LIMIT,
-      );
-    }
-    await onLoadOlder();
-  }, [
-    canLoadServerTranscriptHistory,
-    expandTranscriptEntryLimit,
-    hiddenTranscriptEntryCount,
+  // Shared with the Star Map's chat cards, which mount the same transcript
+  // on a much smaller surface — see useTranscriptWindow.
+  const transcriptWindow = useTranscriptWindow({
+    entries: props.transcriptEntries,
+    limit: props.renderedTranscriptEntryLimit,
+    onLimitChange: onRenderedTranscriptEntryLimitChange,
     onLoadOlder,
-    transcriptEntryCount,
-    transcriptEntryLimit,
-  ]);
+    pagination: props.transcriptPagination,
+    threadKey: selectedThreadKey,
+  });
+  const {
+    canLoadFromServer: canLoadServerTranscriptHistory,
+    expandLimit: expandTranscriptEntryLimit,
+    hasMoreHistory: hasMoreTranscriptHistory,
+    hiddenCount: hiddenTranscriptEntryCount,
+    limit: transcriptEntryLimit,
+    loadOlder: loadOlderTranscript,
+    visibleEntries: visibleTranscriptEntries,
+    visiblePagination: visibleTranscriptPagination,
+  } = transcriptWindow;
   useEffect(() => {
     const target = pendingTranscriptTurnTarget;
     if (!target) {

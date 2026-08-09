@@ -18,6 +18,8 @@ import {
   type CompactComposerAction,
 } from "../composer/CompactComposer";
 import { TranscriptList } from "../thread-detail/TranscriptList";
+import { useTranscriptWindow } from "../thread-detail/useTranscriptWindow";
+import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-history-limits";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
@@ -75,7 +77,26 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // UI-THEME.md rules it out regardless.
   const titleTooltip = useViewportTooltip({ className: "viewport-tooltip" });
 
-  const session = useThreadSessionState({ desktopApi, thread });
+  // Without a limit `readThread` returns the thread from its first message.
+  // On a large thread that is the entire transcript — hundreds of MB over
+  // the bridge before the card can paint. The main window has always asked
+  // for the last few turns and scrolled back on demand; so does this.
+  const session = useThreadSessionState({
+    desktopApi,
+    initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+    thread,
+  });
+
+  // Cap what actually mounts. Same window the full thread view uses, so a
+  // card over a long thread holds tens of entries rather than thousands.
+  const transcriptWindow = useTranscriptWindow({
+    entries: session.entries,
+    limit: session.renderedTranscriptEntryLimit,
+    onLimitChange: session.setRenderedTranscriptEntryLimit,
+    onLoadOlder: session.loadOlder,
+    pagination: session.response?.replay.pagination,
+    threadKey: thread.id,
+  });
 
   const federationTarget =
     thread.federation?.ref.target ?? readRendererFederationTarget();
@@ -329,11 +350,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           activeTurnId={session.activeTurnId}
           activeTurnStartedAt={session.activeTurnStartedAt}
           desktopApi={desktopApi}
-          entries={session.entries}
+          entries={transcriptWindow.visibleEntries}
           error={session.error}
           loading={session.loading}
           loadingMore={session.loadingMore}
-          onLoadOlder={session.loadOlder}
+          onLoadOlder={transcriptWindow.loadOlder}
+          pagination={transcriptWindow.visiblePagination}
           parentThreadId={thread.id}
           pendingAssistantMessage={session.pendingAssistantMessage}
           pendingMcpInteraction={session.pendingMcpInteraction}

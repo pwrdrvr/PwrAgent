@@ -10873,10 +10873,27 @@ textarea,
   color: var(--text-primary);
 }
 
+/* A flex column that does NOT scroll. `.transcript-list__items` inside it
+   is the scroller, and it only becomes one if this box is a flex container
+   with `min-height: 0` — otherwise `.transcript-list`'s own `flex: 1` never
+   resolves, the items box grows to its full content height, and the
+   overflow lands here instead.
+
+   That is not cosmetic. TranscriptList writes scroll position, glue-to-
+   bottom and its load-older trigger against the items box, so when the
+   overflow moved up here every one of them silently did nothing: the card
+   opened at the OLDEST message, never followed new ones, and never paged.
+   Padding lives on the items box for the same reason it does in the main
+   window — the scroll fades have to overlay it, and the bottom reserve
+   keeps room for the thinking indicator. So no padding here, and no
+   override of the items rule either: the card takes the transcript's own
+   spacing rather than restating it. */
 .star-map-chat-card__transcript {
+  display: flex;
   flex: 1 1 auto;
-  overflow: hidden auto;
-  padding: 8px 10px;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .star-map-chat-card__error {
