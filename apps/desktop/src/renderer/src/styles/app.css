@@ -20400,13 +20400,16 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .composer__autocomplete-option {
   display: flex;
-  position: relative;
   width: 100%;
   min-width: 0;
   flex: 0 0 auto;
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
+  /* Pure geometry, not a visual: nothing colors this border anymore now
+     that the highlight is a tint. It stays because the 1px still sizes
+     the row — dropping it shrinks every option by 2px across all four
+     pickers. Fold it into `padding` if you ever want it gone. */
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
