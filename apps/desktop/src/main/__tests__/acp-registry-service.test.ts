@@ -310,6 +310,53 @@ describe("AcpRegistryService", () => {
     });
   });
 
+  it("allowlists only PwrAgent's exact Claude adapter pin", () => {
+    const service = new AcpRegistryService();
+    const snapshot = {
+      fetchedAt: 1,
+      agents: normalizeRegistry({
+        agents: [
+          {
+            id: "claude-acp",
+            name: "Claude Agent",
+            version: "0.60.0",
+            license: "Apache-2.0",
+            distribution: {
+              npx: {
+                package: "@agentclientprotocol/claude-agent-acp@0.60.0",
+              },
+            },
+          },
+          {
+            id: "claude-acp",
+            name: "Claude Agent",
+            version: "0.66.0",
+            license: "Apache-2.0",
+            distribution: {
+              npx: {
+                package: "@agentclientprotocol/claude-agent-acp@0.66.0",
+              },
+            },
+          },
+        ],
+      }),
+      raw: {},
+    };
+
+    const entries = service.applyAllowlist(snapshot);
+    expect(entries[0]).toMatchObject({
+      installable: true,
+      allowlist: {
+        allowed: true,
+        ruleId: "managed-claude-agent-acp-0.60.0",
+      },
+    });
+    expect(entries[1]).toMatchObject({
+      installable: false,
+      allowlist: { allowed: false, reason: "allowlist-rule-mismatch" },
+    });
+  });
+
   it("rejects registry HTTP failures", async () => {
     const service = new AcpRegistryService({
       fetch: async () => ({
