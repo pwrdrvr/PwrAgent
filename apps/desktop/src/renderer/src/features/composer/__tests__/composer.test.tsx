@@ -2319,6 +2319,58 @@ describe("Composer", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("re-arms a cold `#` anchor once the query is short again", async () => {
+    // The escape hatch. A retired anchor is keyed by the query's leading
+    // run, so deleting back past that run yields a different (shorter)
+    // key that was never retired — the same reason parking the caret
+    // right of the `#` re-arms it.
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: "019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+      title: "Bob's Best Thread 3000",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, targetThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    // Mistyped past the threshold — the apostrophe means this matches
+    // nothing, so the anchor goes cold on key "bobs bes".
+    fireEvent.change(textbox, { target: { value: "Ask #Bobs Best Thrxxx" } });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("listbox", { name: "Threads and pull requests" }),
+      ).not.toBeInTheDocument();
+    });
+
+    fireEvent.change(textbox, { target: { value: "Ask #Bob" } });
+
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    expect(
+      within(listbox).getByRole("button", { name: /#Bob's Best Thread 3000/ }),
+    ).toBeInTheDocument();
+  });
+
   it("keeps a long multi-word `#` query armed while it still matches", async () => {
     // The threshold must not punish a legitimate long title — the query
     // spans spaces precisely because thread titles do.
