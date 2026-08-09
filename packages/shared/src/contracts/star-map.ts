@@ -22,6 +22,25 @@ export type StarMapArrangementEntry = {
   by: string;
 };
 
+/**
+ * Reserved `threadKey` for an instance's load card. Thread keys are
+ * `buildThreadIdentityKey(source, id)` and every real backend source is a
+ * known kind, so a `system:` prefix cannot collide with one.
+ *
+ * Using the existing record instead of adding a field keeps this change
+ * additive on the wire: arrangement entries cross the federation, and an
+ * older peer validates only that `threadKey` is a non-empty string — it
+ * stores and relays the offset for a card it does not know how to render,
+ * rather than rejecting the merge.
+ *
+ * Presence is membership. An entry with live offsets means "this card is on
+ * the map" (`0,0` = open at its default spot); the null-pair tombstone that
+ * resets a thread card doubles as "closed" here. That is what makes the
+ * load card appear on every instance in the fleet, since arrangement writes
+ * already broadcast last-writer-wins.
+ */
+export const STAR_MAP_LOAD_CARD_KEY = "system:load";
+
 export function starMapArrangementEntryKey(
   entry: Pick<StarMapArrangementEntry, "instanceId" | "threadKey">,
 ): string {

@@ -22,6 +22,19 @@ export function useStarMapArrangement(params: {
     instanceId: string,
     threadKey: string,
   ) => StarMapCardOffset | undefined;
+  /**
+   * Whether a card key is present in the arrangement at all. Thread cards
+   * ignore this — they are derived, and an absent entry just means "default
+   * slot". Cards whose membership IS the arrangement entry (the reserved
+   * `system:` keys) read it to decide whether to render.
+   */
+  isCardPlaced: (instanceId: string, threadKey: string) => boolean;
+  /**
+   * Instance ids carrying a placed card for one key — how a reserved
+   * `system:` card discovers which instances are showing it without needing
+   * the body list, which is itself derived from that answer.
+   */
+  instancesWithCard: (threadKey: string) => string[];
   setCardPosition: (
     instanceId: string,
     threadKey: string,
@@ -116,5 +129,31 @@ export function useStarMapArrangement(params: {
     };
   }, [entries]);
 
-  return { offsetFor, setCardPosition };
+  const isCardPlaced = useMemo(() => {
+    return (instanceId: string, threadKey: string) => {
+      const entry = entries.get(
+        starMapArrangementEntryKey({ instanceId, threadKey }),
+      );
+      // A tombstone is the "removed" state, not a placement at the origin.
+      return Boolean(entry && entry.dx !== null && entry.dy !== null);
+    };
+  }, [entries]);
+
+  const instancesWithCard = useMemo(() => {
+    return (threadKey: string) => {
+      const ids: string[] = [];
+      for (const entry of entries.values()) {
+        if (
+          entry.threadKey === threadKey
+          && entry.dx !== null
+          && entry.dy !== null
+        ) {
+          ids.push(entry.instanceId);
+        }
+      }
+      return ids.sort();
+    };
+  }, [entries]);
+
+  return { offsetFor, isCardPlaced, instancesWithCard, setCardPosition };
 }

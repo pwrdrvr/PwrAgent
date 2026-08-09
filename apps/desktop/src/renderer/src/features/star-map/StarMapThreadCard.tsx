@@ -1,4 +1,4 @@
-import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
   buildThreadIdentityKey,
   type CelestialIconId,
@@ -16,15 +16,15 @@ import {
   getThreadRowStatus,
   ThreadRowStatus,
 } from "../navigation/ThreadRowStatus";
-import { pointerDeltaToCanvas, resolveCardDragOffset } from "./star-map-layout";
-import type { AlignmentGuide } from "./star-map-snapping";
+import {
+  useStarMapCardDrag,
+  type StarMapCardDrag,
+} from "./useStarMapCardDrag";
 import {
   visiblePullRequests,
   type StarMapCardFields,
 } from "./star-map-preferences";
 import type { StarMapSessionKeys } from "./attention";
-
-const DRAG_THRESHOLD_PX = 4;
 
 /**
  * Compact attention card floating in an instance's lane. Mirrors the
@@ -61,42 +61,7 @@ export function StarMapThreadCard(props: {
    * Present when the card is draggable. Radius and commit travel together
    * so a draggable card cannot exist without the region it drags in.
    */
-  drag?: {
-    /**
-     * Where drag resistance begins, measured from the INSTANCE BODY — one
-     * region shared by the whole cloud (`cloudDetentRadius`), not a
-     * per-card allowance, so any card can be placed where any other card
-     * sits. Past it the drag is resisted, not stopped.
-     */
-    detentRadius: number;
-    /**
-     * Current canvas scale. Pointer deltas arrive in screen pixels but the
-     * card is positioned in canvas pixels, so without this the card moves
-     * `scale` times too far and slides out from under the cursor.
-     */
-    scale: number;
-    /**
-     * Snap a proposed offset against the rest of the arrangement. The
-     * screen owns this because it is the only thing that knows where every
-     * other card sits; the card would otherwise have to reconstruct the
-     * whole map to align with one neighbour.
-     */
-    snap?: (offset: { dx: number; dy: number }) => {
-      dx: number;
-      dy: number;
-      guides: AlignmentGuide[];
-    };
-    /** Guides to draw while this drag is live; empty clears them. */
-    onGuidesChange?: (guides: AlignmentGuide[]) => void;
-    /**
-     * How far this drag has travelled, so the screen can carry the rest of
-     * a multi-card selection along. Fired per frame during the drag and
-     * once more on release, when the movement becomes durable.
-     */
-    onGroupDelta?: (delta: { dx: number; dy: number }) => void;
-    onGroupCommit?: (delta: { dx: number; dy: number }) => void;
-    onCommitOffset: (offset: { dx: number; dy: number }) => void;
-  };
+  drag?: StarMapCardDrag;
   /** `instanceId::threadKey`; unique across clouds. */
   cardKey: string;
   /** Part of a multi-card selection, so it moves with the others. */
@@ -122,9 +87,6 @@ export function StarMapThreadCard(props: {
     thread,
     props.sessionKeys?.thinkingThreadKeys,
   );
-  // Set while a pointer-drag exceeded the threshold, so the click that the
-  // browser fires on release does not also open the thread.
-  const suppressClickRef = useRef(false);
   // Cards live inside the clipped, transformed canvas, and a native
   // `title` cannot be styled, times out differently per platform, and
   // does not wrap on macOS Electron — see UI-THEME.md.
@@ -149,6 +111,16 @@ export function StarMapThreadCard(props: {
       : {}),
   };
 
+  const {
+    startDrag: startCardDrag,
+    consumeSuppressedClick,
+    suppressClick,
+  } = useStarMapCardDrag({
+    baseSlot: props.baseSlot,
+    offset: props.offset,
+    drag: props.drag,
+  });
+
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     // Modifier-click amends the selection rather than opening or dragging.
@@ -156,85 +128,17 @@ export function StarMapThreadCard(props: {
     // that swept up one card too many without starting the sweep over.
     // Gated on the handler so lenses with no selection (Projects) keep
     // modifier-click opening the thread instead of doing nothing at all.
+    //
+    // Handled here rather than in the drag hook because it is a selection
+    // gesture: the hook is shared with cards that have no selection at all.
     const toggleSelect = props.onToggleSelect;
     if (toggleSelect && (event.shiftKey || event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      suppressClickRef.current = true;
+      suppressClick();
       toggleSelect();
       return;
     }
-    const drag = props.drag;
-    if (!drag) return;
-    const element = event.currentTarget;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const startOffset = props.offset ?? { dx: 0, dy: 0 };
-    let dragging = false;
-    let lastDx = startOffset.dx;
-    let lastDy = startOffset.dy;
-    let frame = 0;
-    const move = (pointerEvent: globalThis.PointerEvent) => {
-      const screenX = pointerEvent.clientX - startX;
-      const screenY = pointerEvent.clientY - startY;
-      // The threshold is about human intent, so it stays in screen pixels;
-      // only the movement itself converts into canvas space.
-      if (
-        !dragging
-        && Math.hypot(screenX, screenY) < DRAG_THRESHOLD_PX
-      ) {
-        return;
-      }
-      dragging = true;
-      suppressClickRef.current = true;
-      const delta = pointerDeltaToCanvas({
-        dx: screenX,
-        dy: screenY,
-        scale: drag.scale,
-      });
-      const resolved = resolveCardDragOffset({
-        baseSlot: props.baseSlot,
-        offset: {
-          dx: startOffset.dx + delta.dx,
-          dy: startOffset.dy + delta.dy,
-        },
-        detentRadius: drag.detentRadius,
-      });
-      const snapped = drag.snap ? drag.snap(resolved) : undefined;
-      lastDx = snapped ? snapped.dx : resolved.dx;
-      lastDy = snapped ? snapped.dy : resolved.dy;
-      drag.onGuidesChange?.(snapped?.guides ?? []);
-      if (!frame) {
-        frame = requestAnimationFrame(() => {
-          frame = 0;
-          element.style.left = `${props.baseSlot.dx + lastDx}px`;
-          element.style.top = `${props.baseSlot.dy + lastDy}px`;
-          drag.onGroupDelta?.({
-            dx: lastDx - startOffset.dx,
-            dy: lastDy - startOffset.dy,
-          });
-        });
-      }
-    };
-    const stop = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", stop);
-      if (frame) {
-        cancelAnimationFrame(frame);
-        frame = 0;
-      }
-      drag.onGuidesChange?.([]);
-      if (dragging) {
-        drag.onCommitOffset({ dx: lastDx, dy: lastDy });
-        drag.onGroupCommit?.({
-          dx: lastDx - startOffset.dx,
-          dy: lastDy - startOffset.dy,
-        });
-      }
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop);
-    window.addEventListener("pointercancel", stop);
+    startCardDrag(event);
   };
 
   return (
@@ -277,10 +181,7 @@ export function StarMapThreadCard(props: {
           // and the kebab beside it gets a distinct name of its own.
           aria-label={`Open thread: ${thread.title}`}
           onClick={() => {
-            if (suppressClickRef.current) {
-              suppressClickRef.current = false;
-              return;
-            }
+            if (consumeSuppressedClick()) return;
             props.onOpen(thread);
           }}
         >

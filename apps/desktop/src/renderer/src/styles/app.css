@@ -9294,9 +9294,11 @@ textarea,
   z-index: 2;
 }
 
-/* A celestial body, not a box: glowing icon, label pill beneath. */
+/* A celestial body, not a box: glowing icon, label pill beneath, affordance
+   row absolutely positioned above (hence `relative`). */
 .star-map-instance {
   display: flex;
+  position: relative;
   flex-direction: column;
   align-items: center;
   gap: 8px;
@@ -9417,7 +9419,7 @@ textarea,
   font-size: 11px;
 }
 
-/* Label pill + [+] intake side by side under the body. */
+/* Label pill under the body. */
 .star-map-instance__row {
   display: inline-flex;
   align-items: center;
@@ -9425,28 +9427,199 @@ textarea,
   min-width: 0;
 }
 
-.star-map-instance__intake {
+/* The instance's affordance row, ABOVE the body and out of flow. In flow it
+   would grow this flex column and push the label into the first card slot -
+   worst on the wider hub body, where the margin is only a few px. */
+.star-map-instance__actions {
+  display: inline-flex;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  align-items: center;
+  gap: 4px;
+  transform: translateX(-50%);
+}
+
+/* Quiet by default: a fleet of four instances would otherwise carry a dozen
+   accent chips, against the one-accent-used-sparingly rule. Accent arrives
+   on hover, focus, and the pressed (card-open) state. */
+.star-map-instance__action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--accent-border);
+  /* 24px is the WCAG 2.2 target-size floor; the old 22px intake button was
+     under it. */
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  background: var(--accent-soft);
-  color: var(--accent-bright);
+  background: color-mix(in srgb, var(--bg-panel) 80%, transparent);
+  color: var(--text-secondary);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
 }
 
-.star-map-instance__intake:hover {
-  background: var(--accent-bg-medium);
+.star-map-instance__action svg {
+  fill: currentColor;
 }
 
-.star-map-instance__intake:focus-visible {
+.star-map-instance__action:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.star-map-instance__action[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.star-map-instance__action:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Selection is a "where am I looking" state, so it reads on the label the
+   local instance already marks itself with, not as another accent chip. */
+.star-map-instance--selected .star-map-instance__label {
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* Focusing one instance pushes the rest back rather than hiding them: the
+   topology still has to read as a whole while you work in one system. */
+.star-map__anchor--muted,
+.star-map__cloud--muted {
+  opacity: 0.35;
+  transition: opacity 160ms ease;
+}
+
+/* ==== Instance load card ==== */
+
+.star-map-load-card {
+  display: flex;
+  position: relative;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  /* Opaque for the same reason thread cards are: clouds overlap. */
+  background: var(--bg-panel);
+  color: var(--text-primary);
+}
+
+.star-map-load-shell:hover .star-map-load-card {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.star-map-load-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.star-map-load-card__eyebrow {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+/* Same reveal-on-hover contract as the thread card's kebab, including the
+   pointer-events guard so a hidden button cannot still be clicked. */
+.star-map-load-card__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+
+.star-map-load-shell:hover .star-map-load-card__dismiss,
+.star-map-load-card__dismiss:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.star-map-load-card__dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.star-map-load-card__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  gap: 4px 8px;
+}
+
+.star-map-load-card__metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.star-map-load-card__metrics dt {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-load-card__metrics dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.star-map-load-card__metrics dd:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.star-map-load-card__note {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+/* A reading nobody has refreshed must not read as a healthy idle machine. */
+.star-map-load-shell--stale .star-map-load-card__metrics dd {
+  color: var(--text-muted);
+}
+
+.star-map-load-shell--stale .star-map-load-card {
+  border-color: var(--border-subtle);
+  border-style: dashed;
 }
 
 /* AI intake dialog: a small centered chat panel over the map. */
@@ -10515,7 +10688,9 @@ textarea,
 .star-map-instance,
 .star-map-instance *,
 .star-map-card,
-.star-map-card * {
+.star-map-card *,
+.star-map-load-card,
+.star-map-load-card * {
   -webkit-app-region: no-drag;
 }
 

@@ -12,6 +12,7 @@ import {
   formatFederationPeerDisplayLabel,
   formatFederationPeerDisplayLabelParts,
   isRemoteFederationTarget,
+  STAR_MAP_LOAD_CARD_KEY,
   type FederationPeerSummary,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -86,8 +87,13 @@ import {
 } from "./star-map-view-geometry";
 import { StarMapViewOptions } from "./StarMapViewOptions";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
+import {
+  StarMapLoadCard,
+  STAR_MAP_LOAD_CARD_HEIGHT,
+} from "./StarMapLoadCard";
 import { StarMapThreadCard } from "./StarMapThreadCard";
 import { useStarMapArrangement } from "./useStarMapArrangement";
+import { useStarMapInstanceLoad } from "./useStarMapInstanceLoad";
 import { useStarMapThreads } from "./useStarMapThreads";
 
 const MAX_CARDS_PER_INSTANCE = 8;
@@ -153,6 +159,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }>({ width: 1280, height: 800 });
   const stars = useMemo(() => generateStarField(STAR_COUNT), []);
   const [intakeTarget, setIntakeTarget] = useState<IntakeDialogTarget>();
+  // Which instance the operator is focused on. Selection is deliberately
+  // view-local and unsynced: it is a "where am I looking" gesture, not a
+  // property of the fleet the way card placement is.
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string>();
   // Thread keys that just bubbled in via intake — they wear the entrance
   // animation until the timer clears them.
   const [enteringThreadKeys, setEnteringThreadKeys] = useState<Set<string>>(
@@ -404,6 +414,32 @@ export function StarMapScreen(props: StarMapScreenProps) {
     refreshNonce: remoteRefreshNonce,
   });
   const arrangement = useStarMapArrangement({ desktopApi: props.desktopApi });
+  // Load-card membership lives in the synced arrangement, so a card opened
+  // on one machine is on the map from every machine in the fleet.
+  const loadCardInstanceIds = useMemo(
+    () => arrangement.instancesWithCard(STAR_MAP_LOAD_CARD_KEY),
+    [arrangement],
+  );
+  const loadCardInstances = useMemo(
+    () => new Set(loadCardInstanceIds),
+    [loadCardInstanceIds],
+  );
+  const instanceLoads = useStarMapInstanceLoad({
+    desktopApi: props.desktopApi,
+    instanceIds: loadCardInstanceIds,
+  });
+  const toggleLoadCard = useCallback(
+    (instanceId: string) => {
+      arrangement.setCardPosition(
+        instanceId,
+        STAR_MAP_LOAD_CARD_KEY,
+        arrangement.isCardPlaced(instanceId, STAR_MAP_LOAD_CARD_KEY)
+          ? null
+          : { dx: 0, dy: 0 },
+      );
+    },
+    [arrangement],
+  );
 
   // The hub is the local instance unless this instance is a pure client -
   // then its enrolled gateway anchors the constellation and the local node
@@ -553,19 +589,33 @@ export function StarMapScreen(props: StarMapScreenProps) {
           cardHeights.get(buildThreadIdentityKey(thread.source, thread.id))
           ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
       );
+      // An open load card takes the slot nearest the star, so the lane has
+      // that much less room for threads. Reserving it here (rather than
+      // letting the card overlay) keeps the stack honest: the `+N more`
+      // badge counts what the load card displaced.
+      const loadReserve = loadCardInstances.has(instanceId)
+        ? STAR_MAP_LOAD_CARD_HEIGHT + STAR_MAP_CARD_GAP
+        : 0;
       // Lanes are bounded by the window; an orbit ring grows its radius
       // instead, so it only obeys the hard cap.
       const count = orbitMode
         ? Math.min(threads.length, ORBIT_MAX_CARDS_PER_INSTANCE)
         : visibleCardCount({
             heights,
-            availableHeight: viewportSize.height - STAR_MAP_BODY_ROW_Y,
+            availableHeight:
+              viewportSize.height - STAR_MAP_BODY_ROW_Y - loadReserve,
             max: MAX_CARDS_PER_INSTANCE,
           });
       result.set(instanceId, { threads, heights, count });
     }
     return result;
-  }, [attentionByInstance, cardHeights, orbitMode, viewportSize.height]);
+  }, [
+    attentionByInstance,
+    cardHeights,
+    loadCardInstances,
+    orbitMode,
+    viewportSize.height,
+  ]);
 
   const topology = useMemo(
     () =>
@@ -583,11 +633,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
       computeOrbitPlacement({
         nodes: topology,
         cardCounts: new Map(
-          [...lanes].map(([instanceId, lane]) => [instanceId, lane.count]),
+          // The load card rides the same rings, so it counts toward the
+          // radius the same way a thread card does.
+          [...lanes].map(([instanceId, lane]) => [
+            instanceId,
+            lane.count + (loadCardInstances.has(instanceId) ? 1 : 0),
+          ]),
         ),
         cardWidth: ORBIT_CARD_WIDTH,
       }),
-    [lanes, topology],
+    [lanes, loadCardInstances, topology],
   );
 
   /** Bodies plus their card slots, in whichever space the layout uses. */
@@ -609,11 +664,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
         isHub: position.isHub,
         x: position.x,
         y: position.y,
-        slots: computeCardSlots(lane?.heights.slice(0, lane.count) ?? []),
+        // The load card, when open, owns the slot nearest the star and the
+        // thread stack starts one slot further out.
+        slots: computeCardSlots([
+          ...(loadCardInstances.has(position.instanceId)
+            ? [STAR_MAP_LOAD_CARD_HEIGHT]
+            : []),
+          ...(lane?.heights.slice(0, lane.count) ?? []),
+        ]),
         cardWidth: laneLayout.cardWidth,
       };
     });
-  }, [laneLayout, lanes, orbit, orbitMode]);
+  }, [laneLayout, lanes, loadCardInstances, orbit, orbitMode]);
 
   const panZoomCanvas = orbitMode
     ? { width: orbit.canvasWidth, height: orbit.canvasHeight }
@@ -805,6 +867,38 @@ export function StarMapScreen(props: StarMapScreenProps) {
       ]),
     );
   }, [health, localInstanceId, peers, props.localInstanceLabel]);
+
+  /**
+   * Instance id → label of another instance on the same physical machine.
+   * Two profiles of one box report identical load, and two cards showing
+   * the same numbers reads as a bug unless the card says why.
+   *
+   * Peer-to-peer only: `machineId` arrives on the peer host block, and the
+   * local instance does not advertise a host block to itself, so a
+   * local/peer pair sharing one machine is not detected yet.
+   */
+  const sharedMachineLabels = useMemo(() => {
+    const byMachine = new Map<string, string[]>();
+    for (const peer of peers) {
+      const machineId = peer.host?.machineId;
+      if (!machineId || peer.revokedAt) continue;
+      byMachine.set(machineId, [...(byMachine.get(machineId) ?? []), peer.id]);
+    }
+    const labels = new Map<string, string>();
+    for (const ids of byMachine.values()) {
+      if (ids.length < 2) continue;
+      for (const id of ids) {
+        const others = ids
+          .filter((candidate) => candidate !== id)
+          .map((candidate) => {
+            const parts = displayLabelPartsById.get(candidate);
+            return parts?.profileName ?? parts?.label ?? candidate;
+          });
+        labels.set(id, others.join(", "));
+      }
+    }
+    return labels;
+  }, [displayLabelPartsById, peers]);
 
   const chatCards = useStarMapChatCards();
   const { desktopApi, onFocusLocalInstance, onOpenLocalThread } = props;
@@ -1244,10 +1338,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const threads = lane?.threads ?? [];
     const heights = lane?.heights ?? [];
     const visible = threads.slice(0, lane?.count ?? 0);
-    const slots = position.slots;
+    // Slot 0 belongs to the load card when it is open; the thread stack is
+    // laid out against the remainder.
+    const showLoadCard = loadCardInstances.has(position.instanceId);
+    const loadSlot = showLoadCard ? position.slots[0] : undefined;
+    const slots = showLoadCard ? position.slots.slice(1) : position.slots;
     // One region for the whole cloud, sized to the slots this lens drew,
     // so every card in it can reach every other card's position.
-    const detentRadius = cloudDetentRadius(slots);
+    const detentRadius = cloudDetentRadius(position.slots);
     const overflow = threads.length - visible.length;
     return (
       <div
@@ -1255,6 +1353,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         className={`star-map__cloud${
           remote.staleInstanceIds.has(position.instanceId)
             ? " star-map__cloud--stale"
+            : ""
+        }${
+          selectedInstanceId && selectedInstanceId !== position.instanceId
+            ? " star-map__cloud--muted"
             : ""
         }`}
         style={{ left: position.x, top: position.y }}
@@ -1270,6 +1372,37 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 + (heights[visible.length - 1] ?? 0)
                 + 40,
             }}
+          />
+        ) : null}
+        {loadSlot ? (
+          <StarMapLoadCard
+            key={`load:${position.instanceId}`}
+            instanceId={position.instanceId}
+            instanceLabel={instanceEntry(position.instanceId).label}
+            load={instanceLoads.get(position.instanceId)}
+            baseSlot={loadSlot}
+            offset={arrangement.offsetFor(
+              position.instanceId,
+              STAR_MAP_LOAD_CARD_KEY,
+            )}
+            width={position.cardWidth}
+            centered={orbitMode}
+            stackIndex={0}
+            sharedWith={sharedMachineLabels.get(position.instanceId)}
+            drag={
+              health?.instanceId
+                ? {
+                    detentRadius,
+                    onCommitOffset: (offset) =>
+                      arrangement.setCardPosition(
+                        position.instanceId,
+                        STAR_MAP_LOAD_CARD_KEY,
+                        offset,
+                      ),
+                  }
+                : undefined
+            }
+            onDismiss={() => toggleLoadCard(position.instanceId)}
           />
         ) : null}
         {visible.map((thread, index) => {
@@ -1500,7 +1633,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
           return (
             <div
               key={position.instanceId}
-              className="star-map__anchor"
+              className={`star-map__anchor${
+                selectedInstanceId && selectedInstanceId !== position.instanceId
+                  ? " star-map__anchor--muted"
+                  : ""
+              }`}
               style={{ left: position.x, top: position.y }}
             >
               <StarMapInstanceCard
@@ -1529,7 +1666,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 unreachable={remote.unreachableInstanceIds.has(
                   position.instanceId,
                 )}
+                selected={selectedInstanceId === position.instanceId}
+                onSelect={() =>
+                  setSelectedInstanceId((current) =>
+                    current === position.instanceId
+                      ? undefined
+                      : position.instanceId,
+                  )
+                }
                 onOpen={() => openInstance(position.instanceId)}
+                onToggleLoad={
+                  props.desktopApi?.readFederationInstanceLoad
+                  && (position.instanceId === localInstanceId
+                    || entry.peer?.status === "connected")
+                    ? () => toggleLoadCard(position.instanceId)
+                    : undefined
+                }
+                loadShown={loadCardInstances.has(position.instanceId)}
                 onIntake={
                   props.desktopApi?.dispatchStarMapIntake
                   && (position.instanceId === localInstanceId

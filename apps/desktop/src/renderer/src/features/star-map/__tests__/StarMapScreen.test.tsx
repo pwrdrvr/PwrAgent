@@ -75,6 +75,102 @@ describe("StarMapScreen", () => {
     window.localStorage.removeItem("pwragent.starMap.filters");
   });
 
+  it("writes load-card membership into the synced arrangement", async () => {
+    const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readStarMapArrangement: vi.fn(async () => ({ entries: [] })),
+      setStarMapCardPosition,
+      readFederationInstanceLoad: vi.fn(async () => ({})),
+    };
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: /^Show load for/ }),
+      ).not.toBeNull();
+    });
+    // Re-query at click time: card measurement re-renders the map, and a node
+    // captured by an earlier waitFor can already be detached.
+    fireEvent.click(screen.getByRole("button", { name: /^Show load for/ }));
+
+    // Membership IS the arrangement entry, which is what carries the card to
+    // every other instance in the fleet.
+    await waitFor(() => {
+      expect(setStarMapCardPosition).toHaveBeenCalledWith({
+        instanceId: "pwr_local",
+        threadKey: "system:load",
+        dx: 0,
+        dy: 0,
+      });
+    });
+  });
+
+  it("renders a load card for an instance the arrangement already places one on", async () => {
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readStarMapArrangement: vi.fn(async () => ({
+        entries: [
+          {
+            instanceId: "pwr_local",
+            threadKey: "system:load",
+            dx: 0,
+            dy: 0,
+            updatedAt: 10,
+            by: "pwr_other",
+          },
+        ],
+      })),
+      setStarMapCardPosition: vi.fn(async () => ({ entries: [] })),
+      readFederationInstanceLoad: vi.fn(async () => ({
+        load: {
+          loadAvg1: 6.5,
+          loadAvg5: 5,
+          loadAvg15: 4.25,
+          availableMemoryBytes: 2_147_483_648,
+          diskFreeBytes: 107_374_182_400,
+          sampledAt: Date.now(),
+        },
+      })),
+    };
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    // An entry written by another instance ("by: pwr_other") is enough: the
+    // fleet shares one map, so the card is here without a local click.
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).not.toBeNull();
+    });
+    await waitFor(() => {
+      expect(container.textContent).toContain("6.50");
+    });
+    expect(container.textContent).toContain("2.0 GB");
+    expect(
+      screen.getByRole("button", { name: /^Hide load for/ }),
+    ).toBeTruthy();
+  });
+
   // Mirrors the sidebar row's invariant (see thread-row-chips.test.tsx):
   // the chips carry real buttons, so nesting them inside the card's own
   // button is `nested-interactive` — invalid and unoperable.
