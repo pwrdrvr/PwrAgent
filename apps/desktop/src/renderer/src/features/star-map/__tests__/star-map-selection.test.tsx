@@ -41,21 +41,47 @@ function thread(id: string): NavigationThreadSummary {
   } as unknown as NavigationThreadSummary;
 }
 
-function renderMap(count: number) {
-  return render(
+function renderMap(
+  count: number,
+  overrides?: { desktopApi?: DesktopApi; onClose?: () => void },
+) {
+  const desktopApi = overrides?.desktopApi ?? buildDesktopApi();
+  const screenFor = (threadCount: number) => (
     <StarMapScreen
-      desktopApi={buildDesktopApi()}
-      localThreads={Array.from({ length: count }, (_, index) =>
+      desktopApi={desktopApi}
+      localThreads={Array.from({ length: threadCount }, (_, index) =>
         thread(`t${index}`),
       )}
       sessionKeys={{}}
       localInstanceLabel="Mac-Mini-M4"
       floating={false}
-      onClose={() => undefined}
+      onClose={overrides?.onClose ?? (() => undefined)}
       onOpenLocalThread={() => undefined}
       onFocusLocalInstance={() => undefined}
-    />,
+    />
   );
+  const result = render(screenFor(count));
+  return {
+    ...result,
+    /** Re-render with a different thread count, as a filter change would. */
+    showThreads: (next: number) => result.rerender(screenFor(next)),
+  };
+}
+
+/** Sweep the whole cloud, so every card lands in the selection. */
+function sweepEverything(modifier: "shiftKey" | "metaKey" = "shiftKey") {
+  fireEvent.pointerDown(viewport(), {
+    button: 0,
+    [modifier]: true,
+    clientX: -4000,
+    clientY: -4000,
+  });
+  fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
+  fireEvent.pointerUp(window, { clientX: 4000, clientY: 4000 });
+}
+
+function selectedShells(): HTMLElement[] {
+  return shells().filter((shell) => shell.className.includes("--selected"));
 }
 
 function viewport(): HTMLElement {
@@ -179,5 +205,149 @@ describe("star map marquee selection", () => {
       );
     });
     fireEvent.pointerUp(window, { clientX: 560, clientY: 400 });
+  });
+});
+
+describe("star map selection is amendable", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+    window.localStorage.removeItem("pwragent.starMap.filterSelection");
+  });
+
+  it("reports how many cards are selected", async () => {
+    renderMap(4);
+    await ready();
+    expect(screen.queryByText(/cards selected/)).toBeNull();
+
+    sweepEverything();
+    await waitFor(() => {
+      expect(screen.getByText(/\d+ cards selected/)).toBeTruthy();
+    });
+    expect(screen.getByText(`${selectedShells().length} cards selected`)).toBeTruthy();
+  });
+
+  it("clears the selection on a click on empty canvas", async () => {
+    renderMap(4);
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
+
+    // Press and release in the same spot: a click, not an abandoned pan.
+    fireEvent.pointerDown(viewport(), { button: 0, clientX: 300, clientY: 300 });
+    fireEvent.pointerUp(window, { clientX: 300, clientY: 300 });
+
+    await waitFor(() => expect(selectedShells()).toHaveLength(0));
+  });
+
+  it("keeps the selection when a pan is released somewhere else", async () => {
+    renderMap(4);
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
+    const before = selectedShells().length;
+
+    fireEvent.pointerDown(viewport(), { button: 0, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(window, { clientX: 460, clientY: 380 });
+    fireEvent.pointerUp(window, { clientX: 460, clientY: 380 });
+
+    expect(selectedShells()).toHaveLength(before);
+  });
+
+  it("drops the selection on Escape before it closes the map", async () => {
+    const onClose = vi.fn();
+    renderMap(4, { onClose });
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
+
+    const layer = document.querySelector(".star-map");
+    if (!(layer instanceof HTMLElement)) throw new Error("no layer");
+    fireEvent.keyDown(layer, { key: "Escape" });
+
+    await waitFor(() => expect(selectedShells()).toHaveLength(0));
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Nothing left to unwind, so the second press closes.
+    fireEvent.keyDown(layer, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes a card back out of the selection on a modifier-click", async () => {
+    renderMap(4);
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
+    const before = selectedShells().length;
+
+    fireEvent.pointerDown(selectedShells()[0], {
+      button: 0,
+      shiftKey: true,
+      clientX: 500,
+      clientY: 400,
+    });
+
+    await waitFor(() => expect(selectedShells()).toHaveLength(before - 1));
+  });
+
+  it("extends the selection on a Cmd-sweep and replaces it on a Shift-sweep", async () => {
+    renderMap(4);
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
+    const before = selectedShells().length;
+
+    // A sweep over empty space. In add mode it takes nothing away...
+    fireEvent.pointerDown(viewport(), {
+      button: 0,
+      metaKey: true,
+      clientX: 6000,
+      clientY: 6000,
+    });
+    fireEvent.pointerMove(window, { clientX: 6200, clientY: 6200 });
+    fireEvent.pointerUp(window, { clientX: 6200, clientY: 6200 });
+    expect(selectedShells()).toHaveLength(before);
+
+    // ...while the same sweep in replace mode starts a fresh, empty one.
+    fireEvent.pointerDown(viewport(), {
+      button: 0,
+      shiftKey: true,
+      clientX: 6000,
+      clientY: 6000,
+    });
+    fireEvent.pointerMove(window, { clientX: 6200, clientY: 6200 });
+    fireEvent.pointerUp(window, { clientX: 6200, clientY: 6200 });
+    await waitFor(() => expect(selectedShells()).toHaveLength(0));
+  });
+
+  it("remembers cards that left the map but does not move them", async () => {
+    const desktopApi = buildDesktopApi();
+    const { showThreads } = renderMap(4, { desktopApi });
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(selectedShells().length).toBe(4));
+
+    // Two cards leave — a filter change, or the instance that owns them
+    // dropping for a moment.
+    showThreads(2);
+    await waitFor(() => expect(shells()).toHaveLength(2));
+    // Still remembered: an instance that flaps must not silently cost the
+    // operator every card it owns.
+    expect(screen.getByText("4 cards selected")).toBeTruthy();
+
+    const dragged = selectedShells()[0];
+    fireEvent.pointerDown(dragged, { button: 0, clientX: 500, clientY: 400 });
+    await act(async () => {
+      fireEvent.pointerMove(window, { clientX: 560, clientY: 400 });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    });
+    fireEvent.pointerUp(window, { clientX: 560, clientY: 400 });
+
+    // The absent cards take no offset. Committing one would land invisibly
+    // and only surface when the card came back.
+    const moved = vi.mocked(desktopApi.setStarMapCardPosition).mock.calls;
+    expect(moved.length).toBeGreaterThan(0);
+    for (const call of moved) {
+      expect(JSON.stringify(call)).not.toMatch(/t2|t3/);
+    }
   });
 });

@@ -101,6 +101,12 @@ export function StarMapThreadCard(props: {
   cardKey: string;
   /** Part of a multi-card selection, so it moves with the others. */
   selected?: boolean;
+  /**
+   * Add or remove this card from the selection. Deliberately outside
+   * `drag`: amending a selection has to work before the durable instance
+   * id lands, which is the one thing that gates dragging.
+   */
+  onToggleSelect?: () => void;
   onOpen: (thread: NavigationThreadSummary) => void;
   /** Kebab entries; the kebab is hidden when empty. */
   menuActions?: StarMapCardMenuAction[];
@@ -144,8 +150,21 @@ export function StarMapThreadCard(props: {
   };
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    // Modifier-click amends the selection rather than opening or dragging.
+    // It is the platform convention, and the only way to correct a marquee
+    // that swept up one card too many without starting the sweep over.
+    // Gated on the handler so lenses with no selection (Projects) keep
+    // modifier-click opening the thread instead of doing nothing at all.
+    const toggleSelect = props.onToggleSelect;
+    if (toggleSelect && (event.shiftKey || event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      suppressClickRef.current = true;
+      toggleSelect();
+      return;
+    }
     const drag = props.drag;
-    if (!drag || event.button !== 0) return;
+    if (!drag) return;
     const element = event.currentTarget;
     const startX = event.clientX;
     const startY = event.clientY;
