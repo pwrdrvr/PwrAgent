@@ -221,6 +221,13 @@ export function buildToolOutputMetrics(
  * The summing rules mirror `mergeThreadToolInvocationForUpsert` in
  * `overlay-store-sqlite.ts` for the in-progress case, so a coalesced record
  * merges onto the stored row exactly as the individual deltas would have.
+ *
+ * BOTH arguments must come from the `item/commandExecution/outputDelta` branch
+ * of `toolInvocationFromNotification`, and `incoming` must be the newer of the
+ * two. Only counters are combined; every other field is taken from `incoming`,
+ * so passing a lifecycle record here would drop the other one's `exitCode`,
+ * `completedAt`, `normalizedCommand`, and `sessionId`. Delta records carry
+ * none of those, which is what makes the wholesale take safe.
  */
 export function mergeStreamedToolInvocationDeltas(
   accumulated: ThreadToolInvocationRecord,
@@ -237,14 +244,6 @@ export function mergeStreamedToolInvocationDeltas(
     outputChars,
     outputLines: accumulated.outputLines + incoming.outputLines,
     outputTruncated: accumulated.outputTruncated || incoming.outputTruncated,
-    ...(accumulated.startedAt !== undefined || incoming.startedAt !== undefined
-      ? {
-          startedAt: Math.min(
-            accumulated.startedAt ?? accumulated.observedAt,
-            incoming.startedAt ?? incoming.observedAt,
-          ),
-        }
-      : {}),
     updatedAt: Math.max(accumulated.updatedAt, incoming.updatedAt),
     warningLines: accumulated.warningLines + incoming.warningLines,
   };

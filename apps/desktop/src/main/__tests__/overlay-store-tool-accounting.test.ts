@@ -153,6 +153,13 @@ describe("SqliteOverlayStore tool invocation accounting", () => {
     // Codex streams fixed 8 KiB chunks; the registry folds them in memory and
     // writes once per flush window. The stored totals have to match what a
     // write per chunk produced, or the coalescing quietly changes accounting.
+    //
+    // This asserts equality with the old behavior, not correctness of the
+    // counters themselves. `outputLines` in particular over-counts, because a
+    // fixed-size chunk boundary lands mid-line and both halves count as lines.
+    // That is pre-existing and deliberately preserved here — if you set out to
+    // fix the line count, this test is measuring the wrong thing for you and
+    // should change with it.
     const deltas = [
       "warning: slow step\nbuilding module a\n",
       "error: module b failed\nretrying\n",

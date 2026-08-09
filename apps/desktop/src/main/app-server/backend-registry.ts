@@ -16824,12 +16824,9 @@ export class DesktopBackendRegistry {
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
     }
-    if (this.pendingToolInvocationDeltaTimer) {
-      clearTimeout(this.pendingToolInvocationDeltaTimer);
-      this.pendingToolInvocationDeltaTimer = undefined;
-    }
     // A command streaming at quit time has accounting worth up to one flush
-    // window sitting in memory; write it before the store goes away.
+    // window sitting in memory; write it before the store goes away. The flush
+    // owns the timer, and `closed` above stops anything re-arming it.
     await this.flushStreamedToolInvocationDeltas();
     for (const reconciliation of this.codexNativeSubAgentReconciliations.values()) {
       if (reconciliation.timer) {
@@ -20799,8 +20796,11 @@ export class DesktopBackendRegistry {
         ? mergeStreamedToolInvocationDeltas(accumulated, invocation)
         : invocation,
     );
+    this.scheduleStreamedToolInvocationFlush();
+  }
 
-    if (this.pendingToolInvocationDeltaTimer) {
+  private scheduleStreamedToolInvocationFlush(): void {
+    if (this.pendingToolInvocationDeltaTimer || this.closed) {
       return;
     }
     this.pendingToolInvocationDeltaTimer = setTimeout(() => {
@@ -20824,6 +20824,12 @@ export class DesktopBackendRegistry {
   }
 
   private async writePendingToolInvocationDeltas(): Promise<void> {
+    // Whoever reached here is draining now, so a timer armed for this batch has
+    // nothing left to do.
+    if (this.pendingToolInvocationDeltaTimer) {
+      clearTimeout(this.pendingToolInvocationDeltaTimer);
+      this.pendingToolInvocationDeltaTimer = undefined;
+    }
     if (
       this.pendingToolInvocationDeltas.size === 0
       || typeof this.overlayStore.upsertThreadToolInvocation !== "function"
@@ -20836,6 +20842,12 @@ export class DesktopBackendRegistry {
       try {
         await this.overlayStore.upsertThreadToolInvocation({ invocation });
       } catch (error) {
+        // Unlike the lifecycle write in `recordToolInvocationAccounting`, this
+        // one has no caller to reject: most flushes run from a timer, where
+        // throwing would only produce an unhandled rejection. Put the record
+        // back instead, so a transient store failure costs a retry rather than
+        // the whole accumulated window, and let the next flush carry it.
+        this.requeueFailedToolInvocationDelta(invocation);
         backendRegistryLog.warn("tool invocation output accounting write failed", {
           backend: invocation.backend,
           error: error instanceof Error ? error.message : String(error),
@@ -20844,6 +20856,24 @@ export class DesktopBackendRegistry {
         });
       }
     }
+  }
+
+  private requeueFailedToolInvocationDelta(
+    invocation: ThreadToolInvocationRecord,
+  ): void {
+    if (this.closed) {
+      // Shutdown already took its one flush attempt; retrying would only queue
+      // work against a store that is going away.
+      return;
+    }
+    const newer = this.pendingToolInvocationDeltas.get(invocation.invocationId);
+    this.pendingToolInvocationDeltas.set(
+      invocation.invocationId,
+      newer
+        ? mergeStreamedToolInvocationDeltas(invocation, newer)
+        : invocation,
+    );
+    this.scheduleStreamedToolInvocationFlush();
   }
 
   private async describeSingleBackend(
