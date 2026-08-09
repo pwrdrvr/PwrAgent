@@ -241,7 +241,7 @@ MIT
 - is-plain-obj@4.1.0 | sindresorhus/is-plain-obj
 - is-promise@4.0.0 | https://github.com/then/is-promise
 - jose@6.2.3 | panva/jose
-- js-yaml@4.3.0 | nodeca/js-yaml
+- js-yaml@4.3.1 | nodeca/js-yaml
 - json-schema-traverse@1.0.0 | https://github.com/epoberezkin/json-schema-traverse
 - json-with-bigint@3.5.8 | https://github.com/Ivan-Korolenko/json-with-bigint
 - jsonfile@6.2.1 | https://github.com/jprichardson/node-jsonfile
@@ -4026,13 +4026,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-js-yaml@4.3.0 (MIT)
+js-yaml@4.3.1 (MIT)
 -------------------
 
 Applies to:
-- js-yaml@4.3.0 (MIT)
+- js-yaml@4.3.1 (MIT)
 
-Representative file: js-yaml@4.3.0/LICENSE
+Representative file: js-yaml@4.3.1/LICENSE
 
 (The MIT License)
 
