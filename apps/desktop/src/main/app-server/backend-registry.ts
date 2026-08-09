@@ -27587,6 +27587,12 @@ export class DesktopBackendRegistry {
    * which `docs/thread-history-persistence.md` requires.
    */
   private async forwardManagedReviewActivity(event: AgentEvent): Promise<void> {
+    // Every emitted event reaches this method, including per-chunk streaming
+    // deltas on unrelated threads. Reviews are rare and short-lived, so settle
+    // the common case with a size check before touching the notification.
+    if (this.activeReviewSubAgents.size === 0) {
+      return;
+    }
     const method = event.notification.method;
     const isItemEnvelope =
       method === "item/started" || method === "item/completed";
@@ -27635,7 +27641,11 @@ export class DesktopBackendRegistry {
       typeof value === "string" ? `managed-review:${value}` : undefined;
     const forwardedItemId = namespaceId(params.item?.id);
     const forwardedRefId = namespaceId(params.itemId);
-    await this.emit({
+    // Straight to listeners, NOT back through `emit`. The forwarded copy is a
+    // view of activity the child thread already recorded; replaying it through
+    // the pipeline would write a second tool-invocation row per item and add
+    // parent-keyed entries to the file-change approval-context cache.
+    await this.emitToListeners({
       backend: event.backend,
       notification: {
         ...event.notification,
@@ -28119,6 +28129,18 @@ export class DesktopBackendRegistry {
     this.notifyForAttentionRequired(event);
     await this.notifyForTerminalOutcome(event);
 
+    await this.emitToListeners(event);
+  }
+
+  /**
+   * Fan an event out to subscribers without running any of `emit`'s recording
+   * stages. Only for events that are a *view* of something already recorded —
+   * a managed review's forwarded activity is the sole caller. Running those
+   * through `emit` would re-execute the whole pipeline against the parent
+   * thread id, which double-counts tool accounting (a sqlite write per item)
+   * and pollutes the file-change approval-context cache.
+   */
+  private async emitToListeners(event: AgentEvent): Promise<void> {
     for (const listener of this.eventListeners) {
       try {
         await listener(event);
