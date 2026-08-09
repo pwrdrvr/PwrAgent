@@ -76,6 +76,12 @@ const INLINE_CHEVRONS: Array<{ name: string; collapsed: string; expanded: string
   },
 ];
 
+const NON_ARIA_STATE_CHEVRONS = INLINE_CHEVRONS.filter(
+  ({ collapsed, expanded }) =>
+    !collapsed.includes("aria-expanded")
+    && !expanded.includes("aria-expanded"),
+);
+
 // The base element rule that paints each unfilled chevron's "V" shape.
 const UNFILLED_BASE_RULES = [
   ".transcript-activity__chevron",
@@ -157,24 +163,22 @@ function sweepStateRules(): SweptRule[] {
 }
 
 describe("chevron disclosure direction contract", () => {
-  it.each(INLINE_CHEVRONS)(
-    "$name points right when collapsed (rotate(-45deg))",
-    ({ collapsed }) => {
+  // The generic aria-expanded sweep below covers those state pairs. These
+  // two legacy state selectors do not use aria-expanded, so keep their
+  // direction contract explicit without re-running every swept pair.
+  it.each(NON_ARIA_STATE_CHEVRONS)(
+    "$name points right when collapsed and down when expanded",
+    ({ collapsed, expanded }) => {
       const body = ruleBody(collapsed);
       expect(body).toContain("rotate(-45deg)");
       // "rotate(-45deg)" never contains the substring "rotate(45deg)", so
       // this guards against an expanded value leaking into a collapsed rule.
       expect(body).not.toContain("rotate(45deg)");
-    }
-  );
 
-  it.each(INLINE_CHEVRONS)(
-    "$name points down when expanded (rotate(45deg))",
-    ({ expanded }) => {
-      const body = ruleBody(expanded);
-      expect(body).toContain("rotate(45deg)");
-      expect(body).not.toContain("rotate(-45deg)");
-    }
+      const expandedBody = ruleBody(expanded);
+      expect(expandedBody).toContain("rotate(45deg)");
+      expect(expandedBody).not.toContain("rotate(-45deg)");
+    },
   );
 
   it.each(UNFILLED_BASE_RULES)("%s is an unfilled border chevron", (selector) => {

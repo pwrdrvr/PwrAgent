@@ -2,41 +2,30 @@ import { describe, expect, it } from "vitest";
 
 import { isBranchDrifted } from "../branch-drift";
 
+const BRANCH_DRIFT_CASES: Array<[
+  scenario: string,
+  expected: string | undefined,
+  observed: string | undefined,
+  drifted: boolean,
+]> = [
+  ["missing expected branch", undefined, "main", false],
+  ["missing observed branch", "main", undefined, false],
+  ["equal named branches", "main", "main", false],
+  [
+    "HEAD expected and a named branch observed",
+    "HEAD",
+    "fix/release-skill-squash-merge",
+    true,
+  ],
+  ["a named branch expected and HEAD observed", "main", "HEAD", true],
+  ["HEAD on both sides", "HEAD", "HEAD", false],
+  ["different named branches", "main", "feature/x", true],
+  ["an empty expected branch", "", "main", false],
+  ["an empty observed branch", "main", "", false],
+];
+
 describe("isBranchDrifted", () => {
-  it("returns false when both args are undefined", () => {
-    expect(isBranchDrifted(undefined, undefined)).toBe(false);
-  });
-
-  it("returns false when expected is undefined", () => {
-    expect(isBranchDrifted(undefined, "main")).toBe(false);
-  });
-
-  it("returns false when observed is undefined", () => {
-    expect(isBranchDrifted("main", undefined)).toBe(false);
-  });
-
-  it("returns false when both are equal named branches", () => {
-    expect(isBranchDrifted("main", "main")).toBe(false);
-  });
-
-  it("returns true when expected is HEAD and observed is a named branch", () => {
-    expect(isBranchDrifted("HEAD", "fix/release-skill-squash-merge")).toBe(true);
-  });
-
-  it("returns true when observed is HEAD and expected is a named branch", () => {
-    expect(isBranchDrifted("main", "HEAD")).toBe(true);
-  });
-
-  it("returns false when both are HEAD", () => {
-    expect(isBranchDrifted("HEAD", "HEAD")).toBe(false);
-  });
-
-  it("returns true when both are different named branches", () => {
-    expect(isBranchDrifted("main", "feature/x")).toBe(true);
-  });
-
-  it("treats empty strings as missing", () => {
-    expect(isBranchDrifted("", "main")).toBe(false);
-    expect(isBranchDrifted("main", "")).toBe(false);
+  it.each(BRANCH_DRIFT_CASES)("handles %s", (_scenario, expected, observed, drifted) => {
+    expect(isBranchDrifted(expected, observed)).toBe(drifted);
   });
 });

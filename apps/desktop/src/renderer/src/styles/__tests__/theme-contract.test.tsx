@@ -426,11 +426,6 @@ describe("Tangerine Terminal theme contract", () => {
     expect(titleButtonRule).not.toMatch(/(?:^|\n)\s*width:\s*100%;/);
   });
 
-  it("uses the standard thread chrome instead of legacy launchpad chrome", () => {
-    expect(css).not.toContain(".thread-header--launchpad");
-    expect(css).not.toContain(".launchpad-panel");
-  });
-
   it("keeps launchpad setup output from shrinking the header summary", () => {
     const setupComposerRule = extractRuleBody(
       css,

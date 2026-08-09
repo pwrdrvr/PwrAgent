@@ -763,7 +763,7 @@ describe("LineAdapter", () => {
     );
   });
 
-  it("rejects attachments over the request download limit before fetching", async () => {
+  it("rejects attachments over request and provider download limits before fetching", async () => {
     const api = createApi();
     const adapter = new LineAdapter({
       api,
@@ -772,16 +772,24 @@ describe("LineAdapter", () => {
     });
     adapters.push(adapter);
 
-    await expect(adapter.downloadAttachment({
-      attachment: {
-        id: "123",
-        kind: "file",
-        name: "large.bin",
-        disposition: "available",
-        sizeBytes: 11,
-      },
-      maxBytes: 10,
-    })).rejects.toThrow(/download limit/);
+    for (const { maxBytes, sizeBytes } of [
+      { maxBytes: 10, sizeBytes: 11 },
+      // The request allows 300 MiB, so only LINE's advertised 200 MiB cap
+      // rejects this case. The previous 200 MiB request duplicated the first
+      // branch and did not actually distinguish the provider cap.
+      { maxBytes: 300 * 1024 * 1024, sizeBytes: 201 * 1024 * 1024 },
+    ]) {
+      await expect(adapter.downloadAttachment({
+        attachment: {
+          id: "123",
+          kind: "file",
+          name: "large.bin",
+          disposition: "available",
+          sizeBytes,
+        },
+        maxBytes,
+      })).rejects.toThrow(/download limit/);
+    }
     expect(api.downloadMessageContent).not.toHaveBeenCalled();
   });
 
@@ -830,28 +838,6 @@ describe("LineAdapter", () => {
       fileName: "small.bin",
       sizeBytes: 10,
     });
-  });
-
-  it("rejects attachments over the advertised download cap before fetching", async () => {
-    const api = createApi();
-    const adapter = new LineAdapter({
-      api,
-      callbackHandleStore: createCallbackStore(),
-      config: createConfig(),
-    });
-    adapters.push(adapter);
-
-    await expect(adapter.downloadAttachment({
-      attachment: {
-        id: "123",
-        kind: "file",
-        name: "large.bin",
-        disposition: "available",
-        sizeBytes: 201 * 1024 * 1024,
-      },
-      maxBytes: 200 * 1024 * 1024,
-    })).rejects.toThrow(/download limit/);
-    expect(api.downloadMessageContent).not.toHaveBeenCalled();
   });
 });
 
