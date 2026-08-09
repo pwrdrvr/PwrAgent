@@ -370,22 +370,41 @@ test("plain-text and text/html copies of one source paste to identical markdown"
 // HTML-authoritative guard still defers to the default paste when the clipboard
 // HTML already encodes the structure (a <pre>/<ul>/<ol>/<blockquote>/<hN>).
 
-async function pasteListAndReadValue(flavor: {
-  html?: string;
-  text: string;
-}): Promise<string | null> {
+async function pasteListsAndReadValues(
+  scenarios: ReadonlyArray<{
+    flavor: { html?: string; text: string };
+    listTag: "ol" | "ul";
+  }>,
+): Promise<Array<string | null>> {
   const fixture = await createPasteFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
   try {
     await openExistingThread(app);
     const tiptapInput = app.window.getByTestId("composer-tiptap-input");
-    await app.window.getByRole("textbox", { name: "Reply" }).focus();
-    await pasteIntoReply(app.window, flavor);
-    // Wait for the list to render before snapshotting the serialized value.
-    await expect(
-      tiptapInput.locator(".composer-tiptap-input__editor > ul > li"),
-    ).toHaveCount(2);
-    return await tiptapInput.getAttribute("data-value");
+    const textbox = app.window.getByRole("textbox", { name: "Reply" });
+    const values: Array<string | null> = [];
+
+    for (const [index, scenario] of scenarios.entries()) {
+      await textbox.focus();
+      if (index > 0) {
+        await app.window.keyboard.press(
+          process.platform === "darwin" ? "Meta+A" : "Control+A",
+        );
+        await app.window.keyboard.press("Delete");
+        await expect(tiptapInput).toHaveAttribute("data-value", "");
+      }
+
+      await pasteIntoReply(app.window, scenario.flavor);
+      // Wait for the list to render before snapshotting the serialized value.
+      await expect(
+        tiptapInput.locator(
+          `.composer-tiptap-input__editor > ${scenario.listTag} > li`,
+        ),
+      ).toHaveCount(2);
+      values.push(await tiptapInput.getAttribute("data-value"));
+    }
+
+    return values;
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -438,21 +457,34 @@ test("pasted inline code renders as a styled pill, not bare text", async () => {
   }
 });
 
-test("a bullet list round-trips identically from text/plain and from list HTML", async () => {
-  const text = ["Steps:", "", "- First", "- Second"].join("\n");
-  const expected = "Steps:\n\n- First\n- Second";
+test("fence-free lists reconstruct and bullets round-trip identically from plain text and HTML", async () => {
+  const bulletText = ["Steps:", "", "- First", "- Second"].join("\n");
+  const bulletExpected = "Steps:\n\n- First\n- Second";
+  const orderedText = ["Order matters:", "", "1. Alpha", "2. Beta"].join("\n");
+  const orderedExpected = "Order matters:\n\n1. Alpha\n2. Beta";
 
-  // text/plain only → parser reconstructs the list.
-  const plain = await pasteListAndReadValue({ text });
+  // Each text/plain list independently triggers the block-markdown parser.
+  // Keeping the ordered-only clipboard free of bullets and fences ensures its
+  // detection cannot hitchhike on another block marker.
+  const [plainBullet, plainOrdered] = await pasteListsAndReadValues([
+    { flavor: { text: bulletText }, listTag: "ul" },
+    { flavor: { text: orderedText }, listTag: "ol" },
+  ]);
   // Rich HTML with a <ul> → the guard defers to the default paste, which
   // reconstructs from the HTML. Either flavor must serialize to the same markdown.
-  const html = await pasteListAndReadValue({
-    html: "<p>Steps:</p><ul><li>First</li><li>Second</li></ul>",
-    text,
-  });
+  const [htmlBullet] = await pasteListsAndReadValues([
+    {
+      flavor: {
+        html: "<p>Steps:</p><ul><li>First</li><li>Second</li></ul>",
+        text: bulletText,
+      },
+      listTag: "ul",
+    },
+  ]);
 
-  expect(plain).toBe(expected);
-  expect(html).toBe(plain);
+  expect(plainBullet).toBe(bulletExpected);
+  expect(htmlBullet).toBe(plainBullet);
+  expect(plainOrdered).toBe(orderedExpected);
 });
 
 // --- Nested language fences: the composer must agree with the transcript ---
