@@ -10434,7 +10434,7 @@ textarea,
   inset: 0;
 }
 
-.star-map__canvas.is-orbit {
+.star-map__canvas.is-transformed {
   inset: auto;
   left: 0;
   top: 0;
@@ -10444,7 +10444,7 @@ textarea,
 
 /* Bare sky is a pan handle in orbit; cards and bodies keep their own
    cursors because the pan never starts on them. */
-.star-map__viewport:has(.star-map__canvas.is-orbit) {
+.star-map__viewport:has(.star-map__canvas.is-transformed) {
   cursor: grab;
 }
 

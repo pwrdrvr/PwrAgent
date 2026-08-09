@@ -80,10 +80,10 @@ import {
   type StarMapViewPreferences,
 } from "./star-map-preferences";
 import {
-  centerStarMapView,
   clampStarMapView,
   MAX_ZOOM,
   MIN_ZOOM,
+  placeStarMapView,
 } from "./star-map-view-geometry";
 import { StarMapViewOptions } from "./StarMapViewOptions";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
@@ -96,12 +96,20 @@ import { useStarMapArrangement } from "./useStarMapArrangement";
 import { useStarMapInstanceLoad } from "./useStarMapInstanceLoad";
 import { useStarMapThreads } from "./useStarMapThreads";
 
-const MAX_CARDS_PER_INSTANCE = 8;
+/**
+ * DOM-size backstop for a lane column, not a design limit: lanes pan and
+ * zoom, so a column is free to run past the fold. A fleet of five instances
+ * at this ceiling is already 200 mounted cards, which is the real reason to
+ * stop somewhere; past it the `+N more` badge tells the truth.
+ */
+const LANE_MAX_CARDS_PER_INSTANCE = 40;
 const STAR_COUNT = 130;
 /** Orbit rings use a fixed card width; lanes narrow theirs to fit. */
 const ORBIT_CARD_WIDTH = 200;
-/** Rings hold far more than a lane column, so orbit shows deeper. */
+/** A ring crowds geometrically, so orbit stays shallower than a column. */
 const ORBIT_MAX_CARDS_PER_INSTANCE = 16;
+/** Breathing room past the longest column / widest lane when panning. */
+const LANE_CANVAS_PADDING = 120;
 /**
  * Chat cards float above the map chrome (close button, filters, view
  * options) so a card being read is never underneath a control strip.
@@ -189,12 +197,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
   /** Projects as suns: threads pooled across instances, one body per repo. */
   const projectsMode = preferences.layout === "projects";
   /**
-   * Both big-canvas lenses pan and zoom; lanes fits the window and does
-   * not. Projects previously failed every one of these gates, so its
-   * oversized canvas could not be navigated at all, and the centring
-   * effect pinned it to the origin instead of centring it.
+   * Lanes hang from the top: bodies sit at a fixed y and their columns grow
+   * downward, so a tall canvas has to open at the top edge. Centring it — as
+   * the radial lenses want — would open the map already scrolled past the
+   * stars and the instance bodies.
    */
-  const panZoomMode = orbitMode || projectsMode;
+  const topAnchoredView = !orbitMode && !projectsMode;
 
   // Focus the layer on open AND whenever the floating thread closes -
   // "Back to map" leaves focus inside <main>, and without a refocus the
@@ -589,33 +597,22 @@ export function StarMapScreen(props: StarMapScreenProps) {
           cardHeights.get(buildThreadIdentityKey(thread.source, thread.id))
           ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
       );
-      // An open load card takes the slot nearest the star, so the lane has
-      // that much less room for threads. Reserving it here (rather than
-      // letting the card overlay) keeps the stack honest: the `+N more`
-      // badge counts what the load card displaced.
-      const loadReserve = loadCardInstances.has(instanceId)
-        ? STAR_MAP_LOAD_CARD_HEIGHT + STAR_MAP_CARD_GAP
-        : 0;
-      // Lanes are bounded by the window; an orbit ring grows its radius
-      // instead, so it only obeys the hard cap.
+      // A lane is no longer bounded by the window: the column grows as long
+      // as it needs and the operator pans and zooms into it, the way the
+      // orbit lens already worked. Truncating at the fold hid curated
+      // threads that were never coming back into view — the cap that
+      // remains is a DOM-size backstop, not a design limit.
       const count = orbitMode
         ? Math.min(threads.length, ORBIT_MAX_CARDS_PER_INSTANCE)
         : visibleCardCount({
             heights,
-            availableHeight:
-              viewportSize.height - STAR_MAP_BODY_ROW_Y - loadReserve,
-            max: MAX_CARDS_PER_INSTANCE,
+            availableHeight: Number.POSITIVE_INFINITY,
+            max: LANE_MAX_CARDS_PER_INSTANCE,
           });
       result.set(instanceId, { threads, heights, count });
     }
     return result;
-  }, [
-    attentionByInstance,
-    cardHeights,
-    loadCardInstances,
-    orbitMode,
-    viewportSize.height,
-  ]);
+  }, [attentionByInstance, cardHeights, orbitMode]);
 
   const topology = useMemo(
     () =>
@@ -655,38 +652,71 @@ export function StarMapScreen(props: StarMapScreenProps) {
         y: instance.y,
         slots: instance.cardSlots,
         cardWidth: ORBIT_CARD_WIDTH,
+        // Rings grow their radius, so orbit's canvas is already sized by
+        // `computeOrbitPlacement`; only lanes derive theirs from content.
+        contentBottom: 0,
       }));
     }
     return laneLayout.positions.map((position) => {
       const lane = lanes.get(position.instanceId);
+      // The load card, when open, owns the slot nearest the star and the
+      // thread stack starts one slot further out.
+      const itemHeights = [
+        ...(loadCardInstances.has(position.instanceId)
+          ? [STAR_MAP_LOAD_CARD_HEIGHT]
+          : []),
+        ...(lane?.heights.slice(0, lane.count) ?? []),
+      ];
+      const slots = computeCardSlots(itemHeights);
+      const lastSlot = slots[slots.length - 1];
       return {
         instanceId: position.instanceId,
         isHub: position.isHub,
         x: position.x,
         y: position.y,
-        // The load card, when open, owns the slot nearest the star and the
-        // thread stack starts one slot further out.
-        slots: computeCardSlots([
-          ...(loadCardInstances.has(position.instanceId)
-            ? [STAR_MAP_LOAD_CARD_HEIGHT]
-            : []),
-          ...(lane?.heights.slice(0, lane.count) ?? []),
-        ]),
+        slots,
         cardWidth: laneLayout.cardWidth,
+        contentBottom: lastSlot
+          ? lastSlot.dy + (itemHeights[itemHeights.length - 1] ?? 0)
+          : 0,
       };
     });
   }, [laneLayout, lanes, loadCardInstances, orbit, orbitMode]);
 
+  /**
+   * Lanes canvas: as wide as the instance row and as tall as the longest
+   * column, never smaller than the window so a short map still fills it.
+   *
+   * Lanes used to have no canvas at all — the lens rendered straight into
+   * the viewport and truncated each column at the fold. Sizing it to content
+   * is what lets the shared pan/zoom reach a column that runs past the
+   * bottom of the screen.
+   */
+  const lanesCanvas = useMemo(() => {
+    let right = viewportSize.width;
+    let bottom = viewportSize.height;
+    for (const body of bodies) {
+      right = Math.max(right, body.x + body.cardWidth / 2 + LANE_CANVAS_PADDING);
+      bottom = Math.max(
+        bottom,
+        body.y + body.contentBottom + LANE_CANVAS_PADDING,
+      );
+    }
+    return { width: right, height: bottom };
+  }, [bodies, viewportSize.height, viewportSize.width]);
+
   const panZoomCanvas = orbitMode
     ? { width: orbit.canvasWidth, height: orbit.canvasHeight }
-    : { width: projectLayout.canvasWidth, height: projectLayout.canvasHeight };
+    : projectsMode
+      ? { width: projectLayout.canvasWidth, height: projectLayout.canvasHeight }
+      : lanesCanvas;
 
   // Trackpad: two-finger drag pans, pinch (ctrl+wheel) zooms about the
   // pointer. Registered natively because the listener must not be passive.
   // Sits below panZoomCanvas because the clamp needs the canvas size.
   useEffect(() => {
     const element = viewportRef.current;
-    if (!element || !panZoomMode) return;
+    if (!element) return;
     const bounds = {
       canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
       viewport: { width: viewportSize.width, height: viewportSize.height },
@@ -731,7 +761,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => element.removeEventListener("wheel", onWheel);
   }, [
-    panZoomMode,
+    topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
     viewportSize.width,
@@ -756,18 +786,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   useEffect(() => {
     if (operatorMovedViewRef.current) return;
-    if (!panZoomMode) {
-      setView({ x: 0, y: 0, scale: 1 });
-      return;
-    }
     setView(
-      centerStarMapView({
+      placeStarMapView({
         canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
         viewport: { width: viewportSize.width, height: viewportSize.height },
+        topAnchored: topAnchoredView,
       }),
     );
   }, [
-    panZoomMode,
+    topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
     viewportSize.width,
@@ -787,18 +814,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const resetView = useCallback(() => {
     operatorMovedViewRef.current = false;
-    if (!panZoomMode) {
-      setView({ x: 0, y: 0, scale: 1 });
-      return;
-    }
     setView(
-      centerStarMapView({
+      placeStarMapView({
         canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
         viewport: { width: viewportSize.width, height: viewportSize.height },
+        topAnchored: topAnchoredView,
       }),
     );
   }, [
-    panZoomMode,
+    topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
     viewportSize.width,
@@ -1549,24 +1573,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
         </svg>
         <div
           ref={canvasRef}
-          className={`star-map__canvas${
-            orbitMode || projectsMode ? " is-orbit" : ""
-          }`}
-          style={
-            orbitMode
-              ? {
-                  width: orbit.canvasWidth,
-                  height: orbit.canvasHeight,
-                  transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
-                }
-              : projectsMode
-                ? {
-                    width: projectLayout.canvasWidth,
-                    height: projectLayout.canvasHeight,
-                    transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
-                  }
-                : undefined
-          }
+          // Every lens is now a transformed canvas sized to its content —
+          // lanes included, which is what makes a column longer than the
+          // window reachable.
+          className="star-map__canvas is-transformed"
+          style={{
+            width: panZoomCanvas.width,
+            height: panZoomCanvas.height,
+            transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+          }}
         >
         {projectsMode ? null : (
         <svg
@@ -1932,7 +1947,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             setPreferences(next);
             writeStoredPreferences(next);
           }}
-          onResetView={panZoomMode ? resetView : undefined}
+          onResetView={resetView}
         />
       </div>
       {/* Two different settings can empty the map, and a blank star field

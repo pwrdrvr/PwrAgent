@@ -76,12 +76,19 @@ describe("selectFilteredThreads", () => {
     expect(ids({})).toEqual(all.map((entry) => entry.id).sort());
   });
 
-  it("isolates on a single include", () => {
-    expect(ids({ unread: "include" })).toEqual(["unread", "unread-agent"]);
+  it("isolates on a single include, keeping pins alongside", () => {
+    // A pin outranks the attention chips: the sidebar's Pins section and the
+    // map are meant to agree about what the operator curated.
+    expect(ids({ unread: "include" })).toEqual([
+      "pinned",
+      "unread",
+      "unread-agent",
+    ]);
   });
 
   it("unions includes WITHIN a facet", () => {
     expect(ids({ unread: "include", pr: "include" })).toEqual([
+      "pinned",
       "pr",
       "unread",
       "unread-agent",
@@ -92,6 +99,7 @@ describe("selectFilteredThreads", () => {
     // "unread AND agent-driven" — not "unread or agent-driven", which is
     // what a flat union would give and is never what the operator means.
     expect(ids({ unread: "include", agent: "include" })).toEqual([
+      "pinned",
       "unread-agent",
     ]);
   });
@@ -106,11 +114,15 @@ describe("selectFilteredThreads", () => {
   });
 
   it("lets an exclude override an include in another facet", () => {
-    expect(ids({ unread: "include", agent: "exclude" })).toEqual(["unread"]);
+    expect(ids({ unread: "include", agent: "exclude" })).toEqual([
+      "pinned",
+      "unread",
+    ]);
   });
 
   it("supports include and exclude in the same facet", () => {
     expect(ids({ unread: "include", pr: "exclude" })).toEqual([
+      "pinned",
       "unread",
       "unread-agent",
     ]);
@@ -125,6 +137,34 @@ describe("selectFilteredThreads", () => {
       "unread",
       "unread-agent",
     ]);
+  });
+
+  it("lets an explicit pinned exclude hide a pin the chips would keep", () => {
+    // The override has exactly one counterweight: asking to see everything
+    // EXCEPT pins. Without it the chip would be a control that cannot act.
+    expect(ids({ unread: "include", pinned: "exclude" })).toEqual([
+      "unread",
+      "unread-agent",
+    ]);
+  });
+
+  it("orders pins first, in pin order, ahead of recent activity", () => {
+    const second = thread("pin-b", {
+      pinnedRank: "a1",
+      updatedAt: 0,
+    } as Partial<NavigationThreadSummary>);
+    const busy = thread("busy", {
+      updatedAt: 9_999,
+    } as Partial<NavigationThreadSummary>);
+
+    // Pins take the slots nearest the star and hold their own order, so a
+    // curated thread does not wander as unrelated activity arrives.
+    expect(
+      selectFilteredThreads({
+        selection: {},
+        threads: [busy, second, pinned],
+      }).map((entry) => entry.id),
+    ).toEqual(["pinned", "pin-b", "busy"]);
   });
 
   it("never shows archived threads", () => {

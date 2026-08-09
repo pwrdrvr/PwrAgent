@@ -549,9 +549,11 @@ describe("star map view bounds", () => {
     expect(after.y).toBe(start.y - 150);
   });
 
-  it("offers no reset in the lens that has no view to lose", async () => {
-    // Lanes fits the window: there is nothing to pan, so a reset control
-    // would be a button that does nothing.
+  it("gives lanes a view of its own, opened at the top of the columns", async () => {
+    // Lanes used to fit the window and truncate each column at the fold, so
+    // it had no view and no reset. Columns now run as long as they need, so
+    // the lens pans and zooms like the others — and it has to OPEN at the
+    // top, since bodies sit on a fixed row and their cards grow downward.
     seedLayout("lanes");
     renderMap({ threads: threads(9) });
     await waitFor(() => {
@@ -560,8 +562,10 @@ describe("star map view bounds", () => {
       ).toBeTruthy();
     });
 
+    expect(readTransform().y).toBe(0);
+
     fireEvent.click(screen.getByRole("button", { name: "View" }));
 
-    expect(screen.queryByRole("button", { name: "Reset view" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reset view" })).toBeTruthy();
   });
 });
