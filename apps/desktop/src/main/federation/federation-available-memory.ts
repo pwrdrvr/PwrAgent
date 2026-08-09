@@ -15,9 +15,9 @@ const execFileAsync = promisify(execFile);
  * "free RAM" reads as a machine about to die.
  *
  * Per platform:
- * - **macOS**: `vm_stat` page counts. Free + inactive + purgeable +
- *   speculative is the headroom the kernel can hand out without swapping,
- *   which is what the pressure gauge is really reflecting.
+ * - **macOS**: `vm_stat` page counts. Free + inactive + speculative is the
+ *   headroom the kernel can hand out without swapping, which is what the
+ *   pressure gauge is really reflecting.
  * - **Linux**: `/proc/meminfo`'s `MemAvailable` — the kernel's own estimate
  *   of exactly this, so no arithmetic of ours can beat it.
  * - **Windows and anything else**: `os.freemem()`, which already maps to
@@ -54,7 +54,7 @@ export async function readAvailableMemoryBytes(options?: {
 }
 
 async function runVmStat(): Promise<string> {
-  const { stdout } = await execFileAsync("vm_stat", [], {
+  const { stdout } = await execFileAsync("/usr/bin/vm_stat", [], {
     timeout: 2_000,
     windowsHide: true,
   });
@@ -84,12 +84,18 @@ export function parseVmStatAvailableBytes(stdout: string): number | undefined {
   };
   const free = pages("Pages free");
   if (free === undefined) return undefined;
-  // Inactive and speculative pages are backed by files or are already
-  // reclaimable; purgeable pages the kernel will simply drop under demand.
+  // Inactive and speculative pages are file-backed or already reclaimable, so
+  // the kernel can hand them out without swapping.
+  //
+  // `Pages purgeable` is deliberately NOT added. It is a property of pages
+  // that vm_stat has already counted in the active/inactive queues rather
+  // than a disjoint class — its own Anonymous/File-backed decomposition
+  // covers the same pages — so adding it double-counts. The error would be
+  // small (~1-2%) but it runs in the dangerous direction for a health card:
+  // overstating the headroom a machine has. Understating is safe.
   const reclaimable =
     free
     + (pages("Pages inactive") ?? 0)
-    + (pages("Pages purgeable") ?? 0)
     + (pages("Pages speculative") ?? 0);
   return reclaimable * bytesPerPage;
 }

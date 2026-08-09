@@ -17,11 +17,13 @@ const STALE_AFTER_MS = 25_000;
 const STALE_TICK_MS = 5_000;
 
 /**
- * Slot height the layout reserves for a load card. The card's content is
- * fixed (an eyebrow and three figures), so a constant beats plumbing it
- * through the measured-height map that variable thread cards need. Sized
- * with room for one note line so a stale card grows into its own gap
- * instead of over the card below it.
+ * Nominal height of a load card, used only to extend an instance's canvas
+ * far enough when the card is the sole thing under a body. Nothing reserves
+ * a slot for it any more: the card lands at the top of the cloud, painted
+ * above the stack, so that thread slots stay identical whether it is open or
+ * closed. The card's content is fixed (an eyebrow and three figures), which
+ * is why a constant beats plumbing it through the measured-height map that
+ * variable thread cards need.
  */
 export const STAR_MAP_LOAD_CARD_HEIGHT = 88;
 

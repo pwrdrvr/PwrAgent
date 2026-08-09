@@ -18,14 +18,27 @@ Pages purgeable:                         12000.
 
 describe("federation available memory", () => {
   it("counts reclaimable macOS pages, not just free ones", () => {
-    // 8500 + 120000 + 12000 + 3000 = 143500 pages at 16 KiB.
-    expect(parseVmStatAvailableBytes(VM_STAT)).toBe(143_500 * 16_384);
+    // 8500 free + 120000 inactive + 3000 speculative = 131500 pages.
+    expect(parseVmStatAvailableBytes(VM_STAT)).toBe(131_500 * 16_384);
+  });
+
+  it("does not add purgeable pages on top of the queues holding them", () => {
+    // `Pages purgeable` is a property of pages already counted in the
+    // active/inactive queues, not a disjoint class, so adding it would
+    // overstate the headroom — the dangerous direction for a health card.
+    const withMorePurgeable = VM_STAT.replace(
+      "Pages purgeable:                         12000.",
+      "Pages purgeable:                        999999.",
+    );
+    expect(parseVmStatAvailableBytes(withMorePurgeable)).toBe(
+      parseVmStatAvailableBytes(VM_STAT),
+    );
   });
 
   it("scales by the page size the header reports", () => {
     // Getting this wrong silently scales the answer by 4x on Apple silicon.
     const fourKib = VM_STAT.replace("page size of 16384", "page size of 4096");
-    expect(parseVmStatAvailableBytes(fourKib)).toBe(143_500 * 4_096);
+    expect(parseVmStatAvailableBytes(fourKib)).toBe(131_500 * 4_096);
   });
 
   it("gives up on vm_stat output it cannot read", () => {
@@ -50,7 +63,7 @@ describe("federation available memory", () => {
         platform: "darwin",
         runVmStat: async () => VM_STAT,
       }),
-    ).resolves.toBe(143_500 * 16_384);
+    ).resolves.toBe(131_500 * 16_384);
   });
 
   it("reads Linux through /proc/meminfo", async () => {

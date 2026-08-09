@@ -44,6 +44,16 @@ export function useStarMapInstanceLoad(params: {
     if (!read || instanceIds.length === 0) {
       return;
     }
+    // Drop readings for instances whose card was closed. Without this a
+    // reopened card shows the reading from before it was dismissed until the
+    // first poll lands — briefly, but as a stale figure with a real
+    // timestamp, which is exactly the lie the stale state exists to prevent.
+    setLoads((current) => {
+      const next = new Map(
+        [...current].filter(([instanceId]) => instanceIds.includes(instanceId)),
+      );
+      return next.size === current.size ? current : next;
+    });
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 

@@ -33,6 +33,7 @@ import {
   computeStarMapLayout,
   generateStarField,
   STAR_MAP_BODY_ROW_Y,
+  STAR_MAP_CARD_GAP,
   STAR_MAP_CLOUD_TOP,
   STAR_MAP_ESTIMATED_CARD_HEIGHT,
   visibleCardCount,
@@ -290,10 +291,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       return;
     }
     // A press on empty space that never travels is a click, and a click on
-    // nothing drops the selection. Watched separately from the pan below
-    // because the lanes lens has no pan to hang it off.
+    // nothing drops the selection. Watched separately from the pan below so
+    // the two gestures stay independent.
     watchForCanvasClick(event);
-    if (!panZoomMode) return;
     const canvas = canvasRef.current;
     const viewport = viewportRef.current;
     if (!canvas) return;
@@ -1155,10 +1155,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
   const [marquee, setMarquee] = useState<SnapRect | undefined>(undefined);
   /**
-   * Canvas scale for the overlays drawn inside the transform. The lanes
-   * lens never scales, so it is 1 there.
+   * Canvas scale for the overlays drawn inside the transform. Every lens
+   * scales now, lanes included, so the live value always applies.
    */
-  const overlayScale = panZoomMode && view.scale > 0 ? view.scale : 1;
+  const overlayScale = view.scale > 0 ? view.scale : 1;
 
   /**
    * A press on empty space that ends without travelling is a click, and a
@@ -1198,7 +1198,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       const canvas = canvasRef.current;
       if (!canvas || event.button !== 0) return false;
       const rect = canvas.getBoundingClientRect();
-      const scale = panZoomMode && view.scale > 0 ? view.scale : 1;
+      const scale = view.scale > 0 ? view.scale : 1;
       const toCanvas = (clientX: number, clientY: number) => ({
         x: (clientX - rect.left) / scale,
         y: (clientY - rect.top) / scale,
@@ -1233,7 +1233,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       window.addEventListener("pointercancel", stop);
       return true;
     },
-    [cardRects, panZoomMode, view.scale],
+    [cardRects, view.scale],
   );
 
   /**
@@ -1351,7 +1351,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
       // See the note in `cardRects`: unmeasured cards report 0, not undefined.
       const height = lane?.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT;
-      const scale = panZoomMode && view.scale > 0 ? view.scale : 1;
+      const scale = view.scale > 0 ? view.scale : 1;
 
       return (offset: { dx: number; dy: number }) => {
         const snap = resolveSnap({
@@ -1374,7 +1374,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         };
       };
     },
-    [bodies, cardRects, lanes, panZoomMode, selection, view.scale],
+    [bodies, cardRects, lanes, selection, view.scale],
   );
 
   const renderCloud = (position: {

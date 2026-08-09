@@ -155,5 +155,11 @@ export function useStarMapArrangement(params: {
     };
   }, [entries]);
 
-  return { offsetFor, isCardPlaced, instancesWithCard, setCardPosition };
+  // Memoised as one object: consumers put this in `useMemo` dependency
+  // lists, and a fresh literal every render would defeat every memo
+  // downstream of it — including the per-instance slot computation.
+  return useMemo(
+    () => ({ offsetFor, isCardPlaced, instancesWithCard, setCardPosition }),
+    [offsetFor, isCardPlaced, instancesWithCard, setCardPosition],
+  );
 }
