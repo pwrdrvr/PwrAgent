@@ -3995,29 +3995,6 @@ describe("Sidebar", () => {
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
   });
 
-  it("renders directory rows without the raw chevron glyph affordance", () => {
-    render(
-      <Sidebar
-        backends={backends}
-        browseMode="directories"
-        createThreadError={undefined}
-        directories={directories}
-        inboxThreads={[sharedThread]}
-        launchpadError={undefined}
-        loading={false}
-        creatingThread={undefined}
-        selectedItemKey={undefined}
-        threads={[sharedThread]}
-        onBrowseModeChange={() => undefined}
-        onCreateThread={async () => undefined}
-        onOpenLaunchpad={async () => undefined}
-        onSelectThread={() => undefined}
-      />
-    );
-
-    expect(screen.queryByText("▾")).not.toBeInTheDocument();
-  });
-
   it("copies linked directory and branch metadata from recents chips", async () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragent", {

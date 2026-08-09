@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -44,11 +45,16 @@ describe("AppUpdateBanner", () => {
   });
 
   it("stays hidden before the update is ready to install", async () => {
-    renderBanner({ status: "available", version: "1.2.3" });
+    const { desktopApi, emit } = renderBanner({ status: "idle" });
 
     await waitFor(() => {
-      expect(screen.queryByText(/Restart to update/)).not.toBeInTheDocument();
+      expect(desktopApi.onAppUpdateStatus).toHaveBeenCalledTimes(1);
     });
+    act(() => {
+      emit({ status: "available", version: "1.2.3" });
+    });
+
+    expect(screen.queryByText(/Restart to update/)).not.toBeInTheDocument();
   });
 
   it("calls the restart install IPC action", async () => {

@@ -30,22 +30,19 @@ describe("formatPrimaryAccel", () => {
     expect(formatPrimaryAccel("B", { alt: true })).toBe("⌘⌥B");
   });
 
-  it("renders Ctrl/Alt words on Windows", () => {
-    setPlatform("win32");
-    expect(formatPrimaryAccel("B")).toBe("Ctrl+B");
-    expect(formatPrimaryAccel("B", { alt: true })).toBe("Ctrl+Alt+B");
-  });
-
-  it("renders Ctrl/Alt words on Linux", () => {
-    setPlatform("linux");
-    expect(formatPrimaryAccel("B")).toBe("Ctrl+B");
-    expect(formatPrimaryAccel("B", { alt: true })).toBe("Ctrl+Alt+B");
-  });
-
-  it("falls back to the Ctrl form when the desktop bridge is unavailable", () => {
-    setPlatform(undefined);
-    expect(formatPrimaryAccel("B")).toBe("Ctrl+B");
-    expect(formatPrimaryAccel("B", { alt: true })).toBe("Ctrl+Alt+B");
+  it("renders the Ctrl form on Windows, Linux, and without the desktop bridge", () => {
+    for (const platform of ["win32", "linux", undefined]) {
+      setPlatform(platform);
+      expect({
+        platform: platform ?? "unavailable",
+        primary: formatPrimaryAccel("B"),
+        withAlt: formatPrimaryAccel("B", { alt: true }),
+      }).toEqual({
+        platform: platform ?? "unavailable",
+        primary: "Ctrl+B",
+        withAlt: "Ctrl+Alt+B",
+      });
+    }
   });
 });
 
