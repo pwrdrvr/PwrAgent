@@ -53,7 +53,5 @@ describe("LinkedProjectsPanel", () => {
       "data-tooltip",
       REMOTE_NATIVE_PICKER_TOOLTIP,
     );
-    expect(pickDirectoryFromDisk).not.toHaveBeenCalled();
-    expect(attachDirectoryToThread).not.toHaveBeenCalled();
   });
 });

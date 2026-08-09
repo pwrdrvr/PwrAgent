@@ -26,22 +26,6 @@ describe("buildTranscriptRenderItems", () => {
     expect(items[1]).toMatchObject({ type: "entry", entry: entries[3] });
   });
 
-  it("shows active commentary messages without an elider", () => {
-    const entries = [
-      commentary("c1", "First scan."),
-      commentary("c2", "Narrowing."),
-      commentary("c3", "Still working."),
-    ];
-
-    const items = buildTranscriptRenderItems({ entries, activeMessageId: "c3" });
-
-    expect(items).toEqual([
-      { type: "entry", entry: entries[0] },
-      { type: "entry", entry: entries[1] },
-      { type: "entry", entry: entries[2] },
-    ]);
-  });
-
   it("shows all active commentary messages without an elider", () => {
     const entries = [
       commentary("c1", "First scan."),

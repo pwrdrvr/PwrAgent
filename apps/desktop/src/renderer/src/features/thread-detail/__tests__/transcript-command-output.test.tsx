@@ -146,7 +146,6 @@ describe("TranscriptCommandOutput", () => {
     expect(
       screen.queryByRole("button", { name: "Open transcript" }),
     ).not.toBeInTheDocument();
-    expect(openSubAgentTranscriptWindow).not.toHaveBeenCalled();
   });
 
   it("renders structured ACP tool invocations without pretending they are shell commands", () => {

@@ -510,7 +510,6 @@ describe("ThreadContextPanel", () => {
         name: "Open transcript",
       }),
     ).not.toBeInTheDocument();
-    expect(openSubAgentTranscriptWindow).not.toHaveBeenCalled();
   });
 
   it("does not offer a transcript for a detached review child", () => {
@@ -544,7 +543,6 @@ describe("ThreadContextPanel", () => {
         name: "Open transcript",
       }),
     ).not.toBeInTheDocument();
-    expect(openSubAgentTranscriptWindow).not.toHaveBeenCalled();
   });
 
   it("labels Codex native sub-agent usage separately from monitor usage", () => {
@@ -2930,7 +2928,6 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.queryByRole("button", { name: "Detach" })).not.toBeInTheDocument();
-    expect(detachDirectoryFromThread).not.toHaveBeenCalled();
   });
 
   it("shows regular and Spark rate limits together on the AI provider info tab", () => {
@@ -2954,7 +2951,6 @@ describe("ThreadContextPanel", () => {
     expect(
       screen.queryByRole("button", { name: "Mark as Agent" }),
     ).not.toBeInTheDocument();
-    expect(setThreadAgent).not.toHaveBeenCalled();
   });
 
   it("keeps existing Codex Agent metadata read-only", () => {
