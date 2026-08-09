@@ -1,4 +1,4 @@
-import { type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { type CSSProperties } from "react";
 import {
   buildThreadIdentityKey,
   type CelestialIconId,
@@ -111,35 +111,12 @@ export function StarMapThreadCard(props: {
       : {}),
   };
 
-  const {
-    startDrag: startCardDrag,
-    consumeSuppressedClick,
-    suppressClick,
-  } = useStarMapCardDrag({
+  const { startDrag, consumeSuppressedClick } = useStarMapCardDrag({
     baseSlot: props.baseSlot,
     offset: props.offset,
     drag: props.drag,
+    onToggleSelect: props.onToggleSelect,
   });
-
-  const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    // Modifier-click amends the selection rather than opening or dragging.
-    // It is the platform convention, and the only way to correct a marquee
-    // that swept up one card too many without starting the sweep over.
-    // Gated on the handler so lenses with no selection (Projects) keep
-    // modifier-click opening the thread instead of doing nothing at all.
-    //
-    // Handled here rather than in the drag hook because it is a selection
-    // gesture: the hook is shared with cards that have no selection at all.
-    const toggleSelect = props.onToggleSelect;
-    if (toggleSelect && (event.shiftKey || event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      suppressClick();
-      toggleSelect();
-      return;
-    }
-    startCardDrag(event);
-  };
 
   return (
     // Shell owns position, drag and stacking so the card itself can stay a

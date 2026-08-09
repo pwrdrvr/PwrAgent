@@ -446,6 +446,65 @@ describe("StarMapScreen", () => {
     expect(Number(load.style.zIndex)).toBeGreaterThan(Math.max(...threadZ));
   });
 
+  it("puts the load card in the same selection and snapping geometry as threads", async () => {
+    const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readStarMapArrangement: vi.fn(async () => ({
+        entries: [
+          {
+            instanceId: "pwr_local",
+            threadKey: "system:load",
+            dx: 0,
+            dy: 0,
+            updatedAt: 10,
+            by: "pwr_local",
+          },
+        ],
+      })),
+      setStarMapCardPosition,
+      readFederationInstanceLoad: vi.fn(async () => ({})),
+    };
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[unreadThread("t1"), unreadThread("t2")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    const loadShell = await waitFor(() => {
+      const node = container.querySelector<HTMLElement>(".star-map-load-shell");
+      if (!node) throw new Error("no load card");
+      return node;
+    });
+
+    // It is placed by hand like any other card, so it carries a card key —
+    // which is what puts it in `cardRects` (a snap target and guide source)
+    // and lets the shared group-move find its element.
+    expect(loadShell.dataset.cardKey).toBe("pwr_local::system:load:position");
+
+    // A marquee over the whole cloud sweeps it up with the threads.
+    fireEvent.pointerDown(
+      container.querySelector(".star-map__viewport")!,
+      { button: 0, shiftKey: true, clientX: -4000, clientY: -4000 },
+    );
+    fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
+    fireEvent.pointerUp(window, { clientX: 4000, clientY: 4000 });
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          ".star-map-load-shell.star-map-card-shell--selected",
+        ),
+      ).not.toBeNull();
+    });
+  });
+
   it("does not move a single thread card when the load card opens", async () => {
     const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
     const desktopApi: DesktopApi = {

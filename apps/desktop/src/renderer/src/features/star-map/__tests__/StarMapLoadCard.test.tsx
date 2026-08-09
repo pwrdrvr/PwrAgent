@@ -29,6 +29,7 @@ function renderCard(overrides: Partial<CardProps> = {}): CardProps {
     baseSlot: { dx: 0, dy: 100 },
     width: 220,
     stackIndex: 0,
+    cardKey: "pwr_studio::system:load:position",
     onDismiss: vi.fn(),
     ...overrides,
   };
@@ -108,6 +109,7 @@ describe("StarMapLoadCard", () => {
       <StarMapLoadCard
         instanceId="pwr_slow"
         instanceLabel="Slow Mini"
+        cardKey="pwr_slow::system:load:position"
         load={buildLoad({ sampledAt: Date.now() - 90_000 })}
         baseSlot={{ dx: 0, dy: 100 }}
         width={220}
@@ -164,6 +166,7 @@ describe("StarMapLoadCard", () => {
       <StarMapLoadCard
         instanceId="pwr_studio"
         instanceLabel="Studio Mac"
+        cardKey="pwr_studio::system:load:position"
         load={buildLoad()}
         baseSlot={{ dx: 0, dy: 100 }}
         offset={{ dx: -40, dy: 25 }}

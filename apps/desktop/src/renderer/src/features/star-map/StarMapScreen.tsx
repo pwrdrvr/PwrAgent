@@ -1123,6 +1123,29 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const cardRects = useMemo(() => {
     const rects = new Map<string, SnapRect>();
     for (const position of bodies) {
+      // The load card is placed by hand like any other, so it belongs in the
+      // same geometry: cards align to it, guides draw against it, and a
+      // marquee sweeps it up. Keyed by its POSITION entry so the shared
+      // group-move commit writes to the right arrangement row.
+      if (position.loadSlot) {
+        const loadOffset = arrangement.offsetFor(
+          position.instanceId,
+          STAR_MAP_LOAD_CARD_POSITION_KEY,
+        );
+        rects.set(
+          `${position.instanceId}::${STAR_MAP_LOAD_CARD_POSITION_KEY}`,
+          {
+            x:
+              position.x
+              + position.loadSlot.dx
+              + (loadOffset?.dx ?? 0)
+              - position.cardWidth / 2,
+            y: position.loadSlot.dy + (loadOffset?.dy ?? 0) + position.y,
+            width: position.cardWidth,
+            height: STAR_MAP_LOAD_CARD_HEIGHT,
+          },
+        );
+      }
       const lane = lanes.get(position.instanceId);
       if (!lane) continue;
       const visible = lane.threads.slice(0, lane.count);
@@ -1326,7 +1349,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   const snapFor = useCallback(
-    (instanceId: string, threadKey: string, cardWidth: number) => {
+    (
+      instanceId: string,
+      threadKey: string,
+      cardWidth: number,
+      // Cards outside the thread stack (the load card) know their own slot
+      // and height; the lane lookup below cannot find them.
+      override?: { baseSlot: StarMapCardSlot; height: number },
+    ) => {
       const selfKey = `${instanceId}::${threadKey}`;
       if (!cardRects.has(selfKey)) return undefined;
       // A card carrying a selection must not snap to the rest of it. Those
@@ -1346,11 +1376,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
           (thread) =>
             buildThreadIdentityKey(thread.source, thread.id) === threadKey,
         ) ?? -1;
-      const baseSlot = index >= 0 ? body?.slots[index] : undefined;
+      const baseSlot =
+        override?.baseSlot ?? (index >= 0 ? body?.slots[index] : undefined);
       if (!body || !baseSlot) return undefined;
 
       // See the note in `cardRects`: unmeasured cards report 0, not undefined.
-      const height = lane?.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT;
+      const height =
+        override?.height ?? (lane?.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT);
       const scale = view.scale > 0 ? view.scale : 1;
 
       return (offset: { dx: number; dy: number }) => {
@@ -1393,6 +1425,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // Thread slots never account for the load card, so its presence cannot
     // move a thread — hand-placed or otherwise.
     const loadSlot = position.loadSlot;
+    const loadCardKey = `${position.instanceId}::${STAR_MAP_LOAD_CARD_POSITION_KEY}`;
     const slots = position.slots;
     // One region for the whole cloud, sized to the slots this lens drew,
     // so every card in it can reach every other card's position. The load
@@ -1439,11 +1472,27 @@ export function StarMapScreen(props: StarMapScreenProps) {
             centered={orbitMode}
             stackIndex={STAR_MAP_LOAD_CARD_Z}
             sharedWith={sharedMachineLabels.get(position.instanceId)}
+            cardKey={loadCardKey}
+            selected={selection.has(loadCardKey)}
+            onToggleSelect={() => toggleSelected(loadCardKey)}
             drag={
               health?.instanceId
                 ? {
                     detentRadius,
                     scale: view.scale,
+                    snap: snapFor(
+                      position.instanceId,
+                      STAR_MAP_LOAD_CARD_POSITION_KEY,
+                      position.cardWidth,
+                      {
+                        baseSlot: loadSlot,
+                        height: STAR_MAP_LOAD_CARD_HEIGHT,
+                      },
+                    ),
+                    onGuidesChange: setActiveGuides,
+                    onGroupDelta: (delta) => moveSelectionBy(loadCardKey, delta),
+                    onGroupCommit: (delta) =>
+                      commitSelectionMove(loadCardKey, delta),
                     onCommitOffset: (offset) =>
                       arrangement.setCardPosition(
                         position.instanceId,

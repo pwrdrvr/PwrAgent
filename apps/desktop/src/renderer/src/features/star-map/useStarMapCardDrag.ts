@@ -58,13 +58,17 @@ export function useStarMapCardDrag(params: {
   baseSlot: { dx: number; dy: number };
   offset?: { dx: number; dy: number };
   drag?: StarMapCardDrag;
+  /**
+   * Modifier-click amends the selection instead of dragging or opening.
+   * Lives here rather than in each card because every card type on the map
+   * needs the identical gesture, and it has to run BEFORE the drag: it is
+   * the only way to correct a marquee that swept up one card too many
+   * without starting the sweep over. Absent for lenses with no selection,
+   * where modifier-click keeps its normal meaning.
+   */
+  onToggleSelect?: () => void;
 }): {
   startDrag: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  /**
-   * Mark the release click as consumed without starting a drag — for a
-   * gesture the card handles itself, such as modifier-click selection.
-   */
-  suppressClick: () => void;
   /**
    * True when the gesture that just ended was a drag, so the click the
    * browser fires on release must not also activate the card. Reading it
@@ -75,8 +79,16 @@ export function useStarMapCardDrag(params: {
   const suppressClickRef = useRef(false);
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const toggleSelect = params.onToggleSelect;
+    if (toggleSelect && (event.shiftKey || event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      suppressClickRef.current = true;
+      toggleSelect();
+      return;
+    }
     const drag = params.drag;
-    if (!drag || event.button !== 0) return;
+    if (!drag) return;
     const element = event.currentTarget;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -152,9 +164,6 @@ export function useStarMapCardDrag(params: {
 
   return {
     startDrag,
-    suppressClick: () => {
-      suppressClickRef.current = true;
-    },
     consumeSuppressedClick: () => {
       if (!suppressClickRef.current) return false;
       suppressClickRef.current = false;

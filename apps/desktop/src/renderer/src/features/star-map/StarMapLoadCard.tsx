@@ -55,6 +55,15 @@ export function StarMapLoadCard(props: {
   stackIndex: number;
   drag?: StarMapCardDrag;
   /**
+   * `instanceId::system:load:position` — the card's key in the arrangement
+   * AND in the selection, so the shared group-move path writes its offset
+   * to the right entry without knowing this card exists.
+   */
+  cardKey: string;
+  /** Part of a multi-card selection, so it moves with the others. */
+  selected?: boolean;
+  onToggleSelect?: () => void;
+  /**
    * Label of another instance on the same physical machine. Two profiles of
    * one box report byte-identical load, and two cards showing the same
    * numbers reads as a bug unless the card says why.
@@ -91,6 +100,7 @@ export function StarMapLoadCard(props: {
     baseSlot: props.baseSlot,
     offset: props.offset,
     drag: props.drag,
+    onToggleSelect: props.onToggleSelect,
   });
 
   const age = load ? Math.max(0, Date.now() - load.sampledAt) : 0;
@@ -153,9 +163,10 @@ export function StarMapLoadCard(props: {
     <div
       className={`star-map-card-shell star-map-load-shell${
         stale ? " star-map-load-shell--stale" : ""
-      }`}
+      }${props.selected ? " star-map-card-shell--selected" : ""}`}
       style={style}
       data-load-instance-id={props.instanceId}
+      data-card-key={props.cardKey}
       onPointerDown={startDrag}
     >
       <div className="star-map-load-card">

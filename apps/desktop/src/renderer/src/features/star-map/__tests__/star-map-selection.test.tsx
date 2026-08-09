@@ -90,10 +90,18 @@ function viewport(): HTMLElement {
   return element;
 }
 
+/**
+ * THREAD card shells, in render order.
+ *
+ * Keyed on `[data-thread-key]` rather than the `.star-map-card-shell` class,
+ * because that class is shared with non-thread cards on the map (the
+ * instance load card). Every assertion here indexes into this list, so a
+ * fixture that happened to open a load card would silently shift them all
+ * and fail looking like a selection bug.
+ */
 function shells(): HTMLElement[] {
-  return [...document.querySelectorAll(".star-map-card-shell")].filter(
-    (node): node is HTMLElement => node instanceof HTMLElement,
-  );
+  return [...document.querySelectorAll(".star-map-card-shell[data-thread-key]")]
+    .filter((node): node is HTMLElement => node instanceof HTMLElement);
 }
 
 async function ready() {
