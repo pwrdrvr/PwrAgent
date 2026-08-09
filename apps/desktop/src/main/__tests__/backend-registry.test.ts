@@ -5184,10 +5184,10 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("includes persisted tool accounting when reading ACP threads", async () => {
-    // The Pricing panel's "Tool output" section renders
+    // The Tool calls tab renders
     // `response.toolAccounting`. Live `thread/toolAccounting/updated` events
     // patch it into the session while a turn runs, and any readThread replaces
-    // the whole response — so a read that omits the field erases the section.
+    // the whole response — so a read that omits the field erases the tab data.
     // On an ACP thread that is exactly what the operator sees: tool output
     // during the turn, gone the moment it ends. The Codex read path has always
     // returned this; the ACP path did not.

@@ -8646,7 +8646,7 @@ export class DesktopBackendRegistry {
     // field stale, it erases whatever the live
     // `thread/toolAccounting/updated` events had already patched in. On an
     // ACP thread that read lands as the turn ends, which is why the Pricing
-    // panel's "Tool output" section used to appear during a turn and vanish
+    // Tool calls tab used to appear during a turn and vanish
     // the moment it finished.
     const toolAccounting =
       typeof this.overlayStore.readThreadToolAccounting === "function"

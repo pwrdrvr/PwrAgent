@@ -646,7 +646,7 @@ export type DesktopSettingsSnapshot = {
      */
     threadPricingDisplayCodexCredits?: DesktopSettingsValue<boolean>;
     /**
-     * Shows experimental tool-output accounting inside the thread Pricing tab.
+     * Shows the experimental Tool calls tab in the thread context rail.
      * The desktop app may still collect tool metrics while this is disabled;
      * this only gates the operator-facing panel and noisy-polling alerts.
      */

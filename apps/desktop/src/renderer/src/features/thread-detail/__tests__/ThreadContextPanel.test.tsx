@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import type {
   BackendSummary,
+  AppServerThreadEntry,
   NavigationThreadSummary,
   ThreadPricingSummary,
   ThreadToolAccounting,
@@ -158,8 +159,10 @@ type PanelOverrides = Partial<
     | "onEditedFilesDockChange"
     | "pricing"
     | "toolAccounting"
+    | "toolCallEntries"
     | "pricingDisplayOptions"
     | "threadPricingSummaryEnabled"
+    | "threadToolAccountingEnabled"
   >
 >;
 
@@ -734,7 +737,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
   });
 
-  it("renders tool output accounting and noisy polling alerts in Pricing", () => {
+  it("renders tool call groups and full command output in a dedicated tab", () => {
     const toolAccounting: ThreadToolAccounting = {
       alerts: [
         {
@@ -800,20 +803,66 @@ describe("ThreadContextPanel", () => {
         },
       ],
     };
+    const toolCallEntries: AppServerThreadEntry[] = [
+      {
+        type: "activity",
+        id: "activity-tool-1",
+        summary: "Ran 1 command",
+        details: [
+          {
+            id: "tool-1",
+            kind: "command",
+            label: "poll session 40500",
+            status: "completed",
+            command: {
+              displayCommand: "poll session 40500",
+              rawCommand: "write_stdin --session 40500 --yield-time-ms 30000",
+              output: "first line\nfull captured output",
+              exitCode: 0,
+            },
+          },
+        ],
+      },
+    ];
 
     renderPanel({
-      activeTab: "pricing",
+      activeTab: "tool-calls",
       pinned: true,
-      threadPricingSummaryEnabled: true,
+      threadToolAccountingEnabled: true,
       toolAccounting,
+      toolCallEntries,
     });
 
-    expect(screen.getByRole("heading", { level: 4, name: "Tool output" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Tool calls" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 3, name: "Pricing" })).not.toBeInTheDocument();
     expect(screen.getByText("Noisy polling detected")).toBeInTheDocument();
     expect(screen.getByText(/Repeated write_stdin polling/)).toBeInTheDocument();
     expect(screen.getByText("write_stdin · polling")).toBeInTheDocument();
+    expect(screen.queryByText("poll session 40500")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText("poll session 40500")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+
+    expect(
+      screen.getByText("$ write_stdin --session 40500 --yield-time-ms 30000"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/full captured output/)).toBeInTheDocument();
     expect(screen.getAllByText(/6,000/).length).toBeGreaterThan(0);
+  });
+
+  it("hides the Tool calls tab while its experimental flag is off", () => {
+    renderPanel({
+      activeTab: "tool-calls",
+      pinned: true,
+      threadToolAccountingEnabled: false,
+    });
+
+    expect(screen.queryByRole("tab", { name: "Tool calls" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { level: 3, name: "Tool calls" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
   });
 
   it("renders cached pricing totals and per-turn model settings", () => {

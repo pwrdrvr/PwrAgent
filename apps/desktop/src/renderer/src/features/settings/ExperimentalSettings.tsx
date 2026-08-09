@@ -34,11 +34,6 @@ const DEFAULT_MANAGED_REVIEW = {
   source: "default" as const,
 };
 
-const DEFAULT_THREAD_PRICING_SUMMARY = {
-  value: true,
-  source: "default" as const,
-};
-
 const DEFAULT_THREAD_TOOL_ACCOUNTING = {
   value: false,
   source: "default" as const,
@@ -67,9 +62,6 @@ export function ExperimentalSettings(props: {
   const markdownMathRendering =
     props.snapshot.experimental.markdownMathRendering ??
     DEFAULT_MARKDOWN_MATH_RENDERING;
-  const threadPricingSummary =
-    props.snapshot.experimental.threadPricingSummary ??
-    DEFAULT_THREAD_PRICING_SUMMARY;
   const threadToolAccounting =
     props.snapshot.experimental.threadToolAccounting ??
     DEFAULT_THREAD_TOOL_ACCOUNTING;
@@ -92,22 +84,22 @@ export function ExperimentalSettings(props: {
 
       <SettingsSection
         eyebrow="Experimental"
-        title="Tool Output Accounting"
-        description="Show tool-output volume and noisy-polling alerts inside the released Pricing panel."
+        title="Tool Call Tracking"
+        description="Show tool-call volume, command instances, output, and noisy-polling alerts in a dedicated thread panel."
         chip={threadToolAccounting.value ? "On" : "Off"}
         chipKind={threadToolAccounting.value ? "ok" : "default"}
       >
         <div className="settings-fields">
           <SettingsField
-            label="Display tool output accounting"
-            sub="Show experimental tool-output volume and noisy-polling alerts."
-            help="Collection stays on either way; this only controls the operator-facing section. Requires thread pricing under Settings → Usage & Pricing."
+            label="Display tool call tracking"
+            sub="Show the experimental Tool calls tab in the thread context rail."
+            help="Collection stays on either way; this only controls the operator-facing tab."
             source={sourceBadge(threadToolAccounting)}
             control={
               <SettingsSwitch
                 checked={threadToolAccounting.value}
-                disabled={props.saving || !threadPricingSummary.value}
-                label="Display tool output accounting"
+                disabled={props.saving}
+                label="Display tool call tracking"
                 onChange={(enabled) => {
                   void props.onThreadToolAccountingChange(enabled);
                 }}

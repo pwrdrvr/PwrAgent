@@ -1396,6 +1396,8 @@ function DesktopAppShell(props: {
       settings.snapshot?.experimental.threadToolAccounting?.value === true
         ? session.response?.toolAccounting
         : undefined,
+    threadToolAccountingEnabled:
+      settings.snapshot?.experimental.threadToolAccounting?.value === true,
     threadPricingSummaryEnabled:
       settings.snapshot?.experimental.threadPricingSummary?.value ?? true,
     pricingDisplayOptions: {

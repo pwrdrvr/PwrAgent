@@ -37,6 +37,10 @@ function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
     (isAgentCommand(command.rawCommand) ? "agent" : "shell");
   const sourceLabel =
     source === "agent" ? "Agent" : source === "tool" ? "Tool" : "Shell";
+  const fullCommand =
+    source === "shell"
+      ? command.rawCommand ?? command.displayCommand
+      : command.displayCommand;
   const displayCwd = command.cwd
     ? formatPathRelativeToDirectories(command.cwd, props.directoryPaths)
     : undefined;
@@ -54,7 +58,7 @@ function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
           type="button"
           className="button button--ghost transcript-command__copy"
           onClick={() => {
-            void copyText(command.displayCommand);
+            void copyText(fullCommand);
           }}
         >
           {source === "tool" ? "Copy invocation" : "Copy command"}
@@ -78,7 +82,7 @@ function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
       ) : null}
       <pre className="transcript-command__block">
         <code>
-          {source === "tool" ? command.displayCommand : `$ ${command.displayCommand}`}
+          {source === "tool" ? fullCommand : `$ ${fullCommand}`}
         </code>
       </pre>
       <div className="transcript-command__output" aria-label={`${props.detail.label} output`}>

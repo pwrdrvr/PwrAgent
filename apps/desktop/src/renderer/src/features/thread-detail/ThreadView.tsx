@@ -895,6 +895,7 @@ export type ThreadViewProps = {
     summaries: ThreadPricingSummary[];
   };
   toolAccounting?: ThreadToolAccounting;
+  threadToolAccountingEnabled?: boolean;
   pricingDisplayOptions?: {
     codexCredits: boolean;
     usd: boolean;
@@ -1277,8 +1278,10 @@ export function ThreadView(props: ThreadViewProps) {
   // threaded a value through yet, so the rail is discoverable.
   const contextRailPinned = props.contextRailPinned ?? true;
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
+  const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
   const activeContextTab =
-    !threadPricingSummaryEnabled && props.activeContextTab === "pricing"
+    (!threadPricingSummaryEnabled && props.activeContextTab === "pricing")
+    || (!threadToolAccountingEnabled && props.activeContextTab === "tool-calls")
       ? DEFAULT_CONTEXT_TAB
       : props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
   const editedFilesDock = props.editedFilesDock ?? DEFAULT_EDITED_FILES_DOCK;
@@ -2045,6 +2048,18 @@ export function ThreadView(props: ThreadViewProps) {
     pendingActivityEntry && activityHasFileDiff(pendingActivityEntry)
       ? pendingActivityEntry
       : undefined;
+  const toolCallEntries = useMemo(
+    () => [
+      ...props.transcriptEntries,
+      ...(pendingActivityEntry ? [pendingActivityEntry] : []),
+      ...(pendingProtocolActivityEntry ? [pendingProtocolActivityEntry] : []),
+    ],
+    [
+      pendingActivityEntry,
+      pendingProtocolActivityEntry,
+      props.transcriptEntries,
+    ],
+  );
   const threadImageGallery = useMemo(
     () =>
       collectThreadImageGallery([
@@ -3326,8 +3341,10 @@ export function ThreadView(props: ThreadViewProps) {
           thread={selectedThread!}
           pricing={props.pricing}
           toolAccounting={props.toolAccounting}
+          toolCallEntries={toolCallEntries}
           pricingDisplayOptions={props.pricingDisplayOptions}
           threadPricingSummaryEnabled={threadPricingSummaryEnabled}
+          threadToolAccountingEnabled={threadToolAccountingEnabled}
           worktreeArchiveError={props.worktreeArchiveError}
           onRestoreWorktree={props.onRestoreWorktree}
         />

@@ -17728,14 +17728,14 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.35;
 }
 
-.pricing-tool-output {
+.tool-call-groups {
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin-top: 14px;
 }
 
-.pricing-tool-output h4 {
+.tool-call-groups h4 {
   margin: 0;
   color: var(--text-secondary);
   font-size: 11px;
@@ -17744,14 +17744,85 @@ a.transcript-message__messaging-origin:focus-visible {
   text-transform: uppercase;
 }
 
-.pricing-tool-alert,
-.pricing-tool-invocation-row--noisy {
+.tool-call-alert,
+.tool-call-instance--noisy {
   border-color: color-mix(in srgb, var(--status-warning) 45%, var(--border-subtle));
   box-shadow: inset 2px 0 0 0 var(--status-warning);
 }
 
-.pricing-tool-alert .rail-card__title {
+.tool-call-alert .rail-card__title {
   color: var(--text-primary);
+}
+
+.tool-call-row__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tool-call-row__header > :first-child {
+  min-width: 0;
+}
+
+.tool-call-row__details {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.tool-call-instance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 10px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--border-subtle);
+  list-style: none;
+}
+
+.tool-call-instances__status {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.tool-call-instance {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tool-call-instance:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.tool-call-instance__command {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.tool-call-instance__detail {
+  margin-top: 4px;
+}
+
+.tool-call-instance__detail .transcript-command {
+  margin: 0;
+}
+
+.tool-call-instances__empty {
+  margin-top: 10px;
 }
 
 /* The in-progress turn: a calm accent left-stripe + slightly firmer border,

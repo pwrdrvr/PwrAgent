@@ -28,7 +28,9 @@ describe("TranscriptCommandOutput", () => {
       />
     );
 
-    expect(screen.getByText("$ npm view dive")).toBeInTheDocument();
+    expect(
+      screen.getByText("$ /bin/zsh -lc 'npm view dive'"),
+    ).toBeInTheDocument();
     expect(screen.getByText("dive@0.5.0 | Proprietary | deps: none")).toBeInTheDocument();
     expect(screen.getByText("Shell")).toBeInTheDocument();
     expect(screen.getByText("Success · ran for 373ms")).toBeInTheDocument();

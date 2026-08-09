@@ -13,6 +13,7 @@ import {
 import { createPortal } from "react-dom";
 import type {
   BackendSummary,
+  AppServerThreadEntry,
   DesktopApplicationDiscoveryCandidate,
   EditGroupCommitState,
   NavigationThreadSummary,
@@ -32,6 +33,7 @@ import {
   ServerIcon,
   SubAgentsIcon,
   TerminalIcon,
+  ToolCallsIcon,
   type IconProps,
 } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -44,6 +46,7 @@ import { PullRequestsPanel } from "./context-panels/PullRequestsPanel";
 import { LinkedProjectsPanel } from "./context-panels/LinkedProjectsPanel";
 import { EditsPanel } from "./context-panels/EditsPanel";
 import { PricingPanel } from "./context-panels/PricingPanel";
+import { ToolCallsPanel } from "./context-panels/ToolCallsPanel";
 import { ActionRunsPanel } from "./context-panels/ActionRunsPanel";
 import { buildRailTooltipText } from "./context-panels/context-rail-shared";
 import type {
@@ -71,6 +74,7 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "info", label: "Thread info", Icon: InfoIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
+  { id: "tool-calls", label: "Tool calls", Icon: ToolCallsIcon },
   { id: "actions", label: "Actions", Icon: TerminalIcon },
   { id: "subagents", label: "Sub-agents", Icon: SubAgentsIcon },
   { id: "automations", label: "Automations", Icon: AutomationsIcon },
@@ -106,11 +110,13 @@ type ThreadContextPanelProps = {
     summaries: ThreadPricingSummary[];
   };
   toolAccounting?: ThreadToolAccounting;
+  toolCallEntries?: AppServerThreadEntry[];
   pricingDisplayOptions?: {
     codexCredits: boolean;
     usd: boolean;
   };
   threadPricingSummaryEnabled?: boolean;
+  threadToolAccountingEnabled?: boolean;
   /** Absent on the new-thread launchpad, where only provider context applies. */
   thread?: NavigationThreadSummary;
   worktreeArchiveError?: string;
@@ -181,15 +187,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
+  const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
 
   const activeTab = !props.thread
     ? "providers"
     : props.activeTab === "pricing" && !threadPricingSummaryEnabled
       ? "info"
+      : props.activeTab === "tool-calls" && !threadToolAccountingEnabled
+        ? "info"
       : props.activeTab;
   const visibleTabs = CONTEXT_TABS.filter((tab) =>
     props.thread
-      ? tab.id !== "pricing" || threadPricingSummaryEnabled
+      ? (tab.id !== "pricing" || threadPricingSummaryEnabled)
+        && (tab.id !== "tool-calls" || threadToolAccountingEnabled)
       : tab.id === "providers",
   );
   const topTabs = visibleTabs.filter((tab) => !tab.bottom);
@@ -727,11 +737,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <PricingPanel
             activeTurnId={props.activeTurnId}
             pricing={props.pricing}
-            toolAccounting={props.toolAccounting}
             displayOptions={props.pricingDisplayOptions}
             onScrollToTurn={props.onScrollToTurn}
             subAgents={props.thread.subAgents}
             threadReasoningEffort={props.thread.reasoningEffort}
+          />
+        );
+      case "tool-calls":
+        if (!props.thread) return null;
+        return (
+          <ToolCallsPanel
+            entries={props.toolCallEntries}
+            onScrollToTurn={props.onScrollToTurn}
+            toolAccounting={props.toolAccounting}
           />
         );
       case "actions":

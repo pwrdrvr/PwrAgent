@@ -45,6 +45,7 @@ export { StarMapIcon } from "./StarMapIcon";
 export { SubAgentsIcon } from "./SubAgentsIcon";
 export { TelegramIcon } from "./TelegramIcon";
 export { TerminalIcon } from "./TerminalIcon";
+export { ToolCallsIcon } from "./ToolCallsIcon";
 export { ThreadIcon } from "./ThreadIcon";
 export { UnlinkedDotIcon } from "./UnlinkedDotIcon";
 export { WorkspaceIcon } from "./WorkspaceIcon";
