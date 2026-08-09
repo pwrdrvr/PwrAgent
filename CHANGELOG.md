@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.0-beta.1 - 2026-08-09
+
+- Federation and Star Map - Added secure remote-instance federation, live remote thread and terminal access, and the Star Map mission-control surface with project lenses, filters, arrangement controls, load visibility, and drag, snap, and multi-select interactions.
+- Reviews and Agent Controls - Expanded managed reviews across supported providers, including Grok and Kimi, with provider/model/reasoning overrides, transcript activity, project-aware review context, agent turn controls, and automated pull-request repair controls.
+- Threads and Composer - Added durable scheduling and queued-turn controls, richer thread references, attachment and PDF analysis/preview workflows, HTML-rich clipboard support, directory multi-selection, and improved transcript and code-copy interactions.
+- Messaging - Added Slack App Home, configurable routes, terminal private responses, final image delivery, clearer routed-response labels, and stronger startup, delivery, and authorization recovery.
+- Reliability and Operations - Strengthened remote-session routing and lifecycle recovery, Windows process isolation, agent usage and tool-accounting visibility, SQLite write budgeting, diagnostics, accessibility, and test infrastructure.
+- Release Reliability - Made debug-retention artifact uploads non-fatal so transient retention failures cannot prevent required release assets or changelog notes from publishing.
+
 ## v1.0.0-beta.50 - 2026-07-31
 
 - AI Provider Defaults - Added configurable default model, reasoning, access mode, and service tier per provider, applied to new threads and launchpads without overriding saved thread choices.
