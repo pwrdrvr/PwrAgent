@@ -5,7 +5,10 @@ import type { AgentEvent } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
-import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
+import {
+  AppRuntimeInstanceStore,
+  RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+} from "../state/app-runtime-instance-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import {
   measureSqliteWrites,
@@ -265,6 +268,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("holds dead-process takeover of both runtime leases to its budget", async () => {
+    let now = 1_800_000_001_000;
     const instances = new AppRuntimeInstanceStore(stateDb);
     const owner = new RuntimeLeaseManager({
       cwd: "/tmp/PwrAgnt-a",
@@ -280,7 +284,7 @@ describe("sqlite write metrics", () => {
     const challenger = new RuntimeLeaseManager({
       cwd: "/tmp/PwrAgnt-b",
       instanceId: "instance-b",
-      now: () => 1_800_000_001_000,
+      now: () => now,
       processId: 5678,
       processIsAlive: () => false,
       profileName: "default",
@@ -290,10 +294,13 @@ describe("sqlite write metrics", () => {
     const { writes } = await measureSqliteWrites(() => {
       challenger.acquire("messaging");
       challenger.acquire("federation");
+      now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+      challenger.acquire("messaging");
+      challenger.acquire("federation");
     });
 
     expectSqliteWriteBudget({
-      note: "register challenger and replace a dead owner for both runtime leases",
+      note: "observe one dead owner, wait one minute, replace both runtime leases",
       scenario: "runtime-lease-dead-owner-takeover",
       writes,
     });

@@ -9,6 +9,7 @@ import {
 import {
   AppRuntimeInstanceStore,
   hashCwd,
+  RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
 } from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 import type { DesktopMessagingConfig } from "../messaging/messaging-config";
@@ -272,7 +273,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
     first.shutdownSync();
   });
 
-  it("stops runtime after a dead owner is replaced", async () => {
+  it("stops runtime after the dead-owner grace permits replacement", async () => {
     let now = 1_000;
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
@@ -309,8 +310,12 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
     await first.applyResolvedConfig(firstRuntime, config);
     liveProcessIds.delete(123);
     now = 2_000;
-    await second.applyResolvedConfig(secondRuntime, config);
-    now = 3_000;
+    await expect(second.applyResolvedConfig(secondRuntime, config)).resolves
+      .toMatchObject({ enabled: false, disabledReasonKind: "lease_held" });
+    now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+    await expect(second.applyResolvedConfig(secondRuntime, config)).resolves
+      .toMatchObject({ enabled: true });
+    now += 1_000;
     await expect(first.applyResolvedConfig(firstRuntime, config)).resolves
       .toMatchObject({
         enabled: false,

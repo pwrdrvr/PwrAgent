@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
-import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
+import {
+  AppRuntimeInstanceStore,
+  RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+} from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 
 let stateDb: StateDb;
@@ -85,25 +88,44 @@ describe("RuntimeLeaseManager", () => {
     });
   });
 
-  it("atomically replaces a lease whose registered owner PID is dead", () => {
+  it("persists a dead observation before reclaiming a recycled PID", () => {
+    let now = 2_000;
     const owner = createManager({ instanceId: "instance-a", processId: 123 });
     const challenger = createManager({
       instanceId: "instance-b",
       processId: 456,
-      now: () => 2_000,
+      now: () => now,
     });
     owner.acquire("federation");
     liveProcessIds.delete(123);
 
+    expect(challenger.acquire("federation")).toMatchObject({
+      acquired: false,
+      holder: { instanceId: "instance-a", processId: 123 },
+    });
+    expect(store.getInstance("instance-a")).toMatchObject({ exitedAt: 2_000 });
+    expect(store.getFederationLease()).toMatchObject({
+      expiresAt: 2_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+      ownerInstanceId: "instance-a",
+      status: "active",
+    });
+
+    // A different process may reuse the PID during the grace period. The
+    // durable dead observation remains authoritative, so it cannot revive the
+    // original owner after the reclaim deadline.
+    liveProcessIds.add(123);
+    now = 2_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS - 1;
+    expect(challenger.acquire("federation")).toMatchObject({ acquired: false });
+    now += 1;
     expect(challenger.acquire("federation")).toEqual({ acquired: true });
     expect(store.getFederationLease()).toMatchObject({
-      acquiredAt: 2_000,
       ownerInstanceId: "instance-b",
       status: "active",
     });
   });
 
-  it("does not let a recycled current PID preserve another instance's lease", () => {
+  it("reclaims a stale instance that used the current process PID", () => {
+    let now = 2_000;
     const staleOwner = createManager({
       instanceId: "instance-a",
       processId: 123,
@@ -113,9 +135,13 @@ describe("RuntimeLeaseManager", () => {
     const currentProcess = createManager({
       instanceId: "instance-b",
       processId: 123,
-      now: () => 2_000,
+      now: () => now,
     });
 
+    expect(currentProcess.acquire("messaging")).toMatchObject({
+      acquired: false,
+    });
+    now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
     expect(currentProcess.acquire("messaging")).toEqual({ acquired: true });
     expect(store.getMessagingLease()).toMatchObject({
       ownerInstanceId: "instance-b",

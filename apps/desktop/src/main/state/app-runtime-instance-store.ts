@@ -5,6 +5,7 @@ import type { StateDb } from "./state-db.js";
 const MESSAGING_LEASE_KEY = "profile-messaging";
 const FEDERATION_LEASE_KEY = "profile-federation";
 const PID_OWNED_LEASE_EXPIRES_AT = Number.MAX_SAFE_INTEGER;
+export const RUNTIME_LEASE_DEAD_OWNER_GRACE_MS = 60_000;
 
 export type AppRuntimeMessagingDisabledReason =
   | "explicit_override"
@@ -234,13 +235,41 @@ export class AppRuntimeInstanceStore {
         && existing.ownerInstanceId !== params.instanceId
       ) {
         const owner = this.getInstance(existing.ownerInstanceId);
-        if (owner && (params.isOwnerAlive?.(owner) ?? true)) {
-          params.onHeld?.();
-          return {
-            acquired: false as const,
-            reason: "held" as const,
-            holder: existing,
-          };
+        if (owner?.exitedAt !== undefined) {
+          const reclaimAt = owner.exitedAt + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+          if (existing.expiresAt !== reclaimAt) {
+            this.setLeaseExpiry({
+              leaseKey: params.leaseKey,
+              ownerInstanceId: existing.ownerInstanceId,
+              expiresAt: reclaimAt,
+            });
+          }
+          if (params.now < reclaimAt) {
+            return this.heldResult(params, this.readLease(params.leaseKey)!);
+          }
+        } else if (owner && (params.isOwnerAlive?.(owner) ?? true)) {
+          return this.heldResult(params, existing);
+        } else if (
+          !owner
+          && existing.expiresAt !== PID_OWNED_LEASE_EXPIRES_AT
+        ) {
+          if (params.now < existing.expiresAt) {
+            return this.heldResult(params, existing);
+          }
+        } else {
+          const reclaimAt = params.now + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+          if (owner) {
+            this.markInstanceExited({
+              instanceId: owner.instanceId,
+              now: params.now,
+            });
+          }
+          this.setLeaseExpiry({
+            leaseKey: params.leaseKey,
+            ownerInstanceId: existing.ownerInstanceId,
+            expiresAt: reclaimAt,
+          });
+          return this.heldResult(params, this.readLease(params.leaseKey)!);
         }
       }
 
@@ -262,9 +291,35 @@ export class AppRuntimeInstanceStore {
       params.onAcquired?.();
       return { acquired: true as const, lease };
     });
-    // Serialize the read/liveness-check/replace decision so two challengers
-    // cannot both observe one dead owner and claim the same lease.
+    // Serialize liveness observation, grace-deadline persistence, and eventual
+    // replacement so challengers cannot disagree about or both claim an owner.
     return acquire.immediate();
+  }
+
+  private heldResult(
+    params: { onHeld?: () => void },
+    holder: MessagingRuntimeLeaseRecord,
+  ): MessagingLeaseAcquireResult {
+    params.onHeld?.();
+    return {
+      acquired: false,
+      reason: "held",
+      holder,
+    };
+  }
+
+  private setLeaseExpiry(params: {
+    leaseKey: string;
+    ownerInstanceId: string;
+    expiresAt: number;
+  }): void {
+    this.stateDb.raw
+      .prepare(
+        `UPDATE messaging_runtime_lease
+         SET expires_at = ?
+         WHERE lease_key = ? AND owner_instance_id = ? AND status = 'active'`,
+      )
+      .run(params.expiresAt, params.leaseKey, params.ownerInstanceId);
   }
 
   private releaseLease(params: {

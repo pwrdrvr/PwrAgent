@@ -90,7 +90,7 @@ pnpm dev
 ```
 
 - Do **not** override `HOME` or set `NODE_ENV` — the app needs the real user data directory to load saved threads and Keychain secrets.
-- Messaging adapters are guarded by a profile-scoped sqlite lease. A shared runtime lease manager records the owning PID once and checks whether that process is still alive when another instance challenges the lease. If another live instance already owns messaging for the active profile, this process stays usable but leaves messaging stopped.
+- Messaging adapters are guarded by a profile-scoped sqlite lease. A shared runtime lease manager records the owning PID once and checks whether that process is still alive when another instance challenges the lease. The first confirmed absence is persisted; after a one-minute reclaim grace, PID reuse cannot revive the dead owner. If another live instance already owns messaging for the active profile, this process stays usable but leaves messaging stopped.
 - The federation runtime asks the same lease manager for a parallel profile-scoped lease (lease key `profile-federation`, independent of the messaging lease). If another live instance already runs federation for the active profile, this process keeps its federation runtime stopped and reports the holder in federation health instead of fighting over the shared instance identity.
 - Use `pnpm dev:no-messaging` when you explicitly want to guarantee that this app process never starts messaging adapters.
 - For visual verification of UI changes, either command can show real threads in the sidebar and thread detail pane; prefer `dev:no-messaging` when the UI work does not need live messaging.
@@ -626,15 +626,18 @@ Numbers to compare a new write path against, all measured with this harness:
 | Former 10-second runtime lease heartbeats | 720 commits / 2.7 MB per hour (~65 MB/day) |
 | PID-owned messaging + federation leases, idle hour | 0 commits / 0 MB WAL |
 | PID-owned lease lifecycle (register, acquire/release both, exit) | 6 commits / ~93 KB WAL |
+| PID-owned dead-owner observation + takeover, both leases | 5 commits / ~72 KB WAL |
 | Whole vitest suite | 51 sources / ~3,000 commits / ~27 MB WAL |
 | One replay E2E spec | ~28 commits across two Electron processes |
 
 The former idle figure came from two 10-second sqlite renewal loops. Runtime
 leases now register one process identity and check the recorded PID only when a
-challenger tries to acquire messaging or federation. Holding either lease adds
-no timer and no idle sqlite writes. A process that is alive but hung retains
-ownership; this deliberately favors preventing dual owners over preempting a
-possibly healthy process.
+challenger tries to acquire messaging or federation. A confirmed dead-owner
+observation is persisted and becomes reclaimable after one minute, even if the
+PID is reused in the meantime. Holding either lease adds no timer and no idle
+sqlite writes. A process that is alive but hung retains ownership; this
+deliberately favors preventing dual owners over preempting a possibly healthy
+process.
 
 ### Write budgets
 

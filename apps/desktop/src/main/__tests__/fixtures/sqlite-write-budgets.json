@@ -7,11 +7,11 @@
     "statements": 0
   },
   "runtime-lease-dead-owner-takeover": {
-    "commits": 3,
-    "note": "register challenger and replace a dead owner for both runtime leases",
-    "observedWalBytes": 45320,
-    "rowsChanged": 4,
-    "statements": 4
+    "commits": 5,
+    "note": "observe one dead owner, wait one minute, replace both runtime leases",
+    "observedWalBytes": 74160,
+    "rowsChanged": 8,
+    "statements": 8
   },
   "runtime-lease-lifecycle": {
     "commits": 6,

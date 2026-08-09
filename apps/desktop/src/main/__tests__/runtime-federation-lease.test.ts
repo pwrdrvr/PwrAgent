@@ -6,7 +6,10 @@ import {
   RuntimeFederationLeaseCoordinator,
   type FederationLeaseRuntime,
 } from "../runtime-federation-lease";
-import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
+import {
+  AppRuntimeInstanceStore,
+  RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+} from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 
 let stateDb: StateDb;
@@ -259,7 +262,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     second.shutdownSync();
   });
 
-  it("re-acquires the lease after the holder process exits", async () => {
+  it("re-acquires one minute after observing the holder process exit", async () => {
     let now = 1_000;
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
@@ -278,17 +281,20 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     liveProcessIds.delete(123);
     now = 40_000;
     await expect(second.applyMode(secondRuntime, "gateway")).resolves
+      .toMatchObject({ enabled: false, disabledReasonKind: "lease_held" });
+    now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+    await expect(second.applyMode(secondRuntime, "gateway")).resolves
       .toMatchObject({ enabled: true });
 
     expect(store.getFederationLease()).toMatchObject({
       ownerInstanceId: "instance-b",
-      acquiredAt: 40_000,
+      acquiredAt: 40_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
       status: "active",
     });
     second.shutdownSync();
   });
 
-  it("lets a live challenger replace a dead owner without waiting for a TTL", async () => {
+  it("does not let PID reuse revive a dead owner during reclaim grace", async () => {
     let now = 1_000;
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
@@ -306,6 +312,10 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     await first.applyMode(firstRuntime, "client");
     liveProcessIds.delete(123);
     now = 2_000;
+    await expect(second.applyMode(secondRuntime, "client")).resolves
+      .toMatchObject({ enabled: false, disabledReasonKind: "lease_held" });
+    liveProcessIds.add(123);
+    now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
     await expect(second.applyMode(secondRuntime, "client")).resolves
       .toMatchObject({ enabled: true });
 

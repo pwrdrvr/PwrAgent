@@ -47,9 +47,12 @@ export type RuntimeLeaseManagerOptions = {
  * One process-level owner for every profile-scoped runtime lease.
  *
  * Ownership is registered once in sqlite and remains valid while the owning
- * PID exists. A challenger may replace a dead owner inside the store's atomic
- * acquisition transaction. This deliberately favors single-owner safety over
- * taking work away from a process that is alive but temporarily hung.
+ * PID exists. The first challenger that observes the PID absent persists that
+ * fact; after a one-minute safety grace, a challenger may replace the dead
+ * owner inside the store's atomic acquisition transaction. A recycled PID
+ * cannot revive an owner already observed dead. This deliberately favors
+ * single-owner safety over taking work away from a process that is alive but
+ * temporarily hung.
  */
 export class RuntimeLeaseManager {
   private readonly instanceId: string;
