@@ -9826,7 +9826,7 @@ describe("MessagingController", () => {
             codexEnvironmentId: "grok-environment",
             codexEnvironmentExecutionTarget: "local",
             codexEnvironmentActionId: "grok-action",
-            model: "grok-4.20-reasoning",
+            model: "grok-4.5",
             reasoningEffort: "low",
           },
         },
@@ -9864,7 +9864,7 @@ describe("MessagingController", () => {
             launchpadOptions: {
               models: [
                 { id: "shared-model", label: "Shared Model" },
-                { id: "grok-4.20-reasoning", label: "Grok 4.20 Reasoning" },
+                { id: "grok-4.5", label: "Grok 4.5" },
               ],
               reasoningEfforts: ["low", "medium", "high"],
               supportsFastMode: false,
@@ -9951,7 +9951,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Grok Environment\nModel: grok-4.20-reasoning\nReasoning: low",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Grok Environment\nModel: grok-4.5\nReasoning: low",
       ),
       actions: expect.arrayContaining([
         expect.objectContaining({
@@ -10003,7 +10003,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Grok Environment\nModel: grok-4.20-reasoning\nReasoning: low",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Grok Environment\nModel: grok-4.5\nReasoning: low",
       ),
     });
 
@@ -10017,7 +10017,7 @@ describe("MessagingController", () => {
           codexEnvironmentActionId: "grok-action",
           codexEnvironmentExecutionTarget: "local",
           codexEnvironmentId: "grok-environment",
-          model: "grok-4.20-reasoning",
+          model: "grok-4.5",
           reasoningEffort: "low",
         }),
       }),
@@ -11022,7 +11022,7 @@ describe("MessagingController", () => {
       kind: "acp:grok",
       label: "Grok",
       launchpadOptions: {
-        models: [{ id: "grok-4.20-reasoning", label: "Grok 4.20 Reasoning" }],
+        models: [{ id: "grok-4.5", label: "Grok 4.5" }],
         reasoningEfforts: ["low", "medium", "high"],
         supportsFastMode: false,
       },
@@ -22151,8 +22151,8 @@ function buildBackendSummary(overrides: Partial<BackendSummary> = {}): BackendSu
     launchpadOptions: {
       models: [
         {
-          id: kind === "acp:grok" ? "grok-4.20-reasoning" : "gpt-5.3-codex",
-          label: kind === "acp:grok" ? "Grok 4.20 Reasoning" : "GPT-5.3 Codex",
+          id: kind === "acp:grok" ? "grok-4.5" : "gpt-5.3-codex",
+          label: kind === "acp:grok" ? "Grok 4.5" : "GPT-5.3 Codex",
         },
       ],
       reasoningEfforts: ["low", "medium", "high"],

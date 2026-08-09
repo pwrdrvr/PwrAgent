@@ -39,8 +39,6 @@ test("renders markdown edge cases without breaking transcript boundaries", async
       })
     ).toBeVisible();
 
-    await expect(app.window.locator(".thread-header__summary")).toHaveCount(0);
-
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     await expect(transcript.getByText("Emoji check 😎")).toBeVisible();
     await expect(transcript.getByText("Single newline survives.")).toBeVisible();

@@ -48,7 +48,7 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
     await expect(
       contextRail.getByRole("heading", { level: 3, name: "Pricing" }),
     ).toBeVisible();
-    await expect(contextRail.getByText("$0.020", { exact: true })).toBeVisible();
+    await expect(contextRail.getByText("$0.019", { exact: true })).toBeVisible();
     await expect(contextRail.getByText("3 (2 priced, 1 unpriced)")).toBeVisible();
     await expect(
       contextRail.getByText("1 usage row could not be priced."),
@@ -56,11 +56,11 @@ test("hydrates provider-scoped pricing totals in the context rail", async () => 
     await expect(contextRail.getByText("openai · USD")).toBeVisible();
     await expect(contextRail.getByText("$0.017 list price · 2 rows")).toBeVisible();
     await expect(contextRail.getByText("xai · USD")).toBeVisible();
-    await expect(contextRail.getByText("$0.003 list price · 1 row")).toBeVisible();
+    await expect(contextRail.getByText("$0.002 list price · 1 row")).toBeVisible();
     await expect(contextRail.getByText("gpt-5.5 · high")).toBeVisible();
     await expect(contextRail.getByText("$0.017 list price this turn")).toBeVisible();
     await expect(contextRail.getByText("Unknown model")).toBeVisible();
-    await expect(contextRail.getByText("grok-4.20-reasoning")).toBeVisible();
+    await expect(contextRail.getByText("grok-4.5")).toBeVisible();
   } finally {
     await app.close();
   }

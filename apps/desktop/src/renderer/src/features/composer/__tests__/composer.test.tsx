@@ -3923,49 +3923,6 @@ describe("Composer", () => {
     });
   });
 
-  it("hides reasoning controls for Grok 4.20 models", () => {
-    render(
-      <Composer
-        backends={[
-          backendSummary("acp:grok", {
-            models: [
-              {
-                id: "grok-4.20-reasoning",
-                label: "Grok 4.20 Reasoning",
-                current: true,
-                supportsReasoning: false,
-              },
-              {
-                id: "grok-4.20-non-reasoning",
-                label: "Grok 4.20 Non-Reasoning",
-                supportsReasoning: false,
-              },
-            ],
-          }),
-        ]}
-        launchpad={{
-          directoryKey: "directory:/repo",
-          directoryKind: "directory",
-          directoryLabel: "Repo",
-          directoryPath: "/repo",
-          backend: "acp:grok",
-          executionMode: "default",
-          prompt: "",
-          workMode: "local",
-          branchName: "main",
-          createdAt: 1,
-          updatedAt: 1,
-        }}
-        onUpdateLaunchpad={async () => undefined}
-        skills={[]}
-      />
-    );
-
-    expect(screen.getByLabelText("Model")).toHaveValue("grok-4.20-reasoning");
-    expect(screen.queryByLabelText("Reasoning")).not.toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
-  });
-
   it("shows Grok 4.5 ACP reasoning effort in the launchpad", () => {
     render(
       <Composer

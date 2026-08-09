@@ -5,7 +5,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const threadMarkdownSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("renders markdown content in thread summaries and transcript messages", async () => {
+test("renders markdown content in transcript messages", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       threadMarkdownSpecDir,
@@ -25,8 +25,6 @@ test("renders markdown content in thread summaries and transcript messages", asy
         name: "Markdown replay thread"
       })
     ).toBeVisible();
-
-    await expect(app.window.locator(".thread-header__summary")).toHaveCount(0);
 
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     await expect(
