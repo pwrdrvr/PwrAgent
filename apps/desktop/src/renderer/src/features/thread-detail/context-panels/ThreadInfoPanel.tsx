@@ -165,6 +165,12 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
             </dd>
           </div>
           <div>
+            <dt>Created</dt>
+            <dd>
+              {props.thread.createdAt ? formatTimestamp(props.thread.createdAt) : "Unknown"}
+            </dd>
+          </div>
+          <div>
             <dt>Updated</dt>
             <dd>
               {props.thread.updatedAt ? formatTimestamp(props.thread.updatedAt) : "Unknown"}

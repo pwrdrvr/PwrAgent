@@ -254,6 +254,41 @@ describe("ThreadContextPanel", () => {
     expect(panel).toHaveAttribute("aria-labelledby", activeTab.id);
   });
 
+  it("shows the thread creation and update timestamps in Thread info", () => {
+    const createdAt = new Date(2026, 6, 8, 9, 15).getTime();
+    const updatedAt = new Date(2026, 6, 9, 10, 41).getTime();
+    renderPanel({
+      pinned: true,
+      thread: {
+        ...baseThread,
+        createdAt,
+        updatedAt,
+      },
+    });
+
+    const executionContext = screen
+      .getByRole("heading", { level: 3, name: "Execution context" })
+      .closest("section");
+    expect(executionContext).not.toBeNull();
+    const context = within(executionContext!);
+    expect(context.getByText("Created").nextElementSibling).toHaveTextContent(
+      new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(createdAt),
+    );
+    expect(context.getByText("Updated").nextElementSibling).toHaveTextContent(
+      new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(updatedAt),
+    );
+  });
+
   it("renders persisted sub-agent cards with monitor usage", () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_000);
