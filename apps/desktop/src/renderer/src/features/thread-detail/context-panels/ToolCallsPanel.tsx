@@ -8,7 +8,11 @@ import type {
 } from "@pwragent/shared";
 import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
 import { formatTokenCount } from "./subagent-format";
-import { formatTimestamp } from "./context-rail-shared";
+import {
+  formatCompactCount,
+  formatTimestamp,
+  RailSummaryRow,
+} from "./context-rail-shared";
 
 type ToolCallsPanelProps = {
   entries?: AppServerThreadEntry[];
@@ -40,30 +44,44 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
     <section className="context-panel__section tool-calls-panel">
       <h3>Tool calls</h3>
       {totals ? (
-        <dl className="context-grid">
-          <dt>Estimated output tokens</dt>
-          <dd>{formatTokenCount(totals.estimatedOutputTokens)}</dd>
-          <dt>Output volume</dt>
-          <dd>
-            {formatCharacterCount(totals.outputChars)} ·{" "}
-            {totals.outputLines.toLocaleString()} lines
-          </dd>
-          <dt>Invocations</dt>
-          <dd>
-            {totals.invocationCount.toLocaleString()}
+        <div className="rail-summary-card tool-call-summary-card">
+          <div className="rail-summary-card__header">
+            <span className="rail-summary-card__eyebrow">Tool output</span>
+            <span className="rail-summary-card__meta">
+              {totals.invocationCount.toLocaleString()} invocation
+              {totals.invocationCount === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="rail-summary-card__headline">
+            <span className="rail-summary-card__primary">
+              {formatCompactCount(totals.estimatedOutputTokens)} est. tokens
+            </span>
+            <span className="rail-summary-card__secondary">
+              {formatCharacterCount(totals.outputChars)}
+            </span>
+          </div>
+          <div className="rail-summary-card__caption">
+            {totals.outputLines.toLocaleString()} output line
+            {totals.outputLines === 1 ? "" : "s"}
+          </div>
+          <div className="rail-summary-card__section">
+            <span className="rail-summary-card__section-title">Diagnostics</span>
+            <RailSummaryRow
+              label="Warnings"
+              value={totals.warningLines.toLocaleString()}
+            />
+            <RailSummaryRow
+              label="Errors"
+              value={totals.errorLines.toLocaleString()}
+            />
             {totals.noisyInvocationCount > 0 ? (
-              <span className="context-list__meta">
-                {" "}
-                ({totals.noisyInvocationCount.toLocaleString()} noisy)
-              </span>
+              <RailSummaryRow
+                label="Noisy calls"
+                value={totals.noisyInvocationCount.toLocaleString()}
+              />
             ) : null}
-          </dd>
-          <dt>Warnings / errors</dt>
-          <dd>
-            {totals.warningLines.toLocaleString()} /{" "}
-            {totals.errorLines.toLocaleString()}
-          </dd>
-        </dl>
+          </div>
+        </div>
       ) : (
         <p className="context-empty">No tool calls recorded yet.</p>
       )}

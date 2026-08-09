@@ -84,6 +84,15 @@ export function TooltipValue(props: {
   );
 }
 
+export function RailSummaryRow(props: { label: string; value: string }) {
+  return (
+    <div className="rail-summary-card__row">
+      <span className="rail-summary-card__row-label">{props.label}</span>
+      <span className="rail-summary-card__row-value">{props.value}</span>
+    </div>
+  );
+}
+
 export async function handleCopyPath(
   event: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>,
   path: string,
@@ -129,6 +138,16 @@ export function formatTimestamp(
     minute: "2-digit",
     ...(options?.includeSeconds ? { second: "2-digit" } : {}),
   }).format(timestamp);
+}
+
+export function formatCompactCount(value: number): string {
+  if (Math.abs(value) >= 1_000_000) {
+    return `${Math.round(value / 100_000) / 10}M`;
+  }
+  if (Math.abs(value) >= 1_000) {
+    return `${Math.round(value / 100) / 10}k`;
+  }
+  return Math.round(value).toLocaleString();
 }
 
 export function formatAgentInstructionSummary(lineCount: number): string {

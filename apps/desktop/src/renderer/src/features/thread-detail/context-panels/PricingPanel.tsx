@@ -23,7 +23,11 @@ import {
   isTerminalSubAgent,
   subAgentCompletedAt,
 } from "./subagent-format";
-import { formatTimestamp } from "./context-rail-shared";
+import {
+  formatCompactCount,
+  formatTimestamp,
+  RailSummaryRow,
+} from "./context-rail-shared";
 import { RailStatusChip } from "./RailStatusChip";
 import { subAgentPricingUsageTitle } from "./subagent-kind";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
@@ -101,39 +105,51 @@ export function PricingPanel(props: PricingPanelProps) {
       <h3>Pricing</h3>
       {summary ? (
         <>
-          <dl className="context-grid">
-            <dt>Running total</dt>
-            <dd>
-              {formatSummaryEstimates({
-                codexCreditMicros: pricingTotals.totalCreditMicros,
-                displayOptions,
-                hasEstimates: pricingTotals.hasEstimatedRows,
-                summary,
-              })}
-            </dd>
-            <dt>Usage rows</dt>
-            <dd>
-              {summary.usageLineCount.toLocaleString()}{" "}
-              <span className="context-list__meta">
-                ({summary.pricedUsageLineCount.toLocaleString()} priced,{" "}
-                {summary.unpricedUsageLineCount.toLocaleString()} unpriced)
+          <div className="rail-summary-card pricing-summary-card">
+            <div className="rail-summary-card__header">
+              <span className="rail-summary-card__eyebrow">Pricing summary</span>
+              <span className="rail-summary-card__meta">
+                {summary.usageLineCount.toLocaleString()} row
+                {summary.usageLineCount === 1 ? "" : "s"}
               </span>
-            </dd>
-            <dt>Input</dt>
-            <dd>
-              {formatTokenCount(summary.uncachedInputTokens)} uncached,{" "}
-              {formatTokenCount(summary.cachedInputTokens)} cached
-            </dd>
-            <dt>Output</dt>
-            <dd>
-              {formatTokenCount(summary.outputTokens)}
-              {summary.reasoningOutputTokens > 0
-                ? ` (${formatTokenCount(summary.reasoningOutputTokens)} reasoning)`
-                : ""}
-            </dd>
-            <dt>Updated</dt>
-            <dd>{formatTimestamp(summary.updatedAt)}</dd>
-          </dl>
+            </div>
+            <div className="rail-summary-card__headline">
+              <span className="rail-summary-card__primary">
+                {formatSummaryEstimates({
+                  codexCreditMicros: pricingTotals.totalCreditMicros,
+                  displayOptions,
+                  hasEstimates: pricingTotals.hasEstimatedRows,
+                  summary,
+                })}
+              </span>
+            </div>
+            <div className="rail-summary-card__caption">
+              {summary.pricedUsageLineCount.toLocaleString()} priced ·{" "}
+              {summary.unpricedUsageLineCount.toLocaleString()} unpriced ·{" "}
+              {formatTimestamp(summary.updatedAt)}
+            </div>
+            <div className="rail-summary-card__section">
+              <span className="rail-summary-card__section-title">Token volume</span>
+              <RailSummaryRow
+                label="Uncached input"
+                value={formatCompactCount(summary.uncachedInputTokens)}
+              />
+              <RailSummaryRow
+                label="Cached input"
+                value={formatCompactCount(summary.cachedInputTokens)}
+              />
+              <RailSummaryRow
+                label="Output"
+                value={formatCompactCount(summary.outputTokens)}
+              />
+              {summary.reasoningOutputTokens > 0 ? (
+                <RailSummaryRow
+                  label="Reasoning"
+                  value={formatCompactCount(summary.reasoningOutputTokens)}
+                />
+              ) : null}
+            </div>
+          </div>
           {summary.unpricedUsageLineCount > 0 ? (
             <p className="context-empty context-empty--warning">
               {summary.unpricedUsageLineCount.toLocaleString()} usage row
