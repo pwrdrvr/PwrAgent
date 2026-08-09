@@ -64,6 +64,19 @@ async function setTranscriptScrollTop(locator: Locator, targetScrollTop: number)
   }, targetScrollTop);
 }
 
+async function scrollTranscriptToTop(locator: Locator) {
+  // Use a trusted wheel gesture for the second navigation in this scenario.
+  // TranscriptList deliberately disables bottom glue in its onWheel handler;
+  // assigning scrollTop directly can otherwise race the viewport-restoration
+  // layout effect and snap back to the previously restored middle position.
+  await locator.hover();
+  await locator.page().mouse.wheel(0, -100_000);
+  await expect
+    .poll(async () => await locator.evaluate((element) => element.scrollTop))
+    .toBe(0);
+  return await readScrollMetrics(locator);
+}
+
 async function reselectLongThread(page: Page, transcript: Locator) {
   await page
     .getByRole("button", { name: /Short companion thread/i })
@@ -186,7 +199,7 @@ test("opens a long transcript without drift and restores saved scroll positions 
     });
 
     await test.step("restore an exact scrollTop of zero after reselect", async () => {
-      const savedViewport = await setTranscriptScrollTop(list, 0);
+      const savedViewport = await scrollTranscriptToTop(list);
       expect(savedViewport.scrollTop).toBe(0);
 
       const savedSeries = await collectScrollSamples(list);
