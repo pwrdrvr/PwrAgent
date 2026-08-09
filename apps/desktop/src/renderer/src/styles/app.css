@@ -9442,6 +9442,11 @@ textarea,
   left: 50%;
   align-items: center;
   gap: 4px;
+  /* Above the body. Tucking the row into the body's empty top margin means
+     the two boxes overlap, and the body is the LATER sibling — without this
+     it wins the overlap and swallows clicks on the lower half of every
+     button, selecting the instance instead. */
+  z-index: 1;
   transform: translateX(-50%);
 }
 
@@ -9476,10 +9481,19 @@ textarea,
   color: var(--accent-bright);
 }
 
+/* A toggle's ON state has to be louder than hover, not identical to it:
+   sharing one treatment left the button with no hover feedback at all while
+   it was on — the one state where you most want to know the click will
+   land. On is a filled accent; hover deepens the fill from wherever it
+   starts, so every button on the row answers the pointer. */
 .star-map-instance__action[aria-pressed="true"] {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
+  border-color: var(--accent);
+  background: var(--accent-bg-medium);
   color: var(--accent-bright);
+}
+
+.star-map-instance__action[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .star-map-instance__action:focus-visible {

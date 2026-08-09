@@ -123,6 +123,49 @@ describe("StarMapInstanceCard", () => {
     ).toBeNull();
   });
 
+  it("clicking an action never reaches the body underneath it", () => {
+    // The row tucks into the body's empty top margin, so their boxes overlap
+    // and the body is the later sibling. Without the row claiming a layer,
+    // the body wins the overlap and a click on the lower half of a button
+    // selects the instance instead of firing the action.
+    const onSelect = vi.fn();
+    const onToggleLoad = vi.fn();
+    const { container } = render(
+      <StarMapInstanceCard
+        instanceId="pwr_studio"
+        label="Studio Mac"
+        status="connected"
+        isLocal={false}
+        isHub={false}
+        onSelect={onSelect}
+        onToggleLoad={onToggleLoad}
+      />,
+    );
+
+    const actions = container.querySelector<HTMLElement>(
+      ".star-map-instance__actions",
+    );
+    const body = container.querySelector<HTMLElement>(
+      ".star-map-instance__body",
+    );
+    // The row must come BEFORE the body in the DOM (so it is the earlier
+    // sibling) and carry its own stacking order.
+    expect(actions).not.toBeNull();
+    expect(body).not.toBeNull();
+    expect(
+      actions!.compareDocumentPosition(body!)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Show load for Studio Mac (CPU, memory, disk)",
+      }),
+    );
+    expect(onToggleLoad).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it("shows an icon-only action's name on focus, not just on hover", () => {
     renderCard({ onToggleLoad: vi.fn() });
     const button = screen.getByRole("button", {

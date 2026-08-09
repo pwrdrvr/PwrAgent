@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { CelestialIconId, FederationConnectionState } from "@pwragent/shared";
-import { CelestialIcon } from "../../icons";
+import { CelestialIcon, PopoutIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 function statusTone(status: FederationConnectionState): string {
@@ -31,7 +31,12 @@ function InstanceAction(props: {
   children: ReactNode;
   onClick: () => void;
 }) {
-  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // `.star-map-card__tooltip` raises the layer to 140. Without it the portal
+  // renders at the default 90 and the Star Map layer (120) paints straight
+  // over it — the tooltip is there, just invisible.
+  const tooltip = useViewportTooltip({
+    className: "viewport-tooltip star-map-card__tooltip",
+  });
   return (
     <>
       <button
@@ -102,7 +107,9 @@ export function StarMapInstanceCard(props: {
   // otherwise expose identical button names.
   // Native `title` is an anti-pattern here (UI-THEME.md): unstyleable,
   // platform-dependent timing, no wrapping on macOS Electron.
-  const labelTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const labelTooltip = useViewportTooltip({
+    className: "viewport-tooltip star-map-card__tooltip",
+  });
   const fullLabel = props.profileName
     ? `${props.label} / ${props.profileName}`
     : props.label;
@@ -154,33 +161,7 @@ export function StarMapInstanceCard(props: {
             }
             onClick={props.onOpen}
           >
-            {/* Arrow leaving a frame — the same "opens its own window"
-                shorthand the platform uses. */}
-            <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-              <path
-                d="M4.5 1.5h6v6"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M10.5 1.5 5 7"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-              />
-              <path
-                d="M8.5 10.5h-7v-7"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <PopoutIcon size={13} />
           </InstanceAction>
         ) : null}
       </span>
