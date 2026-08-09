@@ -129,44 +129,39 @@ describe("image normalization ipc", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects HEIC conversion without macOS fallback support", async () => {
+  it.each([
+    {
+      name: "rejects HEIC conversion without macOS fallback support",
+      fileName: "photo.heic",
+      mimeType: "image/heic",
+      platform: "linux" as const,
+      expectedError: "HEIC/HEIF conversion is only available on macOS",
+    },
+    {
+      name: "rejects non-HEIC fallback requests",
+      fileName: "photo.webp",
+      mimeType: "image/webp",
+      platform: "darwin" as const,
+      expectedError: "only supports HEIC/HEIF",
+    },
+  ])("$name", async ({ fileName, mimeType, platform, expectedError }) => {
     const { convertImageUploadFallback } = await import("../ipc/image-normalization");
 
     await expect(
       convertImageUploadFallback(
         {
           data: new Uint8Array([1]).buffer,
-          fileName: "photo.heic",
-          mimeType: "image/heic",
+          fileName,
+          mimeType,
         },
         {
           createImageFromBuffer: () =>
             fakeNativeImage({ empty: true }) as Electron.NativeImage,
           execFile: vi.fn(),
-          platform: "linux",
+          platform,
         },
       ),
-    ).rejects.toThrow("HEIC/HEIF conversion is only available on macOS");
-  });
-
-  it("rejects non-HEIC fallback requests", async () => {
-    const { convertImageUploadFallback } = await import("../ipc/image-normalization");
-
-    await expect(
-      convertImageUploadFallback(
-        {
-          data: new Uint8Array([1]).buffer,
-          fileName: "photo.webp",
-          mimeType: "image/webp",
-        },
-        {
-          createImageFromBuffer: () =>
-            fakeNativeImage({ empty: true }) as Electron.NativeImage,
-          execFile: vi.fn(),
-          platform: "darwin",
-        },
-      ),
-    ).rejects.toThrow("only supports HEIC/HEIF");
+    ).rejects.toThrow(expectedError);
   });
 
   it("cleans up temporary files when sips fails", async () => {

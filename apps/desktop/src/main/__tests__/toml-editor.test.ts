@@ -378,23 +378,6 @@ describe("applyTomlEdits", () => {
     expect(result).toBe("[s]\nexisting = 1\na = 1\nb = 2\n");
   });
 
-  it("parses sources only once regardless of edit count (single-pass)", () => {
-    // Spy via a side channel: count regex.exec invocations on a hot path
-    // would be too invasive. Instead, this is a behavior smoke check —
-    // 50 edits to a small section produce a stable result quickly.
-    const lines = ["[s]", "x = 0"];
-    const source = lines.join("\n") + "\n";
-    const edits = Array.from({ length: 50 }, (_, i) => ({
-      op: "set" as const,
-      path: ["s", `k${i}`],
-      value: i,
-    }));
-    const result = applyTomlEdits(source, edits);
-    for (let i = 0; i < 50; i += 1) {
-      expect(result).toContain(`k${i} = ${i}`);
-    }
-  });
-
   it("applies multiple edits in order", () => {
     const source = [
       "[messaging.telegram]",

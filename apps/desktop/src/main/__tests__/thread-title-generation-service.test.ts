@@ -93,132 +93,60 @@ describe("ThreadTitleGenerationService", () => {
     expect(codexGenerator.generateTitle).not.toHaveBeenCalled();
   });
 
-  it("accepts recognized issue and PR references in generated titles", async () => {
+  it.each([
+    {
+      name: "accepts recognized issue and PR references in generated titles",
+      generatedTitle: "PR 456 issue 123 followup",
+      userPrompt: "In issue 123 and PR 456, why does rename fail?",
+    },
+    {
+      name: "allows bare numbers to be omitted from generated titles",
+      generatedTitle: "Rename behavior",
+      userPrompt: "Can we inspect 456 for rename behavior?",
+    },
+    {
+      name: "does not treat arbitrary prompt numbers as ticket references",
+      generatedTitle: "Thread rename rejection",
+      userPrompt:
+        "At 19:36:47.622 thread title generation rejected a rename for thread 019dd673-a098-7021-a344-a09e4d8ec850.",
+    },
+    {
+      name: "accepts titles that drop ticket references from the prompt",
+      generatedTitle: "Checkout crash followup",
+      userPrompt: "PROJECT-123 investigate checkout crash",
+    },
+    {
+      name: "accepts titles that preserve only one of multiple references",
+      generatedTitle: "Issue 123 rename followup",
+      userPrompt: "In issue 123 and PR 456, why does rename fail?",
+    },
+    {
+      name: "accepts generated titles that omit GitHub PR references from quoted context",
+      generatedTitle: "PR attachment API mismatch",
+      userPrompt:
+        "> PRs created: > - #12998: https://github.com/Giphy/giphy-services/pull/12998 > - #12999 stacked on it: https://github.com/Giphy/giphy-services/pull/12999 Why could the agent not attach the PR to the thread?",
+    },
+    {
+      name: "accepts first-turn handoff titles with non-ticket task markers",
+      generatedTitle: "Dynamic subagent monitoring",
+      userPrompt:
+        "**Handoff Message: Dynamic Subagent Monitoring for Long-Running Tasks**\n\nTask #1: monitor the spawned agents.\nTask #2: report long-running tool calls.",
+    },
+  ])("$name", async ({ generatedTitle, userPrompt }) => {
     const service = new ThreadTitleGenerationService({
       generators: {
-        codex: makeGenerator({ title: "PR 456 issue 123 followup" }),
+        codex: makeGenerator({ title: generatedTitle }),
       },
     });
 
     await expect(
       service.generateTitle({
         backend: "codex",
-        userPrompt: "In issue 123 and PR 456, why does rename fail?",
+        userPrompt,
       })
     ).resolves.toMatchObject({
       status: "generated",
-      title: "PR 456 issue 123 followup",
-    });
-  });
-
-  it("allows bare numbers to be omitted from generated titles", async () => {
-    const service = new ThreadTitleGenerationService({
-      generators: {
-        codex: makeGenerator({ title: "Rename behavior" }),
-      },
-    });
-
-    await expect(
-      service.generateTitle({
-        backend: "codex",
-        userPrompt: "Can we inspect 456 for rename behavior?",
-      })
-    ).resolves.toMatchObject({
-      status: "generated",
-      title: "Rename behavior",
-    });
-  });
-
-  it("does not treat arbitrary prompt numbers as ticket references", async () => {
-    const service = new ThreadTitleGenerationService({
-      generators: {
-        codex: makeGenerator({ title: "Thread rename rejection" }),
-      },
-    });
-
-    await expect(
-      service.generateTitle({
-        backend: "codex",
-        userPrompt:
-          "At 19:36:47.622 thread title generation rejected a rename for thread 019dd673-a098-7021-a344-a09e4d8ec850.",
-      })
-    ).resolves.toMatchObject({
-      status: "generated",
-      title: "Thread rename rejection",
-    });
-  });
-
-  it("accepts titles that drop ticket references from the prompt", async () => {
-    const service = new ThreadTitleGenerationService({
-      generators: {
-        codex: makeGenerator({ title: "Checkout crash followup" }),
-      },
-    });
-
-    await expect(
-      service.generateTitle({
-        backend: "codex",
-        userPrompt: "PROJECT-123 investigate checkout crash",
-      })
-    ).resolves.toMatchObject({
-      status: "generated",
-      title: "Checkout crash followup",
-    });
-  });
-
-  it("accepts titles that preserve only one of multiple references", async () => {
-    const service = new ThreadTitleGenerationService({
-      generators: {
-        codex: makeGenerator({ title: "Issue 123 rename followup" }),
-      },
-    });
-
-    await expect(
-      service.generateTitle({
-        backend: "codex",
-        userPrompt: "In issue 123 and PR 456, why does rename fail?",
-      })
-    ).resolves.toMatchObject({
-      status: "generated",
-      title: "Issue 123 rename followup",
-    });
-  });
-
-  it("accepts generated titles that omit GitHub PR references from quoted context", async () => {
-    const service = new ThreadTitleGenerationService({
-      generators: {
-        codex: makeGenerator({ title: "PR attachment API mismatch" }),
-      },
-    });
-
-    await expect(
-      service.generateTitle({
-        backend: "codex",
-        userPrompt:
-          "> PRs created: > - #12998: https://github.com/Giphy/giphy-services/pull/12998 > - #12999 stacked on it: https://github.com/Giphy/giphy-services/pull/12999 Why could the agent not attach the PR to the thread?",
-      })
-    ).resolves.toMatchObject({
-      status: "generated",
-      title: "PR attachment API mismatch",
-    });
-  });
-
-  it("accepts first-turn handoff titles with non-ticket task markers", async () => {
-    const service = new ThreadTitleGenerationService({
-      generators: {
-        codex: makeGenerator({ title: "Dynamic subagent monitoring" }),
-      },
-    });
-
-    await expect(
-      service.generateTitle({
-        backend: "codex",
-        userPrompt:
-          "**Handoff Message: Dynamic Subagent Monitoring for Long-Running Tasks**\n\nTask #1: monitor the spawned agents.\nTask #2: report long-running tool calls.",
-      })
-    ).resolves.toMatchObject({
-      status: "generated",
-      title: "Dynamic subagent monitoring",
+      title: generatedTitle,
     });
   });
 

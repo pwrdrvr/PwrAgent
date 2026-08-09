@@ -110,27 +110,42 @@ describe("pwragent federation agent tools", () => {
     });
   });
 
-  it("rejects a blank instanceId before dispatching list_instance_projects", async () => {
-    const handler = vi.fn();
-    const router = buildPwrAgentFederationToolRouter(handler);
-
-    const response = await router.handleDynamicToolCall({
-      backend: "codex",
-      call: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: "pwragent",
-        tool: "list_instance_projects",
-        arguments: { instanceId: "   " },
+  it.each([
+    {
+      name: "rejects a blank instanceId before dispatching list_instance_projects",
+      tool: "list_instance_projects",
+      arguments: { instanceId: "   " },
+    },
+    {
+      name: "rejects an unknown workMode before dispatching create_instance_thread",
+      tool: "create_instance_thread",
+      arguments: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        workMode: "container",
       },
-    });
-
-    expect(response).toMatchObject({ success: false });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("rejects an unknown workMode before dispatching create_instance_thread", async () => {
+    },
+    {
+      name: "rejects an unknown scope before dispatching search_federation_threads",
+      tool: "search_federation_threads",
+      arguments: { query: "recorder crash", scope: "nearby" },
+    },
+    {
+      name: "rejects an out-of-range list limit before dispatching list_federation_instances",
+      tool: "list_federation_instances",
+      arguments: { limit: 500 },
+    },
+    {
+      name: "rejects a non-boolean includeLoad before dispatching list_federation_instances",
+      tool: "list_federation_instances",
+      arguments: { includeLoad: "yes" },
+    },
+    {
+      name: "rejects an out-of-range limit before dispatching search_federation_threads",
+      tool: "search_federation_threads",
+      arguments: { query: "recorder crash", limit: 500 },
+    },
+  ] as const)("$name", async ({ tool, arguments: callArguments }) => {
     const handler = vi.fn();
     const router = buildPwrAgentFederationToolRouter(handler);
 
@@ -141,52 +156,8 @@ describe("pwragent federation agent tools", () => {
         turnId: "turn-1",
         callId: "call-1",
         namespace: "pwragent",
-        tool: "create_instance_thread",
-        arguments: {
-          instanceId: "pwr_studio",
-          projectKey: "dir:/repo",
-          workMode: "container",
-        },
-      },
-    });
-
-    expect(response).toMatchObject({ success: false });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("rejects an unknown scope before dispatching search_federation_threads", async () => {
-    const handler = vi.fn();
-    const router = buildPwrAgentFederationToolRouter(handler);
-
-    const response = await router.handleDynamicToolCall({
-      backend: "codex",
-      call: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: "pwragent",
-        tool: "search_federation_threads",
-        arguments: { query: "recorder crash", scope: "nearby" },
-      },
-    });
-
-    expect(response).toMatchObject({ success: false });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("rejects an out-of-range list limit before dispatching list_federation_instances", async () => {
-    const handler = vi.fn();
-    const router = buildPwrAgentFederationToolRouter(handler);
-
-    const response = await router.handleDynamicToolCall({
-      backend: "codex",
-      call: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: "pwragent",
-        tool: "list_federation_instances",
-        arguments: { limit: 500 },
+        tool,
+        arguments: callArguments,
       },
     });
 
@@ -227,46 +198,6 @@ describe("pwragent federation agent tools", () => {
       },
       args: { query: "linux", limit: 10, includeLoad: true },
     });
-  });
-
-  it("rejects a non-boolean includeLoad before dispatching list_federation_instances", async () => {
-    const handler = vi.fn();
-    const router = buildPwrAgentFederationToolRouter(handler);
-
-    const response = await router.handleDynamicToolCall({
-      backend: "codex",
-      call: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: "pwragent",
-        tool: "list_federation_instances",
-        arguments: { includeLoad: "yes" },
-      },
-    });
-
-    expect(response).toMatchObject({ success: false });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("rejects an out-of-range limit before dispatching search_federation_threads", async () => {
-    const handler = vi.fn();
-    const router = buildPwrAgentFederationToolRouter(handler);
-
-    const response = await router.handleDynamicToolCall({
-      backend: "codex",
-      call: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: "pwragent",
-        tool: "search_federation_threads",
-        arguments: { query: "recorder crash", limit: 500 },
-      },
-    });
-
-    expect(response).toMatchObject({ success: false });
-    expect(handler).not.toHaveBeenCalled();
   });
 
   it("normalizes create_instance_thread args before dispatch", async () => {

@@ -165,32 +165,26 @@ describe("dev launch wrapper", () => {
     expect(child.killCalls).toEqual(["SIGTERM"]);
   });
 
-  it("preserves nonzero status when the child exits by signal independently", async () => {
+  it.each([
+    ["signal", 6161, "SIGTERM", 143],
+    ["hangup", 6162, "SIGHUP", 129],
+  ])("preserves nonzero status when the child exits by %s independently", async (
+    _name,
+    pid,
+    signal,
+    exitStatus,
+  ) => {
     const fakeProcess = createFakeProcess();
-    const child = createFakeChild(6161);
+    const child = createFakeChild(pid);
     const promise = runLongLived("node", ["electron-vite", "dev"], {}, {
       platform: "darwin",
       process: fakeProcess,
       spawn: () => child
     });
 
-    child.emit("close", null, "SIGTERM");
+    child.emit("close", null, signal);
 
-    await expect(promise).resolves.toBe(143);
-  });
-
-  it("preserves nonzero status when the child exits by hangup independently", async () => {
-    const fakeProcess = createFakeProcess();
-    const child = createFakeChild(6162);
-    const promise = runLongLived("node", ["electron-vite", "dev"], {}, {
-      platform: "darwin",
-      process: fakeProcess,
-      spawn: () => child
-    });
-
-    child.emit("close", null, "SIGHUP");
-
-    await expect(promise).resolves.toBe(129);
+    await expect(promise).resolves.toBe(exitStatus);
   });
 
   it("forces the long-lived dev child down on a repeated terminal signal", async () => {

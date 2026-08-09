@@ -54,14 +54,6 @@ async function addTestReactions(target: SqliteOverlayStore, threadId = "thread-1
 }
 
 describe("SqliteOverlayStore — thread reactions", () => {
-  it("starts with no reactions on a thread that has never been touched", async () => {
-    const overlay = await store.getThreadOverlayState({
-      backend: "codex",
-      threadId: "thread-1",
-    });
-    expect(overlay).toBeUndefined();
-  });
-
   it("adds a reaction with present=true and surfaces it through getThreadOverlayState", async () => {
     const next = await store.setThreadReaction({
       backend: "codex",

@@ -169,7 +169,38 @@ describe("derive PR states", () => {
     expect(deriveChipState(row)).toBe("passing");
   });
 
-  it("returns passing when all checks SUCCEEDED", () => {
+  it.each([
+    {
+      name: "returns passing when all checks SUCCEEDED",
+      firstName: "Lint",
+      firstStatus: "COMPLETED",
+      secondConclusion: "SUCCESS",
+      secondName: "Test",
+      secondStatus: "COMPLETED",
+    },
+    {
+      name: "returns passing when checks include SKIPPED / NEUTRAL",
+      firstName: "Lint",
+      firstStatus: "COMPLETED",
+      secondConclusion: "SKIPPED",
+      secondName: "Optional",
+      secondStatus: "COMPLETED",
+    },
+    {
+      name: "treats a successful conclusion as final even when gh reports stale progress status",
+      firstName: "Install Dependencies",
+      firstStatus: "IN_PROGRESS",
+      secondConclusion: "SUCCESS",
+      secondName: "Test",
+      secondStatus: "COMPLETED",
+    },
+  ] as const)("$name", ({
+    firstName,
+    firstStatus,
+    secondConclusion,
+    secondName,
+    secondStatus,
+  }) => {
     expect(
       deriveChipState({
         ...rawMergedPr(),
@@ -178,60 +209,14 @@ describe("derive PR states", () => {
           {
             __typename: "CheckRun",
             conclusion: "SUCCESS",
-            status: "COMPLETED",
-            name: "Lint",
+            status: firstStatus,
+            name: firstName,
           },
           {
             __typename: "CheckRun",
-            conclusion: "SUCCESS",
-            status: "COMPLETED",
-            name: "Test",
-          },
-        ],
-      }),
-    ).toBe("passing");
-  });
-
-  it("returns passing when checks include SKIPPED / NEUTRAL", () => {
-    expect(
-      deriveChipState({
-        ...rawMergedPr(),
-        state: "OPEN",
-        statusCheckRollup: [
-          {
-            __typename: "CheckRun",
-            conclusion: "SUCCESS",
-            status: "COMPLETED",
-            name: "Lint",
-          },
-          {
-            __typename: "CheckRun",
-            conclusion: "SKIPPED",
-            status: "COMPLETED",
-            name: "Optional",
-          },
-        ],
-      }),
-    ).toBe("passing");
-  });
-
-  it("treats a successful conclusion as final even when gh reports stale progress status", () => {
-    expect(
-      deriveChipState({
-        ...rawMergedPr(),
-        state: "OPEN",
-        statusCheckRollup: [
-          {
-            __typename: "CheckRun",
-            conclusion: "SUCCESS",
-            status: "IN_PROGRESS",
-            name: "Install Dependencies",
-          },
-          {
-            __typename: "CheckRun",
-            conclusion: "SUCCESS",
-            status: "COMPLETED",
-            name: "Test",
+            conclusion: secondConclusion,
+            status: secondStatus,
+            name: secondName,
           },
         ],
       }),
