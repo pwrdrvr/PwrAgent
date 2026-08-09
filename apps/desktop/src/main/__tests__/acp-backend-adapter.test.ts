@@ -1407,6 +1407,165 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("restarts the ACP running total on each turn", async () => {
+    // The running total is per turn, not per session: `liveTurnUsage` is keyed
+    // by turn and dropped at `turn_finished`. Pinning that here because the
+    // same field is session-cumulative on Codex, and consumers subtract
+    // against it — see the note on `AcpUsageEnvelope`. If a later change makes
+    // ACP cumulative, this test should fail loudly rather than the difference
+    // being discovered downstream.
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "full-access",
+      acpRuntime: { currentModelId: "grok-4.5-build" },
+    });
+    const responseCompleted = (usage: Record<string, number>) => ({
+      sessionUpdate: "response_completed",
+      stop_reason: "tool_use",
+      usage: {
+        cache_creation_input_tokens: 0,
+        reasoning_tokens: 0,
+        ...usage,
+      },
+    });
+    const liveTotalsFor = (turnId: string) =>
+      events
+        .filter(
+          (event) =>
+            event.notification.method === "thread/tokenUsage/updated"
+            && "turnId" in event.notification.params
+            && event.notification.params.turnId === turnId,
+        )
+        .flatMap((event) => {
+          const usage = (
+            event.notification.params as {
+              tokenUsage?: Record<string, unknown>;
+            }
+          ).tokenUsage;
+          const total = usage?.total_token_usage as
+            | { input_tokens?: number }
+            | undefined;
+          return total ? [total.input_tokens] : [];
+        });
+
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "First turn",
+      turnId: "turn-one",
+    });
+    // Assistant text is what makes the prompt count as answered, which is what
+    // lets the turn finish cleanly. No `_meta.usage`, so it adds no envelope.
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "First answer." },
+    });
+    transport.emitSessionUpdate(
+      session.sessionId,
+      responseCompleted({
+        input_tokens: 100,
+        cache_read_input_tokens: 900,
+        output_tokens: 10,
+      }),
+    );
+    transport.emitSessionUpdate(
+      session.sessionId,
+      responseCompleted({
+        input_tokens: 200,
+        cache_read_input_tokens: 1_800,
+        output_tokens: 20,
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(liveTotalsFor("turn-one")).toEqual([1_000, 3_000]);
+    });
+    // The client ends its tracked turn when the `session/prompt` request
+    // resolves, which is also what makes the adapter emit `turn/completed`.
+    // Wait for that rather than firing a synthetic `turn_finished`, or the
+    // next prompt races the first turn's teardown.
+    await vi.waitFor(() => {
+      expect(
+        events.some(
+          (event) => event.notification.method === "turn/completed",
+        ),
+      ).toBe(true);
+    });
+
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Second turn",
+      turnId: "turn-two",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Second answer." },
+    });
+    transport.emitSessionUpdate(
+      session.sessionId,
+      responseCompleted({
+        input_tokens: 50,
+        cache_read_input_tokens: 450,
+        output_tokens: 5,
+      }),
+    );
+
+    // Turn two starts from its own zero rather than continuing turn one's
+    // 3,000 — each turn's usage line reports that turn's spend.
+    await vi.waitFor(() => {
+      expect(liveTotalsFor("turn-two")).toEqual([500]);
+    });
+    expect(liveTotalsFor("turn-one")).toEqual([1_000, 3_000]);
+
+    await adapter.close();
+  });
+
   it("uses separate live assistant item ids for ACP text separated by tools", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();

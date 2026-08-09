@@ -14,6 +14,45 @@ export type AcpUsageEnvelope = {
   tokenUsage: AcpTokenUsage;
 };
 
+/**
+ * ACP running totals are PER TURN, not per session.
+ *
+ * `AcpBackendAdapter` folds these envelopes into a `liveTurnUsage` entry keyed
+ * by `(backend, session, turn)` and drops it at `turn_finished`, so the sum
+ * restarts at zero on every turn. That is the number it sends as
+ * `total_token_usage` on `thread/tokenUsage/updated`.
+ *
+ * Codex sends the same field meaning something else: a session-cumulative
+ * total, which is why `deriveLiveThreadTokenUsage` can read `total - last` as
+ * "the context this turn inherited". For ACP that subtraction lands on zero on
+ * a turn's first call, which is also correct — the turn did start from nothing
+ * — so every consumer traced today produces right answers from either shape.
+ *
+ * Two things follow that are NOT obvious from the field name, and one open
+ * question:
+ *
+ *  - `deriveTurnUsageBaseline` (renderer) prefers `contextWindow.cumulative*`
+ *    over `total - last` when a context window is known. Nothing populates a
+ *    context window from an ACP payload today, because these notifications
+ *    carry no `modelContextWindow`. Adding one — the obvious shape of a Grok
+ *    context-usage indicator — would feed a per-turn total into a baseline
+ *    that expects a session-cumulative one, and the live turn usage would
+ *    collapse toward zero. Settle the semantics before adding that field.
+ *  - `foldObservedContextReplay` keeps its cursor per THREAD and treats a
+ *    total at or below the cursor as a stale re-emission. Per-turn totals
+ *    restart below it, so after the first turn an ACP thread stops advancing
+ *    that cursor. It contributed nothing before this shape existed either (the
+ *    fold requires a total, and ACP sent none), so no observable count
+ *    regressed — but ACP does not meaningfully participate in replay
+ *    accounting, and a half-advanced cursor is easy to mistake for one that
+ *    works.
+ *
+ * Whether ACP should instead report a session-cumulative total is genuinely
+ * open. It would align both of the above with Codex, but it needs answers we
+ * do not have yet: what a resumed or compacted ACP session should report, and
+ * whether Grok's per-call usage is safe to accumulate across turns at all.
+ */
+
 export function readAcpUsageEnvelope(
   update: Record<string, unknown>,
 ): AcpUsageEnvelope | undefined {
@@ -107,6 +146,12 @@ function readGrokResponseUsageEnvelope(
     return undefined;
   }
 
+  // Cache-creation tokens land in `inputTokens` but not in
+  // `cachedInputTokens`, so downstream `inputTokens - cachedInputTokens`
+  // prices them as uncached input. That mirrors `turn_completed.usage`, whose
+  // `cacheCreationTokens` is a separate field this parser also folds nowhere
+  // — matching it is what keeps the running sum and the turn total in
+  // agreement. It is not a claim about how xAI bills cache writes.
   const inputTokens =
     uncachedInputTokens !== undefined
     || cachedInputTokens !== undefined
