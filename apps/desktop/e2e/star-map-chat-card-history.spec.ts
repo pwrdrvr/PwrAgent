@@ -188,13 +188,22 @@ test.describe("star map chat card history", () => {
     // 4. It opened at the NEWEST message. This is the one the CSS-contract
     //    unit test can only approximate: jsdom does no layout, so nothing
     //    else in the suite can tell a working scroller from a dead one.
-    const atBottom = await scroller.evaluate((element) => {
-      const distance =
-        element.scrollHeight - element.clientHeight - element.scrollTop;
-      return { distance, scrollHeight: element.scrollHeight };
-    });
-    // The scroller must genuinely overflow, or "at the bottom" is vacuous.
-    expect(atBottom.scrollHeight).toBeGreaterThan(0);
+    const atBottom = await scroller.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      distance:
+        element.scrollHeight - element.clientHeight - element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop,
+    }));
+    // The scroller must genuinely OVERFLOW, not merely exist. In the
+    // broken state the items box grew to its full content height and
+    // scrollHeight === clientHeight, which makes `distance` 0 and
+    // "scrolled to the bottom" true of a box that cannot scroll at all —
+    // the exact defect this test exists to catch, passing itself.
+    expect(atBottom.clientHeight).toBeGreaterThan(0);
+    expect(atBottom.scrollHeight).toBeGreaterThan(atBottom.clientHeight + 200);
+    // And it must have been moved there, not left at the top.
+    expect(atBottom.scrollTop).toBeGreaterThan(0);
     expect(atBottom.distance).toBeLessThan(80);
 
     // 5. Scrolling up fetches a BOUNDED page, not the rest of the thread.
