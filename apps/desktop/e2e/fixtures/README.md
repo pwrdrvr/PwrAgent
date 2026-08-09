@@ -134,10 +134,9 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
   and final answer preservation during one active turn
 - `plan-autocomplete-order/`: captured active-turn ordering where earlier
   command/file-change activity must remain above later assistant commentary
-- `long-thread-scroll-stability/`: very tall transcript opens at bottom without
-  drift and restores a saved viewport on reselect
-- `thread-scroll-restore/`: cached thread reselection preserves transcript
-  viewport and avoids an extra replay `thread/read`
+- `long-thread-scroll-stability/`: very tall transcripts open at bottom without
+  drift and restore independent middle and exact-zero viewports on reselect;
+  this includes the former `thread-scroll-restore/` coverage
 - `review-output-rendering/`: captured Codex inline review output renders plain
   review findings in one review card without duplicate assistant text
 - `review-multiple-findings/`: captured Codex inline review output renders

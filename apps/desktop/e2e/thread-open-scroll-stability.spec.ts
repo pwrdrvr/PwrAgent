@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
@@ -30,6 +30,82 @@ async function distanceFromTranscriptBottom(locator: Locator) {
   });
 }
 
+async function readScrollMetrics(locator: Locator) {
+  return await locator.evaluate((element) => ({
+    distanceFromBottom: Math.round(
+      Math.max(element.scrollHeight - element.clientHeight - element.scrollTop, 0)
+    ),
+    maxScrollTop: Math.round(
+      Math.max(element.scrollHeight - element.clientHeight, 0)
+    ),
+    scrollTop: Math.round(element.scrollTop),
+  }));
+}
+
+async function setTranscriptScrollTop(locator: Locator, targetScrollTop: number) {
+  return await locator.evaluate((element, target) => {
+    const rect = element.getBoundingClientRect();
+    element.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        clientX: rect.right - 2,
+        clientY: rect.top + 24,
+      })
+    );
+    element.scrollTop = target;
+    element.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    return {
+      distanceFromBottom: Math.round(
+        Math.max(element.scrollHeight - element.clientHeight - element.scrollTop, 0)
+      ),
+      scrollTop: Math.round(element.scrollTop),
+    };
+  }, targetScrollTop);
+}
+
+async function selectCompanionThread(page: Page, transcript: Locator) {
+  await page
+    .getByRole("button", { name: /Short companion thread/i })
+    .first()
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      level: 2,
+      name: "Short companion thread"
+    })
+  ).toBeVisible();
+  await expect(
+    transcript.getByText(
+      "Short companion thread message 20: top viewport marker."
+    )
+  ).toBeVisible();
+  await expect(
+    transcript.getByText("Long thread message 180: final transcript marker.")
+  ).toHaveCount(0);
+}
+
+async function selectLongThread(page: Page, transcript: Locator) {
+  await page
+    .getByRole("button", { name: /Long scroll stability thread/i })
+    .first()
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      level: 2,
+      name: "Long scroll stability thread"
+    })
+  ).toBeVisible();
+  await expect(
+    transcript.getByText("Long thread message 180: final transcript marker.")
+  ).toBeVisible();
+  await expect(
+    transcript.getByText(
+      "Short companion thread message 20: top viewport marker."
+    )
+  ).toHaveCount(0);
+}
+
 function expectStableSeries(values: number[], label: string) {
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -39,7 +115,7 @@ function expectStableSeries(values: number[], label: string) {
   ).toBeLessThanOrEqual(4);
 }
 
-test("opens a long transcript at the bottom without downward drift and restores saved scroll on reselect", async () => {
+test("opens a long transcript without drift and restores saved scroll positions on reselect", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       specDir,
@@ -52,122 +128,115 @@ test("opens a long transcript at the bottom without downward drift and restores 
   });
 
   try {
-    await app.window
-      .getByRole("button", { name: /Long scroll stability thread/i })
-      .first()
-      .click();
-
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Long scroll stability thread"
-      })
-    ).toBeVisible();
-
     const transcript = app.window.getByRole("region", { name: "Transcript" });
     const list = app.window.locator(".transcript-list__items");
 
-    await expect(
-      transcript.getByText("Long thread message 180: final transcript marker.")
-    ).toBeVisible();
-
-    await expect
-      .poll(async () =>
-        await list.evaluate(
-          (element) => element.scrollHeight > element.clientHeight + 2000
-        )
-      )
-      .toBe(true);
-
-    const initialMetrics = await list.evaluate((element) => ({
-      maxScrollTop: Math.round(
-        Math.max(element.scrollHeight - element.clientHeight, 0)
-      ),
-      scrollTop: Math.round(element.scrollTop),
-    }));
-
-    expect(initialMetrics.maxScrollTop).toBeGreaterThan(2000);
-    expect(initialMetrics.maxScrollTop - initialMetrics.scrollTop).toBeLessThanOrEqual(4);
-
-    const initialSeries = await collectScrollSamples(list);
-    expectStableSeries(initialSeries, "long-thread initial open");
-
-    const savedViewport = await list.evaluate((element) => {
-      const maxScrollTop = Math.max(element.scrollHeight - element.clientHeight, 0);
-      const targetScrollTop = Math.max(320, Math.floor(maxScrollTop / 3));
-      const rect = element.getBoundingClientRect();
-      element.dispatchEvent(
-        new PointerEvent("pointerdown", {
-          bubbles: true,
-          clientX: rect.right - 2,
-          clientY: rect.top + 24,
+    await test.step("open the long transcript at a stable bottom position", async () => {
+      await app.window
+        .getByRole("button", { name: /Long scroll stability thread/i })
+        .first()
+        .click();
+      await expect(
+        app.window.getByRole("heading", {
+          level: 2,
+          name: "Long scroll stability thread"
         })
-      );
-      element.scrollTop = targetScrollTop;
-      element.dispatchEvent(new Event("scroll", { bubbles: true }));
-      return {
-        distanceFromBottom: Math.round(
-          Math.max(element.scrollHeight - element.clientHeight - element.scrollTop, 0)
-        ),
-        scrollTop: Math.round(element.scrollTop),
-      };
+      ).toBeVisible();
+      await expect(
+        transcript.getByText("Long thread message 180: final transcript marker.")
+      ).toBeVisible();
+
+      await expect
+        .poll(async () =>
+          await list.evaluate(
+            (element) => element.scrollHeight > element.clientHeight + 2000
+          )
+        )
+        .toBe(true);
+
+      const initialMetrics = await readScrollMetrics(list);
+      expect(initialMetrics.maxScrollTop).toBeGreaterThan(2000);
+      expect(
+        initialMetrics.maxScrollTop - initialMetrics.scrollTop
+      ).toBeLessThanOrEqual(4);
+
+      const initialSeries = await collectScrollSamples(list);
+      expectStableSeries(initialSeries, "long-thread initial open");
     });
 
-    await expect
-      .poll(async () => await list.evaluate((element) => Math.round(element.scrollTop)))
-      .toBe(savedViewport.scrollTop);
+    const savedTopViewport = await test.step(
+      "save two distinct viewports before reselecting either thread",
+      async () => {
+        const currentMetrics = await readScrollMetrics(list);
+        const targetScrollTop = Math.max(
+          320,
+          Math.floor(currentMetrics.maxScrollTop / 3)
+        );
+        const savedViewport = await setTranscriptScrollTop(
+          list,
+          targetScrollTop
+        );
 
-    await app.window
-      .getByRole("button", { name: /Short companion thread/i })
-      .first()
-      .click();
+        await expect
+          .poll(async () =>
+            await list.evaluate((element) => Math.round(element.scrollTop))
+          )
+          .toBe(savedViewport.scrollTop);
 
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Short companion thread"
-      })
-    ).toBeVisible();
-    await expect(
-      transcript.getByText("Short companion thread message 2.")
-    ).toBeVisible();
+        await selectCompanionThread(app.window, transcript);
+        await expect
+          .poll(async () =>
+            await list.evaluate(
+              (element) => element.scrollHeight > element.clientHeight + 200
+            )
+          )
+          .toBe(true);
 
-    await app.window
-      .getByRole("button", { name: /Long scroll stability thread/i })
-      .first()
-      .click();
+        const topViewport = await setTranscriptScrollTop(list, 0);
+        expect(topViewport.scrollTop).toBe(0);
 
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Long scroll stability thread"
-      })
-    ).toBeVisible();
-    await expect(
-      transcript.getByText("Long thread message 180: final transcript marker.")
-    ).toBeVisible();
+        const topSeries = await collectScrollSamples(list);
+        expectStableSeries(topSeries, "companion-thread saved top viewport");
+        expect(Math.max(...topSeries)).toBeLessThanOrEqual(4);
 
-    const restoredSeries = await collectScrollSamples(list);
-    expectStableSeries(restoredSeries, "long-thread reselect restore");
+        await selectLongThread(app.window, transcript);
 
-    const restoredMetrics = await list.evaluate((element) => ({
-      distanceFromBottom: Math.round(
-        Math.max(element.scrollHeight - element.clientHeight - element.scrollTop, 0)
-      ),
-      maxScrollTop: Math.round(
-        Math.max(element.scrollHeight - element.clientHeight, 0)
-      ),
-      scrollTop: Math.round(element.scrollTop),
-    }));
+        const restoredSeries = await collectScrollSamples(list);
+        expectStableSeries(restoredSeries, "long-thread middle viewport restore");
 
-    expect(Math.abs(restoredMetrics.scrollTop - savedViewport.scrollTop)).toBeLessThanOrEqual(4);
-    expect(
-      Math.abs(restoredMetrics.distanceFromBottom - savedViewport.distanceFromBottom)
-    ).toBeLessThanOrEqual(4);
-    expect(restoredMetrics.scrollTop).toBeLessThan(restoredMetrics.maxScrollTop - 24);
-    await expect(
-      transcript.getByText("Short companion thread message 2.")
-    ).toHaveCount(0);
+        const restoredMetrics = await readScrollMetrics(list);
+        expect(
+          Math.abs(restoredMetrics.scrollTop - savedViewport.scrollTop)
+        ).toBeLessThanOrEqual(4);
+        expect(
+          Math.abs(
+            restoredMetrics.distanceFromBottom - savedViewport.distanceFromBottom
+          )
+        ).toBeLessThanOrEqual(4);
+        expect(restoredMetrics.scrollTop).toBeLessThan(
+          restoredMetrics.maxScrollTop - 24
+        );
+
+        return topViewport;
+      }
+    );
+
+    await test.step("restore the companion thread at an exact scrollTop of zero", async () => {
+      await selectCompanionThread(app.window, transcript);
+
+      const restoredSeries = await collectScrollSamples(list);
+      expectStableSeries(restoredSeries, "companion-thread top viewport restore");
+      expect(Math.max(...restoredSeries)).toBeLessThanOrEqual(4);
+
+      const restoredMetrics = await readScrollMetrics(list);
+      expect(restoredMetrics.maxScrollTop).toBeGreaterThan(200);
+      expect(restoredMetrics.scrollTop).toBeLessThanOrEqual(4);
+      expect(
+        Math.abs(
+          restoredMetrics.distanceFromBottom - savedTopViewport.distanceFromBottom
+        )
+      ).toBeLessThanOrEqual(4);
+    });
   } finally {
     await app.close();
   }

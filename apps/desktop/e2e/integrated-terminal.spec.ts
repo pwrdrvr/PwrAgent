@@ -37,7 +37,12 @@ function terminalRows(page: Page) {
   return page.locator(".integrated-terminal .xterm-rows");
 }
 
-test("keeps a per-thread integrated terminal alive while hidden", async () => {
+/**
+ * Regression coverage for two collapsed-session failures: delayed output must
+ * remain buffered while the pane is hidden, and createOrAttach must not expand
+ * a deliberately collapsed pane when ThreadView remounts.
+ */
+test("keeps a hidden terminal alive and collapsed across a thread view remount", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       integratedTerminalSpecDir,
@@ -46,28 +51,63 @@ test("keeps a per-thread integrated terminal alive while hidden", async () => {
   });
 
   try {
-    await openSmokeThread(app.window);
-    await openIntegratedTerminal(app.window);
+    await test.step("start delayed output and hide the running terminal", async () => {
+      await openSmokeThread(app.window);
+      await openIntegratedTerminal(app.window);
 
-    await typeTerminalCommand(
-      app.window,
-      'node -e "setTimeout(() => console.log(\'PWRAGENT_TERMINAL_HIDDEN_DONE\'), 500)"',
-    );
-    await app.window.getByRole("button", { name: "Hide integrated terminal" }).click();
-    await expect(app.window.getByLabel("Integrated terminal", { exact: true })).toBeHidden();
+      await typeTerminalCommand(
+        app.window,
+        'node -e "setTimeout(() => console.log(\'PWRAGENT_TERMINAL_HIDDEN_DONE\'), 500)"',
+      );
+      await app.window
+        .getByRole("button", { name: "Hide integrated terminal" })
+        .click();
+      await expect(
+        app.window.getByLabel("Integrated terminal", { exact: true })
+      ).toBeHidden();
 
-    // A collapsed-but-running shell advertises itself: the toggle changes its
-    // label and wears a live dot, so the terminal can't go silently invisible.
-    const showToggle = app.window.getByRole("button", {
-      name: "Show running integrated terminal",
+      // A collapsed-but-running shell advertises itself: the toggle changes
+      // its label and wears a live dot, so it cannot go silently invisible.
+      await expect(
+        app.window.getByRole("button", {
+          name: "Show running integrated terminal",
+        })
+      ).toHaveClass(/is-running/);
     });
-    await expect(showToggle).toHaveClass(/is-running/);
-    await showToggle.click();
 
-    await expect(terminalRows(app.window)).toContainText(
-      "PWRAGENT_TERMINAL_HIDDEN_DONE",
-      { timeout: 10_000 },
-    );
+    await test.step("remount ThreadView without expanding the terminal", async () => {
+      await app.window.getByRole("button", { name: "Search threads" }).click();
+      await expect(
+        app.window.getByRole("textbox", { name: "Search threads" })
+      ).toBeVisible();
+      await expect(
+        app.window.getByLabel("Integrated terminal", { exact: true })
+      ).toHaveCount(0);
+
+      await openSmokeThread(app.window);
+
+      const showToggle = app.window.getByRole("button", {
+        name: "Show running integrated terminal",
+      });
+      await expect(showToggle).toBeVisible();
+      await expect(showToggle).toHaveClass(/is-running/);
+      await expect(
+        app.window.getByLabel("Integrated terminal", { exact: true })
+      ).toBeHidden();
+    });
+
+    await test.step("show the retained pane and replay its delayed output", async () => {
+      await app.window
+        .getByRole("button", { name: "Show running integrated terminal" })
+        .click();
+      await expect(
+        app.window.getByLabel("Integrated terminal", { exact: true })
+      ).toBeVisible();
+      await expect(terminalRows(app.window)).toContainText(
+        "PWRAGENT_TERMINAL_HIDDEN_DONE",
+        { timeout: 10_000 },
+      );
+    });
   } finally {
     await app.close();
   }
@@ -119,58 +159,6 @@ test("recovers a running terminal after the thread view unmounts", async () => {
       "PWRAGENT_TERMINAL_SURVIVES",
       { timeout: 10_000 },
     );
-  } finally {
-    await app.close();
-  }
-});
-
-/**
- * Regression: `createOrAttach` used to un-hide the panel on every attach, on the
- * theory that the renderer only attaches when it is showing the pane. It isn't —
- * a pane is mounted (and therefore attaches) for every live session, collapsed
- * ones included. So a deliberate collapse was destroyed by the next remount, and
- * because every session gets a pane, one remount re-opened every collapsed
- * terminal in the app at once.
- */
-test("keeps a collapsed terminal collapsed across a thread view unmount", async () => {
-  const app = await launchElectronApp({
-    fixturePath: path.resolve(
-      integratedTerminalSpecDir,
-      "fixtures/smoke/replay.fixture.json",
-    ),
-  });
-
-  try {
-    await openSmokeThread(app.window);
-    await openIntegratedTerminal(app.window);
-
-    await app.window.getByRole("button", { name: "Hide integrated terminal" }).click();
-    await expect(
-      app.window.getByLabel("Integrated terminal", { exact: true }),
-    ).toBeHidden();
-
-    // Unmount ThreadView via the search screen, then come back.
-    await app.window.getByRole("button", { name: "Search threads" }).click();
-    await expect(
-      app.window.getByRole("textbox", { name: "Search threads" }),
-    ).toBeVisible();
-    await openSmokeThread(app.window);
-
-    // Still collapsed, still advertising the running shell.
-    const showToggle = app.window.getByRole("button", {
-      name: "Show running integrated terminal",
-    });
-    await expect(showToggle).toBeVisible();
-    await expect(showToggle).toHaveClass(/is-running/);
-    await expect(
-      app.window.getByLabel("Integrated terminal", { exact: true }),
-    ).toBeHidden();
-
-    // And it still reattaches to the same live shell when asked.
-    await showToggle.click();
-    await expect(
-      app.window.getByLabel("Integrated terminal", { exact: true }),
-    ).toBeVisible();
   } finally {
     await app.close();
   }

@@ -2068,7 +2068,115 @@
             "type": "message",
             "id": "short-message-2",
             "role": "assistant",
-            "text": "Short companion thread message 2."
+            "text": "Short companion thread message 2: this companion is intentionally tall enough to preserve an independent top viewport in the same Electron session."
+          },
+          {
+            "type": "message",
+            "id": "short-message-3",
+            "role": "user",
+            "text": "Short companion thread message 3: the first visit starts at the bottom before the test saves an exact scrollTop of zero."
+          },
+          {
+            "type": "message",
+            "id": "short-message-4",
+            "role": "assistant",
+            "text": "Short companion thread message 4: switching away must retain the top viewport while the long thread restores its middle viewport."
+          },
+          {
+            "type": "message",
+            "id": "short-message-5",
+            "role": "user",
+            "text": "Short companion thread message 5: verbose fixture text keeps this transcript scrollable across Electron layout differences."
+          },
+          {
+            "type": "message",
+            "id": "short-message-6",
+            "role": "assistant",
+            "text": "Short companion thread message 6: each cached thread owns its viewport snapshot independently."
+          },
+          {
+            "type": "message",
+            "id": "short-message-7",
+            "role": "user",
+            "text": "Short companion thread message 7: restoring one thread must not overwrite the saved position of the other thread."
+          },
+          {
+            "type": "message",
+            "id": "short-message-8",
+            "role": "assistant",
+            "text": "Short companion thread message 8: the exact top edge catches falsey-zero viewport restoration regressions."
+          },
+          {
+            "type": "message",
+            "id": "short-message-9",
+            "role": "user",
+            "text": "Short companion thread message 9: enough content remains below this point to make zero distinct from bottom alignment."
+          },
+          {
+            "type": "message",
+            "id": "short-message-10",
+            "role": "assistant",
+            "text": "Short companion thread message 10: the replay remains deterministic because both threads are loaded only once."
+          },
+          {
+            "type": "message",
+            "id": "short-message-11",
+            "role": "user",
+            "text": "Short companion thread message 11: cached transcript reuse and viewport identity are verified together."
+          },
+          {
+            "type": "message",
+            "id": "short-message-12",
+            "role": "assistant",
+            "text": "Short companion thread message 12: this line adds stable height without introducing pagination behavior."
+          },
+          {
+            "type": "message",
+            "id": "short-message-13",
+            "role": "user",
+            "text": "Short companion thread message 13: typography changes should not make the transcript too short to exercise scrolling."
+          },
+          {
+            "type": "message",
+            "id": "short-message-14",
+            "role": "assistant",
+            "text": "Short companion thread message 14: the top snapshot is saved before either cached thread is reselected."
+          },
+          {
+            "type": "message",
+            "id": "short-message-15",
+            "role": "user",
+            "text": "Short companion thread message 15: later reselecting this thread should render immediately at the saved top edge."
+          },
+          {
+            "type": "message",
+            "id": "short-message-16",
+            "role": "assistant",
+            "text": "Short companion thread message 16: no delayed smooth descent should change the restored position after selection."
+          },
+          {
+            "type": "message",
+            "id": "short-message-17",
+            "role": "user",
+            "text": "Short companion thread message 17: repeated samples make any post-selection drift visible in the failure output."
+          },
+          {
+            "type": "message",
+            "id": "short-message-18",
+            "role": "assistant",
+            "text": "Short companion thread message 18: distance from bottom provides a second diagnostic for exact viewport restoration."
+          },
+          {
+            "type": "message",
+            "id": "short-message-19",
+            "role": "user",
+            "text": "Short companion thread message 19: the final marker below confirms the correct cached transcript is visible."
+          },
+          {
+            "type": "message",
+            "id": "short-message-20",
+            "role": "assistant",
+            "text": "Short companion thread message 20: top viewport marker."
           }
         ],
         "messages": [
@@ -2080,11 +2188,101 @@
           {
             "id": "short-message-2",
             "role": "assistant",
-            "text": "Short companion thread message 2."
+            "text": "Short companion thread message 2: this companion is intentionally tall enough to preserve an independent top viewport in the same Electron session."
+          },
+          {
+            "id": "short-message-3",
+            "role": "user",
+            "text": "Short companion thread message 3: the first visit starts at the bottom before the test saves an exact scrollTop of zero."
+          },
+          {
+            "id": "short-message-4",
+            "role": "assistant",
+            "text": "Short companion thread message 4: switching away must retain the top viewport while the long thread restores its middle viewport."
+          },
+          {
+            "id": "short-message-5",
+            "role": "user",
+            "text": "Short companion thread message 5: verbose fixture text keeps this transcript scrollable across Electron layout differences."
+          },
+          {
+            "id": "short-message-6",
+            "role": "assistant",
+            "text": "Short companion thread message 6: each cached thread owns its viewport snapshot independently."
+          },
+          {
+            "id": "short-message-7",
+            "role": "user",
+            "text": "Short companion thread message 7: restoring one thread must not overwrite the saved position of the other thread."
+          },
+          {
+            "id": "short-message-8",
+            "role": "assistant",
+            "text": "Short companion thread message 8: the exact top edge catches falsey-zero viewport restoration regressions."
+          },
+          {
+            "id": "short-message-9",
+            "role": "user",
+            "text": "Short companion thread message 9: enough content remains below this point to make zero distinct from bottom alignment."
+          },
+          {
+            "id": "short-message-10",
+            "role": "assistant",
+            "text": "Short companion thread message 10: the replay remains deterministic because both threads are loaded only once."
+          },
+          {
+            "id": "short-message-11",
+            "role": "user",
+            "text": "Short companion thread message 11: cached transcript reuse and viewport identity are verified together."
+          },
+          {
+            "id": "short-message-12",
+            "role": "assistant",
+            "text": "Short companion thread message 12: this line adds stable height without introducing pagination behavior."
+          },
+          {
+            "id": "short-message-13",
+            "role": "user",
+            "text": "Short companion thread message 13: typography changes should not make the transcript too short to exercise scrolling."
+          },
+          {
+            "id": "short-message-14",
+            "role": "assistant",
+            "text": "Short companion thread message 14: the top snapshot is saved before either cached thread is reselected."
+          },
+          {
+            "id": "short-message-15",
+            "role": "user",
+            "text": "Short companion thread message 15: later reselecting this thread should render immediately at the saved top edge."
+          },
+          {
+            "id": "short-message-16",
+            "role": "assistant",
+            "text": "Short companion thread message 16: no delayed smooth descent should change the restored position after selection."
+          },
+          {
+            "id": "short-message-17",
+            "role": "user",
+            "text": "Short companion thread message 17: repeated samples make any post-selection drift visible in the failure output."
+          },
+          {
+            "id": "short-message-18",
+            "role": "assistant",
+            "text": "Short companion thread message 18: distance from bottom provides a second diagnostic for exact viewport restoration."
+          },
+          {
+            "id": "short-message-19",
+            "role": "user",
+            "text": "Short companion thread message 19: the final marker below confirms the correct cached transcript is visible."
+          },
+          {
+            "id": "short-message-20",
+            "role": "assistant",
+            "text": "Short companion thread message 20: top viewport marker."
           }
         ],
-        "lastUserMessage": "Short companion thread message 1.",
-        "lastAssistantMessage": "Short companion thread message 2.",
+        "lastUserMessage": "Short companion thread message 19: the final marker below confirms the correct cached transcript is visible.",
+        "lastAssistantMessage": "Short companion thread message 20: top viewport marker.",
         "pagination": {
           "supportsPagination": false,
           "hasPreviousPage": false
