@@ -7,9 +7,10 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type {
-  CelestialIconId,
-  NavigationThreadSummary,
+import {
+  buildThreadIdentityKey,
+  type CelestialIconId,
+  type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -95,7 +96,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     onLimitChange: session.setRenderedTranscriptEntryLimit,
     onLoadOlder: session.loadOlder,
     pagination: session.response?.replay.pagination,
-    threadKey: thread.id,
+    // The canonical key, not a bare id: an ACP backend's kind ("acp:grok")
+    // already contains a colon, so `${source}:${id}` is ambiguous and a
+    // bare id is worse. Same key ThreadView keys its window by.
+    threadKey: buildThreadIdentityKey(thread.source, thread.id),
   });
 
   const federationTarget =
