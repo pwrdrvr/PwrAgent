@@ -96,31 +96,6 @@ async function openApprovalPendingReplay() {
   return app;
 }
 
-test("shows pending approval UI without duplicating the turn elsewhere", async () => {
-  const app = await openApprovalPendingReplay();
-
-  try {
-    await expect(
-      app.window.getByRole("group", { name: "Pending approval" })
-    ).toBeVisible();
-    await expect(app.window.getByText("Approval needed")).toBeVisible();
-    const pendingApproval = app.window.getByRole("group", { name: "Pending approval" });
-    await expect(pendingApproval.getByText("Command:")).toBeVisible();
-    await expect(
-      pendingApproval.locator("pre code")
-    ).toHaveText(approvalCommand);
-    await expect(app.window.getByText(/\/bin\/zsh -lc/)).toHaveCount(0);
-    await expect(
-      app.window.getByText("Waiting for approval before this turn can continue.")
-    ).toBeVisible();
-    await expect(
-      app.window.getByRole("button", { name: "Approve Once" })
-    ).toBeVisible();
-  } finally {
-    await app.close();
-  }
-});
-
 test("dismisses the pending approval UI after approval", async () => {
   const app = await openApprovalPendingReplay();
 

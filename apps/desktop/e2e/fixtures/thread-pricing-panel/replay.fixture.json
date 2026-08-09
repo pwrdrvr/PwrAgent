@@ -163,14 +163,14 @@
           {
             "type": "activity",
             "id": "usage-xai-priced",
-            "summary": "Turn usage: 400 uncached in · 0 cached · 120 out · $0.003 list price",
+            "summary": "Turn usage: 400 uncached in · 0 cached · 120 out · $0.002 list price",
             "createdAt": 1781616395000,
             "status": "completed",
             "details": [
               {
                 "id": "usage-xai-priced-detail",
                 "kind": "read",
-                "label": "Cost: $0.003 list price for Grok 4.20 Reasoning",
+                "label": "Cost: $0.002 list price for Grok 4.5 Standard",
                 "status": "completed"
               }
             ],
@@ -186,14 +186,14 @@
               "currency": "USD",
               "fastMode": false,
               "inputTokens": 400,
-              "model": "grok-4.20-reasoning",
-              "outputCostMicros": 2000,
+              "model": "grok-4.5",
+              "outputCostMicros": 720,
               "outputTokens": 120,
               "priceStatus": "priced",
               "provider": "xai",
               "pricingCatalogId": "xai-api",
-              "pricingCatalogVersion": "2026-06-16",
-              "pricingRateId": "xai:2026-06-16:grok-4.20-reasoning:standard",
+              "pricingCatalogVersion": "2026-07-17",
+              "pricingRateId": "xai:2026-07-17:grok-4.5:standard",
               "reasoningOutputTokens": 0,
               "scope": "turn",
               "serviceTier": "standard",
@@ -203,10 +203,10 @@
               "sourceItemId": "usage-xai-priced",
               "status": "finalized",
               "threadId": "thread-pricing-panel",
-              "totalCostMicros": 3000,
+              "totalCostMicros": 1520,
               "totalTokens": 520,
               "turnId": "turn-xai-priced",
-              "uncachedInputCostMicros": 1000,
+              "uncachedInputCostMicros": 800,
               "uncachedInputTokens": 400,
               "usageLineId": "xai-priced-line",
               "usageTurnId": "xai:codex:thread-pricing-panel:turn-xai-priced"

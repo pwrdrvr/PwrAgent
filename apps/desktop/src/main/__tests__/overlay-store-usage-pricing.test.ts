@@ -937,12 +937,12 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     await store.upsertThreadUsageLine({ line: buildUsageLine() });
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
-        model: "grok-4.20-reasoning",
+        model: "grok-4.5",
         outputCostMicros: 2_000,
         provider: "xai",
         pricingCatalogId: "xai-api",
-        pricingCatalogVersion: "2026-06-16",
-        pricingRateId: "xai:2026-06-16:grok-4.20-reasoning:standard",
+        pricingCatalogVersion: "2026-07-17",
+        pricingRateId: "xai:2026-07-17:grok-4.5:standard",
         totalCostMicros: 3_000,
         usageLineId: "xai-line-1",
       }),
