@@ -55,6 +55,7 @@ code side).
 | `tools.thread_orchestration` | tools (danger: med) | Let the agent inject messages into other threads, hand off tasks, attach directories, and attach PRs. |
 | `tools.instance_management` | tools (danger: med) | Let the agent manage PwrAgent itself and inspect automations (`manage_pwragent`). |
 | `thread.execution.full_access` | danger (danger: high) | Select or resume into full-access execution — near-complete control of the host. |
+| `federation.remote_control` | danger (danger: high) | Browse and drive threads that live on federated peers, not just this machine. Required *in addition to* the action's own permission — see "Federation scope" below. |
 
 Notes on the danger tiers:
 
@@ -76,9 +77,9 @@ reserved: `admin`, `power_user`, `power_user_tools`, `chat_user`,
 
 | Role | Permission set | Intent |
 |---|---|---|
-| **Admin** | The whole catalog, computed — it can never silently miss a newly added capability. | The operator's own accounts. |
+| **Admin** | The whole catalog, computed — it can never silently miss a newly added capability. Includes `federation.remote_control`, so Admin is the only built-in that reaches other instances. | The operator's own accounts. |
 | **Power User** | Everything a thread operator needs EXCEPT `approval.respond.escalation`, the `tools.*` agent surface, and full access. Enumerated explicitly so new permissions are opt-in. | A trusted colleague driving their own threads. |
-| **Power User + Tools** | Power User plus the three `tools.*` permissions. | A Power User also trusted to let the agent reach beyond the bound thread. |
+| **Power User + Tools** | Power User plus the three `tools.*` permissions. | A Power User also trusted to let the agent reach beyond the bound thread — but still only on *this* machine. |
 | **Chat User** | `message.reply`, `elicitation.answer`, `thread.status.view`. | Converse and observe; no control surface. |
 | **Limited Chat User** | `message.reply`, `elicitation.answer`. | Reply and answer questions only. |
 
@@ -269,10 +270,16 @@ inline role attach/detach, and custom-role CRUD
 The renderer speaks only `@pwragent/shared` contracts over the
 `messaging-rbac` IPC surface.
 
-## Known gap: the catalog has no federation scope
+## Federation scope: what vs. where
 
-Every permission here answers *what* an actor may do, never *where*. Federation
-made that distinction load-bearing after this catalog was written:
+Every other permission answers *what* an actor may do. `federation.remote_control`
+answers *where*, and it is required **in addition to** the action's own
+permission whenever the target thread lives on another instance — the same
+double-gate shape as `thread.execution.full_access`, for the same reason:
+`thread.resume` on a peer's thread is a materially bigger grant than on a local
+one, and full access on a peer's thread is full access **on another machine**.
+
+Why the scope needed its own axis:
 
 - `DesktopMessagingBackendBridge.getNavigationSnapshot` merges the threads of
   every peer advertising the `messaging_route` capability into the same list as
@@ -284,19 +291,43 @@ made that distinction load-bearing after this catalog was written:
 - `mutate_thread` takes `instanceId` and `includeRemote`, and `includeRemote`
   **defaults to true** — remote resolution is the default, not an opt-in.
 
-So `thread.resume` today means "resume any thread, local or on any
-`messaging_route` peer", and `thread.execution.full_access` on a remote thread
-is full access **on that peer's machine**. The only control is the peer's own
-`messaging_route` opt-in, which is all-or-nothing per peer and is the *peer's*
-decision — the local operator cannot say "Alice may drive local threads but not
-remote ones."
+Before the scope permission, `thread.resume` meant "resume any thread, local or
+on any `messaging_route` peer". The peer's `messaging_route` opt-in is still
+there and still required, but it is all-or-nothing per peer and it is the
+*peer's* decision; it can't express "Alice may drive local threads but not
+remote ones." That's the local operator's call, and now it's expressible.
 
-The intended shape is one orthogonal permission (e.g. `federation.remote_control`,
-danger: high) required *in addition to* the action's own permission whenever the
-resolved target is remote — the same double-gate as `thread.execution.full_access`
-— plus filtering remote entries out of the resume picker. That keeps the additive
-union intact and makes "Local Only" the default posture for every built-in except
-Admin, instead of duplicating the role list into local and federated variants.
+**Where it is enforced.** Each check gates on the *resolved* target, so a
+binding created while the actor had scope stops working when the scope is
+removed:
+
+| Surface | Gate |
+|---|---|
+| Binding to a thread (`resume` / attach) | Before the bind, on the target thread's federation ref |
+| Status / handoff / skills callbacks | Top-guard, on the active binding |
+| Plain message + media turns | The `message.reply` floor, on the active binding (silent, like the floor itself) |
+| Commands (`/status`, `/detach`, `/schedule`, …) | Verb gate, on the active binding. `resume`/`agent` are exempt — they only open the picker, which filters itself, and the bind is gated separately |
+| Agent dynamic tools | Added to the required set when the args explicitly target a peer |
+
+**The picker filters, it doesn't just refuse.** The resume browser lists thread
+titles and projects, so enforcement alone would still leak a peer's work to an
+actor who can't touch it. `renderResumeBrowser` strips remote threads for actors
+without the scope, so every row it offers is a row they may actually bind.
+
+**Built-ins.** Only Admin holds it (it is computed from the whole catalog). Power
+User, Power User + Tools, Chat User, and Limited Chat User do not — so **"local
+only" is the default posture for everyone except Admin**, without duplicating the
+role list into local and federated variants. A role list split that way would
+also fight the additive union: hold both a local and a federated role and the
+union hands you federation anyway.
+
+**Known limit — ambient remote resolution.** `includeRemote` defaults to *true*
+at the resolution layer, so a tool call that simply omits it can still resolve
+onto a peer's thread. `toolArgsTargetRemoteInstance` only catches *explicit*
+targeting (`instanceId`, or `includeRemote: true`), because the check is
+synchronous and runs before resolution. The controller chokepoints above close
+the practical path by gating on the resolved binding; fully closing the ambient
+case belongs at the federation resolution site.
 
 ## Deliberately deferred (Phase 1 boundaries)
 

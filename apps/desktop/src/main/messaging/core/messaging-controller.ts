@@ -15,6 +15,7 @@ import {
   permissionForCommandVerb,
   permissionForDynamicTool,
   permissionsForThreadMutation,
+  toolArgsTargetRemoteInstance,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
   stripCodexGitActionDirectives,
@@ -2171,6 +2172,20 @@ export class MessagingController {
       ) {
         return;
       }
+      // Scope gate: a command against a conversation already bound to a peer's
+      // thread drives that peer. `resume` is exempt — it only opens the picker,
+      // which filters remote entries itself, and the bind is gated separately.
+      if (
+        verb !== "resume" &&
+        verb !== "agent" &&
+        !(await this.requireRemoteScopeForBinding(
+          event,
+          await this.options.store.findActiveBindingForChannel(event.channel),
+          `command:${verb}:remote-instance`,
+        ))
+      ) {
+        return;
+      }
     }
     if (verb === "schedule") {
       await this.handleScheduleCommand(event);
@@ -3138,6 +3153,17 @@ export class MessagingController {
     if (!(await this.requirePermission(event, "message.reply", "message:reply", { notify: false }))) {
       return;
     }
+    // A turn into a remote-bound thread runs on the peer's machine.
+    if (
+      !(await this.requireRemoteScopeForBinding(
+        event,
+        binding,
+        "message:reply:remote-instance",
+        { notify: false },
+      ))
+    ) {
+      return;
+    }
 
     await this.turnAdmission.append({ binding, event });
   }
@@ -3306,6 +3332,16 @@ export class MessagingController {
     }
 
     if (!(await this.requirePermission(event, "message.reply", "media:reply", { notify: false }))) {
+      return;
+    }
+    if (
+      !(await this.requireRemoteScopeForBinding(
+        event,
+        binding,
+        "media:reply:remote-instance",
+        { notify: false },
+      ))
+    ) {
       return;
     }
 
@@ -4306,6 +4342,19 @@ export class MessagingController {
           thread.source === bindingTarget.backend &&
           thread.id === bindingTarget.threadId,
       );
+      // RBAC scope: binding to a thread that lives on a federated peer is
+      // remote control, whatever the thread's execution mode. Gate before the
+      // bind so an actor without the scope can never create a remote binding
+      // (the picker also hides remote threads from them).
+      if (
+        !(await this.requireRemoteScope(
+          event,
+          targetThread ? federationTargetForThread(targetThread) : undefined,
+          "resume:remote-instance",
+        ))
+      ) {
+        return;
+      }
       if (targetThread?.executionMode === "full-access") {
         // RBAC: binding a conversation to a Full Access thread needs the danger
         // permission, in addition to the global resume-full-access setting.
@@ -7953,7 +8002,10 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<void> {
     await this.options.store.upsertBrowseSession(session);
-    const browseNavigation = await this.navigationForResumeBrowser(session, navigation);
+    const browseNavigation = this.filterRemoteThreadsForActor(
+      event,
+      await this.navigationForResumeBrowser(session, navigation),
+    );
     const intent = buildResumeIntent({
       id: this.newIntentId("resume"),
       createdAt: this.now(),
@@ -10544,6 +10596,17 @@ export class MessagingController {
     if (
       requiredPermission &&
       !(await this.requirePermission(event, requiredPermission, actionId))
+    ) {
+      return;
+    }
+    // Scope gate: a binding created while the actor still had remote scope (or
+    // by an operator) must not stay drivable after the scope is revoked.
+    if (
+      !(await this.requireRemoteScopeForBinding(
+        event,
+        await this.options.store.findActiveBindingForChannel(event.channel),
+        `${actionId}:remote-instance`,
+      ))
     ) {
       return;
     }
@@ -16679,6 +16742,94 @@ export class MessagingController {
     return false;
   }
 
+  /**
+   * Federation SCOPE gate. Every other permission answers "what may this actor
+   * do"; this one answers "where". Required IN ADDITION to the action's own
+   * permission whenever the thread being acted on lives on another instance —
+   * the same double-gate shape as `thread.execution.full_access`, and for the
+   * same reason: `thread.resume` on a peer's thread is a materially bigger
+   * grant than on a local one, and `thread.execution.full_access` on a peer's
+   * thread is full access on ANOTHER MACHINE.
+   *
+   * Local targets short-circuit to `true`, so this costs nothing for the
+   * single-instance case. Legacy (unenforced) mode is allow-all as always.
+   */
+  private async requireRemoteScope(
+    event: MessagingInboundEvent,
+    target: FederationTarget | undefined,
+    auditAction: string,
+    opts?: { notify?: boolean },
+  ): Promise<boolean> {
+    if (!target || target.scope !== "remote") {
+      return true;
+    }
+    return await this.requirePermission(
+      event,
+      "federation.remote_control",
+      auditAction,
+      opts,
+    );
+  }
+
+  /**
+   * Non-auditing permission probe for render-time filtering. `requirePermission`
+   * records a denial and messages the user, which is right when they ASKED to do
+   * something and wrong when we're deciding what to put on a menu.
+   */
+  private actorHasPermission(
+    event: MessagingInboundEvent,
+    permission: MessagingPermissionId,
+  ): boolean {
+    const resolution = this.resolveActorPermissions(event);
+    return resolution === null || resolution.permissions.has(permission);
+  }
+
+  /**
+   * Strip peers' threads from a snapshot before it reaches a picker. Enforcement
+   * alone would still leak: the resume browser lists thread titles and projects,
+   * so an actor without remote scope would read a peer's work before being told
+   * they can't touch it. Filtering here keeps the menu honest — every row it
+   * shows is a row the actor may actually bind.
+   */
+  private filterRemoteThreadsForActor<T extends NavigationSnapshot>(
+    event: MessagingInboundEvent,
+    navigation: T,
+  ): T {
+    if (this.actorHasPermission(event, "federation.remote_control")) {
+      return navigation;
+    }
+    const localThreads = navigation.threads.filter(
+      (thread) => federationTargetForThread(thread) === undefined,
+    );
+    if (localThreads.length === navigation.threads.length) {
+      return navigation;
+    }
+    const localKeys = new Set(localThreads.map(threadKeyForNavigationThread));
+    return {
+      ...navigation,
+      threads: localThreads,
+      inboxThreadKeys: navigation.inboxThreadKeys.filter((key) =>
+        localKeys.has(key),
+      ),
+    };
+  }
+
+  /** `requireRemoteScope` for an already-resolved binding. */
+  private async requireRemoteScopeForBinding(
+    event: MessagingInboundEvent,
+    binding: MessagingBindingRecord | undefined,
+    auditAction: string,
+    opts?: { notify?: boolean },
+  ): Promise<boolean> {
+    if (!binding) return true;
+    return await this.requireRemoteScope(
+      event,
+      federationTargetForBinding(binding),
+      auditAction,
+      opts,
+    );
+  }
+
   private recordCapabilityDenied(
     event: MessagingInboundEvent,
     permission: MessagingPermissionId | "(admission)",
@@ -16777,6 +16928,14 @@ export class MessagingController {
             const permission = permissionForDynamicTool(params.category, params.tool);
             return permission ? [permission] : [];
           })();
+    // Scope: the thread tools accept `instanceId` / `includeRemote`, so the
+    // agent can aim them at a peer. Reaching another instance needs the scope
+    // permission on top of the tool's own — and it applies even to otherwise
+    // ungated tools, because "benign here" is not benign on someone else's
+    // machine.
+    if (toolArgsTargetRemoteInstance(params.arguments)) {
+      required.push("federation.remote_control");
+    }
     if (required.length === 0) {
       // Benign tool (e.g. get_current_messaging_surface, or a no-op mutation).
       return { owns: true, allowed: true };

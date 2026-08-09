@@ -75,7 +75,11 @@ export type MessagingPermissionId =
   | "tools.thread_orchestration"
   | "tools.instance_management"
   // Escalation-equivalent — near-complete control of the host. Danger.
-  | "thread.execution.full_access";
+  | "thread.execution.full_access"
+  // Federation SCOPE. Orthogonal to every permission above: those say WHAT an
+  // actor may do, this says WHERE. Required in addition to the action's own
+  // permission whenever the target thread lives on another instance.
+  | "federation.remote_control";
 
 export type MessagingPermissionDanger = "med" | "high";
 
@@ -274,6 +278,14 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
     label: "Codex Full Access",
     description:
       "Select or resume into full-access execution — near-complete control of the host.",
+    group: "danger",
+    danger: "high",
+  },
+  {
+    id: "federation.remote_control",
+    label: "Reach other instances",
+    description:
+      "Browse and drive threads that live on federated peers, not just this machine.",
     group: "danger",
     danger: "high",
   },
@@ -784,6 +796,35 @@ const THREAD_MUTATION_FIELD_PERMISSIONS: Record<
  * rules for every field it actually sets. The caller must require the actor to
  * hold ALL returned permissions.
  */
+/**
+ * Whether dynamic-tool arguments EXPLICITLY reach for another instance.
+ *
+ * The federation-aware thread tools (`search_threads`, `get_thread_status`,
+ * `read_thread`, `mutate_thread`, …) all accept `instanceId` (target a named
+ * peer) and `includeRemote` (widen resolution beyond this machine). When either
+ * is set deliberately, the call needs `federation.remote_control` on top of the
+ * tool's own permission.
+ *
+ * KNOWN LIMIT: `includeRemote` DEFAULTS to true at the resolution layer, so a
+ * call that simply omits it can still land on a peer's thread. We cannot prove
+ * that here — this check is synchronous and pre-resolution, and the id alone
+ * doesn't say which instance owns it. Closing the ambient case belongs at the
+ * resolution site, which is why the bind/status/reply chokepoints in the
+ * controller gate on the RESOLVED binding rather than trusting this alone.
+ */
+export function toolArgsTargetRemoteInstance(
+  args: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!args || typeof args !== "object") {
+    return false;
+  }
+  const instanceId = args.instanceId;
+  if (typeof instanceId === "string" && instanceId.trim().length > 0) {
+    return true;
+  }
+  return args.includeRemote === true;
+}
+
 export function permissionsForThreadMutation(
   args: Record<string, unknown> | null | undefined,
 ): MessagingPermissionId[] {

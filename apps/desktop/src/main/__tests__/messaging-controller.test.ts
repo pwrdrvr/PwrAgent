@@ -37,6 +37,7 @@ import {
   type MessagingCapabilityProfile,
   type MessagingSurfaceAction,
   type MessagingChannelKind,
+  type MessagingChannelRef,
   type MessagingDeliveryScope,
   type MessagingDeliveryResult,
   type MessagingInboundCallbackEvent,
@@ -21484,6 +21485,126 @@ describe("RBAC capability enforcement", () => {
       owns: true,
       allowed: false,
       permission: "thread.settings.model",
+    });
+  });
+
+  describe("federation scope", () => {
+    const remoteBinding = (channel: MessagingChannelRef) => ({
+      id: "binding:remote-peer",
+      authorizedActorIds: ["user-1"],
+      backend: "codex" as const,
+      channel,
+      createdAt: 1_000,
+      federatedThread: {
+        backend: "codex" as const,
+        target: { scope: "remote" as const, instanceId: "peer-one" },
+        threadId: "thread-1",
+      },
+      targetKind: "thread" as const,
+      threadId: "thread-1",
+      updatedAt: 1_000,
+    });
+
+    it("denies a command against a remote-bound thread without the scope", async () => {
+      const records: unknown[] = [];
+      const harness = await createHarness({
+        // Power User holds thread.status.view but NOT federation.remote_control.
+        rbacPolicy: rbacProviderGranting([
+          "message.reply",
+          "thread.status.view",
+        ]),
+        activityLog: () =>
+          ({ record: (entry: unknown) => records.push(entry) }) as never,
+      });
+      const event = buildCommandEvent("/status");
+      await harness.store.upsertBinding(remoteBinding(event.channel));
+
+      await harness.controller.handleInboundEvent(event);
+
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "error",
+        title: "Not permitted",
+      });
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          kind: "inbound-rejected",
+          payload: expect.objectContaining({
+            reason: "unauthorized-capability",
+            permission: "federation.remote_control",
+          }),
+        }),
+      );
+    });
+
+    it("allows the same command once the actor holds the scope", async () => {
+      const harness = await createHarness({
+        rbacPolicy: rbacProviderGranting([
+          "message.reply",
+          "thread.status.view",
+          "federation.remote_control",
+        ]),
+      });
+      const event = buildCommandEvent("/status");
+      await harness.store.upsertBinding(remoteBinding(event.channel));
+
+      await harness.controller.handleInboundEvent(event);
+
+      expect(harness.delivered.at(-1)).not.toMatchObject({
+        title: "Not permitted",
+      });
+    });
+
+    it("leaves local-bound threads untouched by the scope gate", async () => {
+      const harness = await createHarness({
+        // No federation.remote_control — a local binding must still work.
+        rbacPolicy: rbacProviderGranting([
+          "message.reply",
+          "thread.status.view",
+        ]),
+      });
+      await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+      expect(harness.delivered.at(-1)).not.toMatchObject({
+        title: "Not permitted",
+      });
+    });
+
+    it("blocks an agent tool aimed at another instance", async () => {
+      const harness = await createHarness({
+        // Power User + Tools, but no federation scope.
+        rbacPolicy: rbacProviderGranting([
+          "message.reply",
+          "tools.thread_inspection",
+        ]),
+      });
+      await driveOneTurn(harness, "look at my other machine");
+
+      // Local read: allowed on the tool permission alone.
+      expect(
+        harness.controller.checkDynamicToolPermission({
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          category: "thread_inspection",
+          tool: "search_threads",
+          arguments: { query: "x" },
+        }),
+      ).toEqual({ owns: true, allowed: true });
+
+      // Explicitly aimed at a peer: needs the scope on top.
+      expect(
+        harness.controller.checkDynamicToolPermission({
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          category: "thread_inspection",
+          tool: "search_threads",
+          arguments: { query: "x", instanceId: "peer-one" },
+        }),
+      ).toEqual({
+        owns: true,
+        allowed: false,
+        permission: "federation.remote_control",
+      });
     });
   });
 });

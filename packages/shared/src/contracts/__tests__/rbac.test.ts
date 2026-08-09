@@ -12,6 +12,7 @@ import {
   permissionForDynamicTool,
   permissionsForThreadMutation,
   resolveEffectivePermissions,
+  toolArgsTargetRemoteInstance,
   roleIsDangerous,
   type MessagingPermissionId,
   type RbacAttachment,
@@ -395,6 +396,51 @@ describe("action → permission lookup tables", () => {
     // Ungated chrome resolves to undefined (rendered for everyone).
     expect(permissionForActionId("help:cancel")).toBeUndefined();
     expect(permissionForActionId("command:help")).toBeUndefined();
+  });
+});
+
+describe("federation scope", () => {
+  it("is not granted by any built-in except Admin", () => {
+    for (const role of BUILT_IN_ROLES) {
+      const holds = role.permissions.includes("federation.remote_control");
+      expect(
+        holds,
+        `${role.id} should ${role.id === RBAC_BUILT_IN_ROLE_IDS.admin ? "" : "not "}reach other instances`,
+      ).toBe(role.id === RBAC_BUILT_IN_ROLE_IDS.admin);
+    }
+  });
+
+  it("detects explicit remote targeting in tool args", () => {
+    expect(toolArgsTargetRemoteInstance({ instanceId: "peer-1" })).toBe(true);
+    expect(toolArgsTargetRemoteInstance({ includeRemote: true })).toBe(true);
+    // Local-only and unspecified calls are not *explicit* remote targeting.
+    expect(toolArgsTargetRemoteInstance({ includeRemote: false })).toBe(false);
+    expect(toolArgsTargetRemoteInstance({ threadId: "t1" })).toBe(false);
+    expect(toolArgsTargetRemoteInstance({ instanceId: "  " })).toBe(false);
+    expect(toolArgsTargetRemoteInstance(null)).toBe(false);
+  });
+
+  it("is orthogonal — it grants no thread capability on its own", () => {
+    const scopeOnly: RbacRoleDefinition = {
+      id: "role_scope",
+      name: "Scope only",
+      builtIn: false,
+      permissions: ["federation.remote_control"],
+    };
+    const resolution = resolveEffectivePermissions({
+      platform: "slack",
+      actorId: "U1",
+      roles: [scopeOnly],
+      attachments: [
+        {
+          subject: { kind: "actor", platform: "slack", actorId: "U1" },
+          roleIds: ["role_scope"],
+        },
+      ],
+    });
+    expect(resolution.permissions.has("federation.remote_control")).toBe(true);
+    expect(resolution.permissions.has("message.reply")).toBe(false);
+    expect(resolution.permissions.has("thread.resume")).toBe(false);
   });
 });
 
