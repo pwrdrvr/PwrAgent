@@ -5188,6 +5188,143 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("keeps owner environment metadata after remote viewer environment updates", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner-instance",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: typeof federationTarget;
+    }).__pwragentFederationTarget = federationTarget;
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/owner-only/PwrAgent",
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/owner-only/PwrAgent",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      codexEnvironmentOptions: [
+        {
+          id: "environment",
+          name: "PwrAgent",
+          sourcePath: "/owner-only/PwrAgent/.codex/environments/environment.toml",
+          setupScript: "pnpm install",
+          actions: [],
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const updateDirectoryLaunchpad = vi.fn(async () => ({
+      defaults,
+      launchpad: {
+        ...launchpad,
+        codexEnvironmentId: undefined,
+        codexEnvironmentExecutionTarget: undefined,
+        codexEnvironmentOptions: [],
+        updatedAt: 2,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot: vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        federationTarget,
+        inboxThreadKeys: [],
+        threads: [],
+        directories: [
+          {
+            key: launchpad.directoryKey,
+            kind: "directory" as const,
+            label: launchpad.directoryLabel,
+            path: launchpad.directoryPath,
+            threadKeys: [],
+            needsAttentionCount: 0,
+            launchpad,
+          },
+        ],
+        launchpadDefaults: defaults,
+      })),
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.directoryKey).toBe(
+        launchpad.directoryKey,
+      );
+    });
+
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(launchpad.directoryKey, {
+        codexEnvironmentId: "environment",
+        codexEnvironmentExecutionTarget: "local",
+      });
+    });
+
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      codexEnvironmentId: "environment",
+      codexEnvironmentExecutionTarget: "local",
+      codexEnvironmentOptions: [
+        expect.objectContaining({
+          id: "environment",
+          name: "PwrAgent",
+        }),
+      ],
+    });
+  });
+
+  it("keeps launchpad updates stable across remote viewer rerenders", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner-instance",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: typeof federationTarget;
+    }).__pwragentFederationTarget = federationTarget;
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot: vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        federationTarget,
+        inboxThreadKeys: [],
+        threads: [],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })),
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result, rerender } = renderHook(() =>
+      useThreadNavigation(desktopApi)
+    );
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    const initialUpdateDirectoryLaunchpad =
+      result.current.updateDirectoryLaunchpad;
+
+    rerender();
+
+    expect(result.current.updateDirectoryLaunchpad).toBe(
+      initialUpdateDirectoryLaunchpad,
+    );
+  });
+
   it("keeps server-confirmed settingsTouchedAt after sticky launchpad updates", async () => {
     const defaults: NavigationLaunchpadDefaults = {
       backend: "codex" as const,

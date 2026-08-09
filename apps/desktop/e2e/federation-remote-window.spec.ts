@@ -1,9 +1,21 @@
-import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import {
+  buildFakeAgentConfigToml,
+  FEDERATION_CHILD_ENVIRONMENT_MARKER,
+  findAllFakeCodexRequests,
+  findFakeCodexRequest,
+  readFakeCodexRequestLog,
+  seedFakeCodexExecutable,
+  seedFakeKimiExecutable,
+  seedInstalledKimiParent,
+} from "./fixtures/fake-agent-executables";
 import {
   startInProcessFederationGateway,
   type InProcessFederationGateway,
@@ -17,6 +29,9 @@ import {
  * the gateway's router, so invite redemption, the auth handshake, remote
  * navigation snapshots, and pin routing all exercise production code on
  * both ends of the wire.
+ *
+ * The environment-loss repro below uses a second, fully real owner app
+ * with executable-backed Kimi + Codex fakes (no Codex replay fixture).
  */
 
 async function createLocalControlFixture(): Promise<{
@@ -41,7 +56,14 @@ async function createLocalControlFixture(): Promise<{
           method: "initialize",
           result: {
             serverInfo: { name: "Replay Codex", version: "1.0.0" },
-            methods: ["thread/list", "thread/read", "skills/list", "turn/start"],
+            methods: [
+              "thread/list",
+              "thread/read",
+              "skills/list",
+              "thread/start",
+              "turn/start",
+              "review/start",
+            ],
           },
         },
         {
@@ -87,6 +109,24 @@ async function createLocalControlFixture(): Promise<{
             },
           },
         },
+        {
+          id: "thread-start-1",
+          kind: "response",
+          method: "thread/start",
+          result: {
+            threadId: "federated-environment-child",
+          },
+        },
+        {
+          id: "review-start-1",
+          kind: "response",
+          method: "review/start",
+          result: {
+            threadId: "federated-environment-child",
+            reviewThreadId: "federated-environment-child",
+            turnId: "federated-environment-review",
+          },
+        },
       ],
     }),
   );
@@ -96,6 +136,74 @@ async function createLocalControlFixture(): Promise<{
     },
     fixturePath,
   };
+}
+
+async function reserveLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("Expected a loopback TCP port for federation E2E");
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
+  return address.port;
+}
+
+async function seedFixtureGitRepo(params: {
+  repoDir: string;
+  environmentSetupScript: string;
+  commitMessage?: string;
+  /**
+   * When false, skip `git init` / branch creation (for already-materialized
+   * worktrees). Defaults to true.
+   */
+  initializeGit?: boolean;
+}): Promise<void> {
+  await mkdir(path.join(params.repoDir, ".codex", "environments"), {
+    recursive: true,
+  });
+  if (params.initializeGit !== false) {
+    execFileSync("git", ["init"], { cwd: params.repoDir, stdio: "ignore" });
+    execFileSync("git", ["checkout", "-B", "main"], {
+      cwd: params.repoDir,
+      stdio: "ignore",
+    });
+  }
+  await writeFile(
+    path.join(params.repoDir, ".codex", "environments", "environment.toml"),
+    [
+      "version = 1",
+      'name = "PwrAgent"',
+      "",
+      "[setup]",
+      `script = ${JSON.stringify(params.environmentSetupScript)}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  execFileSync("git", ["add", ".codex/environments/environment.toml"], {
+    cwd: params.repoDir,
+    stdio: "ignore",
+  });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=PwrAgent Tests",
+      "-c",
+      "user.email=pwragent-tests@example.invalid",
+      "commit",
+      "-m",
+      params.commitMessage ?? "Seed fixture repo",
+    ],
+    { cwd: params.repoDir, stdio: "ignore" },
+  );
 }
 
 test.describe("federation remote window", () => {
@@ -109,6 +217,18 @@ test.describe("federation remote window", () => {
     const ownerPtyCwd = await mkdtemp(
       path.join(os.tmpdir(), "pwragent-federation-e2e-pty-"),
     );
+    const fixtureRepo = path.join(ownerPtyCwd, "FixtureRepo");
+    const ownerOnlyEnvironmentRepo = path.posix.join(
+      "/owner-only",
+      path.basename(ownerPtyCwd),
+      "EnvironmentRepo",
+    );
+    expect(existsSync(ownerOnlyEnvironmentRepo)).toBe(false);
+    await seedFixtureGitRepo({
+      repoDir: fixtureRepo,
+      environmentSetupScript: "printf federation-child-environment",
+      commitMessage: "Seed fixture repo",
+    });
     let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
     try {
       gateway = await startInProcessFederationGateway({
@@ -119,6 +239,27 @@ test.describe("federation remote window", () => {
             key: "directory:/remote/FixtureRepo",
             label: "FixtureRepo",
             path: "/remote/FixtureRepo",
+            threadIds: ["remote-thread-1", "remote-thread-2"],
+          },
+          {
+            key: `directory:${ownerOnlyEnvironmentRepo}`,
+            label: "EnvironmentRepo",
+            path: ownerOnlyEnvironmentRepo,
+            threadIds: ["remote-kimi-parent"],
+            codexEnvironmentOptions: [
+              {
+                id: "environment",
+                name: "PwrAgent",
+                sourcePath: path.join(
+                  ownerOnlyEnvironmentRepo,
+                  ".codex",
+                  "environments",
+                  "environment.toml",
+                ),
+                setupScript: "printf federation-child-environment",
+                actions: [],
+              },
+            ],
           },
         ],
         threads: [
@@ -132,6 +273,22 @@ test.describe("federation remote window", () => {
             title: "Remote gateway thread two",
             updatedAt: 1_000,
           },
+          {
+            id: "remote-kimi-parent",
+            title: "Remote Kimi parent",
+            updatedAt: 1_500,
+            source: "acp:kimi",
+            executionMode: "default",
+            linkedDirectories: [
+              {
+                id: ownerOnlyEnvironmentRepo,
+                label: "EnvironmentRepo",
+                path: ownerOnlyEnvironmentRepo,
+                worktreePath: ownerOnlyEnvironmentRepo,
+                kind: "worktree",
+              },
+            ],
+          },
         ],
       });
 
@@ -139,6 +296,27 @@ test.describe("federation remote window", () => {
       app = await launchElectronApp({
         fixturePath: fixture.fixturePath,
         secretStorage: "memory",
+        preLaunchHook: async (homeRoot) => {
+          const { executablePath: fakeKimiPath } =
+            await seedFakeKimiExecutable(homeRoot);
+          const configPath = path.join(
+            homeRoot,
+            ".pwragent",
+            "profiles",
+            "default",
+            "config.toml",
+          );
+          await mkdir(path.dirname(configPath), { recursive: true });
+          await writeFile(
+            configPath,
+            [
+              "[acp_agents.kimi]",
+              `cli_path = ${JSON.stringify(fakeKimiPath)}`,
+              "",
+            ].join("\n"),
+            "utf8",
+          );
+        },
       });
       const { electronApp, window } = app;
 
@@ -462,6 +640,74 @@ test.describe("federation remote window", () => {
       await expect(
         remote.getByTestId("composer-tiptap-input"),
       ).toHaveAttribute("data-value", "");
+
+      // A child launchpad inherits the Kimi parent first. Switching it to
+      // OpenAI and choosing a Codex environment must preserve that environment
+      // through remote materialization, including the review-command path.
+      await remote
+        .getByRole("button", { name: "EnvironmentRepo, 1 thread to review" })
+        .click();
+      const remoteKimiParent = remote.getByRole("button", {
+        name: "Remote Kimi parent",
+      });
+      await expect(remoteKimiParent).toBeVisible();
+      await remoteKimiParent.click({ button: "right" });
+      await remote
+        .getByRole("menuitem", { name: "Sub-thread in Same Worktree" })
+        .click();
+
+      const childPrompt = remote.getByRole("textbox", { name: "New thread" });
+      await expect(childPrompt).toBeVisible();
+      const childSettings = remote.getByLabel("New thread settings");
+      const childProvider = childSettings.getByRole("button", {
+        name: "Provider",
+        exact: true,
+      });
+      await expect(childProvider).toContainText("Kimi");
+      await childProvider.click();
+      await remote.getByRole("option", { name: "OpenAI", exact: true }).click();
+      await expect(childProvider).toContainText("OpenAI");
+
+      const childTools = remote.getByLabel("Composer tools");
+      const childEnvironment = childTools.getByRole("button", {
+        name: "Environment",
+        exact: true,
+      });
+      await expect(childEnvironment).toBeVisible();
+      await childEnvironment.click();
+      await remote.getByRole("option", { name: "PwrAgent", exact: true }).click();
+      await expect(childEnvironment).toContainText("PwrAgent");
+
+      await childPrompt.fill("/review");
+      await remote.getByRole("button", { name: "Start thread" }).click();
+      const reviewTarget = remote.getByRole("group", { name: "Review target" });
+      await expect(reviewTarget).toBeVisible();
+      await reviewTarget.getByRole("combobox", { name: "Base branch" }).click();
+      await reviewTarget.getByRole("option", { name: "main", exact: true }).click();
+      await reviewTarget.getByRole("button", { name: "Start review" }).click();
+
+      await expect
+        .poll(
+          () => gateway!.calls.filter(
+            (call) => call.method === "materializeDirectoryLaunchpad",
+          ).length,
+          { timeout: 30_000 },
+        )
+        .toBe(2);
+      const childMaterializeCall = gateway.calls.filter(
+        (call) => call.method === "materializeDirectoryLaunchpad",
+      ).at(-1);
+      expect(childMaterializeCall?.params).toMatchObject({
+        parentThreadId: "remote-kimi-parent",
+        reviewTarget: { type: "baseBranch", branch: "main" },
+        launchpad: {
+          backend: "codex",
+          codexEnvironmentId: "environment",
+          codexEnvironmentExecutionTarget: "local",
+          directoryPath: ownerOnlyEnvironmentRepo,
+        },
+      });
+
       await remoteRowOne.click();
       const remoteReply = remote.getByRole("textbox", { name: "Reply" });
       const recoveryDraft = "Keep this draft while the gateway reconnects";
@@ -515,6 +761,369 @@ test.describe("federation remote window", () => {
       await gateway?.close();
       await fixture.cleanup();
       await rm(ownerPtyCwd, { force: true, recursive: true });
+    }
+  });
+
+  test("preserves a Codex environment when a Kimi child is born through a remote viewer", async ({ browserName: _browserName }, testInfo) => {
+    test.setTimeout(300_000);
+
+    const fixtureRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-federation-environment-owner-"),
+    );
+    const sourceRepo = path.join(fixtureRoot, "source");
+    const fixtureRepo = path.join(
+      fixtureRoot,
+      ".pwragent",
+      "worktrees",
+      "federation-environment-repro",
+      "FixtureRepo",
+    );
+    const setupMarkerPath = path.join(
+      fixtureRepo,
+      FEDERATION_CHILD_ENVIRONMENT_MARKER,
+    );
+    const federationPort = await reserveLoopbackPort();
+
+    await mkdir(sourceRepo, { recursive: true });
+    execFileSync("git", ["init"], { cwd: sourceRepo, stdio: "ignore" });
+    execFileSync("git", ["checkout", "-B", "main"], {
+      cwd: sourceRepo,
+      stdio: "ignore",
+    });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=PwrAgent Tests",
+        "-c",
+        "user.email=pwragent-tests@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "Seed federation source repo",
+      ],
+      { cwd: sourceRepo, stdio: "ignore" },
+    );
+    execFileSync(
+      "git",
+      ["worktree", "add", "-b", "federation-environment-repro", fixtureRepo, "main"],
+      { cwd: sourceRepo, stdio: "ignore" },
+    );
+    await seedFixtureGitRepo({
+      repoDir: fixtureRepo,
+      environmentSetupScript: `touch ${FEDERATION_CHILD_ENVIRONMENT_MARKER}`,
+      commitMessage: "Seed federation environment fixture",
+      initializeGit: false,
+    });
+
+    const protocolDir = path.join(fixtureRoot, "protocol");
+    const requestLogPath = path.join(protocolDir, "fake-codex.protocol.jsonl");
+    const launchMarkerPath = path.join(protocolDir, "fake-codex.launched");
+    await mkdir(protocolDir, { recursive: true });
+
+    let owner: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    let viewer: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    try {
+      // Real owner: executable-backed Kimi + Codex via production settings.
+      // No PWRAGENT_REPLAY_FIXTURE_PATH — Codex discovery spawns fake-codex.
+      owner = await launchElectronApp({
+        requiresReplayDriver: false,
+        secretStorage: "memory",
+        preLaunchHook: async (homeRoot) => {
+          const { executablePath: fakeKimiPath } =
+            await seedFakeKimiExecutable(homeRoot);
+          const { executablePath: fakeCodexPath } =
+            await seedFakeCodexExecutable({
+              homeRoot,
+              requestLogPath,
+              launchMarkerPath,
+            });
+          await seedInstalledKimiParent({
+            directoryPath: fixtureRepo,
+            homeRoot,
+            fakeKimiPath,
+          });
+          const configPath = path.join(
+            homeRoot,
+            ".pwragent",
+            "profiles",
+            "default",
+            "config.toml",
+          );
+          await mkdir(path.dirname(configPath), { recursive: true });
+          await writeFile(
+            configPath,
+            buildFakeAgentConfigToml({
+              fakeKimiPath,
+              fakeCodexPath,
+              extraToml: [
+                "[federation]",
+                'mode = "gateway"',
+                'instance_label = "Federation Environment Owner"',
+                'listen_host = "127.0.0.1"',
+                `listen_port = ${federationPort}`,
+                `public_url = "ws://127.0.0.1:${federationPort}"`,
+                "",
+              ].join("\n"),
+            }),
+            "utf8",
+          );
+        },
+      });
+
+      await expect
+        .poll(
+          async () => await owner!.window.evaluate(async () => {
+            const api = (window as typeof window & {
+              pwragent?: {
+                listBackends?: () => Promise<{
+                  backends: Array<{ available: boolean; kind: string }>;
+                }>;
+              };
+            }).pwragent;
+            const response = await api?.listBackends?.();
+            const kimiReady = response?.backends.some(
+              (backend) => backend.kind === "acp:kimi" && backend.available,
+            ) ?? false;
+            const codexReady = response?.backends.some(
+              (backend) => backend.kind === "codex" && backend.available,
+            ) ?? false;
+            return kimiReady && codexReady;
+          }),
+          { timeout: 60_000 },
+        )
+        .toBe(true);
+
+      const parent = {
+        backend: "acp:kimi",
+        threadId: "federated-kimi-parent",
+      };
+
+      const invite = await owner.window.evaluate(async () => {
+        const api = (window as typeof window & {
+          pwragent?: {
+            generateFederationInvite?: () => Promise<{ invite: string }>;
+          };
+        }).pwragent;
+        if (!api?.generateFederationInvite) {
+          throw new Error("Owner invite API is unavailable");
+        }
+        return (await api.generateFederationInvite()).invite;
+      });
+
+      viewer = await launchElectronApp({
+        requiresReplayDriver: false,
+        secretStorage: "memory",
+      });
+      await expect
+        .poll(
+          async () => await viewer!.window.evaluate(async () => {
+            const api = (window as typeof window & {
+              pwragent?: {
+                readFederationHealth?: () => Promise<{
+                  health: { enabled: boolean };
+                }>;
+              };
+            }).pwragent;
+            return (await api?.readFederationHealth?.())?.health.enabled;
+          }),
+          { timeout: 30_000 },
+        )
+        .toBe(false);
+      // The renderer can become ready while the fire-and-forget federation
+      // startup restart is still unwinding. Importing during that narrow boot
+      // window coalesces with the disabled-mode restart instead of dialing the
+      // newly enrolled gateway, which is not representative of a viewer the
+      // operator is already using.
+      await viewer.window.waitForTimeout(1_000);
+      const enrollment = await viewer.window.evaluate(async (encodedInvite) => {
+        const api = (window as typeof window & {
+          pwragent?: {
+            importFederationInvite?: (request: { invite: string }) => Promise<{
+              gatewayInstanceId: string;
+            }>;
+          };
+        }).pwragent;
+        if (!api?.importFederationInvite) {
+          throw new Error("Viewer invite API is unavailable");
+        }
+        return await api.importFederationInvite({ invite: encodedInvite });
+      }, invite);
+
+      await expect
+        .poll(
+          async () => await viewer!.window.evaluate(async () => {
+            const api = (window as typeof window & {
+              pwragent?: {
+                readFederationHealth?: () => Promise<{
+                  health: { status?: string };
+                }>;
+              };
+            }).pwragent;
+            return JSON.stringify((await api?.readFederationHealth?.())?.health);
+          }),
+          { timeout: 30_000 },
+        )
+        .toContain('"status":"connected"');
+
+      const remoteWindowPromise = viewer.electronApp.waitForEvent("window");
+      await viewer.window.evaluate(async (instanceId) => {
+        const api = (window as typeof window & {
+          pwragent?: {
+            openFederationWindow?: (request: unknown) => Promise<unknown>;
+          };
+        }).pwragent;
+        if (!api?.openFederationWindow) {
+          throw new Error("Viewer remote-window API is unavailable");
+        }
+        await api.openFederationWindow({
+          target: { scope: "remote", instanceId },
+        });
+      }, enrollment.gatewayInstanceId);
+      const remote = await remoteWindowPromise;
+      await remote.waitForLoadState("domcontentloaded");
+
+      const remoteKimiParent = remote.getByRole("button", {
+        name: "Remote Kimi parent",
+      });
+      await expect(remoteKimiParent).toBeVisible({ timeout: 30_000 });
+      await remoteKimiParent.click({ button: "right" });
+      await remote
+        .getByRole("menuitem", { name: "Sub-thread in Same Worktree" })
+        .click();
+
+      const childSettings = remote.getByLabel("New thread settings");
+      const childProvider = childSettings.getByRole("button", {
+        name: "Provider",
+        exact: true,
+      });
+      await expect(childProvider).toContainText("Kimi");
+      await childProvider.click();
+      await remote.getByRole("option", { name: "OpenAI", exact: true }).click();
+      await expect(childProvider).toContainText("OpenAI");
+
+      const childAccessMode = childSettings.getByLabel("Access mode");
+      if (await childAccessMode.getAttribute("data-value") !== "full-access") {
+        await childAccessMode.click();
+        await remote.getByRole("option", { name: "Full Access" }).click();
+        await remote
+          .getByRole("dialog", { name: "Enable Full Access?" })
+          .getByRole("button", { name: "I Understand and Accept the Risks" })
+          .click();
+      }
+      await expect(childAccessMode).toHaveAttribute("data-value", "full-access");
+
+      const childEnvironment = remote
+        .getByLabel("Composer tools")
+        .getByRole("button", { name: "Environment", exact: true });
+      await expect(childEnvironment).toBeVisible();
+      await childEnvironment.click();
+      await remote.getByRole("option", { name: "PwrAgent", exact: true }).click();
+      await expect(childEnvironment).toContainText("PwrAgent");
+
+      await remote.getByRole("textbox", { name: "New thread" }).fill("/review");
+      await remote.getByRole("button", { name: "Start thread" }).click();
+      const reviewTarget = remote.getByRole("group", { name: "Review target" });
+      await expect(reviewTarget).toBeVisible();
+      await reviewTarget.getByRole("combobox", { name: "Base branch" }).click();
+      await reviewTarget.getByRole("option", { name: "main", exact: true }).click();
+      await reviewTarget.getByRole("button", { name: "Start review" }).click();
+
+      // Owner retains environmentId=environment on the materialized child.
+      await expect
+        .poll(
+          async () => await owner!.window.evaluate(
+            async ({ parentThreadId }) => {
+              const api = (window as typeof window & {
+                pwragent?: {
+                  getNavigationSnapshot?: (request: unknown) => Promise<{
+                    threads: Array<{
+                      codexEnvironmentRuntime?: { environmentId?: string };
+                      parentThreadId?: string;
+                      source: string;
+                    }>;
+                  }>;
+                };
+              }).pwragent;
+              const snapshot = await api?.getNavigationSnapshot?.({ backend: "all" });
+              return snapshot?.threads.find(
+                (thread) =>
+                  thread.source === "codex"
+                  && thread.parentThreadId === parentThreadId,
+              )?.codexEnvironmentRuntime?.environmentId;
+            },
+            { parentThreadId: parent.threadId },
+          ),
+          { timeout: 60_000 },
+        )
+        .toBe("environment");
+
+      // Setup marker proves environment setup actually ran on the owner worktree.
+      await expect
+        .poll(() => existsSync(setupMarkerPath), { timeout: 30_000 })
+        .toBe(true);
+
+      // Fake Codex must have been launched through production discovery.
+      await expect
+        .poll(() => {
+          try {
+            const raw = statSync(launchMarkerPath);
+            return raw.size > 0;
+          } catch {
+            return false;
+          }
+        }, { timeout: 30_000 })
+        .toBe(true);
+
+      // Durable protocol capture: thread/start saw the setup marker.
+      await expect
+        .poll(async () => {
+          const entries = await readFakeCodexRequestLog(requestLogPath);
+          return findAllFakeCodexRequests(entries, "thread/start").length;
+        }, { timeout: 30_000 })
+        .toBeGreaterThan(0);
+
+      let protocol = await readFakeCodexRequestLog(requestLogPath);
+      let threadStart = findFakeCodexRequest(protocol, "thread/start");
+      expect(threadStart).toBeTruthy();
+
+      // Exact failure assertion: when fake Codex received thread/start, the
+      // environment setup marker already existed in the requested cwd.
+      expect(threadStart!.setupMarkerPresent).toBe(true);
+
+      // Filesystem clock corroboration (allow small FS timestamp skew).
+      const setupMtimeMs = statSync(setupMarkerPath).mtimeMs;
+      expect(setupMtimeMs).toBeLessThanOrEqual(threadStart!.at + 5_000);
+
+      // Starting a native review continues asynchronously after child
+      // materialization. Wait for the durable request instead of assuming it
+      // has arrived as soon as thread/start is observable on a slower VM.
+      await expect
+        .poll(async () => {
+          const entries = await readFakeCodexRequestLog(requestLogPath);
+          return findAllFakeCodexRequests(entries, "review/start").length;
+        }, { timeout: 30_000 })
+        .toBeGreaterThan(0);
+
+      protocol = await readFakeCodexRequestLog(requestLogPath);
+      const initialize = findFakeCodexRequest(protocol, "initialize");
+      threadStart = findFakeCodexRequest(protocol, "thread/start");
+      const reviewStart = findFakeCodexRequest(protocol, "review/start");
+      expect(initialize).toBeTruthy();
+      expect(threadStart).toBeTruthy();
+      expect(reviewStart).toBeTruthy();
+      expect(initialize!.at).toBeLessThanOrEqual(threadStart!.at);
+      expect(threadStart!.at).toBeLessThanOrEqual(reviewStart!.at);
+    } finally {
+      if (existsSync(requestLogPath)) {
+        await testInfo.attach("fake-codex-protocol", {
+          path: requestLogPath,
+          contentType: "application/x-ndjson",
+        });
+      }
+      await viewer?.close();
+      await owner?.close();
+      await rm(fixtureRoot, { force: true, recursive: true });
     }
   });
 });

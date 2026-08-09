@@ -3,11 +3,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
+  AppServerBackendKind,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
+  CodexEnvironmentOption,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
+  LinkedDirectorySummary,
   ListBackendsResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
@@ -16,6 +19,7 @@ import type {
   SetThreadPinResponse,
 } from "@pwragent/shared";
 import {
+  buildThreadIdentityKey,
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
 } from "@pwragent/shared";
@@ -47,12 +51,17 @@ export type GatewayThreadSeed = {
   title: string;
   updatedAt: number;
   pinnedRank?: string;
+  source?: AppServerBackendKind;
+  executionMode?: AppServerThreadSummary["executionMode"];
+  linkedDirectories?: LinkedDirectorySummary[];
 };
 
 export type GatewayDirectorySeed = {
   key: string;
   label: string;
   path: string;
+  threadIds?: string[];
+  codexEnvironmentOptions?: CodexEnvironmentOption[];
 };
 
 export type InProcessFederationGateway = {
@@ -118,15 +127,18 @@ export async function startInProcessFederationGateway(params: {
       id: thread.id,
       title: thread.title,
       titleSource: "explicit" as const,
-      source: "codex" as const,
-      linkedDirectories: directories[0]
-        ? [{
-            id: directories[0].path,
-            label: directories[0].label,
-            path: directories[0].path,
-            kind: "local" as const,
-          }]
-        : [],
+      source: thread.source ?? "codex",
+      executionMode: thread.executionMode,
+      linkedDirectories:
+        thread.linkedDirectories ??
+        (directories[0]
+          ? [{
+              id: directories[0].path,
+              label: directories[0].label,
+              path: directories[0].path,
+              kind: "local" as const,
+            }]
+          : []),
       updatedAt: thread.updatedAt,
       createdAt: thread.updatedAt,
       ...(pinnedRankByThreadId.get(thread.id) !== undefined
@@ -142,13 +154,22 @@ export async function startInProcessFederationGateway(params: {
       ...thread,
       inbox: { inInbox: true },
     })),
-    inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
+    inboxThreadKeys: threads.map(
+      (thread) => buildThreadIdentityKey(thread.source ?? "codex", thread.id),
+    ),
     directories: directories.map((directory) => ({
       key: directory.key,
       kind: "directory" as const,
       label: directory.label,
       path: directory.path,
-      threadKeys: threads.map((thread) => `codex:${thread.id}`),
+      threadKeys: threads
+        .filter(
+          (thread) =>
+            !directory.threadIds || directory.threadIds.includes(thread.id),
+        )
+        .map((thread) =>
+          buildThreadIdentityKey(thread.source ?? "codex", thread.id),
+        ),
       needsAttentionCount: 0,
     })),
     launchpadDefaults: {
@@ -177,7 +198,7 @@ export async function startInProcessFederationGateway(params: {
       const thread = threads.find((entry) => entry.id === request.threadId);
       const text = `Remote transcript for ${thread?.title ?? request.threadId}.`;
       return {
-        backend: "codex",
+        backend: thread?.source ?? request.backend ?? "codex",
         fetchedAt: Date.now(),
         threadId: request.threadId,
         replay: {
@@ -216,6 +237,34 @@ export async function startInProcessFederationGateway(params: {
           {
             kind: "codex",
             label: "OpenAI",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start"],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          },
+          {
+            kind: "acp:kimi",
+            label: "Kimi Code",
             available: true,
             methods: ["thread/list", "thread/read", "turn/start"],
             capabilities: {
@@ -288,6 +337,7 @@ export async function startInProcessFederationGateway(params: {
           prompt: "",
           workMode: "local",
           branchName: "main",
+          codexEnvironmentOptions: directory?.codexEnvironmentOptions,
           createdAt: now,
           updatedAt: now,
         },
@@ -315,6 +365,7 @@ export async function startInProcessFederationGateway(params: {
         id: threadId,
         title: prompt || "Remote created thread",
         updatedAt: Date.now(),
+        source: request.launchpad?.backend ?? "codex",
       });
       return {
         backend: request.launchpad?.backend ?? "codex",

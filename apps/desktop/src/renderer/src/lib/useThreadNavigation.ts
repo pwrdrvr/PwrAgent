@@ -2143,6 +2143,9 @@ function mergeLaunchpadUpdateResponse(
   current: NavigationLaunchpadDraft | undefined,
   next: NavigationLaunchpadDraft,
   patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
+  options?: {
+    preserveOwnerCodexEnvironmentMetadata?: boolean;
+  },
 ): NavigationLaunchpadDraft {
   if (!current || current.directoryKey !== next.directoryKey) {
     return next;
@@ -2185,6 +2188,20 @@ function mergeLaunchpadUpdateResponse(
   preserveEnvironment("codexEnvironmentExecutionTarget");
   preserveEnvironment("codexEnvironmentActionId");
   preserveEnvironment("codexEnvironmentOptions");
+
+  if (options?.preserveOwnerCodexEnvironmentMetadata) {
+    // Remote launchpad drafts are persisted on the viewer, but environment
+    // discovery belongs to the owner. The viewer-side update response may
+    // legitimately contain an empty environment list because the owner's
+    // absolute project path does not exist on this machine. Keep the
+    // owner-sourced metadata already held by the renderer while accepting the
+    // viewer's persisted settings response for every other field.
+    merged.codexEnvironmentId = current.codexEnvironmentId;
+    merged.codexEnvironmentExecutionTarget =
+      current.codexEnvironmentExecutionTarget;
+    merged.codexEnvironmentActionId = current.codexEnvironmentActionId;
+    merged.codexEnvironmentOptions = current.codexEnvironmentOptions;
+  }
 
   return merged;
 }
@@ -2756,6 +2773,7 @@ export function useThreadNavigation(
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
   const enabled = options.enabled ?? true;
   const rendererFederationTarget = readRendererFederationTarget();
+  const isRendererFederationWindow = Boolean(rendererFederationTarget);
   const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
@@ -4982,8 +5000,27 @@ export function useThreadNavigation(
             directoryKey,
             patch,
           });
+          const optimisticLaunchpad = {
+            ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
+              launchpad,
+              patch,
+            ),
+            parentThreadId: groupRoot.id,
+            parentThreadBackend: groupRoot.source,
+            parentThreadTitle: groupRoot.title,
+            sourceThreadId: parent.id,
+          };
           launchpad = {
-            ...updated.launchpad,
+            ...mergeLaunchpadUpdateResponse(
+              optimisticLaunchpad,
+              updated.launchpad,
+              patch,
+              {
+                preserveOwnerCodexEnvironmentMetadata: Boolean(
+                  parent.federation || rendererFederationTarget,
+                ),
+              },
+            ),
             parentThreadId: groupRoot.id,
             parentThreadBackend: groupRoot.source,
             parentThreadTitle: groupRoot.title,
@@ -5562,6 +5599,10 @@ export function useThreadNavigation(
                   current[directoryKey],
                   response.launchpad,
                   patch,
+                  {
+                    preserveOwnerCodexEnvironmentMetadata:
+                      isRendererFederationWindow,
+                  },
                 ),
               }
             : current
@@ -5576,6 +5617,10 @@ export function useThreadNavigation(
               )?.launchpad,
               response.launchpad,
               patch,
+              {
+                preserveOwnerCodexEnvironmentMetadata:
+                  isRendererFederationWindow,
+              },
             ),
             response.defaults
           ),
@@ -5589,6 +5634,10 @@ export function useThreadNavigation(
               nextPendingPickedLaunchpad,
               response.launchpad,
               patch,
+              {
+                preserveOwnerCodexEnvironmentMetadata:
+                  isRendererFederationWindow,
+              },
             ),
           );
         }
@@ -5599,7 +5648,7 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi]
+    [desktopApi, isRendererFederationWindow]
   );
 
   const resetDirectoryLaunchpad = useCallback(
