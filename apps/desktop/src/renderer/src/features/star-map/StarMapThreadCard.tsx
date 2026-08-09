@@ -17,6 +17,7 @@ import {
   ThreadRowStatus,
 } from "../navigation/ThreadRowStatus";
 import { pointerDeltaToCanvas, resolveCardDragOffset } from "./star-map-layout";
+import type { AlignmentGuide } from "./star-map-snapping";
 import {
   visiblePullRequests,
   type StarMapCardFields,
@@ -74,6 +75,19 @@ export function StarMapThreadCard(props: {
      * `scale` times too far and slides out from under the cursor.
      */
     scale: number;
+    /**
+     * Snap a proposed offset against the rest of the arrangement. The
+     * screen owns this because it is the only thing that knows where every
+     * other card sits; the card would otherwise have to reconstruct the
+     * whole map to align with one neighbour.
+     */
+    snap?: (offset: { dx: number; dy: number }) => {
+      dx: number;
+      dy: number;
+      guides: AlignmentGuide[];
+    };
+    /** Guides to draw while this drag is live; empty clears them. */
+    onGuidesChange?: (guides: AlignmentGuide[]) => void;
     onCommitOffset: (offset: { dx: number; dy: number }) => void;
   };
   onOpen: (thread: NavigationThreadSummary) => void;
@@ -155,8 +169,10 @@ export function StarMapThreadCard(props: {
         },
         detentRadius: drag.detentRadius,
       });
-      lastDx = resolved.dx;
-      lastDy = resolved.dy;
+      const snapped = drag.snap ? drag.snap(resolved) : undefined;
+      lastDx = snapped ? snapped.dx : resolved.dx;
+      lastDy = snapped ? snapped.dy : resolved.dy;
+      drag.onGuidesChange?.(snapped?.guides ?? []);
       if (!frame) {
         frame = requestAnimationFrame(() => {
           frame = 0;
@@ -173,6 +189,7 @@ export function StarMapThreadCard(props: {
         cancelAnimationFrame(frame);
         frame = 0;
       }
+      drag.onGuidesChange?.([]);
       if (dragging) {
         drag.onCommitOffset({ dx: lastDx, dy: lastDy });
       }

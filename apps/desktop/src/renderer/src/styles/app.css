@@ -9792,6 +9792,25 @@ textarea,
   cursor: default;
 }
 
+/* Alignment guides, drawn only while a card is being dragged. They exist
+   so a snap is explainable: without the line, a card latching reads as the
+   drag sticking for no reason. */
+.star-map__guides {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 6;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.star-map__guide {
+  stroke: var(--accent-bright);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.9;
+}
+
 /* Projects lens: projects seat along spiral arms, each the centre of its
    own little system. Deliberately quiet — a project is a place, not a
    star, and a field of bright orange discs reads as noise rather than as

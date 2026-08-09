@@ -31,6 +31,7 @@ import {
   computeStarMapLayout,
   generateStarField,
   STAR_MAP_BODY_ROW_Y,
+  STAR_MAP_CARD_GAP,
   STAR_MAP_ESTIMATED_CARD_HEIGHT,
   visibleCardCount,
   type StarMapCardSlot,
@@ -53,6 +54,11 @@ import {
   type StarMapFilterKey,
   type StarMapFilterSelection,
 } from "./star-map-filters";
+import {
+  resolveSnap,
+  type AlignmentGuide,
+  type SnapRect,
+} from "./star-map-snapping";
 import { buildFederationTopology } from "./star-map-topology";
 import {
   groupThreadsByProject,
@@ -93,6 +99,13 @@ const ORBIT_MAX_CARDS_PER_INSTANCE = 16;
  * options) so a card being read is never underneath a control strip.
  */
 const STAR_MAP_CHAT_CARD_BASE_Z = 40;
+/**
+ * How close an edge has to come before it latches, in SCREEN pixels so the
+ * pull feels identical at every zoom. Wide enough to catch a deliberate
+ * near-miss, tight enough that a card never latches to something the
+ * operator was not aiming at.
+ */
+const SNAP_THRESHOLD_PX = 6;
 
 type StarMapScreenProps = {
   desktopApi?: DesktopApi;
@@ -933,6 +946,90 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return status;
   };
 
+  const [activeGuides, setActiveGuides] = useState<AlignmentGuide[]>([]);
+
+  /**
+   * Every visible card as an absolute canvas rect, keyed so a dragging
+   * card can exclude itself. Absolute rather than cloud-local so cards
+   * belonging to different instances can still align with each other —
+   * the operator sees one map, not several coordinate systems.
+   */
+  const cardRects = useMemo(() => {
+    const rects = new Map<string, SnapRect>();
+    for (const position of bodies) {
+      const lane = lanes.get(position.instanceId);
+      if (!lane) continue;
+      const visible = lane.threads.slice(0, lane.count);
+      visible.forEach((thread, index) => {
+        const slot = position.slots[index];
+        if (!slot) return;
+        const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+        const offset = arrangement.offsetFor(position.instanceId, threadKey);
+        const height = lane.heights[index] ?? STAR_MAP_ESTIMATED_CARD_HEIGHT;
+        rects.set(`${position.instanceId}::${threadKey}`, {
+          // Cards are centred on their slot horizontally (marginLeft is
+          // -width/2), so the rect's left edge is half a card back.
+          x: position.x + slot.dx + (offset?.dx ?? 0) - position.cardWidth / 2,
+          y: position.y + slot.dy + (offset?.dy ?? 0),
+          width: position.cardWidth,
+          height,
+        });
+      });
+    }
+    return rects;
+  }, [arrangement, bodies, lanes]);
+
+  /**
+   * Build the snap for one card. Threshold is screen-space so the pull
+   * feels the same at every zoom, then converted into the canvas units the
+   * geometry works in — the same reasoning as the drag threshold.
+   */
+  const snapFor = useCallback(
+    (instanceId: string, threadKey: string, cardWidth: number) => {
+      const selfKey = `${instanceId}::${threadKey}`;
+      if (!cardRects.has(selfKey)) return undefined;
+      const others = [...cardRects.entries()]
+        .filter(([key]) => key !== selfKey)
+        .map(([, rect]) => rect);
+      if (others.length === 0) return undefined;
+
+      const body = bodies.find((entry) => entry.instanceId === instanceId);
+      const lane = lanes.get(instanceId);
+      const index =
+        lane?.threads.findIndex(
+          (thread) =>
+            buildThreadIdentityKey(thread.source, thread.id) === threadKey,
+        ) ?? -1;
+      const baseSlot = index >= 0 ? body?.slots[index] : undefined;
+      if (!body || !baseSlot) return undefined;
+
+      const height = lane?.heights[index] ?? STAR_MAP_ESTIMATED_CARD_HEIGHT;
+      const scale = panZoomMode && view.scale > 0 ? view.scale : 1;
+
+      return (offset: { dx: number; dy: number }) => {
+        const snap = resolveSnap({
+          defaultGap: STAR_MAP_CARD_GAP,
+          moving: {
+            // Cards are centred on their slot (marginLeft is -width/2), so
+            // the rect's left edge sits half a card back.
+            x: body.x + baseSlot.dx + offset.dx - cardWidth / 2,
+            y: body.y + baseSlot.dy + offset.dy,
+            width: cardWidth,
+            height,
+          },
+          others,
+          threshold: SNAP_THRESHOLD_PX / scale,
+        });
+        return {
+          dx: offset.dx + snap.dx,
+          dy: offset.dy + snap.dy,
+          guides: snap.guides,
+        };
+      };
+    },
+    [bodies, cardRects, lanes, panZoomMode, view.scale],
+  );
+
   const renderCloud = (position: {
     instanceId: string;
     x: number;
@@ -1006,6 +1103,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
                       detentRadius,
                       // Lanes never scales, so this is 1 there.
                       scale: panZoomMode ? view.scale : 1,
+                      snap: snapFor(
+                        position.instanceId,
+                        threadKey,
+                        position.cardWidth,
+                      ),
+                      onGuidesChange: setActiveGuides,
                       onCommitOffset: (offset) =>
                         arrangement.setCardPosition(
                           position.instanceId,
@@ -1231,6 +1334,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
           );
         })}
         {(projectsMode ? [] : bodies).map((position) => renderCloud(position))}
+        {activeGuides.length > 0 ? (
+          <svg
+            className="star-map__guides"
+            width={panZoomCanvas.width || viewportSize.width}
+            height={panZoomCanvas.height || viewportSize.height}
+            aria-hidden="true"
+          >
+            {activeGuides.map((guide, index) => (
+              <line
+                className="star-map__guide"
+                key={index}
+                x1={guide.axis === "x" ? guide.at : guide.start}
+                x2={guide.axis === "x" ? guide.at : guide.end}
+                y1={guide.axis === "x" ? guide.start : guide.at}
+                y2={guide.axis === "x" ? guide.end : guide.at}
+              />
+            ))}
+          </svg>
+        ) : null}
         {projectsMode && projectLayout.arms.length > 0 ? (
           <svg
             className="star-map__arms"
