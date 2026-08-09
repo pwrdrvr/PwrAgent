@@ -76,8 +76,9 @@ export type DiscoverAcpAgentInstancesOptions = {
   discover?: (
     options?: LocalAcpDiscoveryOptions,
   ) => Promise<DiscoveredAcpAgentGroup[]>;
-  /** Injectable raw version-output probe used to distinguish products that
-   *  share one command name (currently legacy Python kimi-cli vs Kimi Code). */
+  /** Injectable raw version-output probe used for synthesized bundled instances
+   *  and to distinguish products that share one command name (currently legacy
+   *  Python kimi-cli vs Kimi Code). */
   readVersionOutput?: (
     command: string,
     env: NodeJS.ProcessEnv,
@@ -117,13 +118,14 @@ export async function discoverAcpAgentInstances(
     ...(options?.env ? { env: options.env } : {}),
     ...(options?.now ? { now: options.now } : {}),
   });
-  const groups = withBundledGrok(
+  const groups = await withBundledGrok(
     discoveredGroups,
     strategies,
     options?.bundledGrokCommand === undefined
       ? resolveBundledGrokCommand()
       : options.bundledGrokCommand,
     options?.now?.() ?? Date.now(),
+    options,
   );
 
   const byRegistryId = new Map<string, AcpInstanceDiscovery>();
@@ -184,11 +186,12 @@ export async function discoverLocalAcpAgentRecords(
     options?.bundledGrokCommand === undefined
       ? resolveBundledGrokCommand()
       : options.bundledGrokCommand;
-  const groups = withBundledGrok(
+  const groups = await withBundledGrok(
     discoveredGroups,
     strategies,
     bundledGrokCommand,
     now,
+    options,
   );
 
   const records: AcpInstalledAgentRecord[] = [];
@@ -409,12 +412,13 @@ function strategiesForEnabledRegistryIds(
   return ACP_DISCOVERY_STRATEGIES.filter((strategy) => enabled.has(strategy.id));
 }
 
-function withBundledGrok(
+async function withBundledGrok(
   discoveredGroups: readonly DiscoveredAcpAgentGroup[],
   enabledStrategies: readonly AcpAgentStrategy[] | undefined,
   bundledGrokCommand: string | null | undefined,
   discoveredAt: number,
-): DiscoveredAcpAgentGroup[] {
+  options: DiscoverAcpAgentInstancesOptions | undefined,
+): Promise<DiscoveredAcpAgentGroup[]> {
   const groups = discoveredGroups.map((group) => ({
     ...group,
     instances: [...group.instances],
@@ -430,19 +434,21 @@ function withBundledGrok(
     return groups;
   }
 
-  const bundledInstance = {
-    command: bundledGrokCommand,
-    source: "fallback" as const,
-  };
   const grokGroup = groups.find((group) => group.strategyId === "grok");
   if (grokGroup) {
-    if (
-      !grokGroup.instances.some(
-        (instance) => instance.command === bundledGrokCommand,
-      )
-    ) {
-      grokGroup.instances.push(bundledInstance);
+    if (grokGroup.instances.some(
+      (instance) => instance.command === bundledGrokCommand,
+    )) {
+      return groups;
     }
+  }
+
+  const bundledInstance = await probeBundledGrokInstance(
+    bundledGrokCommand,
+    options,
+  );
+  if (grokGroup) {
+    grokGroup.instances.push(bundledInstance);
     return groups;
   }
 
@@ -456,4 +462,33 @@ function withBundledGrok(
     discoveredAt,
   });
   return groups;
+}
+
+async function probeBundledGrokInstance(
+  command: string,
+  options: DiscoverAcpAgentInstancesOptions | undefined,
+): Promise<AcpAgentInstance> {
+  const env = buildPwrAgentChildProcessEnv(options?.env ?? process.env);
+  const readVersionOutput = options?.readVersionOutput ?? defaultReadVersionOutput;
+  let version: string | undefined;
+  try {
+    version = parseCliVersion(await readVersionOutput(command, env));
+  } catch {
+    // The bundle path is a trusted packaged fallback. If an install/update race
+    // makes the version probe fail, retain the instance so launch can surface
+    // the concrete error instead of silently hiding Grok from discovery.
+  }
+  return {
+    command,
+    source: "fallback",
+    ...(version !== undefined ? { version } : {}),
+  };
+}
+
+function parseCliVersion(output: string | undefined): string | undefined {
+  const trimmed = output?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.match(/\d+\.\d+\.\d+(?:[-+][\w.-]+)?/)?.[0] ?? trimmed;
 }

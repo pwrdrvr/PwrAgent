@@ -354,18 +354,23 @@ describe("discoverLocalAcpAgentRecords", () => {
   it("surfaces bundled Grok when no system installation exists", async () => {
     const discover = vi.fn(async () => []);
     const bundledGrokCommand = "/app/resources/agents/grok/grok";
+    const readVersionOutput = vi.fn(async () =>
+      "grok 1.0.0-pwragent.1 (297a0c4) [stable]"
+    );
 
     const [record, ...rest] = await discoverLocalAcpAgentRecords({
       discover,
       bundledGrokCommand,
       now: () => 4242,
       enabledRegistryIds: ["grok"],
+      readVersionOutput,
     });
 
     expect(rest).toHaveLength(0);
     expect(record).toMatchObject({
       backendId: "acp:grok",
       registryId: "grok",
+      version: "1.0.0-pwragent.1",
       activeCommand: bundledGrokCommand,
       launchDescriptor: {
         command: bundledGrokCommand,
@@ -379,9 +384,17 @@ describe("discoverLocalAcpAgentRecords", () => {
         {
           command: bundledGrokCommand,
           source: "fallback",
+          version: "1.0.0-pwragent.1",
         },
       ],
+      registryAgent: {
+        version: "1.0.0-pwragent.1",
+      },
     });
+    expect(readVersionOutput).toHaveBeenCalledWith(
+      bundledGrokCommand,
+      expect.any(Object),
+    );
   });
 
   it("allows an explicit Grok override to win over the bundle", async () => {

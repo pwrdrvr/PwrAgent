@@ -382,6 +382,14 @@ describe("AcpBackendAdapter", () => {
             },
           },
         },
+        update: {
+          status: "available",
+          checkedAt: 1000,
+          currentVersion: "0.2.112",
+          latestVersion: "1.0.0",
+          dismissedAt: 1100,
+        },
+        updateCommand: "/Users/test/.grok/bin/grok",
       },
     ];
     const discovered: AcpInstalledAgentRecord = {
@@ -426,6 +434,8 @@ describe("AcpBackendAdapter", () => {
       "/tmp/pwragent-grok-arm64/grok",
     );
     expect(available?.runtimeCapabilities).toBeUndefined();
+    expect(available?.update).toBeUndefined();
+    expect(available?.updateCommand).toBeUndefined();
 
     await adapter.getClient(backendId);
     expect(createAcpClient).toHaveBeenCalledWith(
@@ -495,6 +505,64 @@ describe("AcpBackendAdapter", () => {
     const [available] = await adapter.listAvailableAgents();
     expect(available?.runtimeCapabilities).toEqual(runtimeCapabilities);
     expect(available?.lastDiscoveredAt).toBe(1000);
+
+    await adapter.close();
+  });
+
+  it("keeps Grok update state for the same discovered executable", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const update = {
+      status: "available" as const,
+      checkedAt: 1000,
+      currentVersion: "1.0.0-pwragent.1",
+      latestVersion: "1.0.1",
+      dismissedAt: 1100,
+      snoozedUntil: 2000,
+    };
+    let stored: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version: "1.0.0-pwragent.1",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "/app/resources/agents/grok/grok",
+        args: ["agent", "stdio"],
+        env: {},
+      },
+      update,
+      updateCommand: "/app/resources/agents/grok/grok",
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored,
+        listInstalledAgents: () => [stored],
+        upsertInstalledAgent: (record) => {
+          stored = record;
+        },
+      },
+      acpSessionStore: null,
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [{
+        ...stored,
+        update: undefined,
+        updateCommand: undefined,
+        updatedAt: 2000,
+      }],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const [available] = await adapter.listAvailableAgents();
+    expect(available?.update).toEqual(update);
+    expect(available?.updateCommand).toBe(
+      "/app/resources/agents/grok/grok",
+    );
+    expect(stored.update).toEqual(update);
+    expect(stored.updateCommand).toBe("/app/resources/agents/grok/grok");
 
     await adapter.close();
   });
