@@ -218,6 +218,12 @@ test.describe("federation remote window", () => {
       path.join(os.tmpdir(), "pwragent-federation-e2e-pty-"),
     );
     const fixtureRepo = path.join(ownerPtyCwd, "FixtureRepo");
+    const ownerOnlyEnvironmentRepo = path.posix.join(
+      "/owner-only",
+      path.basename(ownerPtyCwd),
+      "EnvironmentRepo",
+    );
+    expect(existsSync(ownerOnlyEnvironmentRepo)).toBe(false);
     await seedFixtureGitRepo({
       repoDir: fixtureRepo,
       environmentSetupScript: "printf federation-child-environment",
@@ -236,16 +242,16 @@ test.describe("federation remote window", () => {
             threadIds: ["remote-thread-1", "remote-thread-2"],
           },
           {
-            key: `directory:${fixtureRepo}`,
+            key: `directory:${ownerOnlyEnvironmentRepo}`,
             label: "EnvironmentRepo",
-            path: fixtureRepo,
+            path: ownerOnlyEnvironmentRepo,
             threadIds: ["remote-kimi-parent"],
             codexEnvironmentOptions: [
               {
                 id: "environment",
                 name: "PwrAgent",
                 sourcePath: path.join(
-                  fixtureRepo,
+                  ownerOnlyEnvironmentRepo,
                   ".codex",
                   "environments",
                   "environment.toml",
@@ -275,10 +281,10 @@ test.describe("federation remote window", () => {
             executionMode: "default",
             linkedDirectories: [
               {
-                id: fixtureRepo,
+                id: ownerOnlyEnvironmentRepo,
                 label: "EnvironmentRepo",
-                path: fixtureRepo,
-                worktreePath: fixtureRepo,
+                path: ownerOnlyEnvironmentRepo,
+                worktreePath: ownerOnlyEnvironmentRepo,
                 kind: "worktree",
               },
             ],
@@ -698,7 +704,7 @@ test.describe("federation remote window", () => {
           backend: "codex",
           codexEnvironmentId: "environment",
           codexEnvironmentExecutionTarget: "local",
-          directoryPath: fixtureRepo,
+          directoryPath: ownerOnlyEnvironmentRepo,
         },
       });
 
