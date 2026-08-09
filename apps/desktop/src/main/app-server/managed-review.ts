@@ -2,10 +2,15 @@ import type {
   AppServerReviewOutput,
   AppServerReviewTarget,
 } from "@pwragent/shared";
+import {
+  MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
+  MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
+} from "../../shared/review-command";
 
 const REVIEW_OUTPUT_INSTRUCTIONS = [
   "Return only one JSON object with this exact top-level shape:",
   '{"findings":[],"overall_correctness":"patch is correct","overall_explanation":"...","overall_confidence_score":0.0}',
+  'overall_correctness must be exactly "patch is correct" or "patch is incorrect" — no other wording.',
   "Each finding must contain title, body, confidence_score, optional priority (0-3), and code_location with absolute_file_path plus line_range.start/end.",
   "Do not wrap the JSON in Markdown fences and do not include prose outside it.",
 ].join("\n");
@@ -22,12 +27,12 @@ export function buildManagedReviewPrompt(
 
 export function buildManagedReviewContextInput(outputs: string[]): string {
   return [
-    "[PwrAgent review sub-agent results — context for this turn]",
+    MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
     ...outputs.map((output, index) => [
       outputs.length > 1 ? `Review ${index + 1}:` : undefined,
       output.trim(),
     ].filter((line): line is string => Boolean(line)).join("\n")),
-    "[End PwrAgent review sub-agent results]",
+    MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
   ].join("\n\n");
 }
 
@@ -50,23 +55,14 @@ export function parseManagedReviewOutput(
   if (!text?.trim()) {
     return undefined;
   }
-  const source = unwrapJsonFence(text.trim());
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(source);
-  } catch {
+  const record = readReviewArtifactObject(text.trim());
+  if (!record) {
     return undefined;
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return undefined;
-  }
-  const record = parsed as Record<string, unknown>;
   if (
     !Array.isArray(record.findings)
-    || (
-      record.overall_correctness !== "patch is correct"
-      && record.overall_correctness !== "patch is incorrect"
-    )
+    || typeof record.overall_correctness !== "string"
+    || !record.overall_correctness.trim()
     || typeof record.overall_explanation !== "string"
     || typeof record.overall_confidence_score !== "number"
   ) {
@@ -111,10 +107,77 @@ export function parseManagedReviewOutput(
 
   return {
     findings,
-    overall_correctness: record.overall_correctness,
+    overall_correctness: normalizeOverallCorrectness(
+      record.overall_correctness,
+      findings,
+    ),
     overall_explanation: record.overall_explanation,
     overall_confidence_score: record.overall_confidence_score,
   };
+}
+
+/**
+ * The prompt asks for a bare JSON object and nothing else. Grok Build streams
+ * two or three narration sentences first ("I'll review this branch against
+ * `main`…") and only then the object, so the artifact has to be recovered from
+ * the surrounding prose. Failing that recovery is not cosmetic: the unparsed
+ * blob becomes the review text and is replayed verbatim into the parent thread
+ * as the next turn's context.
+ */
+function readReviewArtifactObject(
+  text: string,
+): Record<string, unknown> | undefined {
+  for (const candidate of [unwrapJsonFence(text), extractJsonObject(text)]) {
+    if (!candidate) {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Codex review/start answers with exactly the two documented phrases. Other
+ * agents paraphrase — Grok Build reports "patch has issues" — and an artifact
+ * with real findings is worth more than the exact wording.
+ *
+ * Both directions have to be read, not just the negative one: the renderer
+ * paints anything that is not "patch is correct" as a red "Patch needs work"
+ * badge, so mapping an unrecognized-but-clean verdict to incorrect puts that
+ * badge next to a "0 findings" badge. When the wording says nothing either
+ * way, the findings list is the more trustworthy signal.
+ */
+function normalizeOverallCorrectness(
+  value: string,
+  findings: AppServerReviewOutput["findings"],
+): AppServerReviewOutput["overall_correctness"] {
+  const normalized = value.trim().toLowerCase();
+  const negation = String.raw`\b(no|not|without|zero|free of)\b[^.]{0,20}?`;
+  const fault = String.raw`\b(incorrect|issues?|problems?|bugs?|defects?)\b`;
+  const clean = String.raw`\b(correct|fine|good|ok|okay)\b`;
+  // "no issues found" names the fault word to deny it; "not correct" does the
+  // same to the clean word. Check both denials before either bare match.
+  if (new RegExp(negation + fault).test(normalized)) {
+    return "patch is correct";
+  }
+  if (new RegExp(negation + clean).test(normalized)) {
+    return "patch is incorrect";
+  }
+  if (new RegExp(fault).test(normalized)) {
+    return "patch is incorrect";
+  }
+  if (new RegExp(clean).test(normalized)) {
+    return "patch is correct";
+  }
+  return findings.length > 0 ? "patch is incorrect" : "patch is correct";
 }
 
 export function formatManagedReviewOutput(
@@ -143,6 +206,12 @@ export function formatManagedReviewOutput(
 function unwrapJsonFence(value: string): string {
   const match = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   return match?.[1]?.trim() ?? value;
+}
+
+function extractJsonObject(value: string): string {
+  const start = value.indexOf("{");
+  const end = value.lastIndexOf("}");
+  return start === -1 || end <= start ? "" : value.slice(start, end + 1);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

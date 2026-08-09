@@ -4,6 +4,7 @@ import {
   inferAcpReplayTurns,
   readAcpTopicTitle,
 } from "../acp/acp-session-normalizer";
+import grokReviewSession from "./fixtures/grok-managed-review-session.json";
 
 describe("AcpSessionReplayNormalizer", () => {
   it("keeps inferred provider work inside user-message boundaries", () => {
@@ -1395,6 +1396,181 @@ describe("AcpSessionReplayNormalizer", () => {
     ).toBeUndefined();
   });
 
+  it("hides the injected managed-review context from the transcript", () => {
+    // A finished managed review is handed to the parent thread by prefixing
+    // the next prompt with a wrapped context block. Grok echoes every prompt
+    // back as a user_message_chunk, so without this the operator sees the
+    // whole review artifact rendered as something they supposedly typed.
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: [
+          "[PwrAgent review sub-agent results — context for this turn]",
+          "",
+          '{"findings":[],"overall_correctness":"patch is correct"}',
+          "",
+          "[End PwrAgent review sub-agent results]",
+        ].join("\n"),
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: "Can you summarize the review results for me?",
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "Can you summarize the review results for me?",
+      }),
+    ]);
+  });
+
+  it("keeps user text that shares a chunk with the review context block", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: [
+          "[PwrAgent review sub-agent results — context for this turn]",
+          "",
+          "Review 1:",
+          "No blocking findings.",
+          "",
+          "[End PwrAgent review sub-agent results]",
+          "",
+          "Summarize that for me.",
+        ].join("\n"),
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "Summarize that for me.",
+      }),
+    ]);
+  });
+
+  it("hides a review context block split across two chunks", () => {
+    // Grok echoed the whole block in one chunk, but nothing in ACP guarantees
+    // that. A chunk carrying only the tail of the block would otherwise miss
+    // the open marker and render the artifact remnant plus the close marker.
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content:
+          "[PwrAgent review sub-agent results — context for this turn]\n\nNo blocking",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content:
+          " findings.\n\n[End PwrAgent review sub-agent results]\n\nSummarize.",
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "user",
+        text: "Summarize.",
+      }),
+    ]);
+  });
+
+  it("extracts the ACP session_info_update title", () => {
+    // ACP's own session metadata update (SessionUpdate::SessionInfoUpdate)
+    // carries `title` and `updatedAt` and nothing else. Grok Build sends it
+    // whenever it settles on a durable session title, which is mid-turn on
+    // the first prompt.
+    expect(
+      readAcpTopicTitle({
+        sessionUpdate: "session_info_update",
+        title: "Summarize path normalization review findings",
+      }),
+    ).toBe("Summarize path normalization review findings");
+    // A title-less info update (timestamp refresh, or an explicit clear) is
+    // still metadata, but it names no topic.
+    expect(
+      readAcpTopicTitle({
+        sessionUpdate: "session_info_update",
+        updatedAt: "2026-08-08T19:44:20Z",
+      }),
+    ).toBeUndefined();
+    expect(
+      readAcpTopicTitle({ sessionUpdate: "session_info_update", title: null }),
+    ).toBeUndefined();
+  });
+
+  it("keeps session metadata updates out of a streaming assistant message", () => {
+    // Grok Build emits session_info_update and last_turn_summary in the
+    // middle of the final assistant stream. Both used to fall through to the
+    // unknown-update branch, which dropped an "ACP update: …" activity into
+    // the transcript AND cleared the active assistant bubble, splitting the
+    // message the operator was watching get written.
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { sessionUpdate: "agent_message_chunk", content: "Overall: " },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "session_info_update",
+        title: "Summarize path normalization review findings",
+      },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: {
+        sessionUpdate: "last_turn_summary",
+        summary: "Summarized the review findings",
+        prompt_id: "919afcda-d40d-411e-a729-5a94b0ed94ae",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1003,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: "the patch has issues.",
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "message",
+        role: "assistant",
+        text: "Overall: the patch has issues.",
+      }),
+    ]);
+  });
+
   it("ignores transient Grok interaction updates without splitting text", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
@@ -1865,5 +2041,87 @@ describe("AcpSessionReplayNormalizer", () => {
       "activity",
       "assistant:turn-1:1:The build script is available.",
     ]);
+  });
+
+  // End-to-end replay of the captured Grok Build session that produced the
+  // bug report: a PwrAgent /review finishes, its artifact is prepended to the
+  // operator's follow-up prompt, and Grok streams the summary while emitting
+  // session_info_update and last_turn_summary mid-flight.
+  describe("captured Grok Build review follow-up turn", () => {
+    function replayCapturedParentSession() {
+      const normalizer = new AcpSessionReplayNormalizer({
+        surfaceThoughtsAsMessages: false,
+      });
+      let replay = normalizer.replay();
+      for (const record of grokReviewSession.parentUpdates) {
+        replay = normalizer.apply({
+          sessionId: record.params.sessionId,
+          receivedAt: record.params._meta.agentTimestampMs,
+          update: record.params.update as Record<string, unknown>,
+        });
+        // The two transient updates below never reach updates.jsonl, so the
+        // capture cannot place them; inject them where they landed live —
+        // between the assistant's first and last streamed chunks.
+        if (record.params.update.sessionUpdate === "agent_message_chunk") {
+          replay = normalizer.apply({
+            sessionId: record.params.sessionId,
+            receivedAt: record.params._meta.agentTimestampMs + 1,
+            update: grokReviewSession.liveOnlyUpdates.sessionInfoUpdate,
+          });
+          replay = normalizer.apply({
+            sessionId: record.params.sessionId,
+            receivedAt: record.params._meta.agentTimestampMs + 2,
+            update: grokReviewSession.liveOnlyUpdates.lastTurnSummary,
+          });
+        }
+      }
+      return replay;
+    }
+
+    it("shows the operator's prompt without the review artifact", () => {
+      const replay = replayCapturedParentSession();
+      const userTexts = replay.entries.flatMap((entry) =>
+        entry.type === "message" && entry.role === "user" ? [entry.text] : [],
+      );
+
+      // "/always-approve on" is the execution-mode control prompt PwrAgent
+      // sends over the same session; the renderer materializes it as the
+      // permission-transition marker rather than a user bubble.
+      expect(userTexts).toEqual([
+        "/always-approve on",
+        "Can you summarize the review results for me?",
+      ]);
+      expect(userTexts.join("\n")).not.toContain("PwrAgent review sub-agent");
+      expect(userTexts.join("\n")).not.toContain("overall_correctness");
+    });
+
+    it("keeps the streamed reply in a single assistant bubble", () => {
+      const replay = replayCapturedParentSession();
+      const assistantTexts = replay.entries.flatMap((entry) =>
+        entry.type === "message" && entry.role === "assistant"
+          ? [entry.text]
+          : [],
+      );
+
+      expect(assistantTexts).toHaveLength(1);
+      expect(assistantTexts[0]).toContain("## Review summary");
+      // The tail of the reply — everything that used to land in a second
+      // bubble once a metadata update reset the active message.
+      expect(assistantTexts[0]).toContain("path-separator helper");
+    });
+
+    it("leaves no unknown-update noise in the transcript", () => {
+      const replay = replayCapturedParentSession();
+
+      expect(
+        replay.entries.filter((entry) => entry.id.startsWith("unknown:")),
+      ).toEqual([]);
+    });
+
+    it("surfaces the session_info_update title as the thread topic", () => {
+      expect(
+        readAcpTopicTitle(grokReviewSession.liveOnlyUpdates.sessionInfoUpdate),
+      ).toBe("Summarize path normalization review findings");
+    });
   });
 });

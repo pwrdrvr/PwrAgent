@@ -6,7 +6,9 @@ import {
 } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
+  isAcpSessionMetadataUpdateKind,
   isAcpUserBoilerplateMessage,
+  isGrokTransientUpdateKind,
   readAcpContentText,
   readAcpTopicTitle,
   shouldSurfaceAcpThoughtsAsMessages,
@@ -260,6 +262,12 @@ function shouldPersistUpdate(update: Record<string, unknown>): boolean {
     kind === "current_mode_update" ||
     kind === "model_changed"
   ) {
+    return false;
+  }
+  // Session metadata and the provider's own transient bookkeeping describe the
+  // session, not the conversation. A title-less session_info_update carries no
+  // topic for the check below to catch, so match on the kind as well.
+  if (isAcpSessionMetadataUpdateKind(kind) || isGrokTransientUpdateKind(kind)) {
     return false;
   }
   if (readAcpTopicTitle(update)) {

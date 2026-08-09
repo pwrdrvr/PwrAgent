@@ -10,6 +10,7 @@ import type {
   AppServerThreadTurnStatus,
   AppServerTranscriptPhase,
 } from "@pwragent/shared";
+import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
 import {
   isGenericShellToolTitle,
   readAcpCodeSearch,
@@ -51,6 +52,18 @@ export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
     // session metadata. It is not a second lifecycle event or transcript item.
     || kind === "last_turn_summary"
   );
+}
+
+/**
+ * ACP session metadata (`SessionUpdate::SessionInfoUpdate`) carries a session
+ * title and an activity timestamp — thread metadata, never transcript content.
+ * Grok Build sends it mid-turn, so treating it as an unknown update both
+ * littered the transcript and split the assistant message being streamed.
+ */
+export function isAcpSessionMetadataUpdateKind(
+  kind: string | undefined,
+): boolean {
+  return kind === "session_info_update";
 }
 
 export function readAcpToolCallId(
@@ -356,6 +369,9 @@ export class AcpSessionReplayNormalizer {
       // Grok emits these transient xAI extension updates in addition to the
       // canonical ACP tool calls and permission requests. They are transport
       // state, not transcript entries, and must not split assistant bubbles.
+    } else if (isAcpSessionMetadataUpdateKind(kind)) {
+      // Session title/timestamp metadata. The title is consumed by
+      // readAcpTopicTitle on the acp-client side.
     } else if (kind === "turn_completed") {
       // Grok persists this as a durable replay terminal, but emits it before
       // the live session/prompt request resolves. The client defers the live
@@ -462,10 +478,18 @@ export class AcpSessionReplayNormalizer {
   }
 
   private applyUserMessageChunk(update: AcpSessionUpdate, createdAt: number): void {
-    const text =
+    // PwrAgent prepends the finished managed-review artifact to the next
+    // prompt so the agent can reason about it. The transcript already shows
+    // that review as its own entry, so strip the block back out of the echo
+    // rather than rendering it as something the operator typed.
+    const text = stripManagedReviewContextBlock(
       readContentText(update.update, "content") ??
-      readString(update.update, "text") ??
-      "";
+        readString(update.update, "text") ??
+        "",
+    );
+    if (!text) {
+      return;
+    }
     if (isAcpUserBoilerplateMessage(text)) {
       // Gemini re-emits its <session_context> environment block (date, OS,
       // workspace dir, directory tree) as a user_message_chunk on session/load.
@@ -774,6 +798,15 @@ export function readAcpTopicTitle(
       readString(update, "sessionSummary")
     )?.trim();
     return summary || undefined;
+  }
+
+  // Standard ACP session metadata:
+  //   { sessionUpdate: "session_info_update", title?: string | null,
+  //     updatedAt?: string | null }
+  // `title` is a tri-state (absent / null-to-clear / string). Only a non-empty
+  // string names a topic; the other two carry no title to adopt.
+  if (isAcpSessionMetadataUpdateKind(sessionUpdate)) {
+    return readString(update, "title")?.trim() || undefined;
   }
 
   const kind = readString(update, "kind");
