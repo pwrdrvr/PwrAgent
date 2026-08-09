@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -143,6 +144,39 @@ const SNAP_THRESHOLD_PX = 6;
  */
 const CANVAS_CLICK_SLOP_PX = 4;
 
+const STAR_FIELD = generateStarField(STAR_COUNT);
+
+/**
+ * Static sky behind the live map.
+ *
+ * The map re-renders whenever active-thread state advances. Keeping the 130
+ * circles behind a memo boundary means React does not reconcile a decorative
+ * subtree on every streamed update. The stars intentionally stay still: 130
+ * independent SVG opacity animations kept Chromium painting continuously even
+ * when the operator was not touching the map.
+ */
+const StarMapSky = memo(function StarMapSky() {
+  return (
+    <svg
+      className="star-map__sky"
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      {STAR_FIELD.map((star, index) => (
+        <circle
+          key={index}
+          className="star-map__star"
+          cx={star.x}
+          cy={star.y}
+          r={star.radius * 0.08}
+          fillOpacity={star.opacity}
+        />
+      ))}
+    </svg>
+  );
+});
+
 type StarMapScreenProps = {
   desktopApi?: DesktopApi;
   /** Local navigation snapshot threads (already live in the App shell). */
@@ -180,7 +214,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
     width: number;
     height: number;
   }>({ width: 1280, height: 800 });
-  const stars = useMemo(() => generateStarField(STAR_COUNT), []);
   const [intakeTarget, setIntakeTarget] = useState<IntakeDialogTarget>();
   // Which instance the operator is focused on. Selection is deliberately
   // view-local and unsynced: it is a "where am I looking" gesture, not a
@@ -197,6 +230,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const [cardHeights, setCardHeights] = useState<Map<string, number>>(
     new Map(),
   );
+  const cardResizeObserverRef = useRef<ResizeObserver | null>(null);
+  const observedCardElementsRef = useRef(new Map<HTMLElement, string>());
   const [preferences, setPreferences] = useState<StarMapViewPreferences>(
     readStoredPreferences,
   );
@@ -251,30 +286,82 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return () => observer.disconnect();
   }, []);
 
-  // Deliberately dependency-free: a card's height changes whenever its chip
-  // content does, and no prop reliably signals that. The identity check
-  // below is the loop guard - an unchanged measurement returns the very
-  // same Map, so the state never updates and the cycle stops.
+  // Card height changes are driven by the browser's layout observer rather
+  // than a synchronous offsetHeight sweep after every render. Active threads
+  // can update many times a second; forcing layout for every visible card on
+  // each update was enough to keep the renderer hot while the map sat idle.
+  useLayoutEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    const observedCardElements = observedCardElementsRef.current;
+    const observer = new ResizeObserver((entries) => {
+      const measured = new Map<string, number>();
+      for (const entry of entries) {
+        const element = entry.target as HTMLElement;
+        // Ignore a notification queued before this card was unobserved.
+        const key = observedCardElements.get(element);
+        const height = entry.borderBoxSize[0]?.blockSize
+          ?? entry.contentRect.height;
+        if (key && height > 0) measured.set(key, height);
+      }
+      if (measured.size === 0) return;
+      setCardHeights((current) => {
+        if (
+          [...measured].every(([key, height]) => current.get(key) === height)
+        ) {
+          return current;
+        }
+        const next = new Map(current);
+        for (const [key, height] of measured) next.set(key, height);
+        return next;
+      });
+    });
+    cardResizeObserverRef.current = observer;
+    return () => {
+      observer.disconnect();
+      cardResizeObserverRef.current = null;
+      observedCardElements.clear();
+    };
+  }, []);
+
+  // Reconcile observer membership after React adds or removes cards. This
+  // queries the small mounted card set but deliberately reads no geometry;
+  // ResizeObserver delivers the initial and subsequent border-box sizes after
+  // layout without turning each live-state render into a forced reflow.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     const root = viewportRef.current;
-    if (!root) return;
-    const measured = new Map<string, number>();
+    const observer = cardResizeObserverRef.current;
+    if (!root || !observer) return;
+    const present = new Set<HTMLElement>();
+    const presentKeys = new Set<string>();
     for (const element of root.querySelectorAll<HTMLElement>(
       "[data-thread-key]",
     )) {
       const key = element.dataset.threadKey;
-      if (key) measured.set(key, element.offsetHeight);
+      if (!key) continue;
+      present.add(element);
+      presentKeys.add(key);
+      if (observedCardElementsRef.current.get(element) === key) continue;
+      observer.unobserve(element);
+      observedCardElementsRef.current.set(element, key);
+      observer.observe(element);
     }
-    setCardHeights((current) => {
-      if (
-        current.size === measured.size
-        && [...measured].every(([key, height]) => current.get(key) === height)
-      ) {
-        return current;
-      }
-      return measured;
-    });
+
+    const removedKeys = new Set<string>();
+    for (const [element, key] of observedCardElementsRef.current) {
+      if (present.has(element)) continue;
+      observer.unobserve(element);
+      observedCardElementsRef.current.delete(element);
+      if (!presentKeys.has(key)) removedKeys.add(key);
+    }
+    if (removedKeys.size > 0) {
+      setCardHeights((current) => {
+        if (![...removedKeys].some((key) => current.has(key))) return current;
+        const next = new Map(current);
+        for (const key of removedKeys) next.delete(key);
+        return next;
+      });
+    }
   });
 
   const startCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1630,24 +1717,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         className="star-map__viewport"
         onPointerDown={startCanvasPan}
       >
-        <svg
-          className="star-map__sky"
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          aria-hidden="true"
-        >
-          {stars.map((star, index) => (
-            <circle
-              key={index}
-              className="star-map__star"
-              cx={star.x}
-              cy={star.y}
-              r={star.radius * 0.08}
-              fillOpacity={star.opacity}
-              style={{ animationDelay: `${star.twinkleDelay}s` }}
-            />
-          ))}
-        </svg>
+        <StarMapSky />
         <div
           ref={canvasRef}
           // Every lens is now a transformed canvas sized to its content —
@@ -1712,9 +1782,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   }`}
                   d={d}
                 />
-                {healthy ? (
-                  <path className="star-map__link-flow" d={d} />
-                ) : null}
               </g>
             );
           })}
