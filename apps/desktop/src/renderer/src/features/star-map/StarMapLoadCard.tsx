@@ -97,11 +97,25 @@ export function StarMapLoadCard(props: {
   const loadAvgReported = load
     ? load.loadAvg1 !== 0 || load.loadAvg5 !== 0 || load.loadAvg15 !== 0
     : false;
-  const cpuDetail = load
-    ? `Load average — 1 min ${load.loadAvg1.toFixed(2)}, 5 min ${load.loadAvg5.toFixed(
-        2,
-      )}, 15 min ${load.loadAvg15.toFixed(2)}`
-    : "";
+  /**
+   * A load average is a queue length, not a percentage, and it means
+   * nothing without the core count — 3.3 is idle on 16 cores and badly
+   * oversubscribed on 2. Dividing by cores gives the figure an operator can
+   * actually read at a glance, and it is allowed to exceed 100%: that is
+   * precisely the "work is queueing" signal worth seeing.
+   */
+  const cpuValue = !load || !loadAvgReported
+    ? "—"
+    : load.cpuCount
+      ? `${Math.round((load.loadAvg1 / load.cpuCount) * 100)}%`
+      : load.loadAvg1.toFixed(2);
+  const cpuDetail = !load
+    ? ""
+    : !loadAvgReported
+      ? "This platform does not report load average"
+      : `Load average ${load.loadAvg1.toFixed(2)} over 1 min${
+          load.cpuCount ? ` across ${load.cpuCount} cores` : ""
+        } · 5 min ${load.loadAvg5.toFixed(2)} · 15 min ${load.loadAvg15.toFixed(2)}`;
 
   return (
     <div
@@ -130,27 +144,18 @@ export function StarMapLoadCard(props: {
               <div>
                 <dt>CPU</dt>
                 <dd
+                  aria-label={`CPU: ${cpuValue}. ${cpuDetail}`}
                   onMouseEnter={(event) =>
-                    loadAvgReported
-                      ? cpuTooltip.show(event.currentTarget, cpuDetail)
-                      : cpuTooltip.show(
-                          event.currentTarget,
-                          "This platform does not report load average",
-                        )
+                    cpuTooltip.show(event.currentTarget, cpuDetail)
                   }
                   onMouseLeave={cpuTooltip.hide}
                   onFocus={(event) =>
-                    cpuTooltip.show(
-                      event.currentTarget,
-                      loadAvgReported
-                        ? cpuDetail
-                        : "This platform does not report load average",
-                    )
+                    cpuTooltip.show(event.currentTarget, cpuDetail)
                   }
                   onBlur={cpuTooltip.hide}
                   tabIndex={0}
                 >
-                  {loadAvgReported ? load.loadAvg1.toFixed(2) : "—"}
+                  {cpuValue}
                 </dd>
               </div>
               <div>

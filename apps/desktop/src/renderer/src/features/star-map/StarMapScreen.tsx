@@ -111,6 +111,12 @@ const ORBIT_MAX_CARDS_PER_INSTANCE = 16;
 /** Breathing room past the longest column / widest lane when panning. */
 const LANE_CANVAS_PADDING = 120;
 /**
+ * Where an orbit load card parks: above the body, clear of the largest
+ * body's keepout. Fixed rather than ring-derived so it cannot depend on how
+ * many thread cards the rings hold.
+ */
+const ORBIT_LOAD_CARD_DY = -150;
+/**
  * Chat cards float above the map chrome (close button, filters, view
  * options) so a card being read is never underneath a control strip.
  */
@@ -630,16 +636,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
       computeOrbitPlacement({
         nodes: topology,
         cardCounts: new Map(
-          // The load card rides the same rings, so it counts toward the
-          // radius the same way a thread card does.
-          [...lanes].map(([instanceId, lane]) => [
-            instanceId,
-            lane.count + (loadCardInstances.has(instanceId) ? 1 : 0),
-          ]),
+          // Deliberately NOT counting the load card: ring radius is derived
+          // from card count, so including it would move every thread card
+          // on the ring the moment the load card opened.
+          [...lanes].map(([instanceId, lane]) => [instanceId, lane.count]),
         ),
         cardWidth: ORBIT_CARD_WIDTH,
       }),
-    [lanes, loadCardInstances, topology],
+    [lanes, topology],
   );
 
   /** Bodies plus their card slots, in whichever space the layout uses. */
@@ -652,6 +656,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
         y: instance.y,
         slots: instance.cardSlots,
         cardWidth: ORBIT_CARD_WIDTH,
+        // Above the body, at a radius that does not depend on how many
+        // cards the rings hold — so opening it disturbs nothing.
+        loadSlot: { dx: 0, dy: ORBIT_LOAD_CARD_DY },
         // Rings grow their radius, so orbit's canvas is already sized by
         // `computeOrbitPlacement`; only lanes derive theirs from content.
         contentBottom: 0,
@@ -659,26 +666,30 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     return laneLayout.positions.map((position) => {
       const lane = lanes.get(position.instanceId);
-      // The load card, when open, owns the slot nearest the star and the
-      // thread stack starts one slot further out.
-      const itemHeights = [
-        ...(loadCardInstances.has(position.instanceId)
-          ? [STAR_MAP_LOAD_CARD_HEIGHT]
-          : []),
-        ...(lane?.heights.slice(0, lane.count) ?? []),
-      ];
-      const slots = computeCardSlots(itemHeights);
-      const lastSlot = slots[slots.length - 1];
+      const threadHeights = lane?.heights.slice(0, lane.count) ?? [];
+      const hasLoad = loadCardInstances.has(position.instanceId);
+      // The load card APPENDS below the column. It used to take the slot
+      // nearest the star and push the stack out by one, which moved every
+      // card — including hand-placed ones, whose offsets are relative to a
+      // slot. Appending leaves every existing slot byte-identical, so
+      // opening and closing the card disturbs nothing.
+      const allSlots = computeCardSlots([
+        ...threadHeights,
+        ...(hasLoad ? [STAR_MAP_LOAD_CARD_HEIGHT] : []),
+      ]);
+      const lastSlot = allSlots[allSlots.length - 1];
+      const lastHeight = hasLoad
+        ? STAR_MAP_LOAD_CARD_HEIGHT
+        : threadHeights[threadHeights.length - 1] ?? 0;
       return {
         instanceId: position.instanceId,
         isHub: position.isHub,
         x: position.x,
         y: position.y,
-        slots,
+        slots: allSlots.slice(0, threadHeights.length),
         cardWidth: laneLayout.cardWidth,
-        contentBottom: lastSlot
-          ? lastSlot.dy + (itemHeights[itemHeights.length - 1] ?? 0)
-          : 0,
+        loadSlot: hasLoad ? allSlots[threadHeights.length] : undefined,
+        contentBottom: lastSlot ? lastSlot.dy + lastHeight : 0,
       };
     });
   }, [laneLayout, lanes, loadCardInstances, orbit, orbitMode]);
@@ -1357,19 +1368,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
     y: number;
     slots: StarMapCardSlot[];
     cardWidth: number;
+    /** Set when this instance shows a load card; never a thread slot. */
+    loadSlot?: StarMapCardSlot;
   }) => {
     const lane = lanes.get(position.instanceId);
     const threads = lane?.threads ?? [];
     const heights = lane?.heights ?? [];
     const visible = threads.slice(0, lane?.count ?? 0);
-    // Slot 0 belongs to the load card when it is open; the thread stack is
-    // laid out against the remainder.
-    const showLoadCard = loadCardInstances.has(position.instanceId);
-    const loadSlot = showLoadCard ? position.slots[0] : undefined;
-    const slots = showLoadCard ? position.slots.slice(1) : position.slots;
+    // Thread slots never account for the load card, so its presence cannot
+    // move a thread — hand-placed or otherwise.
+    const loadSlot = position.loadSlot;
+    const slots = position.slots;
     // One region for the whole cloud, sized to the slots this lens drew,
-    // so every card in it can reach every other card's position.
-    const detentRadius = cloudDetentRadius(position.slots);
+    // so every card in it can reach every other card's position. The load
+    // card's slot joins the measurement without joining the thread stack.
+    const detentRadius = cloudDetentRadius(
+      loadSlot ? [...position.slots, loadSlot] : position.slots,
+    );
     const overflow = threads.length - visible.length;
     return (
       <div
@@ -1417,6 +1432,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               health?.instanceId
                 ? {
                     detentRadius,
+                    scale: view.scale,
                     onCommitOffset: (offset) =>
                       arrangement.setCardPosition(
                         position.instanceId,
@@ -1466,8 +1482,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 health?.instanceId
                   ? {
                       detentRadius,
-                      // Lanes never scales, so this is 1 there.
-                      scale: panZoomMode ? view.scale : 1,
+                      // Every lens zooms now, lanes included, so the live
+                      // scale always applies.
+                      scale: view.scale,
                       snap: snapFor(
                         position.instanceId,
                         threadKey,

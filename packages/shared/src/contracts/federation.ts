@@ -145,6 +145,13 @@ export type FederationLoadStatus = {
   loadAvg5: number;
   loadAvg15: number;
   /**
+   * Cores the load averages are measured against. Carried in the reading
+   * itself because a load average is uninterpretable without it — 3.3 is
+   * idle on a 16-core box and badly oversubscribed on a 2-core one — and
+   * the handshake host block is not available for the local instance.
+   */
+  cpuCount?: number;
+  /**
    * `os.freemem()` — truly free pages only. macOS/Linux keep reclaimable
    * page cache out of this figure, so it understates what's actually
    * available to new work; treat "low" thresholds generously on those

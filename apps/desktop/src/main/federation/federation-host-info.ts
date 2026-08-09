@@ -98,10 +98,12 @@ export async function collectFederationLoadStatus(options?: {
   } catch {
     diskFreeBytes = undefined;
   }
+  const cpuCount = os.cpus().length;
   return {
     loadAvg1,
     loadAvg5,
     loadAvg15,
+    ...(cpuCount > 0 ? { cpuCount } : {}),
     availableMemoryBytes: os.freemem(),
     ...(diskFreeBytes !== undefined ? { diskFreeBytes } : {}),
     sampledAt: Date.now(),

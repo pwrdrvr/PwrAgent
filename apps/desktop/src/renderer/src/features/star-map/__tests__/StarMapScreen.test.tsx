@@ -171,6 +171,49 @@ describe("StarMapScreen", () => {
     ).toBeTruthy();
   });
 
+  it("does not move a single thread card when the load card opens", async () => {
+    const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readStarMapArrangement: vi.fn(async () => ({ entries: [] })),
+      setStarMapCardPosition,
+      readFederationInstanceLoad: vi.fn(async () => ({})),
+    };
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[unreadThread("t1"), unreadThread("t2")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    const cardPositions = () =>
+      [...container.querySelectorAll<HTMLElement>(".star-map-card-shell")]
+        .filter((shell) => shell.dataset.threadKey)
+        .map((shell) => `${shell.dataset.threadKey}@${shell.style.top}`);
+
+    await waitFor(() => {
+      expect(cardPositions().length).toBe(2);
+    });
+    const before = cardPositions();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Show load for/ }));
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).not.toBeNull();
+    });
+
+    // The load card appends below the column instead of taking the slot
+    // nearest the star. Card offsets are stored RELATIVE to a slot, so a
+    // shifting slot would drag hand-placed cards with it — reflow here is a
+    // data-integrity problem, not a cosmetic one.
+    expect(cardPositions()).toEqual(before);
+  });
+
   // Mirrors the sidebar row's invariant (see thread-row-chips.test.tsx):
   // the chips carry real buttons, so nesting them inside the card's own
   // button is `nested-interactive` — invalid and unoperable.

@@ -12,6 +12,7 @@ function buildLoad(
     loadAvg1: 2.5,
     loadAvg5: 1.75,
     loadAvg15: 1.5,
+    cpuCount: 16,
     availableMemoryBytes: 5_452_595,
     diskFreeBytes: 214_748_364_800,
     sampledAt: Date.now(),
@@ -47,16 +48,30 @@ describe("StarMapLoadCard", () => {
     cleanup();
   });
 
-  it("renders the live figures with shared byte formatting", () => {
-    renderCard();
+  it("renders CPU against the core count, not as a bare load average", () => {
+    // A load average is a queue length: 2.5 is idle on 16 cores and badly
+    // oversubscribed on 2, so the bare number is unreadable on its own.
+    renderCard({ load: buildLoad({ loadAvg1: 2.5, cpuCount: 16 }) });
 
-    expect(metric("CPU")).toBe("2.50");
+    expect(metric("CPU")).toBe("16%");
     expect(metric("Free RAM")).toBe("5.2 MB");
     expect(metric("Free disk")).toBe("200 GB");
   });
 
+  it("lets CPU exceed 100% when work is queueing", () => {
+    renderCard({ load: buildLoad({ loadAvg1: 12, cpuCount: 8 }) });
+
+    expect(metric("CPU")).toBe("150%");
+  });
+
+  it("falls back to the raw average when the core count is unknown", () => {
+    renderCard({ load: buildLoad({ loadAvg1: 2.5, cpuCount: undefined }) });
+
+    expect(metric("CPU")).toBe("2.50");
+  });
+
   it("reads three zero load averages as not reported, not as idle", () => {
-    // Node reports 0 for every average on Windows; printing "0.00" there
+    // Node reports 0 for every average on Windows; printing "0%" there
     // would claim an idle machine we have no reading for.
     renderCard({
       load: buildLoad({ loadAvg1: 0, loadAvg5: 0, loadAvg15: 0 }),
