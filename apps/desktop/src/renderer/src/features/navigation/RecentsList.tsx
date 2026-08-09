@@ -6,8 +6,6 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
-  comparePinnedThreads,
-  isPinnedThread,
   moveThreadKey,
   parseThreadIdentityKey,
   resolveThreadParentKey,
@@ -53,7 +51,6 @@ type RecentsListProps = {
     thread: NavigationThreadSummary,
     pr: PrSummary,
   ) => void;
-  onReorderThreadPins?: (orderedThreadKeys: string[]) => Promise<void>;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
     threadIds: string[],
@@ -83,11 +80,21 @@ type RecentsListProps = {
   ) => Promise<void>;
 };
 
+/**
+ * The Updated and Created lenses are pure sort orders: every top-level thread
+ * renders in the order the caller supplies, pinned or not. A pinned thread
+ * still appears — just in its natural position by updated/created time,
+ * instead of floating into a section that crowds out what the sort is for.
+ *
+ * Pin *ordering* is therefore not editable here. It lives in the Directories
+ * lens, which is the only place a pinned section still exists and which
+ * carries both the drag and the keyboard (`onMovePinnedThread`) paths against
+ * the same global pinned-key list.
+ */
 export function RecentsList(props: RecentsListProps) {
   const [dropIndicator, setDropIndicator] = useState<
     DropIndicatorState | undefined
   >(undefined);
-  const [dividerDropTarget, setDividerDropTarget] = useState(false);
   const [draggedThreadKey, setDraggedThreadKey] = useState<string | undefined>(
     undefined,
   );
@@ -111,42 +118,6 @@ export function RecentsList(props: RecentsListProps) {
     children.push(thread);
     childrenByParentKey.set(parentKey, children);
   }
-  const pinnedThreads = topLevelThreads
-    .filter(isPinnedThread)
-    .sort(comparePinnedThreads);
-  const pinnedThreadKeys = pinnedThreads.map((thread) =>
-    buildThreadIdentityKey(thread.source, thread.id),
-  );
-  const unpinnedThreads = topLevelThreads.filter((thread) => !isPinnedThread(thread));
-
-  // Pin order is global across backends, so reorder operates on the full
-  // pinned-thread key list and passes the complete new order through.
-  const reorderPins = (nextThreadKeys: string[]): void => {
-    void props.onReorderThreadPins?.(nextThreadKeys);
-  };
-
-  const movePinnedThreadByKeyboard = (
-    thread: NavigationThreadSummary,
-    direction: "up" | "down",
-  ): void => {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    const currentIndex = pinnedThreadKeys.indexOf(threadKey);
-    if (currentIndex === -1) return;
-
-    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
-    const targetKey = pinnedThreadKeys[targetIndex];
-    if (!targetKey) return;
-
-    reorderPins(
-      moveThreadKey(
-        pinnedThreadKeys,
-        threadKey,
-        targetKey,
-        direction === "up" ? "before" : "after",
-      ),
-    );
-  };
-
   const renderSubthreads = (parent: NavigationThreadSummary) => {
     const parentKey = buildThreadIdentityKey(parent.source, parent.id);
     const children = sortSubthreadSummaries(parent, childrenByParentKey.get(parentKey) ?? []);
@@ -275,33 +246,30 @@ export function RecentsList(props: RecentsListProps) {
   };
 
   // Shift selection follows the rows a person can actually see: parents and
-  // any expanded children, first in the pinned section and then in the recent
-  // section. Collapsed children are deliberately absent, just like Finder
-  // ranges do not reach into a closed disclosure.
-  const selectionOrder = [...pinnedThreads, ...unpinnedThreads].flatMap(
-    (thread) => {
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const children = sortSubthreadSummaries(
-        thread,
-        childrenByParentKey.get(threadKey) ?? [],
-      );
-      return [
-        threadKey,
-        ...(isSubthreadSectionCollapsed(thread)
-          ? []
-          : children.map((child) =>
-              buildThreadIdentityKey(child.source, child.id),
-            )),
-      ];
-    },
-  );
+  // any expanded children, in render order. Collapsed children are
+  // deliberately absent, just like Finder ranges do not reach into a closed
+  // disclosure.
+  const selectionOrder = topLevelThreads.flatMap((thread) => {
+    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const children = sortSubthreadSummaries(
+      thread,
+      childrenByParentKey.get(threadKey) ?? [],
+    );
+    return [
+      threadKey,
+      ...(isSubthreadSectionCollapsed(thread)
+        ? []
+        : children.map((child) =>
+            buildThreadIdentityKey(child.source, child.id),
+          )),
+    ];
+  });
 
   const renderThreadGroup = (thread: NavigationThreadSummary) => {
     const key = buildThreadIdentityKey(thread.source, thread.id);
     const children = sortSubthreadSummaries(thread, childrenByParentKey.get(key) ?? []);
     const subthreadCount = getSubthreadDisclosureCount(thread, children.length);
     const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
-    const pinned = isPinnedThread(thread);
     return (
       <div key={key} className="thread-group">
         <ThreadRow
@@ -310,12 +278,6 @@ export function RecentsList(props: RecentsListProps) {
           inputRequestThreadKeys={props.inputRequestThreadKeys}
           queuedMessageThreadKeys={props.queuedMessageThreadKeys}
           composerSourceThreadKey={props.composerSourceThreadKey}
-          dropIndicator={
-            dropIndicator?.targetKey === key
-              ? dropIndicator.position
-              : undefined
-          }
-          draggable={pinned || pinnedThreads.length > 0}
           includeLinkedDirectories
           revealSelectedThreadRequest={props.revealSelectedThreadRequest}
           selectedThreadKey={props.selectedThreadKey}
@@ -333,72 +295,6 @@ export function RecentsList(props: RecentsListProps) {
                   )
               : undefined
           }
-          onDragOverThread={
-            pinned
-              ? (event) => {
-                  event.preventDefault();
-                  const draggedThread = draggedThreadKey
-                    ? threadByKey.get(draggedThreadKey)
-                    : undefined;
-                  if (
-                    !draggedThread ||
-                    draggedThread.source !== thread.source ||
-                    draggedThread.parentThreadId
-                  ) {
-                    event.dataTransfer.dropEffect = "none";
-                    setDropIndicator(undefined);
-                    return;
-                  }
-
-                  event.dataTransfer.dropEffect = "move";
-                  setDropIndicator({
-                    targetKey: key,
-                    position: getDropIndicatorPosition(event),
-                  });
-                  setDividerDropTarget(false);
-                }
-              : undefined
-          }
-          onDragStartThread={(event) => {
-            setDraggedThreadKey(key);
-            event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData("text/plain", key);
-          }}
-          onDragLeaveThread={(event) => {
-            if (didDragLeaveCurrentTarget(event)) {
-              setDropIndicator(undefined);
-            }
-          }}
-          onDragEndThread={() => {
-            setDraggedThreadKey(undefined);
-            setDropIndicator(undefined);
-            setDividerDropTarget(false);
-          }}
-          onDropOnThread={
-            pinned
-              ? (event) => {
-                  event.preventDefault();
-                  setDraggedThreadKey(undefined);
-                  setDropIndicator(undefined);
-                  setDividerDropTarget(false);
-                  const draggedKey = event.dataTransfer.getData("text/plain");
-                  if (!draggedKey) return;
-                  const draggedThread = threadByKey.get(draggedKey);
-                  if (!draggedThread || draggedThread.parentThreadId) return;
-                  const position = getDropIndicatorPosition(event);
-                  const nextKeys = pinnedThreadKeys.includes(draggedKey)
-                    ? moveThreadKey(pinnedThreadKeys, draggedKey, key, position)
-                    : moveThreadKey(
-                        [...pinnedThreadKeys, draggedKey],
-                        draggedKey,
-                        key,
-                        position,
-                      );
-                  reorderPins(nextKeys);
-                }
-              : undefined
-          }
-          onMovePinnedThread={pinned ? movePinnedThreadByKeyboard : undefined}
           onOpenContextMenu={props.onOpenThreadContextMenu}
           onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
           onDetachPullRequest={props.onDetachPullRequest}
@@ -419,53 +315,7 @@ export function RecentsList(props: RecentsListProps) {
 
   return (
     <div className="sidebar-list sidebar-list--dense" role="list">
-      {pinnedThreads.map((thread) => renderThreadGroup(thread))}
-      {pinnedThreads.length > 0 ? (
-        <div
-          className={`recents-pinned-divider${
-            dividerDropTarget ? " is-drop-target" : ""
-          }`}
-          role="separator"
-          aria-label="Unpinned threads"
-          onDragOver={(event) => {
-            event.preventDefault();
-            const draggedThread = draggedThreadKey
-              ? threadByKey.get(draggedThreadKey)
-              : undefined;
-            if (
-              !draggedThread ||
-              !draggedThreadKey ||
-              draggedThread.parentThreadId ||
-              pinnedThreadKeys.includes(draggedThreadKey)
-            ) {
-              event.dataTransfer.dropEffect = "none";
-              setDividerDropTarget(false);
-              return;
-            }
-
-            event.dataTransfer.dropEffect = "move";
-            setDropIndicator(undefined);
-            setDividerDropTarget(true);
-          }}
-          onDragLeave={(event) => {
-            if (didDragLeaveCurrentTarget(event)) {
-              setDividerDropTarget(false);
-            }
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            setDraggedThreadKey(undefined);
-            setDividerDropTarget(false);
-            const draggedKey = event.dataTransfer.getData("text/plain");
-            const draggedThread = threadByKey.get(draggedKey);
-            if (!draggedThread || draggedThread.parentThreadId || pinnedThreadKeys.includes(draggedKey)) return;
-            reorderPins([...pinnedThreadKeys, draggedKey]);
-          }}
-        >
-          <span>Recent threads</span>
-        </div>
-      ) : null}
-      {unpinnedThreads.map((thread) => renderThreadGroup(thread))}
+      {topLevelThreads.map((thread) => renderThreadGroup(thread))}
     </div>
   );
 }

@@ -1238,13 +1238,19 @@ export function Sidebar(props: SidebarProps) {
   /**
    * Move Up / Move Down show as menu items only when the target
    * thread is pinned (reorder only applies inside the pinned
-   * section) AND the reorder IPC is wired. Each item is then
-   * disabled when the thread is at the top / bottom of the global
-   * pinned section. We render the items even when disabled
-   * so the menu layout doesn't jump as the user walks the list.
+   * section), the reorder IPC is wired, AND the active lens actually
+   * renders a pinned section. Updated and Created are pure sort
+   * orders, so a reorder there would move a thread within a list whose
+   * order is invisible — the row would not budge and the menu's
+   * ⌘⇧↑/↓ hint would advertise a shortcut those rows don't carry.
+   * Each item is then disabled when the thread is at the top / bottom
+   * of the global pinned section. We render the items even when
+   * disabled so the menu layout doesn't jump as the user walks the
+   * list.
    */
   const contextMenuShowMoveItems = Boolean(
     !contextMenuIsBulk &&
+      browseMode === "directories" &&
       contextMenu?.thread.pinnedRank &&
       props.onReorderThreadPins,
   );
@@ -1648,7 +1654,6 @@ export function Sidebar(props: SidebarProps) {
                   props.onRevealSelectedThreadComplete
                 }
                 onDetachPullRequest={detachPullRequest}
-                onReorderThreadPins={props.onReorderThreadPins}
                 onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
                 onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
                 onSelectThread={selectThreadFromList}

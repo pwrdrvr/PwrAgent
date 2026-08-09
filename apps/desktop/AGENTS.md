@@ -40,8 +40,9 @@ summary.
 
 - Inbox, Recents, and Directories live in one thread lens switch; Inbox is the
   default browsing lens.
-- User-curated Pins live as a scrollable section at the top of Inbox and
-  Recents.
+- User-curated Pins live as a scrollable section at the top of each directory
+  in the Directories lens. Inbox and Recents are pure sort orders and do not
+  float pins.
 - Unread state uses the orange cookie marker, not punctuation badges.
 - The sidebar is an information surface, not a stack of generic cards.
 - Do not use browser-default controls in shipped UI.
