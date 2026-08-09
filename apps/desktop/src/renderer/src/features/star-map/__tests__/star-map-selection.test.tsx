@@ -344,7 +344,9 @@ describe("star map selection is amendable", () => {
 
     // The absent cards take no offset. Committing one would land invisibly
     // and only surface when the card came back.
-    const moved = vi.mocked(desktopApi.setStarMapCardPosition).mock.calls;
+    const setCardPosition = desktopApi.setStarMapCardPosition;
+    if (!setCardPosition) throw new Error("no setStarMapCardPosition");
+    const moved = vi.mocked(setCardPosition).mock.calls;
     expect(moved.length).toBeGreaterThan(0);
     for (const call of moved) {
       expect(JSON.stringify(call)).not.toMatch(/t2|t3/);
