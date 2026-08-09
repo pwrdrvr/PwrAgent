@@ -8595,6 +8595,20 @@ export class DesktopBackendRegistry {
             threadId: request.threadId,
           })
         : { lines: [], summaries: [] };
+    // Tool accounting is durable, but the response replaces the renderer's
+    // whole session snapshot — so omitting it here does not just leave the
+    // field stale, it erases whatever the live
+    // `thread/toolAccounting/updated` events had already patched in. On an
+    // ACP thread that read lands as the turn ends, which is why the Pricing
+    // panel's "Tool output" section used to appear during a turn and vanish
+    // the moment it finished.
+    const toolAccounting =
+      typeof this.overlayStore.readThreadToolAccounting === "function"
+        ? await this.overlayStore.readThreadToolAccounting({
+            backend,
+            threadId: request.threadId,
+          })
+        : undefined;
     const pendingRequest = this.pendingServerRequestForThread({
       backend,
       threadId: request.threadId,
@@ -8604,6 +8618,7 @@ export class DesktopBackendRegistry {
       fetchedAt: Date.now(),
       pricing,
       threadId: request.threadId,
+      ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),
       ...(replayWithMessageOrigins.threadStatus
         ? { threadStatus: replayWithMessageOrigins.threadStatus }
