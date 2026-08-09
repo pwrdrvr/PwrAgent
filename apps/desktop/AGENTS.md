@@ -579,6 +579,24 @@ log (`e2e.log` on the lab guest). Opt out with
   as "of the code that touched real sqlite, here is the order", never as
   coverage.
 
+### Known baselines
+
+Numbers to compare a new write path against, all measured with this harness:
+
+| Path | Cost |
+|---|---|
+| Streamed command output, per-chunk (pre-#1406) | 3,693 commits / 58 MB WAL for one `find /` |
+| Streamed command output, coalesced (today) | 34 commits / 0.54 MB for the same command |
+| Idle heartbeats, per running instance | 720 commits / 2.7 MB per hour (~65 MB/day) |
+| Whole vitest suite | 51 sources / ~3,000 commits / ~27 MB WAL |
+| One replay E2E spec | ~28 commits across two Electron processes |
+
+The idle figure is the profile-runtime heartbeat plus the federation lease
+renewal, both ticking every 10s against a 45s TTL, each taking its own commit.
+It is a floor the app pays for existing, and it is worth knowing before you add
+another ticker: a third 10s heartbeat is another ~24 MB/day per instance, and
+an operator may be running several profiles at once.
+
 ### The regression guard
 
 [`src/main/__tests__/sqlite-write-metrics.test.ts`](src/main/__tests__/sqlite-write-metrics.test.ts)

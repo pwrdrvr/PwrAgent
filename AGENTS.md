@@ -48,6 +48,24 @@
 - For manual screenshots of the branch-drift dialog, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`; it opens a replay-backed Electron fixture and waits until you close the app.
 - To regenerate the README screenshots under `docs/assets/screenshots/`, run `pnpm --filter @pwragent/desktop screenshot:readme`. The full walkthrough (spec, fixtures, state-seeding helpers, native capture utilities) lives in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) under "Capturing README Screenshots". macOS Screen Recording permission is required for whichever terminal/IDE runs the spec.
 - When focusing root Vitest runs through `pnpm test`, pass file paths or filters directly, for example `pnpm test apps/desktop/src/main/__tests__/backend-registry.test.ts`. Do not insert a standalone `--` before the focus args; `pnpm test -- apps/...` makes Vitest run the full workspace suite.
+- **Any new sqlite write that fires per command, per turn, per item, per
+  streamed event, or on a timer must be measured before it ships, and covered
+  by a measurement spec.** Do the arithmetic out loud: writes/second × commit
+  cost × how long a real session runs → MB/day. Sqlite commits are the unit,
+  not statements — each implicit transaction flushes its dirty pages plus every
+  index the row moved (~4 KB/page, and a timestamp column in an index moves on
+  every write). Two calibration points: tool accounting once wrote per streamed
+  8 KiB chunk, costing 3,693 commits and 58 MB of WAL for one `find /`
+  (PR #1406); the idle heartbeats cost 720 commits and 2.7 MB/hour per running
+  instance, about 65 MB/day. **If the projection looks excessive, say so to the
+  user rather than shipping it quietly — the right answer is often that the
+  design constraint has to change** (batch into one transaction, debounce
+  behind a flush window, accumulate in memory and persist on a boundary, or
+  not persist at all), and that is their call to make. Measure with
+  `pnpm test:sqlite-writes`; assert the *shape* of the write pattern (commits
+  do not scale with events) rather than a wall-clock number, so the spec means
+  the same thing on a loaded CI box. See "Sqlite Write-Volume Instrumentation"
+  in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 
 ## Code Formatting & Linting
 
