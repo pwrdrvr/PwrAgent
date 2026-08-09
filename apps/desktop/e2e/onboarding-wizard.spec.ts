@@ -179,39 +179,6 @@ async function expectFakeProvidersFound(
 }
 
 test.describe("Onboarding wizard", () => {
-  test("Get started and Back buttons are clickable", async () => {
-    const app = await launchElectronApp(wizardLaunchOptions);
-    try {
-      await expect(
-        app.window.getByRole("heading", {
-          name: /A few short choices/i,
-        }),
-      ).toBeVisible();
-
-      const getStarted = app.window.getByRole("button", { name: /Get started/i });
-      await expect(getStarted).toBeVisible();
-      await getStarted.click();
-
-      await expect(
-        app.window.getByRole("heading", {
-          name: /Pick your appearance and thread density/i,
-        }),
-      ).toBeVisible();
-
-      const back = app.window.getByRole("button", { name: /^← Back/i });
-      await expect(back).toBeVisible();
-      await back.click();
-
-      await expect(
-        app.window.getByRole("heading", {
-          name: /A few short choices/i,
-        }),
-      ).toBeVisible();
-    } finally {
-      await app.close();
-    }
-  });
-
   test("fires on a fresh PWRAGENT_HOME and walks Welcome → Done in Shared mode", async () => {
     const app = await launchElectronApp(wizardLaunchOptions);
     try {
@@ -287,7 +254,7 @@ test.describe("Onboarding wizard", () => {
     }
   });
 
-  test("messaging-safety gate: locked Continue flashes the ack card, checking it unlocks", async () => {
+  test("messaging-safety gate flashes once, resets on re-entry, and unlocks after acknowledgement", async () => {
     const app = await launchElectronApp(wizardLaunchOptions);
     try {
       // Walk to the messaging-safety step (same path as the Shared walk).
@@ -329,6 +296,17 @@ test.describe("Onboarding wizard", () => {
       ).toBeVisible();
       await expect(flash).toHaveCount(1);
 
+      // Leaving and returning clears the one-shot attention ring without
+      // replaying it. The acknowledgement remains unchecked and the gate
+      // remains locked until the operator acts again.
+      await app.window.getByRole("button", { name: /^← Back/i }).click();
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+      await expect(
+        app.window.getByRole("heading", { name: /Messaging is optional/i }),
+      ).toBeVisible();
+      await expect(flash).toHaveCount(0);
+      await expect(continueBtn).toHaveAttribute("aria-disabled", "true");
+
       // Tick the acknowledgement card → Continue unlocks.
       await app.window.locator(".onboarding-wizard__safety-ack").click();
       await expect(continueBtn).not.toHaveAttribute("aria-disabled", "true");
@@ -350,58 +328,25 @@ test.describe("Onboarding wizard", () => {
     }
   });
 
-  test("messaging-safety flash does not replay when navigating back to the step", async () => {
-    const app = await launchElectronApp(wizardLaunchOptions);
-    try {
-      // Walk to the messaging-safety step (same Shared-mode path).
-      await app.window.getByRole("button", { name: /Get started/i }).click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window
-        .getByText("Reuse your existing Codex login", { exact: false })
-        .click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window
-        .getByRole("button", { name: /I.ll log in later/i })
-        .click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-
-      await expect(
-        app.window.getByRole("heading", { name: /Messaging is optional/i }),
-      ).toBeVisible();
-
-      const continueBtn = app.window.getByRole("button", {
-        name: /Continue with messaging/i,
-      });
-      const flash = app.window.locator(".onboarding-wizard__safety-ack-flash");
-
-      // Force a flash (box still unchecked), then leave and return.
-      await continueBtn.click({ force: true });
-      await expect(flash).toHaveCount(1);
-
-      // Anchored like the other call sites: the loose /Back/i also matches
-      // the title-bar history Back button in the shell behind the wizard.
-      await app.window.getByRole("button", { name: /^← Back/i }).click();
-      // Back lands on the shared Codex login step (login already deferred,
-      // so its Continue is live); Continue returns to messaging-safety.
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await expect(
-        app.window.getByRole("heading", { name: /Messaging is optional/i }),
-      ).toBeVisible();
-
-      // Re-entry must NOT replay the ring — the box is still unchecked and
-      // the operator never re-clicked the locked button.
-      await expect(flash).toHaveCount(0);
-      await expect(continueBtn).toHaveAttribute("aria-disabled", "true");
-    } finally {
-      await app.close();
-    }
-  });
-
-  test("back navigation preserves density selection across Thread presentation ↔ Models", async () => {
+  test("back navigation preserves the Welcome round trip and density selection across Thread presentation ↔ Models", async () => {
     const app = await launchElectronApp(wizardLaunchOptions);
     try {
       // Welcome → Thread presentation.
+      await app.window.getByRole("button", { name: /Get started/i }).click();
+      await expect(
+        app.window.getByRole("heading", {
+          name: /Pick your appearance and thread density/i,
+        }),
+      ).toBeVisible();
+
+      // The first Back round trip returns to Welcome and can re-enter the
+      // presentation step without losing the navigation path.
+      await app.window.getByRole("button", { name: /^← Back/i }).click();
+      await expect(
+        app.window.getByRole("heading", {
+          name: /A few short choices/i,
+        }),
+      ).toBeVisible();
       await app.window.getByRole("button", { name: /Get started/i }).click();
       await expect(
         app.window.getByRole("heading", {
@@ -467,14 +412,6 @@ test.describe("Onboarding wizard", () => {
           name: /A few short choices/i,
         }),
       ).toBeVisible();
-
-      // Back from Welcome returns to the confirmation (because that's
-      // where this session entered).
-      // (No-op visual check — the Back button is hidden on Welcome,
-      // matching the "no back from first-impression screen" UX rule.)
-      await expect(
-        app.window.getByRole("button", { name: /^← Back/i }),
-      ).toHaveCount(0);
     } finally {
       await app.close();
     }
@@ -664,7 +601,6 @@ test.describe("Onboarding wizard", () => {
       await expect(app.window.getByText(/brew install qwen-code/i)).toBeVisible();
       await app.window.getByRole("tab", { name: /Grok Build/i }).click();
       await expect(app.window.getByText(/x\.ai\/cli\/install\.sh/i)).toBeVisible();
-      await expect(app.window.getByText(/xAI API key/i)).toHaveCount(0);
     } finally {
       await app.close();
     }

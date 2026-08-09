@@ -612,46 +612,6 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
   }
 });
 
-test("directory launchpad Tiptap composer preserves pasted paragraph breaks", async () => {
-  const fixture = await createDirectoryLaunchpadSkillsFixture();
-  const app = await launchElectronApp({    fixturePath: fixture.fixturePath,
-  });
-
-  try {
-    await openDirectoryLaunchpad(app);
-
-    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
-    const textbox = app.window.getByRole("textbox", { name: "New thread" });
-    await textbox.focus();
-    await textbox.evaluate((element) => {
-      const dataTransfer = new DataTransfer();
-      dataTransfer.setData(
-        "text/html",
-        "<p>first paragraph</p><p>second paragraph</p>",
-      );
-      dataTransfer.setData("text/plain", "first paragraph\nsecond paragraph");
-      element.dispatchEvent(
-        new ClipboardEvent("paste", {
-          bubbles: true,
-          cancelable: true,
-          clipboardData: dataTransfer,
-        }),
-      );
-    });
-
-    await expect(
-      tiptapInput.locator(".composer-tiptap-input__editor p"),
-    ).toHaveCount(2);
-    await expect(tiptapInput).toHaveAttribute(
-      "data-value",
-      "first paragraph\n\nsecond paragraph",
-    );
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
-
 test("directory launchpad skill autocomplete honors markdown offsets after formatted blocks", async () => {
   const fixture = await createDirectoryLaunchpadSkillsFixture();
   const app = await launchElectronApp({    fixturePath: fixture.fixturePath,

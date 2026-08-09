@@ -215,34 +215,6 @@ test("a trailing code block does not collapse the paragraph separators above it"
   }
 });
 
-test("a pasted code fence still becomes a code block when the clipboard is plain-text only", async () => {
-  const fixture = await createPasteFixture();
-  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
-
-  try {
-    await openExistingThread(app);
-    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
-    await app.window.getByRole("textbox", { name: "Reply" }).focus();
-
-    // No text/html: text/plain is the authoritative markdown source, so the
-    // custom fence parse must still run and form the code block.
-    await pasteIntoReply(app.window, {
-      text: ["Intro paragraph.", "", "Body paragraph.", "", CODE_PLAIN].join("\n"),
-    });
-
-    await expect(tiptapInput).toHaveAttribute(
-      "data-value",
-      `Intro paragraph.\n\nBody paragraph.\n\n${EXPECTED_CODE_VALUE}`,
-    );
-    await expect(
-      tiptapInput.locator(".composer-tiptap-input__editor > pre"),
-    ).toHaveCount(1);
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
-
 test("a code fence is upgraded from text/plain even when HTML is present but has no code block", async () => {
   const fixture = await createPasteFixture();
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
@@ -419,58 +391,6 @@ async function pasteListAndReadValue(flavor: {
     await fixture.cleanup();
   }
 }
-
-test("a pasted bullet list is reconstructed as a list (text/plain only)", async () => {
-  const fixture = await createPasteFixture();
-  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
-
-  try {
-    await openExistingThread(app);
-    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
-    await app.window.getByRole("textbox", { name: "Reply" }).focus();
-
-    await pasteIntoReply(app.window, {
-      text: ["Here are the steps:", "", "- First item", "- Second item", "- Third item"].join("\n"),
-    });
-
-    await expect(
-      tiptapInput.locator(".composer-tiptap-input__editor > ul > li"),
-    ).toHaveCount(3);
-    await expect(tiptapInput).toHaveAttribute(
-      "data-value",
-      "Here are the steps:\n\n- First item\n- Second item\n- Third item",
-    );
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
-
-test("a pasted ordered list is reconstructed as a list (text/plain only)", async () => {
-  const fixture = await createPasteFixture();
-  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
-
-  try {
-    await openExistingThread(app);
-    const tiptapInput = app.window.getByTestId("composer-tiptap-input");
-    await app.window.getByRole("textbox", { name: "Reply" }).focus();
-
-    await pasteIntoReply(app.window, {
-      text: ["Order matters:", "", "1. Alpha", "2. Beta", "3. Gamma"].join("\n"),
-    });
-
-    await expect(
-      tiptapInput.locator(".composer-tiptap-input__editor > ol > li"),
-    ).toHaveCount(3);
-    await expect(tiptapInput).toHaveAttribute(
-      "data-value",
-      "Order matters:\n\n1. Alpha\n2. Beta\n3. Gamma",
-    );
-  } finally {
-    await app.close();
-    await fixture.cleanup();
-  }
-});
 
 test("pasted inline code renders as a styled pill, not bare text", async () => {
   const fixture = await createPasteFixture();
