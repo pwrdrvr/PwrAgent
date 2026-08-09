@@ -1735,8 +1735,8 @@ export class DesktopFederationRuntime {
         await this.startAfterLeaseAcquired(mode, settings);
       } catch (error) {
         // A startup failure after acquisition (e.g. unreadable federation
-        // key material) must not keep renewing the profile lease with no
-        // runtime behind it: release so another instance can take over,
+        // key material) must not keep the profile lease with no runtime
+        // behind it: release so another instance can take over,
         // mirroring the messaging lease's startup-failure cleanup.
         await leaseCoordinator.releaseAfterStartupFailure(this);
         throw error;
@@ -1754,10 +1754,9 @@ export class DesktopFederationRuntime {
     settings: DesktopSettingsSnapshot,
   ): Promise<void> {
     this.stopping = false;
-    // Startup fence: losing the profile lease mid-startup makes the
-    // heartbeat stop this runtime, which flips `stopping` and bumps
-    // `walkEpoch`. A stale startup continuation must not create or publish
-    // sockets afterwards (the same guard connectToGateway uses per attempt).
+    // Startup fence: a concurrent stop flips `stopping` and bumps `walkEpoch`.
+    // A stale startup continuation must not create or publish sockets
+    // afterwards (the same guard connectToGateway uses per attempt).
     const startupEpoch = this.walkEpoch;
     const startupAborted = (): boolean =>
       this.stopping || this.walkEpoch !== startupEpoch;

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AppRuntimeInstanceStore,
   hashCwd,
+  RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
 } from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 
@@ -46,7 +47,6 @@ describe("AppRuntimeInstanceStore", () => {
     const result = store.acquireMessagingLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
 
     expect(result.acquired).toBe(true);
@@ -65,7 +65,7 @@ describe("AppRuntimeInstanceStore", () => {
       ownerInstanceId: "instance-a",
       acquiredAt: 1_000,
       heartbeatAt: 1_000,
-      expiresAt: 31_000,
+      expiresAt: Number.MAX_SAFE_INTEGER,
       status: "active",
     });
   });
@@ -93,7 +93,7 @@ describe("AppRuntimeInstanceStore", () => {
     );
   });
 
-  it("renews the current holder lease without changing the original acquisition time", () => {
+  it("keeps the current holder lease without rewriting its acquisition", () => {
     store.recordInstanceStart({
       instanceId: "instance-a",
       profileName: "dev",
@@ -106,23 +106,21 @@ describe("AppRuntimeInstanceStore", () => {
       store.acquireMessagingLease({
         instanceId: "instance-a",
         now: 1_000,
-        ttlMs: 30_000,
       }).acquired,
     ).toBe(true);
 
     expect(
-      store.renewMessagingLease({
+      store.acquireMessagingLease({
         instanceId: "instance-a",
         now: 11_000,
-        ttlMs: 30_000,
       }),
-    ).toBe(true);
+    ).toMatchObject({ acquired: true });
 
     expect(store.getMessagingLease()).toMatchObject({
       ownerInstanceId: "instance-a",
       acquiredAt: 1_000,
-      heartbeatAt: 11_000,
-      expiresAt: 41_000,
+      heartbeatAt: 1_000,
+      expiresAt: Number.MAX_SAFE_INTEGER,
       status: "active",
     });
     expect(store.getInstance("instance-a")).toMatchObject({
@@ -151,13 +149,11 @@ describe("AppRuntimeInstanceStore", () => {
     store.acquireMessagingLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
 
     const result = store.acquireMessagingLease({
       instanceId: "instance-b",
       now: 2_000,
-      ttlMs: 30_000,
     });
 
     expect(result).toMatchObject({
@@ -165,7 +161,7 @@ describe("AppRuntimeInstanceStore", () => {
       reason: "held",
       holder: {
         ownerInstanceId: "instance-a",
-        expiresAt: 31_000,
+        expiresAt: Number.MAX_SAFE_INTEGER,
       },
     });
     expect(store.getInstance("instance-b")).toMatchObject({
@@ -179,7 +175,7 @@ describe("AppRuntimeInstanceStore", () => {
     });
   });
 
-  it("lets another instance acquire after the previous holder expires", () => {
+  it("reclaims messaging one minute after the previous holder exits", () => {
     store.recordInstanceStart({
       instanceId: "instance-a",
       profileName: "dev",
@@ -199,21 +195,31 @@ describe("AppRuntimeInstanceStore", () => {
     store.acquireMessagingLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
+    store.markInstanceExited({ instanceId: "instance-a", now: 2_000 });
 
-    const result = store.acquireMessagingLease({
+    const observedDead = store.acquireMessagingLease({
       instanceId: "instance-b",
       now: 40_000,
-      ttlMs: 30_000,
+      isOwnerAlive: () => false,
+    });
+
+    expect(observedDead).toMatchObject({
+      acquired: false,
+      holder: { expiresAt: 2_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS },
+    });
+    const result = store.acquireMessagingLease({
+      instanceId: "instance-b",
+      now: 2_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+      isOwnerAlive: () => true,
     });
 
     expect(result.acquired).toBe(true);
     expect(store.getMessagingLease()).toMatchObject({
       ownerInstanceId: "instance-b",
-      acquiredAt: 40_000,
-      heartbeatAt: 40_000,
-      expiresAt: 70_000,
+      acquiredAt: 2_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+      heartbeatAt: 2_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+      expiresAt: Number.MAX_SAFE_INTEGER,
       status: "active",
     });
     const instance = store.getInstance("instance-b");
@@ -243,7 +249,6 @@ describe("AppRuntimeInstanceStore", () => {
     store.acquireMessagingLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
 
     expect(
@@ -287,7 +292,7 @@ describe("AppRuntimeInstanceStore", () => {
     expect(row.disabled_reason).not.toContain("token-secret-value");
   });
 
-  it("preserves rows across database reopen and still uses expiry as authority", () => {
+  it("persists dead-owner observation across database reopen", () => {
     const dbPath = path.join(tempDir, "state.db");
     store.recordInstanceStart({
       instanceId: "instance-a",
@@ -300,7 +305,6 @@ describe("AppRuntimeInstanceStore", () => {
     store.acquireMessagingLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
     stateDb.close();
 
@@ -315,13 +319,21 @@ describe("AppRuntimeInstanceStore", () => {
       desiredMessagingEnabled: true,
     });
 
-    expect(
-      store.acquireMessagingLease({
-        instanceId: "instance-b",
-        now: 40_000,
-        ttlMs: 30_000,
-      }).acquired,
-    ).toBe(true);
+    expect(store.acquireMessagingLease({
+      instanceId: "instance-b",
+      now: 40_000,
+      isOwnerAlive: () => false,
+    })).toMatchObject({ acquired: false });
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath, { profileName: "dev" });
+    store = new AppRuntimeInstanceStore(stateDb);
+    expect(store.acquireMessagingLease({
+      instanceId: "instance-b",
+      now: 40_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+      // PID reuse after a persisted dead observation cannot revive the owner.
+      isOwnerAlive: () => true,
+    })).toMatchObject({ acquired: true });
     expect(store.getMessagingLease()).toMatchObject({
       ownerInstanceId: "instance-b",
       status: "active",
@@ -400,7 +412,6 @@ describe("AppRuntimeInstanceStore", () => {
     const result = store.acquireFederationLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
 
     expect(result.acquired).toBe(true);
@@ -408,7 +419,7 @@ describe("AppRuntimeInstanceStore", () => {
       ownerInstanceId: "instance-a",
       acquiredAt: 1_000,
       heartbeatAt: 1_000,
-      expiresAt: 31_000,
+      expiresAt: Number.MAX_SAFE_INTEGER,
       status: "active",
     });
     // The federation lease must not flip the messaging desired/effective
@@ -442,7 +453,6 @@ describe("AppRuntimeInstanceStore", () => {
     store.acquireMessagingLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
 
     // Messaging is held by instance-a, but that must not block instance-b's
@@ -451,14 +461,12 @@ describe("AppRuntimeInstanceStore", () => {
       store.acquireFederationLease({
         instanceId: "instance-b",
         now: 2_000,
-        ttlMs: 30_000,
       }).acquired,
     ).toBe(true);
     expect(
       store.acquireFederationLease({
         instanceId: "instance-a",
         now: 2_000,
-        ttlMs: 30_000,
       }),
     ).toMatchObject({
       acquired: false,
@@ -469,7 +477,6 @@ describe("AppRuntimeInstanceStore", () => {
       store.acquireMessagingLease({
         instanceId: "instance-b",
         now: 2_000,
-        ttlMs: 30_000,
       }),
     ).toMatchObject({
       acquired: false,
@@ -498,13 +505,11 @@ describe("AppRuntimeInstanceStore", () => {
     store.acquireFederationLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
 
     const result = store.acquireFederationLease({
       instanceId: "instance-b",
       now: 2_000,
-      ttlMs: 30_000,
     });
 
     expect(result).toMatchObject({
@@ -512,7 +517,7 @@ describe("AppRuntimeInstanceStore", () => {
       reason: "held",
       holder: {
         ownerInstanceId: "instance-a",
-        expiresAt: 31_000,
+        expiresAt: Number.MAX_SAFE_INTEGER,
       },
     });
     expect(store.getFederationLease()).toMatchObject({
@@ -521,7 +526,7 @@ describe("AppRuntimeInstanceStore", () => {
     });
   });
 
-  it("renews the federation lease without changing the original acquisition time", () => {
+  it("keeps the current federation holder without rewriting its acquisition", () => {
     store.recordInstanceStart({
       instanceId: "instance-a",
       profileName: "dev",
@@ -533,27 +538,25 @@ describe("AppRuntimeInstanceStore", () => {
     store.acquireFederationLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
 
     expect(
-      store.renewFederationLease({
+      store.acquireFederationLease({
         instanceId: "instance-a",
         now: 11_000,
-        ttlMs: 30_000,
       }),
-    ).toBe(true);
+    ).toMatchObject({ acquired: true });
 
     expect(store.getFederationLease()).toMatchObject({
       ownerInstanceId: "instance-a",
       acquiredAt: 1_000,
-      heartbeatAt: 11_000,
-      expiresAt: 41_000,
+      heartbeatAt: 1_000,
+      expiresAt: Number.MAX_SAFE_INTEGER,
       status: "active",
     });
   });
 
-  it("lets another instance acquire the federation lease after the holder expires", () => {
+  it("reclaims federation one minute after observing the holder dead", () => {
     store.recordInstanceStart({
       instanceId: "instance-a",
       profileName: "dev",
@@ -573,21 +576,30 @@ describe("AppRuntimeInstanceStore", () => {
     store.acquireFederationLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
 
-    const result = store.acquireFederationLease({
+    const observedDead = store.acquireFederationLease({
       instanceId: "instance-b",
       now: 40_000,
-      ttlMs: 30_000,
+      isOwnerAlive: () => false,
+    });
+
+    expect(observedDead).toMatchObject({
+      acquired: false,
+      holder: { expiresAt: 40_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS },
+    });
+    const result = store.acquireFederationLease({
+      instanceId: "instance-b",
+      now: 40_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+      isOwnerAlive: () => true,
     });
 
     expect(result.acquired).toBe(true);
     expect(store.getFederationLease()).toMatchObject({
       ownerInstanceId: "instance-b",
-      acquiredAt: 40_000,
-      heartbeatAt: 40_000,
-      expiresAt: 70_000,
+      acquiredAt: 40_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+      heartbeatAt: 40_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+      expiresAt: Number.MAX_SAFE_INTEGER,
       status: "active",
     });
   });
@@ -612,7 +624,6 @@ describe("AppRuntimeInstanceStore", () => {
     store.acquireFederationLease({
       instanceId: "instance-a",
       now: 1_000,
-      ttlMs: 30_000,
     });
 
     expect(

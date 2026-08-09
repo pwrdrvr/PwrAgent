@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  MESSAGING_LEASE_HEARTBEAT_MS,
   PWRAGENT_INSTANCE_ROOT_ENV,
   RuntimeMessagingLeaseCoordinator,
 } from "../runtime-messaging-lease";
 import {
   AppRuntimeInstanceStore,
   hashCwd,
+  RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
 } from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 import type { DesktopMessagingConfig } from "../messaging/messaging-config";
@@ -18,6 +18,7 @@ import type { DesktopMessagingRuntime } from "../messaging/messaging-runtime";
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
 let tempDir: string;
+let liveProcessIds: Set<number>;
 
 function createRuntime(options: { failApply?: boolean } = {}): DesktopMessagingRuntime {
   let enabled = false;
@@ -33,12 +34,27 @@ function createRuntime(options: { failApply?: boolean } = {}): DesktopMessagingR
   } as unknown as DesktopMessagingRuntime;
 }
 
+function createCoordinator(
+  options: NonNullable<
+    ConstructorParameters<typeof RuntimeMessagingLeaseCoordinator>[0]
+  >,
+): RuntimeMessagingLeaseCoordinator {
+  const processId = options.processId ?? process.pid;
+  liveProcessIds.add(processId);
+  return new RuntimeMessagingLeaseCoordinator({
+    ...options,
+    processId,
+    processIsAlive: (candidate) => liveProcessIds.has(candidate),
+  });
+}
+
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-lease-coordinator-"));
   stateDb = StateDb.open(path.join(tempDir, "state.db"), {
     profileName: "dev",
   });
   store = new AppRuntimeInstanceStore(stateDb);
+  liveProcessIds = new Set();
 });
 
 afterEach(() => {
@@ -62,7 +78,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
         authorizedSupergroupIds: [],
       },
     }));
-    const coordinator = new RuntimeMessagingLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       profileName: "dev",
       processId: 123,
@@ -89,7 +105,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
 
   it("uses the launch root env var for lease owner identity", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeMessagingLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       profileName: "dev",
       processId: 123,
@@ -130,7 +146,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
 
   it("does not claim the lease when no adapters are runnable", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeMessagingLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       profileName: "dev",
       processId: 123,
@@ -162,7 +178,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
 
   it("treats Feishu-only config as runnable", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeMessagingLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       profileName: "dev",
       processId: 123,
@@ -205,7 +221,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
   it("starts runtime only for the profile lease holder", async () => {
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
-    const first = new RuntimeMessagingLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       profileName: "dev",
       processId: 123,
@@ -213,7 +229,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
       now: () => 1_000,
       store,
     });
-    const second = new RuntimeMessagingLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       profileName: "dev",
       processId: 456,
@@ -257,7 +273,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
     first.shutdownSync();
   });
 
-  it("stops runtime when another live instance holds the lease", async () => {
+  it("stops runtime after the dead-owner grace permits replacement", async () => {
     let now = 1_000;
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
@@ -274,7 +290,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
         authorizedSupergroupIds: [],
       },
     };
-    const first = new RuntimeMessagingLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       profileName: "dev",
       processId: 123,
@@ -282,7 +298,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
       now: () => now,
       store,
     });
-    const second = new RuntimeMessagingLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       profileName: "dev",
       processId: 456,
@@ -292,9 +308,14 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
     });
 
     await first.applyResolvedConfig(firstRuntime, config);
-    now = 32_000;
-    await second.applyResolvedConfig(secondRuntime, config);
-    now = 33_000;
+    liveProcessIds.delete(123);
+    now = 2_000;
+    await expect(second.applyResolvedConfig(secondRuntime, config)).resolves
+      .toMatchObject({ enabled: false, disabledReasonKind: "lease_held" });
+    now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+    await expect(second.applyResolvedConfig(secondRuntime, config)).resolves
+      .toMatchObject({ enabled: true });
+    now += 1_000;
     await expect(first.applyResolvedConfig(firstRuntime, config)).resolves
       .toMatchObject({
         enabled: false,
@@ -311,11 +332,9 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
     second.shutdownSync();
   });
 
-  it("stops runtime when the heartbeat loses the lease", async () => {
-    vi.useFakeTimers();
+  it("does not renew a PID-owned lease on a timer", async () => {
     let now = 1_000;
-    const firstRuntime = createRuntime();
-    const secondRuntime = createRuntime();
+    const runtime = createRuntime();
     const config: DesktopMessagingConfig = {
       enabled: true,
       inputDebounceMs: 500,
@@ -329,7 +348,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
         authorizedSupergroupIds: [],
       },
     };
-    const first = new RuntimeMessagingLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       profileName: "dev",
       processId: 123,
@@ -337,38 +356,26 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
       now: () => now,
       store,
     });
-    const second = new RuntimeMessagingLeaseCoordinator({
-      instanceId: "instance-b",
-      profileName: "dev",
-      processId: 456,
-      cwd: "/tmp/PwrAgnt-b",
-      now: () => now,
-      store,
-    });
 
-    await first.applyResolvedConfig(firstRuntime, config);
-    now = 32_000;
-    await second.applyResolvedConfig(secondRuntime, config);
-    now = 33_000;
-    await vi.advanceTimersByTimeAsync(MESSAGING_LEASE_HEARTBEAT_MS);
+    await coordinator.applyResolvedConfig(runtime, config);
+    now = 60 * 60 * 1000;
 
-    expect(firstRuntime.stop).toHaveBeenCalledTimes(1);
-    expect(firstRuntime.isEnabled()).toBe(false);
-    expect(store.getInstance("instance-a")).toMatchObject({
-      desiredMessagingEnabled: true,
-      effectiveMessagingEnabled: false,
-      disabledReason: "lease_held",
+    expect(runtime.stop).not.toHaveBeenCalled();
+    expect(coordinator.snapshot()).toMatchObject({
+      leaseHeld: true,
+      effectiveMessagingEnabled: true,
     });
     expect(store.getMessagingLease()).toMatchObject({
-      ownerInstanceId: "instance-b",
+      ownerInstanceId: "instance-a",
+      heartbeatAt: 1_000,
       status: "active",
     });
-    second.shutdownSync();
+    coordinator.shutdownSync();
   });
 
   it("releases the lease when runtime startup fails", async () => {
     const runtime = createRuntime({ failApply: true });
-    const coordinator = new RuntimeMessagingLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       profileName: "dev",
       processId: 123,
@@ -411,7 +418,7 @@ describe("RuntimeMessagingLeaseCoordinator", () => {
 
   it("releases the lease when the session disables messaging", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeMessagingLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       profileName: "dev",
       processId: 123,

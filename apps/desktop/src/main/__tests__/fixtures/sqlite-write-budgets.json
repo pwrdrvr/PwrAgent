@@ -1,10 +1,24 @@
 {
-  "idle-hour-heartbeats": {
-    "commits": 720,
-    "note": "one idle hour: 360 profile heartbeats + 360 federation lease renewals",
-    "observedWalBytes": 2851040,
-    "rowsChanged": 1080,
-    "statements": 1080
+  "idle-hour-runtime-leases": {
+    "commits": 0,
+    "note": "one idle hour: PID-owned messaging and federation leases",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "runtime-lease-dead-owner-takeover": {
+    "commits": 5,
+    "note": "observe one dead owner, wait one minute, replace both runtime leases",
+    "observedWalBytes": 74160,
+    "rowsChanged": 8,
+    "statements": 8
+  },
+  "runtime-lease-lifecycle": {
+    "commits": 6,
+    "note": "register once, acquire and release both runtime leases, mark exited",
+    "observedWalBytes": 94760,
+    "rowsChanged": 8,
+    "statements": 8
   },
   "live-thread-token-usage": {
     "commits": 1,

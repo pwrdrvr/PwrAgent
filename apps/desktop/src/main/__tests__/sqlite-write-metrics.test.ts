@@ -4,7 +4,11 @@ import path from "node:path";
 import type { AgentEvent } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
+import { RuntimeLeaseManager } from "../runtime-lease-manager";
+import {
+  AppRuntimeInstanceStore,
+  RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+} from "../state/app-runtime-instance-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import {
   measureSqliteWrites,
@@ -209,40 +213,95 @@ describe("sqlite write metrics", () => {
     await registry.close();
   });
 
-  it("holds an idle hour of heartbeats to its budget", async () => {
-    // The floor the app pays for existing: the profile-runtime heartbeat and
-    // the federation lease renewal both tick every 10s against a 45s TTL, each
-    // taking its own commit. Budgeted so a third ticker, or a shortened
-    // interval, has to be a deliberate line in a diff.
+  it("holds messaging and federation for an idle hour without sqlite writes", async () => {
     const instances = new AppRuntimeInstanceStore(stateDb);
-    instances.recordInstanceStart({
+    const leases = new RuntimeLeaseManager({
+      cwd: "/tmp/PwrAgnt",
       instanceId: "instance-1",
+      now: () => 1_800_000_000_000,
       profileName: "default",
       processId: 1234,
-      startedAt: 1_800_000_000_000,
-      desiredMessagingEnabled: false,
+      processIsAlive: () => true,
+      store: instances,
     });
-    instances.acquireFederationLease({
-      instanceId: "instance-1",
-      now: 1_800_000_000_000,
-      ttlMs: 45_000,
-    });
+    leases.acquire("messaging");
+    leases.acquire("federation");
 
     const { writes } = await measureSqliteWrites(() => {
       for (let tick = 0; tick < 360; tick += 1) {
-        const now = 1_800_000_000_000 + tick * 10_000;
-        instances.heartbeatInstance({ instanceId: "instance-1", now });
-        instances.renewFederationLease({
-          instanceId: "instance-1",
-          now,
-          ttlMs: 45_000,
-        });
+        leases.snapshot("messaging");
+        leases.snapshot("federation");
       }
     });
 
     expectSqliteWriteBudget({
-      note: "one idle hour: 360 profile heartbeats + 360 federation lease renewals",
-      scenario: "idle-hour-heartbeats",
+      note: "one idle hour: PID-owned messaging and federation leases",
+      scenario: "idle-hour-runtime-leases",
+      writes,
+    });
+  });
+
+  it("holds runtime lease acquisition and release to its budget", async () => {
+    const leases = new RuntimeLeaseManager({
+      cwd: "/tmp/PwrAgnt",
+      instanceId: "instance-1",
+      now: () => 1_800_000_000_000,
+      processId: 1234,
+      processIsAlive: () => true,
+      profileName: "default",
+      store: new AppRuntimeInstanceStore(stateDb),
+    });
+
+    const { writes } = await measureSqliteWrites(() => {
+      leases.acquire("messaging");
+      leases.acquire("federation");
+      leases.release("federation");
+      leases.release("messaging");
+      leases.markExited();
+    });
+
+    expectSqliteWriteBudget({
+      note: "register once, acquire and release both runtime leases, mark exited",
+      scenario: "runtime-lease-lifecycle",
+      writes,
+    });
+  });
+
+  it("holds dead-process takeover of both runtime leases to its budget", async () => {
+    let now = 1_800_000_001_000;
+    const instances = new AppRuntimeInstanceStore(stateDb);
+    const owner = new RuntimeLeaseManager({
+      cwd: "/tmp/PwrAgnt-a",
+      instanceId: "instance-a",
+      now: () => 1_800_000_000_000,
+      processId: 1234,
+      processIsAlive: () => true,
+      profileName: "default",
+      store: instances,
+    });
+    owner.acquire("messaging");
+    owner.acquire("federation");
+    const challenger = new RuntimeLeaseManager({
+      cwd: "/tmp/PwrAgnt-b",
+      instanceId: "instance-b",
+      now: () => now,
+      processId: 5678,
+      processIsAlive: () => false,
+      profileName: "default",
+      store: instances,
+    });
+
+    const { writes } = await measureSqliteWrites(() => {
+      challenger.acquire("messaging");
+      challenger.acquire("federation");
+      now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+      challenger.acquire("messaging");
+      challenger.acquire("federation");
+    });
+
+    expectSqliteWriteBudget({
+      note: "observe one dead owner, wait one minute, replace both runtime leases",
+      scenario: "runtime-lease-dead-owner-takeover",
       writes,
     });
   });

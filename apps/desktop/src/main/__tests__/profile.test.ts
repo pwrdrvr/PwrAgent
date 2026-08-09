@@ -11,6 +11,7 @@ import {
   deleteProfile,
   ensureBootstrapProfileDir,
   ensureNamedProfileExists,
+  isProfileRuntimeIdentityLive,
   readProfileArg,
   readProfilesRegistry,
   requestProfileInstanceFocus,
@@ -193,6 +194,78 @@ describe("PwrAgent profiles", () => {
     expect(readProfilesRegistry({ env }).profiles).not.toContainEqual(
       expect.objectContaining({ name: "scratch" }),
     );
+  });
+
+  it("matches identity-aware runtime markers by PID, instance, and start time", () => {
+    const { env } = createRoot();
+    ensureNamedProfileExists("scratch", { env });
+    const identity = {
+      instanceId: "runtime-v2-owner",
+      processId: process.pid,
+      startedAt: 1_000,
+    };
+    const heartbeat = startProfileRuntimeHeartbeat("scratch", {
+      env,
+      instanceId: identity.instanceId,
+      intervalMs: 60_000,
+      now: () => 2_000,
+      processId: identity.processId,
+      startedAt: identity.startedAt,
+    });
+
+    try {
+      expect(isProfileRuntimeIdentityLive("scratch", identity, {
+        env,
+        now: 2_000,
+      })).toBe(true);
+      expect(isProfileRuntimeIdentityLive("scratch", {
+        ...identity,
+        startedAt: identity.startedAt + 1,
+      }, {
+        env,
+        now: 2_000,
+      })).toBe(false);
+      expect(isProfileRuntimeIdentityLive("scratch", {
+        ...identity,
+        instanceId: "runtime-v2-recycled",
+      }, {
+        env,
+        now: 2_000,
+      })).toBe(false);
+    } finally {
+      heartbeat.stop();
+    }
+  });
+
+  it("bounds legacy PID matching by the runtime marker lifetime", () => {
+    const { env } = createRoot();
+    ensureNamedProfileExists("scratch", { env });
+    const heartbeat = startProfileRuntimeHeartbeat("scratch", {
+      env,
+      instanceId: "legacy-marker-id",
+      intervalMs: 60_000,
+      now: () => 2_000,
+      processId: process.pid,
+      startedAt: 1_000,
+    });
+    const legacyIdentity = {
+      instanceId: "unrelated-legacy-db-id",
+      processId: process.pid,
+      startedAt: 500,
+    };
+
+    try {
+      expect(isProfileRuntimeIdentityLive("scratch", legacyIdentity, {
+        env,
+        now: 2_000,
+      })).toBe(true);
+      expect(isProfileRuntimeIdentityLive("scratch", legacyIdentity, {
+        env,
+        now: 47_001,
+      })).toBe(false);
+    } finally {
+      heartbeat.stop();
+    }
   });
 
   it("requests focus only for profiles with a live runtime heartbeat", () => {

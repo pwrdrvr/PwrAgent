@@ -129,7 +129,6 @@ describe("applyFederationLeaseSnapshot", () => {
           instanceId: "instance-a",
           processId: 123,
           cwdHint: "PwrAgnt-a",
-          expiresAt: 31_000,
         },
       }),
     );

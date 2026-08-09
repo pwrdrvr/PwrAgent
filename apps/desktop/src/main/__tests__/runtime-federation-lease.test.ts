@@ -3,21 +3,50 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  FEDERATION_LEASE_HEARTBEAT_MS,
   RuntimeFederationLeaseCoordinator,
   type FederationLeaseRuntime,
 } from "../runtime-federation-lease";
-import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
+import {
+  AppRuntimeInstanceStore,
+  RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
+} from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
 
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
 let tempDir: string;
+let liveProcessIds: Set<number>;
+const activeCoordinators: RuntimeFederationLeaseCoordinator[] = [];
 
 function createRuntime(): FederationLeaseRuntime {
   return {
     stop: vi.fn(async () => {}),
   };
+}
+
+function createCoordinator(
+  options: NonNullable<
+    ConstructorParameters<typeof RuntimeFederationLeaseCoordinator>[0]
+  >,
+): RuntimeFederationLeaseCoordinator {
+  const processId =
+    options.processId
+    ?? (options.instanceId === "instance-b" ? 456 : 123);
+  liveProcessIds.add(processId);
+  const coordinator = new RuntimeFederationLeaseCoordinator({
+    profileName: "dev",
+    processId,
+    cwd:
+      options.cwd
+      ?? (options.instanceId === "instance-b"
+        ? "/tmp/PwrAgnt-b"
+        : "/tmp/PwrAgnt-a"),
+    processIsAlive: (candidateProcessId) =>
+      liveProcessIds.has(candidateProcessId),
+    ...options,
+  });
+  activeCoordinators.push(coordinator);
+  return coordinator;
 }
 
 function recordInstance(
@@ -35,6 +64,7 @@ function recordInstance(
 }
 
 beforeEach(() => {
+  liveProcessIds = new Set<number>();
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-federation-lease-"));
   stateDb = StateDb.open(path.join(tempDir, "state.db"), {
     profileName: "dev",
@@ -44,6 +74,14 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  // Release ownership before closing the shared test database.
+  for (const coordinator of activeCoordinators.splice(0)) {
+    try {
+      coordinator.shutdownSync();
+    } catch {
+      // Ignore teardown races; the store may already be closed.
+    }
+  }
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
 });
@@ -56,7 +94,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
       cwd: "/tmp/PwrAgnt",
       startedAt: 1_000,
     });
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
@@ -81,7 +119,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     "acquires the profile lease in %s mode",
     async (mode) => {
       const runtime = createRuntime();
-      const coordinator = new RuntimeFederationLeaseCoordinator({
+      const coordinator = createCoordinator({
         instanceId: "instance-a",
         now: () => 1_000,
         store,
@@ -101,7 +139,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
 
   it("never acquires the lease when federation is disabled", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
@@ -119,7 +157,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
 
   it("releases a held lease when federation is disabled", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
@@ -153,12 +191,12 @@ describe("RuntimeFederationLeaseCoordinator", () => {
       cwd: "/tmp/PwrAgnt-b",
       startedAt: 2_000,
     });
-    const first = new RuntimeFederationLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
     });
-    const second = new RuntimeFederationLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       now: () => 2_000,
       store,
@@ -195,12 +233,12 @@ describe("RuntimeFederationLeaseCoordinator", () => {
   it("re-acquires the lease after the holder releases it", async () => {
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
-    const first = new RuntimeFederationLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
     });
-    const second = new RuntimeFederationLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       now: () => 2_000,
       store,
@@ -224,63 +262,66 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     second.shutdownSync();
   });
 
-  it("re-acquires the lease after the holder's lease expires", async () => {
+  it("re-acquires one minute after observing the holder process exit", async () => {
     let now = 1_000;
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
-    const first = new RuntimeFederationLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       now: () => now,
       store,
     });
-    const second = new RuntimeFederationLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       now: () => now,
       store,
     });
 
     await first.applyMode(firstRuntime, "gateway");
+    liveProcessIds.delete(123);
     now = 40_000;
+    await expect(second.applyMode(secondRuntime, "gateway")).resolves
+      .toMatchObject({ enabled: false, disabledReasonKind: "lease_held" });
+    now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
     await expect(second.applyMode(secondRuntime, "gateway")).resolves
       .toMatchObject({ enabled: true });
 
     expect(store.getFederationLease()).toMatchObject({
       ownerInstanceId: "instance-b",
-      acquiredAt: 40_000,
-      expiresAt: 70_000,
+      acquiredAt: 40_000 + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
       status: "active",
     });
     second.shutdownSync();
   });
 
-  it("stops the runtime when the heartbeat loses the lease", async () => {
-    vi.useFakeTimers();
+  it("does not let PID reuse revive a dead owner during reclaim grace", async () => {
     let now = 1_000;
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
-    const first = new RuntimeFederationLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       now: () => now,
       store,
     });
-    const second = new RuntimeFederationLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       now: () => now,
       store,
     });
 
     await first.applyMode(firstRuntime, "client");
-    // The first instance stops renewing (busy event loop, debugger pause,
-    // OS sleep) and the second takes the lease once it expires.
-    now = 32_000;
-    await second.applyMode(secondRuntime, "client");
-    now = 33_000;
-    await vi.advanceTimersByTimeAsync(FEDERATION_LEASE_HEARTBEAT_MS);
+    liveProcessIds.delete(123);
+    now = 2_000;
+    await expect(second.applyMode(secondRuntime, "client")).resolves
+      .toMatchObject({ enabled: false, disabledReasonKind: "lease_held" });
+    liveProcessIds.add(123);
+    now += RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+    await expect(second.applyMode(secondRuntime, "client")).resolves
+      .toMatchObject({ enabled: true });
 
-    expect(firstRuntime.stop).toHaveBeenCalledTimes(1);
+    expect(firstRuntime.stop).not.toHaveBeenCalled();
     expect(first.snapshot()).toMatchObject({
       leaseHeld: false,
-      disabledReasonKind: "lease_held",
       leaseHolder: { instanceId: "instance-b" },
     });
     expect(store.getFederationLease()).toMatchObject({
@@ -290,9 +331,29 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     second.shutdownSync();
   });
 
+  it("does not renew a PID-owned lease on a timer", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    const coordinator = createCoordinator({
+      instanceId: "instance-a",
+      now: () => 1_000,
+      store,
+    });
+
+    await coordinator.applyMode(runtime, "client");
+    const acquiredLease = store.getFederationLease();
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1_000);
+
+    expect(store.getFederationLease()).toEqual(acquiredLease);
+    expect(runtime.stop).not.toHaveBeenCalled();
+    expect(coordinator.snapshot()).toMatchObject({
+      leaseHeld: true,
+    });
+  });
+
   it("releases the lease on shutdownSync", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
@@ -308,10 +369,9 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     });
   });
 
-  it("releases the lease and stops the heartbeat when post-acquisition startup fails", async () => {
-    vi.useFakeTimers();
+  it("releases the lease when post-acquisition startup fails", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
@@ -331,8 +391,6 @@ describe("RuntimeFederationLeaseCoordinator", () => {
       disabledReasonKind: "startup_error",
     });
 
-    // The heartbeat must be stopped too: nothing may re-activate the lease.
-    await vi.advanceTimersByTimeAsync(FEDERATION_LEASE_HEARTBEAT_MS * 3);
     expect(store.getFederationLease()).toMatchObject({
       status: "released",
       releasedAt: 1_000,
@@ -352,12 +410,12 @@ describe("RuntimeFederationLeaseCoordinator", () => {
       cwd: "/tmp/PwrAgnt-b",
       startedAt: 2_000,
     });
-    const first = new RuntimeFederationLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
     });
-    const second = new RuntimeFederationLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       now: () => 2_000,
       store,
@@ -382,7 +440,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
         throw new Error("stop failed");
       }),
     };
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,

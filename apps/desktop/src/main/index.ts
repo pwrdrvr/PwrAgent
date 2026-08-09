@@ -136,6 +136,7 @@ import {
   getExistingRuntimeMessagingLeaseCoordinator,
   getRuntimeMessagingLeaseCoordinator,
 } from "./runtime-messaging-lease";
+import { getExistingRuntimeLeaseManager } from "./runtime-lease-manager";
 import {
   getExistingRuntimeFederationLeaseCoordinator,
   getRuntimeFederationLeaseCoordinator,
@@ -460,10 +461,14 @@ function disposeMainProcessResourcesSync(options?: {
   // ahead of the mainProcessResourcesDisposed early-return so the
   // will-quit/process-exit fallback still fires when the barrier's
   // federation phase rejected or timed out before its own release.
-  if (options?.releaseFederationLease ?? true) {
+  const releaseFederationLease = options?.releaseFederationLease ?? true;
+  if (releaseFederationLease) {
     releaseFederationLeaseSync();
   }
   if (mainProcessResourcesDisposed) {
+    if (releaseFederationLease) {
+      getExistingRuntimeLeaseManager()?.markExited();
+    }
     return;
   }
   mainProcessResourcesDisposed = true;
@@ -506,6 +511,9 @@ function disposeMainProcessResourcesSync(options?: {
     getExistingRuntimeMessagingLeaseCoordinator() ??
     (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
   runtimeMessagingLeaseCoordinator?.shutdownSync();
+  if (releaseFederationLease) {
+    getExistingRuntimeLeaseManager()?.markExited();
+  }
 }
 
 async function closeRendererWindowsBeforeResourceShutdown(
@@ -647,6 +655,7 @@ async function disposeMainProcessResources(source: string): Promise<void> {
     // A queued registry entry can otherwise start after its durable lease was
     // released, leaving the next process free to dispatch the same action.
     disposeScheduledThreadActionService();
+    getExistingRuntimeLeaseManager()?.markExited();
     disposeAppState();
     mainProcessShutdownComplete = true;
   })();
