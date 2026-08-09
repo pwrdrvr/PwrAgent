@@ -70,6 +70,7 @@ import {
   DesktopBackendRegistry,
   getCodexFastModeMismatchWarning,
 } from "../app-server/backend-registry";
+import type { AcpAvailableCommandsRecord } from "../acp/acp-available-commands-store";
 import {
   CodexEnvironmentCommandError,
   type CodexEnvironmentCommandRunner,
@@ -2082,6 +2083,14 @@ type KimiSendControlPrompt = (params: {
   prompt: string;
 }) => Promise<{ text: string }>;
 
+type KimiStartSession = (params: {
+  acpRuntime?: BackendAcpSessionRuntimeState;
+  cwd?: string;
+  executionMode: "default" | "full-access";
+  hidden?: boolean;
+  title?: string;
+}) => Promise<AcpSessionMetadata>;
+
 type KimiStartPrompt = (params: {
   sessionId: string;
   prompt: string;
@@ -2112,6 +2121,13 @@ function createKimiAcpRegistry(options?: {
   acpWorktreeRepositoryResolver?: (
     cwd: string,
   ) => Promise<LinkedDirectorySummary | undefined>;
+  acpAvailableCommandsStore?: ReturnType<
+    typeof createAcpAvailableCommandsStoreMock
+  > | null;
+  acpAvailableCommandProbeTimeoutMs?: number;
+  acpAvailableCommandProbeBudgetMs?: number;
+  availableCommandsOnSessionStart?: AppServerAvailableCommandSummary[];
+  startSession?: KimiStartSession;
 }) {
   const acpBackendId =
     options?.installedAgent?.backendId
@@ -2148,6 +2164,9 @@ function createKimiAcpRegistry(options?: {
       hidden?: boolean;
       title?: string;
     }) => {
+      if (options?.startSession) {
+        return await options.startSession(params);
+      }
       const resolvedSessionId = params.hidden
         ? `${sessionId}:title-helper:${sessions.length + 1}`
         : sessionId;
@@ -2161,6 +2180,11 @@ function createKimiAcpRegistry(options?: {
         executionMode: params.executionMode,
         ...(params.acpRuntime ? { acpRuntime: params.acpRuntime } : {}),
         ...(params.hidden ? { hidden: true } : {}),
+        // Agents advertise their commands over `session/update`, which can
+        // land while `session/new` is still resolving.
+        ...(options?.availableCommandsOnSessionStart
+          ? { availableCommands: options.availableCommandsOnSessionStart }
+          : {}),
         status: "idle",
       };
       sessions.push(metadata);
@@ -2198,6 +2222,10 @@ function createKimiAcpRegistry(options?: {
     ...(options?.threadTitleGenerationService
       ? { threadTitleGenerationService: options.threadTitleGenerationService }
       : {}),
+    acpAvailableCommandsStore: options?.acpAvailableCommandsStore,
+    acpAvailableCommandProbeTimeoutMs:
+      options?.acpAvailableCommandProbeTimeoutMs,
+    acpAvailableCommandProbeBudgetMs: options?.acpAvailableCommandProbeBudgetMs,
   });
   return {
     acpBackendId,
@@ -2206,6 +2234,42 @@ function createKimiAcpRegistry(options?: {
     sendControlPrompt,
     sessions,
     startPrompt,
+  };
+}
+
+/**
+ * Match how the registry keys the ACP command cache: an absolute, forward-
+ * slashed path. `path.resolve` differs per platform, so tests must not hardcode
+ * the POSIX form of a repo root.
+ */
+function toTestRepositoryPath(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/");
+}
+
+function createAcpAvailableCommandsStoreMock(
+  records: AcpAvailableCommandsRecord[] = [],
+) {
+  return {
+    records,
+    get: vi.fn((backendId: string, repositoryPath: string) =>
+      records.find(
+        (record) =>
+          record.backendId === backendId
+          && record.repositoryPath === repositoryPath,
+      ),
+    ),
+    upsert: vi.fn((record: AcpAvailableCommandsRecord) => {
+      const index = records.findIndex(
+        (candidate) =>
+          candidate.backendId === record.backendId
+          && candidate.repositoryPath === record.repositoryPath,
+      );
+      if (index === -1) {
+        records.push(record);
+      } else {
+        records[index] = record;
+      }
+    }),
   };
 }
 
@@ -3143,6 +3207,323 @@ describe("DesktopBackendRegistry", () => {
         },
       ],
     });
+  });
+
+  it("serves cached ACP provider commands to a launchpad draft with no thread", async () => {
+    const repositoryPath = toTestRepositoryPath("/repo");
+    const commands: AppServerAvailableCommandSummary[] = [
+      {
+        name: "compact",
+        description: "Compact this thread's context.",
+        backend: "acp:grok",
+        scope: "session",
+        source: "provider",
+      },
+    ];
+    const acpAvailableCommandsStore = createAcpAvailableCommandsStoreMock([
+      {
+        backendId: "acp:grok",
+        repositoryPath,
+        commands,
+        observedAt: 1000,
+      },
+    ]);
+    const { registry, acpClient } = createKimiAcpRegistry({
+      acpBackendId: "acp:grok" as AcpBackendId,
+      acpAvailableCommandsStore,
+    });
+
+    await expect(
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: "/repo",
+        cwds: ["/repo"],
+      }),
+    ).resolves.toEqual({
+      data: [{ skills: [], commands }],
+    });
+    // Cache hit — no throwaway session, so no agent process spawn.
+    expect(acpClient.startSession).not.toHaveBeenCalled();
+  });
+
+  it("keys ACP launchpad commands on the repository behind a worktree cwd", async () => {
+    // A born thread running in a worktree and a draft sitting on the checkout
+    // must resolve to the same cache row: commands belong to the repo, and a
+    // `workMode: "worktree"` draft's directoryPath is the source checkout the
+    // worktree has not been cut from yet.
+    const repositoryPath = toTestRepositoryPath("/repo");
+    const worktreePath = toTestRepositoryPath("/worktrees/ab12/repo");
+    const commands: AppServerAvailableCommandSummary[] = [
+      {
+        name: "review",
+        backend: "acp:grok",
+        scope: "session",
+        source: "provider",
+      },
+    ];
+    const acpAvailableCommandsStore = createAcpAvailableCommandsStoreMock([
+      {
+        backendId: "acp:grok",
+        repositoryPath,
+        commands,
+        observedAt: 1000,
+      },
+    ]);
+    const { registry, acpClient } = createKimiAcpRegistry({
+      acpBackendId: "acp:grok" as AcpBackendId,
+      acpAvailableCommandsStore,
+      acpWorktreeRepositoryResolver: async (cwd) =>
+        path.resolve(cwd) === path.resolve(worktreePath)
+          ? {
+              id: repositoryPath,
+              path: repositoryPath,
+              worktreePath,
+              label: "repo",
+              kind: "worktree",
+            }
+          : undefined,
+    });
+
+    await expect(
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: worktreePath,
+        cwds: [worktreePath],
+      }),
+    ).resolves.toEqual({
+      data: [{ skills: [], commands }],
+    });
+    expect(acpClient.startSession).not.toHaveBeenCalled();
+  });
+
+  it("probes once for an ACP repo it has never observed commands for", async () => {
+    const repositoryPath = toTestRepositoryPath("/repo");
+    const availableCommands: AppServerAvailableCommandSummary[] = [
+      {
+        name: "compact",
+        backend: "acp:grok",
+        scope: "session",
+        source: "provider",
+      },
+    ];
+    const acpAvailableCommandsStore = createAcpAvailableCommandsStoreMock();
+    const { registry, acpClient, sessions } = createKimiAcpRegistry({
+      acpBackendId: "acp:grok" as AcpBackendId,
+      acpAvailableCommandsStore,
+      availableCommandsOnSessionStart: availableCommands,
+    });
+
+    // A burst of composer keystrokes, all before the first probe resolves.
+    const responses = await Promise.all([
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: "/repo",
+        cwds: ["/repo"],
+      }),
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: "/repo",
+        cwds: ["/repo"],
+      }),
+    ]);
+
+    for (const response of responses) {
+      expect(response).toEqual({
+        data: [{ skills: [], commands: availableCommands }],
+      });
+    }
+    expect(acpClient.startSession).toHaveBeenCalledTimes(1);
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: repositoryPath,
+        hidden: true,
+        mcpServers: "none",
+      }),
+    );
+    // The throwaway session stays out of every thread list.
+    expect(sessions.every((session) => session.hidden)).toBe(true);
+
+    // Cached now, so a later draft in the same repo costs nothing.
+    await expect(
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: "/repo",
+        cwds: ["/repo"],
+      }),
+    ).resolves.toEqual({
+      data: [{ skills: [], commands: availableCommands }],
+    });
+    expect(acpClient.startSession).toHaveBeenCalledTimes(1);
+    expect(acpAvailableCommandsStore.records).toEqual([
+      expect.objectContaining({
+        backendId: "acp:grok",
+        repositoryPath,
+        commands: availableCommands,
+      }),
+    ]);
+  });
+
+  it("records an ACP agent that advertises nothing instead of re-probing it", async () => {
+    const repositoryPath = toTestRepositoryPath("/repo");
+    const acpAvailableCommandsStore = createAcpAvailableCommandsStoreMock();
+    const { registry, acpClient } = createKimiAcpRegistry({
+      acpBackendId: "acp:grok" as AcpBackendId,
+      acpAvailableCommandsStore,
+      acpAvailableCommandProbeTimeoutMs: 1,
+    });
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(
+        registry.listSkills({
+          backend: "acp:grok" as AppServerBackendKind,
+          cwd: "/repo",
+          cwds: ["/repo"],
+        }),
+      ).resolves.toEqual({ data: [{ skills: [], commands: [] }] });
+    }
+
+    expect(acpClient.startSession).toHaveBeenCalledTimes(1);
+    expect(acpAvailableCommandsStore.records).toEqual([
+      expect.objectContaining({ repositoryPath, commands: [] }),
+    ]);
+  });
+
+  it("gives up on an ACP probe whose session never opens", async () => {
+    // `session/new` inherits the transport's ten-minute default request
+    // timeout and `getClient` awaits an unbounded `initialize()`, so a wedged
+    // agent must not be able to hold `listSkills` open: the renderer skips any
+    // request while one is in flight, which would strand the `/` menu on
+    // PwrAgent's own commands with no way to retry.
+    const { registry, acpClient } = createKimiAcpRegistry({
+      acpBackendId: "acp:grok" as AcpBackendId,
+      acpAvailableCommandsStore: null,
+      acpAvailableCommandProbeBudgetMs: 5,
+      startSession: () => new Promise<AcpSessionMetadata>(() => {}),
+    });
+
+    await expect(
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: "/repo",
+        cwds: ["/repo"],
+      }),
+    ).resolves.toEqual({ data: [{ skills: [], commands: [] }] });
+
+    // The stuck attempt is still running; the next request must resolve from
+    // it rather than start a second probe alongside it.
+    await expect(
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: "/repo",
+        cwds: ["/repo"],
+      }),
+    ).resolves.toEqual({ data: [{ skills: [], commands: [] }] });
+    expect(acpClient.startSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs off ACP command probes with no cache to remember the miss", async () => {
+    const { registry, acpClient } = createKimiAcpRegistry({
+      acpBackendId: "acp:grok" as AcpBackendId,
+      acpAvailableCommandsStore: null,
+      acpAvailableCommandProbeTimeoutMs: 1,
+    });
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(
+        registry.listSkills({
+          backend: "acp:grok" as AppServerBackendKind,
+          cwd: "/repo",
+          cwds: ["/repo"],
+        }),
+      ).resolves.toEqual({ data: [{ skills: [], commands: [] }] });
+    }
+
+    expect(acpClient.startSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches ACP commands reported by a live session under its repository", async () => {
+    const repositoryPath = toTestRepositoryPath("/repo");
+    const worktreePath = toTestRepositoryPath("/worktrees/ab12/repo");
+    const commands: AppServerAvailableCommandSummary[] = [
+      {
+        name: "compact",
+        backend: "acp:grok",
+        scope: "session",
+        source: "provider",
+      },
+    ];
+    const acpAvailableCommandsStore = createAcpAvailableCommandsStoreMock();
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId: "acp:grok" as AcpBackendId,
+      acpAvailableCommandsStore,
+      sessionId: "grok-session-1",
+      sessions: [
+        {
+          backendId: "acp:grok" as AcpBackendId,
+          sessionId: "grok-session-1",
+          title: "Grok session",
+          cwd: worktreePath,
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+      acpWorktreeRepositoryResolver: async (cwd) =>
+        path.resolve(cwd) === path.resolve(worktreePath)
+          ? {
+              id: repositoryPath,
+              path: repositoryPath,
+              worktreePath,
+              label: "repo",
+              kind: "worktree",
+            }
+          : undefined,
+    });
+
+    (
+      registry as unknown as {
+        rememberAcpAvailableCommands(event: AgentEvent): void;
+      }
+    ).rememberAcpAvailableCommands({
+      backend: "acp:grok" as AppServerBackendKind,
+      notification: {
+        method: "thread/availableCommands/updated",
+        params: { threadId: "grok-session-1", commands },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(acpAvailableCommandsStore.records).toEqual([
+        expect.objectContaining({ repositoryPath, commands }),
+      ]);
+    });
+
+    // The draft on the checkout now answers from what the worktree session saw.
+    await expect(
+      registry.listSkills({
+        backend: "acp:grok" as AppServerBackendKind,
+        cwd: "/repo",
+        cwds: ["/repo"],
+      }),
+    ).resolves.toEqual({ data: [{ skills: [], commands }] });
+  });
+
+  it("leaves Codex launchpad skill requests on the Codex client path", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["skills/list"] },
+      skills: [{ cwd: "/repo", skills: [] }],
+    });
+    const acpAvailableCommandsStore = createAcpAvailableCommandsStoreMock();
+    const { registry, acpClient } = createKimiAcpRegistry({
+      codexClient,
+      acpAvailableCommandsStore,
+    });
+
+    await expect(
+      registry.listSkills({ backend: "codex", cwd: "/repo", cwds: ["/repo"] }),
+    ).resolves.toEqual({ data: [{ cwd: "/repo", skills: [] }] });
+    expect(acpClient.startSession).not.toHaveBeenCalled();
+    expect(acpAvailableCommandsStore.get).not.toHaveBeenCalled();
   });
 
   it("adds Codex compact app-server command to listSkills", async () => {
