@@ -6,13 +6,17 @@
 // We intentionally use the actual Electron renderer (not a jsdom render
 // of individual components) so that real styling from app.css — focus
 // rings, contrast, sticky-header layout — gets audited as it actually
-// ships. The cost is one Electron launch per surface; the coverage is
-// what a screen-reader / keyboard-only operator actually encounters.
+// ships. Surfaces that share a fixture and theme reuse one Electron
+// launch, with named steps and explicit state resets keeping failures
+// attributable and preventing overlays from leaking into the next scan.
+// The coverage is what a screen-reader / keyboard-only operator actually
+// encounters.
 //
-// To extend: add another entry to SURFACES below, or a separate
-// `test(...)` block that drives the renderer into a state (open a
-// dialog, switch a tab) and then calls `runAxe(window)`. Launch via
-// `launchAuditApp({ theme })` so the surface is audited at rest (see below).
+// To extend: add a named `test.step(...)` to the matching fixture group,
+// or add a grouped `test(...)` when the surface needs a different fixture.
+// Drive the renderer into the state, call `runAxe(window, surface)`, and
+// reset any stateful layer before the next step. Launch via
+// `launchAuditApp({ theme })` so every surface is audited at rest (see below).
 //
 // Every surface is audited in BOTH themes. The gate ran dark-only for
 // its whole life, which is exactly why three light-theme token-level
@@ -122,6 +126,7 @@ const KNOWN_VIOLATIONS: ReadonlyArray<{
 
 async function runAxe(
   window: Page,
+  surface: string,
   options?: {
     /**
      * Narrow the scan to one subtree. Use it only when the test is about
@@ -179,22 +184,104 @@ async function runAxe(
       })
       .join("\n");
     throw new Error(
-      `axe-core found ${results.violations.length} WCAG2 AA violation(s):\n${summary}`,
+      `axe-core found ${results.violations.length} WCAG2 AA violation(s) on ${surface}:\n${summary}`,
     );
   }
 }
 
 for (const theme of AUDIT_THEMES) {
   test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme)`, () => {
-    test("sidebar + empty-thread shell has no violations", async () => {
+    test("smoke fixture surfaces have no violations", async () => {
       const app = await launchAuditApp({ theme });
       try {
-        // Wait for first paint of the inbox lens — the "Replay smoke
-        // thread" row is the proxy for "renderer has hydrated".
-        await expect(
-          app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
-        ).toBeVisible();
-        await runAxe(app.window);
+        const smokeThread = app.window
+          .getByRole("button", { name: /Replay smoke thread/i })
+          .first();
+
+        await test.step("sidebar + empty-thread shell", async () => {
+          // The thread row is the proxy for "renderer has hydrated".
+          await expect(smokeThread).toBeVisible();
+          await runAxe(app.window, "sidebar + empty-thread shell");
+        });
+
+        await test.step("thread search", async () => {
+          // Before Search opens, the accessible name unambiguously belongs
+          // to the masthead button. The same name then moves to the
+          // autofocused textbox when the search view mounts.
+          await app.window
+            .getByRole("button", { name: "Search threads" })
+            .click();
+          const searchInput = app.window.getByRole("textbox", {
+            name: "Search threads",
+          });
+          await expect(searchInput).toBeVisible();
+          await runAxe(app.window, "thread search");
+
+          // Search is stateful main-view navigation. Close it before the
+          // settings scans so their unscoped audits see the empty shell
+          // behind the overlay, matching a clean launch.
+          await searchInput.press("Escape");
+          await expect(searchInput).toBeHidden();
+          await expect(smokeThread).toBeVisible();
+        });
+
+        await test.step("settings overlay", async () => {
+          await app.window.getByRole("button", { name: "Open settings" }).click();
+          const settingsNav = app.window.getByRole("navigation", {
+            name: "Settings sections",
+          });
+          await expect(settingsNav).toBeVisible();
+          await runAxe(app.window, "settings overlay");
+
+          await settingsNav
+            .getByRole("button", { name: /Exit Settings/i })
+            .click();
+          await expect(settingsNav).toBeHidden();
+          await expect(smokeThread).toBeVisible();
+        });
+
+        await test.step("settings → messaging", async () => {
+          await app.window.getByRole("button", { name: "Open settings" }).click();
+          const settingsNav = app.window.getByRole("navigation", {
+            name: "Settings sections",
+          });
+          await expect(settingsNav).toBeVisible();
+          await settingsNav
+            .getByRole("button", { name: /^Messaging$/ })
+            .click();
+          const messagingSettings = app.window.getByRole("region", {
+            name: "Messaging settings",
+          });
+          await expect(messagingSettings).toBeVisible();
+          await runAxe(app.window, "settings → messaging");
+
+          await settingsNav
+            .getByRole("button", { name: /Exit Settings/i })
+            .click();
+          await expect(messagingSettings).toBeHidden();
+          await expect(settingsNav).toBeHidden();
+          await expect(smokeThread).toBeVisible();
+        });
+
+        await test.step("open thread view", async () => {
+          await smokeThread.click();
+          await expect(
+            app.window.getByRole("heading", {
+              level: 2,
+              name: "Replay smoke thread",
+            }),
+          ).toBeVisible();
+          await expect(
+            app.window.getByText("The replay harness is live."),
+          ).toBeVisible();
+          // The celestial watermark is a real theme-dependent compositing
+          // input to every contrast pair in the transcript. Keep this
+          // assertion so the audit cannot go green by ceasing to render it.
+          await expect(
+            app.window.locator(".thread-view__primary .celestial-watermark"),
+          ).toHaveCount(1);
+          await runAxe(app.window, "open thread view");
+        });
       } finally {
         await app.close();
       }
@@ -214,61 +301,29 @@ for (const theme of AUDIT_THEMES) {
     // failure anywhere. Keeping the scan UNSCOPED matters for the same
     // reason; narrowing it with `include` is the cheap way out and would
     // stop this block catching anything outside the sidebar.
-    test("sidebar rows carrying copy chips have no violations", async () => {
+    test("sidebar copy-chip fixture surface has no violations", async () => {
       const app = await launchAuditApp({
         theme,
         fixturePath: COPY_CHIP_FIXTURE,
       });
       try {
-        // The branch chip renders last of the row's copy chips, so waiting
-        // on it means the linked-directory chips are up too.
-        await expect(
-          app.window.getByRole("button", {
-            name: "Copy branch feature/copy-chip-audit",
-          }),
-        ).toBeVisible();
-        await runAxe(app.window);
+        await test.step("sidebar rows carrying copy chips", async () => {
+          // The branch chip renders last of the row's copy chips, so waiting
+          // on it means the linked-directory chips are up too.
+          await expect(
+            app.window.getByRole("button", {
+              name: "Copy branch feature/copy-chip-audit",
+            }),
+          ).toBeVisible();
+          await runAxe(app.window, "sidebar rows carrying copy chips");
+        });
       } finally {
         await app.close();
       }
     });
 
-    test("open thread view has no violations", async () => {
-      const app = await launchAuditApp({ theme });
-      try {
-        await app.window
-          .getByRole("button", { name: /Replay smoke thread/i })
-          .first()
-          .click();
-        await expect(
-          app.window.getByRole("heading", {
-            level: 2,
-            name: "Replay smoke thread",
-          }),
-        ).toBeVisible();
-        await expect(app.window.getByText("The replay harness is live.")).toBeVisible();
-        // The celestial watermark paints the owning instance's mark behind
-        // the transcript at 0.05 opacity, tinted with `--text-muted`. That
-        // is a real compositing input to every contrast pair in the thread
-        // body, and it resolves differently per theme — a value harmless
-        // behind a dark surface can eat the margin on a light one. Assert
-        // it is actually painted, or the audit below keeps passing after a
-        // regression that stopped rendering it. It is aria-hidden, so it
-        // has no role to locate it by; the class IS the contract the a11y
-        // note in app.css points at. (Added by #1303 as its own scoped
-        // pair of blocks; folded in here once light theme went AA-clean
-        // window-wide and the scoping stopped being needed.)
-        await expect(
-          app.window.locator(".thread-view__primary .celestial-watermark"),
-        ).toHaveCount(1);
-        await runAxe(app.window);
-      } finally {
-        await app.close();
-      }
-    });
-
-    // The block above opens the smoke fixture's thread, which is idle, so
-    // the transcript renders nothing but its `role="listitem"` entries.
+    // The smoke fixture group opens an idle thread, so its transcript
+    // renders nothing but its `role="listitem"` entries.
     // An ACTIVE thread additionally renders `.transcript-list__pending`,
     // the `role="status"` thinking line — and role="status" is not a
     // permitted owned element of the `role="list"` scroll container, so
@@ -278,144 +333,79 @@ for (const theme of AUDIT_THEMES) {
     // do use an active fixture but the map layer covers the thread view.
     // It now renders inside a listitem wrapper. This block is the gate on
     // that, so keep the fixture active and the scan unscoped.
-    test("open thread view with an active thread has no violations", async () => {
+    test("star map fixture surfaces have no violations", async () => {
       const app = await launchAuditApp({ fixturePath: STAR_MAP_FIXTURE, theme });
       try {
-        await app.window
+        const attentionThread = app.window
           .getByRole("button", { name: /Star map attention thread/i })
-          .first()
-          .click();
-        await expect(app.window.getByText("The star map is live.")).toBeVisible();
-        // Assert the live region is actually painted. Without this the
-        // block keeps passing if the fixture's threads stop being active
-        // (or the thinking line stops rendering), having quietly stopped
-        // auditing the thing it exists for.
-        await expect(
-          app.window.locator(".transcript-list__pending"),
-        ).toHaveCount(1);
-        await runAxe(app.window);
-      } finally {
-        await app.close();
-      }
-    });
-
-    test("settings overlay has no violations", async () => {
-      const app = await launchAuditApp({ theme });
-      try {
-        await expect(
-          app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
-        ).toBeVisible();
-        await app.window.getByRole("button", { name: "Open settings" }).click();
-        // Settings sections nav is the stable signal that the overlay is
-        // hydrated (the overlay has no level-1 heading; see
-        // composer-draft-settings.spec.ts for the same anchor).
-        await expect(
-          app.window.getByRole("navigation", { name: "Settings sections" }),
-        ).toBeVisible();
-        await runAxe(app.window);
-      } finally {
-        await app.close();
-      }
-    });
-
-    test("thread search has no violations", async () => {
-      const app = await launchAuditApp({ theme });
-      try {
-        await expect(
-          app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
-        ).toBeVisible();
-        // Open Search from the sidebar masthead. Before it opens, "Search
-        // threads" is unambiguously the masthead button; the autofocused
-        // search field (same accessible name, but role=textbox) is the
-        // stable signal that the search view has mounted.
-        await app.window.getByRole("button", { name: "Search threads" }).click();
-        await expect(
-          app.window.getByRole("textbox", { name: "Search threads" }),
-        ).toBeVisible();
-        await runAxe(app.window);
-      } finally {
-        await app.close();
-      }
-    });
-
-    test("settings → messaging has no violations", async () => {
-      const app = await launchAuditApp({ theme });
-      try {
-        await expect(
-          app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
-        ).toBeVisible();
-        await app.window.getByRole("button", { name: "Open settings" }).click();
-        await expect(
-          app.window.getByRole("navigation", { name: "Settings sections" }),
-        ).toBeVisible();
-        await app.window
-          .getByRole("navigation", { name: "Settings sections" })
-          .getByRole("button", { name: /^Messaging$/ })
-          .click();
-        await runAxe(app.window);
-      } finally {
-        await app.close();
-      }
-    });
-
-    test("star map layer has no violations", async () => {
-      const app = await launchAuditApp({ fixturePath: STAR_MAP_FIXTURE, theme });
-      try {
-        await expect(
-          app.window
-            .getByRole("button", { name: /Star map attention thread/i })
-            .first(),
-        ).toBeVisible();
-        await app.window.getByRole("button", { name: "Open Star Map" }).click();
-        // `exact` because role-name matching is substring by default, and a
-        // chat card's "Chat: <title>" region can match "Star Map" too.
+          .first();
         const starMap = app.window.getByRole("region", {
           name: "Star Map",
           exact: true,
         });
-        await expect(starMap).toBeVisible();
-        // A single E2E instance means one body on the map. Gate on a card
-        // rather than the body: the lane populates from the navigation
-        // snapshot after the layer mounts, and auditing the empty layer
-        // would silently skip every card-borne contrast pair.
-        await expect(
-          starMap.getByRole("button", {
-            name: "Open thread: Star map attention thread",
-          }),
-        ).toBeVisible();
-        await runAxe(app.window);
-      } finally {
-        await app.close();
-      }
-    });
+        const starMapCard = starMap.getByRole("button", {
+          name: "Open thread: Star map attention thread",
+        });
 
-    test("star map intake dialog has no violations", async () => {
-      const app = await launchAuditApp({ fixturePath: STAR_MAP_FIXTURE, theme });
-      try {
-        await expect(
-          app.window
-            .getByRole("button", { name: /Star map attention thread/i })
-            .first(),
-        ).toBeVisible();
-        await app.window.getByRole("button", { name: "Open Star Map" }).click();
-        // `exact` because role-name matching is substring by default, and a
-        // chat card's "Chat: <title>" region can match "Star Map" too.
-        const starMap = app.window.getByRole("region", {
-          name: "Star Map",
-          exact: true,
+        await test.step("star map layer", async () => {
+          await expect(attentionThread).toBeVisible();
+          await app.window.getByRole("button", { name: "Open Star Map" }).click();
+          await expect(starMap).toBeVisible();
+          // Gate on a card rather than only the map body: the lane populates
+          // after the layer mounts, and an empty map skips the card contrast.
+          await expect(starMapCard).toBeVisible();
+          await runAxe(app.window, "star map layer");
+
+          await starMap
+            .getByRole("button", { name: "Close Star Map" })
+            .click();
+          await expect(starMap).toHaveCount(0);
+          await expect(
+            app.window.getByRole("button", { name: "Open Star Map" }),
+          ).toBeVisible();
         });
-        await expect(starMap).toBeVisible();
-        // The [+] beside the local body carries the machine label, which is
-        // the runner's hostname — match the copy, not the machine.
-        await starMap.getByRole("button", { name: /^New thread on / }).click();
-        const intake = app.window.getByRole("dialog", {
-          name: /^New thread on /,
+
+        await test.step("star map intake dialog", async () => {
+          await expect(
+            app.window.getByRole("button", { name: "Open Star Map" }),
+          ).toBeVisible();
+          await app.window.getByRole("button", { name: "Open Star Map" }).click();
+          await expect(starMap).toBeVisible();
+          await expect(starMapCard).toBeVisible();
+          // The [+] beside the local body carries the runner hostname, so
+          // match the stable copy rather than a machine-specific label.
+          await starMap.getByRole("button", { name: /^New thread on / }).click();
+          const intake = app.window.getByRole("dialog", {
+            name: /^New thread on /,
+          });
+          await expect(intake).toBeVisible();
+          await expect(
+            intake.getByRole("button", { name: "Start thread" }),
+          ).toBeVisible();
+          await runAxe(app.window, "star map intake dialog");
+
+          await intake
+            .getByRole("button", { name: "Close", exact: true })
+            .click();
+          await expect(intake).toHaveCount(0);
+          await starMap
+            .getByRole("button", { name: "Close Star Map" })
+            .click();
+          await expect(starMap).toHaveCount(0);
+          await expect(attentionThread).toBeVisible();
         });
-        await expect(intake).toBeVisible();
-        await expect(
-          intake.getByRole("button", { name: "Start thread" }),
-        ).toBeVisible();
-        await runAxe(app.window);
+
+        await test.step("open thread view with an active thread", async () => {
+          await attentionThread.click();
+          await expect(app.window.getByText("The star map is live.")).toBeVisible();
+          // Assert the live region is actually painted. Without this the
+          // scan keeps passing if the fixture stops being active and quietly
+          // stops auditing the role=status/list relationship it exists for.
+          await expect(
+            app.window.locator(".transcript-list__pending"),
+          ).toHaveCount(1);
+          await runAxe(app.window, "open thread view with an active thread");
+        });
       } finally {
         await app.close();
       }
