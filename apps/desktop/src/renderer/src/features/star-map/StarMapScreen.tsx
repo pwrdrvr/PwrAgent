@@ -1004,6 +1004,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 health?.instanceId
                   ? {
                       detentRadius,
+                      // Lanes never scales, so this is 1 there.
+                      scale: panZoomMode ? view.scale : 1,
                       onCommitOffset: (offset) =>
                         arrangement.setCardPosition(
                           position.instanceId,

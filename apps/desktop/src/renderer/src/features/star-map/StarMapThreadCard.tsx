@@ -16,7 +16,7 @@ import {
   getThreadRowStatus,
   ThreadRowStatus,
 } from "../navigation/ThreadRowStatus";
-import { resolveCardDragOffset } from "./star-map-layout";
+import { pointerDeltaToCanvas, resolveCardDragOffset } from "./star-map-layout";
 import {
   visiblePullRequests,
   type StarMapCardFields,
@@ -68,6 +68,12 @@ export function StarMapThreadCard(props: {
      * sits. Past it the drag is resisted, not stopped.
      */
     detentRadius: number;
+    /**
+     * Current canvas scale. Pointer deltas arrive in screen pixels but the
+     * card is positioned in canvas pixels, so without this the card moves
+     * `scale` times too far and slides out from under the cursor.
+     */
+    scale: number;
     onCommitOffset: (offset: { dx: number; dy: number }) => void;
   };
   onOpen: (thread: NavigationThreadSummary) => void;
@@ -124,21 +130,28 @@ export function StarMapThreadCard(props: {
     let lastDy = startOffset.dy;
     let frame = 0;
     const move = (pointerEvent: globalThis.PointerEvent) => {
-      const deltaX = pointerEvent.clientX - startX;
-      const deltaY = pointerEvent.clientY - startY;
+      const screenX = pointerEvent.clientX - startX;
+      const screenY = pointerEvent.clientY - startY;
+      // The threshold is about human intent, so it stays in screen pixels;
+      // only the movement itself converts into canvas space.
       if (
         !dragging
-        && Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD_PX
+        && Math.hypot(screenX, screenY) < DRAG_THRESHOLD_PX
       ) {
         return;
       }
       dragging = true;
       suppressClickRef.current = true;
+      const delta = pointerDeltaToCanvas({
+        dx: screenX,
+        dy: screenY,
+        scale: drag.scale,
+      });
       const resolved = resolveCardDragOffset({
         baseSlot: props.baseSlot,
         offset: {
-          dx: startOffset.dx + deltaX,
-          dy: startOffset.dy + deltaY,
+          dx: startOffset.dx + delta.dx,
+          dy: startOffset.dy + delta.dy,
         },
         detentRadius: drag.detentRadius,
       });

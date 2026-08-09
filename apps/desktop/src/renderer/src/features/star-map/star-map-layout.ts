@@ -247,6 +247,26 @@ function detentTravel(distance: number, radius: number): number {
  * stored, so running it over a stored offset again would compress a card
  * that is deliberately parked out past the detent.
  */
+/**
+ * Convert a pointer movement into canvas movement.
+ *
+ * Cards live inside `.star-map__canvas`, which the orbit and projects
+ * lenses render under `scale(view.scale)`. A pointer that travels N screen
+ * pixels therefore crosses N / scale canvas pixels — and a card moved by a
+ * raw screen delta renders as delta * scale on screen, so zoomed in the
+ * card outruns the pointer and slides out from under the cursor. Lanes
+ * never scales, so there the conversion is the identity.
+ */
+export function pointerDeltaToCanvas(params: {
+  dx: number;
+  dy: number;
+  /** Current canvas scale; values <= 0 are treated as unscaled. */
+  scale: number;
+}): { dx: number; dy: number } {
+  const scale = params.scale > 0 ? params.scale : 1;
+  return { dx: params.dx / scale, dy: params.dy / scale };
+}
+
 export function resolveCardDragOffset(params: {
   baseSlot: StarMapCardSlot;
   offset: StarMapCardSlot;
