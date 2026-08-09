@@ -9433,7 +9433,12 @@ textarea,
 .star-map-instance__actions {
   display: inline-flex;
   position: absolute;
-  bottom: calc(100% + 6px);
+  /* Tucked into the body's own empty top margin — the box is 96px (116 on
+     the hub) around a 56px (72px) icon, so there is ~20px of nothing above
+     the glyph. Sitting ABOVE the box instead left the row visibly detached
+     from its star and floating over whatever card happened to be there,
+     since the anchor paints above the cloud. */
+  bottom: calc(100% - 14px);
   left: 50%;
   align-items: center;
   gap: 4px;
@@ -9489,6 +9494,16 @@ textarea,
 }
 
 /* ==== Instance load card ==== */
+
+/* No entrance animation. The rise keyframes own the `transform` channel,
+   which in orbit fights this card's inline `translateY(-50%)` centering: for
+   380ms the keyframe wins and the card sits half its height low, then snaps
+   up when the animation ends. A card that appears because the operator hit a
+   toggle should simply be there anyway — the rise exists so a cloud settles
+   like a constellation on open, not for an on-demand readout. */
+.star-map-load-shell {
+  animation: none;
+}
 
 .star-map-load-card {
   display: flex;
