@@ -34,6 +34,7 @@
     "eval:pdf": "pnpm --filter @pwragent/desktop eval:pdf",
     "eval:pdf:build": "pnpm --filter @pwragent/desktop prepare:eval-pdf && pnpm --filter @pwragent/desktop eval:pdf",
     "test": "vitest run --config vitest.workspace.ts",
+    "test:sqlite-writes": "node ./scripts/run-sqlite-write-report.mjs",
     "test:nice": "node ./scripts/nice-run.mjs pnpm test",
     "test:watch": "vitest --config vitest.workspace.ts",
     "typecheck": "pnpm -r --if-present typecheck"

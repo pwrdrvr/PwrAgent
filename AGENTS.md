@@ -48,6 +48,26 @@
 - For manual screenshots of the branch-drift dialog, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`; it opens a replay-backed Electron fixture and waits until you close the app.
 - To regenerate the README screenshots under `docs/assets/screenshots/`, run `pnpm --filter @pwragent/desktop screenshot:readme`. The full walkthrough (spec, fixtures, state-seeding helpers, native capture utilities) lives in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) under "Capturing README Screenshots". macOS Screen Recording permission is required for whichever terminal/IDE runs the spec.
 - When focusing root Vitest runs through `pnpm test`, pass file paths or filters directly, for example `pnpm test apps/desktop/src/main/__tests__/backend-registry.test.ts`. Do not insert a standalone `--` before the focus args; `pnpm test -- apps/...` makes Vitest run the full workspace suite.
+- **Any new sqlite write that fires per command, per turn, per item, per
+  streamed event, or on a timer must be measured before it ships, and pinned
+  by a checked-in write budget** that fails the suite when it moves. Do the arithmetic out loud: writes/second × commit
+  cost × how long a real session runs → MB/day. Sqlite commits are the unit,
+  not statements — each implicit transaction flushes its dirty pages plus every
+  index the row moved (~4 KB/page, and a timestamp column in an index moves on
+  every write). Two calibration points: tool accounting once wrote per streamed
+  8 KiB chunk, costing 3,693 commits and 58 MB of WAL for one `find /`
+  (PR #1406); the idle heartbeats cost 720 commits and 2.7 MB/hour per running
+  instance, about 65 MB/day. **If the projection looks excessive, say so to the
+  user rather than shipping it quietly — the right answer is often that the
+  design constraint has to change** (batch into one transaction, debounce
+  behind a flush window, accumulate in memory and persist on a boundary, or
+  not persist at all), and that is their call to make. Budgets live in
+  `apps/desktop/src/main/__tests__/fixtures/sqlite-write-budgets.json`; wrap the
+  feature (not its setup) in `measureSqliteWrites` and record with
+  `UPDATE_SQLITE_WRITE_BUDGETS=1`, so a write-cost change lands as a reviewable
+  line in the diff instead of never surfacing. Survey a whole run with
+  `pnpm test:sqlite-writes`. See "Sqlite Write-Volume Instrumentation" in
+  [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 
 ## Code Formatting & Linting
 
@@ -134,6 +154,7 @@ These are **dev-only escape hatches**. They are silently ignored in packaged pro
 
 - `PWRAGENT_PROFILE_AUTO_CREATE=1` — Bypass the onboarding wizard's "set up profile" prompt for missing-named-profile boots. Used by E2E fixtures and replay harnesses that need a profile dir materialized without operator interaction. Production launches MUST go through the wizard so an operator never gets a silently-created profile mapped to a Codex auth profile they didn't ask for (see issue #524).
 - `PWRAGENT_DEV_DISABLE_SECRET_STORAGE=1` — Skip `safeStorage` operations entirely. Wizard typed secrets are SILENTLY DROPPED; settings-screen secret pills report "unavailable." Workaround for unsigned dev Electron builds on macOS that surface a confusing "Keychain Not Found" dialog because the binary lacks a stable code-signed identity (signed release builds don't have this problem). Operator re-enters secrets in Settings → Models on a real build afterwards.
+- `PWRAGENT_DEV_SQLITE_WRITE_METRICS=1` — Count sqlite write volume (commits, write statements, rows, WAL growth, per table) for the process. Wraps the database in `StateDb.open` after schema setup. Paired with `PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE=<path>`, which appends one JSON line of totals per source. See "Sqlite Write-Volume Instrumentation" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 
 ## Frontend and Desktop UI
 

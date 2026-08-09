@@ -179,6 +179,10 @@ import {
 } from "./profile";
 import { SECRET_STORAGE_DISABLED_ENV } from "./settings/desktop-secret-store";
 import {
+  SQLITE_WRITE_METRICS_ENV,
+  SQLITE_WRITE_METRICS_FILE_ENV,
+} from "./state/sqlite-write-metrics";
+import {
   isUpdateInstallInProgress,
   isUpdateInstallUpdaterQuitReady,
   setUpdateInstallPreparationHandler,
@@ -951,6 +955,8 @@ function rejectDevOnlyEnvVarsInProduction(): void {
   const devOnlyVars = [
     PWRAGENT_PROFILE_AUTO_CREATE_ENV,
     SECRET_STORAGE_DISABLED_ENV,
+    SQLITE_WRITE_METRICS_ENV,
+    SQLITE_WRITE_METRICS_FILE_ENV,
   ];
   for (const name of devOnlyVars) {
     if (process.env[name] !== undefined) {

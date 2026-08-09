@@ -9,6 +9,10 @@ import {
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
+import {
+  attachSqliteWriteMetrics,
+  isSqliteWriteMetricsEnabled,
+} from "./sqlite-write-metrics.js";
 
 export const CURRENT_STATE_DB_USER_VERSION = 50;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
@@ -1427,6 +1431,18 @@ LEFT JOIN federation_peers
     // Keep current-version databases converged without asking pre-v36 profiles
     // to install the unique index before the migration above removes duplicates.
     db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
+
+    // Dev-only write accounting, attached only after schema setup so the
+    // report ranks steady-state writes. Migrations commit once per version on
+    // a fresh database, which on a suite that opens a temp db per test would
+    // otherwise swamp the signal — the heaviest "writer" would just be
+    // whichever file opened the most databases. Off unless
+    // PWRAGENT_DEV_SQLITE_WRITE_METRICS is set, and
+    // `rejectDevOnlyEnvVarsInProduction` clears that variable on packaged
+    // builds before anything reads it, so a shipped app never patches its db.
+    if (isSqliteWriteMetricsEnabled()) {
+      attachSqliteWriteMetrics({ db, dbPath });
+    }
     return new StateDb(db);
   }
 

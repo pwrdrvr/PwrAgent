@@ -1,0 +1,16 @@
+{
+  "idle-hour-heartbeats": {
+    "commits": 720,
+    "note": "one idle hour: 360 profile heartbeats + 360 federation lease renewals",
+    "observedWalBytes": 2851040,
+    "rowsChanged": 1080,
+    "statements": 1080
+  },
+  "streamed-command-output": {
+    "commits": 2,
+    "note": "500 streamed output deltas plus the completion for one command",
+    "observedWalBytes": 37080,
+    "rowsChanged": 2,
+    "statements": 2
+  }
+}
