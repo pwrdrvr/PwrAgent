@@ -987,7 +987,19 @@ describe("AutomationScheduler", () => {
     });
   });
 
-  it("maps terminal backend failure notifications to failed runs", async () => {
+  it.each([
+    {
+      terminalStatus: "turn/failed" as const,
+      runStatus: "failed" as const,
+    },
+    {
+      terminalStatus: "turn/cancelled" as const,
+      runStatus: "cancelled" as const,
+    },
+  ])("maps terminal backend $terminalStatus notifications to $runStatus runs", async ({
+    terminalStatus,
+    runStatus,
+  }) => {
     createIntervalAutomation();
     const scheduler = buildScheduler();
     now = 5 * 60 * 1000;
@@ -997,33 +1009,13 @@ describe("AutomationScheduler", () => {
     await scheduler.handleTurnQueueUpdate({
       automationRunId: run?.id,
       status: "terminal",
-      terminalStatus: "turn/failed",
+      terminalStatus,
       now: 6 * 60 * 1000,
     });
 
     expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
-      status: "failed",
-      errorMessage: "turn/failed",
-    });
-  });
-
-  it("maps terminal backend cancellation notifications to cancelled runs", async () => {
-    createIntervalAutomation();
-    const scheduler = buildScheduler();
-    now = 5 * 60 * 1000;
-    await scheduler.evaluateDueAutomations();
-    const [run] = store.listRunsForAutomation("automation-1");
-
-    await scheduler.handleTurnQueueUpdate({
-      automationRunId: run?.id,
-      status: "terminal",
-      terminalStatus: "turn/cancelled",
-      now: 6 * 60 * 1000,
-    });
-
-    expect(store.listRunsForAutomation("automation-1")[0]).toMatchObject({
-      status: "cancelled",
-      errorMessage: "turn/cancelled",
+      status: runStatus,
+      errorMessage: terminalStatus,
     });
   });
 });
