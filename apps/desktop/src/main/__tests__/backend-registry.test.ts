@@ -18003,6 +18003,204 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("mirrors managed review tool activity onto the reviewed thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+        } as ThreadOverlayState,
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      resolveManagedReviewEnabled: () => true,
+    });
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    await emit({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "managed-review-child",
+          turnId: "turn-1",
+          item: { id: "item-9", type: "commandExecution" },
+        },
+      },
+    } as AgentEvent);
+
+    const forwarded = events.filter(
+      (event) =>
+        (event.notification.params as { threadId?: string }).threadId
+        === "thread-parent",
+    );
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]?.notification.params).toMatchObject({
+      threadId: "thread-parent",
+      turnId: "turn-1",
+      // Namespaced so a forwarded item cannot collide with a real one.
+      item: { id: "managed-review:item-9", type: "commandExecution" },
+    });
+
+    await registry.close();
+  });
+
+  it("mirrors command output without double-counting tool accounting", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const upsertThreadToolInvocation = vi.fn(
+      async (params: { invocation: unknown }) => params.invocation,
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock({
+        overlays: {
+          "codex:thread-parent": {
+            backend: "codex",
+            threadId: "thread-parent",
+          } as ThreadOverlayState,
+        },
+      }),
+      upsertThreadToolInvocation,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: overlayStore as never,
+      resolveManagedReviewEnabled: () => true,
+    });
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    upsertThreadToolInvocation.mockClear();
+
+    await (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit({
+      backend: "codex",
+      notification: {
+        method: "item/commandExecution/outputDelta",
+        params: {
+          threadId: "managed-review-child",
+          turnId: "turn-1",
+          itemId: "cmd-1",
+          delta: "hello from the reviewer\n",
+        },
+      },
+    } as AgentEvent);
+
+    // Streaming refinements reach the parent so the row animates, with the
+    // item reference namespaced like the envelope that introduced it.
+    const forwarded = events.filter(
+      (event) =>
+        (event.notification.params as { threadId?: string }).threadId
+        === "thread-parent",
+    );
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]?.notification.params).toMatchObject({
+      threadId: "thread-parent",
+      itemId: "managed-review:cmd-1",
+    });
+
+    // The forwarded copy is a view of activity the child already recorded.
+    // Running it back through the pipeline would bill the same command twice
+    // and write a second sqlite row per streamed chunk.
+    expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
+    expect(upsertThreadToolInvocation.mock.calls[0]?.[0]).toMatchObject({
+      invocation: { threadId: "managed-review-child" },
+    });
+
+    await registry.close();
+  });
+
+  it("never mirrors the review sub-agent's own prose onto the reviewed thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+        } as ThreadOverlayState,
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      resolveManagedReviewEnabled: () => true,
+    });
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    // The child's final assistant message is the raw JSON findings blob and
+    // its reasoning is model prose. Either one reaching the parent would
+    // render as a message in the reviewed thread's transcript.
+    for (const type of ["agentMessage", "reasoning", "userMessage"]) {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "managed-review-child",
+            turnId: "turn-1",
+            item: { id: `item-${type}`, type, text: "should not appear" },
+          },
+        },
+      } as AgentEvent);
+    }
+
+    expect(
+      events.filter(
+        (event) =>
+          (event.notification.params as { threadId?: string }).threadId
+          === "thread-parent",
+      ),
+    ).toHaveLength(0);
+
+    await registry.close();
+  });
+
   it("runs the managed review experiment as one child turn and attributes usage to it", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
@@ -18550,6 +18748,86 @@ command = "pnpm dev"
         delivery: "inline",
       }),
     ).rejects.toThrow("Selected backend does not support review/start");
+
+    await registry.close();
+  });
+
+  it("mirrors an ACP review sub-agent's activity onto the reviewed thread", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "kimi-parent";
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: acpBackendId,
+      sessionId: parentThreadId,
+      title: "ACP session",
+      titleSource: "fallback",
+      cwd: "/repo/worktree",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+    }];
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`${acpBackendId}:${parentThreadId}`]: {
+          backend: acpBackendId,
+          threadId: parentThreadId,
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const startPrompt = vi.fn((params: Parameters<KimiStartPrompt>[0]) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn-${startPrompt.mock.calls.length}`,
+    }));
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore,
+      sessionId: parentThreadId,
+      sessions,
+      startPrompt,
+    });
+
+    const response = await registry.startReview({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    expect(response.reviewThreadId).not.toBe(parentThreadId);
+
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    // Forwarding is backend-agnostic, but ACP reaches the child through a
+    // hidden session rather than an ephemeral thread — pin that the record
+    // lookup still resolves it.
+    await (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit({
+      backend: acpBackendId,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: response.reviewThreadId,
+          turnId: response.turnId,
+          item: { id: "acp-item-3", type: "commandExecution" },
+        },
+      },
+    } as AgentEvent);
+
+    const forwarded = events.filter(
+      (event) =>
+        (event.notification.params as { threadId?: string }).threadId
+        === parentThreadId,
+    );
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]?.notification.params).toMatchObject({
+      threadId: parentThreadId,
+      turnId: response.turnId,
+      item: { id: "managed-review:acp-item-3", type: "commandExecution" },
+    });
 
     await registry.close();
   });
