@@ -142,6 +142,15 @@ jobs:
         timeout-minutes: 10
         run: pnpm lint:electron-version
 
+      - name: Cache ESLint results
+        uses: actions/cache@v5
+        timeout-minutes: 10
+        with:
+          path: .eslintcache
+          key: eslint-v1-${{ runner.os }}-node24-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'eslint.config.mjs') }}-${{ github.sha }}
+          restore-keys: |
+            eslint-v1-${{ runner.os }}-node24-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'eslint.config.mjs') }}-
+
       - name: ESLint
         timeout-minutes: 10
         run: pnpm lint:eslint
