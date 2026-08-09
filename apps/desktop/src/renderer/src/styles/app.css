@@ -3013,17 +3013,25 @@ textarea,
      lane inset. See `--sidebar-masthead-pull` on `.sidebar`. */
   width: calc(100% - 2 * var(--sidebar-masthead-pull));
   margin-inline: var(--sidebar-masthead-pull);
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 3px;
+  /* min-content floors each track at its own content width so a tab carrying
+     a count is never cut mid-glyph, while the 1fr max still shares the surplus
+     so the row reads as a segmented control rather than ragged chips. NOT
+     interchangeable with `auto`: `.lens-switch__button` sets overflow: hidden,
+     which zeroes a grid item's automatic minimum size, so minmax(auto, 1fr)
+     would resolve the floor to 0. */
+  grid-template-columns: repeat(3, minmax(min-content, 1fr));
+  gap: 2px;
   padding: 3px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel);
-  /* Width-query container so the longest label ("Directories") can swap to
-     a short form once the (resizable) sidebar narrows past the point where it
-     would otherwise spill past the segmented control. The width is extrinsic
-     (set above from `--sidebar-masthead-pull`), so inline-size containment is
-     safe here. */
+  /* Width-query container for the narrow end of the sidebar's resize range.
+     Nothing queries it while every tab is a single icon, but the switch is a
+     resizable segmented control and the next tab to carry content will need
+     it — the property is what establishes the containment context, and
+     removing and restoring it churns the layout for no gain. The width is
+     extrinsic (set above from `--sidebar-masthead-pull`), so inline-size
+     containment is safe here. */
   container-type: inline-size;
 }
 
@@ -3038,15 +3046,21 @@ textarea,
     color 120ms ease;
 }
 
+/* Icon-only tabs: the lens name lives in `aria-label` and the tooltip, which
+   is what lets the control sit at 26px instead of the 32px a text label
+   needed. Keep the height here in step with `.lens-chip` in PwrGit — the two
+   sidebars are read side by side and a heavier switch here reads as a
+   different product. */
 .lens-switch__button {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   min-width: 0;
-  height: 32px;
+  height: 26px;
   padding: 0 6px;
-  /* Clip rather than let a too-long label bleed past the segmented control's
-     rounded box. The inner label handles the ellipsis; this is the wall. */
+  /* Clip rather than let a count bleed past the segmented control's rounded
+     box. Also what makes the `min-content` track floor above load-bearing. */
   overflow: hidden;
   background: transparent;
   color: var(--text-secondary);
@@ -3054,46 +3068,18 @@ textarea,
   white-space: nowrap;
 }
 
-/* Label inside each lens button. Truncates with an ellipsis when a column is
-   too narrow to show the full word — the universal fallback for "Updated" /
-   "Created" / "Directories" alike. min-width:0 lets the flex child shrink
-   below its content width so text-overflow can engage. */
-.lens-switch__label {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-/* "Directories" is the only label long enough to routinely clip, so it gets a
-   readable short form ("Dirs") instead of a mid-word ellipsis. The abbreviated
-   span is hidden until the container query below decides the column is too
-   tight for the full word. */
-.lens-switch__label--abbrev {
-  display: none;
-}
-
 .lens-switch__active-count {
   display: inline-flex;
+  /* Never the thing that gives: a half-eaten count reads as a different
+     number, so the icon shrinks before the digits do. */
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
-  margin-left: 4px;
+  gap: 3px;
   color: var(--accent-bright);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-}
-
-@container (max-width: 300px) {
-  .lens-switch__label--full {
-    display: none;
-  }
-
-  .lens-switch__label--abbrev {
-    display: inline;
-  }
 }
 
 .lens-switch__button.is-active {
