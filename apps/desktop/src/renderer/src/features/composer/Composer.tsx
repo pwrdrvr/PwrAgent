@@ -10933,7 +10933,6 @@ export function Composer(props: ComposerProps) {
                 onKeyDown={handleAutocompleteKeyDown}
               >
                 <span className="composer__autocomplete-title">
-                  <span aria-hidden="true">🧰</span>
                   <HighlightedAutocompleteLabel
                     label={`$${skill.name}`}
                     query={trigger?.query ? `$${trigger.query}` : "$"}
@@ -10978,7 +10977,6 @@ export function Composer(props: ComposerProps) {
                 onKeyDown={handleAutocompleteKeyDown}
               >
                 <span className="composer__autocomplete-title">
-                  <span className="composer__autocomplete-token" aria-hidden="true">/</span>
                   <HighlightedAutocompleteLabel
                     label={command.label}
                     query={slashTrigger ? `/${slashTrigger.query}` : "/"}
@@ -11179,7 +11177,7 @@ export function Composer(props: ComposerProps) {
                             query={hashReferenceTrigger?.query.trim() ?? ""}
                           />
                         </span>
-                        <span className="composer__autocomplete-source composer__autocomplete-source--pwragent">
+                        <span className="composer__autocomplete-source">
                           Thread
                         </span>
                       </span>
@@ -11245,7 +11243,7 @@ export function Composer(props: ComposerProps) {
                       <span className="composer__autocomplete-label">
                         {`${pullRequest.org}/${pullRequest.repo}#${pullRequest.number}`}
                       </span>
-                      <span className="composer__autocomplete-source composer__autocomplete-source--provider">
+                      <span className="composer__autocomplete-source">
                         Pull request
                       </span>
                     </span>

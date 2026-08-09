@@ -1310,4 +1310,79 @@ describe("Tangerine Terminal theme contract", () => {
       /\.thinking-scanner__beam\s*\{[\s\S]*?animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;[\s\S]*?\}/
     );
   });
+
+  it("keeps every composer autocomplete on the shared popover highlight", () => {
+    // The `$` / `/` / `@` / `#` pickers are four render branches of one
+    // control, and they drifted into two different selection languages:
+    // `@` tinted with --accent-soft (matching `.reference-picker__row`,
+    // `.project-picker__row`, and `.branch-picker__option`) while the
+    // other three drew the thread-row treatment — an --accent-border
+    // outline, a --bg-row-active fill, AND a 3px --accent ::before bar.
+    // That put three separate tangerines on one row and made the same
+    // gesture look like two different things.
+    //
+    // The tint is the popover language; the bar + border + row-active
+    // fill stays reserved for `.thread-row.is-selected`, which marks a
+    // persistent selection rather than a transient "Enter lands here".
+    const sharedHighlight = css.match(
+      /\.composer__autocomplete-option:hover:not\(:disabled\),\s*\.composer__autocomplete-option\.is-active\s*\{(?<body>[^}]*)\}/
+    )?.groups?.body;
+    expect(sharedHighlight).toBeTruthy();
+    expect(sharedHighlight).toContain("background: var(--accent-soft);");
+    expect(sharedHighlight).toContain("color: var(--accent-bright);");
+    // No per-picker override may reintroduce a second highlight: not the
+    // accent bar, and not the thread-row fill/outline pair.
+    expect(css).not.toMatch(
+      /\.composer__autocomplete-option(?:[^{]*)\.is-active(?:[^{]*)::before\s*\{/
+    );
+    expect(sharedHighlight).not.toContain("var(--bg-row-active)");
+    expect(sharedHighlight).not.toContain("var(--accent-border)");
+  });
+
+  it("does not let a disabled autocomplete row hover into the accent tint", () => {
+    // `.composer__autocomplete-option:disabled` sits ~1200 lines earlier
+    // with identical specificity, so it loses on source order. Without
+    // the guard, hovering a disabled row (the remote-federation "Add
+    // directory… / Add file…" actions) paints it in full accent and
+    // overrides its muted disabled color — the row looks live. The
+    // sibling pickers guard the same way.
+    expect(css).toContain(
+      ".composer__autocomplete-option:hover:not(:disabled),",
+    );
+    expect(css).not.toMatch(
+      /^\.composer__autocomplete-option:hover\s*[,{]/m
+    );
+  });
+
+  it("keeps the autocomplete typed-run highlight legible on the tinted row", () => {
+    // On the hovered/active row the whole label is already
+    // --accent-bright, so a color-only match highlight disappears on
+    // precisely the row the operator is reading. Weight carries it in
+    // both states; color alone is not enough.
+    const matchRule = extractRuleBody(css, ".composer__autocomplete-match");
+    expect(matchRule).toContain("color: var(--accent-bright);");
+    expect(matchRule).toMatch(/font-weight:\s*700;/);
+  });
+
+  it("spends no accent on autocomplete row badges or kind icons", () => {
+    // Per UI-THEME.md's accent-ramp rule: a row carries the selection
+    // tint and the typed run, and nothing else. Badges are metadata and
+    // rank via neutrals; kind icons stay muted through hover so the row
+    // reads as one signal instead of lighting up every glyph.
+    const pwragentBadge = extractRuleBody(
+      css,
+      ".composer__autocomplete-source--pwragent",
+    );
+    expect(pwragentBadge).not.toMatch(/var\(--accent/);
+    expect(pwragentBadge).toContain("border-color: var(--border-strong);");
+
+    const kindIcon = extractRuleBody(css, ".composer__autocomplete-title > svg");
+    expect(kindIcon).toContain("color: var(--text-muted);");
+
+    // The `/` picker used to draw an --accent-border box containing a
+    // literal "/" immediately before a label that already read
+    // "/review". It duplicated the sigil and spent a third tangerine to
+    // do it.
+    expect(css).not.toContain(".composer__autocomplete-token");
+  });
 });

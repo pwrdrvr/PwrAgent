@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
+import { SkillIcon } from "../../icons";
 import { buildSkillTooltip } from "../../lib/skill-mentions";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
@@ -133,7 +134,7 @@ export function SkillChip(props: SkillChipProps) {
         onMouseLeave={isTranscriptSkill ? tooltipController.hide : undefined}
       >
         <span aria-hidden="true" className="thread-row__chip-icon">
-          🧰
+          <SkillIcon size={12} />
         </span>
         <span className="skill-chip__label">
           {props.label ?? `$${props.skill.name}`}
