@@ -39,6 +39,7 @@ import {
   type DropIndicatorState,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
   getSubthreadDisclosureCount,
@@ -213,6 +214,56 @@ function getDirectoryRowLinkedDirectoryMode(
   // additional roots (and makes one root stand in for all of them). Reuse the
   // label chips from Updated/Created so every linked project stays visible.
   return thread.linkedDirectories.length > 1 ? "label" : "kind";
+}
+
+/**
+ * One activity count in a directory header: the indicator alone, then the
+ * number. The words ("active", "to review") moved into the tooltip — a
+ * directory row is a dense line already carrying a chevron, a folder glyph,
+ * an elided path, and a new-thread button, and two trailing phrases pushed
+ * the label it belongs to down to a few characters.
+ *
+ * The scanner and the orange cookie are the same marks the thread rows below
+ * use for the same two states, so the header reads as a summary of the rows
+ * rather than a second vocabulary. `useViewportTooltip` rather than `title`
+ * because the sidebar clips, and because a native tooltip is a
+ * browser-default control.
+ *
+ * The portal node is a sibling of the count, not a child of it. A React
+ * portal still propagates events through the React tree, and this count
+ * renders inside the directory summary `<button>` — so a tooltip nested here
+ * would route its events into that button's onClick. `.viewport-tooltip` sets
+ * `pointer-events: none` today, which masks it, but every other call site in
+ * the app keeps the node outside the interactive element and a structured
+ * hover card (which AGENTS.md contemplates) would not be inert.
+ */
+function DirectoryCount(props: {
+  activeCount?: number;
+  className: string;
+  count: number;
+  indicator: ReactElement;
+  reviewCount?: number;
+  tooltipText: string;
+}) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+
+  return (
+    <>
+      <span
+        className={props.className}
+        data-active-thread-count={props.activeCount}
+        data-review-thread-count={props.reviewCount}
+        onMouseEnter={(event) =>
+          tooltip.show(event.currentTarget, props.tooltipText)
+        }
+        onMouseLeave={tooltip.hide}
+      >
+        {props.indicator}
+        <span>{props.count}</span>
+      </span>
+      {tooltip.tooltipNode}
+    </>
+  );
 }
 
 export function DirectoriesList(props: DirectoriesListProps) {
@@ -1176,24 +1227,24 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
             <span className="directory-row__summary-meta">
               {activeThreadCount > 0 ? (
-                <span
+                <DirectoryCount
+                  activeCount={activeThreadCount}
                   className="directory-row__active-count"
-                  data-active-thread-count={activeThreadCount}
-                  title={formatActiveThreadCount(activeThreadCount)}
-                >
-                  <ThinkingScanner compact />
-                  <span>{activeThreadCount} active</span>
-                </span>
+                  count={activeThreadCount}
+                  indicator={<ThinkingScanner compact />}
+                  tooltipText={formatActiveThreadCount(activeThreadCount)}
+                />
               ) : null}
               {reviewThreadCount > 0 ? (
-                <span
+                <DirectoryCount
                   className="directory-row__review-count"
-                  data-review-thread-count={reviewThreadCount}
-                  title={formatReviewThreadCount(reviewThreadCount)}
-                >
-                  <span aria-hidden="true" className="thread-row__status-cookie" />
-                  <span>{reviewThreadCount} to review</span>
-                </span>
+                  count={reviewThreadCount}
+                  indicator={
+                    <span aria-hidden="true" className="thread-row__status-cookie" />
+                  }
+                  reviewCount={reviewThreadCount}
+                  tooltipText={formatReviewThreadCount(reviewThreadCount)}
+                />
               ) : null}
             </span>
           </button>

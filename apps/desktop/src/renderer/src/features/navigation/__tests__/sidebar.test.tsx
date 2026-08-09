@@ -1976,7 +1976,7 @@ describe("Sidebar", () => {
     ).not.toBeNull();
   });
 
-  it("separates active and reviewable threads in directory counts", () => {
+  it("separates active and reviewable threads in directory counts", async () => {
     const backendActiveThread = {
       ...sharedThread,
       id: "thread-backend-active",
@@ -2039,12 +2039,25 @@ describe("Sidebar", () => {
       .getAllByRole("button", { name: /PwrAgent/i })
       .find((button) => button.hasAttribute("aria-expanded"));
     expect(summary).toBeDefined();
-    const activeCount = within(summary!).getByTitle("2 active threads");
+    // Indicator + bare count only: the words live in the hover tooltip, and
+    // the button's aria-label still spells both out for assistive tech.
+    const activeCount = summary!.querySelector("[data-active-thread-count]");
     expect(activeCount).toHaveAttribute("data-active-thread-count", "2");
-    expect(activeCount).toHaveTextContent("2 active");
-    const reviewCount = within(summary!).getByTitle("1 thread to review");
+    expect(activeCount).toHaveTextContent(/^2$/);
+    const reviewCount = summary!.querySelector("[data-review-thread-count]");
     expect(reviewCount).toHaveAttribute("data-review-thread-count", "1");
-    expect(reviewCount).toHaveTextContent("1 to review");
+    expect(reviewCount).toHaveTextContent(/^1$/);
+
+    fireEvent.mouseEnter(activeCount!);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "2 active threads",
+    );
+    fireEvent.mouseLeave(activeCount!);
+
+    fireEvent.mouseEnter(reviewCount!);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "1 thread to review",
+    );
   });
 
   it("shows an approval chip for threads waiting on an approval request", () => {
