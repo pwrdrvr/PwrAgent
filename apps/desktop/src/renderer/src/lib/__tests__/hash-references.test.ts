@@ -6,6 +6,8 @@ import {
   findHashReferenceTrigger,
   formatHashReferenceThreadLabel,
   formatHashReferenceThreadTooltip,
+  hashReferenceAnchorKey,
+  HASH_ANCHOR_COLD_QUERY_LENGTH,
 } from "../hash-references";
 
 function pullRequest(
@@ -66,6 +68,40 @@ describe("findHashReferenceTrigger", () => {
     expect(
       findHashReferenceTrigger(continuingDraft, continuingDraft.length),
     ).toBeUndefined();
+  });
+});
+
+describe("hashReferenceAnchorKey", () => {
+  it("stays put as the query grows to the right", () => {
+    // The whole point: `#validate` retiring must keep the anchor retired
+    // while the operator types the rest of the sentence after it. A key
+    // that moved with the query would retire nothing.
+    const key = hashReferenceAnchorKey("validate");
+    expect(hashReferenceAnchorKey("validate acp sdk")).toBe(key);
+    expect(hashReferenceAnchorKey("validate acp sdk asdg asd asdg")).toBe(key);
+  });
+
+  it("ignores case so retyping the same run does not re-arm a cold anchor", () => {
+    expect(hashReferenceAnchorKey("VaLiDaTe acp")).toBe(
+      hashReferenceAnchorKey("validate acp"),
+    );
+  });
+
+  it("separates anchors that differ inside the leading run", () => {
+    expect(hashReferenceAnchorKey("validate acp")).not.toBe(
+      hashReferenceAnchorKey("validxte acp"),
+    );
+  });
+
+  it("cannot key a query short enough to still be live", () => {
+    // A caret parked immediately right of the `#` yields an empty query,
+    // and retirement only ever fires at or past the threshold — so the
+    // re-arm gesture can never land on an already-cold key.
+    expect(hashReferenceAnchorKey("")).toBe("");
+    expect("".length).toBeLessThan(HASH_ANCHOR_COLD_QUERY_LENGTH);
+    expect(hashReferenceAnchorKey("short").length).toBeLessThan(
+      HASH_ANCHOR_COLD_QUERY_LENGTH,
+    );
   });
 });
 

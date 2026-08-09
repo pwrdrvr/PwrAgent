@@ -2263,6 +2263,104 @@ describe("Composer", () => {
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
   });
 
+  it("retires a `#` anchor that runs long with nothing to match", async () => {
+    // `#` is the only trigger whose query spans spaces, so before this it
+    // stayed armed for the whole rest of the line: every keystroke after a
+    // `#` re-ran the federated search and the popover sat there showing
+    // "Searching other instances…" over ordinary prose.
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [] }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          jumpSearchRemoteThreads,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #validate acp" } });
+
+    // Settles: local matched nothing and the peer answered nothing, past
+    // the threshold, so the anchor is cold and the popover is gone.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("listbox", { name: "Threads and pull requests" }),
+      ).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(jumpSearchRemoteThreads).toHaveBeenCalled();
+    });
+
+    const callsWhenCold = jumpSearchRemoteThreads.mock.calls.length;
+    fireEvent.change(textbox, {
+      target: { value: "Ask #validate acp sdk asdg asd asdg sdg" },
+    });
+    // Comfortably past FEDERATED_THREAD_SEARCH_DEBOUNCE_MS (200ms), so a
+    // still-armed anchor would have fired again by now.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(callsWhenCold);
+    expect(
+      screen.queryByRole("listbox", { name: "Threads and pull requests" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a long multi-word `#` query armed while it still matches", async () => {
+    // The threshold must not punish a legitimate long title — the query
+    // spans spaces precisely because thread titles do.
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: "019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+      title: "Bob's Best Thread 3000",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, targetThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    // 16 characters of query — twice the cold threshold — and still a match.
+    fireEvent.change(textbox, { target: { value: "Ask #Bob's Best Thread" } });
+
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    expect(
+      within(listbox).getByRole("button", { name: /#Bob's Best Thread 3000/ }),
+    ).toBeInTheDocument();
+  });
+
   it("inserts a hash-prefixed thread chip from the inline thread picker", async () => {
     const currentThread: NavigationThreadSummary = {
       id: "thread-current",
