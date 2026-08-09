@@ -89,7 +89,7 @@ describe("managed Claude ACP runtime", () => {
       installedAt: 1234,
       launchDescriptor: {
         command: process.execPath,
-        args: [expect.stringContaining("dist/index.js")],
+        args: [expect.stringContaining(path.join("dist", "index.js"))],
       },
     });
     const summary = claudeAcpManagedRuntimeSummary(installed);
