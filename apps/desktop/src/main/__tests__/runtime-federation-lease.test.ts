@@ -309,6 +309,33 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     second.shutdownSync();
   });
 
+  it("stops the runtime when lease renewal throws", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    const coordinator = createCoordinator({
+      instanceId: "instance-a",
+      now: () => 1_000,
+      store,
+    });
+    const renewLease = vi
+      .spyOn(store, "renewFederationLease")
+      .mockImplementationOnce(() => {
+        throw new Error("database is busy");
+      });
+
+    await coordinator.applyMode(runtime, "client");
+    await vi.advanceTimersByTimeAsync(FEDERATION_LEASE_HEARTBEAT_MS);
+
+    expect(runtime.stop).toHaveBeenCalledTimes(1);
+    expect(coordinator.snapshot()).toMatchObject({
+      leaseHeld: false,
+      disabledReasonKind: "runtime_stopped",
+    });
+
+    await vi.advanceTimersByTimeAsync(FEDERATION_LEASE_HEARTBEAT_MS * 3);
+    expect(renewLease).toHaveBeenCalledTimes(1);
+  });
+
   it("releases the lease on shutdownSync", async () => {
     const runtime = createRuntime();
     const coordinator = createCoordinator({

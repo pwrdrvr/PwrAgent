@@ -210,11 +210,9 @@ export class RuntimeFederationLeaseCoordinator {
           ttlMs: FEDERATION_LEASE_TTL_MS,
         });
       } catch (error) {
-        this.stopHeartbeat();
         leaseLog.warn("federation lease heartbeat failed", {
           error: error instanceof Error ? error.message : String(error),
         });
-        return;
       }
       if (!renewed) {
         void this.stopRuntimeAfterLeaseLoss(runtime).catch((error) => {
