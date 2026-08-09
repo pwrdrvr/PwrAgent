@@ -4,12 +4,15 @@ import path from "node:path";
 import type { AgentEvent } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import {
+  measureSqliteWrites,
   readSqliteWriteMetrics,
   resetSqliteWriteMetrics,
   SQLITE_WRITE_METRICS_ENV,
 } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { StateDb } from "../state/state-db";
 
 let stateDb: StateDb;
@@ -109,10 +112,6 @@ describe("sqlite write metrics", () => {
     // implicit transaction per streamed 8 KiB chunk — 3,693 commits and 58 MB
     // of WAL for a single `find /`. Nothing caught it: every test over that
     // path uses a mocked overlay store, so no sqlite was involved.
-    //
-    // This drives the real registry into a real store and asserts the shape of
-    // the write pattern rather than a wall-clock number, so it means the same
-    // thing on a loaded CI box as on a fast laptop.
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
@@ -121,46 +120,87 @@ describe("sqlite write metrics", () => {
       emit(event: AgentEvent): Promise<void>;
     }).emit.bind(registry);
 
-    const chunks = 500;
-    for (let index = 0; index < chunks; index += 1) {
+    // Everything above is setup and sits outside the measured region, so the
+    // budget tracks the streaming path rather than the fixture.
+    const { writes } = await measureSqliteWrites(async () => {
+      for (let index = 0; index < 500; index += 1) {
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/outputDelta",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "cmd-1",
+              delta: `line ${index}\n`,
+            },
+          },
+        } as AgentEvent);
+      }
       await emit({
         backend: "codex",
         notification: {
-          method: "item/commandExecution/outputDelta",
+          method: "item/completed",
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            itemId: "cmd-1",
-            delta: `line ${index}\n`,
+            item: {
+              id: "cmd-1",
+              type: "commandExecution",
+              command: "find / -xdev",
+              status: "completed",
+              exitCode: 0,
+            },
           },
         },
       } as AgentEvent);
-    }
-    await emit({
-      backend: "codex",
-      notification: {
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          item: {
-            id: "cmd-1",
-            type: "commandExecution",
-            command: "find / -xdev",
-            status: "completed",
-            exitCode: 0,
-          },
-        },
-      },
-    } as AgentEvent);
+    });
 
-    const metrics = readSqliteWriteMetrics();
-    // One flush carrying every buffered chunk, plus the completion row. The
-    // point is that this does not scale with `chunks`.
-    expect(metrics?.commits).toBeLessThanOrEqual(4);
-    expect(metrics?.commits).toBeGreaterThan(0);
+    expectSqliteWriteBudget({
+      note: "500 streamed output deltas plus the completion for one command",
+      scenario: "streamed-command-output",
+      writes,
+    });
 
     await registry.close();
+  });
+
+  it("holds an idle hour of heartbeats to its budget", async () => {
+    // The floor the app pays for existing: the profile-runtime heartbeat and
+    // the federation lease renewal both tick every 10s against a 45s TTL, each
+    // taking its own commit. Budgeted so a third ticker, or a shortened
+    // interval, has to be a deliberate line in a diff.
+    const instances = new AppRuntimeInstanceStore(stateDb);
+    instances.recordInstanceStart({
+      instanceId: "instance-1",
+      profileName: "default",
+      processId: 1234,
+      startedAt: 1_800_000_000_000,
+      desiredMessagingEnabled: false,
+    });
+    instances.acquireFederationLease({
+      instanceId: "instance-1",
+      now: 1_800_000_000_000,
+      ttlMs: 45_000,
+    });
+
+    const { writes } = await measureSqliteWrites(() => {
+      for (let tick = 0; tick < 360; tick += 1) {
+        const now = 1_800_000_000_000 + tick * 10_000;
+        instances.heartbeatInstance({ instanceId: "instance-1", now });
+        instances.renewFederationLease({
+          instanceId: "instance-1",
+          now,
+          ttlMs: 45_000,
+        });
+      }
+    });
+
+    expectSqliteWriteBudget({
+      note: "one idle hour: 360 profile heartbeats + 360 federation lease renewals",
+      scenario: "idle-hour-heartbeats",
+      writes,
+    });
   });
 });
 

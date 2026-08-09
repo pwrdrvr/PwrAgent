@@ -233,6 +233,65 @@ export function attachSqliteWriteMetrics(params: {
   }) as unknown as typeof db.transaction;
 }
 
+export type SqliteWriteDelta = {
+  commits: number;
+  rowsChanged: number;
+  statements: number;
+  tables: SqliteTableWriteMetrics[];
+  walBytes: number;
+};
+
+/**
+ * Measure only what `run` does.
+ *
+ * This is the seam that separates a scenario's cost from the cost of getting
+ * ready to run it. Opening a database, applying migrations, and seeding rows
+ * all happen outside the callback and are excluded by construction — no
+ * classifying of writes after the fact, no guessing which INSERT was "setup".
+ * A budget written against this therefore tracks the feature, and stays put
+ * when a test's fixtures grow.
+ */
+export async function measureSqliteWrites<T>(
+  run: () => T | Promise<T>,
+): Promise<{ result: T; writes: SqliteWriteDelta }> {
+  const before = collector?.snapshot("");
+  const result = await run();
+  const after = collector?.snapshot("");
+  return { result, writes: diffSnapshots(before, after) };
+}
+
+function diffSnapshots(
+  before: SqliteWriteMetricsSnapshot | undefined,
+  after: SqliteWriteMetricsSnapshot | undefined,
+): SqliteWriteDelta {
+  if (!after) {
+    return { commits: 0, rowsChanged: 0, statements: 0, tables: [], walBytes: 0 };
+  }
+  const baseline = new Map(
+    (before?.tables ?? []).map((table) => [table.table, table]),
+  );
+  const tables: SqliteTableWriteMetrics[] = [];
+  for (const table of after.tables) {
+    const start = baseline.get(table.table);
+    const delta = {
+      commits: table.commits - (start?.commits ?? 0),
+      rowsChanged: table.rowsChanged - (start?.rowsChanged ?? 0),
+      statements: table.statements - (start?.statements ?? 0),
+      table: table.table,
+    };
+    if (delta.statements > 0) {
+      tables.push(delta);
+    }
+  }
+  return {
+    commits: after.commits - (before?.commits ?? 0),
+    rowsChanged: after.rowsChanged - (before?.rowsChanged ?? 0),
+    statements: after.statements - (before?.statements ?? 0),
+    tables: tables.sort((left, right) => right.commits - left.commits),
+    walBytes: after.walBytes - (before?.walBytes ?? 0),
+  };
+}
+
 export function isSqliteWriteMetricsEnabled(): boolean {
   return Boolean(process.env[SQLITE_WRITE_METRICS_ENV]);
 }

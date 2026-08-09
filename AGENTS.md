@@ -49,8 +49,8 @@
 - To regenerate the README screenshots under `docs/assets/screenshots/`, run `pnpm --filter @pwragent/desktop screenshot:readme`. The full walkthrough (spec, fixtures, state-seeding helpers, native capture utilities) lives in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) under "Capturing README Screenshots". macOS Screen Recording permission is required for whichever terminal/IDE runs the spec.
 - When focusing root Vitest runs through `pnpm test`, pass file paths or filters directly, for example `pnpm test apps/desktop/src/main/__tests__/backend-registry.test.ts`. Do not insert a standalone `--` before the focus args; `pnpm test -- apps/...` makes Vitest run the full workspace suite.
 - **Any new sqlite write that fires per command, per turn, per item, per
-  streamed event, or on a timer must be measured before it ships, and covered
-  by a measurement spec.** Do the arithmetic out loud: writes/second × commit
+  streamed event, or on a timer must be measured before it ships, and pinned
+  by a checked-in write budget** that fails the suite when it moves. Do the arithmetic out loud: writes/second × commit
   cost × how long a real session runs → MB/day. Sqlite commits are the unit,
   not statements — each implicit transaction flushes its dirty pages plus every
   index the row moved (~4 KB/page, and a timestamp column in an index moves on
@@ -61,11 +61,13 @@
   user rather than shipping it quietly — the right answer is often that the
   design constraint has to change** (batch into one transaction, debounce
   behind a flush window, accumulate in memory and persist on a boundary, or
-  not persist at all), and that is their call to make. Measure with
-  `pnpm test:sqlite-writes`; assert the *shape* of the write pattern (commits
-  do not scale with events) rather than a wall-clock number, so the spec means
-  the same thing on a loaded CI box. See "Sqlite Write-Volume Instrumentation"
-  in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
+  not persist at all), and that is their call to make. Budgets live in
+  `apps/desktop/src/main/__tests__/fixtures/sqlite-write-budgets.json`; wrap the
+  feature (not its setup) in `measureSqliteWrites` and record with
+  `UPDATE_SQLITE_WRITE_BUDGETS=1`, so a write-cost change lands as a reviewable
+  line in the diff instead of never surfacing. Survey a whole run with
+  `pnpm test:sqlite-writes`. See "Sqlite Write-Volume Instrumentation" in
+  [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 
 ## Code Formatting & Linting
 

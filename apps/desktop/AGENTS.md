@@ -597,15 +597,65 @@ It is a floor the app pays for existing, and it is worth knowing before you add
 another ticker: a third 10s heartbeat is another ~24 MB/day per instance, and
 an operator may be running several profiles at once.
 
-### The regression guard
+### Write budgets
 
-[`src/main/__tests__/sqlite-write-metrics.test.ts`](src/main/__tests__/sqlite-write-metrics.test.ts)
-drives the real registry into a real store and asserts streamed command output
-stays at one commit per flush window instead of one per chunk. Reverting the
-#1406 coalescing fails it with `expected 501 to be less than or equal to 4`.
-It asserts the *shape* of the write pattern, not a wall-clock number, so it
-means the same thing on a loaded CI box as on a fast laptop. Prefer that style
-for any new budget you add here.
+[`src/main/__tests__/fixtures/sqlite-write-budgets.json`](src/main/__tests__/fixtures/sqlite-write-budgets.json)
+records what each measured scenario costs, and
+`sqlite-write-metrics.test.ts` fails when one moves:
+
+```
+sqlite write budget "streamed-command-output" changed.
+  budget:   2 commits, 2 statements, 2 rows (~36 KB WAL)
+  measured: 501 commits, 501 statements, 501 rows (~2820 KB WAL)
+```
+
+That is the pre-#1406 write pattern being caught automatically. Note the
+budget: **2 commits for 501 streamed events**, because commits must not scale
+with events.
+
+**Setup is excluded by construction.** `measureSqliteWrites(fn)` measures only
+what the callback does, so opening the database, applying migrations, and
+seeding fixtures all sit outside it. A budget therefore tracks the feature and
+stays put when a test grows more setup — no classifying writes after the fact,
+no arguing about which INSERT was "arrange".
+
+**Only the deterministic counters are asserted.** Commits, write statements,
+and rows changed are a pure function of the code path — same operations, same
+numbers, on any machine under any load, which is what makes an exact assertion
+safe here rather than a tolerance. WAL bytes are *not* deterministic (page fill
+and checkpoint timing move them run to run), so `observedWalBytes` is recorded
+for humans to read and never asserted. Commits are the honest proxy for volume.
+
+Deviation fails in **both** directions. An increase is the regression this
+exists to catch; a decrease means the budget has gone stale and would stop
+catching anything, so lowering it is a deliberate act.
+
+### Adding a budget
+
+Any new write path that fires per command, per turn, per item, per streamed
+event, or on a timer gets one. Wrap the feature — not its setup — and name the
+scenario:
+
+```ts
+const { writes } = await measureSqliteWrites(async () => {
+  // drive the feature
+});
+expectSqliteWriteBudget({
+  note: "what one unit of work is, in words",
+  scenario: "my-feature",
+  writes,
+});
+```
+
+Then record it with `UPDATE_SQLITE_WRITE_BUDGETS=1 pnpm test <file>` and commit
+the JSON. Re-record the same way when a change moves a number **on purpose**,
+and say why in the commit message — the point of the file is that a write-cost
+change shows up as a reviewable line in a diff instead of never showing up at
+all.
+
+Before recording, do the projection: writes/second × how long a real session
+runs → MB/day. If it looks excessive, raise it rather than baking it in. A
+budget is a record of what a path costs, not permission for it to cost that.
 
 ## SQLite Query Rules
 
