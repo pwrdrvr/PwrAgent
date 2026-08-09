@@ -51,7 +51,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@napi-rs/canvas": "0.1.100",
+    "@napi-rs/canvas": "1.0.3",
     "@octokit/graphql": "^9.0.3",
     "@pwragent/messaging-interface": "workspace:*",
     "@pwragent/messaging-provider-discord": "workspace:*",
