@@ -999,6 +999,14 @@ CREATE INDEX IF NOT EXISTS idx_federation_session_audit_session_created
   ON federation_session_audit(session_id, created_at DESC);
 `;
 
+/**
+ * Cached ACP slash commands are keyed by (agent, repository root), so a row
+ * outlives the repo it describes — a deleted checkout, a worktree root that
+ * moved, an agent the operator uninstalled. Nothing reads a row this old: a
+ * repo still in use is re-observed by every session that reports commands, and
+ * one that is not gets re-probed for the price of a single hidden session.
+ */
+const ACP_AVAILABLE_COMMANDS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -1473,6 +1481,9 @@ LEFT JOIN federation_peers
       this.db
         .prepare("DELETE FROM deliveries WHERE created_at < ?")
         .run(now - DELIVERIES_RETENTION_MS);
+      this.db
+        .prepare("DELETE FROM acp_available_commands WHERE observed_at < ?")
+        .run(now - ACP_AVAILABLE_COMMANDS_RETENTION_MS);
       this.db
         .prepare(
           "DELETE FROM bindings WHERE revoked_at IS NOT NULL AND revoked_at < ?",

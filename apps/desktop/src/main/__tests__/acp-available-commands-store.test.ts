@@ -70,7 +70,33 @@ describe("AcpAvailableCommandsStore", () => {
     });
   });
 
-  it("adds its table to a profile database that predates it", () => {
+  it("prunes rows for repositories nothing has re-observed", () => {
+    const now = Date.UTC(2026, 7, 8);
+    const retentionMs = 90 * 24 * 60 * 60 * 1000;
+    store.upsert({
+      backendId: "acp:grok",
+      repositoryPath: "/stale-repo",
+      commands: COMMANDS,
+      observedAt: now - retentionMs - 1,
+    });
+    store.upsert({
+      backendId: "acp:grok",
+      repositoryPath: "/live-repo",
+      commands: COMMANDS,
+      observedAt: now - retentionMs + 1,
+    });
+
+    stateDb.cleanupExpired(now);
+
+    expect(store.get("acp:grok", "/stale-repo")).toBeUndefined();
+    expect(store.get("acp:grok", "/live-repo")?.commands).toEqual(COMMANDS);
+  });
+
+  // The v50 migration block is belt-and-braces: `ensureCurrentSchema` runs
+  // ahead of it on every open and already carries this table's DDL. What is
+  // worth pinning is the observable outcome — an older profile database gains
+  // the table and lands on the current user_version.
+  it("converges an older profile database onto the current schema", () => {
     const dbPath = path.join(tempDir, "migrated.db");
     const seeded = StateDb.open(dbPath);
     seeded.raw.exec("DROP TABLE acp_available_commands");
