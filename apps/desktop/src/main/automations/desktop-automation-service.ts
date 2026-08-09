@@ -891,7 +891,7 @@ export class DesktopAutomationService {
     const params = event.notification.params as {
       threadId: string;
       queueEntryId: string;
-      origin: "manual" | "automation" | "messaging" | "scheduled" | "monitor";
+      origin: "manual" | "automation" | "messaging";
       status: "queued" | "started" | "failed" | "cancelled" | "terminal";
       position?: number;
       turnId?: string;

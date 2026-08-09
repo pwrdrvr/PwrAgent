@@ -285,7 +285,6 @@ import {
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
   type MessagingDynamicToolCategory,
-  type TaskMonitorAutoResumeSuppressionReason,
   type TaskMonitorCompletionSource,
   type TaskMonitorRequest,
   type TaskMonitorResponse,
@@ -2609,9 +2608,7 @@ type TaskMonitorCancellationState = {
 
 type TaskMonitorDelegationRecord = {
   activeCommandCount: number;
-  autoResumeSuppressionReason?:
-    | TaskMonitorAutoResumeSuppressionReason
-    | "thread_busy";
+  autoFollowupDisabled?: boolean;
   backend: "codex";
   createdAt: number;
   cwd?: string;
@@ -3274,9 +3271,6 @@ function formatTaskMonitorProgressMessage(params: {
 }
 
 function formatTaskMonitorCompletionMessage(params: {
-  autoResumeSuppressionReason?:
-    | TaskMonitorAutoResumeSuppressionReason
-    | "thread_busy";
   completionSource?: TaskMonitorCompletionSource;
   details?: string;
   outcome: CompleteMonitoringToolArgs["outcome"];
@@ -3292,11 +3286,6 @@ function formatTaskMonitorCompletionMessage(params: {
       : params.completionSource?.type === "parent_cancel"
         ? "Completion source: Parent cancellation"
         : undefined,
-    params.autoResumeSuppressionReason
-      ? taskMonitorAutoResumeSuppressionMessage(
-          params.autoResumeSuppressionReason,
-        )
-      : undefined,
     params.summary,
     params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
   ]
@@ -3329,22 +3318,10 @@ function buildTaskMonitorFinalHandoffInput(params: {
       : "",
     "",
     "Process this final monitor result. Do not resume polling unless the result explicitly says monitoring is still required.",
-    "Use this result only to continue parent work that directly depended on this monitor. Do not apply unrelated review findings or broaden scope without a new user request.",
+    "Continue anything that was dependent upon this result that the user was expecting to continue when completed.",
   ]
     .filter(Boolean)
     .join("\n");
-}
-
-function taskMonitorAutoResumeSuppressionMessage(
-  reason: TaskMonitorAutoResumeSuppressionReason | "thread_busy",
-): string {
-  if (reason === "review") {
-    return "Automatic parent follow-up was withheld because a review started after this monitor.";
-  }
-  if (reason === "new_turn") {
-    return "Automatic parent follow-up was withheld because newer work started after this monitor.";
-  }
-  return "Automatic parent follow-up was withheld because the parent thread was busy when this monitor completed.";
 }
 
 function buildTaskMonitorRecoveryPrompt(params: {
@@ -6816,6 +6793,7 @@ export class DesktopBackendRegistry {
   private readonly isCodexBootstrapDeferredFn: () => boolean;
   private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
   private readonly resolveManagedReviewEnabledFn: () => boolean;
+  private readonly resolveTaskMonitorFollowupSafetyEnabledFn: () => boolean;
   private readonly resolveDefaultPrAutoDispatchEnabledFn: () => boolean;
   private readonly resolveProviderModelDefaultsFn: () => Record<
     string,
@@ -6884,6 +6862,7 @@ export class DesktopBackendRegistry {
     isBootstrapMode?: () => boolean;
     resolveCodexDefaultModeRequestUserInput?: () => boolean;
     resolveManagedReviewEnabled?: () => boolean;
+    resolveTaskMonitorFollowupSafetyEnabled?: () => boolean;
     resolveDefaultPrAutoDispatchEnabled?: () => boolean;
     resolveProviderModelDefaults?: () => Record<
       string,
@@ -6957,6 +6936,23 @@ export class DesktopBackendRegistry {
         } catch (error) {
           backendRegistryLog.warn(
             "failed to resolve managed review experiment setting",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return false;
+        }
+      });
+    this.resolveTaskMonitorFollowupSafetyEnabledFn =
+      options?.resolveTaskMonitorFollowupSafetyEnabled ??
+      (() => {
+        try {
+          return (
+            settingsService ?? getDesktopSettingsService()
+          ).resolveTaskMonitorFollowupSafetyEnabled();
+        } catch (error) {
+          backendRegistryLog.warn(
+            "failed to resolve task monitor follow-up safety experiment setting",
             {
               error: error instanceof Error ? error.message : String(error),
             },
@@ -7612,11 +7608,6 @@ export class DesktopBackendRegistry {
     turnId: string;
   }> {
     this.assertNotBootstrap("startAutomationHeadlessTurn");
-    this.suppressTaskMonitorAutoResumeForThread({
-      backend: params.backend,
-      threadId: params.agentThreadId,
-      reason: "new_turn",
-    });
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
       threadId: params.agentThreadId,
@@ -7687,6 +7678,10 @@ export class DesktopBackendRegistry {
       ...modelSettings,
       approvalPolicy,
       sandbox,
+    });
+    this.disableTaskMonitorAutoFollowupForThread({
+      backend: params.backend,
+      threadId: params.agentThreadId,
     });
     const queueEntryId = `headless:${params.automationRunId}`;
     backendRegistryLog.info("automation headless turn started", {
@@ -11547,18 +11542,16 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<ThreadTurnQueueSubmissionResult> {
     const { origin = "manual", queueEntryId, ...entry } = params;
-    if (origin !== "monitor") {
-      this.suppressTaskMonitorAutoResumeForThread({
-        backend: entry.backend,
-        threadId: entry.threadId,
-        reason: "new_turn",
-      });
-    }
-    return await this.threadTurnQueue.submit({
+    const submitted = await this.threadTurnQueue.submit({
       ...entry,
       ...(queueEntryId ? { id: queueEntryId } : {}),
       origin,
     });
+    this.disableTaskMonitorAutoFollowupForThread({
+      backend: entry.backend,
+      threadId: entry.threadId,
+    });
+    return submitted;
   }
 
   async submitTurnIfIdle(params: {
@@ -11569,31 +11562,32 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
     const { origin = "manual", ...entry } = params;
-    if (origin !== "monitor") {
-      this.suppressTaskMonitorAutoResumeForThread({
-        backend: entry.backend,
-        threadId: entry.threadId,
-        reason: "new_turn",
-      });
-    }
     if (
       this.threadHasActiveTurn(params.threadId, params.backend)
       || this.threadHasBlockingWorkspaceMove(params)
     ) {
       return { status: "busy" };
     }
-    return await this.threadTurnQueue.submitIfIdle({
+    const submitted = await this.threadTurnQueue.submitIfIdle({
       ...entry,
       origin,
     });
+    if (submitted.status === "started") {
+      this.disableTaskMonitorAutoFollowupForThread({
+        backend: entry.backend,
+        threadId: entry.threadId,
+      });
+    }
+    return submitted;
   }
 
-  private suppressTaskMonitorAutoResumeForThread(params: {
+  private disableTaskMonitorAutoFollowupForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    reason: TaskMonitorAutoResumeSuppressionReason;
-  }): string[] {
-    const suppressedMonitorIds: string[] = [];
+  }): void {
+    if (!this.resolveTaskMonitorFollowupSafetyEnabledFn()) {
+      return;
+    }
     for (const record of this.taskMonitorDelegations.values()) {
       if (
         record.parentBackend !== params.backend
@@ -11601,10 +11595,8 @@ export class DesktopBackendRegistry {
       ) {
         continue;
       }
-      record.autoResumeSuppressionReason ??= params.reason;
-      suppressedMonitorIds.push(record.monitorId);
+      record.autoFollowupDisabled = true;
     }
-    return suppressedMonitorIds;
   }
 
   cancelQueuedTurn(entryId: string, reason?: string): boolean {
@@ -11941,17 +11933,14 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
-    origin?: ThreadTurnQueueOrigin;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    if (params.origin !== "monitor") {
-      this.suppressTaskMonitorAutoResumeForThread({
-        backend: params.backend,
-        threadId: params.threadId,
-        reason: "new_turn",
-      });
-    }
-    return await this.startTurnNow(params);
+    const result = await this.startTurnNow(params);
+    this.disableTaskMonitorAutoFollowupForThread({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    return result;
   }
 
   private async startTurnNow(params: {
@@ -12887,13 +12876,9 @@ export class DesktopBackendRegistry {
       throw error;
     }
 
-    // A review can be rejected before the backend accepts it (for example,
-    // because the thread is still active). Only a successful review start
-    // supersedes an active monitor's automatic parent follow-up.
-    this.suppressTaskMonitorAutoResumeForThread({
+    this.disableTaskMonitorAutoFollowupForThread({
       backend: params.backend,
       threadId: params.threadId,
-      reason: "review",
     });
 
     if (params.backend === "codex") {
@@ -13891,11 +13876,6 @@ export class DesktopBackendRegistry {
     turnId: string;
     itemId?: string;
   }> {
-    this.suppressTaskMonitorAutoResumeForThread({
-      backend: params.backend,
-      threadId: params.threadId,
-      reason: "new_turn",
-    });
     if (isAcpBackendId(params.backend)) {
       throw new Error(
         "ACP backend " + params.backend + " does not support thread compaction",
@@ -14049,11 +14029,6 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
-    this.suppressTaskMonitorAutoResumeForThread({
-      backend: params.backend,
-      threadId: params.threadId,
-      reason: "new_turn",
-    });
     const requestKey = buildSteerRequestKey(params);
     const signature = buildSteerRequestSignature(params, messageOrigin);
     const accepted = this.acceptedSteerRequests.get(requestKey);
@@ -26657,9 +26632,10 @@ export class DesktopBackendRegistry {
     bound.record.finalizationStarted = true;
     let parentTurn:
       | {
-          status: "started";
+          status: "started" | "queued";
           turnId?: string;
           queueEntryId?: string;
+          position?: number;
         }
       | undefined;
     try {
@@ -26702,62 +26678,20 @@ export class DesktopBackendRegistry {
     triggerParentTurn: boolean;
   }): Promise<
     | {
-        status: "started";
+        status: "started" | "queued";
         turnId?: string;
         queueEntryId?: string;
+        position?: number;
       }
     | undefined
   > {
-    let parentTurn:
-      | {
-          status: "started";
-          turnId?: string;
-          queueEntryId?: string;
-        }
-      | undefined;
-    if (
+    const taskMonitorFollowupSafetyEnabled =
+      this.resolveTaskMonitorFollowupSafetyEnabledFn();
+    const shouldTriggerParentTurn =
       params.triggerParentTurn
-      && !params.record.autoResumeSuppressionReason
-    ) {
-      const messageOrigin = buildTaskMonitorMessageOrigin({
-        monitorId: params.record.monitorId,
-        monitorThreadId: params.record.monitorThreadId,
-        outcome: params.outcome,
-        summary: params.summary,
-        task: params.record.task,
-      });
-      const submitted = await this.submitTurnIfIdle({
-        backend: params.record.parentBackend,
-        threadId: params.record.parentThreadId,
-        input: [
-          {
-            type: "text",
-            text: buildTaskMonitorFinalHandoffInput({
-              completionSource: params.completionSource,
-              details: params.details,
-              finalHandoffPrompt: params.record.finalHandoffPrompt,
-              outcome: params.outcome,
-              summary: params.summary,
-              task: params.record.task,
-            }),
-          },
-        ],
-        origin: "monitor",
-        messageOrigin,
-      });
-      if (submitted.status === "started") {
-        parentTurn = {
-          status: "started",
-          turnId: submitted.turnId,
-          queueEntryId: submitted.entry.id,
-        };
-      } else {
-        params.record.autoResumeSuppressionReason = "thread_busy";
-      }
-    }
+      && (!taskMonitorFollowupSafetyEnabled || !params.record.autoFollowupDisabled);
 
     const finalText = formatTaskMonitorCompletionMessage({
-      autoResumeSuppressionReason: params.record.autoResumeSuppressionReason,
       completionSource: params.completionSource,
       details: params.details,
       outcome: params.outcome,
@@ -26774,7 +26708,7 @@ export class DesktopBackendRegistry {
     });
     const canInjectCodexCompletion =
       params.record.parentBackend === "codex"
-      && !parentTurn
+      && (!params.triggerParentTurn || !shouldTriggerParentTurn)
       && this.canStartThreadTurnImmediately({
         backend: "codex",
         threadId: params.record.parentThreadId,
@@ -26803,6 +26737,76 @@ export class DesktopBackendRegistry {
       parentBackend: params.record.parentBackend,
       parentThreadId: params.record.parentThreadId,
     });
+
+    let parentTurn:
+      | {
+          status: "started" | "queued";
+          turnId?: string;
+          queueEntryId?: string;
+          position?: number;
+        }
+      | undefined;
+    if (
+      shouldTriggerParentTurn
+      && (!taskMonitorFollowupSafetyEnabled || !params.record.autoFollowupDisabled)
+    ) {
+      const messageOrigin = buildTaskMonitorMessageOrigin({
+        monitorId: params.record.monitorId,
+        monitorThreadId: params.record.monitorThreadId,
+        outcome: params.outcome,
+        summary: params.summary,
+        task: params.record.task,
+      });
+      const input = [
+        {
+          type: "text" as const,
+          text: buildTaskMonitorFinalHandoffInput({
+            completionSource: params.completionSource,
+            details: params.details,
+            finalHandoffPrompt: params.record.finalHandoffPrompt,
+            outcome: params.outcome,
+            summary: params.summary,
+            task: params.record.task,
+          }),
+        },
+      ];
+      if (taskMonitorFollowupSafetyEnabled) {
+        const submitted = await this.submitTurnIfIdle({
+          backend: params.record.parentBackend,
+          threadId: params.record.parentThreadId,
+          input,
+          origin: "manual",
+          messageOrigin,
+        });
+        if (submitted.status === "started") {
+          parentTurn = {
+            status: "started",
+            turnId: submitted.turnId,
+            queueEntryId: submitted.entry.id,
+          };
+        }
+      } else {
+        const submitted = await this.submitTurn({
+          backend: params.record.parentBackend,
+          threadId: params.record.parentThreadId,
+          input,
+          origin: "manual",
+          messageOrigin,
+        });
+        parentTurn =
+          submitted.status === "started"
+            ? {
+                status: "started",
+                turnId: submitted.turnId,
+                queueEntryId: submitted.entry.id,
+              }
+            : {
+                status: "queued",
+                queueEntryId: submitted.entry.id,
+                position: submitted.position,
+              };
+      }
+    }
 
     this.taskMonitorDelegations.delete(params.record.monitorId);
     return parentTurn;

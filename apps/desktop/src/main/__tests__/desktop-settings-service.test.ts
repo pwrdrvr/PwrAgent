@@ -663,7 +663,7 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveConfirmQuitWithInProgressThreads()).toBe(false);
   });
 
-  it("persists attention promotion and monitor warning preferences", async () => {
+  it("defaults the Attention end-of-turn promotion on and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -677,31 +677,54 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "default",
     });
-    expect(initial.general.taskMonitorOverlapWarningDismissed).toEqual({
-      value: false,
-      source: "default",
-    });
 
     await service.writeConfigPatch({
       general: {
         attentionPromoteOnTurnEnd: false,
-        taskMonitorOverlapWarningDismissed: true,
       },
     });
 
     const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved).toContain("[general]");
     expect(saved).toContain("attention_promote_on_turn_end = false");
-    expect(saved).toContain("task_monitor_overlap_warning_dismissed = true");
-    expect((await service.readSettings()).general.attentionPromoteOnTurnEnd).toEqual({
+    expect(
+      (await service.readSettings()).general.attentionPromoteOnTurnEnd,
+    ).toEqual({
       value: false,
       source: "config",
     });
-    expect(
-      (await service.readSettings()).general.taskMonitorOverlapWarningDismissed,
-    ).toEqual({
-      value: true,
-      source: "config",
+  });
+
+  it("defaults monitor follow-up safety off and persists its preferences", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
     });
+
+    expect((await service.readSettings()).experimental).toMatchObject({
+      taskMonitorFollowupSafety: { value: false, source: "default" },
+      taskMonitorFollowupWarningDismissed: { value: false, source: "default" },
+    });
+    expect(service.resolveTaskMonitorFollowupSafetyEnabled()).toBe(false);
+
+    await service.writeConfigPatch({
+      experimental: {
+        taskMonitorFollowupSafety: true,
+        taskMonitorFollowupWarningDismissed: true,
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "task_monitor_followup_safety = true",
+    );
+    expect((await service.readSettings()).experimental).toMatchObject({
+      taskMonitorFollowupSafety: { value: true, source: "config" },
+      taskMonitorFollowupWarningDismissed: { value: true, source: "config" },
+    });
+    expect(service.resolveTaskMonitorFollowupSafetyEnabled()).toBe(true);
   });
 
   it("round-trips appearance through writeConfigPatch + readSettings + readBootstrapAppearance", async () => {

@@ -1620,7 +1620,7 @@ export type AppServerNotification =
         queueEntryId: string;
         /** Owner-clock creation time for ordering against navigation snapshots. */
         queueEntryCreatedAt?: number;
-        origin: "manual" | "automation" | "messaging" | "scheduled" | "monitor";
+        origin: "manual" | "automation" | "messaging" | "scheduled";
         status: "queued" | "started" | "failed" | "cancelled" | "terminal";
         /**
          * Truncated first text of the queued input on "queued" events, so

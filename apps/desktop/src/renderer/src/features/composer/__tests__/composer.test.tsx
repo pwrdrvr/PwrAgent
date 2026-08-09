@@ -12651,23 +12651,22 @@ describe("Composer", () => {
     });
   });
 
-  it("warns before sending a new turn alongside an active task monitor", async () => {
-    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+  it("warns before a review and can remember the choice", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
-      turnId: "turn-1",
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
     }));
     const onDismissTaskMonitorOverlapWarning = vi.fn(async () => undefined);
 
     render(
       <Composer
-        desktopApi={{
-          onAgentEvent: () => () => undefined,
-          startTurn,
-        }}
+        desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
         disabled={false}
         onDismissTaskMonitorOverlapWarning={onDismissTaskMonitorOverlapWarning}
         skills={[]}
+        taskMonitorFollowupSafetyEnabled
         thread={{
           id: "thread-1",
           title: "Monitor overlap",
@@ -12686,66 +12685,7 @@ describe("Composer", () => {
             },
           ],
         }}
-      />
-    );
-
-    fireEvent.change(screen.getByLabelText("Reply"), {
-      target: { value: "Start unrelated work" },
-    });
-    await clickButton("Send");
-
-    const dialog = screen.getByRole("dialog", {
-      name: "Keep the monitor report-only?",
-    });
-    expect(startTurn).not.toHaveBeenCalled();
-    expect(dialog).toHaveTextContent("without automatically starting or queuing");
-    fireEvent.click(
-      within(dialog).getByLabelText(
-        "Do not show this warning again on this desktop.",
-      ),
-    );
-    await clickButton("Send turn");
-
-    await waitFor(() => {
-      expect(onDismissTaskMonitorOverlapWarning).toHaveBeenCalledTimes(1);
-      expect(startTurn).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("warns before starting a review alongside an active task monitor", async () => {
-    const startReview = vi.fn(async (request: StartReviewRequest) => ({
-      backend: request.backend,
-      threadId: request.threadId,
-      reviewThreadId: request.threadId,
-      turnId: "turn-review-1",
-    }));
-    render(
-      <Composer
-        desktopApi={{
-          onAgentEvent: () => () => undefined,
-          startReview,
-        }}
-        disabled={false}
-        skills={[]}
-        thread={{
-          id: "thread-1",
-          title: "Review overlap",
-          titleSource: "explicit",
-          source: "codex",
-          executionMode: "default",
-          linkedDirectories: [],
-          inbox: { inInbox: false },
-          subAgents: [
-            {
-              monitorId: "monitor-1",
-              task: "Watch CI",
-              status: "running",
-              createdAt: 1,
-              updatedAt: 1,
-            },
-          ],
-        }}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -12757,9 +12697,15 @@ describe("Composer", () => {
       name: "Keep the monitor report-only?",
     });
     expect(startReview).not.toHaveBeenCalled();
+    fireEvent.click(
+      within(dialog).getByLabelText(
+        "Do not show this warning again on this desktop.",
+      ),
+    );
     await clickButton("Start review");
 
     await waitFor(() => {
+      expect(onDismissTaskMonitorOverlapWarning).toHaveBeenCalledTimes(1);
       expect(startReview).toHaveBeenCalledWith(
         expect.objectContaining({
           backend: "codex",
@@ -12767,56 +12713,6 @@ describe("Composer", () => {
           target: { type: "baseBranch", branch: "main" },
         }),
       );
-    });
-    expect(dialog).not.toBeInTheDocument();
-  });
-
-  it("skips the task monitor warning after it has been dismissed", async () => {
-    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
-      backend: request.backend,
-      threadId: request.threadId,
-      turnId: "turn-1",
-    }));
-    render(
-      <Composer
-        desktopApi={{
-          onAgentEvent: () => () => undefined,
-          startTurn,
-        }}
-        disabled={false}
-        skills={[]}
-        taskMonitorOverlapWarningDismissed
-        thread={{
-          id: "thread-1",
-          title: "Dismissed overlap",
-          titleSource: "explicit",
-          source: "codex",
-          executionMode: "default",
-          linkedDirectories: [],
-          inbox: { inInbox: false },
-          subAgents: [
-            {
-              monitorId: "monitor-1",
-              task: "Watch CI",
-              status: "running",
-              createdAt: 1,
-              updatedAt: 1,
-            },
-          ],
-        }}
-      />
-    );
-
-    fireEvent.change(screen.getByLabelText("Reply"), {
-      target: { value: "Start unrelated work" },
-    });
-    await clickButton("Send");
-
-    expect(
-      screen.queryByRole("dialog", { name: "Keep the monitor report-only?" }),
-    ).not.toBeInTheDocument();
-    await waitFor(() => {
-      expect(startTurn).toHaveBeenCalledTimes(1);
     });
   });
 

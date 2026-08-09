@@ -91,13 +91,6 @@ export type TaskMonitorCompletionSource =
       terminalStatus?: "completed" | "failed" | "cancelled";
     };
 
-/**
- * A newer action on the parent thread makes a monitor's final result
- * report-only. The result remains visible in the thread, but it cannot wake
- * or queue a follow-up turn that could act on stale context.
- */
-export type TaskMonitorAutoResumeSuppressionReason = "new_turn" | "review";
-
 export type TaskMonitorToolArgsByOperation = {
   create_monitor_delegation: CreateMonitorDelegationToolArgs;
   cancel_monitor_delegation: CancelMonitorDelegationToolArgs;
@@ -145,9 +138,10 @@ export type TaskMonitorCompletionData = TaskMonitorProgressData & {
   completionSource?: TaskMonitorCompletionSource;
   outcome: CompleteMonitoringToolArgs["outcome"];
   parentTurn?: {
-    status: "started";
+    status: "started" | "queued";
     turnId?: string;
     queueEntryId?: string;
+    position?: number;
   };
 };
 

@@ -220,6 +220,7 @@ type ComposerProps = {
   unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
+  taskMonitorFollowupSafetyEnabled?: boolean;
   taskMonitorOverlapWarningDismissed?: boolean;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
@@ -3225,15 +3226,15 @@ export function Composer(props: ComposerProps) {
   };
   const ensureTaskMonitorOverlapSafety = async (
     action: TaskMonitorOverlapAction,
-    options?: { showWarning?: boolean },
   ): Promise<boolean> => {
-    if (activeTaskMonitorCount === 0 || !props.thread) {
+    if (
+      !props.taskMonitorFollowupSafetyEnabled
+      || activeTaskMonitorCount === 0
+      || !props.thread
+    ) {
       return true;
     }
-    if (
-      options?.showWarning === false
-      || props.taskMonitorOverlapWarningDismissed
-    ) {
+    if (props.taskMonitorOverlapWarningDismissed) {
       return true;
     }
     if (taskMonitorOverlapResolverRef.current) {
@@ -5701,18 +5702,16 @@ export function Composer(props: ComposerProps) {
       setSendError("Choose a project to review.");
       return;
     }
+    if (!options?.queued && shouldQueueThreadSubmit()) {
+      queueReviewCommand(reviewCommand);
+      return;
+    }
     if (
       activeTaskMonitorCount > 0
-      && !(await ensureTaskMonitorOverlapSafety("review", {
-        showWarning: !options?.queued,
-      }))
+      && !(await ensureTaskMonitorOverlapSafety("review"))
     ) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
-      return;
-    }
-    if (!options?.queued && shouldQueueThreadSubmit()) {
-      queueReviewCommand(reviewCommand);
       return;
     }
 
@@ -5894,12 +5893,6 @@ export function Composer(props: ComposerProps) {
     }
     if (!props.thread || !props.desktopApi?.compactThread) {
       setSendError("Compaction is not available for this thread.");
-      return;
-    }
-    if (
-      activeTaskMonitorCount > 0
-      && !(await ensureTaskMonitorOverlapSafety("turn"))
-    ) {
       return;
     }
 
@@ -6340,9 +6333,7 @@ export function Composer(props: ComposerProps) {
 
     if (
       activeTaskMonitorCount > 0
-      && !(await ensureTaskMonitorOverlapSafety("turn", {
-        showWarning: !queued && !backendQueueSubmission,
-      }))
+      && !(await ensureTaskMonitorOverlapSafety("turn"))
     ) {
       if (backendQueueSubmission) {
         removeQueuedTurnInScope(
@@ -7513,22 +7504,6 @@ export function Composer(props: ComposerProps) {
     }
     if (mcpInventoryDetail) {
       showMcpInventory(mcpInventoryDetail);
-      return;
-    }
-
-    if (
-      !reviewCommand
-      && mode === "default"
-      && !props.disabled
-      && activeTaskMonitorCount > 0
-      && (shouldQueueThreadSubmit() || Boolean(effectiveScheduledSendAt))
-      && (
-        hasComposerContent
-        || imageAttachments.length > 0
-        || fileAttachments.length > 0
-      )
-      && !(await ensureTaskMonitorOverlapSafety("turn"))
-    ) {
       return;
     }
 
@@ -10073,14 +10048,14 @@ export function Composer(props: ComposerProps) {
     : null;
   const taskMonitorOverlapDialog = taskMonitorOverlapAction
     ? createPortal(
-        <div className="task-monitor-warning-modal">
+        <div className="full-access-warning-modal">
           <div
             aria-labelledby="task-monitor-warning-title"
             aria-modal="true"
-            className="task-monitor-warning-dialog"
+            className="full-access-warning-dialog"
             role="dialog"
           >
-            <div className="task-monitor-warning-dialog__header">
+            <div className="full-access-warning-dialog__header">
               <h2 id="task-monitor-warning-title">Keep the monitor report-only?</h2>
               <button
                 aria-label="Cancel task monitor warning"
@@ -10103,7 +10078,7 @@ export function Composer(props: ComposerProps) {
             <p>
               This prevents an older monitor result from acting on newer work.
             </p>
-            <label className="composer__checkbox task-monitor-warning-dialog__checkbox">
+            <label className="composer__checkbox full-access-warning-dialog__checkbox">
               <input
                 checked={taskMonitorOverlapDontWarnAgain}
                 disabled={taskMonitorOverlapSaving}
@@ -10115,11 +10090,11 @@ export function Composer(props: ComposerProps) {
               <span>Do not show this warning again on this desktop.</span>
             </label>
             {taskMonitorOverlapError ? (
-              <p className="task-monitor-warning-dialog__error" role="alert">
+              <p className="full-access-warning-dialog__error" role="alert">
                 {taskMonitorOverlapError}
               </p>
             ) : null}
-            <div className="task-monitor-warning-dialog__actions">
+            <div className="full-access-warning-dialog__actions">
               <button
                 className="button button--secondary"
                 disabled={taskMonitorOverlapSaving}

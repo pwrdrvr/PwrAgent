@@ -604,10 +604,6 @@ export class DesktopSettingsService {
           config.general?.attentionPromoteOnTurnEnd,
           true,
         ),
-        taskMonitorOverlapWarningDismissed: this.resolveConfigBoolean(
-          config.general?.taskMonitorOverlapWarningDismissed,
-          false,
-        ),
         pdfAnalysisEnabled: this.resolveConfigBoolean(
           config.general?.pdfAnalysisEnabled,
           true,
@@ -702,6 +698,14 @@ export class DesktopSettingsService {
         ),
         managedReview: this.resolveConfigBoolean(
           config.experimental?.managedReview,
+          false,
+        ),
+        taskMonitorFollowupSafety: this.resolveConfigBoolean(
+          config.experimental?.taskMonitorFollowupSafety,
+          false,
+        ),
+        taskMonitorFollowupWarningDismissed: this.resolveConfigBoolean(
+          config.experimental?.taskMonitorFollowupWarningDismissed,
           false,
         ),
         diffCondensation: {
@@ -1280,6 +1284,13 @@ export class DesktopSettingsService {
   resolveManagedReviewEnabled(): boolean {
     return this.resolveConfigBoolean(
       this.readConfig().config.experimental?.managedReview,
+      false,
+    ).value;
+  }
+
+  resolveTaskMonitorFollowupSafetyEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.experimental?.taskMonitorFollowupSafety,
       false,
     ).value;
   }

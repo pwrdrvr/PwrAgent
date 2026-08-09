@@ -1517,8 +1517,11 @@ function DesktopAppShell(props: {
     directories: navigation.directories,
     fullAccessRiskWarningDismissed:
       settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
+    taskMonitorFollowupSafetyEnabled:
+      settings.snapshot?.experimental.taskMonitorFollowupSafety?.value ?? false,
     taskMonitorOverlapWarningDismissed:
-      settings.snapshot?.general.taskMonitorOverlapWarningDismissed?.value ?? false,
+      settings.snapshot?.experimental.taskMonitorFollowupWarningDismissed?.value
+      ?? false,
     backgroundPrPollingEnabled:
       settings.snapshot
         ? settings.snapshot.git?.backgroundPrPolling?.value
@@ -1589,8 +1592,8 @@ function DesktopAppShell(props: {
     },
     onDismissTaskMonitorOverlapWarning: async () => {
       const saved = await settings.writeConfig({
-        general: {
-          taskMonitorOverlapWarningDismissed: true,
+        experimental: {
+          taskMonitorFollowupWarningDismissed: true,
         },
       });
       if (!saved) {

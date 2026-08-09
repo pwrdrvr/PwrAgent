@@ -927,6 +927,7 @@ export type ThreadViewProps = {
   pendingForkEnvironmentSetup?: PendingForkEnvironmentSetup;
   suppressBranchDriftDialog?: boolean;
   fullAccessRiskWarningDismissed?: boolean;
+  taskMonitorFollowupSafetyEnabled?: boolean;
   taskMonitorOverlapWarningDismissed?: boolean;
   backgroundPrPollingEnabled?: boolean;
   prAutoDispatchAllowed?: boolean;
@@ -3039,6 +3040,9 @@ export function ThreadView(props: ThreadViewProps) {
                   fullAccessRiskWarningDismissed={
                     props.fullAccessRiskWarningDismissed
                   }
+                  taskMonitorFollowupSafetyEnabled={
+                    props.taskMonitorFollowupSafetyEnabled
+                  }
                   taskMonitorOverlapWarningDismissed={
                     props.taskMonitorOverlapWarningDismissed
                   }
@@ -3321,6 +3325,9 @@ export function ThreadView(props: ThreadViewProps) {
             contextWindow={props.contextWindow}
             fullAccessRiskWarningDismissed={
               props.fullAccessRiskWarningDismissed
+            }
+            taskMonitorFollowupSafetyEnabled={
+              props.taskMonitorFollowupSafetyEnabled
             }
             taskMonitorOverlapWarningDismissed={
               props.taskMonitorOverlapWarningDismissed

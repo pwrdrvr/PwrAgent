@@ -22918,8 +22918,7 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.25;
 }
 
-.full-access-warning-modal,
-.task-monitor-warning-modal {
+.full-access-warning-modal {
   position: fixed;
   z-index: 110;
   inset: 0;
@@ -22931,8 +22930,7 @@ a.transcript-message__messaging-origin:focus-visible {
   isolation: isolate;
 }
 
-.full-access-warning-dialog,
-.task-monitor-warning-dialog {
+.full-access-warning-dialog {
   position: relative;
   overflow: hidden;
   width: min(560px, calc(100vw - 48px));
@@ -22943,8 +22941,7 @@ a.transcript-message__messaging-origin:focus-visible {
   box-shadow: var(--shadow-popover);
 }
 
-.full-access-warning-dialog::before,
-.task-monitor-warning-dialog::before {
+.full-access-warning-dialog::before {
   position: absolute;
   inset: 0 auto 0 0;
   width: 3px;
@@ -22952,42 +22949,36 @@ a.transcript-message__messaging-origin:focus-visible {
   content: "";
 }
 
-.full-access-warning-dialog__header,
-.task-monitor-warning-dialog__header {
+.full-access-warning-dialog__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.full-access-warning-dialog h2,
-.task-monitor-warning-dialog h2 {
+.full-access-warning-dialog h2 {
   margin: 0;
   color: var(--text-primary);
   font-size: 16px;
   line-height: 1.25;
 }
 
-.full-access-warning-dialog p,
-.task-monitor-warning-dialog p {
+.full-access-warning-dialog p {
   margin: 10px 0 0;
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.45;
 }
 
-.full-access-warning-dialog__checkbox,
-.task-monitor-warning-dialog__checkbox {
+.full-access-warning-dialog__checkbox {
   margin-top: 14px;
 }
 
-.full-access-warning-dialog__error,
-.task-monitor-warning-dialog__error {
+.full-access-warning-dialog__error {
   color: var(--danger-text);
 }
 
-.full-access-warning-dialog__actions,
-.task-monitor-warning-dialog__actions {
+.full-access-warning-dialog__actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;

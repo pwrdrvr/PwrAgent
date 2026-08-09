@@ -86,7 +86,6 @@ export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
-    taskMonitorOverlapWarningDismissed?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
@@ -119,6 +118,8 @@ export type DesktopSettingsConfig = {
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     managedReview?: boolean;
+    taskMonitorFollowupSafety?: boolean;
+    taskMonitorFollowupWarningDismissed?: boolean;
     diffCondensation?: {
       enabled?: boolean;
     };
@@ -625,12 +626,6 @@ export function desktopSettingsPatchToEdits(
       patch.general.attentionPromoteOnTurnEnd,
     );
   }
-  if (patch.general?.taskMonitorOverlapWarningDismissed !== undefined) {
-    set(
-      ["general", "task_monitor_overlap_warning_dismissed"],
-      patch.general.taskMonitorOverlapWarningDismissed,
-    );
-  }
   if (patch.general?.pdfAnalysisEnabled !== undefined) {
     if (patch.general.pdfAnalysisEnabled) {
       edits.push({ op: "delete", path: ["general", "pdf_analysis_enabled"] });
@@ -706,6 +701,18 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "managed_review"],
       patch.experimental.managedReview,
+    );
+  }
+  if (patch.experimental?.taskMonitorFollowupSafety !== undefined) {
+    set(
+      ["experimental", "task_monitor_followup_safety"],
+      patch.experimental.taskMonitorFollowupSafety,
+    );
+  }
+  if (patch.experimental?.taskMonitorFollowupWarningDismissed !== undefined) {
+    set(
+      ["experimental", "task_monitor_followup_warning_dismissed"],
+      patch.experimental.taskMonitorFollowupWarningDismissed,
     );
   }
   if (patch.general?.appearance?.theme !== undefined) {
@@ -1545,9 +1552,6 @@ function normalizeDesktopConfig(
       attentionPromoteOnTurnEnd: readBoolean(
         general?.attention_promote_on_turn_end,
       ),
-      taskMonitorOverlapWarningDismissed: readBoolean(
-        general?.task_monitor_overlap_warning_dismissed,
-      ),
       pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
       hotCpuProfilingEnabled: readBoolean(general?.hot_cpu_profiling_enabled),
@@ -1608,6 +1612,12 @@ function normalizeDesktopConfig(
         experimental?.codex_default_mode_request_user_input,
       ),
       managedReview: readBoolean(experimental?.managed_review),
+      taskMonitorFollowupSafety: readBoolean(
+        experimental?.task_monitor_followup_safety,
+      ),
+      taskMonitorFollowupWarningDismissed: readBoolean(
+        experimental?.task_monitor_followup_warning_dismissed,
+      ),
       diffCondensation: {
         enabled: readBoolean(diffCondensation?.enabled),
       },
@@ -1886,8 +1896,6 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
-  const taskMonitorOverlapWarningDismissed =
-    config.general?.taskMonitorOverlapWarningDismissed;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const appearance = config.general?.appearance;
@@ -1904,7 +1912,6 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
     attentionPromoteOnTurnEnd !== undefined ||
-    taskMonitorOverlapWarningDismissed !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     appearanceDefined ||
@@ -1942,10 +1949,6 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (attentionPromoteOnTurnEnd !== undefined) {
       pruned.general.attentionPromoteOnTurnEnd = attentionPromoteOnTurnEnd;
-    }
-    if (taskMonitorOverlapWarningDismissed !== undefined) {
-      pruned.general.taskMonitorOverlapWarningDismissed =
-        taskMonitorOverlapWarningDismissed;
     }
     if (pdfAnalysisEnabled !== undefined) {
       pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;
