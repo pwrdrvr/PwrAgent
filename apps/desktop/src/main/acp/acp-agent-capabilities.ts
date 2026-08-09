@@ -31,6 +31,10 @@ const ACP_AGENT_CAPABILITY_CATALOG: Record<string, AcpAgentCapabilities> = {
     managedReview: false,
     steerTurn: false,
   },
+  "claude-acp": {
+    liveWorkspaceHandoff: false,
+    managedReview: false,
+  },
 };
 
 export function acpAgentCapabilitiesForRegistryId(
