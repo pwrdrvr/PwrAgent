@@ -736,17 +736,13 @@ describe("Sidebar", () => {
     const lensTabs = within(
       screen.getByRole("tablist", { name: "Thread lenses" })
     ).getAllByRole("tab");
-    // The Directories tab carries a responsive short form ("Dirs") alongside
-    // the full word; which one shows is decided purely in CSS by a container
-    // query, so the tab's raw textContent holds both spans. Assert the full
-    // label (the visible text in a real browser at normal widths).
-    expect(
-      lensTabs.map(
-        (tab) =>
-          tab.querySelector(".lens-switch__label--full")?.textContent ??
-          tab.textContent
-      )
-    ).toEqual(["Updated", "Created", "Directories"]);
+    // The tabs render an icon and no visible text, so the accessible name is
+    // the whole name — a tab that loses its aria-label announces as unlabeled.
+    expect(lensTabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
+      "Updated",
+      "Created",
+      "Directories",
+    ]);
     expect(lensTabs[2]).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
@@ -840,7 +836,7 @@ describe("Sidebar", () => {
     const updatedTab = screen.getByRole("tab", { name: "Updated" });
     fireEvent.mouseEnter(updatedTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "All threads, most recently updated first"
+      "Updated — all threads, most recently updated first"
     );
     fireEvent.mouseLeave(updatedTab);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
@@ -848,7 +844,7 @@ describe("Sidebar", () => {
     const createdTab = screen.getByRole("tab", { name: "Created" });
     fireEvent.focus(createdTab);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "All threads, newest created first"
+      "Created — all threads, newest created first"
     );
 
     // Selecting a lens still works and the tooltip dismisses on click.

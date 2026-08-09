@@ -10,6 +10,7 @@ import {
   DiscordIcon,
   FileCodeIcon,
   FolderIcon,
+  HistoryIcon,
   MattermostIcon,
   MoreVerticalIcon,
   NewThreadIcon,
@@ -18,6 +19,7 @@ import {
   SettingsIcon,
   SkillIcon,
   SmileyIcon,
+  SparkleIcon,
   TelegramIcon,
   UnlinkedDotIcon,
   WorkspaceIcon,
@@ -46,6 +48,8 @@ const ALL_ICONS = [
   ["PopoutIcon", PopoutIcon],
   ["MoreVerticalIcon", MoreVerticalIcon],
   ["SkillIcon", SkillIcon],
+  ["HistoryIcon", HistoryIcon],
+  ["SparkleIcon", SparkleIcon],
 ] as const;
 
 describe("icon library", () => {

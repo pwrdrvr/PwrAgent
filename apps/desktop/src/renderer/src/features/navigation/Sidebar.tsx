@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  ReactElement,
   ReactNode,
   PointerEvent,
 } from "react";
@@ -32,7 +33,14 @@ import {
 } from "../../lib/federation-window";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
-import { BranchIcon, FolderIcon, SearchIcon } from "../../icons";
+import {
+  BranchIcon,
+  FolderIcon,
+  HistoryIcon,
+  SearchIcon,
+  SparkleIcon,
+} from "../../icons";
+import type { IconProps } from "../../icons";
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { NewThreadButton } from "../chrome/NewThreadButton";
 import type {
@@ -237,18 +245,26 @@ type SidebarProps = {
   sidebarMaxWidth?: number;
 };
 
+// Each lens tab renders as an icon only, so these labels are no longer visible
+// text — they are the tab's accessible name and the first line of its tooltip.
 const browseModeLabels = {
   inbox: "Updated",
   recents: "Created",
   directories: "Directories",
 } satisfies Record<BrowseMode, string>;
 
-// The visible tab labels ("Updated" / "Created") describe only the sort, so a
-// custom viewport tooltip spells out what each lens actually shows.
+const browseModeIcons = {
+  inbox: HistoryIcon,
+  recents: SparkleIcon,
+  directories: FolderIcon,
+} satisfies Record<BrowseMode, (props: IconProps) => ReactElement>;
+
+// Nothing on the tab spells out what the lens shows now that the labels are
+// gone, so the viewport tooltip carries both the name and the explanation.
 const browseModeTooltips = {
-  inbox: "All threads, most recently updated first",
-  recents: "All threads, newest created first",
-  directories: "Threads grouped by linked Git directory",
+  inbox: "Updated — all threads, most recently updated first",
+  recents: "Created — all threads, newest created first",
+  directories: "Directories — threads grouped by linked Git directory",
 } satisfies Record<BrowseMode, string>;
 
 function formatThreadCount(count: number): string {
@@ -2443,6 +2459,7 @@ function LensTab(props: {
   const activeThreadLabel = props.activeThreadCount
     ? formatActiveThreadCount(props.activeThreadCount)
     : undefined;
+  const Icon = browseModeIcons[props.mode];
 
   return (
     <>
@@ -2452,10 +2469,12 @@ function LensTab(props: {
         // button) since browsers don't auto-wire arrow-key navigation from role
         // alone — adding role here only changes how screen readers announce it.
         role="tab"
+        // The tab renders an icon and (on Directories) a decorative count, so
+        // there is no visible text to name it. aria-label is the whole name.
         aria-label={
           activeThreadLabel
             ? `${browseModeLabels[props.mode]}, ${activeThreadLabel}`
-            : undefined
+            : browseModeLabels[props.mode]
         }
         aria-selected={props.active}
         className={`lens-switch__button${props.active ? " is-active" : ""}`}
@@ -2469,22 +2488,7 @@ function LensTab(props: {
         onMouseEnter={(event) => tooltip.show(event.currentTarget, props.tooltipText)}
         onMouseLeave={tooltip.hide}
       >
-        {props.mode === "directories" ? (
-          // Two labels, one shown at a time by the .lens-switch container query:
-          // the full word while the column is wide enough, "Dirs" once it
-          // narrows. The hidden span drops out of the accessible name
-          // (display:none), so the visible text is always the tab's name.
-          <>
-            <span className="lens-switch__label lens-switch__label--full">
-              {browseModeLabels[props.mode]}
-            </span>
-            <span className="lens-switch__label lens-switch__label--abbrev">
-              Dirs
-            </span>
-          </>
-        ) : (
-          <span className="lens-switch__label">{browseModeLabels[props.mode]}</span>
-        )}
+        <Icon size={16} />
         {props.activeThreadCount ? (
           <span aria-hidden="true" className="lens-switch__active-count">
             <ThinkingScanner compact />
