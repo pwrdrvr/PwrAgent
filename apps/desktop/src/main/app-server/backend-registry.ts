@@ -6189,11 +6189,15 @@ const MAX_ACCEPTED_THREAD_CONTROL_REQUESTS = 512;
 
 /**
  * How long a command-discovery probe waits for the agent's
- * `available_commands_update` once its session is open. Agents that advertise
- * commands do so as part of session setup, so this only has to cover one
- * notification hop.
+ * `available_commands_update` once its session is open.
+ *
+ * Agents advertise commands as part of session setup, so in principle this
+ * covers one notification hop — but a cold agent can take several seconds to
+ * get there, and the first cut at 5s was short enough that Kimi routinely lost
+ * the race. Overshooting costs a slower first `/` in a repo; undershooting used
+ * to cost a wrong answer, and now costs a wasted probe.
  */
-const ACP_AVAILABLE_COMMAND_PROBE_TIMEOUT_MS = 5_000;
+const ACP_AVAILABLE_COMMAND_PROBE_TIMEOUT_MS = 12_000;
 /**
  * Ceiling on a whole probe attempt, spawn included.
  *
@@ -6203,9 +6207,11 @@ const ACP_AVAILABLE_COMMAND_PROBE_TIMEOUT_MS = 5_000;
  * would otherwise leave `listSkills` unresolved — and because the renderer
  * skips any request while one is in flight, the `/` menu would sit on
  * PwrAgent's own commands with no way to retry. Generous enough for a cold
- * agent process spawn, short enough that a stuck one is a blip.
+ * agent process spawn, short enough that a stuck one is a blip. Must stay
+ * comfortably above {@link ACP_AVAILABLE_COMMAND_PROBE_TIMEOUT_MS} or the
+ * budget would cut the notification wait short instead of bounding the spawn.
  */
-const ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS = 15_000;
+const ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS = 25_000;
 /**
  * Backoff after a probe that produced nothing (agent unavailable, auth
  * required, or an agent that simply advertises no commands). Without it every
@@ -8021,6 +8027,13 @@ export class DesktopBackendRegistry {
    * it. Cache first (free, and kept fresh by every real session's
    * write-through); a probe only runs when this agent has never reported
    * commands for this repo.
+   *
+   * An empty stored row counts as *no answer*, not as "this agent has no
+   * commands". Treating it as an answer is what turned one slow probe into a
+   * permanently empty `/` menu: the row suppressed every later probe, and only
+   * a real session in that repo could dislodge it. Nothing writes empty rows
+   * any more, and ignoring the ones already on disk lets an affected profile
+   * heal on the next request.
    */
   private async resolveAcpAvailableCommands(params: {
     backend: AcpBackendId;
@@ -8029,25 +8042,14 @@ export class DesktopBackendRegistry {
     const repositoryPaths = await this.resolveAcpCommandRepositoryPaths(
       params.cwds,
     );
-    let observedRepository = false;
     for (const repositoryPath of repositoryPaths) {
       const cached = this.acpAvailableCommandsStore?.get(
         params.backend,
         repositoryPath,
       );
-      if (!cached) {
-        continue;
-      }
-      observedRepository = true;
-      if (cached.commands.length > 0) {
+      if (cached && cached.commands.length > 0) {
         return cached.commands;
       }
-    }
-    if (observedRepository) {
-      // We have watched this agent in this repo and it advertised nothing.
-      // Re-probing would spawn the agent to relearn the same nothing; a real
-      // session's write-through is what corrects this if that ever changes.
-      return [];
     }
 
     const probeTarget = repositoryPaths[0];
@@ -8160,18 +8162,21 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: session.sessionId,
       });
-      // Persist either outcome. On a hit, the write-through for the same
-      // notification normally already did this, but recording it here keeps the
-      // probe self-contained rather than dependent on that ordering. On a miss,
-      // "this agent advertises nothing here" is itself the answer, and storing
-      // it is what stops the next composer focus from spawning the agent again.
-      this.acpAvailableCommandsStore?.upsert({
-        backendId: params.backend,
-        repositoryPath: params.repositoryPath,
-        commands,
-        observedAt: Date.now(),
-      });
       if (commands.length > 0) {
+        // Only a positive observation is durable. The write-through for the
+        // same notification normally already did this, but recording it here
+        // keeps the probe self-contained rather than dependent on that
+        // ordering. An empty result is never persisted — a probe that came up
+        // empty because the agent was slow is indistinguishable from one whose
+        // agent has no commands, and guessing wrong costs the operator a
+        // permanently empty menu. The in-memory cooldown below is what keeps
+        // an empty result from re-spawning the agent on the next keystroke.
+        this.acpAvailableCommandsStore?.upsert({
+          backendId: params.backend,
+          repositoryPath: params.repositoryPath,
+          commands,
+          observedAt: Date.now(),
+        });
         return commands;
       }
     } catch (error) {
