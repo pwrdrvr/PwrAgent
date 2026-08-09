@@ -17622,6 +17622,128 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("mirrors managed review tool activity onto the reviewed thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+        } as ThreadOverlayState,
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      resolveManagedReviewEnabled: () => true,
+    });
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    await emit({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "managed-review-child",
+          turnId: "turn-1",
+          item: { id: "item-9", type: "commandExecution" },
+        },
+      },
+    } as AgentEvent);
+
+    const forwarded = events.filter(
+      (event) =>
+        (event.notification.params as { threadId?: string }).threadId
+        === "thread-parent",
+    );
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]?.notification.params).toMatchObject({
+      threadId: "thread-parent",
+      turnId: "turn-1",
+      // Namespaced so a forwarded item cannot collide with a real one.
+      item: { id: "managed-review:item-9", type: "commandExecution" },
+    });
+
+    await registry.close();
+  });
+
+  it("never mirrors the review sub-agent's own prose onto the reviewed thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+        } as ThreadOverlayState,
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      resolveManagedReviewEnabled: () => true,
+    });
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    // The child's final assistant message is the raw JSON findings blob and
+    // its reasoning is model prose. Either one reaching the parent would
+    // render as a message in the reviewed thread's transcript.
+    for (const type of ["agentMessage", "reasoning", "userMessage"]) {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "managed-review-child",
+            turnId: "turn-1",
+            item: { id: `item-${type}`, type, text: "should not appear" },
+          },
+        },
+      } as AgentEvent);
+    }
+
+    expect(
+      events.filter(
+        (event) =>
+          (event.notification.params as { threadId?: string }).threadId
+          === "thread-parent",
+      ),
+    ).toHaveLength(0);
+
+    await registry.close();
+  });
+
   it("runs the managed review experiment as one child turn and attributes usage to it", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },

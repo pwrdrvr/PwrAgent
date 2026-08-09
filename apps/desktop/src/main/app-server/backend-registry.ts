@@ -27542,7 +27542,118 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * Item types forwarded from a managed review's hidden child thread onto its
+   * parent transcript.
+   *
+   * An ALLOWLIST, deliberately. The child's final assistant message is the raw
+   * JSON findings blob and its reasoning is model prose; forwarding either
+   * would render them as parent-thread messages. A denylist would leak both the
+   * moment a provider adds a type. An unknown type going unforwarded costs a
+   * missing progress row, which is the far cheaper failure.
+   */
+  private static readonly MANAGED_REVIEW_FORWARDED_ITEM_TYPES = new Set([
+    "commandExecution",
+    "fileChange",
+    "mcpToolCall",
+    "patchApply",
+    "toolCall",
+    "webSearch",
+  ]);
+
+  /**
+   * Streaming refinements of an already-forwarded item. These carry no item
+   * envelope of their own, so they are matched by method and rewritten onto the
+   * parent unconditionally — they only ever refine an item the allowlist above
+   * already let through.
+   */
+  private static readonly MANAGED_REVIEW_FORWARDED_METHODS = new Set([
+    "item/commandExecution/outputDelta",
+    "item/fileChange/outputDelta",
+    "item/mcpToolCall/progress",
+  ]);
+
+  /**
+   * Mirror a managed review sub-agent's tool activity onto the thread being
+   * reviewed, so an in-flight review shows what it is doing instead of a silent
+   * gap between "started" and the findings.
+   *
+   * Deliberately transient: the forwarded copies are events only, never
+   * persisted. They live in the renderer's in-memory session state for as long
+   * as the thread stays loaded and vanish on reload or eviction. That is the
+   * intended lifetime — the review's *findings* are durable in the overlay via
+   * `upsertManagedReviewEntry`, so nothing an operator still needs to read is
+   * lost when the breadcrumb goes. It also keeps command output out of sqlite,
+   * which `docs/thread-history-persistence.md` requires.
+   */
+  private async forwardManagedReviewActivity(event: AgentEvent): Promise<void> {
+    const method = event.notification.method;
+    const isItemEnvelope =
+      method === "item/started" || method === "item/completed";
+    if (
+      !isItemEnvelope
+      && !DesktopBackendRegistry.MANAGED_REVIEW_FORWARDED_METHODS.has(method)
+    ) {
+      return;
+    }
+    const params = event.notification.params as {
+      threadId?: unknown;
+      turnId?: unknown;
+      itemId?: unknown;
+      item?: { id?: unknown; type?: unknown };
+    };
+    const childThreadId =
+      typeof params.threadId === "string" ? params.threadId : undefined;
+    if (!childThreadId) {
+      return;
+    }
+    const record = this.findManagedReviewForChildRequest({
+      backend: event.backend,
+      reviewThreadId: childThreadId,
+      ...(typeof params.turnId === "string" ? { turnId: params.turnId } : {}),
+    });
+    // Only a managed review child has a record here; a normal thread's own
+    // items never match, which is also what stops the forwarded copy (addressed
+    // to the parent) from being forwarded again.
+    if (!record || record.reviewThreadId === record.parentThreadId) {
+      return;
+    }
+    if (isItemEnvelope) {
+      const itemType =
+        typeof params.item?.type === "string" ? params.item.type : undefined;
+      if (
+        !itemType
+        || !DesktopBackendRegistry.MANAGED_REVIEW_FORWARDED_ITEM_TYPES.has(itemType)
+      ) {
+        return;
+      }
+    }
+    // Namespace every id so a forwarded item can never collide with a real
+    // item on the parent thread, and group it under the review's turn so it
+    // nests with the review entry rather than floating at the transcript tail.
+    const namespaceId = (value: unknown): string | undefined =>
+      typeof value === "string" ? `managed-review:${value}` : undefined;
+    const forwardedItemId = namespaceId(params.item?.id);
+    const forwardedRefId = namespaceId(params.itemId);
+    await this.emit({
+      backend: event.backend,
+      notification: {
+        ...event.notification,
+        params: {
+          ...(event.notification.params as Record<string, unknown>),
+          threadId: record.parentThreadId,
+          turnId: record.turnId,
+          ...(forwardedRefId ? { itemId: forwardedRefId } : {}),
+          ...(params.item && forwardedItemId
+            ? { item: { ...params.item, id: forwardedItemId } }
+            : {}),
+        },
+      },
+    } as AgentEvent);
+  }
+
   private async emit(event: AgentEvent): Promise<void> {
+    await this.forwardManagedReviewActivity(event);
     event = await this.withThreadMessageContext(event);
     this.rememberFileChangeApprovalContext(event);
     event = this.withEmbeddedFileChangeApprovalContext(event);
