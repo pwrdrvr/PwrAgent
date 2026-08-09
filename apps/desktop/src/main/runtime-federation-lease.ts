@@ -199,11 +199,23 @@ export class RuntimeFederationLeaseCoordinator {
   private startHeartbeat(runtime: FederationLeaseRuntime): void {
     if (this.heartbeatTimer) return;
     this.heartbeatTimer = setInterval(() => {
-      const renewed = this.store.renewFederationLease({
-        instanceId: this.instanceId,
-        now: this.now(),
-        ttlMs: FEDERATION_LEASE_TTL_MS,
-      });
+      // Heartbeat must never throw out of the timer callback. A closed
+      // state DB during process/test teardown would otherwise surface as an
+      // unhandled exception after every assertion already passed.
+      let renewed = false;
+      try {
+        renewed = this.store.renewFederationLease({
+          instanceId: this.instanceId,
+          now: this.now(),
+          ttlMs: FEDERATION_LEASE_TTL_MS,
+        });
+      } catch (error) {
+        this.stopHeartbeat();
+        leaseLog.warn("federation lease heartbeat failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
       if (!renewed) {
         void this.stopRuntimeAfterLeaseLoss(runtime).catch((error) => {
           leaseLog.error("federation runtime stop failed after lease loss", {

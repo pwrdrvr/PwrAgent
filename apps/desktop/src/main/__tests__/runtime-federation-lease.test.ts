@@ -13,11 +13,20 @@ import { StateDb } from "../state/state-db";
 let stateDb: StateDb;
 let store: AppRuntimeInstanceStore;
 let tempDir: string;
+const activeCoordinators: RuntimeFederationLeaseCoordinator[] = [];
 
 function createRuntime(): FederationLeaseRuntime {
   return {
     stop: vi.fn(async () => {}),
   };
+}
+
+function createCoordinator(
+  options: ConstructorParameters<typeof RuntimeFederationLeaseCoordinator>[0],
+): RuntimeFederationLeaseCoordinator {
+  const coordinator = new RuntimeFederationLeaseCoordinator(options);
+  activeCoordinators.push(coordinator);
+  return coordinator;
 }
 
 function recordInstance(
@@ -44,6 +53,16 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  // Stop heartbeats before closing the DB so a still-scheduled interval
+  // cannot renew against a closed better-sqlite3 connection and fail the
+  // suite with an unhandled exception after every assertion passed.
+  for (const coordinator of activeCoordinators.splice(0)) {
+    try {
+      coordinator.shutdownSync();
+    } catch {
+      // Ignore teardown races; the store may already be closed.
+    }
+  }
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
 });
@@ -56,7 +75,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
       cwd: "/tmp/PwrAgnt",
       startedAt: 1_000,
     });
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
@@ -81,7 +100,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     "acquires the profile lease in %s mode",
     async (mode) => {
       const runtime = createRuntime();
-      const coordinator = new RuntimeFederationLeaseCoordinator({
+      const coordinator = createCoordinator({
         instanceId: "instance-a",
         now: () => 1_000,
         store,
@@ -101,7 +120,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
 
   it("never acquires the lease when federation is disabled", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
@@ -119,7 +138,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
 
   it("releases a held lease when federation is disabled", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
@@ -153,12 +172,12 @@ describe("RuntimeFederationLeaseCoordinator", () => {
       cwd: "/tmp/PwrAgnt-b",
       startedAt: 2_000,
     });
-    const first = new RuntimeFederationLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
     });
-    const second = new RuntimeFederationLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       now: () => 2_000,
       store,
@@ -195,12 +214,12 @@ describe("RuntimeFederationLeaseCoordinator", () => {
   it("re-acquires the lease after the holder releases it", async () => {
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
-    const first = new RuntimeFederationLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
     });
-    const second = new RuntimeFederationLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       now: () => 2_000,
       store,
@@ -228,12 +247,12 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     let now = 1_000;
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
-    const first = new RuntimeFederationLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       now: () => now,
       store,
     });
-    const second = new RuntimeFederationLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       now: () => now,
       store,
@@ -258,12 +277,12 @@ describe("RuntimeFederationLeaseCoordinator", () => {
     let now = 1_000;
     const firstRuntime = createRuntime();
     const secondRuntime = createRuntime();
-    const first = new RuntimeFederationLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       now: () => now,
       store,
     });
-    const second = new RuntimeFederationLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       now: () => now,
       store,
@@ -292,7 +311,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
 
   it("releases the lease on shutdownSync", async () => {
     const runtime = createRuntime();
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
@@ -311,7 +330,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
   it("releases the lease and stops the heartbeat when post-acquisition startup fails", async () => {
     vi.useFakeTimers();
     const runtime = createRuntime();
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
@@ -352,12 +371,12 @@ describe("RuntimeFederationLeaseCoordinator", () => {
       cwd: "/tmp/PwrAgnt-b",
       startedAt: 2_000,
     });
-    const first = new RuntimeFederationLeaseCoordinator({
+    const first = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
     });
-    const second = new RuntimeFederationLeaseCoordinator({
+    const second = createCoordinator({
       instanceId: "instance-b",
       now: () => 2_000,
       store,
@@ -382,7 +401,7 @@ describe("RuntimeFederationLeaseCoordinator", () => {
         throw new Error("stop failed");
       }),
     };
-    const coordinator = new RuntimeFederationLeaseCoordinator({
+    const coordinator = createCoordinator({
       instanceId: "instance-a",
       now: () => 1_000,
       store,
