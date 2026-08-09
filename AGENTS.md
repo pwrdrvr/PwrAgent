@@ -134,6 +134,7 @@ These are **dev-only escape hatches**. They are silently ignored in packaged pro
 
 - `PWRAGENT_PROFILE_AUTO_CREATE=1` — Bypass the onboarding wizard's "set up profile" prompt for missing-named-profile boots. Used by E2E fixtures and replay harnesses that need a profile dir materialized without operator interaction. Production launches MUST go through the wizard so an operator never gets a silently-created profile mapped to a Codex auth profile they didn't ask for (see issue #524).
 - `PWRAGENT_DEV_DISABLE_SECRET_STORAGE=1` — Skip `safeStorage` operations entirely. Wizard typed secrets are SILENTLY DROPPED; settings-screen secret pills report "unavailable." Workaround for unsigned dev Electron builds on macOS that surface a confusing "Keychain Not Found" dialog because the binary lacks a stable code-signed identity (signed release builds don't have this problem). Operator re-enters secrets in Settings → Models on a real build afterwards.
+- `PWRAGENT_DEV_SQLITE_WRITE_METRICS=1` — Count sqlite write volume (commits, write statements, rows, WAL growth, per table) for the process. Wraps the database in `StateDb.open` after schema setup. Paired with `PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE=<path>`, which appends one JSON line of totals per source. See "Sqlite Write-Volume Instrumentation" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 
 ## Frontend and Desktop UI
 

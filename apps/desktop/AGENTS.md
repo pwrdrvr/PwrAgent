@@ -525,6 +525,70 @@ The desktop app sits at the **top** of the dependency hierarchy and may import a
 
 Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation.
 
+## Sqlite Write-Volume Instrumentation
+
+PR #1406 fixed tool accounting running one implicit transaction per streamed
+8 KiB command-output chunk: **3,693 commits and 58 MB of WAL growth** for a
+single `find /`, to persist about nineteen integer counters. The whole suite
+passed either way. It had to be found by hand.
+
+The reason nothing caught it is worth internalizing before you reach for a
+unit test here: **the main-process suites mock the overlay store.**
+`backend-registry.test.ts` alone constructs `createOverlayStoreMock` in 450+
+places, so no sqlite is involved and no assertion about write behavior is
+possible. The code path that writes for real only runs in the app — which the
+E2E harness does exercise, against a real `state.db` under a temp
+`PWRAGENT_HOME`.
+
+So the instrumentation lives on the database, in
+[`src/main/state/sqlite-write-metrics.ts`](src/main/state/sqlite-write-metrics.ts),
+and covers vitest, E2E, and dev runs from one place.
+
+**Measure commits, not statements.** Each implicit transaction flushes its
+dirty pages, and a row update drags along every index it moved — in #1406's
+case four 4 KB pages per write, because `observed_at` sits in all three
+indexes on `thread_tool_invocations`. Ranking by statements would call a
+batched migration expensive and a per-event write loop cheap.
+
+### Running it
+
+```bash
+pnpm test:sqlite-writes                       # whole suite, then the ranking
+pnpm test:sqlite-writes apps/desktop/src/main/__tests__/state-db.test.ts
+```
+
+Every desktop E2E run reports automatically — the harness is the only place
+the real write path executes, the overhead is a `statSync` per commit against
+a run that launches Electron, and the ranking prints at teardown into the run
+log (`e2e.log` on the lab guest). Opt out with
+`PWRAGENT_DEV_SQLITE_WRITE_METRICS=0`.
+
+### Things that will bite you
+
+- **Attach after migrations, not before.** Schema migrations commit once per
+  version on a fresh database. A suite that opens a temp db per test would
+  otherwise rank whichever file opened the most databases as the heaviest
+  writer — the first version of this reported 164 commits for 16 statements.
+- **Instrumentation must be invisible to the code it measures.**
+  better-sqlite3 hangs `.default` / `.deferred` / `.immediate` / `.exclusive`
+  off the callable `transaction()` returns, and they are **not enumerable**.
+  Copying with `Object.assign` drops them and every `tx.immediate(...)` caller
+  dies with "is not a function"; `pr-auto-dispatch.test.ts` is what caught it.
+- **A zero is not a clean bill of health.** A test file that mocks its store
+  reports zero writes no matter what it does in production. Read the ranking
+  as "of the code that touched real sqlite, here is the order", never as
+  coverage.
+
+### The regression guard
+
+[`src/main/__tests__/sqlite-write-metrics.test.ts`](src/main/__tests__/sqlite-write-metrics.test.ts)
+drives the real registry into a real store and asserts streamed command output
+stays at one commit per flush window instead of one per chunk. Reverting the
+#1406 coalescing fails it with `expected 501 to be less than or equal to 4`.
+It asserts the *shape* of the write pattern, not a wall-clock number, so it
+means the same thing on a loaded CI box as on a fast laptop. Prefer that style
+for any new budget you add here.
+
 ## SQLite Query Rules
 
 - Never interpolate user-sourced values into SQL strings. Always use

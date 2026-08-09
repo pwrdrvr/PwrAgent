@@ -1,4 +1,23 @@
+import path from "node:path";
 import { defineConfig } from "@playwright/test";
+
+// Every E2E run reports how much the app made sqlite write. This is the only
+// harness that drives the real write path — the main-process unit suites mock
+// the overlay store — so it is the one place a per-event write regression can
+// be seen. Cost is a statSync per commit against a run that launches Electron,
+// so it is on by default; set PWRAGENT_DEV_SQLITE_WRITE_METRICS=0 to skip it.
+// Assigned at config module scope so every Playwright worker, and therefore
+// every Electron child it launches, inherits the variables.
+if (process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS !== "0") {
+  process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS = "1";
+  // Not under `outputDir`: Playwright clears that directory for a run, and
+  // the app appends to this file while tests are executing.
+  process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE ??= path.join(
+    import.meta.dirname,
+    ".local",
+    "sqlite-write-metrics.jsonl",
+  );
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -8,6 +27,8 @@ export default defineConfig({
   // whichever spec sorts first rather than the machine. See
   // e2e/global-setup.ts.
   globalSetup: "./e2e/global-setup.ts",
+  // Prints the sqlite write-volume ranking into the run log.
+  globalTeardown: "./e2e/global-teardown.ts",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
