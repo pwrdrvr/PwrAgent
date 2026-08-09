@@ -444,6 +444,13 @@ export class AcpSessionReplayNormalizer {
         // stays open, so later chunks append to the existing (earlier) message
         // entry and this activity naturally sorts after the finished message
         // rather than through the middle of it.
+        //
+        // This trades one failure for a better one. If an unrecognized kind
+        // really was a boundary — a provider naming its tool call something we
+        // do not enumerate — the text after it merges into the earlier bubble
+        // instead of starting a new one. A reply that reads as one paragraph
+        // too many beats a reply torn in half around a placeholder, and the fix
+        // is to enumerate the kind above, which this breadcrumb is what surfaces.
         this.removeCurrentAgentWaitingActivity();
         this.upsertActivity(unknownActivity(update, kind, createdAt));
       }
@@ -1443,7 +1450,12 @@ function unknownActivity(
   kind: string,
   createdAt: number,
 ): AppServerThreadActivityEntry {
-  const id = `unknown:${update.sessionId}:${createdAt}`;
+  // The kind is part of the identity, not just the summary. Two different
+  // unrecognized kinds in the same millisecond used to collide on this id, and
+  // upsertActivity merges rather than appends — so the second kind's name was
+  // dropped and the breadcrumb reported only the first. Re-applying the same
+  // update still dedupes, which is what the id is for.
+  const id = `unknown:${update.sessionId}:${createdAt}:${kind}`;
   return {
     type: "activity",
     id,
