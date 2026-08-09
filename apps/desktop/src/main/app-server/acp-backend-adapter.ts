@@ -1857,9 +1857,9 @@ export class AcpBackendAdapter {
           //
           // `totalTokenUsage` here is the running total for THIS TURN, since
           // `liveTurnUsage` is keyed by turn and dropped at `turn_finished`.
-          // Codex sends a session-cumulative total in the same field; see the
-          // note on `AcpUsageEnvelope` for what that divergence does and does
-          // not affect before changing this payload's shape.
+          // That is the ACP convention; Codex sends a session-cumulative total
+          // in the same field. See the note on `AcpUsageEnvelope` before
+          // changing this payload's shape.
           if (usageEnvelope.scope === "model-call" && !fromSessionLoad) {
             liveUsageNotification = acpUsageNotification({
               envelope: {

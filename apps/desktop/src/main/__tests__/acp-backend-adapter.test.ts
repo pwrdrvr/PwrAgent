@@ -1408,12 +1408,12 @@ describe("AcpBackendAdapter", () => {
   });
 
   it("restarts the ACP running total on each turn", async () => {
-    // The running total is per turn, not per session: `liveTurnUsage` is keyed
-    // by turn and dropped at `turn_finished`. Pinning that here because the
-    // same field is session-cumulative on Codex, and consumers subtract
-    // against it — see the note on `AcpUsageEnvelope`. If a later change makes
-    // ACP cumulative, this test should fail loudly rather than the difference
-    // being discovered downstream.
+    // Per turn, not per session — the ACP convention, matching how both
+    // reporting agents emit (Grok per `response_completed`, Qwen per
+    // `agent_message_chunk._meta.usage`). Codex sends the same field meaning a
+    // session-cumulative total, so consumers subtract against it; see the note
+    // on `AcpUsageEnvelope`. Pinned here so a change to cumulative fails at
+    // the seam that defines the convention rather than downstream.
     const backendId = "acp:grok" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();
     const events: AgentEvent[] = [];

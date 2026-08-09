@@ -15,21 +15,29 @@ export type AcpUsageEnvelope = {
 };
 
 /**
- * ACP running totals are PER TURN, not per session.
+ * ACP running totals are PER TURN, not per session. That is the convention for
+ * this transport, deliberately, not an accident of one provider.
  *
  * `AcpBackendAdapter` folds these envelopes into a `liveTurnUsage` entry keyed
  * by `(backend, session, turn)` and drops it at `turn_finished`, so the sum
  * restarts at zero on every turn. That is the number it sends as
  * `total_token_usage` on `thread/tokenUsage/updated`.
  *
- * Codex sends the same field meaning something else: a session-cumulative
- * total, which is why `deriveLiveThreadTokenUsage` can read `total - last` as
- * "the context this turn inherited". For ACP that subtraction lands on zero on
- * a turn's first call, which is also correct — the turn did start from nothing
- * — so every consumer traced today produces right answers from either shape.
+ * Both ACP agents that report usage today report per model call, which folds
+ * to per turn: Grok on `response_completed`, Qwen on
+ * `agent_message_chunk._meta.usage`. Gemini and Kimi report none. Codex is the
+ * outlier — it sends the same field meaning a session-cumulative total, which
+ * is why `deriveLiveThreadTokenUsage` can read `total - last` as "the context
+ * this turn inherited". For ACP that subtraction lands on zero on a turn's
+ * first call, which is equally correct: the turn did start from nothing.
  *
- * Two things follow that are NOT obvious from the field name, and one open
- * question:
+ * If a future agent reports cumulative instead, do NOT quietly widen this
+ * function to accept both. The shapes are indistinguishable from a single
+ * observation, so the reader would have to guess. Track which providers (and
+ * which versions) report which way, and normalize on that, keeping per-turn as
+ * the shape this layer hands downstream.
+ *
+ * Two consequences of per-turn that the field name hides:
  *
  *  - `deriveTurnUsageBaseline` (renderer) prefers `contextWindow.cumulative*`
  *    over `total - last` when a context window is known. Nothing populates a
@@ -37,20 +45,16 @@ export type AcpUsageEnvelope = {
  *    carry no `modelContextWindow`. Adding one — the obvious shape of a Grok
  *    context-usage indicator — would feed a per-turn total into a baseline
  *    that expects a session-cumulative one, and the live turn usage would
- *    collapse toward zero. Settle the semantics before adding that field.
+ *    collapse toward zero. Fix that baseline preference before adding the
+ *    field; committing to per-turn makes this the likelier trap, not a rarer
+ *    one.
  *  - `foldObservedContextReplay` keeps its cursor per THREAD and treats a
  *    total at or below the cursor as a stale re-emission. Per-turn totals
  *    restart below it, so after the first turn an ACP thread stops advancing
- *    that cursor. It contributed nothing before this shape existed either (the
- *    fold requires a total, and ACP sent none), so no observable count
- *    regressed — but ACP does not meaningfully participate in replay
- *    accounting, and a half-advanced cursor is easy to mistake for one that
- *    works.
- *
- * Whether ACP should instead report a session-cumulative total is genuinely
- * open. It would align both of the above with Codex, but it needs answers we
- * do not have yet: what a resumed or compacted ACP session should report, and
- * whether Grok's per-call usage is safe to accumulate across turns at all.
+ *    that cursor. Nothing regressed — the fold needs a total and ACP sent none
+ *    before — but the practical position is that ACP does not participate in
+ *    replay accounting, and a half-advanced cursor is easy to mistake for one
+ *    that works.
  */
 
 export function readAcpUsageEnvelope(
