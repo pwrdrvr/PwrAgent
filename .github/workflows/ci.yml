@@ -98,6 +98,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
+        with:
+          sparse-checkout: |
+            **/package.json
+            .npmrc
+            .pnpmfile.cjs
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            apps/desktop/scripts/ensure-electron-runtime.mjs
+            apps/desktop/scripts/rebuild-native-for-electron.mjs
+          sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
@@ -449,7 +459,15 @@ jobs:
         uses: actions/checkout@v7
         timeout-minutes: 10
         with:
-          lfs: true
+          sparse-checkout: |
+            **/package.json
+            .npmrc
+            .pnpmfile.cjs
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            apps/desktop/scripts/ensure-electron-runtime.mjs
+            apps/desktop/scripts/rebuild-native-for-electron.mjs
+          sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
