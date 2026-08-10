@@ -67,12 +67,13 @@ function acpSnapshot(
   registryId: "grok" | "qwen",
   cliPath: string,
   source: "config" | "env" = "config",
+  enabled = true,
 ): DesktopSettingsSnapshot {
   return {
     acpAgents: {
       [registryId]: {
         cliPath: { value: cliPath, source },
-        enabled: true,
+        enabled,
       },
     },
   } as unknown as DesktopSettingsSnapshot;
@@ -214,6 +215,62 @@ describe("AcpAgentsSettings", () => {
     });
   });
 
+  it("blocks path changes while provider discovery is running", async () => {
+    const installed = grokEntry({
+      instances: [
+        { command: "/usr/bin/grok", version: "1.0.0", source: "path" },
+        { command: "/opt/homebrew/bin/grok", version: "0.9.0", source: "path" },
+      ],
+    });
+    let resolveManualRefresh:
+      | ((value: { fetchedAt: number; entries: AcpAgentSettingsEntry[] }) => void)
+      | undefined;
+    const manualRefresh = new Promise<{
+      fetchedAt: number;
+      entries: AcpAgentSettingsEntry[];
+    }>((resolve) => {
+      resolveManualRefresh = resolve;
+    });
+    const listAcpAgents = vi.fn(
+      async (request?: { refresh?: boolean; force?: boolean }) =>
+        request?.force
+          ? manualRefresh
+          : { fetchedAt: 1000, entries: [installed] },
+    );
+    const onCliPathChange = vi.fn(async () => true);
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        snapshot={acpSnapshot("grok", "")}
+        onCliPathChange={onCliPathChange}
+      />,
+    );
+
+    expect(await screen.findByText("Grok")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    });
+    fireEvent.change(screen.getByLabelText("Grok manual path"), {
+      target: { value: "/Users/me/bin/grok-next" },
+    });
+    screen.getByRole("button", { name: "Refresh" }).click();
+
+    expect(
+      await screen.findByRole("button", { name: "Discovering…" }),
+    ).toBeDisabled();
+    expect(screen.getByLabelText("Grok manual path")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Clear" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Use" })).toBeDisabled();
+    expect(onCliPathChange).not.toHaveBeenCalled();
+
+    resolveManualRefresh?.({ fetchedAt: 2000, entries: [installed] });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    });
+  });
+
   it("saves and immediately verifies a manual path for new threads", async () => {
     const overridePath = "/Users/me/.local/bin/grok-local";
     const installed = grokEntry();
@@ -312,6 +369,114 @@ describe("AcpAgentsSettings", () => {
       "aria-invalid",
       "true",
     );
+  });
+
+  it("preserves a saved path when verification fails and supports retry", async () => {
+    const overridePath = "/Users/me/.local/bin/grok-local";
+    const installed = grokEntry();
+    const overridden = grokEntry({
+      activeCommand: overridePath,
+      instances: [
+        { command: overridePath, version: "2.0.0", source: "override" },
+        { command: "/usr/bin/grok", version: "1.0.0", source: "path" },
+      ],
+    });
+    let forcedAttempts = 0;
+    const listAcpAgents = vi.fn(
+      async (request?: { refresh?: boolean; force?: boolean }) => {
+        if (request?.force) {
+          forcedAttempts += 1;
+          if (forcedAttempts === 1) {
+            throw new Error("probe unavailable");
+          }
+          return { fetchedAt: 2000, entries: [overridden] };
+        }
+        return { fetchedAt: 1000, entries: [installed] };
+      },
+    );
+
+    function Harness() {
+      const [snapshot, setSnapshot] = useState(acpSnapshot("grok", ""));
+      return (
+        <AcpAgentsSettings
+          desktopApi={{ listAcpAgents } as DesktopApi}
+          snapshot={snapshot}
+          onCliPathChange={async (registryId, cliPath) => {
+            setSnapshot(acpSnapshot(registryId as "grok", cliPath));
+            return true;
+          }}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    expect(await screen.findByText("Grok")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    });
+    fireEvent.change(screen.getByLabelText("Grok manual path"), {
+      target: { value: overridePath },
+    });
+    screen.getByRole("button", { name: "Save" }).click();
+
+    expect(
+      await screen.findByText(
+        "Path was saved, but PwrAgent couldn't verify it. Click Refresh to try again.",
+      ),
+    ).toHaveAttribute("role", "alert");
+    expect(screen.getByLabelText("Grok manual path")).toHaveValue(overridePath);
+    expect(screen.getByText("saved override")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+
+    screen.getByRole("button", { name: "Refresh" }).click();
+    expect(
+      await screen.findByText("Active for new threads · v2.0.0."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Path was saved, but PwrAgent couldn't verify it. Click Refresh to try again.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not claim a saved path is active while the provider is disabled", async () => {
+    const overridePath = "/Users/me/.local/bin/grok-local";
+    const entry = grokEntry({
+      activeCommand: overridePath,
+      instances: [
+        { command: overridePath, version: "2.0.0", source: "override" },
+      ],
+    });
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1000,
+      entries: [entry],
+    }));
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        snapshot={acpSnapshot("grok", overridePath, "config", false)}
+        onCliPathChange={vi.fn(async () => true)}
+      />,
+    );
+
+    expect(await screen.findByText("Grok")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    });
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    expect(screen.getByText("saved override")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Enable this provider, then click Refresh to verify the saved path before use.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("active override")).not.toBeInTheDocument();
+    expect(screen.queryByText("Using")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Active for new threads · v2.0.0."),
+    ).not.toBeInTheDocument();
   });
 
   it("makes environment-forced paths read-only and explains their source", async () => {

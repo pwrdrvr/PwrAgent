@@ -19,6 +19,13 @@ const KIMI_CODE_INSTALL_COMMAND =
 const KIMI_CODE_WINDOWS_INSTALL_COMMAND =
   "irm https://code.kimi.com/kimi-code/install.ps1 | iex";
 
+type AcpCliPathUpdateResult =
+  | { saved: false }
+  | {
+      saved: true;
+      verification: "verified" | "failed" | "deferred";
+    };
+
 /** Look up the persisted CLI-path override for an agent by its registry id. */
 function cliPathSnapshotFor(
   snapshot: DesktopSettingsSnapshot | undefined,
@@ -140,16 +147,22 @@ export function AcpAgentsSettings(props: {
                       cliPath,
                     );
                     if (!saved) {
-                      return false;
+                      return { saved: false };
                     }
-                    return await refresh(true, true);
+                    if (!enabledSnapshotFor(props.snapshot, registryId)) {
+                      return { saved: true, verification: "deferred" };
+                    }
+                    return {
+                      saved: true,
+                      verification: await refresh(true, true)
+                        ? "verified"
+                        : "failed",
+                    };
                   }
                 : undefined
             }
             onEnabledChange={props.onEnabledChange}
-            onRefresh={() => {
-              void refresh(true, true);
-            }}
+            onRefresh={() => refresh(true, true)}
           />
         </Fragment>
       ))}
@@ -260,9 +273,12 @@ function AcpAgentSection(props: {
   enabled: boolean;
   saving?: boolean;
   refreshing?: boolean;
-  onCliPathChange?: (registryId: string, cliPath: string) => Promise<boolean>;
+  onCliPathChange?: (
+    registryId: string,
+    cliPath: string,
+  ) => Promise<AcpCliPathUpdateResult>;
   onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
-  onRefresh: () => void;
+  onRefresh: () => Promise<boolean>;
 }) {
   const { entry, enabled } = props;
   const instances = entry.instances ?? [];
@@ -280,22 +296,28 @@ function AcpAgentSection(props: {
   const envForced = props.cliPathSnapshot?.source === "env";
   const checkingPath = pathUpdating || props.refreshing === true;
   const overrideActive =
-    normalizedSavedPath !== ""
+    enabled
+    && normalizedSavedPath !== ""
     && entry.activeCommand === normalizedSavedPath;
   const activeOverrideInstance = overrideActive
     ? instances.find((instance) => instance.command === normalizedSavedPath)
     : undefined;
   const overrideHelp = normalizedSavedPath === ""
     ? undefined
-    : checkingPath
-      ? "Checking this path and provider capabilities…"
-      : overrideActive
-        ? `Active for new threads${activeOverrideInstance?.version
-          ? ` · v${activeOverrideInstance.version}`
-          : ""}.`
-        : undefined;
+    : !enabled
+      ? "Enable this provider, then click Refresh to verify the saved path before use."
+      : checkingPath
+        ? "Checking this path and provider capabilities…"
+        : overrideActive
+          ? `Active for new threads${activeOverrideInstance?.version
+            ? ` · v${activeOverrideInstance.version}`
+            : ""}.`
+          : undefined;
   const inactiveOverrideError =
-    normalizedSavedPath !== "" && !checkingPath && !overrideActive
+    enabled
+    && normalizedSavedPath !== ""
+    && !checkingPath
+    && !overrideActive
       ? entry.activeCommand
         ? `Saved override is not active. New threads currently use ${entry.activeCommand}.`
         : "Saved override is not active. This provider cannot launch new threads."
@@ -309,10 +331,14 @@ function AcpAgentSection(props: {
     setPathActionError(undefined);
     setPathUpdating(true);
     try {
-      const updated = await props.onCliPathChange(entry.registryId, nextPath);
-      if (!updated) {
+      const result = await props.onCliPathChange(entry.registryId, nextPath);
+      if (!result.saved) {
         setDraft(savedPath);
-        setPathActionError("PwrAgent couldn't finish saving and checking this path.");
+        setPathActionError("PwrAgent couldn't save this path.");
+      } else if (result.verification === "failed") {
+        setPathActionError(
+          "Path was saved, but PwrAgent couldn't verify it. Click Refresh to try again.",
+        );
       }
     } catch (error) {
       setDraft(savedPath);
@@ -321,6 +347,19 @@ function AcpAgentSection(props: {
       setPathUpdating(false);
     }
   }
+
+  async function refreshPathStatus(): Promise<void> {
+    setPathActionError(undefined);
+    const refreshed = await props.onRefresh();
+    if (!refreshed && normalizedSavedPath !== "") {
+      setPathActionError(
+        "PwrAgent couldn't verify the saved path. Click Refresh to try again.",
+      );
+    }
+  }
+
+  const pathControlsDisabled =
+    props.saving || pathUpdating || props.refreshing || envForced;
 
   return (
     <SettingsSection
@@ -338,7 +377,7 @@ function AcpAgentSection(props: {
             control={
               <SettingsSwitch
                 checked={enabled}
-                disabled={props.saving}
+                disabled={props.saving || pathUpdating || props.refreshing}
                 label={`Enable ${entry.name}`}
                 onChange={(next) => {
                   void props.onEnabledChange?.(entry.registryId, next);
@@ -350,7 +389,11 @@ function AcpAgentSection(props: {
 
         <SettingsField
           label="Installed paths"
-          sub="Binaries detected on this machine. The active one runs new threads — click Use to pick another."
+          sub={
+            enabled
+              ? "Binaries detected on this machine. The active one runs new threads — click Use to pick another."
+              : "Previously detected binaries. Enable this provider and Refresh before launching new threads."
+          }
           source={`${instances.length} found`}
           error={detail}
           control={
@@ -359,7 +402,8 @@ function AcpAgentSection(props: {
                 <p className="settings-empty">Not installed.</p>
               ) : (
                 instances.map((instance) => {
-                  const active = instance.command === entry.activeCommand;
+                  const active =
+                    enabled && instance.command === entry.activeCommand;
                   const chips: SettingsPathRowChip[] = [
                     {
                       label: instance.source === "override" ? "override" : "path",
@@ -383,7 +427,7 @@ function AcpAgentSection(props: {
                       selected={active}
                       selectedLabel="Using"
                       useLabel="Use"
-                      disabled={props.saving || pathUpdating || envForced}
+                      disabled={pathControlsDisabled}
                       onUse={
                         props.onCliPathChange
                           ? () => {
@@ -405,7 +449,9 @@ function AcpAgentSection(props: {
             sub={
               envForced
                 ? "This path is controlled by an environment override set before PwrAgent launched."
-                : "Enter an absolute path. Save checks it immediately and updates the binary used by new threads."
+                : enabled
+                  ? "Enter an absolute path. Save checks it immediately and updates the binary used by new threads."
+                  : "Save an absolute path now. Enable this provider, then Refresh to verify it before use."
             }
             source={
               envForced
@@ -424,7 +470,7 @@ function AcpAgentSection(props: {
                   aria-label={`${entry.name} manual path`}
                   aria-invalid={Boolean(pathActionError ?? inactiveOverrideError)}
                   className="settings-input"
-                  disabled={props.saving || pathUpdating || envForced}
+                  disabled={pathControlsDisabled}
                   placeholder="Manual path — e.g. /Users/you/.local/bin/agent"
                   type="text"
                   value={draft}
@@ -433,9 +479,7 @@ function AcpAgentSection(props: {
                 <button
                   className="button button--secondary"
                   disabled={
-                    props.saving
-                    || pathUpdating
-                    || envForced
+                    pathControlsDisabled
                     || draft.trim() === normalizedSavedPath
                   }
                   type="button"
@@ -445,12 +489,7 @@ function AcpAgentSection(props: {
                 </button>
                 <button
                   className="button button--ghost"
-                  disabled={
-                    props.saving
-                    || pathUpdating
-                    || envForced
-                    || draft === ""
-                  }
+                  disabled={pathControlsDisabled || draft === ""}
                   type="button"
                   onClick={() => void commitPath("")}
                 >
@@ -470,7 +509,7 @@ function AcpAgentSection(props: {
                 className="button button--secondary"
                 disabled={props.refreshing || pathUpdating}
                 type="button"
-                onClick={props.onRefresh}
+                onClick={() => void refreshPathStatus()}
               >
                 {props.refreshing ? "Discovering…" : "Refresh"}
               </button>
