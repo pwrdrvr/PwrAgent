@@ -3827,6 +3827,29 @@ textarea,
   pointer-events: none;
 }
 
+/* Native HTML drag keeps hit-testing the live DOM beneath the drag image.
+   Sidebar rows contain buttons, copy targets, PR hover cards, menus, and
+   native-title controls; letting those surfaces activate while a card is held
+   creates dragenter/dragleave churn and can stall Chromium's edge autoscroll.
+   The window-level native-drag guard stamps this attribute for the duration of
+   a card/directory drag. Interactive descendants become transparent so the
+   stable row/drop shells receive drag events, while every hover overlay is
+   suppressed until drop, dragend, Escape, or window blur. */
+:root[data-native-drag-active] .sidebar button,
+:root[data-native-drag-active] .sidebar a,
+:root[data-native-drag-active] .sidebar input,
+:root[data-native-drag-active] .sidebar select,
+:root[data-native-drag-active] .sidebar textarea,
+:root[data-native-drag-active] .sidebar [role="button"] {
+  pointer-events: none !important;
+}
+
+:root[data-native-drag-active] [role="tooltip"],
+:root[data-native-drag-active] [role="menu"],
+:root[data-native-drag-active] .tooltip-target[data-tooltip]::after {
+  display: none !important;
+}
+
 .thread-row__actions {
   position: absolute;
   /* Align the overflow button + add-reaction chip with the title line,

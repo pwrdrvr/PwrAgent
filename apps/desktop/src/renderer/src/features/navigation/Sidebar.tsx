@@ -55,6 +55,7 @@ import {
   runtimeGitRefCopyValue,
 } from "../../lib/runtime-identity";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { useNativeDragInteractionGuard } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { selectThreadsWithDrafts } from "../../lib/useThreadDraftIndicators";
 import { formatPrimaryAccel } from "../../lib/keyboard-accel";
@@ -310,6 +311,7 @@ function uniqueContextMenuValues(
 }
 
 export function Sidebar(props: SidebarProps) {
+  useNativeDragInteractionGuard();
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
   const contextMenuRef = useRef<HTMLDivElement>(null);

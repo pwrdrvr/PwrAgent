@@ -6,6 +6,10 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { ThreadRow } from "../ThreadRow";
+import {
+  beginNativeDragInteraction,
+  endNativeDragInteraction,
+} from "../../../lib/native-drag-interaction";
 
 // Regression coverage for the unified chip-flow refactor (#188 / plan
 // 2026-05-05-001). The historical bug pattern was:
@@ -51,6 +55,7 @@ const telegramBinding: MessagingThreadBindingSummary = {
 
 afterEach(() => {
   cleanup();
+  endNativeDragInteraction();
   vi.restoreAllMocks();
 });
 
@@ -369,6 +374,39 @@ describe("ThreadRow chip flow", () => {
 
       vi.advanceTimersByTime(1);
       expect(onPrefetchPullRequests).toHaveBeenCalledWith(thread);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not complete an armed hover prefetch during a native drag", () => {
+    vi.useFakeTimers();
+    try {
+      const onPrefetchPullRequests = vi.fn();
+      const thread: NavigationThreadSummary = {
+        ...baseThread,
+        prs: [
+          {
+            provider: "github.com",
+            number: 542,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "passing",
+            lifecycleState: "open",
+            checkState: "passing",
+            reviewState: "ready_for_review",
+            mergeState: "mergeable",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/542",
+          },
+        ],
+      };
+      const { container } = renderRow({ thread, onPrefetchPullRequests });
+
+      fireEvent.mouseOver(container.querySelector(".pr-chip")!);
+      beginNativeDragInteraction();
+      vi.advanceTimersByTime(750);
+
+      expect(onPrefetchPullRequests).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

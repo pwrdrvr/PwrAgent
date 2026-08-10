@@ -18,6 +18,7 @@ import {
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { PrChip } from "../pr-status/PrChip";
 import type { DropIndicatorPosition } from "./drag-drop";
@@ -196,6 +197,7 @@ export function ThreadRow(props: ThreadRowProps) {
     active,
   ]);
   const armHoverPrefetch = (): void => {
+    if (isNativeDragInteractionActive()) return;
     if (
       !props.onPrefetchPullRequests
       && !props.onPrefetchGitWorkingState
@@ -205,6 +207,7 @@ export function ThreadRow(props: ThreadRowProps) {
     if (hoverTimerRef.current !== undefined) return;
     hoverTimerRef.current = window.setTimeout(() => {
       hoverTimerRef.current = undefined;
+      if (isNativeDragInteractionActive()) return;
       if (prs.length > 0) {
         props.onPrefetchPullRequests?.(props.thread);
       }
