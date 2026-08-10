@@ -456,7 +456,7 @@ test("existing running thread keeps selected environment after pending state cle
 
     await app.advance({ stepId: "existing-thread-status-active" });
     await app.advance({ stepId: "existing-thread-turn-started" });
-    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
 
     const environmentDropdown = app.window.getByRole("button", {
       name: "Environment",

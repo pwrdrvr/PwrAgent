@@ -708,7 +708,7 @@ test("shows ACP tool progress while a turn is still running", async () => {
     await app.window.getByLabel("Reply").fill("Inspect the project README.");
     await app.window.getByRole("button", { name: "Send" }).click();
 
-    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     const readSummary = app.window.getByRole("button", { name: "Read README.md" });
     await expect(readSummary).toBeVisible();
     await readSummary.click();

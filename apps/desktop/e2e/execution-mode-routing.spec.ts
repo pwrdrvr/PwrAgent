@@ -33,7 +33,7 @@ test("applies the correct per-turn permission policy after execution mode toggle
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await expect(
-      app.window.getByRole("button", { name: "Stop" })
+      app.window.getByTestId("composer-stop-turn")
     ).toBeVisible();
 
     await expect

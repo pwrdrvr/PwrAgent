@@ -43,7 +43,7 @@ test("clears the thread-list thinking indicator after completed retained activit
         name: "Stale thinking replay",
       })
     ).toBeVisible();
-    await expect(app.window.getByRole("button", { name: "Stop" })).toHaveCount(0);
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
     await expect(app.window.getByRole("status")).toHaveCount(0);
   } finally {
     await app.close();

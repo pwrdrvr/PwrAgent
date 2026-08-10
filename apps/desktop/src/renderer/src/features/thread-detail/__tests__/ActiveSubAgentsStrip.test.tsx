@@ -330,12 +330,17 @@ describe("ActiveSubAgentsStrip", () => {
       });
     });
 
-    it("names its controls after their sub-agent instead of claiming bare Stop/Dismiss", () => {
-      // Regression: a bare "Stop" shadowed the composer's stop-the-turn button
-      // and broke nine E2E specs that use page-wide `name: "Stop"` as its
-      // handle (managed-review.spec.ts caught it). It is also the a11y fix — a
-      // column of identically-named buttons tells a screen-reader user nothing
-      // about which sub-agent each one belongs to.
+    it("names its controls after the sub-agent they act on", () => {
+      // A column of buttons all named "Stop" tells a screen-reader user
+      // nothing about which sub-agent each one belongs to.
+      //
+      // This does NOT protect the composer's stop-the-turn button from a
+      // page-wide locator, and an earlier version of this test claimed it did.
+      // Testing Library matches a string `name` exactly, so "Stop" not
+      // matching "Stop sub-agent: …" here proves nothing about Playwright,
+      // which matches `name` as a normalized SUBSTRING by default — the E2E
+      // collision survived this exact assertion. The composer button carries
+      // data-testid="composer-stop-turn" and the specs target that instead.
       render(
         <ActiveSubAgentsStrip
           desktopApi={{ stopSubAgent: vi.fn() } as unknown as DesktopApi}
@@ -349,8 +354,6 @@ describe("ActiveSubAgentsStrip", () => {
           ])}
         />,
       );
-      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
       expect(
         screen.getByRole("button", {
           name: "Stop sub-agent: Watch the deployment",

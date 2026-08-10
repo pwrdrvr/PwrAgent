@@ -12158,6 +12158,7 @@ export function Composer(props: ComposerProps) {
           {activeTurnId ? (
             <button
               className="button button--ghost"
+              data-testid="composer-stop-turn"
               disabled={props.disabled || interrupting}
               type="button"
               onClick={() => {

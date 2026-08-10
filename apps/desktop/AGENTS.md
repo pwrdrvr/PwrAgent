@@ -151,6 +151,21 @@ elements and fail Playwright strict mode. When writing specs:
 - Target the history buttons themselves via their test ids:
   `history-nav-back` / `history-nav-forward`.
 
+The composer's stop-the-turn button is the same story and has the test id
+`composer-stop-turn`. Use it rather than `getByRole("button", { name:
+"Stop" })`, which 21 call sites across 10 specs once relied on. Adding the
+active sub-agents strip broke every one of them, because a row control named
+"Stop sub-agent: <task>" still matches: **Playwright matches an accessible
+`name` as a normalized substring by default**, so qualifying the new button's
+label was not enough — only `exact: true` or a test id disambiguates. The
+`toHaveCount(0)` assertions were the sharpest edge, since they assert no Stop
+button exists anywhere in the window.
+
+Note the vitest/Playwright asymmetry when you write a unit test to guard one
+of these: Testing Library matches a string `name` **exactly**, so a unit
+assertion that "Stop" no longer resolves will pass while the Playwright
+locator it was meant to protect still breaks.
+
 The same trap runs in the other direction, and it bites the *renderer*
 rather than the spec: **`getByLabel` matches on substring**, and 31 call
 sites across 23 specs drive the composer with `getByLabel("Reply")`. A new
