@@ -508,6 +508,13 @@ jobs:
         with:
           lfs: true
 
+      - name: Materialize full checkout after sparse cache primer
+        # The persistent runner can inherit skip-worktree entries from the
+        # sparse macos-install-deps checkout. actions/checkout disables sparse
+        # mode, but unchanged skipped files may remain absent on Apple Git.
+        timeout-minutes: 5
+        run: git checkout --ignore-skip-worktree-bits -- .
+
       - name: Materialize Git LFS assets
         # These jobs reuse persistent runner workspaces. A previous checkout
         # can leave an LFS pointer at an unchanged path, and checkout --force
