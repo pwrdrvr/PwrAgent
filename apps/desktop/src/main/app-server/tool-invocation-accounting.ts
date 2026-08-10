@@ -548,6 +548,11 @@ function readToolOutput(
 ): { text?: string; truncated?: boolean } {
   const data = readRecord(item?.data);
   const text =
+    readString(item, "aggregatedOutput") ??
+    readString(item, "aggregated_output") ??
+    readString(item, "functionCallOutput") ??
+    readString(data, "aggregatedOutput") ??
+    readString(data, "aggregated_output") ??
     readString(data, "output") ??
     readString(data, "text") ??
     readString(data, "result") ??
