@@ -38,6 +38,22 @@ export function formatReviewThreadCount(count: number): string {
   return `${count} thread${count === 1 ? "" : "s"} to review`;
 }
 
+/**
+ * Membership test for the Attention lens: a live turn, or waiting to be
+ * reviewed. Shares both predicates with the tab's two counts and with the
+ * directory-header counts, so the queue's length and the numbers on the tab
+ * can never disagree.
+ */
+export function isThreadNeedingAttention(
+  thread: NavigationThreadSummary,
+  thinkingThreadKeys?: Record<string, boolean>,
+): boolean {
+  return (
+    isThreadActive(thread, thinkingThreadKeys)
+    || isThreadAwaitingReview(thread)
+  );
+}
+
 export function getThreadRowStatus(
   thread: NavigationThreadSummary,
   thinkingThreadKeys?: Record<string, boolean>

@@ -175,12 +175,16 @@ The main shell should not look like stacked floating cards on a dark background.
 The sidebar is a structured queue. It should contain:
 
 1. top-level global actions
-2. Inbox / Recents / Directories thread lens switch
+2. Attention / Inbox / Recents / Directories thread lens switch
 3. thread or project lists
 4. utility footer items
 
 Rules:
 
+- lens tabs are icon-only and 26px tall; the lens name lives in `aria-label`
+  and the tooltip, never as visible text
+- Attention leads the switch and is the only tab that reports state: two
+  indicators with counts, both grey at zero, zeros always shown
 - Inbox is the default thread lens, sorted by recent activity
 - Recents sorts by thread creation time
 - Inbox and Recents are pure sort orders: no pinned section, no pinned-first

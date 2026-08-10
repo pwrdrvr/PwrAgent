@@ -238,11 +238,15 @@ test("shows initiated background turns as thinking, then unread once they finish
     await expect(initiatedRow.locator('[data-thread-status="thinking"]')).toBeVisible();
     await expect(initiatedRow.locator('[data-thread-status="unread"]')).toHaveCount(0);
 
-    const directoriesTab = app.window.getByRole("tab", {
-      name: "Directories, 1 active thread",
-    });
-    await expect(directoriesTab).toBeVisible();
-    await directoriesTab.click();
+    // The aggregate activity signal lives on the Attention tab now, not on
+    // Directories — a live turn counts as active, never as to-review.
+    await expect(
+      app.window.getByRole("tab", {
+        name: "Attention, 1 active thread, 0 threads to review",
+      }),
+    ).toBeVisible();
+
+    await app.window.getByRole("tab", { name: "Directories" }).click();
     // The counts are indicator + number now; the words moved into a hover
     // tooltip, so the stable handle is the data attribute rather than `title`.
     await expect(
@@ -266,7 +270,13 @@ test("shows initiated background turns as thinking, then unread once they finish
     await expect(initiatedRow.locator('[data-thread-status="thinking"]')).toHaveCount(0);
     await expect(initiatedRow.locator('[data-thread-status="unread"]')).toBeVisible();
     await expect(initiatedRow.locator(".thread-row__status-cookie")).toBeVisible();
-    await expect(app.window.getByRole("tab", { name: "Directories" })).toBeVisible();
+    // Turn finished: the thread leaves the active count and becomes unread, and
+    // the Attention tab has to move with it.
+    await expect(
+      app.window.getByRole("tab", {
+        name: "Attention, 0 active threads, 1 thread to review",
+      }),
+    ).toBeVisible();
     await expect(
       app.window.locator('[data-active-thread-count="1"]'),
     ).toHaveCount(0);

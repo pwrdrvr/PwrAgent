@@ -38,8 +38,12 @@ summary.
 
 ## Non-Negotiables
 
-- Inbox, Recents, and Directories live in one thread lens switch; Inbox is the
-  default browsing lens.
+- Attention, Inbox, Recents, and Directories live in one icon-only thread lens
+  switch; Inbox is the default browsing lens.
+- Attention is a work queue: focusing a thread there must not clear its unread
+  cookie, only replying does. See "Current Product Direction" in the
+  [repo-root `AGENTS.md`](../../AGENTS.md) for why that rule is lens-scoped
+  rather than global.
 - User-curated Pins live as a scrollable section at the top of each directory
   in the Directories lens. Inbox and Recents are pure sort orders and do not
   float pins.

@@ -739,11 +739,12 @@ describe("Sidebar", () => {
     // The tabs render an icon and no visible text, so the accessible name is
     // the whole name — a tab that loses its aria-label announces as unlabeled.
     expect(lensTabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
+      "Attention, 0 active threads, 1 thread to review",
       "Updated",
       "Created",
       "Directories",
     ]);
-    expect(lensTabs[2]).toHaveAttribute("aria-selected", "true");
+    expect(lensTabs[3]).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
@@ -2031,8 +2032,12 @@ describe("Sidebar", () => {
       />,
     );
 
+    // The activity signal lives on the Attention tab now, not on Directories.
+    expect(screen.getByRole("tab", { name: "Directories" })).toBeInTheDocument();
     expect(
-      screen.getByRole("tab", { name: "Directories, 2 active threads" }),
+      screen.getByRole("tab", {
+        name: "Attention, 2 active threads, 1 thread to review",
+      }),
     ).toBeInTheDocument();
 
     const summary = screen
@@ -2191,6 +2196,264 @@ describe("Sidebar", () => {
       threadButton.querySelector('[data-thread-status="unread"] .thread-row__status-cookie')
     ).not.toBeNull();
     expect(unreadIndicator).not.toHaveTextContent("!");
+  });
+
+  describe("Attention lens", () => {
+    const activeThread = {
+      ...sharedThread,
+      id: "thread-active",
+      title: "Active thread",
+      threadStatus: "active" as const,
+      inbox: { inInbox: false },
+    };
+    const unreadThread = {
+      ...updatedSinceSeenThread,
+      id: "thread-unread",
+      title: "Unread thread",
+    };
+    const idleThread = {
+      ...sharedThread,
+      id: "thread-idle",
+      title: "Idle thread",
+      inbox: { inInbox: false },
+    };
+    const allThreads = [activeThread, unreadThread, idleThread];
+
+    const renderAttention = (
+      browseMode: "attention" | "inbox" = "attention",
+      onBrowseModeChange = vi.fn(),
+    ) =>
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode={browseMode}
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={allThreads}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={allThreads}
+          onBrowseModeChange={onBrowseModeChange}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+    it("lists only threads in progress or waiting to be reviewed", () => {
+      renderAttention();
+
+      const browseSection = screen.getByRole("region", {
+        name: "Thread browser",
+      });
+      const rows = within(browseSection as HTMLElement).getAllByRole("button", {
+        name: /Active thread|Unread thread|Idle thread/i,
+      });
+      expect(rows.map((row) => row.textContent)).toEqual([
+        expect.stringContaining("Active thread"),
+        expect.stringContaining("Unread thread"),
+      ]);
+    });
+
+    it("reports both counts on the tab and switches to the lens", () => {
+      const onBrowseModeChange = vi.fn();
+      renderAttention("inbox", onBrowseModeChange);
+
+      const tab = screen.getByRole("tab", {
+        name: "Attention, 1 active thread, 1 thread to review",
+      });
+      expect(tab).toHaveAttribute("aria-selected", "false");
+      expect(
+        tab.querySelector("[data-attention-active-count]"),
+      ).toHaveAttribute("data-attention-active-count", "1");
+      expect(
+        tab.querySelector("[data-attention-review-count]"),
+      ).toHaveAttribute("data-attention-review-count", "1");
+
+      fireEvent.click(tab);
+      expect(onBrowseModeChange).toHaveBeenCalledWith("attention");
+    });
+
+    it("greys both signals — and keeps their zeros — when nothing needs attention", () => {
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={[idleThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={[idleThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      const tab = screen.getByRole("tab", {
+        name: "Attention, 0 active threads, 0 threads to review",
+      });
+      // The zeros stay on the tab: an idle lens has to be distinguishable
+      // from a lens that lost its counts without being opened.
+      const active = tab.querySelector("[data-attention-active-count]");
+      const review = tab.querySelector("[data-attention-review-count]");
+      expect(active).toHaveTextContent(/^0$/);
+      expect(review).toHaveTextContent(/^0$/);
+      expect(active).toHaveAttribute("data-zero", "true");
+      expect(review).toHaveAttribute("data-zero", "true");
+    });
+
+    it("re-pins the scanner to the shared animation epoch when the count leaves zero", () => {
+      // Every thinking scanner in the app is pinned to one document-timeline
+      // origin on mount (ThinkingScanner.tsx, PR #1187) so no two sweeping
+      // bars are ever visibly out of phase. The zero state must therefore be
+      // a DIFFERENT element, not a `ThinkingScanner` with its animation
+      // switched off in CSS: `data-zero` sits on the parent span, so React
+      // would keep the same scanner across the flip, its ref would never
+      // re-run, and the animation CSS restarts would run unpinned forever.
+      const animations = [{ startTime: 4242 }];
+      let animationIndex = 0;
+      const getAnimations = vi.fn(() => {
+        const animation = animations[animationIndex++];
+        return animation ? [animation] : [];
+      });
+      const originalDescriptor = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        "getAnimations",
+      );
+      Object.defineProperty(HTMLElement.prototype, "getAnimations", {
+        configurable: true,
+        value: getAnimations,
+      });
+
+      try {
+        const idle = { ...idleThread };
+        const busy = { ...idleThread, threadStatus: "active" as const };
+        const sidebarProps = (threads: typeof allThreads) => ({
+          backends,
+          browseMode: "inbox" as const,
+          createThreadError: undefined,
+          directories,
+          inboxThreads: threads,
+          launchpadError: undefined,
+          loading: false,
+          creatingThread: undefined,
+          selectedItemKey: undefined,
+          threads,
+          onBrowseModeChange: () => undefined,
+          onCreateThread: async () => undefined,
+          onOpenLaunchpad: async () => undefined,
+          onSelectThread: () => undefined,
+        });
+
+        const view = render(<Sidebar {...sidebarProps([idle])} />);
+
+        const zeroTab = screen.getByRole("tab", { name: /^Attention,/ });
+        expect(
+          zeroTab.querySelector(".lens-switch__dormant-scanner"),
+        ).not.toBeNull();
+        expect(zeroTab.querySelector(".thinking-scanner")).toBeNull();
+        expect(getAnimations).not.toHaveBeenCalled();
+
+        // 0 -> 1: the scanner must MOUNT here, which is what runs the sync ref.
+        view.rerender(<Sidebar {...sidebarProps([busy])} />);
+
+        const liveTab = screen.getByRole("tab", { name: /^Attention,/ });
+        expect(liveTab.querySelector(".thinking-scanner")).not.toBeNull();
+        expect(
+          liveTab.querySelector(".lens-switch__dormant-scanner"),
+        ).toBeNull();
+        expect(getAnimations).toHaveBeenCalled();
+        expect(animations[0]!.startTime).toBe(0);
+      } finally {
+        if (originalDescriptor) {
+          Object.defineProperty(
+            HTMLElement.prototype,
+            "getAnimations",
+            originalDescriptor,
+          );
+        } else {
+          Reflect.deleteProperty(HTMLElement.prototype, "getAnimations");
+        }
+      }
+    });
+
+    it("counts a live turn once, as active rather than to-review", () => {
+      // A thread can be both running and unread. The tab must not report it
+      // twice — same split the directory headers use.
+      const activeAndUnread = {
+        ...unreadThread,
+        id: "thread-active-unread",
+        threadStatus: "active" as const,
+      };
+
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="attention"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={[activeAndUnread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={[activeAndUnread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      expect(
+        screen.getByRole("tab", {
+          name: "Attention, 1 active thread, 0 threads to review",
+        }),
+      ).toBeInTheDocument();
+    });
+
+    it("shows a settled empty state when the queue is clear", () => {
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="attention"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={[idleThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={[idleThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      expect(
+        screen.getByText("Nothing running, nothing to review."),
+      ).toBeInTheDocument();
+    });
+
+    it("explains the lens in its tooltip, including the live counts", async () => {
+      renderAttention();
+
+      const tab = screen.getByRole("tab", { name: /^Attention,/ });
+      fireEvent.mouseEnter(tab);
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        "Attention — threads in progress or waiting to be reviewed"
+          + "\n1 active thread · 1 thread to review",
+      );
+    });
   });
 
   it("renders Inbox as the updated-activity thread lens", () => {

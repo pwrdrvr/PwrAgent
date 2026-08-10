@@ -294,6 +294,162 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads[0]?.threadStatus).toBe("idle");
   });
 
+  it("keeps a thread unread when it is focused from the Attention lens", async () => {
+    // The Attention lens is a work queue. Opening something to look at it
+    // must not empty the queue — only a reply (which routes through
+    // markThreadsSeen from the composer) does. Every other lens still marks
+    // seen on focus, which the test below this one pins.
+    const markThreadSeen = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      seenAt: Date.now(),
+      seenUpdatedAt: 1_000,
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "updated-since-seen" as const,
+            lastSeenUpdatedAt: 900,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+
+    act(() => {
+      result.current.setBrowseMode("attention");
+    });
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+
+    // Nothing should ever arrive; give the effects a full flush to be sure
+    // this is a real "never" and not a race the assertion outran.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(markThreadSeen).not.toHaveBeenCalled();
+    expect(result.current.threads[0]?.inbox.inInbox).toBe(true);
+
+    // Replying is the one thing that does clear it.
+    await act(async () => {
+      await result.current.markThreadsSeen([result.current.threads[0]!]);
+    });
+    expect(markThreadSeen).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      seenUpdatedAt: 1_000,
+    });
+    await waitFor(() => {
+      expect(result.current.threads[0]?.inbox.inInbox).toBe(false);
+    });
+  });
+
+  it("marks a still-selected thread seen once the operator leaves the Attention lens", async () => {
+    // Deliberate, and the counterpart to the test above: the exemption is a
+    // property of the lens, not of the thread. Carrying "never auto-clear"
+    // out of the work queue and into ordinary browsing would leak a rule the
+    // operator did not ask for into every other lens.
+    const markThreadSeen = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      seenAt: Date.now(),
+      seenUpdatedAt: 1_000,
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit" as const,
+          summary: "First thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "updated-since-seen" as const,
+            lastSeenUpdatedAt: 900,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+
+    act(() => {
+      result.current.setBrowseMode("attention");
+    });
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(markThreadSeen).not.toHaveBeenCalled();
+
+    // Same thread still selected; only the lens changed.
+    act(() => {
+      result.current.setBrowseMode("inbox");
+    });
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        seenUpdatedAt: 1_000,
+      });
+    });
+  });
+
   it("clears a directory attention count after the selected thread is marked seen", async () => {
     const markThreadSeen = vi.fn(async () => ({
       backend: "codex" as const,

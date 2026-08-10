@@ -3013,25 +3013,31 @@ textarea,
      lane inset. See `--sidebar-masthead-pull` on `.sidebar`. */
   width: calc(100% - 2 * var(--sidebar-masthead-pull));
   margin-inline: var(--sidebar-masthead-pull);
-  /* min-content floors each track at its own content width so a tab carrying
-     a count is never cut mid-glyph, while the 1fr max still shares the surplus
-     so the row reads as a segmented control rather than ragged chips. NOT
-     interchangeable with `auto`: `.lens-switch__button` sets overflow: hidden,
-     which zeroes a grid item's automatic minimum size, so minmax(auto, 1fr)
-     would resolve the floor to 0. */
-  grid-template-columns: repeat(3, minmax(min-content, 1fr));
+  /* Four tabs, three of which are a single 16px icon. The Attention tab
+     carries two indicator + count pairs, so it is the only one whose content
+     can outgrow an equal share — `min-content` floors every track at its own
+     content width and lets Attention take what it needs before the icon tabs
+     divide the surplus. NOT interchangeable with `auto`:
+     `.lens-switch__button` sets overflow: hidden, which zeroes a grid item's
+     automatic minimum size, so minmax(auto, 1fr) would resolve the floor to 0
+     and let the counts be cut mid-digit — and a half-eaten count reads as a
+     different number.
+
+     Measured at the 280px sidebar minimum (a 264px container, see
+     `--sidebar-masthead-pull`): Attention floors at ~74px with two-digit
+     counts, leaving ~58px per icon tab. The container query below is what
+     keeps that true past two digits. */
+  grid-template-columns: repeat(4, minmax(min-content, 1fr));
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel);
-  /* Width-query container for the narrow end of the sidebar's resize range.
-     Nothing queries it while every tab is a single icon, but the switch is a
-     resizable segmented control and the next tab to carry content will need
-     it — the property is what establishes the containment context, and
-     removing and restoring it churns the layout for no gain. The width is
-     extrinsic (set above from `--sidebar-masthead-pull`), so inline-size
-     containment is safe here. */
+  /* Width-query container for the narrow end of the sidebar's resize range —
+     see the `@container` rule below, which tightens the Attention tab once
+     four columns have to share a 280px sidebar. The width is extrinsic (set
+     above from `--sidebar-masthead-pull`), so inline-size containment is safe
+     here. */
   container-type: inline-size;
 }
 
@@ -3068,18 +3074,96 @@ textarea,
   white-space: nowrap;
 }
 
-.lens-switch__active-count {
+/* The Attention tab's two live readouts. It is wider than an icon tab by
+   construction, so it gets its own inner gap rather than the shared one. */
+.lens-switch__button--attention {
+  gap: 7px;
+  padding: 0 7px;
+}
+
+.lens-switch__signal {
   display: inline-flex;
   /* Never the thing that gives: a half-eaten count reads as a different
-     number, so the icon shrinks before the digits do. */
+     number, so the indicator shrinks before the digits do. */
   flex: 0 0 auto;
   align-items: center;
   gap: 3px;
-  color: var(--accent-bright);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.lens-switch__signal--active {
+  color: var(--accent-bright);
+}
+
+.lens-switch__signal--review {
+  color: var(--text-secondary);
+}
+
+.lens-switch__signal--review .thread-row__status-cookie {
+  width: 8px;
+  height: 8px;
+}
+
+/* Zero is still shown — an idle tab has to read as "nothing running, nothing
+   unread", which a vanishing count cannot do. It just stops claiming the
+   accent: in this theme the accent is a signal, and nothing is happening.
+   `--text-muted` rather than `--text-subtle`: the zero is the message here,
+   not decoration, and only the muted token is on the ramp that clears AA
+   against the darkest surface it can land on. */
+.lens-switch__signal[data-zero="true"] {
+  color: var(--text-muted);
+}
+
+/* The cookie paints itself from accent tokens rather than `currentColor`, so
+   greying the text is not enough — it has to be neutralized explicitly. Safe
+   to restyle in place: it is a static mark with no animation to fall out of
+   step. */
+.lens-switch__signal[data-zero="true"] .thread-row__status-cookie {
+  border-color: var(--border-subtle);
+  background: var(--text-muted);
+  box-shadow: none;
+}
+
+/* The idle stand-in for the scanner. A beam still sweeping next to a 0 would
+   say the opposite of the number, but this must NOT be built by switching off
+   `.thinking-scanner__beam`'s animation: every scanner in the app is pinned to
+   one document-timeline epoch by a mount-time ref (ThinkingScanner.tsx, PR
+   #1187), and an animation that CSS stops and restarts under a live element is
+   never re-pinned. So the zero state is its own element and the live state is
+   an untouched `ThinkingScanner`. Matches `.thinking-scanner--mini`'s footprint
+   so the tab does not reflow when the count leaves zero. */
+.lens-switch__dormant-scanner {
+  display: block;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-panel-hover);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+
+/* The narrow end of the sidebar's resize range (280px minimum → a 264px
+   container). Four tracks share less room here, and a three-digit count on the
+   Attention tab would push the icon tabs below a comfortable target. Tighten
+   the Attention tab's own padding and gaps first — the icon tabs never need
+   to give, since a 16px glyph fits any track this control can produce. */
+@container (max-width: 290px) {
+  .lens-switch {
+    gap: 1px;
+    padding: 2px;
+  }
+
+  .lens-switch__button--attention {
+    gap: 5px;
+    padding: 0 4px;
+  }
+
+  .lens-switch__signal {
+    gap: 2px;
+  }
 }
 
 .lens-switch__button.is-active {

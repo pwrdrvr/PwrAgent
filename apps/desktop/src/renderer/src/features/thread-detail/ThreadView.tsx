@@ -1035,6 +1035,12 @@ export type ThreadViewProps = {
   ) => Promise<void>;
   onCancelLaunchpad?: (directoryKey: string) => void;
   onPendingStatusChange?: (status?: string) => void;
+  /**
+   * Called when the operator sends or steers a turn on a thread. The
+   * Attention lens uses it as its only unread-clearing signal — focusing a
+   * thread there deliberately leaves the cookie in place.
+   */
+  onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
   onUpdatePendingUserInput?: (
     requestId: string,
     updater: (state: PendingQuestionnaireState) => PendingQuestionnaireState
@@ -3278,6 +3284,7 @@ export function ThreadView(props: ThreadViewProps) {
             }
             onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
             onPendingStatusChange={props.onPendingStatusChange}
+            onUserRepliedToThread={props.onUserRepliedToThread}
             onRefreshNavigation={props.onRefreshNavigation}
             onHandoffThreadWorkspace={props.onHandoffThreadWorkspace}
             onBeforeStartTurn={

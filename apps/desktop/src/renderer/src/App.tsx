@@ -1117,10 +1117,19 @@ function DesktopAppShell(props: {
         profiles.profiles,
       )
     : undefined;
+  // Replying is what clears unread on the Attention lens, where focusing a
+  // thread deliberately does not. Harmless elsewhere: every other lens has
+  // already marked the thread seen on focus by the time a reply lands. Shared
+  // by every surface that can send on the operator's behalf — the composer
+  // (send and steer) and the deferred release of a turn they queued earlier.
+  const reportUserRepliedToThread = desktopApi?.markThreadSeen
+    ? (thread: NavigationThreadSummary) => void navigation.markThreadsSeen([thread])
+    : undefined;
   useQueuedTurnRelease({
     backends: backendSummaries.backends,
     composerDraftStore,
     desktopApi,
+    onUserRepliedToThread: reportUserRepliedToThread,
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
   });
@@ -1563,6 +1572,7 @@ function DesktopAppShell(props: {
       ),
     onPendingStatusChange: session.setPendingStatusText,
     onRefreshNavigation: navigation.refresh,
+    onUserRepliedToThread: reportUserRepliedToThread,
     onSetExecutionMode: navigation.selectedThread
       ? async (executionMode) =>
           await navigation.setThreadExecutionMode(

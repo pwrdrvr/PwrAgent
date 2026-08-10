@@ -69,7 +69,9 @@ import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
 import {
   formatActiveThreadCount,
+  formatReviewThreadCount,
   isThreadActive,
+  isThreadNeedingAttention,
 } from "./ThreadRowStatus";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
@@ -245,23 +247,38 @@ type SidebarProps = {
   sidebarMaxWidth?: number;
 };
 
+/**
+ * Lens order. Attention leads: it is the only lens that reports state rather
+ * than just ordering threads, so it is the first thing read on the row and
+ * the one worth glancing at without opening.
+ */
+const BROWSE_MODES = [
+  "attention",
+  "inbox",
+  "recents",
+  "directories",
+] as const satisfies readonly BrowseMode[];
+
 // Each lens tab renders as an icon only, so these labels are no longer visible
 // text — they are the tab's accessible name and the first line of its tooltip.
 const browseModeLabels = {
+  attention: "Attention",
   inbox: "Updated",
   recents: "Created",
   directories: "Directories",
 } satisfies Record<BrowseMode, string>;
 
+// Attention is absent: it renders its two live indicators instead of an icon.
 const browseModeIcons = {
   inbox: HistoryIcon,
   recents: CalendarPlusIcon,
   directories: FolderIcon,
-} satisfies Record<BrowseMode, (props: IconProps) => ReactElement>;
+} satisfies Record<Exclude<BrowseMode, "attention">, (props: IconProps) => ReactElement>;
 
 // Nothing on the tab spells out what the lens shows now that the labels are
 // gone, so the viewport tooltip carries both the name and the explanation.
 const browseModeTooltips = {
+  attention: "Attention — threads in progress or waiting to be reviewed",
   inbox: "Updated — all threads, most recently updated first",
   recents: "Created — all threads, newest created first",
   directories: "Directories — threads grouped by linked Git directory",
@@ -375,17 +392,45 @@ export function Sidebar(props: SidebarProps) {
       profile: activeProfile,
     })
     : undefined;
-  const visibleThreads =
-    props.browseMode === "recents"
-      ? props.recentThreads ?? props.threads
-      : props.inboxThreads ?? props.threads;
-  const activeThreadCount = useMemo(
+  const updatedOrderThreads = props.inboxThreads ?? props.threads;
+  /**
+   * The Attention lens: everything with a live turn or waiting to be
+   * reviewed, in most-recently-updated order (the same order the Updated lens
+   * uses) so the freshest work sits at the top of the queue.
+   */
+  const attentionThreads = useMemo(
     () =>
-      props.threads.filter((thread) =>
-        isThreadActive(thread, props.thinkingThreadKeys),
-      ).length,
-    [props.thinkingThreadKeys, props.threads],
+      updatedOrderThreads.filter((thread) =>
+        isThreadNeedingAttention(thread, props.thinkingThreadKeys),
+      ),
+    [props.thinkingThreadKeys, updatedOrderThreads],
   );
+  const visibleThreads =
+    props.browseMode === "attention"
+      ? attentionThreads
+      : props.browseMode === "recents"
+        ? props.recentThreads ?? props.threads
+        : updatedOrderThreads;
+  /**
+   * The two numbers on the Attention tab. Counted over the very rows the lens
+   * renders, not over `props.threads`, so the tab and the list cannot report
+   * different populations — `active + review` is the queue's length by
+   * construction. A live turn wins over "to review" so one thread is never
+   * counted twice; membership already guarantees a row that is not active is
+   * awaiting review, which is the same split the directory headers use.
+   */
+  const attentionCounts = useMemo(() => {
+    let active = 0;
+    let review = 0;
+    for (const thread of attentionThreads) {
+      if (isThreadActive(thread, props.thinkingThreadKeys)) {
+        active += 1;
+      } else {
+        review += 1;
+      }
+    }
+    return { active, review };
+  }, [attentionThreads, props.thinkingThreadKeys]);
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
   const selectedItemKey = props.selectedItemKey;
   const navigationThreads = props.threads;
@@ -1566,22 +1611,25 @@ export function Sidebar(props: SidebarProps) {
 
       <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
         <div className="lens-switch" role="tablist" aria-label="Thread lenses">
-          {(["inbox", "recents", "directories"] as const).map((mode) => (
-            <LensTab
-              key={mode}
-              mode={mode}
-              active={props.browseMode === mode}
-              activeThreadCount={
-                mode === "directories" ? activeThreadCount : undefined
-              }
-              tooltipText={
-                mode === "directories" && activeThreadCount > 0
-                  ? `${browseModeTooltips[mode]} · ${formatActiveThreadCount(activeThreadCount)}`
-                  : browseModeTooltips[mode]
-              }
-              onSelect={() => props.onBrowseModeChange(mode)}
-            />
-          ))}
+          {BROWSE_MODES.map((mode) =>
+            mode === "attention" ? (
+              <AttentionLensTab
+                key={mode}
+                active={props.browseMode === mode}
+                activeThreadCount={attentionCounts.active}
+                reviewThreadCount={attentionCounts.review}
+                onSelect={() => props.onBrowseModeChange(mode)}
+              />
+            ) : (
+              <LensTab
+                key={mode}
+                mode={mode}
+                active={props.browseMode === mode}
+                tooltipText={browseModeTooltips[mode]}
+                onSelect={() => props.onBrowseModeChange(mode)}
+              />
+            ),
+          )}
         </div>
 
         <div className="sidebar__scroll-region">
@@ -1633,7 +1681,11 @@ export function Sidebar(props: SidebarProps) {
             />
           ) : (
             visibleThreads.length === 0 ? (
-              <p className="sidebar-empty">No threads yet.</p>
+              <p className="sidebar-empty">
+                {props.browseMode === "attention"
+                  ? "Nothing running, nothing to review."
+                  : "No threads yet."}
+              </p>
             ) : (
               <RecentsList
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -2453,17 +2505,96 @@ function ProfileIdentityButton(props: {
   );
 }
 
-function LensTab(props: {
-  mode: BrowseMode;
+/**
+ * The Attention tab. Where the other three lenses show a static icon, this one
+ * shows the two numbers it exists for: threads with a live turn, and threads
+ * waiting to be reviewed. Each pairs the same indicator its thread rows use —
+ * the scanner and the orange cookie.
+ *
+ * A zero count stays on the tab and goes grey rather than disappearing. That
+ * is the point of the tab: "nothing running, nothing unread" has to be legible
+ * at a glance without opening the lens, and a count that vanishes at zero
+ * makes an idle tab indistinguishable from a tab that lost its data. Grey is
+ * also the honest colour — the accent is a signal here, so only a nonzero
+ * count earns it.
+ */
+function AttentionLensTab(props: {
   active: boolean;
-  activeThreadCount?: number;
+  activeThreadCount: number;
+  reviewThreadCount: number;
+  onSelect: () => void;
+}) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const tooltipText = [
+    browseModeTooltips.attention,
+    `${formatActiveThreadCount(props.activeThreadCount)} · ${formatReviewThreadCount(props.reviewThreadCount)}`,
+  ].join("\n");
+
+  return (
+    <>
+      <button
+        role="tab"
+        aria-label={`${browseModeLabels.attention}, ${formatActiveThreadCount(
+          props.activeThreadCount,
+        )}, ${formatReviewThreadCount(props.reviewThreadCount)}`}
+        aria-selected={props.active}
+        className={`lens-switch__button lens-switch__button--attention${
+          props.active ? " is-active" : ""
+        }`}
+        type="button"
+        onBlur={tooltip.hide}
+        onClick={() => {
+          tooltip.hide();
+          props.onSelect();
+        }}
+        onFocus={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onMouseLeave={tooltip.hide}
+      >
+        <span
+          aria-hidden="true"
+          className="lens-switch__signal lens-switch__signal--active"
+          data-attention-active-count={props.activeThreadCount}
+          data-zero={props.activeThreadCount === 0 ? "true" : undefined}
+        >
+          {props.activeThreadCount === 0 ? (
+            // A static stand-in, NOT a greyed-out `ThinkingScanner`. Killing
+            // the sweep with CSS on a mounted scanner is a desync trap:
+            // `data-zero` lives on this span, so React keeps the same scanner
+            // element across the flip, its ref never re-runs, and the restarted
+            // animation is never re-pinned to the shared epoch — leaving this
+            // tab drifting against every other scanner on screen. Swapping the
+            // element type guarantees a mount, so
+            // `syncThinkingScannerAnimation` runs and the beam comes back in
+            // phase. See ThinkingScanner.tsx and PR #1187.
+            <span className="lens-switch__dormant-scanner" />
+          ) : (
+            <ThinkingScanner compact />
+          )}
+          <span>{props.activeThreadCount}</span>
+        </span>
+        <span
+          aria-hidden="true"
+          className="lens-switch__signal lens-switch__signal--review"
+          data-attention-review-count={props.reviewThreadCount}
+          data-zero={props.reviewThreadCount === 0 ? "true" : undefined}
+        >
+          <span className="thread-row__status-cookie" />
+          <span>{props.reviewThreadCount}</span>
+        </span>
+      </button>
+      {tooltip.tooltipNode}
+    </>
+  );
+}
+
+function LensTab(props: {
+  mode: Exclude<BrowseMode, "attention">;
+  active: boolean;
   tooltipText: string;
   onSelect: () => void;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const activeThreadLabel = props.activeThreadCount
-    ? formatActiveThreadCount(props.activeThreadCount)
-    : undefined;
   const Icon = browseModeIcons[props.mode];
 
   return (
@@ -2474,13 +2605,9 @@ function LensTab(props: {
         // button) since browsers don't auto-wire arrow-key navigation from role
         // alone — adding role here only changes how screen readers announce it.
         role="tab"
-        // The tab renders an icon and (on Directories) a decorative count, so
-        // there is no visible text to name it. aria-label is the whole name.
-        aria-label={
-          activeThreadLabel
-            ? `${browseModeLabels[props.mode]}, ${activeThreadLabel}`
-            : browseModeLabels[props.mode]
-        }
+        // The tab renders an icon and no visible text, so aria-label is the
+        // whole accessible name.
+        aria-label={browseModeLabels[props.mode]}
         aria-selected={props.active}
         className={`lens-switch__button${props.active ? " is-active" : ""}`}
         type="button"
@@ -2494,12 +2621,6 @@ function LensTab(props: {
         onMouseLeave={tooltip.hide}
       >
         <Icon size={16} />
-        {props.activeThreadCount ? (
-          <span aria-hidden="true" className="lens-switch__active-count">
-            <ThinkingScanner compact />
-            <span>{props.activeThreadCount}</span>
-          </span>
-        ) : null}
       </button>
       {tooltip.tooltipNode}
     </>
