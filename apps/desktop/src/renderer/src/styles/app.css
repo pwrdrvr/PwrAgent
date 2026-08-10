@@ -5864,7 +5864,9 @@ textarea,
 
 .app-toast-stack {
   position: fixed;
-  z-index: 80;
+  /* App-level notices must remain visible over full-window surfaces such as
+     Star Map (120) and its floating thread (130). */
+  z-index: 140;
   left: 16px;
   bottom: 16px;
   display: flex;
@@ -5985,7 +5987,7 @@ textarea,
 }
 
 .app-notice-toast__thread-menu {
-  z-index: 90;
+  z-index: 150;
 }
 
 .app-notice-toast__status {

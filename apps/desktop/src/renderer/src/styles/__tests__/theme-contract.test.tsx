@@ -720,6 +720,20 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("layers app toasts above the full-window Star Map", () => {
+    const starMapLayerRule = extractRuleBody(
+      css,
+      ".app-shell__star-map-layer",
+    );
+    const toastStackRule = extractRuleBody(css, ".app-toast-stack");
+    const readZIndex = (rule: string): number =>
+      Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
+
+    expect(readZIndex(toastStackRule)).toBeGreaterThan(
+      readZIndex(starMapLayerRule),
+    );
+  });
+
   it("right-aligns the keyboard shortcut hint chip on context menu items", () => {
     // The `__shortcut` chip is the discoverability surface for
     // the otherwise-invisible Cmd+(Shift+)Arrow reorder shortcut.
