@@ -188,7 +188,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: INSTANCE_THREAD_GROUPING_MODES,
             description:
-              "Use subthread for delegated child work that should remain nested beneath the calling thread across instances; defaults to none for independent intake work.",
+              "Use subthread for child work that must remain nested across instances. The default none keeps independent intake separate.",
           },
         },
       };
