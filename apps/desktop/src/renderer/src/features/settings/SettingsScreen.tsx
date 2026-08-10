@@ -823,7 +823,7 @@ function SettingsSectionBody(props: {
         });
       }}
       onAcpCliPathChange={async (registryId, cliPath) => {
-        await props.settings.writeConfig({
+        return await props.settings.writeConfig({
           acpAgents: { [registryId]: { cliPath } } as NonNullable<
             DesktopSettingsConfigPatch["acpAgents"]
           >,
