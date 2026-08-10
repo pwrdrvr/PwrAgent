@@ -650,6 +650,7 @@ export function TranscriptList(props: TranscriptListProps) {
   const olderPageRequestPendingRef = useRef(false);
   const olderPageRequestGenerationRef = useRef(0);
   const lastUnderflowHistoryRequestRef = useRef<string | undefined>(undefined);
+  const latestHydrationPendingRef = useRef(false);
   const [olderPageRequestSettledKey, setOlderPageRequestSettledKey] = useState(0);
   const shouldScrollToBottomRef = useRef(true);
   const isGluedToBottomRef = useRef(true);
@@ -690,12 +691,14 @@ export function TranscriptList(props: TranscriptListProps) {
   const canLoadOlder = Boolean(
     props.pagination?.supportsPagination && props.pagination.hasPreviousPage
   );
+  const loading = props.loading;
   const loadingMore = props.loadingMore;
   const onLoadOlder = props.onLoadOlder;
   useEffect(() => {
     olderPageRequestGenerationRef.current += 1;
     olderPageRequestPendingRef.current = false;
     lastUnderflowHistoryRequestRef.current = undefined;
+    latestHydrationPendingRef.current = false;
   }, [props.threadId]);
   useEffect(() => {
     if (!loadingMore) {
@@ -705,9 +708,24 @@ export function TranscriptList(props: TranscriptListProps) {
       olderPageRequestPendingRef.current = false;
     }
   }, [loadingMore]);
+  useEffect(() => {
+    if (loading) {
+      latestHydrationPendingRef.current = true;
+      olderPageRequestPendingRef.current = false;
+      return;
+    }
+    if (!latestHydrationPendingRef.current) {
+      return;
+    }
+
+    latestHydrationPendingRef.current = false;
+    olderPageRequestPendingRef.current = false;
+    lastUnderflowHistoryRequestRef.current = undefined;
+  }, [loading]);
   const requestOlderPage = useCallback((): boolean => {
     if (
       !canLoadOlder
+      || loading
       || loadingMore
       || olderPageRequestPendingRef.current
     ) {
@@ -732,7 +750,7 @@ export function TranscriptList(props: TranscriptListProps) {
       throw error;
     }
     return true;
-  }, [canLoadOlder, loadingMore, onLoadOlder]);
+  }, [canLoadOlder, loading, loadingMore, onLoadOlder]);
   const requestOlderPageIfUnderflowing = useCallback(() => {
     const container = scrollContainerRef.current;
     if (
