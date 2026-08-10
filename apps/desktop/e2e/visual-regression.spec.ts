@@ -35,6 +35,7 @@ const VISUAL_WINDOW_SIZE = { width: 1440, height: 900 };
 const VISUAL_MAX_DIFF_PIXELS = 20;
 const VISUAL_CLOCK_TIME = new Date("2026-08-02T12:00:00.000Z");
 const VISUAL_APP_VERSION = "1.2.3-beta.1";
+const VISUAL_INITIAL_LOAD_DURATION = "3 ms";
 
 async function waitForFonts(page: Page): Promise<void> {
   await page.evaluate(async () => {
@@ -79,6 +80,17 @@ test.describe("visual regression", () => {
           /Existing Codex threads cannot be converted/,
         ),
       ).toBeVisible();
+      const initialLoadDuration = app.window
+        .getByText("Initial load", { exact: true })
+        .locator("xpath=following-sibling::dd");
+      await expect(initialLoadDuration).toBeVisible();
+      // The real backend read is intentionally measured, so its exact value
+      // varies by a millisecond or two between otherwise identical runs.
+      // Normalize only that volatile text while retaining the row and layout
+      // in the visual contract.
+      await initialLoadDuration.evaluate((element, duration) => {
+        element.textContent = duration;
+      }, VISUAL_INITIAL_LOAD_DURATION);
       await expect.poll(async () =>
         await app.window.evaluate(async () => {
           const bridge = globalThis as typeof globalThis & {

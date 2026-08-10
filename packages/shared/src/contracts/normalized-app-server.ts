@@ -874,6 +874,12 @@ export type AppServerReadThreadRequest = {
 export type AppServerReadThreadResponse = {
   backend: AppServerBackendKind;
   fetchedAt: number;
+  /**
+   * Wall-clock time spent by the owning backend registry producing this
+   * thread read. Renderers may retain the first successful value in memory as
+   * the thread's initial-load duration.
+   */
+  readDurationMs?: number;
   threadId: ThreadIdentifier;
   replay: AppServerThreadReplay;
   /**

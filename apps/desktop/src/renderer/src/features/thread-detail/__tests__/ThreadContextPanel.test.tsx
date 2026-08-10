@@ -150,6 +150,7 @@ type PanelOverrides = Partial<
     | "activeTurnId"
     | "backends"
     | "desktopApi"
+    | "initialLoadDurationMs"
     | "pinned"
     | "thread"
     | "onRefreshNavigation"
@@ -289,6 +290,22 @@ describe("ThreadContextPanel", () => {
         hour: "numeric",
         minute: "2-digit",
       }).format(updatedAt),
+    );
+  });
+
+  it("shows the initial backend load duration in Thread info", () => {
+    renderPanel({
+      initialLoadDurationMs: 1_234.4,
+      pinned: true,
+    });
+
+    const executionContext = screen
+      .getByRole("heading", { level: 3, name: "Execution context" })
+      .closest("section");
+    expect(executionContext).not.toBeNull();
+    const context = within(executionContext!);
+    expect(context.getByText("Initial load").nextElementSibling).toHaveTextContent(
+      `${(1_234).toLocaleString()} ms`,
     );
   });
 
