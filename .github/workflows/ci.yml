@@ -458,16 +458,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
-        with:
-          sparse-checkout: |
-            **/package.json
-            .npmrc
-            .pnpmfile.cjs
-            pnpm-lock.yaml
-            pnpm-workspace.yaml
-            apps/desktop/scripts/ensure-electron-runtime.mjs
-            apps/desktop/scripts/rebuild-native-for-electron.mjs
-          sparse-checkout-cone-mode: false
+        # Keep this checkout full: sparse state can persist on the self-hosted
+        # macOS runner and break a later job's checkout.
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
@@ -507,13 +499,6 @@ jobs:
         timeout-minutes: 10
         with:
           lfs: true
-
-      - name: Materialize full checkout after sparse cache primer
-        # The persistent runner can inherit skip-worktree entries from the
-        # sparse macos-install-deps checkout. actions/checkout disables sparse
-        # mode, but unchanged skipped files may remain absent on Apple Git.
-        timeout-minutes: 5
-        run: git checkout --ignore-skip-worktree-bits -- .
 
       - name: Materialize Git LFS assets
         # These jobs reuse persistent runner workspaces. A previous checkout
