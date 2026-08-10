@@ -3,6 +3,7 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BranchIcon,
+  CalendarPlusIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CloseIcon,
@@ -10,6 +11,7 @@ import {
   DiscordIcon,
   FileCodeIcon,
   FolderIcon,
+  HistoryIcon,
   MattermostIcon,
   MoreVerticalIcon,
   NewThreadIcon,
@@ -46,6 +48,8 @@ const ALL_ICONS = [
   ["PopoutIcon", PopoutIcon],
   ["MoreVerticalIcon", MoreVerticalIcon],
   ["SkillIcon", SkillIcon],
+  ["HistoryIcon", HistoryIcon],
+  ["CalendarPlusIcon", CalendarPlusIcon],
 ] as const;
 
 describe("icon library", () => {

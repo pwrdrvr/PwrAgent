@@ -6,8 +6,23 @@
 // stored in Git LFS. Update them from the off-desktop VM lab, never from a
 // Linux host or a developer's active desktop:
 //
-//   ~/pwragent-mac-vm/run-e2e.sh --local /path/to/PwrAgent \
+//   ~/pwrdrvr/PwrSuiteLab/macos-tart/run-e2e.sh --confirm-live-run \
+//     --workload pwragent --local /path/to/PwrAgent \
 //     e2e/visual-regression.spec.ts --update-snapshots
+//
+// VISUAL_MAX_DIFF_PIXELS exists because the lab guest and the CI macOS runner
+// no longer rasterize identically. A golden regenerated on the lab lands 8
+// pixels away from what CI renders — scattered singletons in the sidebar, the
+// transcript header, and one at the far right edge, with no layout difference
+// and no cluster. Both the CI run and its retry produced the same 8, so it is
+// a deterministic per-machine antialiasing difference, not run-to-run flake.
+//
+// 20 is deliberately just above that noise floor and far below anything real:
+// the icon-only lens switch moved 7368 pixels and adding a fourth lens tab
+// moved 659. Treat a diff between 20 and a few hundred as a genuine finding to
+// investigate, not a reason to raise this number. If the floor climbs past 20,
+// the lab guest has drifted further from CI and that is the bug to fix — the
+// lab is supposed to be the authoritative golden environment.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +31,8 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const VISUAL_WINDOW_SIZE = { width: 1440, height: 900 };
+/** See the lab-vs-CI antialiasing note in the file header before changing. */
+const VISUAL_MAX_DIFF_PIXELS = 20;
 const VISUAL_CLOCK_TIME = new Date("2026-08-02T12:00:00.000Z");
 const VISUAL_APP_VERSION = "1.2.3-beta.1";
 
@@ -79,6 +96,7 @@ test.describe("visual regression", () => {
       await expect(shell).toHaveScreenshot("todo-thread-shell.png", {
         animations: "disabled",
         caret: "hide",
+        maxDiffPixels: VISUAL_MAX_DIFF_PIXELS,
         scale: "css",
       });
     } finally {
@@ -121,6 +139,7 @@ test.describe("visual regression", () => {
       await expect(approval).toHaveScreenshot("pending-approval.png", {
         animations: "disabled",
         caret: "hide",
+        maxDiffPixels: VISUAL_MAX_DIFF_PIXELS,
         scale: "css",
       });
     } finally {
