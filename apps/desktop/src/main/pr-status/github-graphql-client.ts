@@ -74,7 +74,7 @@ export async function readGithubDotComAuthToken(
       "--hostname",
       "github.com",
     ]);
-    const token = findGithubToken(output);
+    const token = output.stdout.trim();
     if (token) {
       return token;
     }
@@ -82,14 +82,20 @@ export async function readGithubDotComAuthToken(
     // Older gh versions do not have `auth token`; try their status output.
   }
 
-  const output = await run(command, [
-    "auth",
-    "status",
-    "--hostname",
-    "github.com",
-    "--show-token",
-  ]);
-  return findGithubToken(output);
+  try {
+    const output = await run(command, [
+      "auth",
+      "status",
+      "--hostname",
+      "github.com",
+      "--show-token",
+    ]);
+    return findGithubToken(output);
+  } catch {
+    // This command can print a plaintext token before exiting unsuccessfully.
+    // Never propagate its stdout, stderr, or exec error message.
+    throw new Error("GitHub CLI authentication status check failed");
+  }
 }
 
 /**

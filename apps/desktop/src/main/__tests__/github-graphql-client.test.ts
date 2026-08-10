@@ -764,6 +764,14 @@ describe("readGithubDotComAuthToken", () => {
     ]);
   });
 
+  it("preserves unprefixed legacy tokens from the direct token command", async () => {
+    const legacyToken = "a".repeat(40);
+    const run = vi.fn(async () => ({ stdout: `${legacyToken}\n` }));
+
+    await expect(readGithubDotComAuthToken("gh", run)).resolves.toBe(legacyToken);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to legacy status output, including stderr", async () => {
     const run = vi.fn()
       .mockRejectedValueOnce(new Error("unknown command: token"))
@@ -781,5 +789,29 @@ describe("readGithubDotComAuthToken", () => {
       "github.com",
       "--show-token",
     ]);
+  });
+
+  it("does not expose token-bearing output from a failed status fallback", async () => {
+    const exposedCredential = "plaintext-test-credential-that-must-not-escape";
+    const statusError = Object.assign(new Error(`Token: ${exposedCredential}`), {
+      stdout: `github.com token: ${exposedCredential}`,
+      stderr: `Authentication failed for token ${exposedCredential}`,
+    });
+    const run = vi.fn()
+      .mockRejectedValueOnce(new Error("unknown command token"))
+      .mockRejectedValueOnce(statusError);
+
+    let caught: unknown;
+    try {
+      await readGithubDotComAuthToken("gh", run);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe(
+      "GitHub CLI authentication status check failed",
+    );
+    expect(String(caught)).not.toContain(exposedCredential);
   });
 });
