@@ -385,7 +385,11 @@ describe("AcpAgentsSettings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Check readiness" }));
     await waitFor(() => {
-      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true, force: true });
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        discoveryIntent: "settings-user-action",
+        refresh: true,
+        force: true,
+      });
     });
   });
 

@@ -99,13 +99,14 @@ the general local-CLI discovery path, not a new agent-kit strategy:
 - Installation requires Node.js 22 or newer plus npm on the owning instance.
   npm lifecycle scripts are disabled. Before an installation is promoted,
   PwrAgent verifies the package name, exact version, executable entrypoint, and
-  the checked-in npm SHA-512 integrity value.
+  the checked-in npm SHA-512 integrity value, then hashes the complete installed
+  package tree against a checked-in SHA-256 content digest.
 - Runtime launches go through PwrAgent's normal ACP stdio transport and owned
   process-tree shutdown. PwrAgent launches the adapter with no adapter-specific
   arguments, matching its normal local-authenticated behavior.
-- Cached readiness is reused only after the on-disk package and entrypoint pass
-  the same pin checks. A removed or altered runtime becomes unavailable and
-  must be reinstalled before PwrAgent will launch it.
+- Cached readiness is reused only after the on-disk package bytes and
+  entrypoint pass the same pin checks. A removed or altered runtime becomes
+  unavailable and must be reinstalled before PwrAgent will launch it.
 - Authentication is an explicit local setup step. Settings provides both the
   adapter's `--cli auth login --claudeai` subscription command and its
   `--cli auth login --console` command for the operator to run in a terminal,
@@ -113,6 +114,11 @@ the general local-CLI discovery path, not a new agent-kit strategy:
   ACP client does not advertise terminal-auth handling; these commands are the
   intentionally explicit local flow. PwrAgent does not receive, store, log, or
   transport the resulting credential.
+- An authenticated readiness probe discovers the account's available models
+  and the model-dependent effort choices advertised by the adapter. Prompt
+  results populate PwrAgent's turn token-usage and pricing state; ACP
+  `usage_update` notifications populate context-window occupancy separately so
+  cumulative context is never mispriced as per-turn spend.
 
 The package pin is deliberately independent of the moving public ACP registry.
 An upgrade requires updating the package version, integrity value, allowlist
