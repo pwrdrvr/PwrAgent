@@ -82,6 +82,7 @@ function isPickableDirectory(directory: NavigationDirectorySummary): boolean {
 }
 
 export function ReferencePicker(props: ReferencePickerProps): ReactElement {
+  const { onClose, open } = props;
   const [tab, setTab] = useState<ReferencePickerTab>("projects");
   const [query, setQuery] = useState("");
   const [menuShift, setMenuShift] = useState(0);
@@ -91,17 +92,17 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
   const panelId = useId();
 
   useEffect(() => {
-    if (!props.open) {
+    if (!open) {
       return;
     }
     const onPointerDown = (event: PointerEvent) => {
       if (!containerRef.current?.contains(event.target as Node)) {
-        props.onClose();
+        onClose();
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        props.onClose();
+        onClose();
       }
     };
     document.addEventListener("pointerdown", onPointerDown);
@@ -110,7 +111,7 @@ export function ReferencePicker(props: ReferencePickerProps): ReactElement {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [props.open, props.onClose]);
+  }, [onClose, open]);
 
   // The popover is anchored to the trigger, which sits near the right edge of
   // the composer toolbar — keep it inside the viewport by nudging it back in

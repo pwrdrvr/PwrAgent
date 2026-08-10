@@ -21,6 +21,7 @@ export function MarkdownFilesWindow() {
   const selectedFile = snapshot?.files.find(
     (file) => file.path === snapshot.selectedPath,
   ) ?? snapshot?.files[0];
+  const selectedPath = selectedFile?.path;
   const markdownApplications = useMemo(
     () => applicationsSnapshotForEditor(snapshot),
     [snapshot],
@@ -75,13 +76,13 @@ export function MarkdownFilesWindow() {
 
   useEffect(() => {
     const reader = desktopApi?.readMarkdownFile;
-    if (!reader || !selectedFile) {
+    if (!reader || !selectedPath) {
       return;
     }
 
     let cancelled = false;
     setLoadState({ status: "loading" });
-    void reader({ path: selectedFile.path })
+    void reader({ path: selectedPath })
       .then((response) => {
         if (cancelled) return;
         if (response.error || response.content === undefined) {
@@ -104,7 +105,7 @@ export function MarkdownFilesWindow() {
     return () => {
       cancelled = true;
     };
-  }, [desktopApi, selectedFile?.path]);
+  }, [desktopApi, selectedPath]);
 
   const selectFile = useCallback(
     (file: MarkdownFileViewerFile) => {

@@ -706,6 +706,7 @@ function MarkdownDocumentModal(props: {
   skills?: AppServerSkillSummary[];
   target: MarkdownViewerTarget;
 }) {
+  const onClose = props.onClose;
   const contentRef = useRef<HTMLDivElement>(null);
   const [loadState, setLoadState] = useState<
     | { status: "loading" }
@@ -768,7 +769,7 @@ function MarkdownDocumentModal(props: {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        props.onClose();
+        onClose();
         return;
       }
 
@@ -801,7 +802,7 @@ function MarkdownDocumentModal(props: {
       window.removeEventListener("keydown", handleKeyDown, true);
       restoreFocus?.focus?.();
     };
-  }, [props.onClose]);
+  }, [onClose]);
 
   if (typeof document === "undefined") {
     return null;

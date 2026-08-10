@@ -49,6 +49,8 @@ export function AppNoticeToast(props: {
   const [paused, setPaused] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
   const onDismissRef = useRef(props.onDismiss);
+  const noticeId = props.notice?.id;
+  const noticePresent = props.notice !== undefined;
   const autoDismiss = props.notice?.autoDismiss !== false;
 
   useEffect(() => {
@@ -64,7 +66,7 @@ export function AppNoticeToast(props: {
   }, [props.notice?.id]);
 
   useEffect(() => {
-    if (!props.notice || !autoDismiss || paused) {
+    if (!noticePresent || !autoDismiss || paused) {
       return;
     }
 
@@ -79,7 +81,7 @@ export function AppNoticeToast(props: {
         timeoutRef.current = undefined;
       }
     };
-  }, [autoDismiss, paused, props.notice?.id]);
+  }, [autoDismiss, noticeId, noticePresent, paused]);
 
   if (!props.notice) {
     return null;

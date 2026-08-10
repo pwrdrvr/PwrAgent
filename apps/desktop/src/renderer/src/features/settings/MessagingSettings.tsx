@@ -2285,13 +2285,13 @@ function PairingTokenField(props: {
     [],
   );
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     if (!props.desktopApi?.listMessagingPairingRequests) return;
     const result = await props.desktopApi.listMessagingPairingRequests({
       platform: props.platform,
     });
     setEntries(result.entries);
-  };
+  }, [props.desktopApi, props.platform]);
 
   useEffect(() => {
     void refresh();
@@ -2302,7 +2302,7 @@ function PairingTokenField(props: {
       }
       void refresh();
     });
-  }, [props.desktopApi, props.platform, setGeneratedMessage]);
+  }, [props.desktopApi, props.platform, refresh, setGeneratedMessage]);
 
   const selectScope = (nextScope: MessagingPairingScope) => {
     setScope(nextScope);

@@ -53,6 +53,8 @@ export type UseAppearanceInput = {
  */
 export function useAppearance(input: UseAppearanceInput): AppearanceController {
   const { snapshotPreference, writeConfig } = input;
+  const snapshotDensity = snapshotPreference?.density;
+  const snapshotTheme = snapshotPreference?.theme;
 
   const [appearance, setAppearanceState] = useState<AppearanceState>(() => {
     const initial = snapshotPreference ?? readBridgedAppearance();
@@ -67,20 +69,21 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   // We compare by value to avoid stomping local in-flight writes that
   // haven't been re-read yet.
   useEffect(() => {
-    if (!snapshotPreference) return;
+    if (!snapshotDensity || !snapshotTheme) return;
     setAppearanceState((current) => {
       if (
-        current.theme === snapshotPreference.theme
-        && current.density === snapshotPreference.density
+        current.theme === snapshotTheme
+        && current.density === snapshotDensity
       ) {
         return current;
       }
       return {
-        ...snapshotPreference,
-        resolvedTheme: resolveTheme(snapshotPreference.theme),
+        density: snapshotDensity,
+        resolvedTheme: resolveTheme(snapshotTheme),
+        theme: snapshotTheme,
       };
     });
-  }, [snapshotPreference?.theme, snapshotPreference?.density]);
+  }, [snapshotDensity, snapshotTheme]);
 
   // Apply DOM attributes whenever the resolved appearance changes. No
   // localStorage cache to maintain — the source of truth is TOML, the
