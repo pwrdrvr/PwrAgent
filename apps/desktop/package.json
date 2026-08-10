@@ -15,6 +15,7 @@
     "analyze:protocol-capture": "tsx ./scripts/analyze-protocol-capture.ts",
     "analyze:startup-cpu-profile": "tsx ./scripts/analyze-startup-cpu-profile.ts",
     "build": "electron-vite build",
+    "capture:codex-usage": "tsx ./scripts/capture-codex-usage-protocol.ts",
     "postbuild": "node ./scripts/check-main-bundle-boundary.mjs",
     "dev": "node ./scripts/dev.mjs --",
     "dev:dev": "node ./scripts/dev.mjs -- --profile dev",

@@ -410,6 +410,22 @@ function formatBackendRateLimit(
   const resetText = formatRateLimitReset(rateLimit.resetAt);
   const suffix = resetText ? `, resets ${resetText}` : "";
 
+  if (
+    label === "Individual limit"
+    && rateLimit.used !== undefined
+    && rateLimit.limit !== undefined
+  ) {
+    const remainingPercent = rateLimit.usedPercent !== undefined
+      ? Math.max(0, Math.round(100 - rateLimit.usedPercent))
+      : Math.max(
+          0,
+          Math.round(((rateLimit.limit - rateLimit.used) / rateLimit.limit) * 100),
+        );
+    return `${displayLabel}: ${formatWholeNumber(
+      rateLimit.used,
+    )}/${formatWholeNumber(rateLimit.limit)} used, ${remainingPercent}% left${suffix}`;
+  }
+
   if (rateLimit.usedPercent !== undefined) {
     return `${displayLabel}: ${Math.max(
       0,
@@ -451,6 +467,9 @@ function splitRateLimitName(name: string): {
   }
   if (lower.endsWith("weekly limit")) {
     return { label: "Weekly limit", labelOrder: 1 };
+  }
+  if (lower.endsWith("individual limit")) {
+    return { label: "Individual limit", labelOrder: 2 };
   }
   return { label: trimmed, labelOrder: 99 };
 }
