@@ -2591,7 +2591,7 @@ describe("AcpAgentClient", () => {
     expect(client.readReplay(session.sessionId).entries).toEqual([]);
   });
 
-  it("preserves a Grok assistant stream across transient vendor updates", async () => {
+  it("distinguishes known tool progress from standalone tool updates", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({
       "session/prompt": promptResponse.promise,
@@ -2623,6 +2623,16 @@ describe("AcpAgentClient", () => {
       method: "_x.ai/session_notification",
       sessionId: session.sessionId,
       update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "background-tool",
+        title: "Background check",
+        status: "in_progress",
+      },
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
         sessionUpdate: "agent_message_chunk",
         content: "Before ",
       },
@@ -2642,16 +2652,49 @@ describe("AcpAgentClient", () => {
       method: "_x.ai/session_notification",
       sessionId: session.sessionId,
       update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "background-tool",
+        title: "Background check",
+        status: "completed",
+      },
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
         sessionUpdate: "agent_message_chunk",
         content: "after",
+      },
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "standalone-tool",
+        title: "Standalone check",
+        status: "completed",
+      },
+    });
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: "Later",
       },
     });
 
     expect(assistantMessageItemIds).toEqual([
       "assistant:turn-1:0",
       "assistant:turn-1:0",
+      "assistant:turn-1:1",
     ]);
-    expect(client.readReplay(session.sessionId).entries).toEqual([
+    expect(
+      client
+        .readReplay(session.sessionId)
+        .entries.filter((entry) => entry.type === "message"),
+    ).toEqual([
       expect.objectContaining({
         type: "message",
         role: "user",
@@ -2662,12 +2705,63 @@ describe("AcpAgentClient", () => {
         role: "assistant",
         text: "Before after",
       }),
+      expect.objectContaining({
+        type: "message",
+        role: "assistant",
+        text: "Later",
+      }),
     ]);
 
     promptResponse.resolve({ turnId: "turn-1" });
     await vi.waitFor(() => {
       expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
     });
+  });
+
+  it("does not advance a seen Grok thread for last_turn_summary metadata", async () => {
+    let now = 1000;
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => now,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    now = 1100;
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Finished the requested work." },
+    });
+    const seenUpdatedAt =
+      store.getSession("acp:grok", session.sessionId)?.updatedAt;
+
+    now = 1200;
+    transport.emitVendorNotification({
+      method: "_x.ai/session_notification",
+      sessionId: session.sessionId,
+      update: {
+        sessionUpdate: "last_turn_summary",
+        summary: "Requested work complete",
+      },
+    });
+
+    expect(store.getSession("acp:grok", session.sessionId)?.updatedAt).toBe(
+      seenUpdatedAt,
+    );
+    expect(
+      client
+        .readReplay(session.sessionId)
+        .entries.some(
+          (entry) =>
+            entry.type === "activity" && entry.summary.startsWith("ACP update:"),
+        ),
+    ).toBe(false);
   });
 
   it("keeps a tracked Grok turn active until session/prompt resolves", async () => {
@@ -3071,64 +3165,67 @@ describe("AcpAgentClient", () => {
     await client.dispose();
   });
 
-  it("preserves a visible assistant stream across hidden ACP thought chunks", async () => {
-    const assistantMessageItemIds: Array<string | undefined> = [];
-    const transport = new FakeAcpAgentTransport();
-    const client = new AcpAgentClient({
-      backendId: "acp:qwen",
-      store,
-      transport,
-      now: () => 1000,
-      onSessionUpdate: ({ assistantMessageItemId, update }) => {
-        if (
-          (update.sessionUpdate ?? update.session_update ?? update.kind) ===
-          "agent_message_chunk"
-        ) {
-          assistantMessageItemIds.push(assistantMessageItemId);
-        }
-      },
-    });
+  it.each(["acp:qwen", "acp:grok"] as const)(
+    "preserves a visible assistant stream across hidden %s thought chunks",
+    async (backendId) => {
+      const assistantMessageItemIds: Array<string | undefined> = [];
+      const transport = new FakeAcpAgentTransport();
+      const client = new AcpAgentClient({
+        backendId,
+        store,
+        transport,
+        now: () => 1000,
+        onSessionUpdate: ({ assistantMessageItemId, update }) => {
+          if (
+            (update.sessionUpdate ?? update.session_update ?? update.kind) ===
+            "agent_message_chunk"
+          ) {
+            assistantMessageItemIds.push(assistantMessageItemId);
+          }
+        },
+      });
 
-    await client.initialize();
-    const session = await client.startSession({
-      cwd: "/repo",
-      executionMode: "default",
-    });
-    client.startPrompt({
-      sessionId: session.sessionId,
-      prompt: "hello",
-      turnId: "turn-1",
-    });
+      await client.initialize();
+      const session = await client.startSession({
+        cwd: "/repo",
+        executionMode: "default",
+      });
+      client.startPrompt({
+        sessionId: session.sessionId,
+        prompt: "hello",
+        turnId: "turn-1",
+      });
 
-    transport.emitSessionUpdate(session.sessionId, {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "Visible " },
-    });
-    transport.emitSessionUpdate(session.sessionId, {
-      sessionUpdate: "agent_thought_chunk",
-      content: { type: "text", text: "hidden reasoning" },
-    });
-    transport.emitSessionUpdate(session.sessionId, {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "answer." },
-    });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Visible " },
+      });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "hidden reasoning" },
+      });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "answer." },
+      });
 
-    expect(assistantMessageItemIds).toEqual([
-      "assistant:turn-1:0",
-      "assistant:turn-1:0",
-    ]);
-    expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe(
-      "Visible answer.",
-    );
-    expect(
-      client
-        .readReplay(session.sessionId)
-        .entries.some(
-          (entry) =>
-            entry.type === "message" && entry.text.includes("hidden reasoning"),
-        ),
-    ).toBe(false);
-  });
+      expect(assistantMessageItemIds).toEqual([
+        "assistant:turn-1:0",
+        "assistant:turn-1:0",
+      ]);
+      expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe(
+        "Visible answer.",
+      );
+      expect(
+        client
+          .readReplay(session.sessionId)
+          .entries.some(
+            (entry) =>
+              entry.type === "message" && entry.text.includes("hidden reasoning"),
+          ),
+      ).toBe(false);
+    },
+  );
 
   it("strips legacy transcript updates when upserting stored sessions", () => {
     store.upsertSession({

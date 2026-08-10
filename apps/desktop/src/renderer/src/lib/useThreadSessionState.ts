@@ -59,6 +59,7 @@ const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "item/commandExecution/requestApproval",
   "item/fileChange/requestApproval",
 ]);
+const ACP_IDLE_RECONCILIATION_GRACE_MS = 1_500;
 
 export function getContextWindowMoonPhase(usedPercent: number): number {
   if (usedPercent < 10) {
@@ -151,6 +152,7 @@ type ThreadSessionEntry = {
   pendingStatusText?: string;
   pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
+  staleThinkingRecheckAt?: number;
   thinkingSinceAt?: number;
   viewport?: ThreadViewportState;
 };
@@ -3639,6 +3641,80 @@ export function useThreadSessionState(params: {
   }, [initialHistoryLimit, loadLatest, sessions, thread, threadKey, updateSession]);
 
   useEffect(() => {
+    if (!thread || !threadKey) {
+      return;
+    }
+    const recheckAt = sessions[threadKey]?.staleThinkingRecheckAt;
+    if (typeof recheckAt !== "number") {
+      return;
+    }
+    const timer = setTimeout(() => {
+      updateSession(threadKey, (current) => ({
+        ...current,
+        hydratedUpdatedAt: undefined,
+        lastTouchedAt: Date.now(),
+        staleThinkingRecheckAt: undefined,
+      }));
+      void loadLatest(thread);
+    }, Math.max(0, recheckAt - Date.now()) + 1);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [loadLatest, sessions, thread, threadKey, updateSession]);
+
+  useEffect(() => {
+    const timers = Object.entries(sessions).flatMap(
+      ([sessionThreadKey, session]) => {
+        if (
+          sessionThreadKey === threadKey
+          || typeof session.staleThinkingRecheckAt !== "number"
+        ) {
+          return [];
+        }
+
+        const recheckAt = session.staleThinkingRecheckAt;
+        return [
+          setTimeout(() => {
+            updateSession(sessionThreadKey, (current) => {
+              if (
+                current.staleThinkingRecheckAt !== recheckAt
+                || hasPendingInteraction(current)
+              ) {
+                return current;
+              }
+
+              // An unfocused thread has no NavigationThreadSummary to pass to
+              // loadLatest(). After the grace period, clear renderer-owned
+              // live state and hydrate durable completion when next selected.
+              return {
+                ...current,
+                activeTurnId: undefined,
+                activeTurnStartedAt: undefined,
+                completionHydrationRetries: 0,
+                expectOwnUpdate: false,
+                hydratedUpdatedAt: undefined,
+                needsHydrationAfterCompletion: true,
+                optimisticEntries: current.optimisticEntries.filter(
+                  (entry) => !isLiveOptimisticEntry(entry)
+                ),
+                pendingAssistantMessage: undefined,
+                pendingStatusText: undefined,
+                staleThinkingRecheckAt: undefined,
+              };
+            });
+          }, Math.max(0, recheckAt - Date.now()) + 1),
+        ];
+      }
+    );
+
+    return () => {
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+    };
+  }, [sessions, threadKey, updateSession]);
+
+  useEffect(() => {
     if (!desktopApi?.onAgentEvent) {
       return;
     }
@@ -4486,9 +4562,24 @@ export function useThreadSessionState(params: {
               ? event.notification.params.status.type
               : undefined;
 
+          if (statusType === "active") {
+            return {
+              ...current,
+              lastTouchedAt: nextLastTouchedAt,
+              staleThinkingRecheckAt: undefined,
+            };
+          }
+
           if (statusType === "idle") {
-            if (current.activeTurnId || current.pendingStatusText) {
-              return current;
+            const shouldRecheckStaleThinking =
+              hasThinkingState(current) && !hasPendingInteraction(current);
+            if (shouldRecheckStaleThinking) {
+              return {
+                ...current,
+                lastTouchedAt: nextLastTouchedAt,
+                staleThinkingRecheckAt:
+                  nextLastTouchedAt + ACP_IDLE_RECONCILIATION_GRACE_MS,
+              };
             }
 
             return {
@@ -4498,6 +4589,7 @@ export function useThreadSessionState(params: {
               lastTouchedAt: nextLastTouchedAt,
               pendingAssistantMessage: undefined,
               pendingStatusText: undefined,
+              staleThinkingRecheckAt: undefined,
             };
           }
         }

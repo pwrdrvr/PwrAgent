@@ -15,6 +15,7 @@ import {
   AcpSessionReplayNormalizer,
   isGrokTransientUpdateKind,
   readAcpContentText,
+  readAcpToolCallId,
   readAcpTopicTitle,
   shouldSurfaceAcpThoughtsAsMessages,
   type AcpSessionUpdate,
@@ -124,6 +125,7 @@ type AcpActiveTurn = {
   activeAssistantMessagePhase?: AppServerTranscriptPhase;
   assistantText: string;
   assistantMessageSequence: number;
+  knownToolCallIds: Set<string>;
   turnId: string;
 };
 
@@ -813,6 +815,11 @@ export class AcpAgentClient {
       updateKind === "agent_message_chunk" ||
       (updateKind === "agent_thought_chunk" && this.surfaceThoughtsAsMessages);
     const text = readUpdateText(update);
+    const toolCallId = readAcpToolCallId(update);
+    const updatesKnownToolCall =
+      updateKind === "tool_call_update"
+      && toolCallId !== undefined
+      && activeTurn?.knownToolCallIds.has(toolCallId) === true;
     let assistantMessageItemId: string | undefined;
     if (shouldTrackAssistantTextUpdate && activeTurn && text) {
       const phase: AppServerTranscriptPhase =
@@ -829,9 +836,17 @@ export class AcpAgentClient {
       !isAssistantTextUpdate
       && activeTurn
       && !isGrokTransientUpdateKind(updateKind)
+      && !updatesKnownToolCall
     ) {
       activeTurn.activeAssistantMessageItemId = undefined;
       activeTurn.activeAssistantMessagePhase = undefined;
+    }
+    if (
+      activeTurn
+      && toolCallId
+      && (updateKind === "tool_call" || updateKind === "tool_call_update")
+    ) {
+      activeTurn.knownToolCallIds.add(toolCallId);
     }
     const replay = this.normalizerFor(sessionId).apply({
       sessionId,
@@ -1142,6 +1157,7 @@ export class AcpAgentClient {
     this.activeTurns.set(sessionId, {
       assistantText: "",
       assistantMessageSequence: 0,
+      knownToolCallIds: new Set<string>(),
       turnId,
     });
     this.updateSessionStatus(sessionId, "active");

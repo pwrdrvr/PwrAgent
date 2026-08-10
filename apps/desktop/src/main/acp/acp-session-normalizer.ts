@@ -35,7 +35,7 @@ export type AcpSessionReplayNormalizerOptions = {
 };
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
-  return backendId !== "acp:qwen";
+  return backendId !== "acp:qwen" && backendId !== "acp:grok";
 }
 
 export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
@@ -43,6 +43,22 @@ export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
     kind === "tool_call_delta_chunk"
     || kind === "pending_interaction"
     || kind === "interaction_resolved"
+    || kind === "response_completed"
+    // Grok publishes this after its canonical `turn_completed` update as
+    // session metadata. It is not a second lifecycle event or transcript item.
+    || kind === "last_turn_summary"
+  );
+}
+
+export function readAcpToolCallId(
+  update: Record<string, unknown>,
+): string | undefined {
+  return (
+    readString(update, "toolCallId")
+    ?? readString(update, "tool_call_id")
+    ?? readString(update, "id")
+    ?? readString(update, "itemId")
+    ?? readString(update, "item_id")
   );
 }
 
@@ -56,6 +72,7 @@ export class AcpSessionReplayNormalizer {
   private activeAssistantMessagePhase?: AppServerTranscriptPhase;
   private assistantMessageSequence = 0;
   private generatedMessageSequence = 0;
+  private readonly knownToolCallIds = new Set<string>();
 
   constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {}
 
@@ -75,6 +92,7 @@ export class AcpSessionReplayNormalizer {
     this.activeAssistantMessageId = undefined;
     this.activeAssistantMessagePhase = undefined;
     this.assistantMessageSequence = 0;
+    this.knownToolCallIds.clear();
     this.upsertMessage({
       id,
       role: "user",
@@ -106,6 +124,7 @@ export class AcpSessionReplayNormalizer {
     }
     this.activeAssistantMessageId = undefined;
     this.activeAssistantMessagePhase = undefined;
+    this.knownToolCallIds.clear();
     this.status = "idle";
     return this.replay();
   }
@@ -125,6 +144,7 @@ export class AcpSessionReplayNormalizer {
     }
     this.activeAssistantMessageId = undefined;
     this.activeAssistantMessagePhase = undefined;
+    this.knownToolCallIds.clear();
     this.status = "idle";
     this.upsertActivity({
       type: "activity",
@@ -182,6 +202,7 @@ export class AcpSessionReplayNormalizer {
     } else if (kind === "user_message_chunk") {
       this.activeAssistantMessageId = undefined;
       this.activeAssistantMessagePhase = undefined;
+      this.knownToolCallIds.clear();
       this.applyUserMessageChunk(update, createdAt);
     } else if (kind === "available_commands_update") {
       // Command metadata belongs in provider capabilities, not the transcript.
@@ -205,18 +226,42 @@ export class AcpSessionReplayNormalizer {
     } else if (readAcpTopicTitle(update.update)) {
       // Topic updates are thread metadata, not transcript entries.
     } else {
-      this.activeAssistantMessageId = undefined;
-      this.activeAssistantMessagePhase = undefined;
+      const toolCallId = readAcpToolCallId(update.update);
+      // A tool_call is the semantic boundary between assistant messages.
+      // Updates for that known call may arrive while the provider is already
+      // streaming the next message, so only those preserve the active bubble.
+      // A standalone tool_call_update remains a boundary for providers that
+      // use it as their only notification for a tool invocation.
+      const updatesKnownToolCall =
+        kind === "tool_call_update"
+        && toolCallId !== undefined
+        && this.knownToolCallIds.has(toolCallId);
+      if (
+        toolCallId
+        && (kind === "tool_call" || kind === "tool_call_update")
+      ) {
+        this.knownToolCallIds.add(toolCallId);
+      }
+      // Each branch below ends the active assistant bubble only if that update
+      // really is a message boundary. Failing to recognize a future update is
+      // not evidence that the assistant stopped speaking.
       if (kind === "plan") {
+        this.endActiveAssistantMessage();
         this.removeCurrentAgentWaitingActivity();
         this.upsertPlan(update, createdAt);
       } else if (kind === "tool_call" || kind === "tool_call_update") {
+        if (!updatesKnownToolCall) {
+          this.endActiveAssistantMessage();
+        }
         this.removeCurrentAgentWaitingActivity();
         this.upsertActivity(toolActivity(update, kind, createdAt));
       } else if (kind === "file" || kind === "terminal") {
+        this.endActiveAssistantMessage();
         this.removeCurrentAgentWaitingActivity();
         this.upsertActivity(toolActivity(update, kind, createdAt));
       } else if (kind === "turn_started") {
+        this.endActiveAssistantMessage();
+        this.knownToolCallIds.clear();
         this.status = "active";
       } else if (kind === "turn_finished") {
         this.recordTurnFinished(readString(update.update, "turnId"), createdAt);
@@ -237,6 +282,9 @@ export class AcpSessionReplayNormalizer {
           waitingForAgent: readBoolean(update.update, "waitingForAgent"),
         });
       } else {
+        // Keep a breadcrumb for forward compatibility without destructively
+        // splitting the assistant message that surrounds it. Later chunks
+        // append to the earlier message entry, so the activity sorts after it.
         this.removeCurrentAgentWaitingActivity();
         this.upsertActivity(unknownActivity(update, kind, createdAt));
       }
@@ -346,6 +394,11 @@ export class AcpSessionReplayNormalizer {
         `assistant:${this.currentTurnId ?? update.sessionId}:${this.assistantMessageSequence++}`;
     }
     return this.activeAssistantMessageId;
+  }
+
+  private endActiveAssistantMessage(): void {
+    this.activeAssistantMessageId = undefined;
+    this.activeAssistantMessagePhase = undefined;
   }
 
   private resetAssistantMessageIfPhaseChanged(
@@ -813,11 +866,7 @@ function toolActivity(
   createdAt: number,
 ): AppServerThreadActivityEntry {
   const id =
-    readString(update.update, "toolCallId") ??
-    readString(update.update, "tool_call_id") ??
-    readString(update.update, "id") ??
-    readString(update.update, "itemId") ??
-    readString(update.update, "item_id") ??
+    readAcpToolCallId(update.update) ??
     `${kind}:${update.sessionId}`;
   const webSearch = readAcpWebSearch(update.update);
   if (webSearch) {
@@ -1089,7 +1138,7 @@ function unknownActivity(
   kind: string,
   createdAt: number,
 ): AppServerThreadActivityEntry {
-  const id = `unknown:${update.sessionId}:${createdAt}`;
+  const id = `unknown:${update.sessionId}:${createdAt}:${kind}`;
   return {
     type: "activity",
     id,
