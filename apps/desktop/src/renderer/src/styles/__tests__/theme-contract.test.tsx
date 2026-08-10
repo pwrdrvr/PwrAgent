@@ -183,6 +183,9 @@ describe("Tangerine Terminal theme contract", () => {
       "sidebar-rail-inset",
       "sidebar-lane-inset",
       "sidebar-masthead-pull",
+      // Live run strip row height — defined on `.live-strip`, not `:root`.
+      // The four-row scroll cap is derived from it, so the two cannot drift.
+      "live-strip-row-h",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

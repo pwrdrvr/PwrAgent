@@ -159,6 +159,7 @@ import {
   formatDurationMs,
   formatRunningDurationMs,
 } from "../thread-detail/EnvActionRunsView";
+import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
 import {
   buildThreadComposerScopeKey,
   getNextReleasableQueuedTurn,
@@ -10151,6 +10152,15 @@ export function Composer(props: ComposerProps) {
           conveys the action prompt visually. Stacking another header
           above an input that already names itself was redundant
           chrome. */}
+
+      {/* Topmost in the band: ambient agent work the operator did not just
+          launch. Env action rows sit below it, nearer the input, because they
+          carry the Stop the operator is most likely to reach for. */}
+      <ActiveSubAgentsStrip
+        desktopApi={props.desktopApi}
+        onRefreshNavigation={props.onRefreshNavigation}
+        thread={props.thread}
+      />
 
       {props.showEnvActionAnchors === false ? null : (
         <EnvActionAnchorList
