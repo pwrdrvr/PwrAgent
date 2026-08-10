@@ -1606,6 +1606,78 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("routes app mentions that appear after other message content", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "app_mention",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: ":thread: <@U0BOTUSERID> attach the search thread",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        botMention: true,
+        text: ":thread: attach the search thread",
+      }),
+    ]);
+  });
+
+  it("preserves line breaks around a mid-message app mention", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "app_mention",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "context:\n<@U0BOTUSERID> explain this",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        botMention: true,
+        text: "context:\nexplain this",
+      }),
+    ]);
+  });
+
   it("routes bare leading app mentions as the help command", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
@@ -1728,7 +1800,7 @@ describe("SlackAdapter", () => {
     ]);
   });
 
-  it("deduplicates app_mention and message events for the same Slack post", async () => {
+  it("preserves mention detection when message arrives before app_mention", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
       config: baseConfig,
@@ -1747,16 +1819,9 @@ describe("SlackAdapter", () => {
       team: "T012ABCDEF0",
       ts: "1712023032.123456",
       user: "U012ABCDEF0",
-      text: "<@U0BOTUSERID> help",
+      text: "show `<@U0BOTUSERID>` literally, then <@U0BOTUSERID> help",
     };
 
-    await socket.emitEvent("slack_event", {
-      ack: async () => undefined,
-      event: {
-        ...event,
-        type: "app_mention",
-      },
-    });
     await socket.emitEvent("slack_event", {
       ack: async () => undefined,
       event: {
@@ -1764,14 +1829,57 @@ describe("SlackAdapter", () => {
         type: "message",
       },
     });
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        ...event,
+        type: "app_mention",
+      },
+    });
 
     expect(events).toEqual([
       expect.objectContaining({
         kind: "text",
         botMention: true,
-        text: "help",
+        text: "show `<@U0BOTUSERID>` literally, then help",
       }),
     ]);
+  });
+
+  it.each([
+    ["inline", "show `<@U0BOTUSERID>` literally"],
+    ["fenced", "```\n<@U0BOTUSERID>\n```"],
+  ])("does not treat bot tokens in %s code as mentions", async (_kind, text) => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, responseMode: "mention_only" },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text,
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({ kind: "text", text }),
+    ]);
+    expect(events[0]).not.toHaveProperty("botMention");
   });
 
   it("strips the configured prefix from Slack slash commands", async () => {

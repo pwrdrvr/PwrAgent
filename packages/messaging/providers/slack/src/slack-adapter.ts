@@ -1001,7 +1001,10 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
     const rawText = event.text ?? "";
     const strippedText = stripBotMention(rawText, this.botUserId);
-    const isMention = strippedText !== rawText;
+    // Slack's app_mention event is the authoritative addressed-to-us signal.
+    // Also inspect message text because Slack can deliver the same post as both
+    // app_mention and message, and either copy may win our deduplication race.
+    const isMention = event.type === "app_mention" || strippedText !== rawText;
     const text = strippedText.trim();
     const isPairingMessage = Boolean(extractMessagingPairingToken(rawText));
     const command = isMention && text.length === 0
@@ -2601,7 +2604,44 @@ function slackConversationUrl(channelId: string, teamId?: string): string {
 
 export function stripBotMention(text: string, botUserId: string | undefined): string {
   if (!botUserId) return text;
-  return text.replace(new RegExp(`^\\s*<@${escapeRegex(botUserId)}>\\s*`), "");
+  const mention = `<@${botUserId}>`;
+  const mentionIndex = findSlackMentionOutsideCode(text, mention);
+  if (mentionIndex < 0) return text;
+
+  const before = text.slice(0, mentionIndex);
+  const after = text.slice(mentionIndex + mention.length);
+  const trailingWhitespace = before.match(/[ \t]+$/u)?.[0] ?? "";
+  const leadingWhitespace = after.match(/^[ \t]+/u)?.[0] ?? "";
+  const prefix = before.slice(0, before.length - trailingWhitespace.length);
+  const suffix = after.slice(leadingWhitespace.length);
+  const prefixEndsLine = prefix.length === 0 || /[\r\n]$/u.test(prefix);
+  const suffixStartsLine = suffix.length === 0 || /^[\r\n]/u.test(suffix);
+  const needsSpace = !prefixEndsLine
+    && !suffixStartsLine
+    && Boolean(trailingWhitespace || leadingWhitespace);
+  return `${prefix}${needsSpace ? " " : ""}${suffix}`;
+}
+
+function findSlackMentionOutsideCode(text: string, mention: string): number {
+  let inFencedCode = false;
+  let inInlineCode = false;
+  for (let index = 0; index < text.length;) {
+    if (!inInlineCode && text.startsWith("```", index)) {
+      inFencedCode = !inFencedCode;
+      index += 3;
+      continue;
+    }
+    if (!inFencedCode && text[index] === "`") {
+      inInlineCode = !inInlineCode;
+      index += 1;
+      continue;
+    }
+    if (!inFencedCode && !inInlineCode && text.startsWith(mention, index)) {
+      return index;
+    }
+    index += 1;
+  }
+  return -1;
 }
 
 function parseCommand(text: string): { command: string; args: string[] } | undefined {
@@ -2985,8 +3025,4 @@ function safeEqual(left: string, right: string): boolean {
   const rightBuffer = Buffer.from(right);
   return leftBuffer.byteLength === rightBuffer.byteLength
     && timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
