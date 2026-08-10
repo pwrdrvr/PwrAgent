@@ -52,7 +52,7 @@ describe("pwragent thread orchestration agent tools", () => {
             type: "function",
             name: "handoff_task",
             description: expect.stringMatching(
-              /Prefer this over backend-native sub-agent spawning.*cross-project handoffs are created ungrouped/,
+              /Prefer this to backend-native spawning.*Same-project handoffs default to grouped subthreads.*Cross-project handoffs are ungrouped/,
             ),
             deferLoading: false,
             inputSchema: expect.objectContaining({
@@ -63,13 +63,19 @@ describe("pwragent thread orchestration agent tools", () => {
                 }),
                 groupingMode: expect.objectContaining({
                   enum: ["none", "subthread"],
-                  description: expect.stringContaining("same-project sub-thread"),
+                  description: expect.stringContaining("defaults for same-project"),
                 }),
                 workspaceMode: expect.objectContaining({
                   enum: ["same", "same_workspace", "project_local", "new_worktree", "none"],
                 }),
                 cwd: expect.objectContaining({
-                  description: expect.stringContaining("another project"),
+                  description: expect.stringContaining("task text does not select cwd"),
+                }),
+                backend: expect.objectContaining({
+                  description: expect.stringContaining("`acp:grok`"),
+                }),
+                model: expect.objectContaining({
+                  description: expect.stringContaining("`grok-4.5`"),
                 }),
                 branchName: expect.objectContaining({
                   description: expect.stringContaining("existing base branch/ref"),
@@ -167,6 +173,22 @@ describe("pwragent thread orchestration agent tools", () => {
         ]),
       }),
     ]);
+  });
+
+  it("keeps handoff_task metadata identical across dynamic and MCP exposure", () => {
+    const router = buildPwrAgentThreadOrchestrationToolRouter(undefined);
+    const dynamicTool = router.buildDynamicToolSpecs()
+      .flatMap((spec) => spec.type === "namespace" ? spec.tools : [])
+      .find((tool) => tool.name === "handoff_task");
+    const mcpTool = router.buildMcpTools()
+      .find((tool) => tool.name === "handoff_task");
+
+    expect(dynamicTool).toBeDefined();
+    expect(mcpTool).toEqual({
+      name: dynamicTool?.name,
+      description: dynamicTool?.description,
+      inputSchema: dynamicTool?.inputSchema,
+    });
   });
 
   it("returns unavailable when no handler is registered", async () => {

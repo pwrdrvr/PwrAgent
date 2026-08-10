@@ -22384,7 +22384,8 @@ command = "pnpm dev"
       turnId: "turn-1",
       title: "Investigate issue XYZ",
       seedMode: "clean",
-      groupingMode: "none",
+      groupingMode: "subthread",
+      groupedUnderThreadId: "ordinary-thread",
       inheritedSettings: {
         backend: "codex",
         executionMode: "full-access",
@@ -22484,7 +22485,7 @@ command = "pnpm dev"
         sourceTitle: "Parent Thread",
         taskTitle: "Investigate issue XYZ",
         seedMode: "clean",
-        groupingMode: "none",
+        groupingMode: "subthread",
         workspace: {
           mode: "new_worktree",
           cwd: expect.stringContaining("handoff"),
@@ -22495,6 +22496,152 @@ command = "pnpm dev"
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("rejects a Grok model on an inherited Codex backend and accepts an explicit Grok backend", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+      threads: [
+        {
+          id: "codex-parent",
+          title: "Codex parent",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const installedAgent: AcpInstalledAgentRecord = {
+      ...createKimiAgentRecord(acpBackendId),
+      registryId: "grok",
+      name: "Grok",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        checkedAt: 1000,
+        models: {
+          currentModelId: "grok-4.5",
+          availableModels: [
+            {
+              id: "grok-4.5",
+              label: "Grok 4.5",
+            },
+          ],
+        },
+      },
+    };
+    const { acpClient, registry } = createKimiAcpRegistry({
+      acpBackendId,
+      codexClient,
+      installedAgent,
+      sessionId: "grok-child",
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "codex-parent",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const wrongBackendResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "codex-parent",
+        turnId: "turn-1",
+        callId: "call-wrong-backend",
+        requestId: "call-wrong-backend",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Ask Grok to investigate the issue.",
+          model: "grok",
+          workspaceMode: "none",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(wrongBackendResponse).toMatchObject({ success: false });
+    expect(
+      JSON.parse(
+        (wrongBackendResponse as { contentItems: Array<{ text: string }> })
+          .contentItems[0]!.text,
+      ),
+    ).toEqual({
+      code: "invalid_arguments",
+      message:
+        'model="grok" is not available for backend="codex". Available models: gpt-5.6-sol. To request Grok, pass backend="acp:grok" and an exact discovered model ID such as model="grok-4.5".',
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+    expect(acpClient.startSession).not.toHaveBeenCalled();
+
+    const mcpWrongBackendResponse = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "codex-parent",
+      turnId: "turn-1",
+      tool: "handoff_task",
+      args: {
+        task: "Ask Grok to investigate the issue over MCP.",
+        model: "grok",
+        workspaceMode: "none",
+      },
+    });
+    expect(mcpWrongBackendResponse).toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "invalid_arguments",
+        message: expect.stringContaining(
+          'pass backend="acp:grok" and an exact discovered model ID',
+        ),
+      },
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+    expect(acpClient.startSession).not.toHaveBeenCalled();
+
+    const explicitGrokResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "codex-parent",
+        turnId: "turn-1",
+        callId: "call-explicit-grok",
+        requestId: "call-explicit-grok",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          backend: acpBackendId,
+          task: "Ask Grok to investigate the issue.",
+          model: "grok-4.5",
+          workspaceMode: "none",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(explicitGrokResponse).toMatchObject({ success: true });
+    expect(
+      JSON.parse(
+        (explicitGrokResponse as { contentItems: Array<{ text: string }> })
+          .contentItems[0]!.text,
+      ),
+    ).toMatchObject({
+      backend: acpBackendId,
+      groupingMode: "subthread",
+      groupedUnderThreadId: "codex-parent",
+      inheritedSettings: {
+        backend: acpBackendId,
+        model: "grok-4.5",
+      },
+    });
+    expect(acpClient.startSession).toHaveBeenCalledOnce();
+
+    await registry.close();
   });
 
   it("groups an ACP handoff under a Codex parent", async () => {
@@ -25292,6 +25439,7 @@ script = "printf setup"
         tool: "handoff_task",
         arguments: {
           task: "Investigate issue XYZ and report back.",
+          groupingMode: "none",
           workspaceMode: "same_workspace",
         },
       },
@@ -25940,22 +26088,23 @@ script = "printf setup"
     }
   });
 
-  it("creates new-worktree handoffs from a labeled target repo path in the task", async () => {
+  it("does not switch a same-project child to a nested path mentioned in the task", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-task-cwd-"));
     const scratchPath = path.join(root, "scratch-workspace");
     const repoPath = path.join(root, "PwrAgnt");
-    const worktreePath = path.join(repoPath, ".worktrees", "handoff-task");
+    const nestedPackagePath = path.join(repoPath, "apps", "desktop");
+    const worktreePath = path.join(scratchPath, ".worktrees", "handoff-task");
     try {
-      await mkdir(scratchPath, { recursive: true });
+      await mkdir(nestedPackagePath, { recursive: true });
       await mkdir(worktreePath, { recursive: true });
-      const canonicalRepoPath = await realpath(repoPath);
+      const canonicalScratchPath = await realpath(scratchPath);
       const canonicalWorktreePath = await realpath(worktreePath);
       const prepareLaunchpadWorkspace = vi.fn(async (_launchpad: {
         directoryPath?: string;
         workMode: "local" | "worktree";
       }) => ({
         cwd: canonicalWorktreePath,
-        repositoryPath: canonicalRepoPath,
+        repositoryPath: canonicalScratchPath,
         workMode: "worktree" as const,
       }));
 
@@ -25994,10 +26143,10 @@ script = "printf setup"
             if (
               cwd?.startsWith(worktreePath)
               || cwd?.startsWith(canonicalWorktreePath)
-              || cwd?.startsWith(repoPath)
-              || cwd?.startsWith(canonicalRepoPath)
+              || cwd?.startsWith(scratchPath)
+              || cwd?.startsWith(canonicalScratchPath)
             ) {
-              return canonicalRepoPath;
+              return canonicalScratchPath;
             }
             return cwd;
           }),
@@ -26039,7 +26188,7 @@ script = "printf setup"
             task: [
               "Investigate the messaging bug.",
               "Target repository:",
-              `- "${repoPath}"`,
+              `- "${nestedPackagePath}"`,
             ].join("\n"),
             title: "Messaging handoff target repo",
             workspaceMode: "new_worktree",
@@ -26056,12 +26205,12 @@ script = "printf setup"
         expectedDir(
           prepareLaunchpadWorkspace.mock.calls[0]?.[0].directoryPath ?? "",
         ),
-      ).toBe(expectedDir(repoPath));
+      ).toBe(expectedDir(scratchPath));
       const handoffCwd = expectedDir(codexClient.lastStartThreadParams?.cwd ?? "");
       expect(handoffCwd).toContain(
-        expectedDir(await realpath(path.join(repoPath, ".worktrees"))),
+        expectedDir(await realpath(path.join(scratchPath, ".worktrees"))),
       );
-      expect(handoffCwd).not.toContain(expectedDir(scratchPath));
+      expect(handoffCwd).not.toContain(expectedDir(nestedPackagePath));
       const payload = JSON.parse(
         (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
       );
@@ -26070,8 +26219,8 @@ script = "printf setup"
         cwd: handoffCwd,
         linkedDirectory: {
           kind: "worktree",
-          label: "PwrAgnt",
-          path: expectedDir(await realpath(repoPath)),
+          label: "scratch-workspace",
+          path: expectedDir(await realpath(scratchPath)),
           worktreePath: handoffCwd,
         },
       });

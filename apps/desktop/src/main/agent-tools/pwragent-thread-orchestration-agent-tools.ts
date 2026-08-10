@@ -185,7 +185,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "handoff_task":
-      return "Create and start a new PwrAgent-managed AI thread for a delegated task. Prefer this over backend-native sub-agent spawning when it can satisfy the request so the child retains PwrAgent thread management and tool access. Use backend-native spawning only when the user explicitly requests it or needs a capability this tool does not support. Use this when the user asks to hand off or delegate work to a new thread. Omitted settings inherit from the invoking turn. Clean new-thread handoff is the default; use seedMode=fork only when the user asks to fork this thread. Workspace-backed handoffs default to workspaceMode=new_worktree. Use cwd=<source project/repo path> whenever the user names a target repo/project, especially from messaging or a notes/scratch thread; putting the path only in the task text does not select the runtime workspace. In Default Access, an explicit cwd that is not already trusted will trigger an operator confirmation before PwrAgent uses that directory for handoff workspaces. Use groupingMode=subthread only for same-project follow-up work that should stay grouped under the current thread; cross-project handoffs are created ungrouped even if subthread grouping is requested. Combine groupingMode=subthread with workspaceMode=new_worktree and branchName=<existing base ref> such as origin/main when same-project related work should start from another branch. Use workspaceMode=same_workspace only when the user explicitly asks to share the caller's exact workspace. Use workspaceMode=project_local only when the delegated thread should run in the project's primary checkout instead of a managed worktree. Use workspaceMode=none only for an intentionally unscoped local thread, not as a fallback for repo work. Handoff startup can take several minutes while a worktree or Codex environment setup is prepared; if this call appears slow or uncertain, do not call handoff_task again. Use search_threads or get_thread_status and inspect pendingHandoffs until a threadId appears or the handoff reports failed. The result includes threadLink, a ready-made markdown link to the new thread. When you tell the user about the thread you created, include threadLink verbatim instead of writing out the raw threadId so PwrAgent renders it as a clickable chip; a bare id is a dead end for the user.";
+      return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend-native spawning unless the user requests it or needs an unsupported capability. Omitted settings inherit from the invoking turn. Same-project handoffs default to grouped subthreads in a new worktree; omit cwd so they inherit the caller's workspace source. Pass cwd only when the user explicitly selects another project or directory; task text never selects cwd. Cross-project handoffs are ungrouped. Use seedMode=fork only for explicit forks, same_workspace only for explicit sharing, project_local for the project checkout, and none for unscoped work. Provider overrides require a registered backend and exact model ID. Startup can take minutes; do not retry while pending. Inspect pendingHandoffs for progress, and return threadLink verbatim.";
     case "attach_thread_directory":
       return "Attach an additional Git directory to the current PwrAgent thread. Use this for cross-project work when the user asks to link another repo or create a secondary worktree for another repo. Omitted backend targets the invoking thread. workspaceMode=local attaches the repository directory itself; workspaceMode=new_worktree asks PwrAgent to allocate and attach a managed worktree for the provided repository path. In Default Access, an untrusted path triggers operator confirmation before it can grant agent read/write/delete scope or allocate a managed worktree. This does not change the thread's primary cwd; use detach_thread_directory separately if a temporary local reference should be removed.";
     case "detach_thread_directory":
@@ -297,7 +297,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: HANDOFF_TASK_GROUPING_MODES,
             description:
-              "`none` leaves the created thread ungrouped and is the default. `subthread` groups it under the invoking thread only when the user asks for a same-project sub-thread; cross-project handoffs are created ungrouped.",
+              "`subthread` defaults for same-project handoffs; `none` is explicitly ungrouped. Cross-project handoffs are always ungrouped.",
           },
           workspaceMode: {
             type: "string",
@@ -308,7 +308,7 @@ function inputSchemaForOperation(
           cwd: {
             type: "string",
             description:
-              "Optional source project/repo directory for workspace-backed handoffs. Set this whenever the user asks for another project, a specific repo/project, or says to create the handoff into a repo from messaging; omitted means use the invoking thread's current workspace.",
+              "Omit to inherit the caller workspace. Set only when the user explicitly selects another project or directory; task text does not select cwd.",
           },
           messagingAttachment: {
             type: "string",
@@ -316,8 +316,16 @@ function inputSchemaForOperation(
             description:
               "Whether to attach the created thread to the current messaging location. Defaults to `auto` for messaging-originated turns and `none` otherwise.",
           },
-          backend: { type: "string" },
-          model: { type: "string" },
+          backend: {
+            type: "string",
+            description:
+              "Registered backend override; omitted inherits the caller (Grok: `acp:grok`).",
+          },
+          model: {
+            type: "string",
+            description:
+              "Exact model ID for the selected backend (Grok: `grok-4.5`).",
+          },
           reasoningEffort: { type: "string" },
           serviceTier: { type: "string" },
           fastMode: { type: "boolean" },
