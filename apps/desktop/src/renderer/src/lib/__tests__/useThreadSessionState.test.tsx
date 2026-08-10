@@ -8,6 +8,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
+  NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,7 +25,7 @@ import { readRendererSequence } from "../../features/thread-detail/live-transcri
 function buildThread(params: {
   id: string;
   updatedAt: number;
-}): any {
+}): NavigationThreadSummary {
   return {
     id: params.id,
     title: `Thread ${params.id}`,
@@ -5582,7 +5583,7 @@ describe("useThreadSessionState", () => {
                 modelContextWindow: 258400,
               },
             },
-          } as any,
+          },
         });
         listener({
           backend: "codex",
@@ -5594,7 +5595,7 @@ describe("useThreadSessionState", () => {
                 planType: "pro",
               },
             },
-          } as any,
+          },
         });
         listener({
           backend: "codex",
@@ -5606,7 +5607,7 @@ describe("useThreadSessionState", () => {
               itemId: "call-1",
               delta: "To github.com:pwrdrvr/PwrAgent.git\n",
             },
-          } as any,
+          },
         });
       }
     });
@@ -6101,7 +6102,7 @@ describe("useThreadSessionState", () => {
               },
             },
           },
-        } as any,
+        },
       });
     });
 
@@ -7149,7 +7150,7 @@ describe("useThreadSessionState", () => {
               },
             },
           },
-        } as any);
+        });
       }
     });
 
@@ -7211,6 +7212,13 @@ describe("useThreadSessionState", () => {
 
     await waitForThreadHydration(result);
 
+    const commandItem = {
+      id: "tool-2",
+      type: "commandExecution",
+      command: "pnpm test",
+      status: "inProgress",
+    };
+
     act(() => {
       for (const listener of agentEventListeners) {
         listener({
@@ -7220,15 +7228,10 @@ describe("useThreadSessionState", () => {
             params: {
               threadId: "thread-2",
               turnId: "turn-2",
-              item: {
-                id: "tool-2",
-                type: "commandExecution",
-                command: "pnpm test",
-                status: "inProgress",
-              },
+              item: commandItem,
             },
           },
-        } as any);
+        });
       }
     });
 
@@ -7271,6 +7274,13 @@ describe("useThreadSessionState", () => {
 
     await waitForThreadHydration(result);
 
+    const commandItem = {
+      id: "tool-2",
+      type: "commandExecution",
+      command: "pnpm test",
+      status: "inProgress",
+    };
+
     act(() => {
       for (const listener of agentEventListeners) {
         listener({
@@ -7280,15 +7290,10 @@ describe("useThreadSessionState", () => {
             params: {
               threadId: "thread-2",
               turnId: "turn-2",
-              item: {
-                id: "tool-2",
-                type: "commandExecution",
-                command: "pnpm test",
-                status: "inProgress",
-              },
+              item: commandItem,
             },
           },
-        } as any);
+        });
       }
     });
 
@@ -7375,7 +7380,7 @@ describe("useThreadSessionState", () => {
                 status: "in_progress",
               },
             },
-          } as any,
+          },
         });
       }
     });
@@ -7548,7 +7553,7 @@ describe("useThreadSessionState", () => {
     const event = {
       backend: "codex" as const,
       notification: {
-        method: "item/started",
+        method: "item/started" as const,
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
@@ -7564,7 +7569,7 @@ describe("useThreadSessionState", () => {
 
     act(() => {
       for (const listener of agentEventListeners) {
-        listener(event as any);
+        listener(event);
       }
     });
 
@@ -7574,7 +7579,7 @@ describe("useThreadSessionState", () => {
 
     act(() => {
       for (const listener of agentEventListeners) {
-        listener(event as any);
+        listener(event);
       }
     });
 
@@ -7622,7 +7627,7 @@ describe("useThreadSessionState", () => {
     const event = {
       backend: "codex" as const,
       notification: {
-        method: "item/started",
+        method: "item/started" as const,
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
@@ -7638,7 +7643,7 @@ describe("useThreadSessionState", () => {
 
     act(() => {
       for (const listener of agentEventListeners) {
-        listener(event as any);
+        listener(event);
       }
     });
 
@@ -7648,7 +7653,7 @@ describe("useThreadSessionState", () => {
 
     act(() => {
       for (const listener of agentEventListeners) {
-        listener(event as any);
+        listener(event);
       }
     });
 
@@ -7705,7 +7710,7 @@ describe("useThreadSessionState", () => {
                 status: "in_progress",
               },
             },
-          } as any,
+          },
         });
       }
     });
@@ -7728,7 +7733,7 @@ describe("useThreadSessionState", () => {
               },
             },
           },
-        } as any);
+        });
       }
     });
 
@@ -7750,7 +7755,7 @@ describe("useThreadSessionState", () => {
               },
             },
           },
-        } as any);
+        });
       }
     });
 
@@ -7808,7 +7813,7 @@ describe("useThreadSessionState", () => {
                 status: "in_progress",
               },
             },
-          } as any,
+          },
         });
       }
     });
@@ -7833,7 +7838,7 @@ describe("useThreadSessionState", () => {
                 },
               },
             },
-          } as any,
+          },
         });
       }
     });
@@ -7897,7 +7902,7 @@ describe("useThreadSessionState", () => {
               reason: "Network access is required.",
               command: "npm view dive",
             },
-          } as any,
+          },
         });
       }
     });
@@ -7966,7 +7971,7 @@ describe("useThreadSessionState", () => {
                 type: "full-access",
               },
             },
-          } as any,
+          },
         });
       }
     });
@@ -8041,7 +8046,7 @@ describe("useThreadSessionState", () => {
                 },
               ],
             },
-          } as any,
+          },
         });
       }
     });
@@ -8218,7 +8223,7 @@ describe("useThreadSessionState", () => {
                 },
               ],
             },
-          } as any,
+          },
         });
       }
     });
@@ -9219,7 +9224,7 @@ describe("useThreadSessionState", () => {
             reason: "Network access is required.",
             command: "npm view dive",
           },
-        } as any,
+        },
       });
     });
 
