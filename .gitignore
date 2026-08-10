@@ -1,6 +1,6 @@
 node_modules/
 .pnpm-store/
-.eslintcache
+.eslintcache*
 .local/
 .tmp/
 .DS_Store
