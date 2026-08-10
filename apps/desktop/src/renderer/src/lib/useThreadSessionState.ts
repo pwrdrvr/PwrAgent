@@ -3786,6 +3786,11 @@ export function useThreadSessionState(params: {
         failedHydrationVersion: undefined,
         lastTouchedAt: Date.now(),
         loading: true,
+        // A latest hydration supersedes any older-page read for the same
+        // thread. Its request-version bump makes that page response stale, so
+        // release the loading state here instead of waiting for a response
+        // that will intentionally be discarded (or may never arrive).
+        loadingMore: false,
       }));
 
       try {

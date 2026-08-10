@@ -912,6 +912,66 @@ describe("TranscriptList", () => {
     resolveFirstLoad?.();
   });
 
+  it("releases an in-flight older-page lock when loading is superseded", async () => {
+    const firstLoad = vi.fn(() => new Promise<void>(() => undefined));
+    const secondLoad = vi.fn(async () => undefined);
+    const commonProps = {
+      entries: [
+        {
+          type: "message" as const,
+          id: "message-1",
+          role: "assistant" as const,
+          text: "Recent history",
+        },
+      ],
+      loading: false,
+      pagination: {
+        supportsPagination: true,
+        hasPreviousPage: true,
+        previousCursor: "cursor-1",
+      },
+      threadId: "thread-1",
+    };
+    const { rerender } = render(
+      <TranscriptList
+        {...commonProps}
+        loadingMore={false}
+        onLoadOlder={firstLoad}
+      />,
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 120;
+    fireEvent.scroll(list);
+    expect(firstLoad).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <TranscriptList
+        {...commonProps}
+        loadingMore={true}
+        onLoadOlder={firstLoad}
+      />,
+    );
+    rerender(
+      <TranscriptList
+        {...commonProps}
+        loadingMore={false}
+        onLoadOlder={secondLoad}
+        pagination={{
+          ...commonProps.pagination,
+          previousCursor: "cursor-after-refresh",
+        }}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    list.scrollTop = 120;
+    fireEvent.scroll(list);
+    expect(secondLoad).toHaveBeenCalledTimes(1);
+  });
+
   it("renders automation card details as markdown in the transcript", () => {
     const automationMarkdown = `| Priority | Service | Next step |
 |---|---|---|

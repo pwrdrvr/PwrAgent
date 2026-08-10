@@ -697,6 +697,14 @@ export function TranscriptList(props: TranscriptListProps) {
     olderPageRequestPendingRef.current = false;
     lastUnderflowHistoryRequestRef.current = undefined;
   }, [props.threadId]);
+  useEffect(() => {
+    if (!loadingMore) {
+      // The parent can cancel an older-page read by starting a fresher thread
+      // hydration. Mirror that cancellation locally so a stale promise cannot
+      // leave scroll pagination locked after loadingMore returns to false.
+      olderPageRequestPendingRef.current = false;
+    }
+  }, [loadingMore]);
   const requestOlderPage = useCallback((): boolean => {
     if (
       !canLoadOlder
