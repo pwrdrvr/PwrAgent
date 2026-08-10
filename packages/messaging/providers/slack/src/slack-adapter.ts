@@ -1001,7 +1001,10 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
     const rawText = event.text ?? "";
     const strippedText = stripBotMention(rawText, this.botUserId);
-    const isMention = strippedText !== rawText;
+    // Slack's app_mention event is the authoritative addressed-to-us signal.
+    // Also inspect message text because Slack can deliver the same post as both
+    // app_mention and message, and either copy may win our deduplication race.
+    const isMention = event.type === "app_mention" || strippedText !== rawText;
     const text = strippedText.trim();
     const isPairingMessage = Boolean(extractMessagingPairingToken(rawText));
     const command = isMention && text.length === 0
@@ -2601,7 +2604,17 @@ function slackConversationUrl(channelId: string, teamId?: string): string {
 
 export function stripBotMention(text: string, botUserId: string | undefined): string {
   if (!botUserId) return text;
-  return text.replace(new RegExp(`^\\s*<@${escapeRegex(botUserId)}>\\s*`), "");
+  const mention = `<@${botUserId}>`;
+  const mentionIndex = text.indexOf(mention);
+  if (mentionIndex < 0) return text;
+
+  const before = text.slice(0, mentionIndex);
+  const after = text.slice(mentionIndex + mention.length);
+  if (!before.trim()) return after.trimStart();
+  if (!after.trim()) return before.trimEnd();
+
+  const separated = /\s$/u.test(before) || /^\s/u.test(after);
+  return `${before.trimEnd()}${separated ? " " : ""}${after.trimStart()}`;
 }
 
 function parseCommand(text: string): { command: string; args: string[] } | undefined {
@@ -2985,8 +2998,4 @@ function safeEqual(left: string, right: string): boolean {
   const rightBuffer = Buffer.from(right);
   return leftBuffer.byteLength === rightBuffer.byteLength
     && timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
