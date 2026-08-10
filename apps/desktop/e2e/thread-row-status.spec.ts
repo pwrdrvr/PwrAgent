@@ -243,17 +243,19 @@ test("shows initiated background turns as thinking, then unread once they finish
     });
     await expect(directoriesTab).toBeVisible();
     await directoriesTab.click();
+    // The counts are indicator + number now; the words moved into a hover
+    // tooltip, so the stable handle is the data attribute rather than `title`.
     await expect(
       app.window
         .locator(".directory-row__summary")
         .filter({ hasText: "Thread row status fixture" })
-        .getByTitle("1 active thread"),
+        .locator('[data-active-thread-count="1"]'),
     ).toBeVisible();
     await expect(
       app.window
         .locator(".directory-row__summary")
         .filter({ hasText: "Thread row status fixture" })
-        .getByTitle("1 thread to review"),
+        .locator("[data-review-thread-count]"),
     ).toHaveCount(0);
 
     await app.advance({ stepId: "turn-started-1" });
@@ -272,7 +274,7 @@ test("shows initiated background turns as thinking, then unread once they finish
       app.window
         .locator(".directory-row__summary")
         .filter({ hasText: "Thread row status fixture" })
-        .getByTitle("1 thread to review"),
+        .locator('[data-review-thread-count="1"]'),
     ).toBeVisible();
   } finally {
     await app.close();
