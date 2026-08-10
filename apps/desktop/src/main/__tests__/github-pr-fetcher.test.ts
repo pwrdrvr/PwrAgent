@@ -62,7 +62,6 @@ describe("parseGhPrPayload", () => {
       additions: 412,
       deletions: 198,
       changedFiles: 18,
-      commitCount: 2,
       createdAt: Date.parse("2026-04-27T20:06:31Z"),
       mergedAt: Date.parse("2026-05-05T00:06:31Z"),
       closedAt: Date.parse("2026-05-05T00:06:31Z"),
@@ -109,6 +108,16 @@ describe("parseGhPrPayload", () => {
     ]) {
       expect(summary).not.toHaveProperty(field);
     }
+  });
+
+  it("does not treat the sampled commit array as the total commit count", () => {
+    const commits = Array.from({ length: 100 }, (_, index) => ({
+      oid: index.toString(16).padStart(40, "0"),
+    }));
+    const summary = parseGhPrPayload({ ...rawMergedPr(), commits });
+
+    expect(summary.commitShas).toHaveLength(100);
+    expect(summary).not.toHaveProperty("commitCount");
   });
 });
 
@@ -591,7 +600,6 @@ describe("GithubPrFetcher", () => {
           additions: 412,
           deletions: 198,
           changedFiles: 18,
-          commitCount: 2,
           createdAt: Date.parse("2026-04-27T20:06:31Z"),
           mergedAt: Date.parse("2026-05-05T00:06:31Z"),
           closedAt: Date.parse("2026-05-05T00:06:31Z"),
@@ -660,7 +668,6 @@ describe("GithubPrFetcher", () => {
         additions: 412,
         deletions: 198,
         changedFiles: 18,
-        commitCount: 2,
         createdAt: Date.parse("2026-04-27T20:06:31Z"),
         mergedAt: Date.parse("2026-05-05T00:06:31Z"),
         closedAt: Date.parse("2026-05-05T00:06:31Z"),

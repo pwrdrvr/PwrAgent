@@ -74,7 +74,6 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     ...readPrCount(row.additions, "additions"),
     ...readPrCount(row.deletions, "deletions"),
     ...readPrCount(row.changedFiles, "changedFiles"),
-    ...readPrCount(row.commits?.length, "commitCount"),
     ...readPrTimestamp(row.createdAt, "createdAt"),
     ...readPrTimestamp(row.mergedAt, "mergedAt"),
     ...readPrTimestamp(row.closedAt, "closedAt"),

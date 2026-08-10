@@ -600,6 +600,39 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
   };
 }
 
+function preserveKnownPrHoverMetadata(
+  previous: PrSummary | undefined,
+  next: PrSummary,
+): PrSummary {
+  if (!previous) {
+    return next;
+  }
+  return {
+    ...next,
+    ...(next.additions === undefined && previous.additions !== undefined
+      ? { additions: previous.additions }
+      : {}),
+    ...(next.deletions === undefined && previous.deletions !== undefined
+      ? { deletions: previous.deletions }
+      : {}),
+    ...(next.changedFiles === undefined && previous.changedFiles !== undefined
+      ? { changedFiles: previous.changedFiles }
+      : {}),
+    ...(next.commitCount === undefined && previous.commitCount !== undefined
+      ? { commitCount: previous.commitCount }
+      : {}),
+    ...(next.createdAt === undefined && previous.createdAt !== undefined
+      ? { createdAt: previous.createdAt }
+      : {}),
+    ...(next.mergedAt === undefined && previous.mergedAt !== undefined
+      ? { mergedAt: previous.mergedAt }
+      : {}),
+    ...(next.closedAt === undefined && previous.closedAt !== undefined
+      ? { closedAt: previous.closedAt }
+      : {}),
+  };
+}
+
 function normalizeCommitShas(commitShas: string[] | undefined): string[] | undefined {
   const normalized = [
     ...new Set(
@@ -2905,21 +2938,22 @@ class DesktopAppServerService {
   private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): PrSummary[] {
     const changedPrs: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
-    for (const pr of prs.map(normalizePrSummary)) {
-      const key = getPrStatusKey(pr);
+    for (const candidate of prs.map(normalizePrSummary)) {
+      const key = getPrStatusKey(candidate);
       const current = this.prStatusRegistry.get(key);
       if (current && current.fetchedAt > fetchedAt) {
         appServerLog.info("pr status observation ignored", {
           prKey: key,
           observedAt: fetchedAt,
           currentObservedAt: current.fetchedAt,
-          observedCheckState: pr.checkState,
+          observedCheckState: candidate.checkState,
           currentCheckState: current.pr.checkState,
-          observedLifecycleState: pr.lifecycleState,
+          observedLifecycleState: candidate.lifecycleState,
           currentLifecycleState: current.pr.lifecycleState,
         });
         continue;
       }
+      const pr = preserveKnownPrHoverMetadata(current?.pr, candidate);
       if (!current || !prSummariesEqual([current.pr], [pr])) {
         changedPrs.push(pr);
         // A meaningful field flip (CI, merge, conflict, draft, title) becomes a
@@ -3028,7 +3062,7 @@ class DesktopAppServerService {
       provider: normalizePullRequestProvider(entry.provider),
       branch: entry.branch,
       directoryPaths: entry.directoryPaths,
-      prs: entry.prs.map(normalizePrSummary),
+      prs: this.canonicalizePrs(entry.prs),
       fetchedAt: entry.fetchedAt,
     });
   }
@@ -3060,7 +3094,7 @@ class DesktopAppServerService {
     prs: PrSummary[],
     fetchedAt: number,
   ): Promise<void> {
-    const entries: PrStatusCacheEntry[] = prs.map(normalizePrSummary).map((pr) => ({
+    const entries: PrStatusCacheEntry[] = this.canonicalizePrs(prs).map((pr) => ({
       provider: normalizePullRequestProvider(pr.provider),
       prKey: getPrStatusKey(pr),
       fetchedAt,
@@ -3070,7 +3104,10 @@ class DesktopAppServerService {
   }
 
   private async writePrLookupToCache(entry: PrLookupCacheEntry): Promise<void> {
-    await this.getOverlayStore().writePrLookupCacheEntry(entry);
+    await this.getOverlayStore().writePrLookupCacheEntry({
+      ...entry,
+      prs: this.canonicalizePrs(entry.prs),
+    });
   }
 
   private canonicalizePrs(prs: PrSummary[]): PrSummary[] {
