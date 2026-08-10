@@ -6,6 +6,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "federated-child-archive-ungroup": {
+    "commits": 2,
+    "note": "clear one child-owner parent overlay and refresh its root-owner pin",
+    "observedWalBytes": 20600,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "idle-hour-runtime-leases": {
     "commits": 0,
     "note": "one idle hour: PID-owned messaging and federation leases",

@@ -5,6 +5,7 @@ import type {
   FederationProtocolEnvelope,
   TrustCodexProjectRequest,
 } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared";
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -1168,6 +1169,96 @@ describe("federation backend bridge", () => {
     });
   });
 
+  it("routes child mounts and parent changes to the owning instance", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "child_one",
+      threadId: "thread-child",
+    });
+    const summary = {
+      source: "codex" as const,
+      id: "thread-child",
+      title: "Child",
+      titleSource: "fallback" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      parentThreadId: "thread-root",
+      parentThreadBackend: "codex" as const,
+      parentThreadInstanceId: "owner_one",
+    };
+
+    const mountPending = client.mountRemoteChild({
+      ref,
+      summary,
+      instanceLabel: "Child Mac",
+    });
+    const mountRequest = sent.at(-1)!;
+    expect(mountRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.mountRemoteChild,
+      params: { ref, summary, instanceLabel: "Child Mac" },
+    });
+    rpc.receiveEnvelope({
+      id: "response-mount-child",
+      kind: "response",
+      requestId: mountRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: { mounted: true },
+    });
+    await expect(mountPending).resolves.toEqual({ mounted: true });
+
+    const parentPending = client.setThreadParent({
+      backend: "codex",
+      threadId: "thread-child",
+      parentThreadId: null,
+    });
+    const parentRequest = sent.at(-1)!;
+    expect(parentRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.setThreadParent,
+      params: {
+        backend: "codex",
+        threadId: "thread-child",
+        parentThreadId: null,
+      },
+    });
+    rpc.receiveEnvelope({
+      id: "response-clear-parent",
+      kind: "response",
+      requestId: parentRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_200,
+      result: { backend: "codex", threadId: "thread-child" },
+    });
+    await expect(parentPending).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-child",
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.mountRemoteChild
+      ],
+    ).toBe("thread_navigation");
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.setThreadParent
+      ],
+    ).toBe("thread_navigation");
+  });
+
   it("routes PR detach over RPC with turn_control authorization", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -2107,6 +2198,8 @@ describe("federation backend bridge", () => {
       setThreadReaction: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
+      mountRemoteChild: vi.fn(),
+      setThreadParent: vi.fn(),
       detachThreadPullRequest: vi.fn(),
       setThreadPrAutoDispatch: vi.fn(),
       cancelThreadPrAutoDispatch: vi.fn(),
@@ -2410,6 +2503,8 @@ describe("federation backend bridge", () => {
         setThreadReaction: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
+        mountRemoteChild: vi.fn(),
+        setThreadParent: vi.fn(),
         detachThreadPullRequest: vi.fn(),
         setThreadPrAutoDispatch: vi.fn(),
         cancelThreadPrAutoDispatch: vi.fn(),

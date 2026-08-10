@@ -92,6 +92,7 @@ import {
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
   type AppServerReadThreadRequest,
+  type AppServerBackendKind,
   type AttachDirectoryToThreadRequest,
   type CancelQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
@@ -103,6 +104,7 @@ import {
   type ForkThreadRequest,
   type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
+  type FederatedThreadRef,
   type DesktopApplicationsSnapshot,
   type DesktopFederationMode,
   type DesktopSettingsSnapshot,
@@ -130,6 +132,7 @@ import {
   type ReorderThreadPinsRequest,
   type ReorderThreadPinsResponse,
   type NavigationSnapshot,
+  type NavigationThreadSummary,
   type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
   type RefreshDirectoryGitStatusesRequest,
@@ -149,6 +152,7 @@ import {
   type SetCodexThreadEnvironmentRequest,
   type SetThreadExecutionModeRequest,
   type SetThreadModelSettingsRequest,
+  type SetThreadParentRequest,
   type StartReviewRequest,
   type StartThreadRequest,
   type SteerTurnRequest,
@@ -1694,6 +1698,75 @@ export class DesktopFederationRuntime {
       },
     });
     return this.remoteThreadSummaryCache;
+  }
+
+  /**
+   * Archiving a local group root must clear parent overlays on children owned
+   * by other instances. Those relationships are visible here through the
+   * root viewer's remote child pins; mutate each child on its owner, then
+   * update the cached pin so restoring the root cannot reattach it.
+   */
+  async ungroupRemoteChildrenOfArchivedThread(params: {
+    backend: AppServerBackendKind;
+    parentThreadId: string;
+  }): Promise<void> {
+    const localInstanceId = (await this.health()).instanceId;
+    if (!localInstanceId) {
+      return;
+    }
+    const overlayStore = getDesktopOverlayStore();
+    const pins = await overlayStore.listRemoteThreadPins();
+    const children = pins.filter((pin) => {
+      const summary = pin.summary;
+      return summary?.parentThreadId === params.parentThreadId
+        && (summary.parentThreadBackend ?? summary.source) === params.backend
+        && summary.parentThreadInstanceId === localInstanceId
+        && isRemoteFederationTarget(pin.ref.target);
+    });
+    if (children.length === 0) {
+      return;
+    }
+
+    const refreshed: Array<{
+      ref: FederatedThreadRef;
+      summary: NavigationThreadSummary;
+      instanceLabel: string;
+    }> = [];
+    await Promise.all(
+      children.map(async (pin) => {
+        if (!isRemoteFederationTarget(pin.ref.target) || !pin.summary) {
+          return;
+        }
+        try {
+          await this.remoteBackend(pin.ref.target).setThreadParent({
+            backend: pin.ref.backend,
+            threadId: pin.ref.threadId,
+            parentThreadId: null,
+          });
+          const summary = { ...pin.summary };
+          delete summary.parentThreadId;
+          delete summary.parentThreadBackend;
+          delete summary.parentThreadInstanceId;
+          refreshed.push({
+            ref: pin.ref,
+            summary,
+            instanceLabel: pin.instanceLabel,
+          });
+          this.remoteThreadSummaryCache?.invalidate(pin.ref.target.instanceId);
+        } catch (error) {
+          log.warn("failed to ungroup remote child after parent archive", {
+            backend: pin.ref.backend,
+            childInstanceId: pin.ref.target.instanceId,
+            childThreadId: pin.ref.threadId,
+            error: error instanceof Error ? error.message : String(error),
+            parentThreadId: params.parentThreadId,
+          });
+        }
+      }),
+    );
+    if (refreshed.length > 0) {
+      await overlayStore.updateRemoteThreadPinSnapshots(refreshed);
+    }
   }
 
   async searchConnectedPeers(
@@ -4096,8 +4169,73 @@ function localBackendOperations(): FederationBackendOperations {
       });
       return { pinnedRanks };
     },
+    async mountRemoteChild(request) {
+      const target = request.ref.target;
+      if (!isRemoteFederationTarget(target)) {
+        throw new Error("A federated child mount must target a remote instance.");
+      }
+      await getDesktopOverlayStore().addRemoteThreadPin({
+        ref: request.ref,
+        summary: request.summary,
+        instanceLabel: request.instanceLabel,
+        pinnedVia: "child",
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: request.ref.backend,
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: {
+            instanceId: target.instanceId,
+            threadId: request.ref.threadId,
+            pinned: true,
+          },
+        },
+      });
+      return { mounted: true };
+    },
+    async setThreadParent(
+      request: SetThreadParentRequest,
+    ) {
+      const backend = request.backend ?? "codex";
+      const overlay = await getDesktopOverlayStore().setThreadParent({
+        backend,
+        threadId: request.threadId,
+        parentThreadId: request.parentThreadId,
+        parentThreadBackend: request.parentThreadBackend,
+        parentThreadInstanceId: request.parentThreadInstanceId,
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: overlay.parentThreadId
+          ? {
+              method: "thread/parent/set",
+              params: {
+                threadId: request.threadId,
+                parentThreadId: overlay.parentThreadId,
+                parentThreadBackend: overlay.parentThreadBackend,
+                parentThreadInstanceId: overlay.parentThreadInstanceId,
+              },
+            }
+          : {
+              method: "thread/parent/cleared",
+              params: { threadId: request.threadId },
+            },
+      });
+      return {
+        backend,
+        threadId: request.threadId,
+        parentThreadId: overlay.parentThreadId,
+        parentThreadBackend: overlay.parentThreadBackend,
+        parentThreadInstanceId: overlay.parentThreadInstanceId,
+      };
+    },
     async archiveThread(request) {
-      return await getDesktopBackendRegistry().archiveThread(request);
+      const response = await getDesktopBackendRegistry().archiveThread(request);
+      await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
+        backend: response.backend,
+        parentThreadId: response.threadId,
+      });
+      return response;
     },
     async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
       return await getDesktopBackendRegistry().startThread(request);

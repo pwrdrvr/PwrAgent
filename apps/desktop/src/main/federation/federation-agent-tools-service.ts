@@ -396,9 +396,10 @@ async function createInstanceThread(
       `No project with key ${args.projectKey} on ${instance.label}. Use list_instance_projects for the current project list.`,
     );
   }
+  let localInstanceId: FederationInstanceId | undefined;
   let groupingParent: GroupingParent | undefined;
   if (groupingMode === "subthread") {
-    const localInstanceId = (await runtime.health()).instanceId;
+    localInstanceId = (await runtime.health()).instanceId;
     if (!localInstanceId) {
       return failure(
         "internal_error",
@@ -433,6 +434,22 @@ async function createInstanceThread(
       : {}),
     ...(args.input ? { input: [{ type: "text", text: args.input }] } : {}),
   });
+  const mountDisposition = groupingParent && localInstanceId
+    ? await mountRemoteChildAtGroupingRoot(
+        runtime,
+        targetStore,
+        onRemoteChildMounted,
+        {
+          childBackend: response.backend,
+          childInstanceId: instance.instanceId,
+          childInstanceLabel: instance.label,
+          childThreadId: response.threadId,
+          localInstanceId,
+          parent: groupingParent,
+          title: directory.label,
+        },
+      )
+    : "none";
   if (!instance.isLocal) {
     const remoteTarget = {
       instanceId: instance.instanceId,
@@ -440,33 +457,7 @@ async function createInstanceThread(
       backend: response.backend,
       threadId: response.threadId,
     };
-    let mounted = false;
-    if (groupingParent) {
-      mounted = await rememberRemoteChildPin(targetStore, {
-        ...remoteTarget,
-        parentThreadId: groupingParent.threadId,
-        parentThreadBackend: groupingParent.backend,
-        parentThreadInstanceId,
-        title: directory.label,
-      });
-    }
-    if (mounted) {
-      try {
-        await onRemoteChildMounted?.({
-          instanceId: remoteTarget.instanceId,
-          backend: remoteTarget.backend,
-          threadId: remoteTarget.threadId,
-        });
-      } catch (error) {
-        log.warn("failed to announce remotely created child mount", {
-          backend: remoteTarget.backend,
-          error: error instanceof Error ? error.message : String(error),
-          instanceId: remoteTarget.instanceId,
-          threadId: remoteTarget.threadId,
-        });
-      }
-    }
-    if (!mounted) {
+    if (mountDisposition !== "local") {
       await rememberTarget(targetStore, remoteTarget);
     }
   }
@@ -822,18 +813,113 @@ async function rememberTarget(
   }
 }
 
-async function rememberRemoteChildPin(
+async function mountRemoteChildAtGroupingRoot(
+  runtime: DesktopFederationRuntime,
   targetStore: FederationAgentThreadStore | undefined,
-  params: {
+  onRemoteChildMounted: ((params: {
     instanceId: string;
-    instanceLabel: string;
     backend: CreateInstanceThreadResult["backend"];
     threadId: string;
-    parentThreadId: string;
-    parentThreadBackend: PwrAgentFederationContext["backend"];
-    parentThreadInstanceId?: string;
+  }) => Promise<void> | void) | undefined,
+  params: {
+    childBackend: CreateInstanceThreadResult["backend"];
+    childInstanceId: FederationInstanceId;
+    childInstanceLabel: string;
+    childThreadId: string;
+    localInstanceId: FederationInstanceId;
+    parent: GroupingParent;
     title: string;
   },
+): Promise<"inherent" | "local" | "none" | "remote"> {
+  if (params.parent.instanceId === params.childInstanceId) {
+    return "inherent";
+  }
+  const pinParams = {
+    instanceId: params.childInstanceId,
+    instanceLabel: params.childInstanceLabel,
+    backend: params.childBackend,
+    threadId: params.childThreadId,
+    parentThreadId: params.parent.threadId,
+    parentThreadBackend: params.parent.backend,
+    parentThreadInstanceId: params.parent.instanceId,
+    title: params.title,
+  };
+  if (params.parent.instanceId === params.localInstanceId) {
+    const mounted = await rememberRemoteChildPin(targetStore, pinParams);
+    if (!mounted) {
+      return "none";
+    }
+    try {
+      await onRemoteChildMounted?.({
+        instanceId: params.childInstanceId,
+        backend: params.childBackend,
+        threadId: params.childThreadId,
+      });
+    } catch (error) {
+      log.warn("failed to announce remotely created child mount", {
+        backend: params.childBackend,
+        error: error instanceof Error ? error.message : String(error),
+        instanceId: params.childInstanceId,
+        threadId: params.childThreadId,
+      });
+    }
+    return "local";
+  }
+
+  try {
+    await runtime.remoteBackend({
+      scope: "remote",
+      instanceId: params.parent.instanceId,
+    }).mountRemoteChild({
+      ref: buildFederatedThreadRef(pinParams),
+      instanceLabel: params.childInstanceLabel,
+      summary: buildRemoteChildSummary(pinParams),
+    });
+    return "remote";
+  } catch (error) {
+    log.warn("failed to mount child on remote group root", {
+      childInstanceId: params.childInstanceId,
+      childThreadId: params.childThreadId,
+      error: error instanceof Error ? error.message : String(error),
+      parentInstanceId: params.parent.instanceId,
+      parentThreadId: params.parent.threadId,
+    });
+    return "none";
+  }
+}
+
+type RemoteChildPinParams = {
+  instanceId: string;
+  instanceLabel: string;
+  backend: CreateInstanceThreadResult["backend"];
+  threadId: string;
+  parentThreadId: string;
+  parentThreadBackend: PwrAgentFederationContext["backend"];
+  parentThreadInstanceId?: string;
+  title: string;
+};
+
+function buildRemoteChildSummary(
+  params: RemoteChildPinParams,
+): NavigationThreadSummary {
+  return {
+    source: params.backend,
+    id: params.threadId,
+    title: params.title,
+    titleSource: "fallback",
+    linkedDirectories: [],
+    inbox: { inInbox: false },
+    parentThreadId: params.parentThreadId,
+    parentThreadBackend: params.parentThreadBackend,
+    ...(params.parentThreadInstanceId
+      ? { parentThreadInstanceId: params.parentThreadInstanceId }
+      : {}),
+  };
+}
+
+async function rememberRemoteChildPin(
+  targetStore: FederationAgentThreadStore | undefined,
+  params: RemoteChildPinParams,
 ): Promise<boolean> {
   if (!targetStore?.addRemoteThreadPin) {
     return false;
@@ -843,19 +929,7 @@ async function rememberRemoteChildPin(
       ref: buildFederatedThreadRef(params),
       instanceLabel: params.instanceLabel,
       pinnedVia: "child",
-      summary: {
-        source: params.backend,
-        id: params.threadId,
-        title: params.title,
-        titleSource: "fallback",
-        linkedDirectories: [],
-        inbox: { inInbox: false },
-        parentThreadId: params.parentThreadId,
-        parentThreadBackend: params.parentThreadBackend,
-        ...(params.parentThreadInstanceId
-          ? { parentThreadInstanceId: params.parentThreadInstanceId }
-          : {}),
-      },
+      summary: buildRemoteChildSummary(params),
     });
     return true;
   } catch (error) {

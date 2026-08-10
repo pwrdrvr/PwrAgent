@@ -1254,6 +1254,7 @@ describe("Sidebar", () => {
       ...sharedThread,
       id: "thread-derived-child",
       title: "Derived remote child",
+      parentThreadId: "thread-remote-root",
       federation: {
         ref: {
           backend: "codex",
@@ -1289,6 +1290,9 @@ describe("Sidebar", () => {
 
     expect(
       screen.queryByRole("menuitem", { name: /Remove from My List/ }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Unlink from Parent" }),
     ).toBeNull();
   });
 

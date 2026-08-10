@@ -1754,6 +1754,10 @@ class DesktopAppServerService {
       ...request,
       backend,
     });
+    await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
+      backend: response.backend,
+      parentThreadId: response.threadId,
+    });
 
     logDebug("archiveThread", {
       backend,

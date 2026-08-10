@@ -710,6 +710,62 @@ describe("sqlite write metrics", () => {
     });
   });
 
+  it("holds federated child archive-ungrouping to its write budget", async () => {
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "pwr_child",
+      threadId: "thread-child",
+    });
+    const linkedSummary = {
+      source: "codex" as const,
+      id: "thread-child",
+      title: "Remote child",
+      titleSource: "fallback" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      parentThreadId: "thread-parent",
+      parentThreadBackend: "codex" as const,
+      parentThreadInstanceId: "pwr_parent",
+    };
+    await store.addRemoteThreadPin({
+      ref,
+      instanceLabel: "Child Mac",
+      pinnedVia: "child",
+      summary: linkedSummary,
+    });
+    await store.setThreadParent({
+      backend: "codex",
+      threadId: "thread-child",
+      parentThreadId: "thread-parent",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "pwr_parent",
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.setThreadParent({
+        backend: "codex",
+        threadId: "thread-child",
+        parentThreadId: undefined,
+      });
+      await store.updateRemoteThreadPinSnapshots([{
+        ref,
+        instanceLabel: "Child Mac",
+        summary: {
+          ...linkedSummary,
+          parentThreadId: undefined,
+          parentThreadBackend: undefined,
+          parentThreadInstanceId: undefined,
+        },
+      }]);
+    });
+
+    expectSqliteWriteBudget({
+      note: "clear one child-owner parent overlay and refresh its root-owner pin",
+      scenario: "federated-child-archive-ungroup",
+      writes,
+    });
+  });
+
   it("holds runtime lease acquisition and release to its budget", async () => {
     const leases = new RuntimeLeaseManager({
       cwd: "/tmp/PwrAgnt",

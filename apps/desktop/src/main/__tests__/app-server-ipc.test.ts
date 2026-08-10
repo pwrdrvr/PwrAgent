@@ -98,6 +98,7 @@ const federationMock = vi.hoisted(() => {
       remoteTargetSupportsCapability: vi.fn(() => true),
       remoteNavigationSnapshot: vi.fn(),
       remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
+      ungroupRemoteChildrenOfArchivedThread: vi.fn(async () => undefined),
     },
   };
 });
@@ -991,6 +992,7 @@ describe("app server ipc", () => {
     federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(true);
     federationMock.runtime.hydrateThreadMessageOrigins.mockClear();
     federationMock.runtime.remoteNavigationSnapshot.mockReset();
+    federationMock.runtime.ungroupRemoteChildrenOfArchivedThread.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
     getThreadTranscriptImageRoots.mockClear();
@@ -3344,6 +3346,12 @@ describe("app server ipc", () => {
     expect(archiveThread).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
+    });
+    expect(
+      federationMock.runtime.ungroupRemoteChildrenOfArchivedThread,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      parentThreadId: "thread-1",
     });
     expect(response).toEqual({
       backend: "codex",

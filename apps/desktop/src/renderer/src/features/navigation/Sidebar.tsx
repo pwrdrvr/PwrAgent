@@ -1272,7 +1272,9 @@ export function Sidebar(props: SidebarProps) {
       props.onForkThread,
   );
   const contextMenuCanUnlinkSubthread = Boolean(
-    contextMenuIsSubthread && props.onSetThreadParent,
+    contextMenuIsSubthread
+    && !contextMenuIsMainWindowRemoteRow
+    && props.onSetThreadParent,
   );
   // Remote rows CAN pin here: the rank is viewer-owned (stored on the
   // remote_thread_pins row), so the owner's list never learns about it.
