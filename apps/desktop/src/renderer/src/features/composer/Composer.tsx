@@ -894,8 +894,6 @@ function getLaunchpadDirectoryKeyFromScope(scopeKey: string): string | undefined
     : undefined;
 }
 
-const getThreadComposerScopeKey = buildThreadComposerScopeKey;
-
 function createReviewConfig(params: {
   directory?: NavigationDirectorySummary;
   thread?: NavigationThreadSummary;
@@ -5310,7 +5308,7 @@ export function Composer(props: ComposerProps) {
         // process and every surface should show its contents, not just
         // the window that submitted. Known ids and in-flight local
         // submissions keep their richer local state untouched.
-        const mirrorScopeKey = getThreadComposerScopeKey(
+        const mirrorScopeKey = buildThreadComposerScopeKey(
           event.backend,
           notificationThreadId,
         );
@@ -5345,7 +5343,7 @@ export function Composer(props: ComposerProps) {
         typeof turnQueueRecord?.queueEntryId === "string" &&
         (
           draftStore.getQueuedTurns(
-            getThreadComposerScopeKey(event.backend, notificationThreadId),
+            buildThreadComposerScopeKey(event.backend, notificationThreadId),
           ).some(
             (queued) => queued.queueEntryId === turnQueueRecord.queueEntryId,
           )
@@ -5358,7 +5356,7 @@ export function Composer(props: ComposerProps) {
           )
         )
       ) {
-        const queueScopeKey = getThreadComposerScopeKey(
+        const queueScopeKey = buildThreadComposerScopeKey(
           event.backend,
           notificationThreadId,
         );

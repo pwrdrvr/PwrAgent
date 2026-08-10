@@ -246,6 +246,7 @@ export function ThreadMetaChips({
       {queuedMessageState === "scheduled" ? (
         <span
           aria-label="A message is scheduled to send"
+          role="img"
           className="thread-row__chip thread-row__chip--scheduled"
           title="A message is scheduled to send"
         >
@@ -254,6 +255,7 @@ export function ThreadMetaChips({
       ) : queuedMessageState === "queued" ? (
         <span
           aria-label="A message is queued to send"
+          role="img"
           className="thread-row__chip thread-row__chip--queued"
           title="A message is queued to send"
         >
@@ -263,13 +265,25 @@ export function ThreadMetaChips({
 
       {hasUnsentDraft ? (
         <span
-          aria-label="Unsent draft reply"
+          // Deliberately does NOT contain the word "reply". Playwright's
+          // `getByLabel` is a substring match, and 31 specs across 23 files
+          // drive the composer with `getByLabel("Reply")` — an
+          // "Unsent draft reply" label made every one of them a strict-mode
+          // violation the moment a thread had a draft. See "E2E Locator
+          // Hygiene Around Global Chrome" in apps/desktop/AGENTS.md.
+          aria-label="Unsent draft"
+          // Without an explicit role this is a generic element, where
+          // `aria-label` is prohibited and silently dropped — the chip would
+          // announce as its visible "Draft" text and the fuller label would
+          // never be heard. Same reason the pin and terminal markers below
+          // carry one.
+          role="img"
           className="thread-row__chip thread-row__chip--draft"
           data-thread-draft="unsent"
           onMouseEnter={(event) =>
             draftTooltip.show(
               event.currentTarget,
-              "Unsent draft reply\nThis thread has composer text you have not sent.",
+              "Unsent draft\nThis thread has composer text you have not sent.",
             )
           }
           onMouseLeave={draftTooltip.hide}

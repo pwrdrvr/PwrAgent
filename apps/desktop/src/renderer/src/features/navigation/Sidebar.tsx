@@ -1709,7 +1709,11 @@ export function Sidebar(props: SidebarProps) {
                 {props.browseMode === "attention"
                   ? "Nothing running, nothing to review."
                   : props.browseMode === "drafts"
-                    ? "No unsent drafts."
+                    // "replies", not "drafts": launchpad (new-thread) composer
+                    // text is equally unsent but belongs to a directory rather
+                    // than a thread, so this lens cannot show it and must not
+                    // claim there is nothing to find.
+                    ? "No unsent replies."
                     : "No threads yet."}
               </p>
             ) : (

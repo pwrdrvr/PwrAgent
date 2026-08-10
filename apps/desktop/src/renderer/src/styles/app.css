@@ -3032,10 +3032,13 @@ textarea,
      and let the counts be cut mid-digit — and a half-eaten count reads as a
      different number.
 
-     Measured at the 280px sidebar minimum (a 264px container, see
-     `--sidebar-masthead-pull`): Attention floors at ~74px with two-digit
-     counts, leaving ~44px per icon tab. The container query below is what
-     keeps that true past two digits. */
+     At the 280px sidebar minimum (a 264px container, see
+     `--sidebar-masthead-pull`) Attention floors at ~74px with two-digit
+     counts. What the four icon tabs then divide is arithmetic, not a
+     measurement: 264 − 4px padding − 4 × 1px gap = 256, less Attention's 74,
+     is ~45px each — comfortably above the 28px an icon tab can shrink to
+     (16px glyph + 2 × 6px padding). The container query below is what keeps
+     that true past two digits. */
   grid-template-columns: repeat(5, minmax(min-content, 1fr));
   gap: 2px;
   padding: 3px;

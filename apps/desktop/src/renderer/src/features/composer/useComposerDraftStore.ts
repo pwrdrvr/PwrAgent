@@ -251,6 +251,11 @@ export function useComposerDraftStore(): ComposerDraftStore {
           draftPresenceListenersRef.current.delete(listener);
         };
       },
+      // Presence is synced after the pop, so a scope whose only content was
+      // the parked draft reads as absent until the composer `set`s the
+      // returned snapshot back as the active one. Both happen inside the same
+      // React event, so the two notifications batch into one render and the
+      // chip does not visibly blink.
       popDraft: (scopeKey) => {
         const current = draftStackStoreRef.current.get(scopeKey) ?? [];
         const restored = current.at(-1);

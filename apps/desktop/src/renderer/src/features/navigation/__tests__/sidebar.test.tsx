@@ -2584,7 +2584,9 @@ describe("Sidebar", () => {
         />,
       );
 
-      expect(screen.getByText("No unsent drafts.")).toBeInTheDocument();
+      // "replies", not "drafts": launchpad composer text is equally unsent
+      // but has no thread row, so the lens must not claim it covers it.
+      expect(screen.getByText("No unsent replies.")).toBeInTheDocument();
     });
   });
 

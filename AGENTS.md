@@ -208,7 +208,11 @@ accidental.
   peer's thread sees its own "Draft" chip on that row; the owning instance does
   not, because publishing an operator's unsent text to another machine is not
   something the affordance is worth. Threads carry the chip in every lens, not
-  only this one.
+  only this one. Two limits are deliberate rather than bugs: the storage is
+  machine-wide but each window reads it once at mount, so a second open window
+  does not light up until it restarts; and launchpad (new-thread) composer text
+  has no thread row, so the lens says "replies" and its empty state says "No
+  unsent replies."
 - Inbox is the default browsing lens: all threads in recent-activity order.
 - Recents shows all threads in thread-creation order so active threads do not
   jump around.
