@@ -4015,7 +4015,7 @@ describe("ThreadView", () => {
     let agentEventHandler: ((event: AgentEvent) => void) | undefined;
     const getThreadFileDiff = vi.fn(async () => ({ diff: liveDiff }));
 
-    const renderThread = (transcriptEntries: any[]) => (
+    const renderThread = (transcriptEntries: AppServerThreadEntry[]) => (
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[]}
@@ -5840,7 +5840,7 @@ describe("ThreadView", () => {
       | undefined;
 
     function Harness() {
-      const [entries, setEntries] = useState<any[]>([]);
+      const [entries, setEntries] = useState<AppServerThreadEntry[]>([]);
 
       return (
         <ThreadView
@@ -6111,7 +6111,7 @@ describe("ThreadView", () => {
       // `activeTurnId` on `turn/completed` so the rail flips from
       // live → pinned. The Harness simulates that here.
       const [activeTurnId, setActiveTurnId] = useState<string | undefined>("turn-1");
-      const [entries, setEntries] = useState<any[]>([]);
+      const [entries, setEntries] = useState<AppServerThreadEntry[]>([]);
       return (
         <ThreadView
           activeTurnId={activeTurnId}
@@ -6242,7 +6242,7 @@ describe("ThreadView", () => {
 
     function Harness() {
       const [activeTurnId, setActiveTurnId] = useState<string | undefined>("turn-1");
-      const [entries, setEntries] = useState<any[]>([]);
+      const [entries, setEntries] = useState<AppServerThreadEntry[]>([]);
       return (
         <>
           <button type="button" onClick={() => setActiveTurnId("turn-2")}>
@@ -6363,7 +6363,7 @@ describe("ThreadView", () => {
     ].join("\n");
 
     function Harness() {
-      const [entries, setEntries] = useState<any[]>([]);
+      const [entries, setEntries] = useState<AppServerThreadEntry[]>([]);
       return (
         <ThreadView
           activeTurnId="turn-1"

@@ -14,6 +14,7 @@ import type {
   CreateScheduledThreadActionRequest,
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
+  NavigationSnapshot,
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
@@ -2556,7 +2557,7 @@ describe("App", () => {
         };
       }) => void
     >();
-    let navigationSnapshot: any = {
+    let navigationSnapshot: NavigationSnapshot = {
       backend: "all",
       fetchedAt: Date.now(),
       unchanged: false,
@@ -2739,7 +2740,7 @@ describe("App", () => {
         };
       }) => void
     >();
-    let navigationSnapshot: any = {
+    let navigationSnapshot: NavigationSnapshot = {
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,
@@ -3032,7 +3033,7 @@ describe("App", () => {
         };
       }) => void
     >();
-    let navigationSnapshot: any = {
+    let navigationSnapshot: NavigationSnapshot = {
       backend: "all" as const,
       fetchedAt: Date.now(),
       unchanged: false,

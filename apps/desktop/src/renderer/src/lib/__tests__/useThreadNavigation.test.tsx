@@ -931,7 +931,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("marks the selected thread seen again when a refresh advances it", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     const markThreadSeen = vi.fn(
       async (
         request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
@@ -1027,6 +1027,11 @@ describe("useThreadNavigation", () => {
             params: {
               threadId: "thread-other",
               turnId: "turn-other",
+              turn: {
+                id: "turn-other",
+                status: "completed",
+                output: [],
+              },
             },
           },
         });
@@ -1044,7 +1049,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("clears a selected-thread unread update when the seen write resolves after selecting away", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     const delayedSeen = createDeferred<{
       backend: "codex";
       threadId: string;
@@ -1154,6 +1159,11 @@ describe("useThreadNavigation", () => {
             params: {
               threadId: "thread-other",
               turnId: "turn-other",
+              turn: {
+                id: "turn-other",
+                status: "completed",
+                output: [],
+              },
             },
           },
         });
@@ -1190,7 +1200,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("keeps selected refreshes unread while the window is backgrounded", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     const markThreadSeen = vi.fn(
       async (
         request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
@@ -1291,6 +1301,11 @@ describe("useThreadNavigation", () => {
             params: {
               threadId: "thread-other",
               turnId: "turn-other",
+              turn: {
+                id: "turn-other",
+                status: "completed",
+                output: [],
+              },
             },
           },
         });
@@ -1308,7 +1323,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("keeps selected refreshes unread while the thread view is hidden", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     const markThreadSeen = vi.fn(
       async (
         request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0]
@@ -1414,6 +1429,11 @@ describe("useThreadNavigation", () => {
             params: {
               threadId: "thread-other",
               turnId: "turn-other",
+              turn: {
+                id: "turn-other",
+                status: "completed",
+                output: [],
+              },
             },
           },
         });
@@ -1495,7 +1515,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("coalesces repeated turn lifecycle notifications into one navigation refresh", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -1546,18 +1566,52 @@ describe("useThreadNavigation", () => {
 
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
 
+    const terminalNotifications: AgentEvent["notification"][] = [
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+      {
+        method: "turn/failed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "failed",
+            error: {
+              message: "Turn failed",
+            },
+          },
+        },
+      },
+      {
+        method: "turn/cancelled",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "cancelled",
+          },
+        },
+      },
+    ];
+
     await act(async () => {
-      for (const method of ["turn/completed", "turn/failed", "turn/cancelled"] as const) {
+      for (const notification of terminalNotifications) {
         for (const listener of listeners) {
           listener({
             backend: "codex",
-            notification: {
-              method,
-              params: {
-                threadId: "thread-1",
-                turnId: "turn-1",
-              },
-            },
+            notification,
           });
         }
       }
@@ -2143,7 +2197,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("does not move selection to another thread when refresh temporarily drops the selected thread", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     let includeSelectedThread = true;
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
@@ -2220,6 +2274,11 @@ describe("useThreadNavigation", () => {
             params: {
               threadId: "thread-1",
               turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
             },
           },
         });
@@ -7935,7 +7994,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("refreshes the selected thread when only the observed branch changes", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     let navigationCallCount = 0;
     const getNavigationSnapshot = vi.fn(async () => {
       navigationCallCount += 1;
@@ -7995,6 +8054,11 @@ describe("useThreadNavigation", () => {
             params: {
               threadId: "thread-1",
               turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
             },
           },
         });
@@ -8010,7 +8074,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("refreshes the selected thread when only reactions change", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     let navigationCallCount = 0;
     const getNavigationSnapshot = vi.fn(async () => {
       navigationCallCount += 1;
@@ -8070,6 +8134,11 @@ describe("useThreadNavigation", () => {
             params: {
               threadId: "019e0755-ac96-7be2-a94d-78a6912eccb6",
               turnId: "turn-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                output: [],
+              },
             },
           },
         });
@@ -8082,7 +8151,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("refreshes the selected thread when review sub-agents change", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     let navigationCallCount = 0;
     const getNavigationSnapshot = vi.fn(async () => {
       navigationCallCount += 1;
@@ -8228,7 +8297,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("patches the snapshot for thread/executionMode/updated without refetching", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -8298,7 +8367,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("applies pull request update notification payloads before unchanged refreshes", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     const initialPr: PrSummary = {
       provider: "github.com",
       number: 123,
@@ -8386,7 +8455,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("fans out pull request status updates to every visible matching PR key", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     const initialPr: PrSummary = {
       provider: "github.com",
       number: 255,
@@ -8520,7 +8589,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("patches the snapshot for thread/executionMode/queued and queueCleared", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     let navigationSnapshot: NavigationSnapshot = {
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -8656,7 +8725,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("patches the snapshot for thread/modelSettings/updated without refetching", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -9003,7 +9072,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("patches the snapshot for thread/codexEnvironment/updated without refetching", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -9086,7 +9155,7 @@ describe("useThreadNavigation", () => {
   });
 
   it("refreshes the snapshot when thread directory metadata is repaired", async () => {
-    const listeners = new Set<(event: any) => void>();
+    const listeners = new Set<(event: AgentEvent) => void>();
     let navigationSnapshot: NavigationSnapshot = {
       backend: "all",
       fetchedAt: Date.now(),
