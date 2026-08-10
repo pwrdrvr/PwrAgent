@@ -422,13 +422,16 @@
    The "Scheduled"/"Queued" pending-send and detached-work "Unpublished"
    chips also stay visible: these time-sensitive commitments need to remain
    visible at a glance, so they survive the density strip like the pin marker.
+   "Draft" survives for the same reason from the other direction: it is the
+   one pending state nothing but the operator will ever resolve, so hiding it
+   in the denser view is exactly where it would be lost.
 
    Scope the rule to `.thread-row__chips` so non-list surfaces that
    carry a `.thread-row__chip--*` variant (e.g. the questionnaire's mode
    chip in the transcript) don't get collapsed when compact density is
    on. The skill chip in the composer and the standalone SkillChip use
    `.chip` directly and aren't affected by this rule. */
-:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--agent):not(.thread-row__chip--pin):not(.thread-row__chip--scheduled):not(.thread-row__chip--queued):not(.thread-row__chip--unpublished) {
+:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--agent):not(.thread-row__chip--pin):not(.thread-row__chip--scheduled):not(.thread-row__chip--queued):not(.thread-row__chip--draft):not(.thread-row__chip--unpublished) {
   display: none;
 }
 
@@ -2933,8 +2936,13 @@ textarea,
   line-height: 1.16;
 }
 
+/* Only ever worn together with `--fill`, so this padding is the gap between
+   the runtime-identity divider and the lens switch. 16px read as a hole: the
+   row above it is 6px of padding around a single line of text, so the strip
+   was floating away from the chrome it belongs to. 10px keeps the lens switch
+   legible as its own band without the drift. */
 .sidebar__section {
-  padding: 16px 0 0;
+  padding: 10px 0 0;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -3014,7 +3022,7 @@ textarea,
      lane inset. See `--sidebar-masthead-pull` on `.sidebar`. */
   width: calc(100% - 2 * var(--sidebar-masthead-pull));
   margin-inline: var(--sidebar-masthead-pull);
-  /* Four tabs, three of which are a single 16px icon. The Attention tab
+  /* Five tabs, four of which are a single 16px icon. The Attention tab
      carries two indicator + count pairs, so it is the only one whose content
      can outgrow an equal share — `min-content` floors every track at its own
      content width and lets Attention take what it needs before the icon tabs
@@ -3026,9 +3034,9 @@ textarea,
 
      Measured at the 280px sidebar minimum (a 264px container, see
      `--sidebar-masthead-pull`): Attention floors at ~74px with two-digit
-     counts, leaving ~58px per icon tab. The container query below is what
+     counts, leaving ~44px per icon tab. The container query below is what
      keeps that true past two digits. */
-  grid-template-columns: repeat(4, minmax(min-content, 1fr));
+  grid-template-columns: repeat(5, minmax(min-content, 1fr));
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--border-subtle);
@@ -3147,7 +3155,7 @@ textarea,
 }
 
 /* The narrow end of the sidebar's resize range (280px minimum → a 264px
-   container). Four tracks share less room here, and a three-digit count on the
+   container). Five tracks share less room here, and a three-digit count on the
    Attention tab would push the icon tabs below a comfortable target. Tighten
    the Attention tab's own padding and gaps first — the icon tabs never need
    to give, since a 16px glyph fits any track this control can produce. */
@@ -4301,6 +4309,21 @@ textarea,
   border: 1px solid var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent-bright);
+  font-weight: 600;
+}
+
+/* Unsent draft. Deliberately the quietest of the three pending states: a
+   Scheduled or Queued message is already committed to send and the app will
+   act on it, whereas a draft is waiting on the operator and nothing is going
+   to happen until they come back. So it takes the dashed neutral outline
+   rather than the accent — the accent is a signal in this theme, and "you
+   left something half-written" is a reminder, not an alert. The dash is what
+   distinguishes it at a glance from the solid neutral chips (branch, path)
+   it sits beside. */
+.thread-row__chip--draft {
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
   font-weight: 600;
 }
 

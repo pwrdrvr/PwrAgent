@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
+  DEFAULT_NAVIGATION_BROWSE_MODE,
+  normalizeNavigationBrowseMode,
+} from "@pwragent/shared";
+import {
   createEventSubscriptionMultiplexer,
 } from "./event-subscription-multiplexer";
 import type {
@@ -2111,19 +2115,16 @@ function readBootstrapNavigationPreferences(): {
     if (!arg.startsWith(NAVIGATION_ARG_PREFIX)) continue;
     try {
       const raw = JSON.parse(arg.slice(NAVIGATION_ARG_PREFIX.length));
-      const browseMode =
-        raw &&
-        (raw.browseMode === "inbox" ||
-          raw.browseMode === "recents" ||
-          raw.browseMode === "directories")
-          ? raw.browseMode
-          : "inbox";
-      return { browseMode };
+      // Shared allowlist, not a hand-copied one: this decoder used to list
+      // only inbox/recents/directories, so an operator whose saved lens was
+      // Attention got Inbox at first paint and then a visible jump — the
+      // exact flicker this bootstrap hint exists to prevent.
+      return { browseMode: normalizeNavigationBrowseMode(raw?.browseMode) };
     } catch {
       break;
     }
   }
-  return { browseMode: "inbox" };
+  return { browseMode: DEFAULT_NAVIGATION_BROWSE_MODE };
 }
 const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
 const bootstrapFederationTarget = readFederationWindowTargetFromArgv(

@@ -30,6 +30,7 @@ type RecentsListProps = {
   terminalThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
+  draftThreadKeys?: Record<string, boolean>;
   composerSourceThreadKey?: string;
   revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
@@ -145,6 +146,7 @@ export function RecentsList(props: RecentsListProps) {
               terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
+              draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               dropIndicator={
                 dropIndicator?.targetKey === rowDropKey
@@ -277,6 +279,7 @@ export function RecentsList(props: RecentsListProps) {
           terminalThreadKeys={props.terminalThreadKeys}
           inputRequestThreadKeys={props.inputRequestThreadKeys}
           queuedMessageThreadKeys={props.queuedMessageThreadKeys}
+          draftThreadKeys={props.draftThreadKeys}
           composerSourceThreadKey={props.composerSourceThreadKey}
           includeLinkedDirectories
           revealSelectedThreadRequest={props.revealSelectedThreadRequest}

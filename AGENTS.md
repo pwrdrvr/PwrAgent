@@ -192,14 +192,23 @@ accidental.
 ## Current Product Direction
 
 - Threads are first-class and may exist without a directory.
-- Attention, Inbox, Recents, and Directories share the thread lens switch. The
-  tabs are icon-only; the lens name lives in `aria-label` and the tooltip.
+- Attention, Drafts, Inbox, Recents, and Directories share the thread lens
+  switch. The tabs are icon-only; the lens name lives in `aria-label` and the
+  tooltip.
 - Attention is the work-queue lens: threads with a live turn or waiting to be
   reviewed, in recent-activity order. Its tab is two indicators with counts
   (scanner + in-progress, cookie + unread) rather than an icon, and each goes
   grey at zero so the tab reads as "nothing running, nothing unread" without
   being opened. A zero is shown, never hidden — a vanishing count makes an
   idle tab look like a broken one.
+- Drafts is the second state lens: threads holding unsent composer text, in
+  recent-activity order. A draft belongs to whoever typed it — it is stored in
+  that machine's `composer_draft_latest` table, re-hydrated on the next launch,
+  and deliberately **never federated**. A viewer that half-writes a reply to a
+  peer's thread sees its own "Draft" chip on that row; the owning instance does
+  not, because publishing an operator's unsent text to another machine is not
+  something the affordance is worth. Threads carry the chip in every lens, not
+  only this one.
 - Inbox is the default browsing lens: all threads in recent-activity order.
 - Recents shows all threads in thread-creation order so active threads do not
   jump around.

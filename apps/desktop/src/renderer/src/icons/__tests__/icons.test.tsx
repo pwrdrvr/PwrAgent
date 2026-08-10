@@ -9,6 +9,7 @@ import {
   CloseIcon,
   CopyIcon,
   DiscordIcon,
+  DraftIcon,
   FileCodeIcon,
   FolderIcon,
   HistoryIcon,
@@ -50,6 +51,7 @@ const ALL_ICONS = [
   ["SkillIcon", SkillIcon],
   ["HistoryIcon", HistoryIcon],
   ["CalendarPlusIcon", CalendarPlusIcon],
+  ["DraftIcon", DraftIcon],
 ] as const;
 
 describe("icon library", () => {

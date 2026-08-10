@@ -36,6 +36,7 @@ import { copyText } from "../../lib/copy-text";
 import {
   BranchIcon,
   CalendarPlusIcon,
+  DraftIcon,
   FolderIcon,
   HistoryIcon,
   SearchIcon,
@@ -55,6 +56,7 @@ import {
 } from "../../lib/runtime-identity";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
+import { selectThreadsWithDrafts } from "../../lib/useThreadDraftIndicators";
 import { formatPrimaryAccel } from "../../lib/keyboard-accel";
 import {
   DetachPullRequestWarning,
@@ -115,6 +117,11 @@ type SidebarProps = {
    * "Scheduled"/"Queued" thread-row chip. Absent key = no pending send.
    */
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
+  /**
+   * Threads holding unsent composer text. Window-local: a draft never
+   * leaves the machine it was typed on (see useThreadDraftIndicators).
+   */
+  draftThreadKeys?: Record<string, boolean>;
   /** Identity key of the card to highlight as the open composer's source. */
   composerSourceThreadKey?: string;
   /** Incremented when the thread title asks the active lens to reveal its row. */
@@ -254,6 +261,7 @@ type SidebarProps = {
  */
 const BROWSE_MODES = [
   "attention",
+  "drafts",
   "inbox",
   "recents",
   "directories",
@@ -263,6 +271,7 @@ const BROWSE_MODES = [
 // text — they are the tab's accessible name and the first line of its tooltip.
 const browseModeLabels = {
   attention: "Attention",
+  drafts: "Drafts",
   inbox: "Updated",
   recents: "Created",
   directories: "Directories",
@@ -270,6 +279,7 @@ const browseModeLabels = {
 
 // Attention is absent: it renders its two live indicators instead of an icon.
 const browseModeIcons = {
+  drafts: DraftIcon,
   inbox: HistoryIcon,
   recents: CalendarPlusIcon,
   directories: FolderIcon,
@@ -279,6 +289,7 @@ const browseModeIcons = {
 // gone, so the viewport tooltip carries both the name and the explanation.
 const browseModeTooltips = {
   attention: "Attention — threads in progress or waiting to be reviewed",
+  drafts: "Drafts — threads with a reply you started and never sent",
   inbox: "Updated — all threads, most recently updated first",
   recents: "Created — all threads, newest created first",
   directories: "Directories — threads grouped by linked Git directory",
@@ -405,12 +416,24 @@ export function Sidebar(props: SidebarProps) {
       ),
     [props.thinkingThreadKeys, updatedOrderThreads],
   );
+  /**
+   * The Drafts lens: everything holding unsent composer text, in the same
+   * most-recently-updated order Attention uses. Filtered from the very map the
+   * rows render their "Draft" chip from, so the lens and the chips agree by
+   * construction.
+   */
+  const draftThreads = useMemo(
+    () => selectThreadsWithDrafts(updatedOrderThreads, props.draftThreadKeys),
+    [props.draftThreadKeys, updatedOrderThreads],
+  );
   const visibleThreads =
     props.browseMode === "attention"
       ? attentionThreads
-      : props.browseMode === "recents"
-        ? props.recentThreads ?? props.threads
-        : updatedOrderThreads;
+      : props.browseMode === "drafts"
+        ? draftThreads
+        : props.browseMode === "recents"
+          ? props.recentThreads ?? props.threads
+          : updatedOrderThreads;
   /**
    * The two numbers on the Attention tab. Counted over the very rows the lens
    * renders, not over `props.threads`, so the tab and the list cannot report
@@ -1643,6 +1666,7 @@ export function Sidebar(props: SidebarProps) {
               terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
+              draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               directories={props.directories}
               revealSelectedThreadRequest={directoryRevealRequest}
@@ -1684,7 +1708,9 @@ export function Sidebar(props: SidebarProps) {
               <p className="sidebar-empty">
                 {props.browseMode === "attention"
                   ? "Nothing running, nothing to review."
-                  : "No threads yet."}
+                  : props.browseMode === "drafts"
+                    ? "No unsent drafts."
+                    : "No threads yet."}
               </p>
             ) : (
               <RecentsList
@@ -1692,6 +1718,7 @@ export function Sidebar(props: SidebarProps) {
                 terminalThreadKeys={props.terminalThreadKeys}
                 inputRequestThreadKeys={props.inputRequestThreadKeys}
                 queuedMessageThreadKeys={props.queuedMessageThreadKeys}
+                draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 revealSelectedThreadRequest={revealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}

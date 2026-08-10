@@ -1,7 +1,10 @@
 import { useMemo, useSyncExternalStore } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
+import {
+  buildThreadComposerScopeKey,
+  type ComposerDraftStore,
+} from "../features/composer/useComposerDraftStore";
 
 /**
  * A thread's pending outbound-message state, in descending information
@@ -10,12 +13,6 @@ import type { ComposerDraftStore } from "../features/composer/useComposerDraftSt
  * that has both surfaces the scheduled signal.
  */
 export type ThreadQueuedMessageState = "scheduled" | "queued";
-
-function getThreadScopeKey(
-  thread: Pick<NavigationThreadSummary, "id" | "source">,
-): string {
-  return `thread:${thread.source}:${thread.id}`;
-}
 
 /**
  * Derives a per-thread map of pending outbound-message indicators from the
@@ -56,7 +53,7 @@ export function useThreadQueuedMessageIndicators(params: {
           "scheduled";
       }
       const queuedTurns = composerDraftStore.getQueuedTurns(
-        getThreadScopeKey(thread),
+        buildThreadComposerScopeKey(thread.source, thread.id),
       );
       if (queuedTurns.length === 0) {
         continue;

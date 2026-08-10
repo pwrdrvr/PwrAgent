@@ -61,6 +61,7 @@ import {
   estimateTokenUsageCost,
   isAcpBackendId,
   isRemoteFederationTarget,
+  normalizeNavigationBrowseMode,
   normalizeThreadIdentityKey,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
@@ -473,20 +474,15 @@ function normalizeLaunchpadDefaults(
 }
 
 const NAVIGATION_BROWSE_MODE_META_KEY = "navigation_browse_mode";
-const DEFAULT_NAVIGATION_BROWSE_MODE: NavigationBrowseMode = "inbox";
 const LEGACY_HANDOFF_AGENT_INSTRUCTIONS =
   "Work only on the delegated task from the parent PwrAgent thread. Keep progress and results in this thread.";
 
-export function normalizeNavigationBrowseMode(
-  value: unknown,
-): NavigationBrowseMode {
-  return value === "attention"
-    || value === "inbox"
-    || value === "recents"
-    || value === "directories"
-    ? value
-    : DEFAULT_NAVIGATION_BROWSE_MODE;
-}
+/**
+ * Re-exported from `@pwragent/shared` so the persisted-lens allowlist has one
+ * definition across main, preload, and the renderer. Existing importers keep
+ * pointing here.
+ */
+export { normalizeNavigationBrowseMode };
 
 function shouldApplyAcpExecutionModeSnapshot(
   current: ThreadOverlayState | undefined,

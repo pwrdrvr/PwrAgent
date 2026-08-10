@@ -1,7 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted } from "@pwragent/shared";
-import { BranchIcon, FolderIcon, PinIcon, TerminalIcon, WorktreeIcon } from "../../icons";
+import {
+  BranchIcon,
+  DraftIcon,
+  FolderIcon,
+  PinIcon,
+  TerminalIcon,
+  WorktreeIcon,
+} from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText } from "../../lib/copy-text";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -12,6 +19,13 @@ import { AgentThreadChip } from "./AgentThreadChip";
 
 type ThreadMetaChipsProps = {
   hasApprovalRequest?: boolean;
+  /**
+   * Unsent composer text is parked on this thread. Distinct from "Queued" and
+   * "Scheduled", which are messages already committed to send — a draft is
+   * work the operator has not decided to send at all, and is the one pending
+   * state nothing else will ever clear for them.
+   */
+  hasUnsentDraft?: boolean;
   /** A shell is alive for this thread — the row is how you find it again. */
   hasIntegratedTerminal?: boolean;
   hasInputRequest?: boolean;
@@ -55,6 +69,7 @@ type ThreadMetaChipsProps = {
 
 export function ThreadMetaChips({
   hasApprovalRequest = false,
+  hasUnsentDraft = false,
   hasIntegratedTerminal = false,
   hasInputRequest = false,
   onUnpin,
@@ -79,6 +94,9 @@ export function ThreadMetaChips({
   // Sidebar rows are a clipped scroll region, so a native `title` gets
   // edge-clipped — the viewport tooltip is what the neighbouring chips use.
   const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // Same reason as the terminal chip: the sidebar clips a native `title`, and
+  // the Star Map layer would paint over one anyway.
+  const draftTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const pinIsActionable = Boolean(onUnpin);
   const pinTooltipText = pinIsActionable ? "Click to unpin" : "Pinned";
@@ -242,6 +260,27 @@ export function ThreadMetaChips({
           Queued
         </span>
       ) : null}
+
+      {hasUnsentDraft ? (
+        <span
+          aria-label="Unsent draft reply"
+          className="thread-row__chip thread-row__chip--draft"
+          data-thread-draft="unsent"
+          onMouseEnter={(event) =>
+            draftTooltip.show(
+              event.currentTarget,
+              "Unsent draft reply\nThis thread has composer text you have not sent.",
+            )
+          }
+          onMouseLeave={draftTooltip.hide}
+        >
+          <span aria-hidden="true" className="thread-row__chip-icon">
+            <DraftIcon size={12} />
+          </span>
+          <span className="thread-row__chip-label">Draft</span>
+        </span>
+      ) : null}
+      {draftTooltip.tooltipNode}
 
       {hasApprovalRequest ? (
         <span

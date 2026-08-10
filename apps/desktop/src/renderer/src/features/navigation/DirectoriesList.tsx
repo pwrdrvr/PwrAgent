@@ -63,6 +63,7 @@ type DirectoriesListProps = {
   terminalThreadKeys?: Record<string, boolean>;
   inputRequestThreadKeys?: Record<string, boolean>;
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
+  draftThreadKeys?: Record<string, boolean>;
   composerSourceThreadKey?: string;
   directories: NavigationDirectorySummary[];
   revealSelectedThreadRequest?: number;
@@ -745,6 +746,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               terminalThreadKeys={props.terminalThreadKeys}
               inputRequestThreadKeys={props.inputRequestThreadKeys}
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
+              draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               compact
               draggable={reorderable}
@@ -884,6 +886,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             terminalThreadKeys={props.terminalThreadKeys}
             inputRequestThreadKeys={props.inputRequestThreadKeys}
             queuedMessageThreadKeys={props.queuedMessageThreadKeys}
+            draftThreadKeys={props.draftThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
             compact
             draggable={Boolean(props.onReorderThreadPins)}
@@ -1228,6 +1231,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           terminalThreadKeys={props.terminalThreadKeys}
                           inputRequestThreadKeys={props.inputRequestThreadKeys}
                           queuedMessageThreadKeys={props.queuedMessageThreadKeys}
+                          draftThreadKeys={props.draftThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           compact
                           dropIndicator={

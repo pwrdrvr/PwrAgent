@@ -413,13 +413,43 @@ export function buildPullRequestStatusKey(
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
 /**
  * `attention` is the work-queue lens: threads with a live turn or waiting to
- * be reviewed. The other three are browsing lenses over every thread.
+ * be reviewed. `drafts` is the other state lens: threads holding unsent
+ * composer text on this machine. The remaining three are browsing lenses over
+ * every thread.
  */
 export type NavigationBrowseMode =
   | "attention"
+  | "drafts"
   | "inbox"
   | "recents"
   | "directories";
+
+export const NAVIGATION_BROWSE_MODES = [
+  "attention",
+  "drafts",
+  "inbox",
+  "recents",
+  "directories",
+] as const satisfies readonly NavigationBrowseMode[];
+
+export const DEFAULT_NAVIGATION_BROWSE_MODE: NavigationBrowseMode = "inbox";
+
+/**
+ * The one allowlist for a persisted / bridged lens value. Lives here rather
+ * than in the desktop app because three processes decode it independently —
+ * main (sqlite), preload (the pre-paint `additionalArguments` hint), and the
+ * renderer — and a hand-copied list drifts: preload's copy silently omitted
+ * `attention`, so an operator whose saved lens was Attention got Inbox on the
+ * first paint and then a jump, which is the exact flicker the bootstrap hint
+ * exists to prevent.
+ */
+export function normalizeNavigationBrowseMode(
+  value: unknown,
+): NavigationBrowseMode {
+  return NAVIGATION_BROWSE_MODES.includes(value as NavigationBrowseMode)
+    ? (value as NavigationBrowseMode)
+    : DEFAULT_NAVIGATION_BROWSE_MODE;
+}
 export type LaunchpadWorkMode = "local" | "worktree";
 
 export type CodexEnvironmentOption = {

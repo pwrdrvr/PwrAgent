@@ -38,8 +38,11 @@ summary.
 
 ## Non-Negotiables
 
-- Attention, Inbox, Recents, and Directories live in one icon-only thread lens
-  switch; Inbox is the default browsing lens.
+- Attention, Drafts, Inbox, Recents, and Directories live in one icon-only
+  thread lens switch; Inbox is the default browsing lens.
+- A thread's unsent composer draft is window-local state, never federated.
+  Derive it from the composer draft store (`useThreadDraftIndicators`), not
+  from `NavigationThreadSummary`.
 - Attention is a work queue: focusing a thread there must not clear its unread
   cookie, only replying does. See "Current Product Direction" in the
   [repo-root `AGENTS.md`](../../AGENTS.md) for why that rule is lens-scoped

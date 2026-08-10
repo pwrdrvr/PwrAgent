@@ -34,10 +34,12 @@ import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   compareThreadsByCreatedAtDesc,
+  DEFAULT_NAVIGATION_BROWSE_MODE,
   federatedThreadIdentityKey,
   insertSubthreadIdAfter,
   isRemoteFederationTarget,
   isSubthreadLaunchpadKey,
+  normalizeNavigationBrowseMode,
   resolveThreadParentKey,
   shortenDerivedThreadTitle,
   sortSubthreadSummaries,
@@ -101,7 +103,6 @@ const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 const NAVIGATION_BACKGROUND_REFRESH_IDLE_AFTER_MS = 30 * 60_000;
 const NAVIGATION_FOCUS_REFRESH_MIN_INTERVAL_MS = 60_000;
 const NAVIGATION_REMOTE_RECOVERY_MAX_DELAY_MS = 30_000;
-const DEFAULT_BROWSE_MODE: BrowseMode = "inbox";
 const NAVIGATION_ACTIVITY_EVENTS = [
   "input",
   "keydown",
@@ -109,14 +110,8 @@ const NAVIGATION_ACTIVITY_EVENTS = [
   "pointerdown",
 ] as const;
 
-function normalizeBrowseMode(value: unknown): BrowseMode {
-  return value === "attention"
-    || value === "inbox"
-    || value === "recents"
-    || value === "directories"
-    ? value
-    : DEFAULT_BROWSE_MODE;
-}
+const DEFAULT_BROWSE_MODE = DEFAULT_NAVIGATION_BROWSE_MODE;
+const normalizeBrowseMode = normalizeNavigationBrowseMode;
 
 function readBridgedBrowseMode(): BrowseMode {
   if (typeof window === "undefined") {

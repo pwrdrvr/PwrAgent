@@ -33,6 +33,9 @@ function createComposerDraftStore(): ComposerDraftStore {
     getQueuedTurns: (scopeKey) => queuedTurns.get(scopeKey) ?? [],
     getQueuedTurnVersion: () => 0,
     subscribeQueuedTurns: () => () => {},
+    hasDraftContent: () => false,
+    getDraftPresenceVersion: () => 0,
+    subscribeDraftPresence: () => () => {},
     removeQueuedTurnAt: (scopeKey, index) => {
       const current = queuedTurns.get(scopeKey) ?? [];
       const next = [...current];

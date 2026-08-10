@@ -740,11 +740,12 @@ describe("Sidebar", () => {
     // the whole name — a tab that loses its aria-label announces as unlabeled.
     expect(lensTabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
       "Attention, 0 active threads, 1 thread to review",
+      "Drafts",
       "Updated",
       "Created",
       "Directories",
     ]);
-    expect(lensTabs[3]).toHaveAttribute("aria-selected", "true");
+    expect(lensTabs[4]).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Cross-project cleanup").length).toBeGreaterThan(0);
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
@@ -2453,6 +2454,137 @@ describe("Sidebar", () => {
         "Attention — threads in progress or waiting to be reviewed"
           + "\n1 active thread · 1 thread to review",
       );
+    });
+  });
+
+  describe("Drafts lens", () => {
+    const draftThread = {
+      ...sharedThread,
+      id: "thread-with-draft",
+      title: "Thread with a draft",
+      inbox: { inInbox: false },
+    };
+    const plainThread = {
+      ...sharedThread,
+      id: "thread-without-draft",
+      title: "Thread without a draft",
+      inbox: { inInbox: false },
+    };
+    const allThreads = [draftThread, plainThread];
+    // Keyed exactly as `buildThreadIdentityKey` builds it — the same string
+    // ThreadRow looks its chip up under.
+    const draftThreadKeys = {
+      [`${draftThread.source}:${draftThread.id}`]: true,
+    };
+
+    const renderDrafts = (
+      browseMode: "drafts" | "inbox" = "drafts",
+      onBrowseModeChange = vi.fn(),
+    ) =>
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode={browseMode}
+          createThreadError={undefined}
+          directories={directories}
+          draftThreadKeys={draftThreadKeys}
+          inboxThreads={allThreads}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={allThreads}
+          onBrowseModeChange={onBrowseModeChange}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+    it("lists only threads holding unsent composer text", () => {
+      renderDrafts();
+
+      const browseSection = screen.getByRole("region", {
+        name: "Thread browser",
+      });
+      const rows = within(browseSection as HTMLElement).getAllByRole("button", {
+        name: /Thread with a draft|Thread without a draft/i,
+      });
+      expect(rows.map((row) => row.textContent)).toEqual([
+        expect.stringContaining("Thread with a draft"),
+      ]);
+    });
+
+    it("marks the drafted row with a Draft chip in every lens", () => {
+      renderDrafts("inbox");
+
+      const browseSection = screen.getByRole("region", {
+        name: "Thread browser",
+      });
+      // The chip is a sibling of the row's open button, so assert against
+      // the whole row shell rather than the button.
+      const rowFor = (title: string): HTMLElement => {
+        const button = within(browseSection as HTMLElement).getByRole(
+          "button",
+          { name: new RegExp(title, "i") },
+        );
+        const shell = button.closest(".thread-row-shell");
+        expect(shell).not.toBeNull();
+        return shell as HTMLElement;
+      };
+
+      expect(
+        rowFor("Thread with a draft").querySelector(
+          '[data-thread-draft="unsent"]',
+        ),
+      ).toBeInTheDocument();
+      expect(
+        rowFor("Thread without a draft").querySelector(
+          '[data-thread-draft="unsent"]',
+        ),
+      ).toBeNull();
+    });
+
+    it("switches to the lens from its tab", () => {
+      const onBrowseModeChange = vi.fn();
+      renderDrafts("inbox", onBrowseModeChange);
+
+      const tab = screen.getByRole("tab", { name: "Drafts" });
+      expect(tab).toHaveAttribute("aria-selected", "false");
+      fireEvent.click(tab);
+      expect(onBrowseModeChange).toHaveBeenCalledWith("drafts");
+    });
+
+    it("explains the lens in its tooltip", async () => {
+      renderDrafts();
+
+      fireEvent.mouseEnter(screen.getByRole("tab", { name: "Drafts" }));
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        "Drafts — threads with a reply you started and never sent",
+      );
+    });
+
+    it("shows an empty state when nothing is half-written", () => {
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="drafts"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={allThreads}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={allThreads}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      expect(screen.getByText("No unsent drafts.")).toBeInTheDocument();
     });
   });
 

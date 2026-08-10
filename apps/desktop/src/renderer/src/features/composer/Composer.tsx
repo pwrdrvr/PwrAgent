@@ -160,7 +160,9 @@ import {
   formatRunningDurationMs,
 } from "../thread-detail/EnvActionRunsView";
 import {
+  buildThreadComposerScopeKey,
   getNextReleasableQueuedTurn,
+  hasComposerDraftContent,
   useComposerDraftStore,
   type ComposerDraftSnapshot,
   type ComposerDraftStore,
@@ -892,9 +894,7 @@ function getLaunchpadDirectoryKeyFromScope(scopeKey: string): string | undefined
     : undefined;
 }
 
-function getThreadComposerScopeKey(backend: string, threadId: string): string {
-  return `thread:${backend}:${threadId}`;
-}
+const getThreadComposerScopeKey = buildThreadComposerScopeKey;
 
 function createReviewConfig(params: {
   directory?: NavigationDirectorySummary;
@@ -2937,7 +2937,7 @@ export function Composer(props: ComposerProps) {
   const composerScopeKey = props.launchpad
     ? `launchpad:${props.launchpad.directoryKey}`
     : props.thread
-      ? `thread:${props.thread.source}:${props.thread.id}`
+      ? buildThreadComposerScopeKey(props.thread.source, props.thread.id)
       : "empty";
   const prAutoDispatchPending = props.thread?.prAutoDispatchPending;
   const localDraftStore = useComposerDraftStore();
@@ -3750,19 +3750,13 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    if (
-      !state.draft.trim() &&
-      state.skillTokens.length === 0 &&
-      state.imageAttachments.length === 0 &&
-      (state.fileAttachments?.length ?? 0) === 0
-    ) {
+    // Shared with the store's draft-presence tracking, so "the composer is
+    // empty" and "this thread has no draft" can never diverge.
+    if (!hasComposerDraftContent(state)) {
       const previous = latestDraftSnapshotRef.current;
       if (
         previous.scopeKey === scopeKey &&
-        (previous.snapshot.draft.trim() ||
-          previous.snapshot.skillTokens.length > 0 ||
-          previous.snapshot.imageAttachments.length > 0 ||
-          (previous.snapshot.fileAttachments?.length ?? 0) > 0)
+        hasComposerDraftContent(previous.snapshot)
       ) {
         recordComposerDraftHistory(scopeKey, previous.snapshot, "abandoned");
       }
