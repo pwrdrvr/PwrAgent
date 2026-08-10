@@ -27753,6 +27753,12 @@ script = "printf setup"
         titleSource: "fallback",
         source: "codex",
         linkedDirectories: [],
+      }, {
+        id: "parent-thread",
+        title: "M4 runner-host conversion preflight",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
       }],
     });
     const overlayStore = createOverlayStoreMock();
@@ -27863,6 +27869,7 @@ script = "printf setup"
               sourceThread: {
                 backend: "codex",
                 threadId: "parent-thread",
+                title: "M4 runner-host conversion preflight",
               },
             },
           },
@@ -27878,6 +27885,7 @@ script = "printf setup"
         sourceThread: {
           backend: "codex",
           threadId: "parent-thread",
+          title: "M4 runner-host conversion preflight",
         },
       },
     });
@@ -28872,6 +28880,13 @@ script = "printf setup"
   it("resolves and sends to a federated thread after a local UUID miss", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        id: "parent-thread",
+        title: "M4 runner-host conversion preflight",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      }],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -28948,6 +28963,7 @@ script = "printf setup"
         sourceThread: {
           backend: "codex",
           threadId: "parent-thread",
+          title: "M4 runner-host conversion preflight",
         },
       },
       executionMode: undefined,
@@ -29021,6 +29037,13 @@ script = "printf setup"
   it("routes stop and steer controls to an explicit federated owner", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        id: "parent-thread",
+        title: "M4 runner-host conversion preflight",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      }],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -29083,6 +29106,7 @@ script = "printf setup"
         sourceThread: {
           backend: "codex",
           threadId: "parent-thread",
+          title: "M4 runner-host conversion preflight",
         },
       },
     });
