@@ -3603,7 +3603,192 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("retires a name observation after a snapshot acknowledges it", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const snapshot = (title: string, updatedAt: number): NavigationSnapshot => ({
+      backend: "all",
+      fetchedAt: updatedAt,
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title,
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+          updatedAt,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(snapshot("Initial title", 1_000))
+      .mockResolvedValueOnce(snapshot("Generated title", 2_000))
+      .mockResolvedValueOnce(snapshot("Newer remote title", 3_000));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.title).toBe("Initial title");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/name/updated",
+          params: {
+            threadId: "thread-1",
+            threadName: "Generated title",
+          },
+        },
+      });
+    });
+    expect(result.current.threads[0]?.title).toBe("Generated title");
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.threads[0]?.title).toBe("Generated title");
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.threads[0]?.title).toBe("Newer remote title");
+  });
+
+  it("isolates observed names for same-id threads owned by different peers", async () => {
+    const firstTarget = {
+      scope: "remote" as const,
+      instanceId: "first-owner",
+    };
+    const secondTarget = {
+      scope: "remote" as const,
+      instanceId: "second-owner",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = firstTarget;
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const navigationSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "shared-session-id",
+          title: "First owner title",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            ref: {
+              backend: "acp:kimi",
+              target: firstTarget,
+              threadId: "shared-session-id",
+            },
+            instanceLabel: "First Owner",
+          },
+          updatedAt: 1_000,
+        },
+        {
+          id: "shared-session-id",
+          title: "Second owner title",
+          titleSource: "explicit",
+          source: "acp:kimi",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            ref: {
+              backend: "acp:kimi",
+              target: secondTarget,
+              threadId: "shared-session-id",
+            },
+            instanceLabel: "Second Owner",
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const getNavigationSnapshot = vi.fn(async () => navigationSnapshot);
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const titlesByOwner = (): Record<string, string> => Object.fromEntries(
+      result.current.threads.map((thread) => [
+        thread.federation?.ref.target.scope === "remote"
+          ? thread.federation.ref.target.instanceId
+          : "local",
+        thread.title,
+      ]),
+    );
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(2);
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "acp:kimi",
+        federationTarget: firstTarget,
+        notification: {
+          method: "thread/name/updated",
+          params: {
+            threadId: "shared-session-id",
+            threadName: "Renamed first owner",
+          },
+        },
+      });
+    });
+    expect(titlesByOwner()).toEqual({
+      "first-owner": "Renamed first owner",
+      "second-owner": "Second owner title",
+    });
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(titlesByOwner()).toEqual({
+      "first-owner": "Renamed first owner",
+      "second-owner": "Second owner title",
+    });
+  });
+
   it("keeps an eager generated name that arrives while a scheduled thread materializes", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "scheduled-thread-owner",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
     const directoryKey = "directory:/Users/huntharo/github/PwrSuiteLab";
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
@@ -3640,6 +3825,7 @@ describe("useThreadNavigation", () => {
         backend: "codex",
         executionMode: "default",
       },
+      federationTarget,
     };
     const scheduledFor = Date.now() + 60 * 60 * 1_000;
     const staleHydratedSnapshot: NavigationSnapshot = {
@@ -3654,6 +3840,14 @@ describe("useThreadNavigation", () => {
           source: "codex",
           linkedDirectories: [],
           inbox: { inInbox: true, reason: "new-thread" },
+          federation: {
+            ref: {
+              backend: "codex",
+              target: federationTarget,
+              threadId: "thread-scheduled",
+            },
+            instanceLabel: "Scheduled Thread Owner",
+          },
           scheduledStart: {
             actionId: "scheduled-action:1",
             scheduledFor,
@@ -3679,6 +3873,7 @@ describe("useThreadNavigation", () => {
     > = vi.fn(async () => {
       agentEventHandler?.({
         backend: "codex",
+        federationTarget,
         notification: {
           method: "thread/name/updated",
           params: {

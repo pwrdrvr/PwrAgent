@@ -33,6 +33,7 @@ import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   compareThreadsByCreatedAtDesc,
+  federatedThreadIdentityKey,
   insertSubthreadIdAfter,
   isRemoteFederationTarget,
   isSubthreadLaunchpadKey,
@@ -45,6 +46,7 @@ import { fileLabelFromPath } from "./directory-references";
 import { readRendererFederationTarget } from "./federation-window";
 import { resolveThreadWorkingStatePath } from "./thread-working-state-path";
 import {
+  agentEventMatchesThread,
   agentEventThreadIdentityKey,
   federationTargetsEqual,
   threadSummaryIdentityKey,
@@ -898,20 +900,20 @@ function applyConcurrentThreadStatusObservations(
 
 function applyObservedThreadNames(
   snapshot: NavigationSnapshot,
-  observations: ReadonlyMap<string, ThreadNameObservation>,
+  observations: Map<string, ThreadNameObservation>,
 ): NavigationSnapshot {
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    const observation = observations.get(
-      buildThreadIdentityKey(thread.source, thread.id),
-    );
+    const threadKey = threadSummaryIdentityKey(thread);
+    const observation = observations.get(threadKey);
+    if (!observation) {
+      return thread;
+    }
     if (
-      !observation
-      || (
-        thread.title === observation.threadName
-        && thread.titleSource === "explicit"
-      )
+      thread.title === observation.threadName
+      && thread.titleSource === "explicit"
     ) {
+      observations.delete(threadKey);
       return thread;
     }
     changed = true;
@@ -1645,16 +1647,28 @@ function getFallbackSelectionAfterRemoval(
 
 function applyThreadNameUpdate(
   snapshot: NavigationSnapshot | undefined,
-  params: { backend: AppServerBackendKind; threadId: string; threadName?: string }
+  params: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    threadName?: string;
+  }
 ): NavigationSnapshot | undefined {
   const threadName = params.threadName?.trim();
   if (!snapshot || !threadName) {
     return snapshot;
   }
 
+  const threadKey = params.federationTarget
+    ? federatedThreadIdentityKey({
+        backend: params.backend,
+        target: params.federationTarget,
+        threadId: params.threadId,
+      })
+    : buildThreadIdentityKey(params.backend, params.threadId);
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (threadSummaryIdentityKey(thread) !== threadKey) {
       return thread;
     }
 
@@ -3052,6 +3066,10 @@ export function useThreadNavigation(
         const optimisticThreadKey = optimisticSelection
           ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
           : undefined;
+        const responseWithObservedThreadNames = applyObservedThreadNames(
+          response,
+          threadNameObservationsRef.current,
+        );
 
         setState((current) => {
           if (current.response && response.unchanged && !preferredSelectionKey) {
@@ -3063,10 +3081,6 @@ export function useThreadNavigation(
             };
           }
 
-          const responseWithObservedThreadNames = applyObservedThreadNames(
-            response,
-            threadNameObservationsRef.current,
-          );
           const responseWithConcurrentThreadStatuses =
             applyConcurrentThreadStatusObservations(
               responseWithObservedThreadNames,
@@ -3766,19 +3780,20 @@ export function useThreadNavigation(
           return;
         }
         threadNameObservationsRef.current.set(
-          buildThreadIdentityKey(event.backend, threadId),
+          agentEventThreadIdentityKey(event, threadId),
           { threadName: nextThreadName },
         );
         setState((current) => ({
           ...current,
           response: applyThreadNameUpdate(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             threadName: nextThreadName,
           }),
         }));
         setOptimisticThread((current) => {
-          if (current?.source !== event.backend || current.id !== threadId) {
+          if (!current || !agentEventMatchesThread(event, current, threadId)) {
             return current;
           }
 
@@ -5961,7 +5976,13 @@ export function useThreadNavigation(
           : undefined,
       });
       const observedThreadName = threadNameObservationsRef.current.get(
-        buildThreadIdentityKey(response.backend, response.threadId),
+        federationTarget
+          ? federatedThreadIdentityKey({
+              backend: response.backend,
+              target: federationTarget,
+              threadId: response.threadId,
+            })
+          : buildThreadIdentityKey(response.backend, response.threadId),
       )?.threadName;
       const namedOptimisticMaterializedThread = observedThreadName
         ? {
@@ -6343,12 +6364,14 @@ export function useThreadNavigation(
         ...current,
         response: applyThreadNameUpdate(current.response, {
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target,
           threadId: thread.id,
           threadName: nextName,
         }),
       }));
       setRetainedUnreadThread((current) =>
-        current?.source === thread.source && current.id === thread.id
+        current
+        && threadSummaryIdentityKey(current) === threadSummaryIdentityKey(thread)
           ? {
               ...current,
               title: nextName,
@@ -6357,7 +6380,8 @@ export function useThreadNavigation(
           : current
       );
       setOptimisticThread((current) =>
-        current?.source === thread.source && current.id === thread.id
+        current
+        && threadSummaryIdentityKey(current) === threadSummaryIdentityKey(thread)
           ? {
               ...current,
               title: nextName,
