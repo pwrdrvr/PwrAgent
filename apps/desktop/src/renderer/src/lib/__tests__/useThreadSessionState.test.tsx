@@ -389,6 +389,81 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("releases older-history loading when a fresher hydration supersedes it", async () => {
+    const initialTail = readThreadResponse({
+      entries: [
+        messageEntry({ id: "recent-1", text: "Recent 1", createdAt: 300 }),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "older-page",
+    });
+    const refreshedTail = readThreadResponse({
+      entries: [
+        messageEntry({ id: "recent-2", text: "Recent 2", createdAt: 400 }),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "older-page-after-refresh",
+    });
+    let resolveOlderPage:
+      | ((response: AppServerReadThreadResponse) => void)
+      | undefined;
+    const olderPagePending = new Promise<AppServerReadThreadResponse>((resolve) => {
+      resolveOlderPage = resolve;
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockReturnValueOnce(olderPagePending)
+      .mockResolvedValueOnce(refreshedTail);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      {
+        initialProps: { updatedAt: 1_000 },
+      }
+    );
+
+    await waitForThreadHydration(result);
+    act(() => {
+      void result.current.loadOlder();
+    });
+    await waitFor(() => {
+      expect(result.current.loadingMore).toBe(true);
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+
+    rerender({ updatedAt: 2_000 });
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+      expect(result.current.response?.replay.pagination.previousCursor).toBe(
+        "older-page-after-refresh",
+      );
+    });
+
+    act(() => {
+      resolveOlderPage?.(readThreadResponse({
+        entries: [
+          messageEntry({ id: "older-1", text: "Older 1", createdAt: 100 }),
+        ],
+        hasPreviousPage: false,
+      }));
+    });
+    await waitFor(() => {
+      expect(result.current.loadingMore).toBe(false);
+    });
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Recent 2",
+    ]);
+  });
+
   it("retains transcript reading state across temporary view unmounts", async () => {
     const desktopApi: DesktopApi = {
       onAgentEvent: () => () => undefined,
