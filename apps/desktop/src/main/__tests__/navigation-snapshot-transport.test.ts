@@ -156,4 +156,41 @@ describe("NavigationSnapshotTransport", () => {
       snapshot,
     }).kind).toBe("full");
   });
+
+  it("retains independent revisions for full and active-recent scopes", () => {
+    const transport = new NavigationSnapshotTransport();
+    const snapshot = buildSnapshot([buildThread(1)]);
+    const full = transport.encode({
+      rendererId: 11,
+      request: {},
+      snapshot,
+    });
+    const activeRecent = transport.encode({
+      rendererId: 11,
+      request: { refreshMode: "active-recent" },
+      snapshot,
+    });
+    if (full.kind !== "full" || activeRecent.kind !== "full") {
+      throw new Error("Expected independent full baselines");
+    }
+
+    expect(transport.encode({
+      baseRevision: full.revision,
+      rendererId: 11,
+      request: { refreshMode: "full" },
+      snapshot,
+    })).toEqual({
+      kind: "unchanged",
+      revision: full.revision,
+    });
+    expect(transport.encode({
+      baseRevision: activeRecent.revision,
+      rendererId: 11,
+      request: { refreshMode: "active-recent" },
+      snapshot,
+    })).toEqual({
+      kind: "unchanged",
+      revision: activeRecent.revision,
+    });
+  });
 });

@@ -7,23 +7,15 @@ import type {
   NavigationSnapshotTransportResponse,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  buildNavigationSnapshotTransportScopeKey,
+  buildThreadIdentityKey,
+} from "@pwragent/shared";
 
 type CachedNavigationSnapshot = {
   revision: string;
   snapshot: NavigationSnapshot;
 };
-
-function navigationSnapshotScopeKey(
-  request: GetNavigationSnapshotRequest,
-): string {
-  return JSON.stringify({
-    backend: request.backend ?? "all",
-    federationTarget: request.federationTarget ?? { scope: "local" },
-    filter: request.filter ?? "",
-    refreshMode: request.refreshMode ?? "full",
-  });
-}
 
 function threadKey(thread: NavigationThreadSummary): string {
   return buildThreadIdentityKey(thread.source, thread.id);
@@ -190,7 +182,7 @@ export class NavigationSnapshotTransport {
     request: GetNavigationSnapshotRequest;
     snapshot: NavigationSnapshot;
   }): NavigationSnapshotTransportResponse {
-    const scopeKey = navigationSnapshotScopeKey(params.request);
+    const scopeKey = buildNavigationSnapshotTransportScopeKey(params.request);
     const rendererSnapshots =
       this.snapshotsByRenderer.get(params.rendererId) ?? new Map();
     this.snapshotsByRenderer.set(params.rendererId, rendererSnapshots);

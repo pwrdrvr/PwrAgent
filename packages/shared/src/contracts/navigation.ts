@@ -1199,6 +1199,21 @@ export type GetNavigationSnapshotTransportRequest =
     };
   };
 
+/**
+ * Stable renderer/main cache scope. `forceRefresh` is a scheduling hint and
+ * does not change the semantic snapshot population.
+ */
+export function buildNavigationSnapshotTransportScopeKey(
+  request: GetNavigationSnapshotRequest,
+): string {
+  return JSON.stringify({
+    backend: request.backend ?? "all",
+    federationTarget: request.federationTarget ?? { scope: "local" },
+    filter: request.filter ?? "",
+    refreshMode: request.refreshMode ?? "full",
+  });
+}
+
 export type NavigationSnapshotTransportFull = {
   kind: "full";
   revision: string;

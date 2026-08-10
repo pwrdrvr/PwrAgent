@@ -28,6 +28,7 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
+  buildNavigationSnapshotTransportScopeKey,
   buildAppendPinRank,
   buildPinnedRanks,
   buildPullRequestStatusKey,
@@ -2864,9 +2865,9 @@ export function useThreadNavigation(
   );
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
   const stateRef = useRef(state);
-  const navigationSnapshotTransportRef = useRef<
-    NavigationSnapshotTransportState | undefined
-  >(undefined);
+  const navigationSnapshotTransportByScopeRef = useRef(
+    new Map<string, NavigationSnapshotTransportState>(),
+  );
 
   optimisticThreadRef.current = optimisticThread;
   retainedUnreadThreadRef.current = retainedUnreadThread;
@@ -2926,7 +2927,7 @@ export function useThreadNavigation(
     ): Promise<void> => {
       if (!enabled) {
         prChipLocationIndexRef.current = undefined;
-        navigationSnapshotTransportRef.current = undefined;
+        navigationSnapshotTransportByScopeRef.current.clear();
         setState({
           loading: false,
           refreshing: false,
@@ -2985,8 +2986,13 @@ export function useThreadNavigation(
         let transportKind: "delta" | "full" | "legacy" | "unchanged" =
           "legacy";
         if (getNavigationSnapshotTransport) {
+          const transportScopeKey = buildNavigationSnapshotTransportScopeKey(
+            snapshotRequest ?? {},
+          );
           const previousTransportState =
-            navigationSnapshotTransportRef.current;
+            navigationSnapshotTransportByScopeRef.current.get(
+              transportScopeKey,
+            );
           let transportResponse = await getNavigationSnapshotTransport({
             ...snapshotRequest,
             transport: {
@@ -3021,7 +3027,10 @@ export function useThreadNavigation(
               "Navigation snapshot transport did not provide a recoverable baseline.",
             );
           }
-          navigationSnapshotTransportRef.current = nextTransportState;
+          navigationSnapshotTransportByScopeRef.current.set(
+            transportScopeKey,
+            nextTransportState,
+          );
           snapshot = nextTransportState.snapshot;
         } else if (getNavigationSnapshot) {
           snapshot = snapshotRequest

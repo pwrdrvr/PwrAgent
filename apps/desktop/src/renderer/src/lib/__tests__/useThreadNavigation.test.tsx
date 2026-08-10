@@ -100,6 +100,99 @@ describe("useThreadNavigation", () => {
     expect(result.current.error).toBeUndefined();
   });
 
+  it("keeps separate transport revisions while lightweight refresh scopes alternate", async () => {
+    let intervalHandler: (() => void) | undefined;
+    let focusListener: (() => void) | undefined;
+    const originalSetInterval = globalThis.setInterval;
+    vi.spyOn(globalThis, "setInterval").mockImplementation(
+      (handler, timeout, ...args) => {
+        if (timeout !== 5 * 60_000) {
+          return originalSetInterval(handler, timeout, ...args);
+        }
+        intervalHandler =
+          typeof handler === "function" ? () => handler() : undefined;
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      },
+    );
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const getNavigationSnapshot = vi.fn(async () => snapshot);
+    const getNavigationSnapshotTransport = vi.fn<
+      NonNullable<DesktopApi["getNavigationSnapshotTransport"]>
+    >(async (request) => {
+      const revision = request.refreshMode === "active-recent"
+        ? "active-recent-revision"
+        : "full-revision";
+      return request.transport.baseRevision === revision
+        ? { kind: "unchanged", revision }
+        : { kind: "full", revision, snapshot };
+    });
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      getNavigationSnapshotTransport,
+      onWindowFocus: (callback) => {
+        focusListener = callback;
+        return () => {
+          focusListener = undefined;
+        };
+      },
+    };
+    const { unmount } = renderHook(() =>
+      useThreadNavigation(desktopApi, { lightweightNavigationRefresh: true }),
+    );
+
+    await waitFor(() => {
+      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(1);
+    });
+    act(() => {
+      intervalHandler?.();
+    });
+    await waitFor(() => {
+      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(2);
+    });
+    act(() => {
+      focusListener?.();
+    });
+    await waitFor(() => {
+      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(3);
+    });
+    act(() => {
+      intervalHandler?.();
+    });
+    await waitFor(() => {
+      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(4);
+    });
+
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(3, {
+      forceRefresh: true,
+      refreshMode: "full",
+      transport: {
+        baseRevision: "full-revision",
+        protocol: 1,
+      },
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(4, {
+      forceRefresh: true,
+      refreshMode: "active-recent",
+      transport: {
+        baseRevision: "active-recent-revision",
+        protocol: 1,
+      },
+    });
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+    unmount();
+  });
+
   it("does not let a late launchpad update replace a directory label with its internal key", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgnt";
     const defaults: NavigationLaunchpadDefaults = {
