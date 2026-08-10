@@ -128,6 +128,7 @@ export type AcpRuntimeClient = Pick<
     Pick<
       AcpAgentClient,
       | "didSessionLoadReplayHistory"
+      | "hasActiveTurns"
       | "readProviderStatus"
       | "sendControlPrompt"
       | "setRuntimeOption"
@@ -1410,6 +1411,12 @@ export class AcpBackendAdapter {
       return await cached.promise;
     }
     if (cached) {
+      // One ACP client owns every live turn for this backend. Keep routing
+      // control and session operations to that process until its last turn
+      // reaches a terminal state; the next idle lookup adopts the new path.
+      if (cached.client.hasActiveTurns?.() === true) {
+        return await cached.promise;
+      }
       this.acpClients.delete(backend);
       await this.disposeAcpClient(cached);
       if (this.closed) {
@@ -1668,15 +1675,19 @@ export class AcpBackendAdapter {
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
+    const discoveredAgents = (await this.readLocalAgentsOnce())
+      .map(normalizeInstalledAcpAgent)
+      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
+    // Discovery probes are asynchronous and can overlap runtime-capability or
+    // update-check writes. Read the durable cache only after discovery, then
+    // merge and persist synchronously so those newer fields cannot be rolled
+    // back by a snapshot captured before the probe started.
     const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? [])
       .map(normalizeInstalledAcpAgent)
       .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
     const installedByBackendId = new Map(
       installedAgents.map((agent) => [agent.backendId, agent]),
     );
-    const discoveredAgents = (await this.readLocalAgentsOnce())
-      .map(normalizeInstalledAcpAgent)
-      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
     const effectiveDiscoveredAgents = discoveredAgents.map((agent) => {
       const cached = installedByBackendId.get(agent.backendId);
       const sameRuntime =

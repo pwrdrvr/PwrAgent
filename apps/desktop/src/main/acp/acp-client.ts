@@ -310,6 +310,10 @@ export class AcpAgentClient {
     });
   }
 
+  hasActiveTurns(): boolean {
+    return this.activeTurns.size > 0;
+  }
+
   async dispose(): Promise<void> {
     this.options.rolloutStore?.flushAll?.();
     this.unsubscribe?.();
