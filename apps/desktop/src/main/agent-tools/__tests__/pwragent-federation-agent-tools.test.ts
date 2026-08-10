@@ -18,7 +18,7 @@ describe("pwragent federation agent tools", () => {
             type: "function",
             name: "list_federation_instances",
             deferLoading: false,
-            description: expect.stringContaining("machineId"),
+            description: expect.stringContaining("known PwrAgent peers"),
             inputSchema: expect.objectContaining({
               type: "object",
               additionalProperties: false,
@@ -57,7 +57,7 @@ describe("pwragent federation agent tools", () => {
             type: "function",
             name: "search_federation_threads",
             deferLoading: false,
-            description: expect.stringContaining("every reachable PwrAgent instance"),
+            description: expect.stringContaining("local and connected PwrAgent instances"),
             inputSchema: expect.objectContaining({
               required: ["query"],
               properties: expect.objectContaining({

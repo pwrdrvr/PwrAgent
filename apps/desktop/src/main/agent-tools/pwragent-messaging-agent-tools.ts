@@ -117,17 +117,17 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "get_current_location":
       return "Deprecated alias for get_current_messaging_surface. Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "get_current_messaging_surface":
-      return "Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
+      return "Inspect the current messaging surface, actor, conversation, binding, bound thread, and native child-topic support.";
     case "send_private_response":
-      return "Send the terminal response privately to the user who initiated the current messaging turn. Use this only when the user explicitly asks for a private reply or the response contains secrets that should not be posted to the source conversation. On success, PwrAgent suppresses the normal final response on the source surface; end the turn without repeating the private content. Set awaitReply=true with replyInstructions when the private message asks the user for a response: their first reply starts a one-shot continuation turn whose final answer is delivered back to the originating surface, and PwrAgent then removes the temporary private-thread route. This cannot target an arbitrary user or be called outside an active messaging turn.";
+      return "Send the final response privately to the user who started this messaging turn. Use this only after an explicit request or to protect secrets. After success, end the turn without a public copy. Set awaitReply and replyInstructions to route one private reply back to the source surface. This tool works only in an active messaging turn and cannot target another user.";
     case "attach_thread_here":
-      return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it. Pass instanceId for a remote thread when known; otherwise PwrAgent checks the local instance and then resolves a remembered or connected Federation peer. This does not rename the PwrAgent thread.";
+      return "Attach a known PwrAgent thread to the current messaging surface. Use new_child for a native child topic when supported. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename the PwrAgent thread.";
     case "inspect_messaging_pdfs":
-      return "List PDF attachments available only for the current active PwrAgent turn. The initial turn input already includes page metadata when probing succeeded; call this only for an attachment whose metadata was unavailable. Returns local metadata and render limits, not PDF bytes or extracted document text. In Codex Code Mode, JSON.parse the returned string; native MCP callers receive the response directly.";
+      return "List PDF attachments for the current messaging turn. Use this only when the initial attachment metadata is unavailable. The result contains local metadata and render limits, not PDF content. In Codex Code Mode, parse the JSON string. Native MCP clients receive the response directly.";
     case "search_messaging_pdf_text":
-      return "For a multi-page PDF only, locate an unknown relevant page using its embedded text layer. Use returned page-number snippets only for bounded navigation, then render pages for visual analysis. Do not use this on one-page PDFs or as a content-extraction/comparison workflow; per-turn search calls are capped. In Codex Code Mode, JSON.parse the returned string; native MCP callers receive the response directly.";
+      return "Search the text layer of a multi-page PDF to find an unknown page. Use the snippets only to select pages for rendering. Do not use this tool for one-page PDFs, extraction, or comparison. Each turn has a search limit. In Codex Code Mode, parse the JSON string. Native MCP clients receive the response directly.";
     case "render_messaging_pdf_pages":
-      return "Render explicitly selected PDF pages from the current active PwrAgent turn. The result contains page images for direct visual analysis. In Codex Code Mode, JSON.parse the returned string and pass each image block in its content array to image(item) exactly once; do not print or text() the JSON. Native MCP callers receive image content directly and must not call image(). This is the only permitted way to access PwrAgent-managed PDF pages: do not use shell, filesystem, OCR, or conversion tools on the source PDF or rendered page. Partially repeated requests return only unseen pages. Rendering is capped by page count, total pixels, encoded image bytes, and model-input bytes.";
+      return "Render selected PDF pages from the current messaging turn. In Codex Code Mode, parse the JSON string and pass each image to image(item) once. Do not print the JSON. Native MCP clients receive image content directly. Do not call image() for MCP content. Use only this tool for PwrAgent PDFs. Do not use shell, filesystem, OCR, or conversion tools. Repeated requests return only pages not shown before. Render limits apply to pages, pixels, encoded bytes, and model input.";
   }
 }
 
@@ -151,14 +151,14 @@ function inputSchemaForOperation(
           awaitReply: {
             type: "boolean",
             description:
-              "Whether the first reply in the private message thread should start a one-shot continuation whose final response returns to the originating surface. Requires replyInstructions.",
+              "Set true to route the first private reply back to the source surface. This requires replyInstructions.",
           },
           replyInstructions: {
             type: "string",
             minLength: 1,
             maxLength: 4_000,
             description:
-              "Instructions for turning the user's private reply into the final response returned to the originating surface, including what must not be repeated there. Used only when awaitReply is true.",
+              "Explain how to turn the private reply into the final source response. Include content that must stay private. Use only with awaitReply=true.",
           },
           text: {
             type: "string",
@@ -198,7 +198,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: ["auto", "new_child", "current_conversation"],
             description:
-              "Where to attach the target thread. Use new_child to create a native messaging child topic/thread when supported; use current_conversation only when replacing or reusing the current conversation binding is intended.",
+              "Use new_child to create a native child topic when supported. Use current_conversation only to replace or reuse the current binding.",
           },
           targetKind: {
             type: "string",
@@ -258,7 +258,7 @@ function inputSchemaForOperation(
               minimum: 1,
             },
             description:
-              "Specific page numbers to render. Start with the smallest useful batch; pages already supplied in this turn are not emitted again.",
+              "Pages to render. Start with the smallest useful batch. PwrAgent does not return pages already supplied in this turn.",
           },
         },
       };

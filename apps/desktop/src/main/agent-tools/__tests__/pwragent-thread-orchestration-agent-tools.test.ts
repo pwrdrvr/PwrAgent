@@ -17,7 +17,7 @@ describe("pwragent thread orchestration agent tools", () => {
           expect.objectContaining({
             type: "function",
             name: "attach_thread_directory",
-            description: expect.stringContaining("secondary worktree"),
+            description: expect.stringContaining("cross-project work"),
             deferLoading: false,
             inputSchema: expect.objectContaining({
               required: ["path"],
@@ -52,7 +52,7 @@ describe("pwragent thread orchestration agent tools", () => {
             type: "function",
             name: "handoff_task",
             description: expect.stringMatching(
-              /Prefer this to backend-native spawning.*Same-project handoffs default to grouped subthreads.*Cross-project handoffs are ungrouped/,
+              /Prefer this to backend spawning.*same-project handoffs create grouped subthreads.*Cross-project handoffs are not grouped/,
             ),
             deferLoading: false,
             inputSchema: expect.objectContaining({
@@ -63,13 +63,13 @@ describe("pwragent thread orchestration agent tools", () => {
                 }),
                 groupingMode: expect.objectContaining({
                   enum: ["none", "subthread"],
-                  description: expect.stringContaining("defaults for same-project"),
+                  description: expect.stringContaining("same-project default"),
                 }),
                 workspaceMode: expect.objectContaining({
                   enum: ["same", "same_workspace", "project_local", "new_worktree", "none"],
                 }),
                 cwd: expect.objectContaining({
-                  description: expect.stringContaining("task text does not select cwd"),
+                  description: expect.stringContaining("Task text does not select cwd"),
                 }),
                 backend: expect.objectContaining({
                   description: expect.stringContaining("`acp:grok`"),
@@ -78,7 +78,7 @@ describe("pwragent thread orchestration agent tools", () => {
                   description: expect.stringContaining("`grok-4.5`"),
                 }),
                 branchName: expect.objectContaining({
-                  description: expect.stringContaining("existing base branch/ref"),
+                  description: expect.stringContaining("Existing base ref"),
                 }),
               }),
             }),
@@ -86,7 +86,7 @@ describe("pwragent thread orchestration agent tools", () => {
           expect.objectContaining({
             type: "function",
             name: "move_thread_workspace",
-            description: expect.stringContaining("same-thread continuation"),
+            description: expect.stringContaining("starts a continuation"),
             deferLoading: false,
             inputSchema: expect.objectContaining({
               additionalProperties: false,
@@ -106,7 +106,7 @@ describe("pwragent thread orchestration agent tools", () => {
           expect.objectContaining({
             type: "function",
             name: "send_message_to_thread",
-            description: expect.stringMatching(/schedules\/queues.*steer_thread/),
+            description: expect.stringMatching(/queues the follow-up.*steer_thread/),
             deferLoading: false,
             inputSchema: expect.objectContaining({
               required: ["backend", "threadId", "prompt"],
@@ -120,7 +120,7 @@ describe("pwragent thread orchestration agent tools", () => {
             type: "function",
             name: "steer_thread",
             description: expect.stringMatching(
-              /next tool completion or message boundary.*never reports a queued follow-up as steered/,
+              /next tool boundary.*never reports a queued follow-up as steered/,
             ),
             deferLoading: false,
             inputSchema: expect.objectContaining({
@@ -135,7 +135,7 @@ describe("pwragent thread orchestration agent tools", () => {
           expect.objectContaining({
             type: "function",
             name: "stop_thread",
-            description: expect.stringMatching(/high-urgency.*never queues text/),
+            description: expect.stringMatching(/urgent interruption.*does not queue text/),
             deferLoading: false,
             inputSchema: expect.objectContaining({
               required: ["backend", "threadId", "requestId"],
@@ -149,7 +149,7 @@ describe("pwragent thread orchestration agent tools", () => {
           expect.objectContaining({
             type: "function",
             name: "start_review",
-            description: expect.stringContaining("after the current turn completes successfully"),
+            description: expect.stringContaining("current turn ends successfully"),
             deferLoading: false,
             inputSchema: expect.objectContaining({
               required: ["target"],

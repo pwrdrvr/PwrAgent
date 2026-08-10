@@ -94,13 +94,13 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "list_federation_instances":
-      return "List the PwrAgent instances this app can reach: the local instance plus any federated peers, each with its id, display label, celestial icon, operator-written purpose notes, connection status, capabilities, an isLocal flag, and host facts (OS platform/version, hostname, CPU architecture and count, total RAM, free disk, machineId). Use this first when the user wants work routed to a particular machine ('on the studio Mac', 'on the rack mini') or for 'find me a place to run this' requests — purpose notes describe intent, host facts describe capability. Instances sharing the same host.machineId are profiles on one physical machine and compete for the same CPUs/RAM — never sum their capacity. Disk/host figures are snapshots from the last handshake, not live readings. For live readings, pass includeLoad: true to attach a `load` sibling next to `host` (1/5/15-minute CPU load averages, available RAM bytes, free disk bytes, sampledAt) fetched from each reachable instance with a short per-peer timeout — instances that fail to answer in time simply omit `load`. Load is per machine, not per instance: rows sharing host.machineId report the same underlying load, so dedupe by machineId when aggregating load for placement decisions. Results are paged: at most `limit` rows (default 25) per call, with nextCursor and totalCount when more remain; pass nextCursor back promptly (tokens expire after about a minute), or better, use `query` to filter by label, notes, profile, hostname, platform, or architecture instead of paging through a large fleet. Works with federation disabled too: the result is then just the local instance, so there is no need to check whether federation is configured before calling. Only instances with status connected (or the local instance) can accept new work.";
+      return "List the local instance and known PwrAgent peers. Results include identity, purpose, status, capabilities, and host facts. Use this before you route work to a machine. Profiles with the same machineId share one host. Do not add their CPU, memory, or disk capacity. Host facts come from the last connection. Set includeLoad=true for current load, available memory, free disk, and sample time. A peer can omit load if it does not reply in time. Load is per machineId. Count it once. Use query instead of paging when possible. Cursor tokens expire after about one minute. A local-only result is valid when Federation is disabled. Only local or connected instances can accept work.";
     case "list_instance_projects":
-      return "List the projects/directories available on one PwrAgent instance, local or remote. Pass an instanceId from list_federation_instances. Each project row carries the key to pass to create_instance_thread as projectKey, plus its label, filesystem path, and whether a launchpad (per-project environment, model, and execution-mode presets) is configured. Use this to find the project the user is talking about on the chosen instance before creating a thread there.";
+      return "List projects on one local or remote PwrAgent instance. Pass an instanceId from list_federation_instances. Each result includes projectKey, label, path, and launchpad status. Use projectKey with create_instance_thread.";
     case "create_instance_thread":
-      return "Create and start a new PwrAgent thread in a project on a chosen instance, local or remote. Pass instanceId from list_federation_instances and projectKey from list_instance_projects; input becomes the first prompt of the created thread. Set groupingMode=subthread when the new thread is delegated child work that should stay nested beneath the caller across instances; leave it none for independent intake/routing work. Omitted settings inherit the project's launchpad presets, then the instance defaults — only pass model/executionMode/workMode overrides the user asked for. Consult ~/.pwragent/AGENTS.md (when it exists) for the operator's thread-startup preferences such as default projects and settings before choosing values. For delegating work on the local instance from an ordinary thread, prefer handoff_task, which offers richer workspace and grouping options; use create_instance_thread when targeting another instance or when routing intake work by instance. Thread startup can take minutes while a worktree or environment is prepared; if this call is slow, do not call it again — use search_federation_threads to check whether the thread appeared. The result includes threadLink and instanceId. Include threadLink verbatim when telling the user about the thread so it renders as a clickable chip, and preserve instanceId when passing the remote target to send_message_to_thread.";
+      return "Create a PwrAgent thread in a project on a selected instance. Get instanceId and projectKey from the list tools. The input becomes the first prompt. Set groupingMode=subthread for delegated child work across instances. Use none for independent intake. Settings inherit from the launchpad and then the instance. Set overrides only when the user requests them. Read ~/.pwragent/AGENTS.md for operator startup preferences when it exists. Use handoff_task for local delegation that needs workspace or grouping controls. Use this tool for a selected instance or instance-based intake. Startup can take minutes. Do not retry a slow request. Use search_federation_threads to check for the thread. Return threadLink verbatim. Keep instanceId for later remote calls.";
     case "search_federation_threads":
-      return "Search threads across every reachable PwrAgent instance, including the local one, in a single call — use it to find 'the PwrSnap thread about X' wherever it lives. Use scope to pick the search surface: `all` (default) is local plus every connected peer, `local` is this instance only, and `remote` is every connected peer excluding local — the right choice when the user knows the thread is not on this machine. Pass instanceId to target one specific instance; scope and instanceId intersect when both are given. Backend, project, archive, and update-time filters are applied on each instance before the global result limit. Results carry the owning instanceId, its display label, an isLocal flag, and a threadLink that preserves cross-instance routing; failures lists peers that could not be searched. This is a metadata search (titles, summaries, project paths). For deeper local-only search with transcript content modes, use search_threads instead. Include threadLink verbatim when mentioning a result so it renders as a clickable chip, and preserve instanceId when passing a remote target to send_message_to_thread.";
+      return "Search thread metadata on local and connected PwrAgent instances. Use scope=all, local, or remote to select the search area. Pass instanceId to select one instance. Scope and instanceId both apply when you set both. Filters apply before the result limit. Results include owner data, threadLink, and peer failures. Use search_threads for local transcript or advanced searches. Return threadLink verbatim. Keep instanceId for later remote calls.";
   }
 }
 
@@ -116,7 +116,7 @@ function inputSchemaForOperation(
           query: {
             type: "string",
             description:
-              "Optional case-insensitive substring filter matched against label, purpose notes, profile name, instance id, hostname, OS platform/version, and CPU architecture. Prefer filtering over paging through a large fleet. Ignored when cursor is set.",
+              "Case-insensitive filter for labels, notes, profiles, instance IDs, hostnames, platforms, and CPU architecture. Prefer this to paging. A cursor disables it.",
           },
           limit: {
             type: "integer",
@@ -127,12 +127,12 @@ function inputSchemaForOperation(
           cursor: {
             type: "string",
             description:
-              "Continuation token from a previous truncated result. Tokens expire after about a minute; on an expired-cursor error, call again without a cursor.",
+              "Continuation token from a truncated result. It expires after about one minute. After expiry, call the tool without a cursor.",
           },
           includeLoad: {
             type: "boolean",
             description:
-              "When true, attach a live `load` block (CPU load averages, available RAM, free disk, sampledAt) to each reachable instance via a short-timeout on-demand query. Instances that fail to answer in time omit `load`. Rows sharing host.machineId report the same underlying load — dedupe by machineId when aggregating.",
+              "Set true to get current load, available memory, free disk, and sampledAt. A slow peer can omit `load`. Count each machineId once.",
           },
         },
       };
@@ -177,7 +177,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: LAUNCHPAD_WORK_MODES,
             description:
-              "`worktree` runs the thread in an isolated Git worktree; `local` uses the project checkout directly. Omitted inherits the project's launchpad preset.",
+              "`worktree` uses an isolated Git worktree. `local` uses the project checkout. Omit workMode to inherit the launchpad preset.",
           },
           branchName: {
             type: "string",
@@ -231,7 +231,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: FEDERATION_SEARCH_SCOPES,
             description:
-              "`all` (default) searches the local instance plus every connected peer. `local` searches only this instance. `remote` searches every connected peer and excludes local — use it when the thread is known to live on another machine.",
+              "`all` is the default and searches local and connected instances. `local` searches only this instance. `remote` searches only connected peers.",
           },
           instanceId: {
             type: "string",

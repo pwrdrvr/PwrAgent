@@ -129,19 +129,19 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "search_threads":
-      return "Search known PwrAgent threads by title, summary, Agent metadata, backend, and linked directory. By default PwrAgent combines local results with metadata matches from connected Federation instances; pass instanceId to target one instance or includeRemote=false to search locally only. Omit query to inspect recent lightweight thread candidates before choosing a thread. Advanced transcript, semantic, Agent, model, and directory filters remain local-only. The response may include pendingHandoffs for handoff_task calls that are still creating a child thread and pendingWorkspaceMoves for move_thread_workspace calls that are still moving the same thread; do not retry those operations while they are starting.";
+      return "Search known PwrAgent threads. By default, metadata search includes connected peers. Content and advanced filters work only on the local instance. Omit query to list recent candidates. Use instanceId for one peer or includeRemote=false for local metadata only. Results can include pending handoffs and workspace moves. Do not retry a pending operation.";
     case "read_thread":
-      return "Read a bounded page of another known PwrAgent thread's recent transcript and activity. Use search_threads first when the threadId is unknown. Pass instanceId for a remote thread when known; otherwise PwrAgent checks the local instance and then resolves a remembered or connected Federation peer.";
+      return "Read a bounded page of transcript and activity from another known PwrAgent thread. Use search_threads when threadId is unknown. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner.";
     case "get_thread_status":
-      return "Read status and compact metadata for a PwrAgent thread, including linked directories, repository groups, pull requests, live PR automation state, pendingHandoffs when this thread has child handoffs that are still being created, and pendingWorkspaceMoves when this thread has same-thread workspace moves in progress. Omit backend and threadId to inspect the current thread; pass instanceId for a remote thread when known. Follow prAutomation.guidance: when Auto-fix PR is active, do not poll CI or create a monitor thread.";
+      return "Read compact status and metadata for a PwrAgent thread. Results include linked directories, repository groups, pull requests, PR automation, pending handoffs, and workspace moves. Omit backend and threadId for the current thread. Pass instanceId for a known remote thread. Follow prAutomation.guidance. If Auto-fix PR is active, do not poll CI or create a monitor.";
     case "attach_thread_pull_request":
-      return "Attach a pull request reference to a PwrAgent thread. Omit backend and threadId to attach to the current thread. Use this when a PR was created outside the thread's current working directory or automatic branch-based discovery will not see it. Accepts a full PR/MR URL, a full provider/org/repo/number identity, or a bare number when the thread has exactly one inferable repository.";
+      return "Attach a pull request reference to a PwrAgent thread. Omit backend and threadId for the current thread. Use this when automatic branch discovery cannot find the PR. Pass a URL, a full provider identity, or a number for one inferable repository.";
     case "check_thread_pull_request_status":
-      return "Run a user-invoked pull request status check for a thread using PwrAgent's provider integration instead of shelling out. Omit backend and threadId to check the current thread. Returns PR status with freshness metadata plus live prAutomation state. When prAutomation.autoFixActive is true, do not poll CI and do not create a monitor thread; end the turn and let PwrAgent start a follow-up turn on failure or conflict. Use watch_thread_pull_request when the thread should also wake on successful completion.";
+      return "Check pull request status through the PwrAgent provider. Use this instead of a shell command. Omit backend and threadId for the current thread. The result includes freshness and prAutomation state. If prAutomation.autoFixActive is true, do not poll CI or create a monitor. End the turn. Use watch_thread_pull_request when the thread must also wake after success.";
     case "watch_thread_pull_request":
-      return "Create a durable one-shot watch for a pull request attached to the thread's primary workspace at its current head. PwrAgent starts one follow-up turn on the first requested terminal outcome: an early CI failure or merge conflict, or full CI success. Informational PRs from secondary linked repositories are not eligible. If several threads watch the same PR and head, the oldest watch receives the result and the others are satisfied without duplicate turns. If the current provider snapshot is already terminal, the result returns currentOutcome immediately without creating a watch. Omit backend and threadId for the current thread, and omit url only when exactly one eligible PR is attached. After a watch is created, end the current turn—do not poll CI and do not create a monitor thread. When Auto-fix PR is active at failure time, its repair dispatch satisfies the failure wake-up so the watch does not create a duplicate turn.";
+      return "Create a durable, one-time watch for an attached pull request at the current head. The watch wakes the thread after CI success, early failure, or a merge conflict. Only a primary-workspace PR is eligible. The oldest duplicate watch receives the result. A terminal snapshot returns currentOutcome without a new watch. Omit backend and threadId for the current thread. Omit url only when one eligible PR exists. After creation, end the turn. Do not poll CI or create a monitor. Auto-fix PR handles failure wake-ups without a duplicate turn.";
     case "mutate_thread":
-      return "Mutate guarded PwrAgent thread settings such as the PwrAgent thread title, model settings, or execution mode. Pass instanceId for a remote thread when known; otherwise PwrAgent checks the local instance and then resolves a remembered or connected Federation peer. This does not rename any attached Telegram topic, Discord thread, or other messaging surface.";
+      return "Change guarded settings on a PwrAgent thread. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread.";
   }
 }
 
@@ -216,7 +216,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: ["metadata", "available", "required"],
             description:
-              "Use `metadata` for title/project/folder search only, `available` to also search bounded provider transcript content when possible, or `required` when content search must be attempted.",
+              "Use `metadata` for metadata only. Use `available` to search bounded transcript content when possible. Use `required` when content search is mandatory.",
           },
           semanticMode: {
             type: "string",

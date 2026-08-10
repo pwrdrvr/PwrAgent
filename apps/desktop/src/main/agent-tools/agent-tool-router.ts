@@ -40,7 +40,7 @@ export type AgentMcpToolCallResponse = {
 };
 
 export const PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION =
-  "PwrAgent-native tools for managing threads, delegated work, messaging, apps, and automations. Prefer PwrAgent thread and sub-agent management tools over backend-native equivalents when they can satisfy the request. Use backend-native spawning only when the user explicitly asks for it or requires a capability PwrAgent does not support.";
+  "PwrAgent tools manage threads, delegated work, messaging, apps, automations, and connected instances. Prefer these tools to backend tools when both can do the task.";
 
 export class AgentToolRouter {
   private readonly definitions: AgentToolDefinition[];
