@@ -75,6 +75,7 @@ import type {
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   GetNavigationSnapshotRequest,
+  GetNavigationSnapshotTransportRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
@@ -98,6 +99,7 @@ import type {
   ListDesktopPwrAgentProfilesResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
+  NavigationSnapshotTransportResponse,
   MarkThreadSeenRequest,
   OpenFederationWindowRequest,
   OpenFederationWindowResponse,
@@ -686,6 +688,9 @@ export type DesktopApi = {
   getNavigationSnapshot?: (
     request?: GetNavigationSnapshotRequest
   ) => Promise<NavigationSnapshot>;
+  getNavigationSnapshotTransport?: (
+    request: GetNavigationSnapshotTransportRequest,
+  ) => Promise<NavigationSnapshotTransportResponse>;
   setNavigationBrowseMode?: (
     request: SetNavigationBrowseModeRequest,
   ) => Promise<SetNavigationBrowseModeResponse>;

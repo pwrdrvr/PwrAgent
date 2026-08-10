@@ -28,6 +28,7 @@ import type {
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
+  buildNavigationSnapshotTransportScopeKey,
   buildAppendPinRank,
   buildPinnedRanks,
   buildPullRequestStatusKey,
@@ -43,6 +44,10 @@ import {
 import type { DesktopApi } from "./desktop-api";
 import { fileLabelFromPath } from "./directory-references";
 import { readRendererFederationTarget } from "./federation-window";
+import {
+  applyNavigationSnapshotTransportResponse,
+  type NavigationSnapshotTransportState,
+} from "./navigation-snapshot-transport";
 import { resolveThreadWorkingStatePath } from "./thread-working-state-path";
 import {
   agentEventThreadIdentityKey,
@@ -2860,6 +2865,9 @@ export function useThreadNavigation(
   );
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
   const stateRef = useRef(state);
+  const navigationSnapshotTransportByScopeRef = useRef(
+    new Map<string, NavigationSnapshotTransportState>(),
+  );
 
   optimisticThreadRef.current = optimisticThread;
   retainedUnreadThreadRef.current = retainedUnreadThread;
@@ -2919,6 +2927,7 @@ export function useThreadNavigation(
     ): Promise<void> => {
       if (!enabled) {
         prChipLocationIndexRef.current = undefined;
+        navigationSnapshotTransportByScopeRef.current.clear();
         setState({
           loading: false,
           refreshing: false,
@@ -2928,12 +2937,15 @@ export function useThreadNavigation(
         return;
       }
 
-      if (!desktopApi?.getNavigationSnapshot) {
+      const getNavigationSnapshot = desktopApi?.getNavigationSnapshot;
+      const getNavigationSnapshotTransport =
+        desktopApi?.getNavigationSnapshotTransport;
+      if (!getNavigationSnapshot && !getNavigationSnapshotTransport) {
         prChipLocationIndexRef.current = undefined;
         setState({
           loading: false,
           refreshing: false,
-          error: "Desktop bridge is missing getNavigationSnapshot().",
+          error: "Desktop bridge is missing navigation snapshot support.",
           response: undefined,
         });
         return;
@@ -2970,14 +2982,69 @@ export function useThreadNavigation(
             : undefined;
         const threadStatusSequenceAtRefreshStart =
           threadStatusObservationSequenceRef.current;
-        const snapshot = snapshotRequest
-          ? await desktopApi.getNavigationSnapshot(snapshotRequest)
-          : await desktopApi.getNavigationSnapshot();
+        let snapshot: NavigationSnapshot;
+        let transportKind: "delta" | "full" | "legacy" | "unchanged" =
+          "legacy";
+        if (getNavigationSnapshotTransport) {
+          const transportScopeKey = buildNavigationSnapshotTransportScopeKey(
+            snapshotRequest ?? {},
+          );
+          const previousTransportState =
+            navigationSnapshotTransportByScopeRef.current.get(
+              transportScopeKey,
+            );
+          let transportResponse = await getNavigationSnapshotTransport({
+            ...snapshotRequest,
+            transport: {
+              protocol: 1,
+              ...(previousTransportState
+                ? { baseRevision: previousTransportState.revision }
+                : {}),
+            },
+          });
+          transportKind = transportResponse.kind;
+          let nextTransportState = applyNavigationSnapshotTransportResponse(
+            previousTransportState,
+            transportResponse,
+          );
+          if (!nextTransportState) {
+            desktopApi.recordStartupProfileEvent?.(
+              "navigation-refresh:transport-recovery",
+              { responseKind: transportResponse.kind },
+            );
+            transportResponse = await getNavigationSnapshotTransport({
+              ...snapshotRequest,
+              transport: { protocol: 1 },
+            });
+            transportKind = transportResponse.kind;
+            nextTransportState = applyNavigationSnapshotTransportResponse(
+              undefined,
+              transportResponse,
+            );
+          }
+          if (!nextTransportState) {
+            throw new Error(
+              "Navigation snapshot transport did not provide a recoverable baseline.",
+            );
+          }
+          navigationSnapshotTransportByScopeRef.current.set(
+            transportScopeKey,
+            nextTransportState,
+          );
+          snapshot = nextTransportState.snapshot;
+        } else if (getNavigationSnapshot) {
+          snapshot = snapshotRequest
+            ? await getNavigationSnapshot(snapshotRequest)
+            : await getNavigationSnapshot();
+        } else {
+          throw new Error("Desktop bridge is missing navigation snapshot support.");
+        }
         remoteRecoveryAttemptRef.current = 0;
         desktopApi.recordStartupProfileEvent?.("navigation-refresh:snapshot", {
           directoryCount: snapshot.directories.length,
           forceRefresh: Boolean(options?.forceRefresh),
           threadCount: snapshot.threads.length,
+          transportKind,
           unchanged: Boolean(snapshot.unchanged),
         });
         const filteredResponse = removeThreadKeysFromSnapshot(

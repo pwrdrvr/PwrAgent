@@ -1186,6 +1186,70 @@ export type GetNavigationSnapshotRequest = {
   refreshMode?: "active-recent" | "full";
 };
 
+/**
+ * Opt-in renderer transport layered over the full navigation snapshot API.
+ * Internal main-process, messaging, and federation callers continue to use
+ * `GetNavigationSnapshotRequest` and always receive a complete snapshot.
+ */
+export type GetNavigationSnapshotTransportRequest =
+  GetNavigationSnapshotRequest & {
+    transport: {
+      baseRevision?: string;
+      protocol: 1;
+    };
+  };
+
+/**
+ * Stable renderer/main cache scope. `forceRefresh` is a scheduling hint and
+ * does not change the semantic snapshot population.
+ */
+export function buildNavigationSnapshotTransportScopeKey(
+  request: GetNavigationSnapshotRequest,
+): string {
+  return JSON.stringify({
+    backend: request.backend ?? "all",
+    federationTarget: request.federationTarget ?? { scope: "local" },
+    filter: request.filter ?? "",
+    refreshMode: request.refreshMode ?? "full",
+  });
+}
+
+export type NavigationSnapshotTransportFull = {
+  kind: "full";
+  revision: string;
+  snapshot: NavigationSnapshot;
+};
+
+export type NavigationSnapshotTransportUnchanged = {
+  kind: "unchanged";
+  revision: string;
+};
+
+export type NavigationSnapshotTransportDelta = {
+  kind: "delta";
+  baseRevision: string;
+  revision: string;
+  fetchedAt: number;
+  removedThreadKeys: string[];
+  upsertedThreads: NavigationThreadSummary[];
+  /** Complete thread order, present only when identities moved or changed. */
+  threadKeys?: string[];
+  removedDirectoryKeys: string[];
+  upsertedDirectories: NavigationDirectorySummary[];
+  /** Complete directory order, present only when identities moved or changed. */
+  directoryKeys?: string[];
+  addedInboxThreadKeys?: string[];
+  removedInboxThreadKeys?: string[];
+  /** Complete inbox order, present only when existing identities moved. */
+  inboxThreadKeys?: string[];
+  launchpadDefaults?: NavigationLaunchpadDefaults;
+};
+
+export type NavigationSnapshotTransportResponse =
+  | NavigationSnapshotTransportFull
+  | NavigationSnapshotTransportUnchanged
+  | NavigationSnapshotTransportDelta;
+
 export type SetNavigationBrowseModeRequest = {
   browseMode: NavigationBrowseMode;
 };

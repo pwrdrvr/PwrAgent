@@ -87,6 +87,7 @@ import type {
   CodexEnvironmentSetupProgressEvent,
   CreateAutomationRequest,
   GetNavigationSnapshotRequest,
+  GetNavigationSnapshotTransportRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
   ListAcpAgentSettingsRequest,
@@ -214,6 +215,7 @@ import type {
   GetWorktreeUnpublishedCommitDiffRequest,
   GetWorktreeUnpublishedCommitDiffResponse,
   NavigationSnapshot,
+  NavigationSnapshotTransportResponse,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
   RetainThreadBranchDriftRequest,
@@ -1472,6 +1474,14 @@ const desktopApi = Object.freeze({
   ): Promise<NavigationSnapshot> =>
     await invokeWithStartupProfileTiming(
       "getNavigationSnapshot",
+      NAVIGATION_SNAPSHOT_CHANNEL,
+      request,
+    ),
+  getNavigationSnapshotTransport: async (
+    request: GetNavigationSnapshotTransportRequest,
+  ): Promise<NavigationSnapshotTransportResponse> =>
+    await invokeWithStartupProfileTiming(
+      "getNavigationSnapshotTransport",
       NAVIGATION_SNAPSHOT_CHANNEL,
       request,
     ),
