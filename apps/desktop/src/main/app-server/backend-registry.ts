@@ -10653,8 +10653,8 @@ export class DesktopBackendRegistry {
       ...request
     } = params;
     const modelSettings = await this.resolveModelSettings(backend, request);
-    let cwd =
-      backend === "codex" && !request.cwd?.trim()
+    let cwd: string | undefined =
+      !request.cwd?.trim()
         ? await this.createScratchProjectDirectory()
         : request.cwd;
     let resolvedLinkedDirectories = linkedDirectories;
