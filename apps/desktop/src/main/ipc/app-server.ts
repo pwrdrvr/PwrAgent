@@ -669,7 +669,8 @@ function filterDetachedPullRequests(
   return prs.filter((pr) => !detached.has(getPrStatusKey(pr)));
 }
 
-function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
+/** Includes every displayed field so snapshot publication cannot go stale. */
+export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
   if (left.length !== right.length) {
     return false;
   }
@@ -689,6 +690,13 @@ function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&
       JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
+      candidate.additions === pr.additions &&
+      candidate.deletions === pr.deletions &&
+      candidate.changedFiles === pr.changedFiles &&
+      candidate.commitCount === pr.commitCount &&
+      candidate.createdAt === pr.createdAt &&
+      candidate.mergedAt === pr.mergedAt &&
+      candidate.closedAt === pr.closedAt &&
       candidate.url === pr.url
     );
   });

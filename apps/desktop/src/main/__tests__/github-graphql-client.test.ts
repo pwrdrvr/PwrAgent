@@ -146,6 +146,25 @@ describe("buildBatchedPrQuery", () => {
     expect(query).not.toContain("evil");
   });
 
+  it("requests structured hover-card fields in the existing query", () => {
+    const { query } = buildBatchedPrQuery([
+      { owner: "pwrdrvr", repo: "PwrAgent", number: 981 },
+    ]);
+
+    for (const field of [
+      "additions",
+      "deletions",
+      "changedFiles",
+      "createdAt",
+      "mergedAt",
+      "closedAt",
+    ]) {
+      expect(query).toContain(field);
+    }
+    expect(query).toContain("commits(last: 1) {\n    totalCount");
+    expect(query).not.toContain("updatedAt");
+  });
+
   it("declares one typed variable triple per ref", () => {
     const { query, variables } = buildBatchedPrQuery(refs);
     expect(query).toContain("$o0: String!, $n0: String!, $p0: Int!");
@@ -202,6 +221,41 @@ describe("branchRefKey", () => {
 });
 
 describe("mapGraphqlPrNode", () => {
+  it("maps diff, commit, and lifecycle fields for the hover card", () => {
+    const summary = mapGraphqlPrNode(node({
+      additions: 412,
+      deletions: 198,
+      changedFiles: 18,
+      createdAt: "2026-07-31T12:00:00Z",
+      mergedAt: "2026-08-01T09:30:00Z",
+      commits: {
+        totalCount: 7,
+        nodes: [{ commit: { oid: "a".repeat(40) } }],
+      },
+    }));
+
+    expect(summary).toMatchObject({
+      additions: 412,
+      deletions: 198,
+      changedFiles: 18,
+      commitCount: 7,
+      createdAt: Date.parse("2026-07-31T12:00:00Z"),
+      mergedAt: Date.parse("2026-08-01T09:30:00Z"),
+    });
+  });
+
+  it("omits absent or invalid hover-card values", () => {
+    const summary = mapGraphqlPrNode(node({
+      additions: -3,
+      deletions: Number.NaN,
+      createdAt: "not a date",
+      commits: { totalCount: null, nodes: [] },
+    }));
+
+    for (const field of ["additions", "deletions", "commitCount", "createdAt"]) {
+      expect(summary).not.toHaveProperty(field);
+    }
+  });
   it("maps a clean open PR", () => {
     expect(mapGraphqlPrNode(node())).toEqual({
       provider: "github.com",

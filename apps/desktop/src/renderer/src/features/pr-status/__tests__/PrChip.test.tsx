@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import { PrChip } from "../PrChip";
@@ -74,6 +74,44 @@ describe("PrChip", () => {
     expect(chip).not.toHaveClass("pr-chip--draft");
     expect(chip.querySelector(".pr-chip__draft-bar")).toBeNull();
     expect(chip).toHaveAttribute("aria-label", expect.stringContaining("closed without merge"));
+  });
+
+  it("opens a structured card and keeps it unmounted while hidden", () => {
+    const chip = renderChip(basePr({
+      title: "fix(desktop): honor selected review project cwd",
+      additions: 38,
+      deletions: 1204,
+      changedFiles: 44,
+      commitCount: 23,
+      createdAt: Date.now() - (21 * 24 * 60 * 60 * 1000),
+    }));
+    expect(document.querySelector(".pr-status-card")).toBeNull();
+
+    fireEvent.mouseEnter(chip);
+    const card = document.querySelector(".pr-status-card") as HTMLElement;
+    expect(card).toHaveAttribute("role", "tooltip");
+    expect(card.textContent).toContain("fix(desktop): honor selected review project cwd");
+    expect(card.textContent).toContain("+38");
+    expect(card.textContent).toContain("1,204");
+    expect(card.textContent).toContain("44 files");
+    expect(card.textContent).toContain("23 commits");
+    expect(card.textContent).toContain("21d ago");
+
+    fireEvent.mouseLeave(chip);
+    expect(document.querySelector(".pr-status-card")).toBeNull();
+  });
+
+  it("links the visible card with aria-describedby", () => {
+    const chip = renderChip(basePr({ additions: 412, deletions: 198 }));
+    expect(chip).not.toHaveAttribute("aria-describedby");
+
+    fireEvent.mouseEnter(chip);
+    const describedBy = chip.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)).toHaveClass("pr-status-card");
+
+    fireEvent.mouseLeave(chip);
+    expect(chip).not.toHaveAttribute("aria-describedby");
   });
 
   it("defers draft + conflict to sibling pills when withStatusPills is set", () => {

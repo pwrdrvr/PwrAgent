@@ -362,8 +362,11 @@ describe("pull request links in transcript markdown", () => {
       "Document JDK 17 for EMR and Spark jobs",
     );
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "Giphy/giphy-services#13290 — merged",
+      "Giphy/giphy-services#13290",
     );
+    expect(
+      screen.getByRole("tooltip").querySelector(".pr-status-card__phase"),
+    ).toHaveTextContent("merged");
     expect(screen.getByText("Draft PR:").parentElement).toBe(markdownNode);
   });
 
@@ -411,8 +414,9 @@ describe("pull request links in transcript markdown", () => {
     expect(fallbackChip).toHaveClass("pr-chip--unknown");
     expect(fallbackChip).not.toHaveClass("pr-chip--draft");
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "Giphy/giphy-services#13290 — status unknown",
+      "Giphy/giphy-services#13290",
     );
+    expect(screen.getByRole("tooltip")).toHaveTextContent("status unknown");
     expect(screen.getByRole("tooltip")).not.toHaveTextContent(
       "Document JDK 17 for EMR jobs",
     );

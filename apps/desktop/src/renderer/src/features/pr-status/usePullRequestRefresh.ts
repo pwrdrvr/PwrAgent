@@ -230,6 +230,13 @@ function prSummariesEqual(
       candidate.lifecycleState === pr.lifecycleState &&
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&
+      candidate.additions === pr.additions &&
+      candidate.deletions === pr.deletions &&
+      candidate.changedFiles === pr.changedFiles &&
+      candidate.commitCount === pr.commitCount &&
+      candidate.createdAt === pr.createdAt &&
+      candidate.mergedAt === pr.mergedAt &&
+      candidate.closedAt === pr.closedAt &&
       candidate.url === pr.url
     );
   });

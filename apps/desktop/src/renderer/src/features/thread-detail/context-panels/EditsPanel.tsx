@@ -9,7 +9,7 @@ import type {
 import { ArrowUpIcon, EditorIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
-import { DiffStat } from "../DiffStat";
+import { DiffStat } from "../../../lib/DiffStat";
 import {
   EditedFileGroupList,
   EditedFileViewToggle,
