@@ -6677,19 +6677,16 @@ async function requestThreadListPages(params: {
 
     if (maxPagesLimit !== undefined && pageCount >= maxPagesLimit) {
       terminalReason = "max-pages";
-      cursor = undefined;
       break;
     }
 
     const nextCursor = page.nextCursor?.trim();
     if (!nextCursor) {
       terminalReason = "no-next-cursor";
-      cursor = undefined;
       break;
     }
     if (seenCursors.has(nextCursor)) {
       terminalReason = "repeated-cursor";
-      cursor = undefined;
       break;
     }
 

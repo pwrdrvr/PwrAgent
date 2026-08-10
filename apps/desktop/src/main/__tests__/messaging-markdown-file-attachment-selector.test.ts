@@ -66,6 +66,24 @@ describe("MessagingMarkdownFileAttachmentSelector", () => {
     expect(manyLinesSelection?.previewTruncated).toBe(true);
   });
 
+  it("replaces ASCII control characters in attachment names", () => {
+    const selector = new MessagingMarkdownFileAttachmentSelector();
+    const selection = selector.selectFromCompletedItem({
+      type: "fileChange",
+      changes: [
+        {
+          path: "docs/report\u0000\u001f.md",
+          kind: {
+            type: "add",
+            content: "# Report\n",
+          },
+        },
+      ],
+    });
+
+    expect(selection?.attachmentName).toBe("report__.md");
+  });
+
   it("skips multiple changes, non-markdown files, updates, and oversized files", () => {
     const selector = new MessagingMarkdownFileAttachmentSelector();
 

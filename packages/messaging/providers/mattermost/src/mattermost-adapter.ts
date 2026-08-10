@@ -1306,7 +1306,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
    * with the server, so writes here take effect immediately.
    */
   private async reconcileSlashCommandsAcrossTeams(): Promise<void> {
-    let teams: Array<{ id: string; name?: string }> = [];
+    let teams: Array<{ id: string; name?: string }>;
     try {
       teams = (await this.client.getMyTeams()) as Array<{ id: string; name?: string }>;
     } catch (error) {

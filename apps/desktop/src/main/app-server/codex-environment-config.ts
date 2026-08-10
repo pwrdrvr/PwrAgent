@@ -25,8 +25,8 @@ type RawEnvironmentConfig = {
 type ParserContext = "" | "setup" | "cleanup" | "action";
 
 const KEY_LINE = /^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(.*)$/;
-const SECTION_LINE = /^\s*\[\s*([^\[\]]+?)\s*\]\s*(?:#.*)?$/;
-const ARRAY_SECTION_LINE = /^\s*\[\[\s*([^\[\]]+?)\s*\]\]\s*(?:#.*)?$/;
+const SECTION_LINE = /^\s*\[\s*([^[\]]+?)\s*\]\s*(?:#.*)?$/;
+const ARRAY_SECTION_LINE = /^\s*\[\[\s*([^[\]]+?)\s*\]\]\s*(?:#.*)?$/;
 
 export async function listCodexEnvironmentOptions(
   directoryPath?: string,

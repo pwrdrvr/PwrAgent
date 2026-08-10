@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
-import { isAgentThread, threadAttentionCategories } from "../attention";
+import { threadAttentionCategories } from "../attention";
 import {
   cloudDetentRadius,
   computeStarMapLayout,
@@ -337,6 +337,4 @@ describe("resolveCardDragOffset", () => {
     expect(near).toBeGreaterThan(detentRadius + 200);
   });
 });
-
-
 

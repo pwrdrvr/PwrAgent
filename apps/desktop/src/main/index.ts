@@ -842,7 +842,7 @@ function installApplicationMenu(): void {
     }));
   // Peer lookup touches the profile state db; during early boot (or a
   // torn-down app state in tests) just render the menu without peers.
-  let federationPeers: Array<{ instanceId: string; label: string }> = [];
+  let federationPeers: Array<{ instanceId: string; label: string }>;
   try {
     federationPeers = getDesktopFederationRuntime()
       .connectedPeerTargets()

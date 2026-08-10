@@ -2980,8 +2980,27 @@ function clipStatusText(value: string | undefined): string | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  const normalized = replaceAsciiControlCharacterRuns(value).trim();
   return normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
+}
+
+function replaceAsciiControlCharacterRuns(value: string): string {
+  let result = "";
+  let replacingControlRun = false;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const isControl = codePoint <= 0x1f || codePoint === 0x7f;
+    if (isControl) {
+      if (!replacingControlRun) {
+        result += " ";
+      }
+      replacingControlRun = true;
+      continue;
+    }
+    replacingControlRun = false;
+    result += character;
+  }
+  return result;
 }
 
 function describeConversation(

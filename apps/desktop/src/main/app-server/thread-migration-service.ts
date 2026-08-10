@@ -534,7 +534,7 @@ export class ThreadMigrationService {
     sourceProfile: string;
   }): Promise<{ wasArchived: boolean }> {
     const { item, runId, sourceProfile } = params;
-    let wasArchived = false;
+    let wasArchived: boolean;
     try {
       wasArchived = (
         await this.findSourceThreadState(sourceProfile, item.sourceThreadId)

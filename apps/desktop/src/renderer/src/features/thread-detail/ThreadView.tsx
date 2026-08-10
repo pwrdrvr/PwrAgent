@@ -1416,7 +1416,6 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadKey = selectedThread
     ? buildThreadIdentityKey(selectedThread.source, selectedThread.id)
     : undefined;
-  const transcriptEntryCount = props.transcriptEntries.length;
   const onLoadOlder = props.onLoadOlder;
   const onRenderedTranscriptEntryLimitChange =
     props.onRenderedTranscriptEntryLimitChange;
@@ -1434,8 +1433,6 @@ export function ThreadView(props: ThreadViewProps) {
     canLoadFromServer: canLoadServerTranscriptHistory,
     expandLimit: expandTranscriptEntryLimit,
     hasMoreHistory: hasMoreTranscriptHistory,
-    hiddenCount: hiddenTranscriptEntryCount,
-    limit: transcriptEntryLimit,
     loadOlder: loadOlderTranscript,
     visibleEntries: visibleTranscriptEntries,
     visiblePagination: visibleTranscriptPagination,

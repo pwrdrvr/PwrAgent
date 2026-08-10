@@ -222,7 +222,6 @@ import {
   publicPeerSummary,
 } from "./federation-health";
 import {
-  FEDERATION_PTY_ERROR_METHOD,
   FEDERATION_PTY_EXIT_METHOD,
   FEDERATION_PTY_OUTPUT_METHOD,
   FEDERATION_PTY_METHOD_CAPABILITIES,
@@ -1536,7 +1535,7 @@ export class DesktopFederationRuntime {
     // early boot or in store-injected test harnesses that db may be
     // absent — fall back to the bare store record (mirrors the menu's
     // peer-lookup guard in main/index.ts).
-    let visible: FederationPeerSummary[] = [];
+    let visible: FederationPeerSummary[];
     try {
       visible = this.visiblePeers();
     } catch {

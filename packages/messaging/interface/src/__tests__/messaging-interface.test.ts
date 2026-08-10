@@ -124,14 +124,14 @@ describe("messaging interface package", () => {
     // U+00A0 NO-BREAK SPACE — Telegram iOS / some clipboard pipelines
     // substitute this for a plain space when pasting. Before the
     // tokenizer learned to recognize Unicode whitespace, a paste like
-    // this would tokenize as one big "pair <token>" blob and
+    // this would tokenize as one big "pair <token>" blob and
     // `extractMessagingPairingToken` would return undefined — silently
     // dropping the operator's pairing attempt.
     const token = "123456789ABCDEFGHJKLMNPQRSTUVWXY";
-    expect(extractMessagingPairingToken(`pair ${token}`)).toBe(token);
-    expect(extractMessagingPairingToken(`pair ${token}`)).toBe(token);
-    expect(extractMessagingPairingToken(`pair ${token}`)).toBe(token);
-    expect(extractMessagingPairingToken(`pair　${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`pair\u00a0${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`pair\u202f${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`pair\u2009${token}`)).toBe(token);
+    expect(extractMessagingPairingToken(`pair\u3000${token}`)).toBe(token);
   });
 
   it("looksLikePairingAttempt routes typo'd / malformed tokens through", () => {

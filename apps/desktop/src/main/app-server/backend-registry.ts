@@ -16504,15 +16504,15 @@ export class DesktopBackendRegistry {
     // from the runtime helper into the renderer's actionRuns entry and
     // into the post-startThread output/exit handlers.
     const autoActionRunId = randomUUID();
-    let pendingActionThreadId: string | undefined;
+    const pendingActionThreadIdRef: { current?: string } = {};
     const queuedActionDetachedExits: CodexEnvironmentDetachedExit[] = [];
     const queuedActionDetachedOutputs: CodexEnvironmentDetachedOutput[] = [];
     const codexActionBackend: AppServerBackendKind = launchpad.backend;
     const onActionDetachedExit = (event: CodexEnvironmentDetachedExit) => {
-      if (pendingActionThreadId && codexEnvironmentSelection?.action?.id) {
+      if (pendingActionThreadIdRef.current && codexEnvironmentSelection?.action?.id) {
         void this.handleCodexEnvironmentActionDetachedExit({
           backend: codexActionBackend,
-          threadId: pendingActionThreadId,
+          threadId: pendingActionThreadIdRef.current,
           runId: autoActionRunId,
           event,
         });
@@ -16521,10 +16521,10 @@ export class DesktopBackendRegistry {
       queuedActionDetachedExits.push(event);
     };
     const onActionDetachedOutput = (event: CodexEnvironmentDetachedOutput) => {
-      if (pendingActionThreadId && codexEnvironmentSelection?.action?.id) {
+      if (pendingActionThreadIdRef.current && codexEnvironmentSelection?.action?.id) {
         void this.handleCodexEnvironmentActionDetachedOutput({
           backend: codexActionBackend,
-          threadId: pendingActionThreadId,
+          threadId: pendingActionThreadIdRef.current,
           runId: autoActionRunId,
           event,
         });
@@ -16603,7 +16603,7 @@ export class DesktopBackendRegistry {
         directory: linkedDirectory,
       });
     }
-    pendingActionThreadId = startThreadResponse.threadId;
+    pendingActionThreadIdRef.current = startThreadResponse.threadId;
     // The auto-started environment action spawned before this thread existed;
     // give its detached-process record an owner now so the quit dialog can name
     // it and link back here.

@@ -656,7 +656,7 @@ export function startProfileRuntimeHeartbeat(
   const markerDir = resolveProfileRuntimeMarkerDir(normalizedProfileName, options);
   fs.mkdirSync(markerDir, { recursive: true });
   const markerPath = path.join(markerDir, `${processId}-${marker.instanceId}.json`);
-  let interval: ReturnType<typeof setInterval> | undefined;
+  const intervalRef: { current?: ReturnType<typeof setInterval> } = {};
   const writeMarker = (): void => {
     marker.heartbeatAt = now();
     try {
@@ -671,17 +671,18 @@ export function startProfileRuntimeHeartbeat(
       // race the deleter; let the heartbeat die quietly.
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
-        if (interval) clearInterval(interval);
+        if (intervalRef.current) clearInterval(intervalRef.current);
         return;
       }
       throw error;
     }
   };
   writeMarker();
-  interval = setInterval(
+  const interval = setInterval(
     writeMarker,
     options?.intervalMs ?? PROFILE_RUNTIME_HEARTBEAT_INTERVAL_MS,
   );
+  intervalRef.current = interval;
   if (interval.unref) interval.unref();
 
   return {

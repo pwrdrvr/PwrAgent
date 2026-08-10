@@ -4,7 +4,6 @@ import {
   fireEvent,
   render,
   screen,
-  within,
 } from "@testing-library/react";
 import type { NavigationDirectorySummary } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";

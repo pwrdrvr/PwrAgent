@@ -329,7 +329,7 @@ export function SettingsSection(props: {
     const currentIndex = sections.findIndex((section) => section.id === sectionId);
     if (currentIndex === -1) return;
 
-    let nextIndex = currentIndex;
+    let nextIndex: number;
     if (direction === "next") {
       nextIndex = Math.min(sections.length - 1, currentIndex + 1);
     } else if (direction === "previous") {

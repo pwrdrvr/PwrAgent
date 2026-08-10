@@ -262,6 +262,35 @@ describe("TranscriptCommandOutput", () => {
     expect(copyText).toHaveBeenNthCalledWith(2, "line 1\nline 2");
   });
 
+  it("replaces disallowed control characters without removing tabs or newlines", () => {
+    const copyText = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        copyText,
+      },
+    });
+
+    render(
+      <TranscriptCommandOutput
+        detail={{
+          id: "cmd-control-output",
+          kind: "command",
+          label: "print controls",
+          status: "completed",
+          command: {
+            displayCommand: "print controls",
+            output: "keep\tthis\nreplace\u0000\u000b\u007fthese",
+          },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy output" }));
+
+    expect(copyText).toHaveBeenCalledWith("keep\tthis\nreplace\uFFFD\uFFFD\uFFFDthese");
+  });
+
   it("shortens the displayed cwd without changing executable command text", () => {
     const copyText = vi.fn(async () => undefined);
     Object.defineProperty(window, "pwragent", {
