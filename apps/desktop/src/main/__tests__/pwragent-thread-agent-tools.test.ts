@@ -50,10 +50,10 @@ describe("PwrAgent thread agent tools", () => {
     expect(tools.find((tool) => tool.name === "watch_thread_pull_request"))
       .toMatchObject({
         name: "watch_thread_pull_request",
-        description: expect.stringContaining("end the current turn"),
+        description: expect.stringContaining("After creation, end the turn"),
       });
     expect(tools.find((tool) => tool.name === "read_thread")).toMatchObject({
-      description: expect.stringContaining("connected Federation peer"),
+      description: expect.stringContaining("Pass instanceId for a known remote thread"),
       inputSchema: expect.objectContaining({
         properties: expect.objectContaining({
           instanceId: expect.objectContaining({ type: "string" }),
