@@ -52,6 +52,7 @@ import {
   type FocusedDiffAnalysisRequest,
   type FocusedDiffAnalysisResponse,
   type GetNavigationSnapshotRequest,
+  type GetNavigationSnapshotTransportRequest,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
   type GetGhStatusRequest,
@@ -88,6 +89,7 @@ import {
   type NavigationDirectoryGitStatusUpdatedNotification,
   type NavigationThreadGitWorkingStateUpdatedNotification,
   type NavigationSnapshot,
+  type NavigationSnapshotTransportResponse,
   type NavigationThreadSummary,
   type AutomationThreadSummary,
   type PrSummary,
@@ -155,6 +157,7 @@ import {
   type UpdateSubthreadOrderResponse,
   type PwrAgentThreadInspectionResponse,
 } from "@pwragent/shared";
+import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -7144,6 +7147,8 @@ const GIT_MUTATION_COMMAND =
   /(?:^|[;&|]\s*)git\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*(?:commit|merge|rebase|reset|revert|stash|checkout|switch|restore|cherry-pick|pull|push|am|apply|clean)\b/;
 
 const appServerService = new DesktopAppServerService();
+const navigationSnapshotTransport = new NavigationSnapshotTransport();
+const navigationSnapshotTransportCleanupSenderIds = new Set<number>();
 
 /** Sender ids that already have a destroyed-listener reaping their PR focus. */
 const prPollingFocusCleanupSenderIds = new Set<number>();
@@ -7394,15 +7399,42 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_SNAPSHOT_CHANNEL,
     async (
-      _event,
-      request?: GetNavigationSnapshotRequest,
-    ): Promise<NavigationSnapshot> => {
+      event,
+      request?:
+        | GetNavigationSnapshotRequest
+        | GetNavigationSnapshotTransportRequest,
+    ): Promise<NavigationSnapshot | NavigationSnapshotTransportResponse> => {
+      const transportRequest =
+        request && "transport" in request ? request : undefined;
       return await timeStartupProfileOperation({
         type: "ipc-main:getNavigationSnapshot",
         detail: {
           forceRefresh: Boolean(request?.forceRefresh),
+          transport: transportRequest?.transport.protocol ?? null,
         },
-        operation: async () => await appServerService.getNavigationSnapshot(request),
+        operation: async () => {
+          if (!transportRequest) {
+            return await appServerService.getNavigationSnapshot(request);
+          }
+          const { transport, ...snapshotRequest } = transportRequest;
+          const snapshot = await appServerService.getNavigationSnapshot(
+            snapshotRequest,
+          );
+          const rendererId = event.sender.id;
+          if (!navigationSnapshotTransportCleanupSenderIds.has(rendererId)) {
+            navigationSnapshotTransportCleanupSenderIds.add(rendererId);
+            event.sender.once("destroyed", () => {
+              navigationSnapshotTransport.clearRenderer(rendererId);
+              navigationSnapshotTransportCleanupSenderIds.delete(rendererId);
+            });
+          }
+          return navigationSnapshotTransport.encode({
+            baseRevision: transport.baseRevision,
+            rendererId,
+            request: snapshotRequest,
+            snapshot,
+          });
+        },
       });
     },
   );
@@ -8061,6 +8093,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
+  navigationSnapshotTransport.clear();
+  navigationSnapshotTransportCleanupSenderIds.clear();
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);

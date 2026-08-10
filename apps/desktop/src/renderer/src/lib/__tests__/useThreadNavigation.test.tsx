@@ -47,6 +47,59 @@ describe("useThreadNavigation", () => {
     return { promise, resolve, reject };
   }
 
+  it("uses the renderer transport revision for subsequent refreshes", async () => {
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const getNavigationSnapshot = vi.fn(async () => snapshot);
+    const getNavigationSnapshotTransport = vi
+      .fn<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>()
+      .mockResolvedValueOnce({
+        kind: "full",
+        revision: "revision-1",
+        snapshot,
+      })
+      .mockResolvedValueOnce({
+        kind: "unchanged",
+        revision: "revision-1",
+      });
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      getNavigationSnapshotTransport,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(1, {
+      transport: { protocol: 1 },
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(2, {
+      transport: {
+        protocol: 1,
+        baseRevision: "revision-1",
+      },
+    });
+    expect(result.current.error).toBeUndefined();
+  });
+
   it("does not let a late launchpad update replace a directory label with its internal key", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgnt";
     const defaults: NavigationLaunchpadDefaults = {
