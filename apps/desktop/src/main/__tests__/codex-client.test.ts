@@ -1431,6 +1431,83 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("contains a directory enrichment failure to the affected thread", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const managedWorktree = "/Users/vitaliy/.codex/worktrees/a21d/giphy-services";
+    const localDirectory = "/Users/vitaliy/projects/healthy";
+    const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => {
+      if (projectKey === managedWorktree) {
+        throw Object.assign(new Error("spawn git EACCES"), { code: "EACCES" });
+      }
+      return {
+        linkedDirectories: [
+          {
+            id: projectKey ?? "missing",
+            label: path.basename(projectKey ?? "missing"),
+            path: projectKey ?? "missing",
+            kind: "local" as const,
+          },
+        ],
+      };
+    });
+    const client = new CodexAppServerClient({
+      command: "codex",
+      threadDirectoryEnricher,
+    });
+    const threads: AppServerThreadSummary[] = [
+      {
+        id: "broken-worktree-thread",
+        title: "Broken worktree",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: managedWorktree,
+        linkedDirectories: [],
+      },
+      {
+        id: "healthy-thread",
+        title: "Healthy thread",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: localDirectory,
+        linkedDirectories: [],
+      },
+    ];
+
+    await expect(client.enrichThreadDirectories(threads)).resolves.toEqual([
+      expect.objectContaining({
+        id: "broken-worktree-thread",
+        linkedDirectories: [
+          {
+            id: managedWorktree,
+            label: "giphy-services",
+            path: managedWorktree,
+            worktreePath: managedWorktree,
+            kind: "worktree",
+          },
+        ],
+      }),
+      expect.objectContaining({
+        id: "healthy-thread",
+        linkedDirectories: [
+          expect.objectContaining({
+            path: localDirectory,
+            kind: "local",
+          }),
+        ],
+      }),
+    ]);
+    expect(codexClientLogWarn).toHaveBeenCalledWith(
+      "thread directory enrichment failed",
+      expect.objectContaining({
+        threadId: "broken-worktree-thread",
+        projectKey: managedWorktree,
+        error: "spawn git EACCES",
+      }),
+    );
+
+    await client.close();
+  });
+
   it("keeps cheap thread summaries from rendering managed worktrees as local", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const threadDirectoryEnricher = vi.fn(async () => ({

@@ -8,6 +8,8 @@ import { getMainLogger } from "../log";
 
 const execFile = promisify(execFileCallback);
 const threadDirectoryLog = getMainLogger("pwragent:thread-directory-enricher");
+const GIT_DIRECTORY_PROBE_TIMEOUT_MS = 2_000;
+const GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES = 1024 * 1024;
 
 /**
  * Normalize a resolved filesystem path to forward slashes for use as a stable,
@@ -43,8 +45,22 @@ type GitMetadataEvidence = {
 async function runGit(projectKey: string, args: string[]): Promise<string> {
   const result = await execFile("git", ["-C", projectKey, ...args], {
     env: process.env,
+    maxBuffer: GIT_DIRECTORY_PROBE_MAX_BUFFER_BYTES,
+    timeout: GIT_DIRECTORY_PROBE_TIMEOUT_MS,
   });
   return result.stdout.trim();
+}
+
+function buildFallbackLinkedDirectory(currentPath: string): LinkedDirectorySummary {
+  const directoryPath = path.resolve(currentPath);
+  const isManagedWorktree = isToolManagedWorktreePath(directoryPath);
+  return {
+    id: toDirectoryId(directoryPath),
+    path: toDirectoryId(directoryPath),
+    ...(isManagedWorktree ? { worktreePath: toDirectoryId(directoryPath) } : {}),
+    label: path.basename(directoryPath) || directoryPath,
+    kind: isManagedWorktree ? "worktree" : "local",
+  };
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -266,25 +282,18 @@ async function loadThreadDirectoryEnrichment(
       };
     }
 
-    const fallbackPath = path.resolve(currentPath);
-    if (isToolManagedWorktreePath(fallbackPath)) {
-      threadDirectoryLog.warn("managed worktree path fell back to local directory", {
+    const fallbackDirectory = buildFallbackLinkedDirectory(currentPath);
+    if (fallbackDirectory.kind === "worktree") {
+      threadDirectoryLog.warn("managed worktree repository relationship unavailable", {
         projectKey,
-        fallbackPath,
+        fallbackPath: fallbackDirectory.worktreePath,
         error: error instanceof Error ? error.message : String(error),
         gitMetadata: gitMetadataFallback.evidence,
       });
     }
 
     return {
-      linkedDirectories: [
-        {
-          id: toDirectoryId(fallbackPath),
-          path: toDirectoryId(fallbackPath),
-          label: path.basename(fallbackPath) || fallbackPath,
-          kind: "local",
-        },
-      ],
+      linkedDirectories: [fallbackDirectory],
     };
   }
 }
