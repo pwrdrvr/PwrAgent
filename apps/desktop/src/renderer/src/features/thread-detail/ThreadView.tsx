@@ -109,6 +109,7 @@ import {
   readRendererSequence,
   summarizeActivityStatus,
 } from "./live-transcript-activity";
+import { findTranscriptCommandDetailEntryIndex } from "./tool-call-details";
 
 type LaunchpadEnvironmentSetupProgress = {
   command: string;
@@ -1450,11 +1451,16 @@ export function ThreadView(props: ThreadViewProps) {
       return;
     }
 
-    const targetIndex = findTranscriptTurnEntryIndex(
-      props.transcriptEntries,
-      target.turnId,
-      target.turnTimeMs,
-    );
+    const targetIndex = target.intent === "tool-detail"
+      ? findTranscriptCommandDetailEntryIndex(
+          props.transcriptEntries,
+          target.itemId,
+        )
+      : findTranscriptTurnEntryIndex(
+          props.transcriptEntries,
+          target.turnId,
+          target.turnTimeMs,
+        );
     if (targetIndex >= 0) {
       if (target.intent === "reveal") {
         expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
@@ -2231,10 +2237,9 @@ export function ThreadView(props: ThreadViewProps) {
       if (!invocation.turnId || !selectedThreadKey) {
         return;
       }
-      const targetIndex = findTranscriptTurnEntryIndex(
+      const targetIndex = findTranscriptCommandDetailEntryIndex(
         props.transcriptEntries,
-        invocation.turnId,
-        invocation.observedAt,
+        invocation.itemId,
       );
       if (targetIndex >= 0 || !canLoadServerTranscriptHistory) {
         return;

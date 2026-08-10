@@ -7,6 +7,7 @@ import type {
   ThreadToolInvocationSummary,
 } from "@pwragent/shared";
 import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
+import { detailMatchesInvocationItem } from "../tool-call-details";
 import { formatTokenCount } from "./subagent-format";
 import {
   formatCompactCount,
@@ -300,14 +301,6 @@ function collectCommandDetails(
     }
   }
   return detailsByItemId;
-}
-
-function detailMatchesInvocationItem(detailId: string, itemId: string): boolean {
-  return (
-    detailId === itemId
-    || detailId.startsWith(`${itemId}-`)
-    || detailId.startsWith(`${itemId}:`)
-  );
 }
 
 function aggregateToolAccounting(

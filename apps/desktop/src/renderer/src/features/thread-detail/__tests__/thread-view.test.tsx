@@ -899,21 +899,36 @@ describe("ThreadView", () => {
     });
   });
 
-  it("loads older transcript pages before showing historical tool output", async () => {
+  it("pages past a same-turn usage overlay to load historical tool output", async () => {
     const targetTime = 1_800_000_000_000;
     const loadOlder = vi.fn();
     let loadedPageCount = 0;
-    const recentEntries = Array.from({ length: 5 }, (_, index) => ({
-      type: "message" as const,
-      id: `recent-message-${index}`,
-      role: "assistant" as const,
-      text: `Recent history ${index}`,
-      turn: {
-        id: `turn-recent-${index}`,
-        status: "completed" as const,
-        completedAt: targetTime + index + 1,
+    const recentEntries: AppServerThreadEntry[] = [
+      {
+        type: "activity",
+        id: "live-turn-usage-turn-target",
+        createdAt: targetTime,
+        details: [],
+        status: "completed",
+        summary: "Turn usage: 1,000 uncached in · 2,000 cached · 100 out",
+        turn: {
+          id: "turn-target",
+          status: "completed",
+          completedAt: targetTime,
+        },
       },
-    }));
+      ...Array.from({ length: 5 }, (_, index) => ({
+        type: "message" as const,
+        id: `recent-message-${index}`,
+        role: "assistant" as const,
+        text: `Recent history ${index}`,
+        turn: {
+          id: `turn-recent-${index}`,
+          status: "completed" as const,
+          completedAt: targetTime + index + 1,
+        },
+      })),
+    ];
     const selectedThread = buildTimestampTargetThread(
       "thread-tool-history",
       "Historical tool output",
