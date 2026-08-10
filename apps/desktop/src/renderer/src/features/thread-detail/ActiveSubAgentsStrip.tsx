@@ -106,6 +106,7 @@ export function ActiveSubAgentsStrip(props: {
     <section className="live-strip" aria-label="Active sub-agents">
       <button
         aria-expanded={expanded}
+        aria-label={`Active sub-agents (${visible.length})`}
         className="live-strip__row"
         type="button"
         onClick={() => setExpanded((current) => !current)}
@@ -152,8 +153,15 @@ export function ActiveSubAgentsStrip(props: {
                         Math.max(0, now - subAgent.createdAt),
                       )}
                 </span>
+                {/* Both controls name their target. The visible text stays a
+                    single word so the row does not grow, but an unqualified
+                    "Stop" would be read out identically for every row by a
+                    screen reader — and page-wide `name: "Stop"` is the
+                    established E2E handle for the composer's stop-the-turn
+                    button, which this must not shadow. */}
                 {failedRow ? (
                   <button
+                    aria-label={`Dismiss failed sub-agent: ${subAgent.task}`}
                     className="live-strip__item-action"
                     type="button"
                     onClick={() => dismissFailure(subAgent.monitorId)}
@@ -162,6 +170,7 @@ export function ActiveSubAgentsStrip(props: {
                   </button>
                 ) : canStop ? (
                   <button
+                    aria-label={`Stop sub-agent: ${subAgent.task}`}
                     className="live-strip__item-action live-strip__item-action--danger"
                     disabled={stopping}
                     type="button"

@@ -224,7 +224,7 @@ describe("ActiveSubAgentsStrip", () => {
       // A finished failure must not animate.
       expect(container.querySelector(".status-dot--blink")).toBeNull();
       expect(container.querySelector(".thinking-scanner")).toBeNull();
-      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Stop sub-agent:/ })).toBeNull();
     });
 
     it("removes a failed row once dismissed, and the strip with it", () => {
@@ -235,7 +235,7 @@ describe("ActiveSubAgentsStrip", () => {
           ])}
         />,
       );
-      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Dismiss failed sub-agent:/ }));
       expect(container).toBeEmptyDOMElement();
     });
   });
@@ -316,7 +316,7 @@ describe("ActiveSubAgentsStrip", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Stop sub-agent:/ }));
       await waitFor(() => {
         expect(stopSubAgent).toHaveBeenCalledWith({
           backend: "codex",
@@ -330,6 +330,39 @@ describe("ActiveSubAgentsStrip", () => {
       });
     });
 
+    it("names its controls after their sub-agent instead of claiming bare Stop/Dismiss", () => {
+      // Regression: a bare "Stop" shadowed the composer's stop-the-turn button
+      // and broke nine E2E specs that use page-wide `name: "Stop"` as its
+      // handle (managed-review.spec.ts caught it). It is also the a11y fix — a
+      // column of identically-named buttons tells a screen-reader user nothing
+      // about which sub-agent each one belongs to.
+      render(
+        <ActiveSubAgentsStrip
+          desktopApi={{ stopSubAgent: vi.fn() } as unknown as DesktopApi}
+          thread={buildThread([
+            buildSubAgent({ monitorId: "a", task: "Watch the deployment" }),
+            buildSubAgent({
+              monitorId: "b",
+              status: "failed",
+              task: "Broken monitor",
+            }),
+          ])}
+        />,
+      );
+      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+      expect(
+        screen.getByRole("button", {
+          name: "Stop sub-agent: Watch the deployment",
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", {
+          name: "Dismiss failed sub-agent: Broken monitor",
+        }),
+      ).toBeInTheDocument();
+    });
+
     it("offers no Stop when the sub-agent has no monitor turn to stop", () => {
       render(
         <ActiveSubAgentsStrip
@@ -339,7 +372,7 @@ describe("ActiveSubAgentsStrip", () => {
           ])}
         />,
       );
-      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Stop sub-agent:/ })).toBeNull();
     });
 
     it("recovers the button after a failed stop instead of leaving it stuck", async () => {
@@ -350,9 +383,9 @@ describe("ActiveSubAgentsStrip", () => {
           thread={buildThread([buildSubAgent({ monitorId: "a" })])}
         />,
       );
-      fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Stop sub-agent:/ }));
       await waitFor(() => {
-        expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+        expect(screen.getByRole("button", { name: /^Stop sub-agent:/ })).toBeEnabled();
       });
     });
   });
