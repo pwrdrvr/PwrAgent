@@ -37,6 +37,7 @@ import {
   type MessagingCapabilityProfile,
   type MessagingSurfaceAction,
   type MessagingChannelKind,
+  type MessagingChannelRef,
   type MessagingDeliveryScope,
   type MessagingDeliveryResult,
   type MessagingInboundCallbackEvent,
@@ -52,6 +53,8 @@ import {
   shouldConsumeDeliveryBudget,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
+import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
+import type { MessagingPermissionId } from "@pwragent/shared";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
@@ -21456,6 +21459,419 @@ describe("MessagingController", () => {
   });
 });
 
+function rbacProviderGranting(
+  permissions: MessagingPermissionId[],
+): MessagingRbacPolicyProvider {
+  return {
+    isEnforcing: () => true,
+    resolve: () => ({
+      permissions: new Set(permissions),
+      roleIds: permissions.length ? ["test-role"] : [],
+      matchedSubjects: [],
+      rejected: permissions.length === 0,
+    }),
+  };
+}
+
+describe("RBAC capability enforcement", () => {
+  it("denies a command the actor lacks and delivers a reject notice", async () => {
+    const records: unknown[] = [];
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "elicitation.answer",
+        "thread.status.view",
+      ]), // Chat User: no thread.resume
+      activityLog: () =>
+        ({ record: (entry: unknown) => records.push(entry) }) as never,
+    });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Not permitted",
+    });
+    // An audit row records the capability denial.
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        kind: "inbound-rejected",
+        payload: expect.objectContaining({
+          reason: "unauthorized-capability",
+          permission: "thread.resume",
+        }),
+      }),
+    );
+  });
+
+  it("allows a command the actor holds", async () => {
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "thread.resume",
+        "thread.status.view",
+      ]),
+    });
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    // The resume browser is delivered, not a permission error.
+    expect(harness.delivered.at(-1)).not.toMatchObject({
+      kind: "error",
+      title: "Not permitted",
+    });
+    expect(harness.delivered.length).toBeGreaterThan(0);
+  });
+
+  it("admits actors normally when enforcement is off (legacy mode)", async () => {
+    const harness = await createHarness(); // no rbacPolicy → legacy allow-all
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume"));
+    expect(harness.delivered.at(-1)).not.toMatchObject({
+      kind: "error",
+      title: "Not permitted",
+    });
+  });
+
+  async function driveOneTurn(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    text: string,
+  ): Promise<void> {
+    harness.startTurn.mockImplementation(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-1",
+    }));
+    const event = buildTextEvent(text);
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.controller.handleInboundEvent(event);
+  }
+
+  it("gates agent dynamic tools by the originating actor's role", async () => {
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "elicitation.answer",
+        "thread.status.view",
+      ]), // Chat User: no tools.*
+    });
+    await driveOneTurn(harness, "look something up");
+
+    // Chat User → denied for a cross-thread inspection tool.
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "thread_inspection",
+        tool: "search_threads",
+      }),
+    ).toEqual({ owns: true, allowed: false, permission: "tools.thread_inspection" });
+
+    // The benign messaging-context surface stays allowed.
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "messaging_context",
+        tool: "get_current_messaging_surface",
+      }),
+    ).toEqual({ owns: true, allowed: true });
+
+    // An unknown turn is not owned by this controller → allowed (a
+    // desktop-operator turn is unrestricted).
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-unknown",
+        category: "thread_inspection",
+        tool: "search_threads",
+      }),
+    ).toEqual({ owns: false, allowed: true });
+  });
+
+  it("allows agent dynamic tools for an actor with the tools permission", async () => {
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "tools.thread_orchestration",
+      ]),
+    });
+    await driveOneTurn(harness, "send it");
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "thread_orchestration",
+        tool: "send_message_to_thread",
+      }),
+    ).toEqual({ owns: true, allowed: true });
+  });
+
+  it("does not gate dynamic tools in legacy mode (no policy)", async () => {
+    const harness = await createHarness();
+    await driveOneTurn(harness, "legacy");
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "thread_inspection",
+        tool: "search_threads",
+      }),
+    ).toEqual({ owns: true, allowed: true });
+  });
+
+  it("gates mutate_thread per field, including the full-access double-gate", async () => {
+    // Power User + Tools: can change settings, cannot escalate to full access.
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "thread.settings.model",
+        "thread.settings.reasoning",
+        "thread.settings.fast_mode",
+        "thread.settings.name",
+        "thread.settings.execution_mode",
+        "tools.thread_orchestration",
+      ]),
+    });
+    await driveOneTurn(harness, "tune it");
+    const mutate = (args: Record<string, unknown>) =>
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "thread_inspection",
+        tool: "mutate_thread",
+        arguments: args,
+      });
+
+    // Allowed: renaming + model + reasoning + fast + non-full-access mode.
+    expect(mutate({ title: "renamed", model: "m", fastMode: true })).toEqual({
+      owns: true,
+      allowed: true,
+    });
+    expect(mutate({ executionMode: "default" })).toEqual({
+      owns: true,
+      allowed: true,
+    });
+    // DENIED: escalating to full access needs the danger permission.
+    expect(mutate({ executionMode: "full-access" })).toEqual({
+      owns: true,
+      allowed: false,
+      permission: "thread.execution.full_access",
+    });
+  });
+
+  it("blocks a Chat User's agent from mutating thread settings", async () => {
+    const harness = await createHarness({
+      rbacPolicy: rbacProviderGranting([
+        "message.reply",
+        "elicitation.answer",
+        "thread.status.view",
+      ]), // Chat User
+    });
+    await driveOneTurn(harness, "change the model");
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "thread_inspection",
+        tool: "mutate_thread",
+        arguments: { model: "gpt-whatever" },
+      }),
+    ).toEqual({
+      owns: true,
+      allowed: false,
+      permission: "thread.settings.model",
+    });
+  });
+
+  describe("federation scope", () => {
+    const remoteBinding = (channel: MessagingChannelRef) => ({
+      id: "binding:remote-peer",
+      authorizedActorIds: ["user-1"],
+      backend: "codex" as const,
+      channel,
+      createdAt: 1_000,
+      federatedThread: {
+        backend: "codex" as const,
+        target: { scope: "remote" as const, instanceId: "peer-one" },
+        threadId: "thread-1",
+      },
+      targetKind: "thread" as const,
+      threadId: "thread-1",
+      updatedAt: 1_000,
+    });
+
+    it("denies a command against a remote-bound thread without the scope", async () => {
+      const records: unknown[] = [];
+      const harness = await createHarness({
+        // Power User holds thread.status.view but NOT federation.remote_control.
+        rbacPolicy: rbacProviderGranting([
+          "message.reply",
+          "thread.status.view",
+        ]),
+        activityLog: () =>
+          ({ record: (entry: unknown) => records.push(entry) }) as never,
+      });
+      const event = buildCommandEvent("/status");
+      await harness.store.upsertBinding(remoteBinding(event.channel));
+
+      await harness.controller.handleInboundEvent(event);
+
+      expect(harness.delivered.at(-1)).toMatchObject({
+        kind: "error",
+        title: "Not permitted",
+      });
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          kind: "inbound-rejected",
+          payload: expect.objectContaining({
+            reason: "unauthorized-capability",
+            permission: "federation.remote_control",
+          }),
+        }),
+      );
+    });
+
+    it("allows the same command once the actor holds the scope", async () => {
+      const harness = await createHarness({
+        rbacPolicy: rbacProviderGranting([
+          "message.reply",
+          "thread.status.view",
+          "federation.remote_control",
+        ]),
+      });
+      const event = buildCommandEvent("/status");
+      await harness.store.upsertBinding(remoteBinding(event.channel));
+
+      await harness.controller.handleInboundEvent(event);
+
+      expect(harness.delivered.at(-1)).not.toMatchObject({
+        title: "Not permitted",
+      });
+    });
+
+    it("leaves local-bound threads untouched by the scope gate", async () => {
+      const harness = await createHarness({
+        // No federation.remote_control — a local binding must still work.
+        rbacPolicy: rbacProviderGranting([
+          "message.reply",
+          "thread.status.view",
+        ]),
+      });
+      await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
+      expect(harness.delivered.at(-1)).not.toMatchObject({
+        title: "Not permitted",
+      });
+    });
+
+    it("still lets a scope-revoked actor detach, so they are not stranded", async () => {
+      // Detach removes the LOCAL binding and never touches the peer. If the
+      // scope gate covered it, an actor whose scope was revoked could neither
+      // drive the conversation nor leave it.
+      const harness = await createHarness({
+        rbacPolicy: rbacProviderGranting([
+          "message.reply",
+          "thread.status.view",
+          "thread.detach",
+        ]), // no federation.remote_control
+      });
+      const event = buildCommandEvent("/detach");
+      await harness.store.upsertBinding(remoteBinding(event.channel));
+
+      await harness.controller.handleInboundEvent(event);
+
+      expect(harness.delivered.at(-1)).not.toMatchObject({
+        title: "Not permitted",
+      });
+      expect(
+        await harness.store.findActiveBindingForChannel(event.channel),
+      ).toBeUndefined();
+    });
+
+    it("refuses to bind a remote thread even if a caller skips the gate", async () => {
+      // Backstop: bindChannelToThread is the one funnel every bind path goes
+      // through, so a future caller that forgets the entry gate still cannot
+      // create a remote binding.
+      const harness = await createHarness({
+        rbacPolicy: rbacProviderGranting(["message.reply", "thread.resume"]),
+      });
+      const event = buildCommandEvent("/status");
+      await expect(
+        (
+          harness.controller as unknown as {
+            bindChannelToThread: (
+              event: unknown,
+              target: unknown,
+            ) => Promise<unknown>;
+          }
+        ).bindChannelToThread(event, {
+          backend: "codex",
+          threadId: "thread-1",
+          federatedThread: {
+            backend: "codex",
+            target: { scope: "remote", instanceId: "peer-one" },
+            threadId: "thread-1",
+          },
+        }),
+      ).rejects.toThrow(/another instance/i);
+      expect(
+        await harness.store.findActiveBindingForChannel(event.channel),
+      ).toBeUndefined();
+    });
+
+    it("blocks an agent tool aimed at another instance", async () => {
+      const harness = await createHarness({
+        // Power User + Tools, but no federation scope.
+        rbacPolicy: rbacProviderGranting([
+          "message.reply",
+          "tools.thread_inspection",
+        ]),
+      });
+      await driveOneTurn(harness, "look at my other machine");
+
+      // Local read: allowed on the tool permission alone.
+      expect(
+        harness.controller.checkDynamicToolPermission({
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          category: "thread_inspection",
+          tool: "search_threads",
+          arguments: { query: "x" },
+        }),
+      ).toEqual({ owns: true, allowed: true });
+
+      // Explicitly aimed at a peer: needs the scope on top.
+      expect(
+        harness.controller.checkDynamicToolPermission({
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          category: "thread_inspection",
+          tool: "search_threads",
+          arguments: { query: "x", instanceId: "peer-one" },
+        }),
+      ).toEqual({
+        owns: true,
+        allowed: false,
+        permission: "federation.remote_control",
+      });
+    });
+  });
+});
+
 async function createHarness(options?: {
   deliveryBudget?: MessagingDeliveryBudget;
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
@@ -21466,6 +21882,7 @@ async function createHarness(options?: {
   handoff?: false;
   inputDebounceMs?: number;
   logger?: MessagingControllerOptions["logger"];
+  rbacPolicy?: MessagingControllerOptions["rbacPolicy"];
   listBackends?: NonNullable<MessagingBackendBridge["listBackends"]>;
   listSkills?: NonNullable<MessagingBackendBridge["listSkills"]> | false;
   navigation?: NavigationSnapshot;
@@ -22021,6 +22438,7 @@ async function createHarness(options?: {
   const controller = new MessagingController({
     adapter,
     authorizedActorIds: ["user-1"],
+    rbacPolicy: options?.rbacPolicy,
     backend,
     channel: options?.channel,
     deliveryBudget: options?.deliveryBudget,

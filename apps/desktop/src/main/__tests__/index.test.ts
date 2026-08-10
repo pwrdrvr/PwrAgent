@@ -155,6 +155,7 @@ const disposeMessagingStatusIpcHandlersMock = vi.fn();
 const registerMcpConnectionIpcHandlersMock = vi.fn();
 const disposeMcpConnectionIpcHandlersMock = vi.fn();
 const closePwrSnapConnectionServiceMock = vi.fn<() => Promise<void>>();
+const registerMessagingRbacIpcHandlersMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
 const buildFromTemplateMock = vi.fn((template: unknown) => ({
   kind: "menu",
@@ -527,6 +528,10 @@ vi.mock("../mcp-connections/pwrsnap-connection-service", () => ({
   })),
 }));
 
+vi.mock("../ipc/messaging-rbac", () => ({
+  registerMessagingRbacIpcHandlers: registerMessagingRbacIpcHandlersMock,
+}));
+
 vi.mock("../diagnostics/startup-cpu-profiler", () => ({
   StartupCpuProfiler: StartupCpuProfilerMock,
 }));
@@ -710,6 +715,7 @@ describe("bootstrapApp", () => {
     disposeDesktopMessagingRuntimeMock.mockReset();
     disposeDesktopMessagingRuntimeMock.mockResolvedValue(undefined);
     registerMessagingStatusIpcHandlersMock.mockReset();
+    registerMessagingRbacIpcHandlersMock.mockReset();
     disposeMessagingStatusIpcHandlersMock.mockReset();
     registerMcpConnectionIpcHandlersMock.mockReset();
     disposeMcpConnectionIpcHandlersMock.mockReset();

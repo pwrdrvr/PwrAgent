@@ -4167,6 +4167,7 @@ describe("SettingsScreen", () => {
       "Usage & Pricing",
       "Messaging",
       "Federation",
+      "Access Control",
       "Git",
       "Worktrees",
       "Thread Management",

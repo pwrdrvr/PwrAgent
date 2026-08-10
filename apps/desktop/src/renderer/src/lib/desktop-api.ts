@@ -170,6 +170,18 @@ import type {
   ListInboundTopicsResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
+  ReadRbacPolicyResponse,
+  ReadRbacKnownSubjectsResponse,
+  WriteRbacRoleRequest,
+  WriteRbacRoleResponse,
+  DeleteRbacRoleRequest,
+  DeleteRbacRoleResponse,
+  WriteRbacAttachmentRequest,
+  WriteRbacAttachmentResponse,
+  DeleteRbacAttachmentRequest,
+  DeleteRbacAttachmentResponse,
+  SetRbacEnforcedRequest,
+  SetRbacEnforcedResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
   ListMessagingRoutesResponse,
@@ -1062,6 +1074,23 @@ export type DesktopApi = {
   listMessagingActivity?: (
     request?: ListMessagingActivityRequest,
   ) => Promise<ListMessagingActivityResponse>;
+  readRbacPolicy?: () => Promise<ReadRbacPolicyResponse>;
+  readRbacKnownSubjects?: () => Promise<ReadRbacKnownSubjectsResponse>;
+  writeRbacRole?: (
+    request: WriteRbacRoleRequest,
+  ) => Promise<WriteRbacRoleResponse>;
+  deleteRbacRole?: (
+    request: DeleteRbacRoleRequest,
+  ) => Promise<DeleteRbacRoleResponse>;
+  writeRbacAttachment?: (
+    request: WriteRbacAttachmentRequest,
+  ) => Promise<WriteRbacAttachmentResponse>;
+  deleteRbacAttachment?: (
+    request: DeleteRbacAttachmentRequest,
+  ) => Promise<DeleteRbacAttachmentResponse>;
+  setRbacEnforced?: (
+    request: SetRbacEnforcedRequest,
+  ) => Promise<SetRbacEnforcedResponse>;
   getMessagingActivitySummary?: () =>
     Promise<GetMessagingActivitySummaryResponse>;
   generateMessagingPairingToken?: (

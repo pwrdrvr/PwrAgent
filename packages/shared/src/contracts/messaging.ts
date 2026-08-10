@@ -217,11 +217,20 @@ export type MessagingActivityKind =
   | "pairing"
   | "outbound"
   | "binding"
-  | "diagnostic";
+  | "diagnostic"
+  | "policy";
+
+/**
+ * Where an activity entry originated: a messaging platform, or the desktop
+ * app itself. `"desktop"` covers rows produced by local-operator actions
+ * (e.g. `policy` rows for Access Control edits that aren't scoped to one
+ * platform); platform-scoped rows keep their real channel kind.
+ */
+export type MessagingActivityOrigin = MessagingChannelKind | "desktop";
 
 export type MessagingActivityEntry = {
   id: number;
-  platform: MessagingChannelKind;
+  platform: MessagingActivityOrigin;
   kind: MessagingActivityKind;
   /** Backend the entry routed to / from, if known. */
   backend?: AppServerBackendKind;

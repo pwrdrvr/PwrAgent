@@ -3,6 +3,7 @@ import type {
   GetMessagingActivitySummaryResponse,
   MessagingActivityEntry,
   MessagingActivityKind,
+  MessagingActivityOrigin,
   MessagingChannelKind,
   ThreadIdentifier,
 } from "@pwragent/shared";
@@ -12,7 +13,7 @@ const DEFAULT_LIST_LIMIT = 100;
 const MAX_LIST_LIMIT = 500;
 
 export type RecordMessagingActivityInput = {
-  platform: MessagingChannelKind;
+  platform: MessagingActivityOrigin;
   kind: MessagingActivityKind;
   backend?: AppServerBackendKind;
   threadId?: ThreadIdentifier;
@@ -244,7 +245,7 @@ function rowToEntry(row: RawActivityRow): MessagingActivityEntry {
   }
   return {
     id: row.id,
-    platform: row.platform as MessagingChannelKind,
+    platform: row.platform as MessagingActivityOrigin,
     kind: row.kind as MessagingActivityKind,
     backend,
     threadId: row.thread_id ?? undefined,

@@ -22337,6 +22337,9 @@ command = "pnpm dev"
           },
         };
       },
+      checkDynamicToolPermission() {
+        return { allowed: true };
+      },
     });
     await registry.publishLocalEvent({
       backend: "codex",

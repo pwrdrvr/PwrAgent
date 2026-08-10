@@ -194,6 +194,17 @@ export const MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL =
   "messaging:clear-default-agent";
 export const MESSAGING_SET_ENABLED_CHANNEL = "messaging:set-enabled";
 export const MESSAGING_LIST_ACTIVITY_CHANNEL = "messaging:list-activity";
+export const MESSAGING_RBAC_READ_POLICY_CHANNEL = "messaging:rbac-read-policy";
+export const MESSAGING_RBAC_READ_SUBJECTS_CHANNEL =
+  "messaging:rbac-read-subjects";
+export const MESSAGING_RBAC_WRITE_ROLE_CHANNEL = "messaging:rbac-write-role";
+export const MESSAGING_RBAC_DELETE_ROLE_CHANNEL = "messaging:rbac-delete-role";
+export const MESSAGING_RBAC_WRITE_ATTACHMENT_CHANNEL =
+  "messaging:rbac-write-attachment";
+export const MESSAGING_RBAC_DELETE_ATTACHMENT_CHANNEL =
+  "messaging:rbac-delete-attachment";
+export const MESSAGING_RBAC_SET_ENFORCED_CHANNEL =
+  "messaging:rbac-set-enforced";
 export const MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL =
   "messaging:get-activity-summary";
 export const MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL =

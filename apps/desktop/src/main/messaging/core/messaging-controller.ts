@@ -11,6 +11,11 @@ import {
   isAppServerBackendKind,
   isMessagingBindingTargetKind,
   parseCodexTurnErrorMessage,
+  permissionForActionId,
+  permissionForCommandVerb,
+  permissionForDynamicTool,
+  permissionsForThreadMutation,
+  toolArgsTargetRemoteInstance,
   resolveNewThreadBackend,
   selectableNewThreadBackends,
   stripCodexGitActionDirectives,
@@ -45,6 +50,8 @@ import type {
   LaunchpadWorkMode,
   MaterializedDirectoryLaunchpadThread,
   MessagingBindingTargetKind,
+  MessagingDynamicToolCategory,
+  MessagingPermissionId,
   MessagingToolUpdateMode,
   PwrAgentMessagingBoundThreadSummary,
   PwrAgentMessagingLocationSummary,
@@ -55,12 +62,14 @@ import type {
   NavigationLaunchpadDraft,
   NavigationSnapshot,
   NavigationThreadSummary,
+  RbacResolution,
   ScheduledThreadAction,
   ThreadMessagingBindingTransition,
   ThreadExecutionMode,
   ThreadIdentifier,
   UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
+import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
 import type {
   MessagingBindingRecord,
   MessagingCallbackHandleRecord,
@@ -761,6 +770,12 @@ type MessagingCancellationSignal = MessagingDeliveryGuard & {
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
+  /**
+   * Per-platform RBAC capability resolver. When absent or not enforcing, the
+   * controller runs in legacy-compatible mode: every provider-admitted actor is
+   * implicitly Admin (exactly as before RBAC shipped).
+   */
+  rbacPolicy?: MessagingRbacPolicyProvider;
   automationInboundHandler?: (
     event: Extract<MessagingInboundEvent, { kind: "media" | "text" }>,
   ) => Promise<boolean>;
@@ -1029,7 +1044,12 @@ export class MessagingController {
   }
 
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
-    if (!this.isAuthorized(event.actor.platformUserId)) {
+    if (!this.authorizeInboundAdmission(event)) {
+      // In enforcing mode this fires for actors with no permission-granting
+      // role (default-deny); record it so operators can see who was inert.
+      if (this.options.rbacPolicy?.isEnforcing()) {
+        this.recordCapabilityDenied(event, "(admission)", [], "admission");
+      }
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("unauthorized"),
@@ -2140,6 +2160,37 @@ export class MessagingController {
     },
   ): Promise<void> {
     const verb = matchMessagingCommandVerb(event.command);
+    // RBAC: gate the verb before dispatching. `help` and unknown commands are
+    // ungated (they only surface the command list). `permissionForCommandVerb`
+    // is the same lookup the render-time button filter uses, so they can't drift.
+    // This stays ABOVE every verb branch so a newly added command cannot slip
+    // in below the gate.
+    if (verb) {
+      const permission = permissionForCommandVerb(verb);
+      if (
+        permission &&
+        !(await this.requirePermission(event, permission, `command:${verb}`))
+      ) {
+        return;
+      }
+      // Scope gate: a command against a conversation already bound to a peer's
+      // thread drives that peer. Exempt: `resume`/`agent` only open the picker
+      // (which filters, and the bind is gated at bind time), and `detach` is a
+      // local unbind that must stay available or a scope-revoked actor is
+      // stranded in a conversation they can neither use nor leave.
+      if (
+        verb !== "resume" &&
+        verb !== "agent" &&
+        verb !== "detach" &&
+        !(await this.requireRemoteScopeForBinding(
+          event,
+          await this.options.store.findActiveBindingForChannel(event.channel),
+          `command:${verb}:remote-instance`,
+        ))
+      ) {
+        return;
+      }
+    }
     if (verb === "schedule") {
       await this.handleScheduleCommand(event);
       return;
@@ -3229,6 +3280,24 @@ export class MessagingController {
       return;
     }
 
+    // RBAC floor: sending a turn to the agent needs `message.reply`. Silent
+    // drop (no reply) so an under-permissioned sender can't be spammed with
+    // rejections in a shared channel.
+    if (!(await this.requirePermission(event, "message.reply", "message:reply", { notify: false }))) {
+      return;
+    }
+    // A turn into a remote-bound thread runs on the peer's machine.
+    if (
+      !(await this.requireRemoteScopeForBinding(
+        event,
+        binding,
+        "message:reply:remote-instance",
+        { notify: false },
+      ))
+    ) {
+      return;
+    }
+
     await this.turnAdmission.append({ binding, event });
   }
 
@@ -3392,6 +3461,20 @@ export class MessagingController {
     }
 
     if (!await this.shouldHandleAmbientSharedMessage(event, binding)) {
+      return;
+    }
+
+    if (!(await this.requirePermission(event, "message.reply", "media:reply", { notify: false }))) {
+      return;
+    }
+    if (
+      !(await this.requireRemoteScopeForBinding(
+        event,
+        binding,
+        "media:reply:remote-instance",
+        { notify: false },
+      ))
+    ) {
       return;
     }
 
@@ -4392,16 +4475,39 @@ export class MessagingController {
           thread.source === bindingTarget.backend &&
           thread.id === bindingTarget.threadId,
       );
+      // RBAC scope: binding to a thread that lives on a federated peer is
+      // remote control, whatever the thread's execution mode. Gate before the
+      // bind so an actor without the scope can never create a remote binding
+      // (the picker also hides remote threads from them).
       if (
-        targetThread?.executionMode === "full-access" &&
-        !(await this.canResumeFullAccessThreads())
-      ) {
-        await this.deliverFullAccessPolicyError(
-          undefined,
+        !(await this.requireRemoteScope(
           event,
-          "Full Access threads cannot be resumed from messaging with the current settings.",
-        );
+          targetThread ? federationTargetForThread(targetThread) : undefined,
+          "resume:remote-instance",
+        ))
+      ) {
         return;
+      }
+      if (targetThread?.executionMode === "full-access") {
+        // RBAC: binding a conversation to a Full Access thread needs the danger
+        // permission, in addition to the global resume-full-access setting.
+        if (
+          !(await this.requirePermission(
+            event,
+            "thread.execution.full_access",
+            "resume:full-access",
+          ))
+        ) {
+          return;
+        }
+        if (!(await this.canResumeFullAccessThreads())) {
+          await this.deliverFullAccessPolicyError(
+            undefined,
+            event,
+            "Full Access threads cannot be resumed from messaging with the current settings.",
+          );
+          return;
+        }
       }
       const binding = await this.bindChannelToThread(event, bindingTarget);
       await this.deliver(
@@ -4430,6 +4536,21 @@ export class MessagingController {
         (candidate) => candidate.id === (event.actionId ?? event.interaction.id),
       );
       if (action && pendingIntent.intent.kind === "approval") {
+        // RBAC (fail closed): a pending-request approval is the agent asking to
+        // act OUTSIDE its sandbox (run a command, touch the network/filesystem).
+        // We can't reliably prove any such request is benign, so every one
+        // requires the escalation permission — never the weaker default. This
+        // avoids under-classifying an exec/network approval whose payload lacks
+        // the subject fields (path/grantRoot/diff/files) we can recognize.
+        if (
+          !(await this.requirePermission(
+            event,
+            "approval.respond.escalation",
+            "approval:respond",
+          ))
+        ) {
+          return;
+        }
         if (await this.retireApprovalCallbackIfBackendIdle(pendingIntent, event)) {
           return;
         }
@@ -4450,6 +4571,15 @@ export class MessagingController {
         return;
       }
       if (action && pendingIntent.intent.kind === "questionnaire") {
+        if (
+          !(await this.requirePermission(
+            event,
+            "elicitation.answer",
+            "questionnaire:answer",
+          ))
+        ) {
+          return;
+        }
         await this.handleQuestionnaireAction(pendingIntent, event, action);
         return;
       }
@@ -7806,6 +7936,18 @@ export class MessagingController {
         );
         return;
       }
+      // Scope: the picker hides remote threads from actors without the scope,
+      // but a browse session outlives its render (it is persisted with a TTL),
+      // so the selection is gated too rather than trusting the filter.
+      if (
+        !(await this.requireRemoteScope(
+          event,
+          target.federatedThread?.target,
+          "resume:select:remote-instance",
+        ))
+      ) {
+        return;
+      }
       const requestedExecutionMode = session.preferences?.executionMode;
       const shouldEscalateTarget =
         requestedExecutionMode === "full-access" &&
@@ -8119,7 +8261,10 @@ export class MessagingController {
     event: MessagingInboundEvent,
   ): Promise<void> {
     await this.options.store.upsertBrowseSession(session);
-    const browseNavigation = await this.navigationForResumeBrowser(session, navigation);
+    const browseNavigation = this.filterRemoteThreadsForActor(
+      event,
+      await this.navigationForResumeBrowser(session, navigation),
+    );
     const intent = buildResumeIntent({
       id: this.newIntentId("resume"),
       createdAt: this.now(),
@@ -10701,12 +10846,38 @@ export class MessagingController {
     event: MessagingInboundCallbackEvent,
     actionId: string,
   ): Promise<void> {
+    // RBAC top-guard: every status/handoff action maps to a permission through
+    // the shared lookup table, so one check covers every mutation method below
+    // without touching each individually. Unmapped actions (skills sub-nav)
+    // fall through ungated. The full-access double-gate is enforced deeper, at
+    // ensureFullAccessEscalationAllowed / ensureAcpRuntimeModeAllowed.
+    const requiredPermission = permissionForActionId(actionId);
+    if (
+      requiredPermission &&
+      !(await this.requirePermission(event, requiredPermission, actionId))
+    ) {
+      return;
+    }
+    // Detach is exempt: it removes the LOCAL binding record and never touches
+    // the peer. Gating it would strand an actor whose scope was revoked while
+    // bound to a remote thread — unable to act, and unable to let go either.
     if (actionId === "status:detach") {
       await this.detachBinding(event);
       return;
     }
 
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    // Scope gate: a binding created while the actor still had remote scope (or
+    // by an operator) must not stay drivable after the scope is revoked.
+    if (
+      !(await this.requireRemoteScopeForBinding(
+        event,
+        binding,
+        `${actionId}:remote-instance`,
+      ))
+    ) {
+      return;
+    }
     if (!binding) {
       await this.deliver(
         buildErrorIntent({
@@ -12135,6 +12306,17 @@ export class MessagingController {
     context: AcpRuntimeRiskWarningContext,
     event: MessagingInboundEvent,
   ): Promise<boolean> {
+    // RBAC double-gate: a privileged (full-access-equivalent) ACP runtime needs
+    // the dedicated danger permission on top of the global Full Access toggle.
+    if (
+      !(await this.requirePermission(
+        event,
+        "thread.execution.full_access",
+        "execution:acp-privileged",
+      ))
+    ) {
+      return false;
+    }
     const controls = await this.resolveFullAccessControls();
     if (!controls.allowEscalation) {
       await this.deliverFullAccessPolicyError(
@@ -12256,6 +12438,18 @@ export class MessagingController {
     context: FullAccessEscalationContext,
     event: MessagingInboundEvent,
   ): Promise<boolean> {
+    // RBAC double-gate: escalating a thread to Codex Full Access requires the
+    // dedicated danger permission IN ADDITION to the global Full Access
+    // settings toggle below — the permission is never a bypass of the toggle.
+    if (
+      !(await this.requirePermission(
+        event,
+        "thread.execution.full_access",
+        "execution:full-access",
+      ))
+    ) {
+      return false;
+    }
     const controls = await this.resolveFullAccessControls();
     if (!controls.allowEscalation) {
       await this.recordFullAccessPolicyViolation(context, event);
@@ -14989,6 +15183,22 @@ export class MessagingController {
       targetKind?: MessagingBindingRecord["targetKind"];
     },
   ): Promise<MessagingBindingRecord> {
+    // Scope backstop. EVERY bind funnels through here, so a caller that forgets
+    // the gate still cannot create a remote binding. Interactive entry points
+    // check first and deliver a proper denial; reaching this throw means a path
+    // was missed, so it fails closed loudly (the runtime's inbound dispatch
+    // logs it) instead of quietly binding a peer's thread.
+    if (
+      !(await this.requireRemoteScope(
+        event,
+        target.federatedThread?.target,
+        "bind:remote-instance",
+      ))
+    ) {
+      throw new Error(
+        "Refusing to bind a thread on another instance: actor lacks federation.remote_control.",
+      );
+    }
     const now = this.now();
     const previousBinding = await this.options.store.findActiveBindingForChannel(
       event.channel,
@@ -16768,6 +16978,303 @@ export class MessagingController {
     return this.authorizedActorIds.has(platformUserId);
   }
 
+  // -------------------------------------------------------------------------
+  // RBAC — capability layer (issue #260). Composes with, never replaces, the
+  // provider admission gate. In legacy-compatible mode (no policy provider, or
+  // enforcement disabled) every method here is a no-op so behavior is identical
+  // to pre-RBAC PwrAgent.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Resolve the triggering actor's effective permissions, or `null` in
+   * legacy-compatible mode (caller should treat null as "allow, Admin-implied").
+   *
+   * The admission-path inference: a caller in `authorizedActorIds` is a *named*
+   * actor (only their named attachments apply); anyone else was admitted by the
+   * provider through a bucket access mode (DM workspace bucket for direct
+   * messages, channel bucket otherwise), so the matching bucket attachment
+   * applies. See #260 §3.
+   */
+  private resolveActorPermissions(
+    event: MessagingInboundEvent,
+  ): RbacResolution | null {
+    const provider = this.options.rbacPolicy;
+    if (!provider) {
+      return null;
+    }
+    const actorId = event.actor.platformUserId;
+    const named = this.authorizedActorIds.has(actorId);
+    const admittedVia = named
+      ? {}
+      : event.channel.conversation.kind === "dm"
+        ? { dmBucket: true }
+        : { channelBucket: true };
+    const input = {
+      actorId,
+      conversationId: event.channel.conversation.id,
+      admittedVia,
+    };
+    // One policy read when the provider supports it — a gated action asks both
+    // "are we enforcing?" and "what may they do?", and each ask re-reads.
+    if (provider.resolveIfEnforcing) {
+      return provider.resolveIfEnforcing(input);
+    }
+    return provider.isEnforcing() ? provider.resolve(input) : null;
+  }
+
+  /**
+   * Admission gate replacement. Legacy mode preserves the exact
+   * `authorizedActorIds` membership check. Enforcing mode admits any actor that
+   * resolves to at least one permission-granting role (named or bucket) and
+   * default-denies the rest.
+   */
+  private authorizeInboundAdmission(event: MessagingInboundEvent): boolean {
+    const resolution = this.resolveActorPermissions(event);
+    if (resolution === null) {
+      return this.isAuthorized(event.actor.platformUserId);
+    }
+    return !resolution.rejected;
+  }
+
+  /**
+   * Gate a single action. Returns true (proceed) in legacy mode or when the
+   * actor holds `permission`; otherwise records an audit row, optionally
+   * notifies the user, and returns false. `notify: false` silently drops (used
+   * for the plain-reply floor to avoid spamming a channel).
+   */
+  private async requirePermission(
+    event: MessagingInboundEvent,
+    permission: MessagingPermissionId,
+    auditAction: string,
+    opts?: { notify?: boolean },
+  ): Promise<boolean> {
+    const resolution = this.resolveActorPermissions(event);
+    if (resolution === null) {
+      return true;
+    }
+    if (resolution.permissions.has(permission)) {
+      return true;
+    }
+    this.recordCapabilityDenied(event, permission, resolution.roleIds, auditAction);
+    if (opts?.notify !== false) {
+      await this.deliverCapabilityDenied(event);
+    }
+    return false;
+  }
+
+  /**
+   * Federation SCOPE gate. Every other permission answers "what may this actor
+   * do"; this one answers "where". Required IN ADDITION to the action's own
+   * permission whenever the thread being acted on lives on another instance —
+   * the same double-gate shape as `thread.execution.full_access`, and for the
+   * same reason: `thread.resume` on a peer's thread is a materially bigger
+   * grant than on a local one, and `thread.execution.full_access` on a peer's
+   * thread is full access on ANOTHER MACHINE.
+   *
+   * Local targets short-circuit to `true`, so this costs nothing for the
+   * single-instance case. Legacy (unenforced) mode is allow-all as always.
+   */
+  private async requireRemoteScope(
+    event: MessagingInboundEvent,
+    target: FederationTarget | undefined,
+    auditAction: string,
+    opts?: { notify?: boolean },
+  ): Promise<boolean> {
+    if (!target || target.scope !== "remote") {
+      return true;
+    }
+    return await this.requirePermission(
+      event,
+      "federation.remote_control",
+      auditAction,
+      opts,
+    );
+  }
+
+  /**
+   * Non-auditing permission probe for render-time filtering. `requirePermission`
+   * records a denial and messages the user, which is right when they ASKED to do
+   * something and wrong when we're deciding what to put on a menu.
+   */
+  private actorHasPermission(
+    event: MessagingInboundEvent,
+    permission: MessagingPermissionId,
+  ): boolean {
+    const resolution = this.resolveActorPermissions(event);
+    return resolution === null || resolution.permissions.has(permission);
+  }
+
+  /**
+   * Strip peers' threads from a snapshot before it reaches a picker. Enforcement
+   * alone would still leak: the resume browser lists thread titles and projects,
+   * so an actor without remote scope would read a peer's work before being told
+   * they can't touch it. Filtering here keeps the menu honest — every row it
+   * shows is a row the actor may actually bind.
+   */
+  private filterRemoteThreadsForActor<T extends NavigationSnapshot>(
+    event: MessagingInboundEvent,
+    navigation: T,
+  ): T {
+    if (this.actorHasPermission(event, "federation.remote_control")) {
+      return navigation;
+    }
+    const localThreads = navigation.threads.filter(
+      (thread) => federationTargetForThread(thread) === undefined,
+    );
+    if (localThreads.length === navigation.threads.length) {
+      return navigation;
+    }
+    const localKeys = new Set(localThreads.map(threadKeyForNavigationThread));
+    return {
+      ...navigation,
+      threads: localThreads,
+      inboxThreadKeys: navigation.inboxThreadKeys.filter((key) =>
+        localKeys.has(key),
+      ),
+    };
+  }
+
+  /** `requireRemoteScope` for an already-resolved binding. */
+  private async requireRemoteScopeForBinding(
+    event: MessagingInboundEvent,
+    binding: MessagingBindingRecord | undefined,
+    auditAction: string,
+    opts?: { notify?: boolean },
+  ): Promise<boolean> {
+    if (!binding) return true;
+    return await this.requireRemoteScope(
+      event,
+      federationTargetForBinding(binding),
+      auditAction,
+      opts,
+    );
+  }
+
+  private recordCapabilityDenied(
+    event: MessagingInboundEvent,
+    permission: MessagingPermissionId | "(admission)",
+    roleIds: readonly string[],
+    auditAction: string,
+  ): void {
+    try {
+      const log = this.desktopActivityLog();
+      if (!log) return;
+      const conversation = event.channel.conversation;
+      const who = event.actor.displayName ?? event.actor.platformUserId;
+      log.record({
+        platform: event.channel.channel,
+        kind: "inbound-rejected",
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        actorId: event.actor.platformUserId,
+        actorDisplayName: event.actor.displayName,
+        summary: `Denied ${auditAction}: ${who} lacks ${permission}`,
+        createdAt: this.now(),
+        payload: {
+          reason: "unauthorized-capability",
+          permission,
+          roleIds: [...roleIds],
+          auditAction,
+          conversationKind: conversation.kind,
+        },
+      });
+    } catch {
+      // Activity log is best-effort observability.
+    }
+  }
+
+  private async deliverCapabilityDenied(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("capability-denied"),
+        createdAt: this.now(),
+        title: "Not permitted",
+        body: "You don't have permission to do that.",
+        recoverable: false,
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  /**
+   * Authorize an agent dynamic-tool call against the RBAC actor who started the
+   * turn. `owns: false` means this controller has no record of the turn (a
+   * different platform's controller, or a desktop-operator turn) — the runtime
+   * asks each controller and only the owner decides. When owned: legacy mode is
+   * allow-all; otherwise gate on the tool's required permission and audit
+   * denials. This is the second RBAC surface — the agent reaching BEYOND the
+   * bound thread — distinct from the actor's direct command/button surface.
+   *
+   * Known window: turn origins live only in this in-memory map. If a
+   * controller is torn down mid-turn (messaging stop / adapter restart), a
+   * still-running turn it started loses its origin, every controller answers
+   * `owns: false`, and the runtime treats the turn as desktop-originated
+   * (unrestricted). Accepted for Phase 1: teardown also severs the actor's
+   * channel back to that turn, and persisting origins would couple RBAC to
+   * turn-lifecycle storage. Revisit if turns ever survive controller restarts.
+   */
+  checkDynamicToolPermission(params: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+    turnId?: string;
+    category: MessagingDynamicToolCategory;
+    tool: string;
+    arguments?: Record<string, unknown> | null;
+  }): { owns: boolean; allowed: boolean; permission?: string } {
+    if (!params.turnId) {
+      return { owns: false, allowed: true };
+    }
+    const origin = this.activeAgentMessagingOriginsByTurnKey.get(
+      agentMessagingTurnKey(params.backend, params.threadId, params.turnId),
+    );
+    if (!origin) {
+      return { owns: false, allowed: true };
+    }
+    const resolution = this.resolveActorPermissions(origin.event);
+    if (resolution === null) {
+      // Legacy-compatible mode: full capability, exactly as before RBAC.
+      return { owns: true, allowed: true };
+    }
+    // `mutate_thread` is gated PER FIELD (model/reasoning/fast/rename/execution
+    // mode) at parity with the status buttons, including the Full Access danger
+    // gate; every other tool needs a single category permission.
+    const required =
+      params.category === "thread_inspection" && params.tool === "mutate_thread"
+        ? permissionsForThreadMutation(params.arguments)
+        : ((): MessagingPermissionId[] => {
+            const permission = permissionForDynamicTool(params.category, params.tool);
+            return permission ? [permission] : [];
+          })();
+    // Scope: the thread tools accept `instanceId` / `includeRemote`, so the
+    // agent can aim them at a peer. Reaching another instance needs the scope
+    // permission on top of the tool's own — and it applies even to otherwise
+    // ungated tools, because "benign here" is not benign on someone else's
+    // machine.
+    if (toolArgsTargetRemoteInstance(params.arguments)) {
+      required.push("federation.remote_control");
+    }
+    if (required.length === 0) {
+      // Benign tool (e.g. get_current_messaging_surface, or a no-op mutation).
+      return { owns: true, allowed: true };
+    }
+    const missing = required.find(
+      (permission) => !resolution.permissions.has(permission),
+    );
+    if (!missing) {
+      return { owns: true, allowed: true };
+    }
+    this.recordCapabilityDenied(
+      origin.event,
+      missing,
+      resolution.roleIds,
+      `tool:${params.category}:${params.tool}`,
+    );
+    return { owns: true, allowed: false, permission: missing };
+  }
+
   private newIntentId(prefix: string): string {
     return `${prefix}:${randomUUID()}`;
   }
@@ -16790,6 +17297,7 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
   const match = /^command:([a-z0-9_-]+)$/i.exec(actionId);
   return match?.[1]?.toLowerCase();
 }
+
 
 /**
  * Narrow an `AppServerNotification` to the `thread/executionMode/queued`

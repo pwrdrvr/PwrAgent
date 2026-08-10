@@ -4,6 +4,7 @@ import {
   MessagingController,
   type MessagingControllerDeliveryBudgetEvent,
 } from "./core/messaging-controller";
+import { getRbacPolicyService } from "./rbac-policy-service";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
@@ -92,7 +93,11 @@ import {
   MessagingDeliveryBudget,
   type MessagingDeliveryPriority,
 } from "./core/messaging-delivery-budget";
-import type { MessagingAgentToolService } from "./messaging-agent-tool-service";
+import type {
+  DynamicToolPermissionCheck,
+  DynamicToolPermissionResult,
+  MessagingAgentToolService,
+} from "./messaging-agent-tool-service";
 
 export type DesktopMessagingAdapter = {
   authorizedActorIds: readonly string[];
@@ -445,6 +450,25 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         message: "No running messaging adapter has this Agent turn location.",
       },
     };
+  }
+
+  checkDynamicToolPermission(
+    check: DynamicToolPermissionCheck,
+  ): DynamicToolPermissionResult {
+    for (const controller of this.controllers) {
+      const result = controller.checkDynamicToolPermission(check);
+      if (result.owns) {
+        return result.permission !== undefined
+          ? { allowed: result.allowed, permission: result.permission }
+          : { allowed: result.allowed };
+      }
+    }
+    // No messaging controller started this turn → desktop-operator turn →
+    // unrestricted (RBAC only governs messaging-originated agents). Note:
+    // origins are controller-memory only, so a controller torn down mid-turn
+    // makes its still-running turn land here too — see the "Known window"
+    // note on MessagingController.checkDynamicToolPermission.
+    return { allowed: true };
   }
 
   private async stopNow(
@@ -1179,6 +1203,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       adapter,
       attachmentPolicy: config.attachmentPolicy,
       authorizedActorIds,
+      rbacPolicy: getRbacPolicyService().providerFor(adapter.channel),
       automationInboundHandler: this.options.automationInboundHandler,
       onInboundPreview: (event) => publishInboundPreview(event),
       backend: this.options.backendBridge,

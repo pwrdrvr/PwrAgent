@@ -266,6 +266,7 @@ import {
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
+  type MessagingDynamicToolCategory,
   type TaskMonitorCompletionSource,
   type TaskMonitorRequest,
   type TaskMonitorResponse,
@@ -22559,6 +22560,17 @@ export class DesktopBackendRegistry {
             "Automation inspection tool calls must originate from an active turn on the same thread.",
         });
       }
+      const automationDenied = this.dynamicToolPermissionDenied(
+        backend,
+        "automation_inspection",
+        dynamicToolCall,
+      );
+      if (automationDenied) {
+        return buildAutomationInspectionDynamicToolErrorResponse({
+          code: "forbidden",
+          message: `The messaging user who started this turn lacks permission for this tool (${automationDenied}).`,
+        });
+      }
       backendRegistryLog.info("handling automation inspection dynamic tool call", {
         backend,
         callId: dynamicToolCall.callId,
@@ -22593,6 +22605,17 @@ export class DesktopBackendRegistry {
             "Thread inspection tool calls must originate from an active turn on the same thread.",
         });
       }
+      const threadInspectionDenied = this.dynamicToolPermissionDenied(
+        backend,
+        "thread_inspection",
+        threadToolCall,
+      );
+      if (threadInspectionDenied) {
+        return buildPwrAgentThreadDynamicToolErrorResponse({
+          code: "forbidden",
+          message: `The messaging user who started this turn lacks permission for this tool (${threadInspectionDenied}).`,
+        });
+      }
       backendRegistryLog.info("handling thread inspection dynamic tool call", {
         backend,
         callId: threadToolCall.callId,
@@ -22625,6 +22648,17 @@ export class DesktopBackendRegistry {
           code: "forbidden",
           message:
             "App management tool calls must originate from an active turn on the same thread.",
+        });
+      }
+      const appManagementDenied = this.dynamicToolPermissionDenied(
+        backend,
+        "app_management",
+        appToolCall,
+      );
+      if (appManagementDenied) {
+        return buildPwrAgentAppDynamicToolErrorResponse({
+          code: "forbidden",
+          message: `The messaging user who started this turn lacks permission for this tool (${appManagementDenied}).`,
         });
       }
       backendRegistryLog.info("handling app management dynamic tool call", {
@@ -22664,6 +22698,17 @@ export class DesktopBackendRegistry {
           code: "forbidden",
           message:
             "Thread handoff tool calls must originate from an active turn on the same thread.",
+        });
+      }
+      const orchestrationDenied = this.dynamicToolPermissionDenied(
+        backend,
+        "thread_orchestration",
+        threadOrchestrationToolCall,
+      );
+      if (orchestrationDenied) {
+        return buildPwrAgentThreadOrchestrationDynamicToolErrorResponse({
+          code: "forbidden",
+          message: `The messaging user who started this turn lacks permission for this tool (${orchestrationDenied}).`,
         });
       }
       backendRegistryLog.info("handling thread orchestration dynamic tool call", {
@@ -22737,6 +22782,17 @@ export class DesktopBackendRegistry {
           code: "forbidden",
           message:
             "Messaging context tool calls must originate from an active turn on the same thread.",
+        });
+      }
+      const messagingContextDenied = this.dynamicToolPermissionDenied(
+        backend,
+        "messaging_context",
+        messagingToolCall,
+      );
+      if (messagingContextDenied) {
+        return buildPwrAgentMessagingDynamicToolErrorResponse({
+          code: "forbidden",
+          message: `The messaging user who started this turn lacks permission for this tool (${messagingContextDenied}).`,
         });
       }
       backendRegistryLog.info("handling messaging context dynamic tool call", {
@@ -22880,6 +22936,44 @@ export class DesktopBackendRegistry {
           ),
       );
     return matchingTurns.length === 1 ? matchingTurns[0] : undefined;
+  }
+
+  /**
+   * RBAC gate for agent dynamic tools. When a turn was started by a messaging
+   * user, the agent acting for them may only invoke tools their role permits.
+   * Returns the required permission when the call is denied, or `null` to allow
+   * (non-messaging / legacy turns, and ungated tools, always allow). Denials
+   * are audited by the messaging layer.
+   */
+  private dynamicToolPermissionDenied(
+    backend: AppServerBackendKind,
+    category: MessagingDynamicToolCategory,
+    call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
+  ): string | null {
+    const service = this.messagingAgentToolService;
+    if (!service) return null;
+    const args =
+      call.arguments && typeof call.arguments === "object"
+        ? (call.arguments as Record<string, unknown>)
+        : null;
+    const result = service.checkDynamicToolPermission({
+      backend,
+      threadId: call.threadId,
+      turnId: call.turnId,
+      category,
+      tool: call.tool,
+      arguments: args,
+    });
+    if (result.allowed) return null;
+    backendRegistryLog.warn("denying dynamic tool call: messaging RBAC", {
+      backend,
+      category,
+      permission: result.permission,
+      threadId: call.threadId,
+      tool: call.tool,
+      turnId: call.turnId,
+    });
+    return result.permission ?? "required capability";
   }
 
   private async handleThreadOrchestrationRequest(
