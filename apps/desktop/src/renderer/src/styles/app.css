@@ -5267,18 +5267,33 @@ textarea,
   padding-right: 8px;
 }
 
-.directory-row__pin-drop-slot {
+.directory-row__pin-drop-boundary {
   position: relative;
-  height: 18px;
+  z-index: 7;
+  height: 0;
   flex: 0 0 auto;
-  margin: -2px 6px;
+  /* The compact list contributes a 4px gap on both sides of every flex item.
+     Cancel those gaps so revealing this zero-height drag target never moves
+     the source row out from under the held card. */
+  margin-block: -4px;
+}
+
+.directory-row__pin-drop-slot {
+  position: absolute;
+  /* Reach upward into the pinned lane while leaving a small guarded overlap
+     with the source row. Runtime source-bounds checks keep that overlap a
+     cancel zone; the line itself stays exactly on the section boundary. */
+  top: -24px;
+  right: 6px;
+  left: 6px;
+  height: 32px;
   cursor: grabbing;
 }
 
 .directory-row__pin-drop-slot::after {
   content: "";
   position: absolute;
-  top: 50%;
+  top: 24px;
   right: 8px;
   left: 8px;
   height: 1px;

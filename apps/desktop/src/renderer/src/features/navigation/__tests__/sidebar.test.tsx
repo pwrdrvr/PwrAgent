@@ -228,6 +228,21 @@ function createDataTransfer(threadKey: string) {
   };
 }
 
+function fireDragEventAt(
+  element: Element,
+  type: "dragover" | "drop",
+  dataTransfer: ReturnType<typeof createDataTransfer>,
+  point: { x: number; y: number },
+): void {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    clientX: { value: point.x },
+    clientY: { value: point.y },
+    dataTransfer: { value: dataTransfer },
+  });
+  fireEvent(element, event);
+}
+
 afterEach(() => {
   delete (window as unknown as {
     __pwragentFederationLabel?: unknown;
@@ -3764,6 +3779,12 @@ describe("Sidebar", () => {
       .closest(".thread-row-shell");
     const dataTransfer = createDataTransfer("codex:thread-1");
     fireEvent.dragStart(unpinnedRow!, { dataTransfer });
+    const pinnedRow = screen
+      .getByRole("button", { name: /Updated thread/i })
+      .closest(".thread-row-shell");
+    fireEvent.dragOver(pinnedRow!, { dataTransfer });
+    expect(pinnedRow).not.toHaveClass("is-drop-target-before");
+    expect(pinnedRow).not.toHaveClass("is-drop-target-after");
     const appendTarget = screen.getByRole("separator", {
       name: "Pin thread after pinned threads for PwrAgent",
     });
@@ -3779,7 +3800,7 @@ describe("Sidebar", () => {
     expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
   });
 
-  it("shows an append target while dragging into an empty directory pin section", () => {
+  it("cancels over the source and appends after leaving an empty pin section", () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
 
     render(
@@ -3811,17 +3832,92 @@ describe("Sidebar", () => {
     const row = screen
       .getByRole("button", { name: /Cross-project cleanup/i })
       .closest(".thread-row-shell");
+    vi.spyOn(row!, "getBoundingClientRect").mockReturnValue({
+      bottom: 200,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
+    });
     const dataTransfer = createDataTransfer("codex:thread-1");
-    fireEvent.dragStart(row!, { dataTransfer });
+    fireEvent.dragStart(row!, { clientX: 50, clientY: 150, dataTransfer });
 
+    let appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
+    });
+    fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 150 });
+    expect(appendTarget).not.toHaveClass("is-drop-target-before");
+    fireDragEventAt(appendTarget, "drop", dataTransfer, { x: 50, y: 150 });
+    expect(onReorderThreadPins).not.toHaveBeenCalled();
+
+    fireEvent.dragStart(row!, { clientX: 50, clientY: 150, dataTransfer });
+    appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
+    });
+    fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 90 });
+    expect(appendTarget).toHaveClass("is-drop-target-before");
+
+    fireDragEventAt(appendTarget, "drop", dataTransfer, { x: 50, y: 90 });
+    expect(onReorderThreadPins).toHaveBeenCalledWith(["codex:thread-1"]);
+  });
+
+  it("keeps an escaped directory pin drag canceled through release", () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const row = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell");
+    vi.spyOn(row!, "getBoundingClientRect").mockReturnValue({
+      bottom: 200,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
+    });
+    const dataTransfer = createDataTransfer("codex:thread-1");
+    fireEvent.dragStart(row!, { clientX: 50, clientY: 150, dataTransfer });
     const appendTarget = screen.getByRole("separator", {
       name: "Pin thread after pinned threads for PwrAgent",
     });
-    fireEvent.dragOver(appendTarget, { dataTransfer });
+    fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 90 });
     expect(appendTarget).toHaveClass("is-drop-target-before");
 
-    fireEvent.drop(appendTarget, { dataTransfer });
-    expect(onReorderThreadPins).toHaveBeenCalledWith(["codex:thread-1"]);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(
+      screen.queryByRole("separator", {
+        name: "Pin thread after pinned threads for PwrAgent",
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.dragEnd(row!, { dataTransfer });
+    expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
   it("shows directory drop targets for row edges and the pin divider", () => {

@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent,
   type ReactElement,
   type MouseEvent,
 } from "react";
@@ -213,6 +214,35 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
   );
 }
 
+type ThreadPinDragSession = {
+  canceled: boolean;
+  sourceWasPinned: boolean;
+  sourceBounds: {
+    bottom: number;
+    left: number;
+    right: number;
+    top: number;
+  };
+  threadKey: string;
+};
+
+function isPointInsideDragSource(
+  session: ThreadPinDragSession,
+  point: { x: number; y: number },
+): boolean {
+  if (
+    session.sourceBounds.right <= session.sourceBounds.left
+    || session.sourceBounds.bottom <= session.sourceBounds.top
+  ) {
+    return false;
+  }
+  return (
+    point.x >= session.sourceBounds.left
+    && point.x <= session.sourceBounds.right
+    && point.y >= session.sourceBounds.top
+    && point.y <= session.sourceBounds.bottom
+  );
+}
 function getDirectoryRowLinkedDirectoryMode(
   thread: NavigationThreadSummary,
 ): "kind" | "label" {
@@ -305,6 +335,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     useState(false);
   const previousSelectedItemKeyRef = useRef<string | undefined>(undefined);
   const handledRevealRequestRef = useRef(0);
+  const threadPinDragSessionRef = useRef<ThreadPinDragSession | undefined>(
+    undefined,
+  );
   /**
    * Suppress the directory summary button's expand/collapse click
    * when the click is the trailing edge of a drag gesture. Browsers
@@ -325,6 +358,48 @@ export function DirectoriesList(props: DirectoriesListProps) {
   // Suppress the click browsers synthesize immediately after a drop so
   // pinning a thread never also minimizes the section.
   const lastDirectoryThreadDropAtRef = useRef(0);
+
+  const beginThreadPinDrag = (
+    event: DragEvent<HTMLDivElement>,
+    threadKey: string,
+    sourceWasPinned: boolean,
+  ): void => {
+    const sourceRect = event.currentTarget.getBoundingClientRect();
+    threadPinDragSessionRef.current = {
+      canceled: false,
+      sourceWasPinned,
+      sourceBounds: {
+        bottom: sourceRect.bottom,
+        left: sourceRect.left,
+        right: sourceRect.right,
+        top: sourceRect.top,
+      },
+      threadKey,
+    };
+    setDraggedThreadKey(threadKey);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", threadKey);
+  };
+
+  const finishThreadPinDrag = (): void => {
+    threadPinDragSessionRef.current = undefined;
+    setDraggedThreadKey(undefined);
+    dropIndicator.clear();
+  };
+
+  useEffect(() => {
+    const cancelThreadPinDrag = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      const session = threadPinDragSessionRef.current;
+      if (!session) return;
+      session.canceled = true;
+      setDraggedThreadKey(undefined);
+      dropIndicator.clear();
+    };
+
+    window.addEventListener("keydown", cancelThreadPinDrag);
+    return () => window.removeEventListener("keydown", cancelThreadPinDrag);
+  }, [dropIndicator]);
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -898,14 +973,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 : undefined
             }
             onDragStartThread={(event) => {
-              setDraggedThreadKey(threadKey);
-              event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("text/plain", threadKey);
+              beginThreadPinDrag(event, threadKey, false);
             }}
-            onDragEndThread={() => {
-              setDraggedThreadKey(undefined);
-              dropIndicator.clear();
-            }}
+            onDragEndThread={finishThreadPinDrag}
             onOpenContextMenu={props.onOpenThreadContextMenu}
             onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
             onDetachPullRequest={props.onDetachPullRequest}
@@ -1229,7 +1299,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                               subthreadCount={subthreadCount}
                               subthreadsCollapsed={subthreadsCollapsed}
 	                          thinkingThreadKeys={props.thinkingThreadKeys}
-	                          thread={thread}
+                          thread={thread}
                               onToggleSubthreads={
                                 subthreadCount > 0 && props.onSetSubthreadsCollapsed
                                   ? () =>
@@ -1240,13 +1310,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                   : undefined
                               }
                           onDragOverThread={(event) => {
-                            event.preventDefault();
                             const draggedThread = draggedThreadKey
                               ? threadsByKey.get(draggedThreadKey)
                               : undefined;
+                            const session = threadPinDragSessionRef.current;
                             if (
                               !draggedThreadKey ||
                               !draggedThread ||
+                              !session ||
+                              session.canceled ||
+                              !session.sourceWasPinned ||
                               draggedThreadKey === threadKey ||
                               !directory.threadKeys.includes(draggedThreadKey)
                             ) {
@@ -1255,6 +1328,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                               return;
                             }
 
+                            event.preventDefault();
                             event.dataTransfer.dropEffect = "move";
                             dropIndicator.show(event.currentTarget, {
                               targetKey: rowDropKey,
@@ -1262,25 +1336,25 @@ export function DirectoriesList(props: DirectoriesListProps) {
                             });
                           }}
                           onDragStartThread={(event) => {
-                            setDraggedThreadKey(threadKey);
-                            event.dataTransfer.effectAllowed = "move";
-                            event.dataTransfer.setData("text/plain", threadKey);
+                            beginThreadPinDrag(event, threadKey, true);
                           }}
                           onDragLeaveThread={(event) => {
                             if (didDragLeaveCurrentTarget(event)) {
                               dropIndicator.clear();
                             }
                           }}
-                          onDragEndThread={() => {
-                            setDraggedThreadKey(undefined);
-                            dropIndicator.clear();
-                          }}
+                          onDragEndThread={finishThreadPinDrag}
                           onDropOnThread={(event) => {
                             event.preventDefault();
-                            setDraggedThreadKey(undefined);
-                            dropIndicator.clear();
                             const draggedKey = event.dataTransfer.getData("text/plain");
-                            if (!draggedKey) return;
+                            const session = threadPinDragSessionRef.current;
+                            const canceled =
+                              !session
+                              || session.canceled
+                              || !session.sourceWasPinned
+                              || session.threadKey !== draggedKey;
+                            finishThreadPinDrag();
+                            if (canceled || !draggedKey) return;
                             const position = getDropIndicatorPosition(event);
                             moveDirectoryPin(
                               directory,
@@ -1317,43 +1391,60 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     })}
 
                     {showPinnedAppendTarget ? (
-                      <div
-                        aria-label={`Pin thread after pinned threads for ${directory.label}`}
-                        className="directory-row__pin-drop-slot"
-                        role="separator"
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          if (
-                            !draggedThreadKey
-                            || !directory.threadKeys.includes(draggedThreadKey)
-                          ) {
-                            event.dataTransfer.dropEffect = "none";
-                            dropIndicator.clear();
-                            return;
-                          }
+                      <div className="directory-row__pin-drop-boundary">
+                        <div
+                          aria-label={`Pin thread after pinned threads for ${directory.label}`}
+                          className="directory-row__pin-drop-slot"
+                          role="separator"
+                          onDragOver={(event) => {
+                            const session = threadPinDragSessionRef.current;
+                            if (
+                              !draggedThreadKey
+                              || !session
+                              || session.canceled
+                              || session.threadKey !== draggedThreadKey
+                              || !directory.threadKeys.includes(draggedThreadKey)
+                              || isPointInsideDragSource(session, {
+                                x: event.clientX,
+                                y: event.clientY,
+                              })
+                            ) {
+                              event.dataTransfer.dropEffect = "none";
+                              dropIndicator.clear();
+                              return;
+                            }
 
-                          event.dataTransfer.dropEffect = "move";
-                          dropIndicator.show(event.currentTarget, {
-                            targetKey: `pinned-append:${directory.key}`,
-                            position: "before",
-                          });
-                        }}
-                        onDragLeave={(event) => {
-                          if (didDragLeaveCurrentTarget(event)) {
-                            dropIndicator.clear();
-                          }
-                        }}
-                        onDrop={(event) => {
-                          event.preventDefault();
-                          lastDirectoryThreadDropAtRef.current = Date.now();
-                          setDraggedThreadKey(undefined);
-                          dropIndicator.clear();
-                          dropThreadAfterDirectoryPins(
-                            directory,
-                            event.dataTransfer.getData("text/plain"),
-                          );
-                        }}
-                      />
+                            event.preventDefault();
+                            event.dataTransfer.dropEffect = "move";
+                            dropIndicator.show(event.currentTarget, {
+                              targetKey: `pinned-append:${directory.key}`,
+                              position: "before",
+                            });
+                          }}
+                          onDragLeave={(event) => {
+                            if (didDragLeaveCurrentTarget(event)) {
+                              dropIndicator.clear();
+                            }
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            const session = threadPinDragSessionRef.current;
+                            const draggedKey = event.dataTransfer.getData("text/plain");
+                            const canceled =
+                              !session
+                              || session.canceled
+                              || session.threadKey !== draggedKey
+                              || isPointInsideDragSource(session, {
+                                x: event.clientX,
+                                y: event.clientY,
+                              });
+                            lastDirectoryThreadDropAtRef.current = Date.now();
+                            finishThreadPinDrag();
+                            if (canceled) return;
+                            dropThreadAfterDirectoryPins(directory, draggedKey);
+                          }}
+                        />
+                      </div>
                     ) : null}
 
                     {directoryPinnedThreads.length > 0 &&
