@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import {
+  federatedThreadIdentityKey,
+  type NavigationThreadSummary,
+} from "@pwragent/shared";
 import { threadAttentionCategories } from "../attention";
 import {
   cloudDetentRadius,
@@ -91,6 +94,50 @@ describe("threadAttentionCategories", () => {
     });
     expect(categories).toContain("approval");
     expect(categories).toContain("active");
+  });
+
+  it("does not let an unscoped stale session mark a remote thread active", () => {
+    const subject = thread({
+      id: "shared-thread-id",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: {
+            scope: "remote",
+            instanceId: "peer-harold",
+          },
+          threadId: "shared-thread-id",
+        },
+        instanceLabel: "Harold-MBP-M2-Max",
+      },
+    });
+
+    expect(threadAttentionCategories(subject, {
+      thinkingThreadKeys: { "codex:shared-thread-id": true },
+    })).not.toContain("active");
+  });
+
+  it("reads thinking from the remote thread identity", () => {
+    const subject = thread({
+      id: "shared-thread-id",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: {
+            scope: "remote",
+            instanceId: "peer-harold",
+          },
+          threadId: "shared-thread-id",
+        },
+        instanceLabel: "Harold-MBP-M2-Max",
+      },
+    });
+
+    expect(threadAttentionCategories(subject, {
+      thinkingThreadKeys: {
+        [federatedThreadIdentityKey(subject.federation!.ref)]: true,
+      },
+    })).toContain("active");
   });
 });
 
@@ -337,4 +384,3 @@ describe("resolveCardDragOffset", () => {
     expect(near).toBeGreaterThan(detentRadius + 200);
   });
 });
-

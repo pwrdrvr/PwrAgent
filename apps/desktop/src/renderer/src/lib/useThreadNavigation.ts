@@ -44,7 +44,10 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { fileLabelFromPath } from "./directory-references";
-import { readRendererFederationTarget } from "./federation-window";
+import {
+  readRendererFederationLabel,
+  readRendererFederationTarget,
+} from "./federation-window";
 import {
   applyNavigationSnapshotTransportResponse,
   type NavigationSnapshotTransportState,
@@ -2414,6 +2417,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   parentThreadBackend?: AppServerBackendKind;
   pinnedRank?: string;
   scheduledStart?: NavigationThreadSummary["scheduledStart"];
+  federation?: NavigationThreadSummary["federation"];
 }): NavigationThreadSummary {
   const titlePrompt =
     params.optimisticUserMessage?.text?.trim() || params.launchpad.prompt.trim();
@@ -2451,6 +2455,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     parentThreadId: params.parentThreadId,
     parentThreadBackend: params.parentThreadBackend,
     pinnedRank: params.pinnedRank,
+    federation: params.federation,
     acpRuntime: params.launchpad.acpRuntime,
     codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     optimisticUserMessage: params.optimisticUserMessage,
@@ -6008,6 +6013,17 @@ export function useThreadNavigation(
         launchpad,
         backend: response.backend,
         threadId: response.threadId,
+        federation: federationTarget
+          ? {
+              ref: {
+                backend: response.backend,
+                target: federationTarget,
+                threadId: response.threadId,
+              },
+              instanceLabel:
+                readRendererFederationLabel() ?? federationTarget.instanceId,
+            }
+          : undefined,
         executionMode: response.executionMode,
         workMode: response.workMode,
         codexEnvironmentRuntime: response.codexEnvironmentRuntime,

@@ -1,5 +1,5 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
 export type ThreadRowStatusKind = "thinking" | "unread";
@@ -14,7 +14,7 @@ export function isThreadActive(
   thread: NavigationThreadSummary,
   thinkingThreadKeys?: Record<string, boolean>,
 ): boolean {
-  const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+  const threadKey = threadSummaryIdentityKey(thread);
   return (
     thread.threadStatus === "active"
     || thinkingThreadKeys?.[threadKey] === true

@@ -1,7 +1,5 @@
-import {
-  buildThreadIdentityKey,
-  type NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { isOpenPullRequest } from "./star-map-preferences";
 
 export const STAR_MAP_ATTENTION_CATEGORIES = [
@@ -34,7 +32,7 @@ export function threadAttentionCategories(
   thread: NavigationThreadSummary,
   sessionKeys?: StarMapSessionKeys,
 ): StarMapAttentionCategory[] {
-  const key = buildThreadIdentityKey(thread.source, thread.id);
+  const key = threadSummaryIdentityKey(thread);
   const categories: StarMapAttentionCategory[] = [];
   if (thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen") {
     categories.push("unread");
@@ -67,4 +65,3 @@ export function threadAttentionCategories(
 export function isAgentThread(thread: NavigationThreadSummary): boolean {
   return thread.agent !== undefined;
 }
-
