@@ -44,6 +44,27 @@ export function subscribeNativeDragInteraction(
 }
 
 /**
+ * Navigation refreshes can rebuild hundreds of sidebar rows. If a full
+ * snapshot or delta arrives during a native drag, defer its React commit until
+ * the held card is released so Chromium can keep servicing the gesture. The
+ * boolean tells the caller whether it waited, which lets refresh code preserve
+ * any pin change made by the drop over data captured before that change.
+ */
+export function waitForNativeDragInteractionEnd(): Promise<boolean> {
+  if (!active) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    const unsubscribe = subscribeNativeDragInteraction((nextActive) => {
+      if (nextActive) return;
+      unsubscribe();
+      resolve(true);
+    });
+  });
+}
+
+/**
  * One window-level guard owns drag-time interaction state for the sidebar.
  * Native drag events keep traversing the DOM while the pointer moves over
  * nested buttons and chips; marking the document lets those descendants and

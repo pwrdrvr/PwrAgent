@@ -3803,7 +3803,7 @@ describe("Sidebar", () => {
   it("cancels over the source and appends after leaving an empty pin section", () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
 
-    render(
+    const { container } = render(
       <Sidebar
         backends={backends}
         browseMode="directories"
@@ -3828,6 +3828,10 @@ describe("Sidebar", () => {
         name: "Pin thread after pinned threads for PwrAgent",
       }),
     ).not.toBeInTheDocument();
+    const mountedAppendTarget = container.querySelector(
+      ".directory-row__pin-drop-slot",
+    );
+    expect(mountedAppendTarget).toHaveAttribute("aria-hidden", "true");
 
     const row = screen
       .getByRole("button", { name: /Cross-project cleanup/i })
@@ -3849,6 +3853,8 @@ describe("Sidebar", () => {
     let appendTarget = screen.getByRole("separator", {
       name: "Pin thread after pinned threads for PwrAgent",
     });
+    expect(appendTarget).toBe(mountedAppendTarget);
+    expect(appendTarget).toHaveClass("is-drag-enabled");
     fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 150 });
     expect(appendTarget).not.toHaveClass("is-drop-target-before");
     fireDragEventAt(appendTarget, "drop", dataTransfer, { x: 50, y: 150 });
@@ -3984,13 +3990,22 @@ describe("Sidebar", () => {
     expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
-  it("shows directory drop targets for row edges and the pin divider", () => {
+  it("shows directory drop targets for pinned row edges and the append slot", () => {
     // Pin reorder-by-drag lives only where a pinned section is rendered, which
     // after the Updated/Created lenses became pure sort orders means the
     // Directories lens alone.
-    const pinnedThread = {
-      ...updatedSinceSeenThread,
+    const firstPinnedThread = {
+      ...sharedThread,
       pinnedRank: "1024",
+    };
+    const secondPinnedThread = {
+      ...updatedSinceSeenThread,
+      pinnedRank: "2048",
+    };
+    const unpinnedThread = {
+      ...sharedThread,
+      id: "thread-unpinned",
+      title: "Unpinned thread",
     };
 
     render(
@@ -4001,15 +4016,19 @@ describe("Sidebar", () => {
         directories={[
           {
             ...directories[0]!,
-            threadKeys: ["codex:thread-1", "codex:thread-updated"],
+            threadKeys: [
+              "codex:thread-1",
+              "codex:thread-updated",
+              "codex:thread-unpinned",
+            ],
           },
         ]}
-        inboxThreads={[sharedThread]}
+        inboxThreads={[firstPinnedThread, secondPinnedThread, unpinnedThread]}
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
-        threads={[sharedThread, pinnedThread]}
+        threads={[firstPinnedThread, secondPinnedThread, unpinnedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
@@ -4041,24 +4060,26 @@ describe("Sidebar", () => {
       y: 0,
     });
 
-    fireEvent.dragOver(pinnedRow!, {
-      clientY: 75,
-      dataTransfer,
-    });
+    fireDragEventAt(pinnedRow!, "dragover", dataTransfer, { x: 50, y: 25 });
     expect(pinnedRow).toHaveClass("is-drop-target-before");
+
+    fireDragEventAt(pinnedRow!, "dragover", dataTransfer, { x: 50, y: 75 });
+    expect(pinnedRow).not.toHaveClass("is-drop-target-before");
+    expect(pinnedRow).toHaveClass("is-drop-target-after");
 
     fireEvent.dragLeave(pinnedRow!, {
       relatedTarget: null,
     });
     expect(pinnedRow).not.toHaveClass("is-drop-target-before");
+    expect(pinnedRow).not.toHaveClass("is-drop-target-after");
 
-    const divider = screen.getByRole("button", {
-      name: "Hide directory threads for PwrAgent",
+    const appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
     });
-    fireEvent.dragOver(divider, {
+    fireEvent.dragOver(appendTarget, {
       dataTransfer,
     });
-    expect(divider).toHaveClass("is-drop-target");
+    expect(appendTarget).toHaveClass("is-drop-target-before");
   });
 
   it("renders no pinned section or drag affordance in the Created lens", () => {

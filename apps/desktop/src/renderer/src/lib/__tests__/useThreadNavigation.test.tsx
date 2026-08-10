@@ -14,6 +14,10 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  beginNativeDragInteraction,
+  endNativeDragInteraction,
+} from "../native-drag-interaction";
 import { useThreadNavigation } from "../useThreadNavigation";
 
 describe("useThreadNavigation", () => {
@@ -23,6 +27,7 @@ describe("useThreadNavigation", () => {
   });
 
   afterEach(() => {
+    endNativeDragInteraction();
     delete (window as unknown as {
       __pwragentNavigationPreferences?: unknown;
     }).__pwragentNavigationPreferences;
@@ -101,6 +106,101 @@ describe("useThreadNavigation", () => {
       },
     });
     expect(result.current.error).toBeUndefined();
+  });
+
+  it("defers navigation deltas during a drag and preserves the dropped pin rank", async () => {
+    const buildSnapshot = (title: string): NavigationSnapshot => ({
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title,
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          updatedAt: 1,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+    const deferredDelta = createDeferred<
+      Awaited<
+        ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>
+      >
+    >();
+    const getNavigationSnapshot = vi.fn(async () => buildSnapshot("Initial"));
+    const getNavigationSnapshotTransport = vi
+      .fn<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>()
+      .mockResolvedValueOnce({
+        kind: "full",
+        revision: "revision-1",
+        snapshot: buildSnapshot("Initial"),
+      })
+      .mockReturnValueOnce(deferredDelta.promise);
+    const reorderThreadPins = vi.fn<
+      NonNullable<DesktopApi["reorderThreadPins"]>
+    >(async () => ({
+      pinnedRanks: { "codex:thread-1": "1024" },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      getNavigationSnapshotTransport,
+      onAgentEvent: () => () => undefined,
+      reorderThreadPins,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.title).toBe("Initial");
+    });
+
+    let refresh!: Promise<void>;
+    act(() => {
+      refresh = result.current.refresh();
+    });
+    await waitFor(() => {
+      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(2);
+    });
+
+    beginNativeDragInteraction();
+    await act(async () => {
+      await result.current.reorderThreadPins(["codex:thread-1"]);
+    });
+    expect(result.current.threads[0]?.pinnedRank).toBe("1024");
+
+    act(() => {
+      deferredDelta.resolve({
+        kind: "delta",
+        baseRevision: "revision-1",
+        revision: "revision-2",
+        fetchedAt: 2,
+        removedThreadKeys: [],
+        upsertedThreads: buildSnapshot("Updated during drag").threads,
+        removedDirectoryKeys: [],
+        upsertedDirectories: [],
+      });
+    });
+    await Promise.resolve();
+    expect(result.current.threads[0]?.title).toBe("Initial");
+    expect(result.current.threads[0]?.pinnedRank).toBe("1024");
+
+    await act(async () => {
+      endNativeDragInteraction();
+      await refresh;
+    });
+    expect(result.current.threads[0]).toMatchObject({
+      title: "Updated during drag",
+      pinnedRank: "1024",
+    });
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   it("keeps separate transport revisions while lightweight refresh scopes alternate", async () => {

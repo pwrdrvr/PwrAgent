@@ -5295,10 +5295,16 @@ textarea,
   z-index: 7;
   height: 0;
   flex: 0 0 auto;
-  /* The compact list contributes a 4px gap on both sides of every flex item.
-     Cancel those gaps so revealing this zero-height drag target never moves
-     the source row out from under the held card. */
+  /* The list contributes a 4px gap on both sides of this flex item. Cancel
+     those gaps so this permanently mounted zero-height target is layout-neutral
+     and starting a drag never moves the source row under the held card. */
   margin-block: -4px;
+}
+
+:root[data-density="compact"] .directory-row__pin-drop-boundary {
+  /* Compact density reduces `.sidebar-list` to a 2px gap. Keep the boundary's
+     compensation paired with that value so it remains layout-neutral. */
+  margin-block: -2px;
 }
 
 .directory-row__pin-drop-slot {
@@ -5311,6 +5317,11 @@ textarea,
   left: 6px;
   height: 32px;
   cursor: grabbing;
+  pointer-events: none;
+}
+
+.directory-row__pin-drop-slot.is-drag-enabled {
+  pointer-events: auto;
 }
 
 .directory-row__pin-drop-slot::after {
@@ -5322,8 +5333,13 @@ textarea,
   height: 1px;
   border-radius: 999px;
   background: var(--border-subtle);
+  opacity: 0;
   pointer-events: none;
   transform: translateY(-50%);
+}
+
+.directory-row__pin-drop-slot.is-drag-enabled::after {
+  opacity: 1;
 }
 
 .directory-row__pin-drop-slot.is-drop-target-before::after {

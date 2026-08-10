@@ -54,6 +54,7 @@ import {
   applyNavigationSnapshotTransportResponse,
   type NavigationSnapshotTransportState,
 } from "./navigation-snapshot-transport";
+import { waitForNativeDragInteractionEnd } from "./native-drag-interaction";
 import { resolveThreadWorkingStatePath } from "./thread-working-state-path";
 import {
   agentEventMatchesThread,
@@ -874,6 +875,59 @@ function reconcileNavigationSnapshot(
       return previousThread && threadSummariesEqual(previousThread, thread)
         ? previousThread
         : thread;
+    }),
+  };
+}
+
+function preserveNavigationPinState(
+  current: NavigationSnapshot | undefined,
+  next: NavigationSnapshot,
+): NavigationSnapshot {
+  if (!current) {
+    return next;
+  }
+
+  const currentThreads = new Map(
+    current.threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread,
+    ]),
+  );
+  const currentDirectories = new Map(
+    current.directories.map((directory) => [directory.key, directory]),
+  );
+  return {
+    ...next,
+    threads: next.threads.map((thread) => {
+      const currentThread = currentThreads.get(
+        buildThreadIdentityKey(thread.source, thread.id),
+      );
+      if (!currentThread || currentThread.pinnedRank === thread.pinnedRank) {
+        return thread;
+      }
+      const preserved = { ...thread };
+      if (currentThread.pinnedRank === undefined) {
+        delete preserved.pinnedRank;
+      } else {
+        preserved.pinnedRank = currentThread.pinnedRank;
+      }
+      return preserved;
+    }),
+    directories: next.directories.map((directory) => {
+      const currentDirectory = currentDirectories.get(directory.key);
+      if (
+        !currentDirectory
+        || currentDirectory.pinnedRank === directory.pinnedRank
+      ) {
+        return directory;
+      }
+      const preserved = { ...directory };
+      if (currentDirectory.pinnedRank === undefined) {
+        delete preserved.pinnedRank;
+      } else {
+        preserved.pinnedRank = currentDirectory.pinnedRank;
+      }
+      return preserved;
     }),
   };
 }
@@ -3019,6 +3073,8 @@ export function useThreadNavigation(
         return;
       }
 
+      let deferredForNativeDrag = await waitForNativeDragInteractionEnd();
+
       setState((current) => ({
         ...current,
         loading: !current.response,
@@ -3099,6 +3155,9 @@ export function useThreadNavigation(
         } else {
           throw new Error("Desktop bridge is missing navigation snapshot support.");
         }
+        deferredForNativeDrag =
+          (await waitForNativeDragInteractionEnd())
+          || deferredForNativeDrag;
         remoteRecoveryAttemptRef.current = 0;
         desktopApi.recordStartupProfileEvent?.("navigation-refresh:snapshot", {
           directoryCount: snapshot.directories.length,
@@ -3157,7 +3216,12 @@ export function useThreadNavigation(
 
           const responseWithConcurrentThreadStatuses =
             applyConcurrentThreadStatusObservations(
-              responseWithObservedThreadNames,
+              deferredForNativeDrag
+                ? preserveNavigationPinState(
+                    current.response,
+                    responseWithObservedThreadNames,
+                  )
+                : responseWithObservedThreadNames,
               threadStatusObservationsRef.current,
               threadStatusSequenceAtRefreshStart,
             );

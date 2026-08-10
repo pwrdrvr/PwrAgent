@@ -2,9 +2,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  beginNativeDragInteraction,
   endNativeDragInteraction,
   NATIVE_DRAG_ACTIVE_ATTRIBUTE,
   useNativeDragInteractionGuard,
+  waitForNativeDragInteractionEnd,
 } from "../native-drag-interaction";
 import { useViewportTooltip } from "../useViewportTooltip";
 
@@ -73,5 +75,21 @@ describe("native drag interaction guard", () => {
     expect(document.documentElement).not.toHaveAttribute(
       NATIVE_DRAG_ACTIVE_ATTRIBUTE,
     );
+  });
+
+  it("defers work until a native drag ends", async () => {
+    beginNativeDragInteraction();
+
+    let settled = false;
+    const waiting = waitForNativeDragInteractionEnd().then((waited) => {
+      settled = true;
+      return waited;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    endNativeDragInteraction();
+    await expect(waiting).resolves.toBe(true);
+    await expect(waitForNativeDragInteractionEnd()).resolves.toBe(false);
   });
 });

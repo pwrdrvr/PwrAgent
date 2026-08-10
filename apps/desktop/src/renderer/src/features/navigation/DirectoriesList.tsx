@@ -215,11 +215,24 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
 }
 
 type ThreadPinDragSession = {
+  appendTargetElement?: HTMLDivElement;
   canceled: boolean;
   sourceElement: HTMLDivElement;
   sourceWasPinned: boolean;
   threadKey: string;
 };
+
+function setThreadPinAppendTargetActive(
+  session: ThreadPinDragSession,
+  active: boolean,
+): void {
+  session.appendTargetElement?.classList.toggle("is-drag-enabled", active);
+  if (active) {
+    session.appendTargetElement?.removeAttribute("aria-hidden");
+  } else {
+    session.appendTargetElement?.setAttribute("aria-hidden", "true");
+  }
+}
 
 function isPointInsideDragSource(
   session: ThreadPinDragSession,
@@ -306,9 +319,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
     Record<string, boolean>
   >({});
   const dropIndicator = useDropIndicatorController();
-  const [draggedThreadKey, setDraggedThreadKey] = useState<string | undefined>(
-    undefined,
-  );
   // Sub-thread (child) drag/drop state — kept SEPARATE from the
   // pinned-thread / directory drag state above so a child reorder can
   // never cross-wire with a pin or directory drag. Child drags carry the
@@ -360,20 +370,29 @@ export function DirectoriesList(props: DirectoriesListProps) {
     threadKey: string,
     sourceWasPinned: boolean,
   ): void => {
-    threadPinDragSessionRef.current = {
+    const session: ThreadPinDragSession = {
+      appendTargetElement:
+        event.currentTarget
+          .closest(".directory-row")
+          ?.querySelector<HTMLDivElement>(".directory-row__pin-drop-slot")
+        ?? undefined,
       canceled: false,
       sourceElement: event.currentTarget,
       sourceWasPinned,
       threadKey,
     };
-    setDraggedThreadKey(threadKey);
+    threadPinDragSessionRef.current = session;
+    setThreadPinAppendTargetActive(session, true);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", threadKey);
   };
 
   const finishThreadPinDrag = (): void => {
+    const session = threadPinDragSessionRef.current;
+    if (session) {
+      setThreadPinAppendTargetActive(session, false);
+    }
     threadPinDragSessionRef.current = undefined;
-    setDraggedThreadKey(undefined);
     dropIndicator.clear();
   };
 
@@ -383,7 +402,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       const session = threadPinDragSessionRef.current;
       if (!session) return;
       session.canceled = true;
-      setDraggedThreadKey(undefined);
+      setThreadPinAppendTargetActive(session, false);
       dropIndicator.clear();
     };
 
@@ -912,10 +931,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       selectionOrder,
       unpinnedExpanded,
     } = expandedThreadModel;
-    const showPinnedAppendTarget = Boolean(
+    const renderPinnedAppendTarget = Boolean(
       props.onReorderThreadPins
-      && draggedThreadKey
-      && directory.threadKeys.includes(draggedThreadKey)
+      && directoryUnpinnedThreadCount > 0
     );
     // Render one unpinned thread row. Shared by the always-shown capped
     // slice and the overflow slice so the "Show more / Show less" toggle
@@ -1300,18 +1318,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                   : undefined
                               }
                           onDragOverThread={(event) => {
-                            const draggedThread = draggedThreadKey
-                              ? threadsByKey.get(draggedThreadKey)
-                              : undefined;
                             const session = threadPinDragSessionRef.current;
+                            const draggedThread = session
+                              ? threadsByKey.get(session.threadKey)
+                              : undefined;
                             if (
-                              !draggedThreadKey ||
                               !draggedThread ||
                               !session ||
                               session.canceled ||
                               !session.sourceWasPinned ||
-                              draggedThreadKey === threadKey ||
-                              !directory.threadKeys.includes(draggedThreadKey)
+                              session.threadKey === threadKey ||
+                              !directory.threadKeys.includes(session.threadKey)
                             ) {
                               event.dataTransfer.dropEffect = "none";
                               dropIndicator.clear();
@@ -1380,20 +1397,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                      );
                     })}
 
-                    {showPinnedAppendTarget ? (
+                    {renderPinnedAppendTarget ? (
                       <div className="directory-row__pin-drop-boundary">
                         <div
                           aria-label={`Pin thread after pinned threads for ${directory.label}`}
+                          aria-hidden="true"
                           className="directory-row__pin-drop-slot"
                           role="separator"
                           onDragOver={(event) => {
                             const session = threadPinDragSessionRef.current;
                             if (
-                              !draggedThreadKey
-                              || !session
+                              !session
                               || session.canceled
-                              || session.threadKey !== draggedThreadKey
-                              || !directory.threadKeys.includes(draggedThreadKey)
+                              || !directory.threadKeys.includes(session.threadKey)
                               || isPointInsideDragSource(session, {
                                 x: event.clientX,
                                 y: event.clientY,
