@@ -44,6 +44,51 @@ const MAX_BACKOFF_MS = 60_000;
 /** How long a minted `gh auth token` stays fresh in memory. */
 const TOKEN_TTL_MS = 5 * 60_000;
 
+type GhAuthTokenRunner = (
+  command: string,
+  args: string[],
+) => Promise<{ stdout: string; stderr?: string }>;
+
+const GITHUB_TOKEN_PATTERN = /(?:gh[oprsu]_\w+|github_pat_\w+)/;
+
+function findGithubToken(output: { stdout: string; stderr?: string }): string | null {
+  return `${output.stdout}\n${output.stderr ?? ""}`.match(GITHUB_TOKEN_PATTERN)?.[0] ?? null;
+}
+
+/** Read a github.com token across both current and older GitHub CLI releases. */
+export async function readGithubDotComAuthToken(
+  command: string,
+  run: GhAuthTokenRunner = async (binary, args) =>
+    await execFileAsync(binary, args, {
+      timeout: 10_000,
+      encoding: "utf8",
+    }),
+): Promise<string | null> {
+  try {
+    const output = await run(command, [
+      "auth",
+      "token",
+      "--hostname",
+      "github.com",
+    ]);
+    const token = findGithubToken(output);
+    if (token) {
+      return token;
+    }
+  } catch {
+    // Older gh versions do not have `auth token`; use status output instead.
+  }
+
+  const output = await run(command, [
+    "auth",
+    "status",
+    "--hostname",
+    "github.com",
+    "--show-token",
+  ]);
+  return findGithubToken(output);
+}
+
 /**
  * The repo + number that identify a PR *for querying*. This is the PR's BASE
  * repo — a PR number belongs to the repo it was opened against, which for a
@@ -343,6 +388,13 @@ export type GithubGraphqlPrClientOptions = {
   /** Override the retry sleep — tests make backoff instant. */
   sleep?: (ms: number) => Promise<void>;
   batchSize?: number;
+  onAuthenticationFailure?: (event: GithubAuthenticationFailureEvent) => void;
+  onAuthenticationRecovered?: () => void;
+};
+
+export type GithubAuthenticationFailureEvent = {
+  detail?: string;
+  reason: "token-command-failed" | "token-unavailable";
 };
 
 export class GithubGraphqlPrClient {
@@ -350,6 +402,10 @@ export class GithubGraphqlPrClient {
   private readonly getTokenOverride: GithubGraphqlPrClientOptions["getToken"];
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly batchSize: number;
+  private readonly onAuthenticationFailure:
+    | NonNullable<GithubGraphqlPrClientOptions["onAuthenticationFailure"]>
+    | undefined;
+  private readonly onAuthenticationRecovered: (() => void) | undefined;
   private tokenCache: { token: string; fetchedAt: number } | undefined;
 
   constructor(options: GithubGraphqlPrClientOptions = {}) {
@@ -359,6 +415,8 @@ export class GithubGraphqlPrClient {
       options.sleep
       ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.batchSize = Math.max(1, options.batchSize ?? DEFAULT_BATCH_SIZE);
+    this.onAuthenticationFailure = options.onAuthenticationFailure;
+    this.onAuthenticationRecovered = options.onAuthenticationRecovered;
   }
 
   /** Force the next request to re-mint a token (e.g. after `gh auth login`). */
@@ -564,7 +622,21 @@ export class GithubGraphqlPrClient {
 
   private async resolveToken(): Promise<string | null> {
     if (this.getTokenOverride) {
-      return await this.getTokenOverride();
+      try {
+        const token = await this.getTokenOverride();
+        if (token) {
+          this.onAuthenticationRecovered?.();
+        } else {
+          this.onAuthenticationFailure?.({ reason: "token-unavailable" });
+        }
+        return token;
+      } catch (error) {
+        this.onAuthenticationFailure?.({
+          detail: error instanceof Error ? error.message : String(error),
+          reason: "token-command-failed",
+        });
+        return null;
+      }
     }
     if (
       this.tokenCache
@@ -576,6 +648,7 @@ export class GithubGraphqlPrClient {
     const envToken = process.env.GITHUB_TOKEN?.trim();
     if (envToken) {
       this.tokenCache = { token: envToken, fetchedAt: Date.now() };
+      this.onAuthenticationRecovered?.();
       return envToken;
     }
 
@@ -595,20 +668,23 @@ export class GithubGraphqlPrClient {
       });
       const command = discovery.selectedCommand;
       if (!command) {
+        this.onAuthenticationFailure?.({ reason: "token-unavailable" });
         return null;
       }
-      const { stdout } = await execFileAsync(command, ["auth", "token"], {
-        timeout: 10_000,
-        encoding: "utf8",
-      });
-      const token = stdout.trim();
+      const token = await readGithubDotComAuthToken(command);
       if (!token) {
+        this.onAuthenticationFailure?.({ reason: "token-unavailable" });
         return null;
       }
       this.tokenCache = { token, fetchedAt: Date.now() };
+      this.onAuthenticationRecovered?.();
       return token;
     } catch (error) {
       // gh missing, or not logged in. The poller simply idles.
+      this.onAuthenticationFailure?.({
+        detail: error instanceof Error ? error.message : String(error),
+        reason: "token-command-failed",
+      });
       graphqlLog.debug("gh auth token failed", {
         error: error instanceof Error ? error.message : String(error),
       });

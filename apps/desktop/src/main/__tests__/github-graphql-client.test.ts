@@ -6,6 +6,7 @@ import {
   buildBranchPrQuery,
   mapGraphqlPrNode,
   parsePrRefFromUrl,
+  readGithubDotComAuthToken,
   retryDelayMs,
 } from "../pr-status/github-graphql-client";
 import type { GraphqlPrNode, PrRef } from "../pr-status/github-graphql-client";
@@ -33,6 +34,43 @@ function node(overrides: Partial<GraphqlPrNode> = {}): GraphqlPrNode {
     ...overrides,
   };
 }
+
+describe("readGithubDotComAuthToken", () => {
+  it("uses the direct token command when supported", async () => {
+    const run = vi.fn(async () => ({ stdout: "ghp_directToken123456\n" }));
+
+    await expect(readGithubDotComAuthToken("gh", run)).resolves.toBe(
+      "ghp_directToken123456",
+    );
+    expect(run).toHaveBeenCalledWith("gh", [
+      "auth",
+      "token",
+      "--hostname",
+      "github.com",
+    ]);
+  });
+
+  it("falls back to auth status output for older GitHub CLI versions", async () => {
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("unknown command token"))
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "Logged in to github.com\n  Token: ghp_legacyToken123456",
+      });
+
+    await expect(readGithubDotComAuthToken("gh", run)).resolves.toBe(
+      "ghp_legacyToken123456",
+    );
+    expect(run).toHaveBeenLastCalledWith("gh", [
+      "auth",
+      "status",
+      "--hostname",
+      "github.com",
+      "--show-token",
+    ]);
+  });
+});
 
 describe("parsePrRefFromUrl", () => {
   it("extracts the BASE repo, which is what a PR number belongs to", () => {
@@ -270,6 +308,22 @@ describe("GithubGraphqlPrClient", () => {
       ...options,
     });
   }
+
+  it("surfaces token acquisition failures to the application", async () => {
+    const onAuthenticationFailure = vi.fn();
+    const request = vi.fn();
+    const authless = new GithubGraphqlPrClient({
+      request,
+      getToken: async () => null,
+      onAuthenticationFailure,
+    });
+
+    await expect(authless.fetchPullRequests([refs[0]!])).resolves.toEqual([]);
+    expect(request).not.toHaveBeenCalled();
+    expect(onAuthenticationFailure).toHaveBeenCalledWith({
+      reason: "token-unavailable",
+    });
+  });
 
   it("returns one PrSummary per resolved alias", async () => {
     const request = vi.fn(async () => ({

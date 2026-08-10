@@ -297,6 +297,28 @@ describe("PrPollingScheduler", () => {
     expect(fetchPullRequests).toHaveBeenCalledTimes(1);
   });
 
+  it("orders observations by request start instead of response completion", async () => {
+    const applyResults = vi.fn(async () => [] as string[]);
+    const advanceDuringFetch = vi.fn();
+    const h = harness({
+      listTargets: () => [target(1)],
+      fetchPullRequests: async () => {
+        advanceDuringFetch();
+        return [pr({ number: 1, mergeState: "conflicting" })];
+      },
+      applyResults,
+    });
+    advanceDuringFetch.mockImplementation(() => h.advance(5_000));
+    const requestedAt = h.now;
+
+    await h.scheduler.tick();
+
+    expect(applyResults).toHaveBeenCalledWith(
+      [expect.objectContaining({ number: 1, mergeState: "conflicting" })],
+      requestedAt,
+    );
+  });
+
   it("keeps a changing PR warm and lets a quiet one go cold", async () => {
     const targets = [target(1), target(2)];
     const h = harness({

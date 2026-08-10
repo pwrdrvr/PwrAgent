@@ -97,6 +97,8 @@ export type PrPollingSchedulerDeps = {
   fetchPullRequests: (refs: PrRef[]) => Promise<PrSummary[]>;
   /** Persist + publish. Returns the prKeys whose status actually changed. */
   applyResults: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
+  /** Allocate a globally ordered token immediately before starting a request. */
+  getObservationTimestamp?: () => number;
   now?: () => number;
 };
 
@@ -319,6 +321,7 @@ export class PrPollingScheduler {
     // Mark polled BEFORE the request. If a PR consistently errors, it must not
     // stay permanently "due" and crowd out healthy targets on every tick.
     const attemptedAt = this.now();
+    const observedAt = this.deps.getObservationTimestamp?.() ?? attemptedAt;
     for (const target of batch) {
       const state = this.ensurePollState(target.prKey, attemptedAt);
       state.lastPolledAt = attemptedAt;
@@ -333,12 +336,11 @@ export class PrPollingScheduler {
       return;
     }
 
-    const fetchedAt = this.now();
-    const changedKeys = await this.deps.applyResults(prs, fetchedAt);
+    const changedKeys = await this.deps.applyResults(prs, observedAt);
     for (const prKey of changedKeys) {
       const state = this.pollState.get(prKey);
       if (state) {
-        state.lastChangedAt = fetchedAt;
+        state.lastChangedAt = observedAt;
       }
     }
 

@@ -70,6 +70,7 @@ import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
 import { resolveBackendErrorNotice } from "./features/notifications/backend-error-notice";
+import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
@@ -278,6 +279,8 @@ function DesktopAppShell(props: {
     useState<AppNoticeToastNotice>();
   const [grokCliUpdateNotice, setGrokCliUpdateNotice] =
     useState<AppNoticeToastNotice>();
+  const [githubPrAuthenticationNotice, setGithubPrAuthenticationNotice] =
+    useState<AppNoticeToastNotice>();
   // Latest thread list, mirrored into a ref so the backend-error toast
   // subscription can resolve a thread's title without re-subscribing on
   // every navigation change. Kept fresh by an effect below, once
@@ -313,6 +316,12 @@ function DesktopAppShell(props: {
           " Copy this notice to hand off the profile path.",
         ].join(""),
       });
+    });
+  }, [desktopApi]);
+
+  useEffect(() => {
+    return desktopApi?.onGithubPrAuthenticationFailure?.((event) => {
+      setGithubPrAuthenticationNotice(buildGithubPrAuthenticationNotice(event));
     });
   }, [desktopApi]);
 
@@ -1601,6 +1610,11 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             notice={grokCliUpdateNotice}
             onDismiss={() => setGrokCliUpdateNotice(undefined)}
+          />
+          <AppNoticeToast
+            desktopApi={desktopApi}
+            notice={githubPrAuthenticationNotice}
+            onDismiss={() => setGithubPrAuthenticationNotice(undefined)}
           />
           <AppNoticeToast
             desktopApi={desktopApi}

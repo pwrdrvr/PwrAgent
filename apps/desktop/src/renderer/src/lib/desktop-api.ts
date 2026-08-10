@@ -11,6 +11,7 @@ import type {
   CaptureHeapSnapshotResult,
 } from "../../../shared/heap-snapshot";
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
+import type { GithubPrAuthenticationFailureEvent } from "../../../shared/github-pr-authentication";
 import type {
   IntegratedTerminalCloseRequest,
   IntegratedTerminalCreateRequest,
@@ -309,6 +310,9 @@ export type DesktopApi = {
   onAppUpdateStatus?: (callback: (status: AppUpdateStatus) => void) => () => void;
   onHotCpuProfileCaptured?: (
     callback: (event: HotCpuProfileCapturedEvent) => void,
+  ) => () => void;
+  onGithubPrAuthenticationFailure?: (
+    callback: (event: GithubPrAuthenticationFailureEvent) => void,
   ) => () => void;
   installAppUpdate?: () => Promise<AppUpdateInstallResult>;
   listAutomations?: (
