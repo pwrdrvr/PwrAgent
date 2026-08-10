@@ -254,6 +254,7 @@ import type {
   ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
 import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
+import type { GithubPrAuthenticationFailureEvent } from "../shared/github-pr-authentication";
 import type {
   CaptureHeapSnapshotRequest,
   CaptureHeapSnapshotResult,
@@ -329,6 +330,7 @@ import {
   APP_UPDATE_STATUS_READ_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
+  GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
@@ -630,6 +632,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL, listener);
+    };
+  },
+  onGithubPrAuthenticationFailure: (
+    callback: (event: GithubPrAuthenticationFailureEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: GithubPrAuthenticationFailureEvent,
+    ) => callback(payload);
+    ipcRenderer.on(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL, listener);
     };
   },
   installAppUpdate: async (): Promise<AppUpdateInstallResult> =>

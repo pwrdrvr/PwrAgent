@@ -400,6 +400,43 @@ describe("GithubPrFetcher", () => {
       expect(exec).toHaveBeenCalledTimes(1);
     });
 
+    it("discards a primed result for an authoritative refresh", async () => {
+      const { fetcher, exec } = buildFetcher({
+        stdout: JSON.stringify([{
+          number: primedPr.number,
+          title: "Fresh PR state",
+          url: primedPr.url,
+          state: "OPEN",
+          isDraft: false,
+          mergeable: "CONFLICTING",
+          mergeStateStatus: "DIRTY",
+          mergedAt: null,
+          commits: [],
+          headRefName: "feat/x",
+          headRepository: { name: primedPr.repo },
+          headRepositoryOwner: { login: primedPr.org },
+          statusCheckRollup: [],
+        }]),
+      });
+      fetcher.primeBranchLookup([
+        { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
+      ]);
+
+      const result = await fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/repo",
+        branch: "feat/x",
+        allowPrimed: false,
+      });
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          number: primedPr.number,
+          mergeState: "conflicting",
+        }),
+      ]);
+      expect(exec).toHaveBeenCalledOnce();
+    });
+
     it("does not answer for a different branch or directory", async () => {
       const { fetcher, exec } = buildFetcher();
       fetcher.primeBranchLookup([
