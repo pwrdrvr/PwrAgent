@@ -5611,6 +5611,11 @@ function isUnmaterializedThreadError(error: unknown): boolean {
   );
 }
 
+function isThreadNotFoundError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.toLowerCase().includes("thread not found:");
+}
+
 function readCodexThreadSourceKind(
   record: Record<string, unknown>,
   sessionRecord: Record<string, unknown> | null,
@@ -7613,33 +7618,44 @@ export class CodexAppServerClient {
   }): Promise<CodexMcpServerSummary[]> {
     await this.ensureInitialized();
 
-    const servers: CodexMcpServerSummary[] = [];
-    const seenCursors = new Set<string>();
-    let cursor: string | undefined;
-    do {
-      const result = await requestWithFallbacks({
-        client: this.connection,
-        methods: ["mcpServerStatus/list"],
-        payloads: [{
-          threadId: params.threadId,
-          detail: params.detail,
-          limit: 100,
-          ...(cursor ? { cursor } : {}),
-        }],
-        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      });
-      const page = readMcpServerStatusPage(result, params.detail);
-      servers.push(...page.servers);
-      cursor = page.nextCursor;
-      if (cursor) {
-        if (seenCursors.has(cursor)) {
-          throw new Error("codex_mcp_inventory_repeated_cursor");
+    const listPages = async (threadId?: string) => {
+      const servers: CodexMcpServerSummary[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const result = await requestWithFallbacks({
+          client: this.connection,
+          methods: ["mcpServerStatus/list"],
+          payloads: [{
+            ...(threadId ? { threadId } : {}),
+            detail: params.detail,
+            limit: 100,
+            ...(cursor ? { cursor } : {}),
+          }],
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        });
+        const page = readMcpServerStatusPage(result, params.detail);
+        servers.push(...page.servers);
+        cursor = page.nextCursor;
+        if (cursor) {
+          if (seenCursors.has(cursor)) {
+            throw new Error("codex_mcp_inventory_repeated_cursor");
+          }
+          seenCursors.add(cursor);
         }
-        seenCursors.add(cursor);
-      }
-    } while (cursor);
+      } while (cursor);
 
-    return servers.sort((left, right) => left.name.localeCompare(right.name));
+      return servers.sort((left, right) => left.name.localeCompare(right.name));
+    };
+
+    try {
+      return await listPages(params.threadId);
+    } catch (error) {
+      if (!isThreadNotFoundError(error)) {
+        throw error;
+      }
+      return await listPages();
+    }
   }
 
   async reloadMcpConfig(): Promise<void> {

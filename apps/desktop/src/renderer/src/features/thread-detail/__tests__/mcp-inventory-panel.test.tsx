@@ -1,11 +1,21 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { McpInventoryPanel } from "../McpInventoryPanel";
 
 afterEach(() => {
   cleanup();
+  delete (window as typeof window & {
+    __pwragentFederationTarget?: unknown;
+  }).__pwragentFederationTarget;
 });
 
 const thread = {
@@ -94,5 +104,47 @@ describe("McpInventoryPanel", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "applies when the next turn starts",
     );
+  });
+
+  it("keeps the federation-window target stable across state updates", async () => {
+    (window as typeof window & {
+      __pwragentFederationTarget?: {
+        scope: "remote";
+        instanceId: string;
+      };
+    }).__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "owner-instance",
+    };
+    const listThreadMcpServers = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      detail: "toolsAndAuthOnly" as const,
+      servers: [],
+    }));
+
+    render(
+      <McpInventoryPanel
+        desktopApi={{ listThreadMcpServers }}
+        onDismiss={vi.fn()}
+        request={{ detail: "toolsAndAuthOnly", requestId: 1 }}
+        thread={thread}
+      />,
+    );
+
+    expect(await screen.findByText("No MCP servers available.")).toBeInTheDocument();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(listThreadMcpServers).toHaveBeenCalledTimes(1);
+    expect(listThreadMcpServers).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget: {
+        scope: "remote",
+        instanceId: "owner-instance",
+      },
+      threadId: "thread-1",
+      detail: "toolsAndAuthOnly",
+    });
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import type {
   CodexMcpAuthStatus,
   CodexMcpInventoryDetail,
@@ -35,8 +35,12 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
   const [reloadStatus, setReloadStatus] = useState<string>();
   const bodyId = useId();
   const reloadTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const rendererFederationTarget = useMemo(
+    () => readRendererFederationTarget(),
+    [],
+  );
   const federationTarget =
-    props.thread.federation?.ref.target ?? readRendererFederationTarget();
+    props.thread.federation?.ref.target ?? rendererFederationTarget;
 
   useEffect(() => {
     let cancelled = false;
