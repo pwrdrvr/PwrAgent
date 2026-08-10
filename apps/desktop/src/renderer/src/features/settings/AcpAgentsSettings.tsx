@@ -54,7 +54,7 @@ export function AcpAgentsSettings(props: {
   snapshot?: DesktopSettingsSnapshot;
   /** Persist a per-agent CLI-path override (also used to "pin" a discovered
    *  install — picking an install writes its command as the override). */
-  onCliPathChange?: (registryId: string, cliPath: string) => Promise<void>;
+  onCliPathChange?: (registryId: string, cliPath: string) => Promise<boolean>;
   /** Persist a per-agent enabled flag (off = hidden from the model picker). */
   onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
 }) {
@@ -66,11 +66,11 @@ export function AcpAgentsSettings(props: {
   async function refresh(
     refreshRegistry = false,
     force = false,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!props.desktopApi?.listAcpAgents) {
       setError("ACP registry controls are unavailable in this build.");
       setLoading(false);
-      return;
+      return false;
     }
     if (!refreshRegistry && entries.length === 0) {
       setLoading(true);
@@ -87,8 +87,10 @@ export function AcpAgentsSettings(props: {
       if (refreshRegistry) {
         window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
       }
+      return true;
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
+      return false;
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -130,7 +132,20 @@ export function AcpAgentsSettings(props: {
             enabled={enabledSnapshotFor(props.snapshot, entry.registryId)}
             saving={props.saving}
             refreshing={refreshing || loading}
-            onCliPathChange={props.onCliPathChange}
+            onCliPathChange={
+              props.onCliPathChange
+                ? async (registryId, cliPath) => {
+                    const saved = await props.onCliPathChange?.(
+                      registryId,
+                      cliPath,
+                    );
+                    if (!saved) {
+                      return false;
+                    }
+                    return await refresh(true, true);
+                  }
+                : undefined
+            }
             onEnabledChange={props.onEnabledChange}
             onRefresh={() => {
               void refresh(true, true);
@@ -245,7 +260,7 @@ function AcpAgentSection(props: {
   enabled: boolean;
   saving?: boolean;
   refreshing?: boolean;
-  onCliPathChange?: (registryId: string, cliPath: string) => Promise<void>;
+  onCliPathChange?: (registryId: string, cliPath: string) => Promise<boolean>;
   onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
   onRefresh: () => void;
 }) {
@@ -253,12 +268,59 @@ function AcpAgentSection(props: {
   const instances = entry.instances ?? [];
   const savedPath = props.cliPathSnapshot?.value ?? "";
   const [draft, setDraft] = useState(savedPath);
+  const [pathUpdating, setPathUpdating] = useState(false);
+  const [pathActionError, setPathActionError] = useState<string | undefined>();
   useEffect(() => {
     setDraft(savedPath);
   }, [savedPath]);
 
   const detail =
     entry.lastDiscoveryError ?? entry.lastError ?? entry.unavailableReason;
+  const normalizedSavedPath = savedPath.trim();
+  const envForced = props.cliPathSnapshot?.source === "env";
+  const checkingPath = pathUpdating || props.refreshing === true;
+  const overrideActive =
+    normalizedSavedPath !== ""
+    && entry.activeCommand === normalizedSavedPath;
+  const activeOverrideInstance = overrideActive
+    ? instances.find((instance) => instance.command === normalizedSavedPath)
+    : undefined;
+  const overrideHelp = normalizedSavedPath === ""
+    ? undefined
+    : checkingPath
+      ? "Checking this path and provider capabilities…"
+      : overrideActive
+        ? `Active for new threads${activeOverrideInstance?.version
+          ? ` · v${activeOverrideInstance.version}`
+          : ""}.`
+        : undefined;
+  const inactiveOverrideError =
+    normalizedSavedPath !== "" && !checkingPath && !overrideActive
+      ? entry.activeCommand
+        ? `Saved override is not active. New threads currently use ${entry.activeCommand}.`
+        : "Saved override is not active. This provider cannot launch new threads."
+      : undefined;
+
+  async function commitPath(nextPath: string): Promise<void> {
+    if (!props.onCliPathChange) {
+      return;
+    }
+    setDraft(nextPath);
+    setPathActionError(undefined);
+    setPathUpdating(true);
+    try {
+      const updated = await props.onCliPathChange(entry.registryId, nextPath);
+      if (!updated) {
+        setDraft(savedPath);
+        setPathActionError("PwrAgent couldn't finish saving and checking this path.");
+      }
+    } catch (error) {
+      setDraft(savedPath);
+      setPathActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPathUpdating(false);
+    }
+  }
 
   return (
     <SettingsSection
@@ -321,14 +383,11 @@ function AcpAgentSection(props: {
                       selected={active}
                       selectedLabel="Using"
                       useLabel="Use"
-                      disabled={props.saving}
+                      disabled={props.saving || pathUpdating || envForced}
                       onUse={
                         props.onCliPathChange
                           ? () => {
-                              void props.onCliPathChange?.(
-                                entry.registryId,
-                                instance.command,
-                              );
+                              void commitPath(instance.command);
                             }
                           : undefined
                       }
@@ -343,13 +402,29 @@ function AcpAgentSection(props: {
         {props.onCliPathChange ? (
           <SettingsField
             label="Manual path"
-            sub="Override discovery with an absolute path. Save, then Refresh to re-probe."
+            sub={
+              envForced
+                ? "This path is controlled by an environment override set before PwrAgent launched."
+                : "Enter an absolute path. Save checks it immediately and updates the binary used by new threads."
+            }
+            source={
+              envForced
+                ? "env override"
+                : overrideActive
+                  ? "active override"
+                  : normalizedSavedPath
+                    ? "saved override"
+                    : undefined
+            }
+            help={overrideHelp}
+            error={pathActionError ?? inactiveOverrideError}
             control={
               <div className="settings-secret">
                 <input
                   aria-label={`${entry.name} manual path`}
+                  aria-invalid={Boolean(pathActionError ?? inactiveOverrideError)}
                   className="settings-input"
-                  disabled={props.saving}
+                  disabled={props.saving || pathUpdating || envForced}
                   placeholder="Manual path — e.g. /Users/you/.local/bin/agent"
                   type="text"
                   value={draft}
@@ -357,22 +432,27 @@ function AcpAgentSection(props: {
                 />
                 <button
                   className="button button--secondary"
-                  disabled={props.saving || draft.trim() === savedPath.trim()}
-                  type="button"
-                  onClick={() =>
-                    props.onCliPathChange?.(entry.registryId, draft.trim())
+                  disabled={
+                    props.saving
+                    || pathUpdating
+                    || envForced
+                    || draft.trim() === normalizedSavedPath
                   }
+                  type="button"
+                  onClick={() => void commitPath(draft.trim())}
                 >
-                  Save
+                  {pathUpdating ? "Checking…" : "Save"}
                 </button>
                 <button
                   className="button button--ghost"
-                  disabled={props.saving || draft === ""}
+                  disabled={
+                    props.saving
+                    || pathUpdating
+                    || envForced
+                    || draft === ""
+                  }
                   type="button"
-                  onClick={() => {
-                    setDraft("");
-                    void props.onCliPathChange?.(entry.registryId, "");
-                  }}
+                  onClick={() => void commitPath("")}
                 >
                   Clear
                 </button>
@@ -388,7 +468,7 @@ function AcpAgentSection(props: {
             <div className="settings-inline-actions">
               <button
                 className="button button--secondary"
-                disabled={props.refreshing}
+                disabled={props.refreshing || pathUpdating}
                 type="button"
                 onClick={props.onRefresh}
               >
