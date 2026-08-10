@@ -219,7 +219,7 @@ describe("createThreadDirectoryEnricher", () => {
     });
     expect(execFileMock).toHaveBeenCalledWith(
       "git",
-      expect.arrayContaining(["-C", projectPath]),
+      expect.arrayContaining(["-C", path.resolve(projectPath)]),
       expect.objectContaining({ timeout: 2_000 }),
       expect.any(Function),
     );
