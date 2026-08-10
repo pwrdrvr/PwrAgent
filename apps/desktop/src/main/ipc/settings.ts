@@ -635,7 +635,11 @@ async function installAcpAgentImpl(
     record = failedClaudeAcpInstallRecord(error, now);
   }
   store.upsertInstalledAgent(record);
-  getDesktopBackendRegistry().invalidateAcpBackendDiscovery();
+  await getDesktopBackendRegistry().invalidateProviderRuntimeSelections({
+    acp: true,
+    acpRegistryIds: [CLAUDE_ACP_REGISTRY_ID],
+    codex: false,
+  });
   return {
     fetchedAt: now,
     entry: installedAcpAgentSettingsEntry(record),
@@ -1033,7 +1037,7 @@ async function listInstalledAndLocalAcpAgents(
           },
         );
         if (
-          acpAgentEnabledFor(config, record.registryId)
+          acpProviderEnabledFromSnapshot(providers, record.registryId)
           && reprobeRequired
         ) {
           toProbe.push(nextRecord);

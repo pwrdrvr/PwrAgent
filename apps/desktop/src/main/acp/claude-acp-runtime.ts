@@ -1,9 +1,10 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   access,
   mkdir,
   readFile,
+  readdir,
   realpath,
   rename,
   rm,
@@ -40,6 +41,8 @@ export const CLAUDE_ACP_PACKAGE_SPEC =
   `${CLAUDE_ACP_PACKAGE_NAME}@${CLAUDE_ACP_VERSION}`;
 export const CLAUDE_ACP_PACKAGE_INTEGRITY =
   "sha512-+ZZCJukpKdEY+/O982UCtgGHOY+MKa/JPpZ34v25ITawRyQyg3cqqOGo3M+9TsA4D+T/NXb+kT3zUB1uQZhY+Q==";
+export const CLAUDE_ACP_PACKAGE_CONTENT_DIGEST =
+  "sha256-Dh3T8+VIa3dxj9vVGCBtIk/LVoL2vKpE3wj4onixCq4=";
 export const CLAUDE_ACP_ALLOWLIST_RULE_ID =
   "managed-claude-agent-acp-0.60.0";
 export const CLAUDE_ACP_REPOSITORY_URL =
@@ -55,10 +58,11 @@ const CLAUDE_ACP_MINIMUM_NODE_MAJOR = 22;
 const CLAUDE_ACP_INSTALL_TIMEOUT_MS = 10 * 60_000;
 
 type ClaudeAcpRuntimeMarker = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   packageName: typeof CLAUDE_ACP_PACKAGE_NAME;
   version: typeof CLAUDE_ACP_VERSION;
   integrity: typeof CLAUDE_ACP_PACKAGE_INTEGRITY;
+  contentDigest: string;
   nodeCommand: string;
   entrypoint: string;
   installedAt: number;
@@ -75,6 +79,7 @@ export type ClaudeAcpRuntimeOptions = {
   now?: () => number;
   runtimeDirectory?: string;
   installId?: () => string;
+  expectedPackageContentDigest?: string;
   resolveToolchain?: (
     env: NodeJS.ProcessEnv,
   ) => Promise<ClaudeAcpRuntimeToolchain>;
@@ -118,6 +123,7 @@ export function claudeAcpPlaceholderSettingsEntry(): AcpAgentSettingsEntry {
 
 export function claudeAcpManagedRuntimeSummary(
   record?: AcpInstalledAgentRecord,
+  options: { platform?: NodeJS.Platform } = {},
 ): NonNullable<AcpAgentSettingsEntry["managedRuntime"]> {
   const descriptor = record?.launchDescriptor;
   return {
@@ -140,6 +146,7 @@ export function claudeAcpManagedRuntimeSummary(
               "login",
               "--console",
             ].filter(Boolean),
+            options.platform,
           ),
           subscriptionAuthCommand: formatLocalCommand(
             descriptor.command,
@@ -150,6 +157,7 @@ export function claudeAcpManagedRuntimeSummary(
               "login",
               "--claudeai",
             ].filter(Boolean),
+            options.platform,
           ),
         }
       : {}),
@@ -161,11 +169,20 @@ export async function discoverManagedClaudeAcpRuntime(
 ): Promise<AcpInstalledAgentRecord | undefined> {
   const runtimeDirectory =
     options.runtimeDirectory ?? claudeAcpRuntimeDirectory();
-  const marker = await readRuntimeMarker(runtimeDirectory);
+  const expectedPackageContentDigest =
+    options.expectedPackageContentDigest ?? CLAUDE_ACP_PACKAGE_CONTENT_DIGEST;
+  const marker = await readRuntimeMarker(
+    runtimeDirectory,
+    expectedPackageContentDigest,
+  );
   if (!marker) {
     return undefined;
   }
-  const validated = await validateRuntimeInstallation(runtimeDirectory, marker);
+  const validated = await validateRuntimeInstallation(
+    runtimeDirectory,
+    marker,
+    expectedPackageContentDigest,
+  );
   if (!validated) {
     return undefined;
   }
@@ -201,6 +218,8 @@ export async function installManagedClaudeAcpRuntime(
   await mkdir(stagingDirectory, { recursive: false });
 
   const runInstaller = options.runInstaller ?? runNpmInstaller;
+  const expectedPackageContentDigest =
+    options.expectedPackageContentDigest ?? CLAUDE_ACP_PACKAGE_CONTENT_DIGEST;
   let movedExisting = false;
   try {
     await runInstaller({
@@ -230,13 +249,15 @@ export async function installManagedClaudeAcpRuntime(
     const entrypoint = await validateInstalledPackage(
       stagingDirectory,
       packageRoot,
+      expectedPackageContentDigest,
     );
     const installedAt = options.now?.() ?? Date.now();
     const marker: ClaudeAcpRuntimeMarker = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       packageName: CLAUDE_ACP_PACKAGE_NAME,
       version: CLAUDE_ACP_VERSION,
       integrity: CLAUDE_ACP_PACKAGE_INTEGRITY,
+      contentDigest: expectedPackageContentDigest,
       nodeCommand: toolchain.nodeCommand,
       entrypoint: path.relative(stagingDirectory, entrypoint),
       installedAt,
@@ -497,6 +518,7 @@ async function runNpmInstaller(params: {
 async function validateInstalledPackage(
   runtimeDirectory: string,
   packageRoot: string,
+  expectedPackageContentDigest: string,
 ): Promise<string> {
   const packageJson = await readJsonFile(path.join(packageRoot, "package.json"));
   if (
@@ -543,12 +565,19 @@ async function validateInstalledPackage(
   ) {
     throw new Error("The Claude ACP executable entrypoint escapes its package.");
   }
+  const contentDigest = await computePackageContentDigest(resolvedPackageRoot);
+  if (contentDigest !== expectedPackageContentDigest) {
+    throw new Error(
+      "The downloaded Claude ACP package failed installed-byte verification.",
+    );
+  }
   return entrypoint;
 }
 
 async function validateRuntimeInstallation(
   runtimeDirectory: string,
   marker: ClaudeAcpRuntimeMarker,
+  expectedPackageContentDigest: string,
 ): Promise<{ entrypoint: string } | undefined> {
   if (!path.isAbsolute(marker.nodeCommand)) {
     return undefined;
@@ -566,6 +595,7 @@ async function validateRuntimeInstallation(
         "@agentclientprotocol",
         "claude-agent-acp",
       ),
+      expectedPackageContentDigest,
     );
     if (validatedEntrypoint !== entrypoint) {
       return undefined;
@@ -579,16 +609,18 @@ async function validateRuntimeInstallation(
 
 async function readRuntimeMarker(
   runtimeDirectory: string,
+  expectedPackageContentDigest: string,
 ): Promise<ClaudeAcpRuntimeMarker | undefined> {
   try {
     const value = await readJsonFile(
       path.join(runtimeDirectory, CLAUDE_ACP_MARKER_FILE),
     );
     if (
-      value.schemaVersion !== 1
+      value.schemaVersion !== 2
       || value.packageName !== CLAUDE_ACP_PACKAGE_NAME
       || value.version !== CLAUDE_ACP_VERSION
       || value.integrity !== CLAUDE_ACP_PACKAGE_INTEGRITY
+      || value.contentDigest !== expectedPackageContentDigest
       || typeof value.nodeCommand !== "string"
       || typeof value.entrypoint !== "string"
       || typeof value.installedAt !== "number"
@@ -657,16 +689,67 @@ function isPathInside(candidate: string, parent: string): boolean {
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
-function formatLocalCommand(command: string, args: string[]): string {
-  return [command, ...args].map(quoteCommandArgument).join(" ");
+async function computePackageContentDigest(packageRoot: string): Promise<string> {
+  const files = await collectPackageFiles(packageRoot);
+  const digest = createHash("sha256");
+  digest.update("pwragent-claude-acp-content-v1\0");
+  for (const relativePath of files) {
+    const contents = await readFile(
+      path.join(packageRoot, ...relativePath.split("/")),
+    );
+    digest.update(relativePath);
+    digest.update("\0");
+    digest.update(String(contents.byteLength));
+    digest.update("\0");
+    digest.update(contents);
+  }
+  return `sha256-${digest.digest("base64")}`;
 }
 
-function quoteCommandArgument(value: string): string {
+async function collectPackageFiles(
+  packageRoot: string,
+  directory = packageRoot,
+): Promise<string[]> {
+  const files: string[] = [];
+  const entries = (await readdir(directory, { withFileTypes: true }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await collectPackageFiles(packageRoot, entryPath));
+      continue;
+    }
+    if (!entry.isFile()) {
+      throw new Error(
+        "The downloaded Claude ACP package contains an unsupported file entry.",
+      );
+    }
+    files.push(path.relative(packageRoot, entryPath).split(path.sep).join("/"));
+  }
+  return files;
+}
+
+function formatLocalCommand(
+  command: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    return `& ${[command, ...args].map(quotePowerShellArgument).join(" ")}`;
+  }
+  return [command, ...args].map(quotePosixCommandArgument).join(" ");
+}
+
+function quotePowerShellArgument(value: string): string {
   if (/^[a-zA-Z0-9_@%+=:,./\\-]+$/.test(value)) {
     return value;
   }
-  if (process.platform === "win32") {
-    return `"${value.replace(/"/g, '""')}"`;
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function quotePosixCommandArgument(value: string): string {
+  if (/^[a-zA-Z0-9_@%+=:,./\\-]+$/.test(value)) {
+    return value;
   }
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
