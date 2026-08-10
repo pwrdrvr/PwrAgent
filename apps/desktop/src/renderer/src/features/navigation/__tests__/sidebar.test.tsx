@@ -1249,6 +1249,53 @@ describe("Sidebar", () => {
     expect(onRemoveRemoteThreadPin).toHaveBeenCalledWith(remotePinnedThread);
   });
 
+  it("does not offer removal for a child derived from a mounted parent", () => {
+    const derivedChild: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-derived-child",
+      title: "Derived remote child",
+      parentThreadId: "thread-remote-root",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-mini" },
+          threadId: "thread-derived-child",
+        },
+        instanceLabel: "Mac Mini",
+        peerStatus: "connected",
+        capabilities: [],
+        derivedFromMountedParent: true,
+      },
+    };
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[derivedChild]}
+        loading={false}
+        selectedItemKey="codex:thread-derived-child"
+        threads={[derivedChild]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onRemoveRemoteThreadPin={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Derived remote child" }),
+    );
+
+    expect(
+      screen.queryByRole("menuitem", { name: /Remove from My List/ }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Unlink from Parent" }),
+    ).toBeNull();
+  });
+
   it("closes its context menu when another renderer menu opens", () => {
     render(
       <Sidebar

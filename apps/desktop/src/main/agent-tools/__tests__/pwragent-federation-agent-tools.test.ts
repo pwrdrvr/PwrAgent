@@ -211,6 +211,7 @@ describe("pwragent federation agent tools", () => {
         threadId: "thread-2",
         executionMode: "default" as const,
         workMode: "worktree" as const,
+        groupingMode: "none" as const,
         message: "Created thread in PwrSnap on Studio Mac.",
       },
     }));
@@ -230,6 +231,7 @@ describe("pwragent federation agent tools", () => {
           input: " Fix the recorder crash ",
           workMode: "worktree",
           branchName: " origin/main ",
+          groupingMode: "subthread",
           fastMode: true,
         },
       },
@@ -250,6 +252,7 @@ describe("pwragent federation agent tools", () => {
         input: "Fix the recorder crash",
         workMode: "worktree",
         branchName: "origin/main",
+        groupingMode: "subthread",
         fastMode: true,
       },
     });

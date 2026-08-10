@@ -26,7 +26,7 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadImageAttachment,
 } from "./navigation";
-import type { FederationTarget } from "./federation";
+import type { FederationInstanceId, FederationTarget } from "./federation";
 import type {
   ScheduledThreadAction,
   ScheduledThreadTurnPayload,
@@ -55,6 +55,7 @@ export type StartThreadRequest = {
   acpRuntime?: BackendAcpSessionRuntimeState;
   parentThreadId?: ThreadIdentifier;
   parentThreadBackend?: AppServerBackendKind;
+  parentThreadInstanceId?: FederationInstanceId;
 };
 
 export type StartThreadResponse = {
@@ -83,6 +84,7 @@ export type ForkThreadRequest = {
   sourceThreadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier;
   parentThreadBackend?: AppServerBackendKind;
+  parentThreadInstanceId?: FederationInstanceId;
   executionMode?: ThreadExecutionMode;
   directoryKind?: DirectorySummaryKind;
   directoryLabel?: string;
@@ -763,6 +765,7 @@ export type MaterializeDirectoryLaunchpadRequest = {
   reviewTarget?: AppServerReviewTarget;
   parentThreadId?: ThreadIdentifier;
   parentThreadBackend?: AppServerBackendKind;
+  parentThreadInstanceId?: FederationInstanceId;
   /**
    * Create the provider thread and prepare its workspace now, but defer the
    * first turn or review until this wall-clock time.

@@ -6,6 +6,7 @@ import type {
   AppServerThreadReplay,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
@@ -674,6 +675,93 @@ describe("sqlite write metrics", () => {
     expectSqliteWriteBudget({
       note: "one idle hour: PID-owned messaging and federation leases",
       scenario: "idle-hour-runtime-leases",
+      writes,
+    });
+  });
+
+  it("holds a federated child mount to its write budget", async () => {
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.addRemoteThreadPin({
+        ref: buildFederatedThreadRef({
+          backend: "codex",
+          instanceId: "pwr_child",
+          threadId: "thread-child",
+        }),
+        instanceLabel: "Child Mac",
+        pinnedVia: "child",
+        summary: {
+          source: "codex",
+          id: "thread-child",
+          title: "Remote child",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          parentThreadId: "thread-parent",
+          parentThreadBackend: "codex",
+          parentThreadInstanceId: "pwr_parent",
+        },
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note: "persist one cross-instance child mount and its routing target",
+      scenario: "federated-child-mount",
+      writes,
+    });
+  });
+
+  it("holds federated child archive-ungrouping to its write budget", async () => {
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "pwr_child",
+      threadId: "thread-child",
+    });
+    const linkedSummary = {
+      source: "codex" as const,
+      id: "thread-child",
+      title: "Remote child",
+      titleSource: "fallback" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      parentThreadId: "thread-parent",
+      parentThreadBackend: "codex" as const,
+      parentThreadInstanceId: "pwr_parent",
+    };
+    await store.addRemoteThreadPin({
+      ref,
+      instanceLabel: "Child Mac",
+      pinnedVia: "child",
+      summary: linkedSummary,
+    });
+    await store.setThreadParent({
+      backend: "codex",
+      threadId: "thread-child",
+      parentThreadId: "thread-parent",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "pwr_parent",
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.setThreadParent({
+        backend: "codex",
+        threadId: "thread-child",
+        parentThreadId: undefined,
+      });
+      await store.updateRemoteThreadPinSnapshots([{
+        ref,
+        instanceLabel: "Child Mac",
+        summary: {
+          ...linkedSummary,
+          parentThreadId: undefined,
+          parentThreadBackend: undefined,
+          parentThreadInstanceId: undefined,
+        },
+      }]);
+    });
+
+    expectSqliteWriteBudget({
+      note: "clear one child-owner parent overlay and refresh its root-owner pin",
+      scenario: "federated-child-archive-ungroup",
       writes,
     });
   });

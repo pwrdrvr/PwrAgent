@@ -710,6 +710,224 @@ describe("federation agent tools service", () => {
       backend: "codex",
       threadId: "remote-thread-9",
     });
+    expect(data.groupingMode).toBe("none");
+  });
+
+  it("mounts a delegated sibling on its remote group-root owner", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-child",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+      turnId: "remote-turn",
+    }));
+    const addRemoteThreadPin = vi.fn(async () => undefined);
+    const mountRemoteChild = vi.fn(async () => ({ mounted: true as const }));
+    const onRemoteChildMounted = vi.fn(async () => undefined);
+    const rememberRemoteThreadTarget = vi.fn(async (target) => ({
+      ...target,
+      firstSeenAt: 1_000,
+      lastSeenAt: 1_000,
+    }));
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      onRemoteChildMounted,
+      targetStore: {
+        addRemoteThreadPin,
+        rememberRemoteThreadTarget,
+        listRemoteThreadTargets: vi.fn(async () => []),
+      },
+      runtime: buildRuntime({
+        health: async () =>
+          buildHealth({
+            peers: [
+              {
+                id: "pwr_studio",
+                label: "Studio Mac",
+                role: "client",
+                status: "connected",
+                capabilities: ["thread_navigation", "environment_actions"],
+              },
+              {
+                id: "pwr_root",
+                label: "Root Mac",
+                role: "client",
+                status: "connected",
+                capabilities: ["thread_navigation"],
+              },
+            ],
+          }),
+        localBackend: (() => ({
+          getNavigationSnapshot: async () =>
+            buildSnapshot({
+              threads: [{
+                source: "codex",
+                id: "thread-1",
+                title: "Existing child",
+                titleSource: "derived",
+                linkedDirectories: [],
+                inbox: { inInbox: false },
+                parentThreadId: "group-root",
+                parentThreadBackend: "acp:grok",
+                parentThreadInstanceId: "pwr_root",
+              }] as NavigationSnapshot["threads"],
+            }),
+        })) as never,
+        remoteBackend: ((target: { instanceId: string }) =>
+          target.instanceId === "pwr_root"
+            ? { mountRemoteChild }
+            : {
+                getNavigationSnapshot: async () =>
+                  buildSnapshot({
+                    directories: [{
+                      key: "dir:/repo",
+                      kind: "directory",
+                      label: "PwrAgent",
+                      path: "/repo",
+                      threadKeys: [],
+                      needsAttentionCount: 0,
+                    }] as NavigationSnapshot["directories"],
+                  }),
+                materializeDirectoryLaunchpad,
+              }) as never,
+      }),
+    });
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        groupingMode: "subthread",
+        workMode: "local",
+      },
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentThreadId: "group-root",
+        parentThreadBackend: "acp:grok",
+        parentThreadInstanceId: "pwr_root",
+      }),
+    );
+    expect(mountRemoteChild).toHaveBeenCalledWith(expect.objectContaining({
+      ref: {
+        backend: "codex",
+        target: { scope: "remote", instanceId: "pwr_studio" },
+        threadId: "remote-child",
+      },
+      instanceLabel: "Studio Mac",
+      summary: expect.objectContaining({
+        parentThreadId: "group-root",
+        parentThreadBackend: "acp:grok",
+        parentThreadInstanceId: "pwr_root",
+      }),
+    }));
+    expect(addRemoteThreadPin).not.toHaveBeenCalled();
+    expect(onRemoteChildMounted).not.toHaveBeenCalled();
+    expect(rememberRemoteThreadTarget).toHaveBeenCalledWith({
+      instanceId: "pwr_studio",
+      instanceLabel: "Studio Mac",
+      backend: "codex",
+      threadId: "remote-child",
+    });
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        groupingMode: "subthread",
+        groupedUnderThreadId: "group-root",
+      },
+    });
+  });
+
+  it("mounts a locally created sibling on its remote group-root owner", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "local-sibling",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    }));
+    const mountRemoteChild = vi.fn(async () => ({ mounted: true as const }));
+    const localSnapshot = buildSnapshot({
+      directories: [{
+        key: "dir:/repo",
+        kind: "directory",
+        label: "PwrAgent",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+      }] as NavigationSnapshot["directories"],
+      threads: [{
+        source: "codex",
+        id: "thread-1",
+        title: "Existing child",
+        titleSource: "derived",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+        parentThreadId: "group-root",
+        parentThreadBackend: "codex",
+        parentThreadInstanceId: "pwr_root",
+      }] as NavigationSnapshot["threads"],
+    });
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () =>
+          buildHealth({
+            peers: [{
+              id: "pwr_root",
+              label: "Root Mac",
+              role: "client",
+              status: "connected",
+              capabilities: ["thread_navigation"],
+            }],
+          }),
+        localBackend: (() => ({
+          getNavigationSnapshot: async () => localSnapshot,
+          materializeDirectoryLaunchpad,
+        })) as never,
+        remoteBackend: (() => ({ mountRemoteChild })) as never,
+      }),
+    });
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: {
+        instanceId: "pwr_local",
+        projectKey: "dir:/repo",
+        groupingMode: "subthread",
+        workMode: "local",
+      },
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentThreadId: "group-root",
+        parentThreadBackend: "codex",
+        parentThreadInstanceId: "pwr_root",
+      }),
+    );
+    expect(mountRemoteChild).toHaveBeenCalledWith(expect.objectContaining({
+      ref: {
+        backend: "codex",
+        target: { scope: "remote", instanceId: "pwr_local" },
+        threadId: "local-sibling",
+      },
+      instanceLabel: "Local Mac",
+      summary: expect.objectContaining({
+        parentThreadId: "group-root",
+        parentThreadInstanceId: "pwr_root",
+      }),
+    }));
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        isLocal: true,
+        groupedUnderThreadId: "group-root",
+      },
+    });
   });
 
   it("merges local and peer results in search_federation_threads", async () => {

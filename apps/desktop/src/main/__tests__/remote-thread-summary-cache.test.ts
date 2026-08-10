@@ -427,6 +427,114 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(resolved.refreshed[0].summary.title).toBe("Fresh title");
   });
 
+  it("carries a transitive remote child with its mounted parent", async () => {
+    const parent = stampedThread({
+      instanceId: "peer-a",
+      threadId: "parent",
+      title: "Parent",
+    });
+    const child = stampedThread({
+      instanceId: "peer-b",
+      threadId: "child",
+      title: "Child",
+    });
+    child.parentThreadId = "parent";
+    child.parentThreadBackend = "codex";
+    child.parentThreadInstanceId = "peer-a";
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([parent, child]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+    });
+    const pins = [pin({ instanceId: "peer-a", threadId: "parent" })];
+
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    const resolved = await cache.resolvePinnedThreads(pins);
+
+    expect(resolved.threads.map((thread) => thread.id)).toEqual([
+      "parent",
+      "child",
+    ]);
+    expect(resolved.threads[1].federation?.ref.target).toEqual({
+      scope: "remote",
+      instanceId: "peer-b",
+    });
+    expect(
+      resolved.threads[1].federation?.derivedFromMountedParent,
+    ).toBe(true);
+  });
+
+  it("does not carry ordinary same-instance siblings with a mounted parent", async () => {
+    const parent = stampedThread({
+      instanceId: "peer-a",
+      threadId: "parent",
+      title: "Parent",
+    });
+    const localChild = stampedThread({
+      instanceId: "peer-a",
+      threadId: "local-child",
+      title: "Local child",
+    });
+    localChild.parentThreadId = "parent";
+    localChild.parentThreadBackend = "codex";
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([parent, localChild]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+    });
+    const pins = [pin({ instanceId: "peer-a", threadId: "parent" })];
+
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    const resolved = await cache.resolvePinnedThreads(pins);
+
+    expect(resolved.threads.map((thread) => thread.id)).toEqual(["parent"]);
+  });
+
+  it("deduplicates a transitive child that is also directly pinned", async () => {
+    const parent = stampedThread({
+      instanceId: "peer-a",
+      threadId: "parent",
+      title: "Parent",
+    });
+    const child = stampedThread({
+      instanceId: "peer-b",
+      threadId: "child",
+      title: "Child",
+    });
+    child.parentThreadId = "parent";
+    child.parentThreadBackend = "codex";
+    child.parentThreadInstanceId = "peer-a";
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a"), peer("peer-b")],
+      fetchSnapshot: async (target) =>
+        target.instanceId === "peer-a"
+          ? snapshotOf([parent, child])
+          : snapshotOf([child]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+    });
+    const pins = [
+      pin({ instanceId: "peer-a", threadId: "parent" }),
+      pin({ instanceId: "peer-b", threadId: "child" }),
+    ];
+
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    const resolved = await cache.resolvePinnedThreads(pins);
+
+    expect(resolved.threads.map((thread) => thread.id)).toEqual([
+      "parent",
+      "child",
+    ]);
+    expect(
+      resolved.threads[1].federation?.derivedFromMountedParent,
+    ).toBeUndefined();
+  });
+
   it("returns promptly with cached rows while a peer fetch hangs", async () => {
     let now = 0;
     let hang = false;

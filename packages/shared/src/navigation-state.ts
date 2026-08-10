@@ -167,7 +167,10 @@ function resolveNavigationParentThread(params: {
   overlayByThreadKey: Record<string, ThreadOverlayState | undefined>;
   source: AppServerThreadSummary["source"];
   threadId: string;
-}): Pick<NavigationThreadSummary, "parentThreadBackend" | "parentThreadId"> {
+}): Pick<
+  NavigationThreadSummary,
+  "parentThreadBackend" | "parentThreadId" | "parentThreadInstanceId"
+> {
   const directParentThreadId = params.overlay?.parentThreadId?.trim();
   if (!directParentThreadId) {
     return {};
@@ -175,6 +178,7 @@ function resolveNavigationParentThread(params: {
 
   let parentThreadId = directParentThreadId;
   const directParentThreadBackend = params.overlay?.parentThreadBackend;
+  const directParentThreadInstanceId = params.overlay?.parentThreadInstanceId;
   let parentThreadBackend = directParentThreadBackend ?? params.source;
   const seen = new Set([buildThreadIdentityKey(params.source, params.threadId)]);
   let parentKey = buildThreadIdentityKey(parentThreadBackend, parentThreadId);
@@ -186,6 +190,9 @@ function resolveNavigationParentThread(params: {
     if (!nextParentThreadId) {
       return {
         ...(directParentThreadBackend ? { parentThreadBackend } : {}),
+        ...(directParentThreadInstanceId
+          ? { parentThreadInstanceId: directParentThreadInstanceId }
+          : {}),
         parentThreadId,
       };
     }
@@ -198,6 +205,9 @@ function resolveNavigationParentThread(params: {
   return {
     ...(directParentThreadBackend
       ? { parentThreadBackend: directParentThreadBackend }
+      : {}),
+    ...(directParentThreadInstanceId
+      ? { parentThreadInstanceId: directParentThreadInstanceId }
       : {}),
     parentThreadId: directParentThreadId,
   };
@@ -568,6 +578,7 @@ export function buildNavigationSnapshotHash(params: {
       pinnedRank: thread.pinnedRank ?? null,
       parentThreadId: thread.parentThreadId ?? null,
       parentThreadBackend: thread.parentThreadBackend ?? null,
+      parentThreadInstanceId: thread.parentThreadInstanceId ?? null,
       forkSourceThreadId: thread.forkSourceThreadId ?? null,
       subthreadOrder: thread.subthreadOrder ?? [],
       subthreadsCollapsed: thread.subthreadsCollapsed ?? null,

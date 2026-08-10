@@ -156,6 +156,11 @@ export type CreateInstanceThreadToolArgs = {
   workMode?: LaunchpadWorkMode;
   /** Existing base branch/ref for workMode=worktree, e.g. `origin/main`. */
   branchName?: string;
+  /**
+   * Group the created thread beneath the calling thread, even when the two
+   * threads live on different federation instances. Defaults to ungrouped.
+   */
+  groupingMode?: "none" | "subthread";
 };
 
 export type CreateInstanceThreadResult = {
@@ -167,6 +172,8 @@ export type CreateInstanceThreadResult = {
   executionMode: ThreadExecutionMode;
   workMode: LaunchpadWorkMode;
   turnId?: string;
+  groupingMode: "none" | "subthread";
+  groupedUnderThreadId?: ThreadIdentifier;
   /** Canonical link, including instanceId for a remote owner on newer peers. */
   threadUrl?: string;
   threadLink?: string;

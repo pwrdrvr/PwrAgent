@@ -276,8 +276,8 @@ describe("SqliteOverlayStore — remote thread pins", () => {
 
   it("round-trips pinnedVia and answers membership checks", async () => {
     await store.addRemoteThreadPin({
-      ref: ref("child"),
-      summary: summary({ id: "child" }),
+      ref: ref("explicit"),
+      summary: summary({ id: "explicit" }),
       instanceLabel: "Laptop",
       pinnedVia: "explicit",
     });
@@ -287,11 +287,18 @@ describe("SqliteOverlayStore — remote thread pins", () => {
       instanceLabel: "Laptop",
       pinnedVia: "companion",
     });
+    await store.addRemoteThreadPin({
+      ref: ref("child"),
+      summary: summary({ id: "child" }),
+      instanceLabel: "Laptop",
+      pinnedVia: "child",
+    });
 
     const listed = await store.listRemoteThreadPins();
     const byThread = new Map(listed.map((pin) => [pin.ref.threadId, pin]));
-    expect(byThread.get("child")?.pinnedVia).toBe("explicit");
+    expect(byThread.get("explicit")?.pinnedVia).toBe("explicit");
     expect(byThread.get("parent")?.pinnedVia).toBe("companion");
+    expect(byThread.get("child")?.pinnedVia).toBe("child");
 
     expect(await store.hasRemoteThreadPin({ ref: ref("parent") })).toBe(true);
     expect(await store.hasRemoteThreadPin({ ref: ref("nope") })).toBe(false);

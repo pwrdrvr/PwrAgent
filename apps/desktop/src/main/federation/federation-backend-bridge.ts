@@ -25,6 +25,7 @@ import type {
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
   FederationCapability,
+  FederatedThreadRef,
   FederationLoadStatus,
   FederationRequestEnvelope,
   ForkThreadRequest,
@@ -67,6 +68,7 @@ import type {
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
   NavigationSnapshot,
+  NavigationThreadSummary,
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
@@ -102,6 +104,8 @@ import type {
   SetThreadExecutionModeResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
+  SetThreadParentRequest,
+  SetThreadParentResponse,
   SteerTurnRequest,
   SteerTurnResponse,
   StartTurnRequest,
@@ -156,6 +160,16 @@ export type FederatedTranscriptImageResponse = {
 
 export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
+};
+
+export type FederationMountRemoteChildRequest = {
+  ref: FederatedThreadRef;
+  summary: NavigationThreadSummary;
+  instanceLabel: string;
+};
+
+export type FederationMountRemoteChildResponse = {
+  mounted: true;
 };
 
 type ResolvedSourceInstance = {
@@ -240,6 +254,8 @@ export const FEDERATION_BACKEND_METHODS = {
   setThreadReaction: "backend.setThreadReaction",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
+  mountRemoteChild: "backend.mountRemoteChild",
+  setThreadParent: "backend.setThreadParent",
   detachThreadPullRequest: "backend.detachThreadPullRequest",
   setThreadPrAutoDispatch: "backend.setThreadPrAutoDispatch",
   cancelThreadPrAutoDispatch: "backend.cancelThreadPrAutoDispatch",
@@ -327,6 +343,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.setThreadReaction]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.mountRemoteChild]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.setThreadParent]: "thread_navigation",
   // PR detach cancels pending auto-dispatch work and auto-dispatch arms
   // automatic repair turns, so both sit with the turn-control grants
   // (like archiveThread) rather than the browse-level navigation grants.
@@ -435,6 +453,12 @@ export type FederationBackendOperations = {
   reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse>;
+  mountRemoteChild(
+    request: FederationMountRemoteChildRequest,
+  ): Promise<FederationMountRemoteChildResponse>;
+  setThreadParent(
+    request: SetThreadParentRequest,
+  ): Promise<SetThreadParentResponse>;
   detachThreadPullRequest(
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse>;
@@ -700,6 +724,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.reorderThreadPins(
         envelope.params as ReorderThreadPinsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.mountRemoteChild,
+    async (envelope) =>
+      await params.backend.mountRemoteChild(
+        envelope.params as FederationMountRemoteChildRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadParent,
+    async (envelope) =>
+      await params.backend.setThreadParent(
+        envelope.params as SetThreadParentRequest,
       ),
   );
   params.router.registerHandler(
@@ -1214,6 +1252,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<ReorderThreadPinsResponse> {
     return await this.rpc.request<ReorderThreadPinsResponse>({
       method: FEDERATION_BACKEND_METHODS.reorderThreadPins,
+      params: request,
+    });
+  }
+
+  async mountRemoteChild(
+    request: FederationMountRemoteChildRequest,
+  ): Promise<FederationMountRemoteChildResponse> {
+    return await this.rpc.request<FederationMountRemoteChildResponse>({
+      method: FEDERATION_BACKEND_METHODS.mountRemoteChild,
+      params: request,
+    });
+  }
+
+  async setThreadParent(
+    request: SetThreadParentRequest,
+  ): Promise<SetThreadParentResponse> {
+    return await this.rpc.request<SetThreadParentResponse>({
+      method: FEDERATION_BACKEND_METHODS.setThreadParent,
       params: request,
     });
   }

@@ -1071,6 +1071,15 @@ export function bootstrapApp(): void {
     getDesktopBackendRegistry().setPwrAgentFederationHandler(
       createFederationAgentToolsHandler({
         targetStore: getDesktopOverlayStore(),
+        onRemoteChildMounted: async ({ backend, instanceId, threadId }) => {
+          await getDesktopBackendRegistry().publishLocalEvent({
+            backend,
+            notification: {
+              method: "navigation/remoteThreadPins/changed",
+              params: { instanceId, threadId, pinned: true },
+            },
+          });
+        },
       }),
     );
     getDesktopBackendRegistry().setFederatedThreadMessageHandler(

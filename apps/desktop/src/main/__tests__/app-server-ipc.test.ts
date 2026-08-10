@@ -92,11 +92,13 @@ const federationMock = vi.hoisted(() => {
     remoteBackend,
     remoteThreadSummaries,
     runtime: {
+      health: vi.fn(async () => ({ instanceId: "pwr_local" })),
       hydrateThreadMessageOrigins: vi.fn(async (response) => response),
       remoteBackend: vi.fn(() => remoteBackend),
       remoteTargetSupportsCapability: vi.fn(() => true),
       remoteNavigationSnapshot: vi.fn(),
       remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
+      ungroupRemoteChildrenOfArchivedThread: vi.fn(async () => undefined),
     },
   };
 });
@@ -990,6 +992,7 @@ describe("app server ipc", () => {
     federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(true);
     federationMock.runtime.hydrateThreadMessageOrigins.mockClear();
     federationMock.runtime.remoteNavigationSnapshot.mockReset();
+    federationMock.runtime.ungroupRemoteChildrenOfArchivedThread.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
     getThreadTranscriptImageRoots.mockClear();
@@ -2681,6 +2684,7 @@ describe("app server ipc", () => {
         title: "Fix PwrSnap controls",
         titleSource: "explicit" as const,
         parentThreadId: "parent-1",
+        parentThreadInstanceId: "peer-parent",
         linkedDirectories: [],
         inbox: { inInbox: false },
       },
@@ -2694,11 +2698,18 @@ describe("app server ipc", () => {
     expect(addRemoteThreadPinStore.mock.calls[1][0]).toMatchObject({
       ref: buildFederatedThreadRef({
         backend: "codex",
-        instanceId: "peer-laptop",
+        instanceId: "peer-parent",
         threadId: "parent-1",
       }),
       summary: parentSummary,
       pinnedVia: "companion",
+    });
+    expect(
+      federationMock.remoteThreadSummaries.threadFromPeer,
+    ).toHaveBeenCalledWith({
+      target: { scope: "remote", instanceId: "peer-parent" },
+      backend: "codex",
+      threadId: "parent-1",
     });
   });
 
@@ -3335,6 +3346,12 @@ describe("app server ipc", () => {
     expect(archiveThread).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
+    });
+    expect(
+      federationMock.runtime.ungroupRemoteChildrenOfArchivedThread,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      parentThreadId: "thread-1",
     });
     expect(response).toEqual({
       backend: "codex",

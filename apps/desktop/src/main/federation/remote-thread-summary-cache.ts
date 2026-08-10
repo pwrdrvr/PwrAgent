@@ -251,6 +251,12 @@ export class RemoteThreadSummaryCache {
       group.push(pin);
       pinsByInstanceId.set(pin.ref.target.instanceId, group);
     }
+    const directPinKeys = new Set(
+      pins.map((pin) =>
+        buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId)
+      ),
+    );
+    const selectedKeys = new Set<string>();
 
     for (const [instanceId, group] of pinsByInstanceId) {
       const peer = connectedByInstanceId.get(instanceId);
@@ -279,9 +285,12 @@ export class RemoteThreadSummaryCache {
         );
         const servedThread = servedByKey.get(threadKey);
         if (servedThread) {
-          threads.push(
-            fetchFailed ? this.dimDegraded(servedThread) : servedThread,
-          );
+          if (!selectedKeys.has(threadKey)) {
+            selectedKeys.add(threadKey);
+            threads.push(
+              fetchFailed ? this.dimDegraded(servedThread) : servedThread,
+            );
+          }
           if (!fetchFailed) {
             refreshed.push({
               ref: pin.ref,
@@ -296,7 +305,65 @@ export class RemoteThreadSummaryCache {
           archived.push(pin.ref);
           continue;
         }
-        threads.push(this.fallbackThread(pin, fetchFailed));
+        if (!selectedKeys.has(threadKey)) {
+          threads.push(this.fallbackThread(pin, fetchFailed));
+          selectedKeys.add(threadKey);
+        }
+      }
+
+      // A mounted remote parent may itself have mounted a child from another
+      // instance. Carry direct children with the pinned parent so a third
+      // viewer sees the same nested tree instead of an orphaned parent row.
+      // The child's existing federation stamp identifies its true owner and
+      // is preserved by DesktopFederationRuntime when snapshots relay.
+      const pinnedParentKeys = new Set(
+        group.map((pin) =>
+          buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId)
+        ),
+      );
+      for (const candidate of served ?? []) {
+        const candidateFederation = candidate.federation;
+        const candidateOwner = candidateFederation?.ref.target;
+        if (
+          !candidateFederation
+          || candidateOwner?.scope !== "remote"
+          || candidateOwner.instanceId === instanceId
+        ) {
+          continue;
+        }
+        const parentThreadId = candidate.parentThreadId?.trim();
+        if (!parentThreadId) {
+          continue;
+        }
+        if (
+          candidate.parentThreadInstanceId
+          && candidate.parentThreadInstanceId !== instanceId
+        ) {
+          continue;
+        }
+        const parentKey = buildThreadIdentityKey(
+          candidate.parentThreadBackend ?? candidate.source,
+          parentThreadId,
+        );
+        const candidateKey = buildThreadIdentityKey(candidate.source, candidate.id);
+        if (
+          !pinnedParentKeys.has(parentKey)
+          || directPinKeys.has(candidateKey)
+          || selectedKeys.has(candidateKey)
+        ) {
+          continue;
+        }
+        selectedKeys.add(candidateKey);
+        const derivedCandidate = {
+          ...candidate,
+          federation: {
+            ...candidateFederation,
+            derivedFromMountedParent: true,
+          },
+        };
+        threads.push(
+          fetchFailed ? this.dimDegraded(derivedCandidate) : derivedCandidate,
+        );
       }
     }
     return { threads, refreshed, archived };

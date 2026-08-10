@@ -15,6 +15,7 @@ import type {
 import {
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
+  buildFederatedThreadRef,
   findPreferredReviewWorkspaceCwd,
 } from "@pwragent/shared";
 import {
@@ -22,6 +23,12 @@ import {
   FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
 } from "../federation/federation-backend-bridge";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  resetDesktopOverlayStoreForTests,
+  setDesktopOverlayStoreForTests,
+} from "../app-server/desktop-overlay-store";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 import {
   FEDERATION_PEER_UNAVAILABLE_ERROR_CODE,
   FederationPeerUnavailableError,
@@ -342,6 +349,141 @@ describe("DesktopFederationRuntime", () => {
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
       pwrAgentWorktree,
     );
+  });
+
+  it("preserves a transitive child's true federation owner", async () => {
+    const response = {
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [{
+        id: "child",
+        title: "Remote child",
+        titleSource: "derived" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+        parentThreadId: "parent",
+        parentThreadBackend: "codex" as const,
+        parentThreadInstanceId: "parent-peer",
+        federation: {
+          ref: buildFederatedThreadRef({
+            backend: "codex",
+            instanceId: "child-peer",
+            threadId: "child",
+          }),
+          instanceLabel: "Child Mac",
+        },
+      }],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    } as NavigationSnapshot;
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.remoteBackend = () => ({
+      getNavigationSnapshot: async () => response,
+      listThreads: async () => ({ backend: "codex", fetchedAt: 1_000, threads: [] }),
+    });
+    runtime.store = () => ({
+      getPeer: (instanceId: string) => ({
+        label: instanceId === "child-peer" ? "Child Mac" : "Parent Mac",
+        status: "connected",
+      }),
+      listPeers: () => [],
+    });
+    runtime.visiblePeers = () => [
+      {
+        id: "parent-peer",
+        label: "Parent Mac",
+        role: "client",
+        status: "connected",
+        capabilities: ["thread_navigation"],
+      },
+      {
+        id: "child-peer",
+        label: "Child Mac",
+        role: "client",
+        status: "connected",
+        capabilities: ["thread_navigation", "remote_pty"],
+      },
+    ];
+
+    const snapshot = await runtime.remoteNavigationSnapshot(
+      { scope: "remote", instanceId: "parent-peer" },
+      {},
+    );
+
+    expect(snapshot.threads[0]).toMatchObject({
+      parentThreadInstanceId: "parent-peer",
+      federation: {
+        instanceLabel: "Child Mac",
+        capabilities: ["thread_navigation", "remote_pty"],
+        ref: {
+          target: { scope: "remote", instanceId: "child-peer" },
+        },
+      },
+    });
+  });
+
+  it("ungroups pinned remote children on their owner after parent archive", async () => {
+    const stateDb = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(stateDb);
+    setDesktopOverlayStoreForTests(overlayStore);
+    try {
+      const ref = buildFederatedThreadRef({
+        backend: "codex",
+        instanceId: "child-peer",
+        threadId: "child",
+      });
+      await overlayStore.addRemoteThreadPin({
+        ref,
+        instanceLabel: "Child Mac",
+        pinnedVia: "child",
+        summary: {
+          source: "codex",
+          id: "child",
+          title: "Remote child",
+          titleSource: "derived",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          parentThreadId: "parent",
+          parentThreadBackend: "codex",
+          parentThreadInstanceId: "parent-peer",
+        },
+      });
+      const setThreadParent = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "child",
+      }));
+      const runtime = new DesktopFederationRuntime();
+      vi.spyOn(runtime, "health").mockResolvedValue({
+        instanceId: "parent-peer",
+      } as never);
+      vi.spyOn(runtime, "remoteBackend").mockReturnValue({
+        setThreadParent,
+      } as never);
+
+      await runtime.ungroupRemoteChildrenOfArchivedThread({
+        backend: "codex",
+        parentThreadId: "parent",
+      });
+
+      expect(setThreadParent).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "child",
+        parentThreadId: null,
+      });
+      const [pin] = await overlayStore.listRemoteThreadPins();
+      expect(pin?.summary?.parentThreadId).toBeUndefined();
+      expect(pin?.summary?.parentThreadBackend).toBeUndefined();
+      expect(pin?.summary?.parentThreadInstanceId).toBeUndefined();
+    } finally {
+      resetDesktopOverlayStoreForTests();
+      stateDb.close();
+    }
   });
 
   it("records gateway-advertised peers for client instance health and opening", () => {
