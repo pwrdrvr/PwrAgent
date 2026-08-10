@@ -29,13 +29,22 @@ const PROVIDERS: ProviderCase[] = [
 
 const tempDirs: string[] = [];
 
+// These fixtures intentionally exercise direct execution of Node shebang
+// files, matching the macOS/Linux CLI installations involved in this bug.
+// Windows cannot execute extensionless shebang files through execFile/spawn;
+// a Windows runtime test needs a real native executable fixture, not a .cmd
+// shim that would change the production launch semantics under test.
+const describeExecutableAcp = process.platform === "win32"
+  ? describe.skip
+  : describe;
+
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-describe("ACP runtime path overrides", () => {
+describeExecutableAcp("ACP runtime path overrides", () => {
   it.each(PROVIDERS)(
     "launches the $registryId absolute override after startup with a stale cached default",
     async ({ expectedArgs, registryId }) => {
