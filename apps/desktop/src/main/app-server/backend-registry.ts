@@ -10238,9 +10238,14 @@ export class DesktopBackendRegistry {
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {
     this.assertNotBootstrap("readThread");
+    const readStartedAt = performance.now();
     const backend = request.backend ?? "codex";
     if (isAcpBackendId(backend)) {
-      return await this.readAcpThread(request, backend);
+      const response = await this.readAcpThread(request, backend);
+      return {
+        ...response,
+        readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
+      };
     }
 
     const codexStatusObservationSequence =
@@ -10392,6 +10397,7 @@ export class DesktopBackendRegistry {
     return {
       backend,
       fetchedAt: Date.now(),
+      readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       threadId: request.threadId,
       pricing,
       ...(toolAccounting ? { toolAccounting } : {}),

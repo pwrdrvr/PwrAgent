@@ -145,6 +145,7 @@ type ThreadSessionEntry = {
   failedHydrationVersion?: number | "unknown";
   hydratedInitialHistoryLimit?: number;
   hydratedUpdatedAt?: number;
+  initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
   loadedOlderHistory: boolean;
@@ -3613,6 +3614,7 @@ export function useThreadSessionState(params: {
   error?: string;
   expandedTranscriptActivityIds: string[];
   expandedTranscriptWorkPhaseGroupIds: string[];
+  initialLoadDurationMs?: number;
   loading: boolean;
   loadingMore: boolean;
   loadOlder: () => Promise<void>;
@@ -3959,6 +3961,8 @@ export function useThreadSessionState(params: {
               needsHydrationAfterCompletion && completionHydrationRetries < 2
                 ? undefined
                 : targetThread.updatedAt,
+            initialLoadDurationMs:
+              current.initialLoadDurationMs ?? response.readDurationMs,
             lastTouchedAt: Date.now(),
             loading: false,
             completionHydrationRetries,
@@ -6003,6 +6007,7 @@ export function useThreadSessionState(params: {
     clearPendingRequest,
     entries,
     error: selectedSession?.error,
+    initialLoadDurationMs: selectedSession?.initialLoadDurationMs,
     loading: selectedSession?.loading ?? false,
     loadingMore: selectedSession?.loadingMore ?? false,
     loadOlder,
