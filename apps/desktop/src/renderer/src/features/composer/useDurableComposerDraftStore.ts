@@ -153,8 +153,9 @@ export function useDurableComposerDraftStore(
   }, [baseStore, desktopApi]);
 
   useEffect(() => {
+    const pendingSaves = pendingSavesRef.current;
     return () => {
-      for (const [scopeKey, pending] of [...pendingSavesRef.current]) {
+      for (const [scopeKey, pending] of [...pendingSaves]) {
         flushPendingSave(scopeKey, pending);
       }
     };
@@ -233,7 +234,6 @@ export function useDurableComposerDraftStore(
       flushPendingSave,
       hydrationVersion,
       persistDraftHistory,
-      rememberLocalRecoveryCandidate,
     ],
   );
 }

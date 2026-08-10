@@ -32,7 +32,7 @@ type SubAgentDetailsModalProps = {
  * final response, run timing, model, and token/pricing usage.
  */
 export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
-  const { subAgent } = props;
+  const { onClose, subAgent } = props;
   const contentRef = useRef<HTMLDivElement>(null);
   const desktopApi = useDesktopApi();
   const openSubAgentTranscriptWindow = desktopApi?.openSubAgentTranscriptWindow;
@@ -54,7 +54,7 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        props.onClose();
+        onClose();
         return;
       }
       if (event.key !== "Tab") {
@@ -84,7 +84,7 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
       window.removeEventListener("keydown", handleKeyDown, true);
       restoreFocus?.focus?.();
     };
-  }, [props.onClose]);
+  }, [onClose]);
 
   const tone = subAgentTone(subAgent.status);
   const usage = subAgent.monitorUsage;

@@ -26,6 +26,7 @@ export function MessagingErrorNotices(props: {
     notice: AppNoticeToastNotice | undefined,
   ) => void;
 }) {
+  const onNoticeChanged = props.onNoticeChanged;
   const [statusByPlatform, setStatusByPlatform] = useState(
     () => new Map<MessagingChannelKind, MessagingPlatformNoticeState>(),
   );
@@ -88,7 +89,7 @@ export function MessagingErrorNotices(props: {
   }
 
   useEffect(() => {
-    if (!props.onNoticeChanged) return;
+    if (!onNoticeChanged) return;
     for (const [platform, state] of statusByPlatform) {
       const noticeKey = state.notice
         ? messagingNoticePublicationKey(state.notice)
@@ -97,11 +98,11 @@ export function MessagingErrorNotices(props: {
         continue;
       }
       publishedNoticeKeysRef.current.set(platform, noticeKey);
-      props.onNoticeChanged(platform, state.notice);
+      onNoticeChanged(platform, state.notice);
     }
-  }, [props.onNoticeChanged, statusByPlatform]);
+  }, [onNoticeChanged, statusByPlatform]);
 
-  if (props.onNoticeChanged) return null;
+  if (onNoticeChanged) return null;
 
   return notices.map(({ notice, platform }) => (
     <AppNoticeToast

@@ -158,7 +158,6 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     }),
     [
       clearSecret,
-      desktopApi?.readSettings,
       error,
       loading,
       refresh,

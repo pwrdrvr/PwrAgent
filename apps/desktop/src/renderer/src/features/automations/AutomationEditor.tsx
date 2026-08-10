@@ -365,7 +365,10 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const selectedGroup = telegramGroups.find(
     (group) => group.id === groupSelection,
   );
-  const destGroups = providerGroups[destProvider] ?? [];
+  const destGroups = useMemo(
+    () => providerGroups[destProvider] ?? [],
+    [destProvider, providerGroups],
+  );
   const selectedDestGroup = destGroups.find(
     (group) => group.id === destGroupSelection,
   );

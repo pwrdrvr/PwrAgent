@@ -818,6 +818,7 @@ function DesktopAppShell(props: {
     (Boolean(settings.snapshot) &&
       settings.snapshot?.onboarding?.completed.value !== false);
   const profiles = usePwrAgentProfiles(desktopApi);
+  const refreshProfiles = profiles.refresh;
   const runtimeIdentity = useRuntimeIdentity(desktopApi);
   const navigation = useThreadNavigation(desktopApi, {
     enabled: normalAppEnabled,
@@ -1253,11 +1254,11 @@ function DesktopAppShell(props: {
       return;
     }
     return desktopApi.onReplayOnboardingRequested(() => {
-      void profiles.refresh().finally(() => {
+      void refreshProfiles().finally(() => {
         setOnboardingOpen("replay");
       });
     });
-  }, [desktopApi, profiles.refresh]);
+  }, [desktopApi, refreshProfiles]);
   useEffect(() => {
     // Auto-launch on the first snapshot where `completed === false`.
     // `autoOpenSeen` blocks re-opens after the user dismissed without

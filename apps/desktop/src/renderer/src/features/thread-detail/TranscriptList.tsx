@@ -1013,9 +1013,6 @@ export function TranscriptList(props: TranscriptListProps) {
       threadId: props.threadId
     };
   }, [
-    props.pendingRequest,
-    props.pendingMcpInteraction,
-    props.pendingUserInput,
     props.pendingStatusText,
     props.runningTurnUsageText,
     props.threadId,
@@ -1128,17 +1125,20 @@ export function TranscriptList(props: TranscriptListProps) {
     scrollToBottom();
   }, [props.reglueRequestKey, scrollToBottom]);
 
+  const onViewportChange = props.onViewportChange;
+  const viewportThreadId = props.threadId;
   useEffect(() => {
+    const savedViewports = savedViewportsRef.current;
     return () => {
-      if (!props.threadId) {
-        props.onViewportChange?.(undefined);
+      if (!viewportThreadId) {
+        onViewportChange?.(undefined);
         return;
       }
 
-      const viewport = savedViewportsRef.current.get(props.threadId);
-      props.onViewportChange?.(viewport);
+      const viewport = savedViewports.get(viewportThreadId);
+      onViewportChange?.(viewport);
     };
-  }, [props.onViewportChange, props.threadId]);
+  }, [onViewportChange, viewportThreadId]);
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
