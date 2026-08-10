@@ -29,6 +29,9 @@ describe("useThreadNavigation", () => {
     delete (window as unknown as {
       __pwragentFederationTarget?: unknown;
     }).__pwragentFederationTarget;
+    delete (window as unknown as {
+      __pwragentFederationLabel?: unknown;
+    }).__pwragentFederationLabel;
     vi.restoreAllMocks();
   });
 
@@ -3850,6 +3853,86 @@ describe("useThreadNavigation", () => {
     );
     expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({ directoryKey });
     expect(result.current.selectedLaunchpad).toBeUndefined();
+  });
+
+  it("scopes a remote optimistic thread before its owner snapshot arrives", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+      __pwragentFederationLabel?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    (window as unknown as {
+      __pwragentFederationLabel?: unknown;
+    }).__pwragentFederationLabel = "Harold-MBP-M2-Max";
+    const directoryKey = "directory:/remote/PwrAgent";
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/remote/PwrAgent",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "Start remotely",
+      workMode: "local",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [{
+        key: directoryKey,
+        kind: "directory",
+        label: "PwrAgent",
+        path: "/remote/PwrAgent",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        launchpad,
+      }],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot: vi.fn(async () => snapshot),
+      materializeDirectoryLaunchpad: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "remote-thread-new",
+        turnId: "remote-turn-new",
+        executionMode: "default" as const,
+        workMode: "local" as const,
+      })),
+      resetDirectoryLaunchpad: vi.fn(async () => ({
+        directoryKey,
+        defaults: snapshot.launchpadDefaults,
+      })),
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.prompt).toBe("Start remotely");
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey);
+    });
+
+    expect(result.current.threads[0]?.federation).toEqual({
+      ref: {
+        backend: "codex",
+        target: federationTarget,
+        threadId: "remote-thread-new",
+      },
+      instanceLabel: "Harold-MBP-M2-Max",
+    });
   });
 
   it("shows a newly materialized detached worktree thread as HEAD before the backend snapshot catches up", async () => {
