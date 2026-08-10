@@ -22,6 +22,8 @@ import {
 } from "../acp/claude-acp-runtime";
 
 const temporaryDirectories: string[] = [];
+const TEST_PACKAGE_CONTENT_DIGEST =
+  "sha256-64o0mY8Wcu6Gu1V+70nzTHfuRs+Ot5OnqVUlNZPmWQI=";
 
 afterEach(async () => {
   await Promise.all(
@@ -66,6 +68,7 @@ describe("managed Claude ACP runtime", () => {
 
     const installed = await installManagedClaudeAcpRuntime({
       runtimeDirectory,
+      expectedPackageContentDigest: TEST_PACKAGE_CONTENT_DIGEST,
       installId: () => "test-install",
       now: () => 1234,
       resolveToolchain: async () => ({
@@ -100,6 +103,7 @@ describe("managed Claude ACP runtime", () => {
 
     const discovered = await discoverManagedClaudeAcpRuntime({
       runtimeDirectory,
+      expectedPackageContentDigest: TEST_PACKAGE_CONTENT_DIGEST,
       now: () => 5678,
     });
     expect(discovered).toMatchObject({
@@ -115,6 +119,7 @@ describe("managed Claude ACP runtime", () => {
     await expect(
       installManagedClaudeAcpRuntime({
         runtimeDirectory,
+        expectedPackageContentDigest: TEST_PACKAGE_CONTENT_DIGEST,
         installId: () => "bad-integrity",
         resolveToolchain: async () => ({
           nodeCommand: process.execPath,
@@ -149,6 +154,7 @@ describe("managed Claude ACP runtime", () => {
       await expect(
         installManagedClaudeAcpRuntime({
           runtimeDirectory,
+          expectedPackageContentDigest: TEST_PACKAGE_CONTENT_DIGEST,
           installId: () => "escaped-entrypoint",
           resolveToolchain: async () => ({
             nodeCommand: process.execPath,
@@ -172,6 +178,63 @@ describe("managed Claude ACP runtime", () => {
       ).rejects.toThrow("escapes its package");
     },
   );
+
+  it("rejects modified installed package bytes during rediscovery", async () => {
+    const runtimeDirectory = await temporaryRuntimeDirectory();
+    await installManagedClaudeAcpRuntime({
+      runtimeDirectory,
+      expectedPackageContentDigest: TEST_PACKAGE_CONTENT_DIGEST,
+      installId: () => "tamper-check",
+      resolveToolchain: async () => ({
+        nodeCommand: process.execPath,
+        npmCommand: "/usr/bin/npm",
+        npmArgsPrefix: [],
+      }),
+      runInstaller: async ({ cwd }) => {
+        await writePackageFixture(cwd, CLAUDE_ACP_PACKAGE_INTEGRITY);
+      },
+    });
+    await writeFile(
+      path.join(
+        runtimeDirectory,
+        "node_modules",
+        "@agentclientprotocol",
+        "claude-agent-acp",
+        "dist",
+        "index.js",
+      ),
+      "tampered",
+    );
+
+    await expect(
+      discoverManagedClaudeAcpRuntime({
+        runtimeDirectory,
+        expectedPackageContentDigest: TEST_PACKAGE_CONTENT_DIGEST,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("formats Windows authentication commands for PowerShell", () => {
+    const entrypoint =
+      "C:\\Program Files\\PwrAgent\\claude-agent-acp\\dist\\index.js";
+    const record = {
+      launchDescriptor: {
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [entrypoint],
+      },
+    } as Parameters<typeof claudeAcpManagedRuntimeSummary>[0];
+
+    const summary = claudeAcpManagedRuntimeSummary(record, {
+      platform: "win32",
+    });
+
+    expect(summary.subscriptionAuthCommand).toBe(
+      `& 'C:\\Program Files\\nodejs\\node.exe' '${entrypoint}' --cli auth login --claudeai`,
+    );
+    expect(summary.consoleAuthCommand).toBe(
+      `& 'C:\\Program Files\\nodejs\\node.exe' '${entrypoint}' --cli auth login --console`,
+    );
+  });
 
   it(
     "classifies local credential and blocked-subscription failures as auth setup",

@@ -105,6 +105,80 @@ describe("discoverAcpRuntimeCapabilities", () => {
     expect(selectedModel).toBe("kimi-code/kimi-for-coding");
     expect(close).toHaveBeenCalledOnce();
   });
+
+  it("discovers Claude models and each model's effort levels", async () => {
+    let selectedModel = "claude-sonnet";
+    const request = vi.fn(
+      async (
+        method: string,
+        params?: Record<string, unknown>,
+      ): Promise<unknown> => {
+        if (method === "initialize") {
+          return {
+            protocolVersion: 1,
+            agentInfo: {
+              name: "Claude Agent ACP",
+              version: "0.60.0",
+            },
+          };
+        }
+        if (method === "session/new") {
+          return {
+            sessionId: "claude-session",
+            configOptions: buildClaudeConfigOptions(selectedModel),
+          };
+        }
+        if (method === "session/set_config_option") {
+          if (params?.configId === "model") {
+            selectedModel = String(params.value);
+          }
+          return {
+            configOptions: buildClaudeConfigOptions(selectedModel),
+          };
+        }
+        return {};
+      },
+    );
+    const close = vi.fn(async () => undefined);
+    const transport: AcpJsonRpcTransport = {
+      request,
+      close,
+      onNotification: () => () => undefined,
+    };
+
+    const result = await discoverAcpRuntimeCapabilities(
+      buildClaudeAgent(),
+      {
+        cwd: "/repo",
+        now: () => 1000,
+        transportFactory: () => transport,
+      },
+    );
+
+    expect(result.runtimeCapabilities?.models).toEqual({
+      currentModelId: "claude-sonnet",
+      availableModels: [
+        {
+          id: "claude-sonnet",
+          label: "Claude Sonnet",
+          current: true,
+          supportsReasoning: true,
+          reasoningEfforts: ["low", "medium", "high"],
+          defaultReasoningEffort: "medium",
+        },
+        {
+          id: "claude-opus",
+          label: "Claude Opus",
+          current: false,
+          supportsReasoning: true,
+          reasoningEfforts: ["medium", "high", "max"],
+          defaultReasoningEffort: "high",
+        },
+      ],
+    });
+    expect(selectedModel).toBe("claude-sonnet");
+    expect(close).toHaveBeenCalledOnce();
+  });
 });
 
 function buildKimiConfigOptions(selectedModel: string) {
@@ -169,6 +243,59 @@ function buildKimiAgent(): AcpInstalledAgentRecord {
       distributionKind: "local",
       command: "kimi",
       args: ["acp"],
+      env: {},
+    },
+  };
+}
+
+function buildClaudeConfigOptions(selectedModel: string) {
+  const efforts = selectedModel === "claude-opus"
+    ? ["medium", "high", "max"]
+    : ["low", "medium", "high"];
+  return [
+    {
+      type: "select",
+      id: "model",
+      name: "Model",
+      category: "model",
+      currentValue: selectedModel,
+      options: [
+        { value: "claude-sonnet", name: "Claude Sonnet" },
+        { value: "claude-opus", name: "Claude Opus" },
+      ],
+    },
+    {
+      type: "select",
+      id: "effort",
+      name: "Effort",
+      category: "thought_level",
+      currentValue: selectedModel === "claude-opus" ? "high" : "medium",
+      options: efforts.map((value) => ({ value, name: value })),
+    },
+  ];
+}
+
+function buildClaudeAgent(): AcpInstalledAgentRecord {
+  const backendId = "acp:claude-acp" as AcpBackendId;
+  return {
+    backendId,
+    registryId: "claude-acp",
+    name: "Claude Agent",
+    version: "0.60.0",
+    distributionKind: "npx",
+    distributionSource: "@agentclientprotocol/claude-agent-acp@0.60.0",
+    installStatus: "installed",
+    authStatus: "authenticated",
+    verificationStatus: "verified",
+    allowlistRuleId: "managed-claude-agent-acp-0.60.0",
+    installedAt: 1000,
+    updatedAt: 1000,
+    launchDescriptor: {
+      backendId,
+      registryId: "claude-acp",
+      distributionKind: "npx",
+      command: process.execPath,
+      args: ["/verified/claude-agent-acp.js"],
       env: {},
     },
   };

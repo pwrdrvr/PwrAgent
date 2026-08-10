@@ -2723,6 +2723,7 @@ export class DesktopSettingsService {
           grok: providerConfigSection(providers.grok),
           kimi: providerConfigSection(providers.kimi),
           qwen: providerConfigSection(providers.qwen),
+          "claude-acp": providerConfigSection(providers["claude-acp"]),
         },
         applications: this.configStore.read("applications"),
         git: this.configStore.read("git"),

@@ -1689,6 +1689,14 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/contextWindow/updated";
+      params: {
+        threadId: string;
+        usedTokens: number;
+        modelContextWindow: number;
+      };
+    }
+  | {
       method: "thread/pricing/updated";
       params: {
         threadId: string;

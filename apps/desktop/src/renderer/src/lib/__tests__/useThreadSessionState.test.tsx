@@ -27,6 +27,7 @@ import { readRendererSequence } from "../../features/thread-detail/live-transcri
 function buildThread(params: {
   codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
   id: string;
+  source?: AppServerBackendKind;
   updatedAt: number;
 }): NavigationThreadSummary {
   return {
@@ -34,7 +35,7 @@ function buildThread(params: {
     title: `Thread ${params.id}`,
     titleSource: "explicit" as const,
     summary: `Summary for ${params.id}`,
-    source: "codex" as const,
+    source: params.source ?? "codex",
     linkedDirectories: [],
     inbox: {
       inInbox: false,
@@ -14008,6 +14009,66 @@ describe("useThreadSessionState", () => {
       totalTokens: 96_000,
       usedPercent: 75,
     });
+  });
+
+  it("applies ACP context-window updates without creating token usage", async () => {
+    let agentEventHandler: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "acp:claude-acp",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({
+          id: "thread-1",
+          source: "acp:claude-acp",
+          updatedAt: 1_000,
+        }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(desktopApi.readThread).toHaveBeenCalled();
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "acp:claude-acp",
+        notification: {
+          method: "thread/contextWindow/updated",
+          params: {
+            threadId: "thread-1",
+            usedTokens: 96_000,
+            modelContextWindow: 200_000,
+          },
+        },
+      });
+    });
+
+    expect(result.current.contextWindow).toMatchObject({
+      modelContextWindow: 200_000,
+      remainingTokens: 104_000,
+      totalTokens: 96_000,
+      usedPercent: 48,
+    });
+    expect(result.current.entries).toEqual([]);
   });
 
   it("derives context window usage from captured input and output token breakdowns", async () => {

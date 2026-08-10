@@ -65,6 +65,7 @@ import {
 import {
   CLAUDE_ACP_BACKEND_ID,
   CLAUDE_ACP_REGISTRY_ID,
+  discoverManagedClaudeAcpRuntime,
   unavailableManagedClaudeAcpRuntime,
 } from "../acp/claude-acp-runtime";
 import {
@@ -74,6 +75,7 @@ import {
 } from "../acp/acp-live-notifications";
 import {
   foldAcpTurnUsage,
+  readAcpContextWindowUpdate,
   readAcpSelectedModel,
   readAcpUsageEnvelope,
   type AcpTokenUsage,
@@ -168,6 +170,9 @@ export type AcpTransportFactory = (
   agent: AcpInstalledAgentRecord,
 ) => AcpJsonRpcTransport;
 export type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
+export type ManagedClaudeAcpDiscovery = () => Promise<
+  AcpInstalledAgentRecord | undefined
+>;
 
 /**
  * Real local ACP discovery, and the only discovery that reaches outside this
@@ -240,12 +245,31 @@ export function createLocalAcpAgentDiscovery(params: {
 }
 
 /**
+ * Real managed Claude discovery. Keep it separate from generic local-agent
+ * discovery so an unrelated CLI probe failure cannot hide a verified Claude
+ * runtime, while still requiring the production registry to opt into machine
+ * access explicitly.
+ */
+export function createManagedClaudeAcpDiscovery(params?: {
+  resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
+}): ManagedClaudeAcpDiscovery {
+  return async () => {
+    const env = await params?.resolveEnv?.();
+    return await discoverManagedClaudeAcpRuntime({
+      ...(env ? { env } : {}),
+    });
+  };
+}
+
+/**
  * Inert discovery: reports no installed ACP agents and touches nothing outside
  * this process. This is what a `DesktopBackendRegistry` gets unless its caller
  * opts in to machine discovery, so a registry test that injects no stub fails
  * by finding no agents rather than by installing a Grok runtime.
  */
 export const noLocalAcpAgentDiscovery: LocalAcpDiscovery = async () => [];
+export const noManagedClaudeAcpDiscovery: ManagedClaudeAcpDiscovery =
+  async () => undefined;
 
 export type AcpSessionStoreLike =
   Pick<AcpSessionStoreContract, "getSession" | "listSessions"> &
@@ -287,6 +311,7 @@ export type AcpBackendAdapterOptions = {
    * Production passes `createLocalAcpAgentDiscovery(...)`; tests pass a stub.
    */
   discoverLocalAcpAgents: LocalAcpDiscovery;
+  discoverManagedClaudeAcpAgent?: ManagedClaudeAcpDiscovery;
   isAcpAgentEnabled?: (registryId: string) => boolean;
   resolveProviderDependencyFingerprint?: (
     registryId: string,
@@ -1147,6 +1172,7 @@ export class AcpBackendAdapter {
   private readonly createAcpClient: AcpClientFactory;
   private readonly createAcpTransport?: AcpTransportFactory;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
+  private readonly discoverManagedClaudeAcpAgent: ManagedClaudeAcpDiscovery;
   private readonly isAcpAgentEnabled?: (registryId: string) => boolean;
   private readonly resolveProviderDependencyFingerprint?: (
     registryId: string,
@@ -1185,6 +1211,9 @@ export class AcpBackendAdapter {
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
   private localAgentSnapshot: AcpInstalledAgentRecord[] = [];
   private readonly invalidatedProviderRegistryIds = new Set<string>();
+  private managedClaudeAcpAgentPromise?: Promise<
+    AcpInstalledAgentRecord | undefined
+  >;
 
   constructor(options: AcpBackendAdapterOptions) {
     this.captureStores = options.captureStores;
@@ -1223,6 +1252,9 @@ export class AcpBackendAdapter {
             ? new AcpRolloutStore(resolveDefaultAcpRolloutRoot())
             : undefined);
     this.discoverLocalAcpAgents = options.discoverLocalAcpAgents;
+    this.discoverManagedClaudeAcpAgent =
+      options.discoverManagedClaudeAcpAgent
+      ?? noManagedClaudeAcpDiscovery;
     this.isAcpAgentEnabled = options.isAcpAgentEnabled;
     this.resolveProviderDependencyFingerprint =
       options.resolveProviderDependencyFingerprint;
@@ -1403,6 +1435,7 @@ export class AcpBackendAdapter {
   invalidateLocalAgentDiscovery(): void {
     this.localAcpAgentsRevision += 1;
     this.localAcpAgentsPromise = undefined;
+    this.managedClaudeAcpAgentPromise = undefined;
   }
 
   invalidateRuntimeSelections(registryIds: readonly string[]): void {
@@ -1505,8 +1538,8 @@ export class AcpBackendAdapter {
       && !this.isClaudeAcpExperimentalEnabled()
     ) {
       return session
-         ? this.readRolloutReplay(session, "rollout-claude-experimental-disabled")
-         : new AcpSessionReplayNormalizer().replay();
+        ? this.readRolloutReplay(session, "rollout-claude-experimental-disabled")
+        : new AcpSessionReplayNormalizer().replay();
     }
     const cachedClient = await (
       this.findSessionOwner(backend, sessionId) ?? this.acpClients.get(backend)
@@ -2090,9 +2123,26 @@ export class AcpBackendAdapter {
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
+    const verifiedManagedClaudeBackends = new Set(
+      this.localAgentSnapshot
+        .filter(
+          (agent) =>
+            agent.registryId === CLAUDE_ACP_REGISTRY_ID
+            && agent.installStatus === "installed"
+            && agent.verificationStatus === "verified"
+            && agent.launchDescriptor !== undefined,
+        )
+        .map((agent) => agent.backendId),
+    );
     const durable = (this.acpAgentStore?.listInstalledAgents() ?? [])
       .map(normalizeInstalledAcpAgent)
-      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
+      .filter((agent) => !isBannedAcpRegistryId(agent.registryId))
+      .map((agent) =>
+        agent.registryId === CLAUDE_ACP_REGISTRY_ID
+        && !verifiedManagedClaudeBackends.has(agent.backendId)
+          ? unavailableManagedClaudeAcpRuntime(agent, agent.updatedAt)
+          : agent,
+      );
     if (this.localAgentSnapshot.length === 0) return durable;
     const durableByBackend = new Map(
       durable.map((agent) => [agent.backendId, agent]),
@@ -2123,14 +2173,32 @@ export class AcpBackendAdapter {
   ): Promise<AcpInstalledAgentRecord[]> {
     assertProviderDiscoveryPermit(permit);
     while (true) {
-      const discovery = await this.readLocalAgentsOnce();
-      if (discovery.revision !== this.localAcpAgentsRevision) {
+      const [localDiscovery, managedClaudeDiscovery] = await Promise.all([
+        this.readLocalAgentsOnce(),
+        this.isClaudeAcpExperimentalEnabled()
+          ? this.readManagedClaudeAcpAgentOnce()
+          : Promise.resolve({
+              agent: undefined,
+              revision: this.localAcpAgentsRevision,
+            }),
+      ]);
+      if (
+        localDiscovery.revision !== this.localAcpAgentsRevision
+        || managedClaudeDiscovery.revision !== this.localAcpAgentsRevision
+      ) {
         continue;
       }
       // Keep the revision check and all consumption synchronous. An
       // invalidation queued after discovery settles must run before this
       // point or after stale results have been fully merged and persisted.
-      const agents = this.mergeAndPersistDiscoveredAgents(discovery.agents);
+      const agents = this.mergeAndPersistDiscoveredAgents([
+        ...localDiscovery.agents.filter(
+          (agent) => agent.registryId !== CLAUDE_ACP_REGISTRY_ID,
+        ),
+        ...(managedClaudeDiscovery.agent
+          ? [managedClaudeDiscovery.agent]
+          : []),
+      ]);
       for (const agent of agents) {
         if (agent.registryId === "grok" && agent.installStatus === "installed") {
           this.refreshGrokUpdateStatusInBackground(agent);
@@ -2188,7 +2256,10 @@ export class AcpBackendAdapter {
       const preserveCachedMetadata = sameRuntime || sameManagedClaudeRuntime;
       return {
         ...agent,
-        authStatus: preserveCachedMetadata ? cached.authStatus : agent.authStatus,
+        authStatus:
+          preserveCachedMetadata && cached
+            ? cached.authStatus
+            : agent.authStatus,
         installedAt: cached?.installedAt ?? agent.installedAt,
         updatedAt:
           preserveCachedMetadata && cached
@@ -2401,6 +2472,24 @@ export class AcpBackendAdapter {
     };
   }
 
+  private async readManagedClaudeAcpAgentOnce(): Promise<{
+    agent: AcpInstalledAgentRecord | undefined;
+    revision: number;
+  }> {
+    const revision = this.localAcpAgentsRevision;
+    this.managedClaudeAcpAgentPromise ??=
+      this.discoverManagedClaudeAcpAgent().catch((error) => {
+        acpBackendAdapterLog.debug("managed_claude_acp_discovery_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      });
+    return {
+      agent: await this.managedClaudeAcpAgentPromise,
+      revision,
+    };
+  }
+
   private createDefaultClient(agent: AcpInstalledAgentRecord): AcpRuntimeClient {
     if (!agent.launchDescriptor) {
       throw new Error(`ACP backend ${agent.backendId} has no launch descriptor`);
@@ -2442,6 +2531,7 @@ export class AcpBackendAdapter {
         update,
       }) => {
         const updateKind = readAcpUpdateKind(update);
+        const contextWindowUpdate = readAcpContextWindowUpdate(update);
         const usageEnvelope = readAcpUsageEnvelope(update);
         let liveUsageNotification: AppServerNotification | undefined;
         if (usageEnvelope && turnId) {
@@ -2571,6 +2661,19 @@ export class AcpBackendAdapter {
                 commands:
                   this.getSession(agent.backendId, sessionId)?.availableCommands ??
                   [],
+              },
+            },
+          });
+        }
+        if (contextWindowUpdate) {
+          await this.emit({
+            backend: agent.backendId,
+            notification: {
+              method: "thread/contextWindow/updated",
+              params: {
+                threadId: sessionId,
+                usedTokens: contextWindowUpdate.used,
+                modelContextWindow: contextWindowUpdate.size,
               },
             },
           });

@@ -3944,17 +3944,17 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).experimental.claudeAcp).toEqual({
+    expect((await service.readSettingsProjection()).experimental.claudeAcp).toEqual({
       value: false,
       source: "default",
     });
     expect(service.resolveClaudeAcpExperimentalEnabled()).toBe(false);
 
-    await service.writeConfigPatch({
+    await service.writeConfigPatchTargeted({
       experimental: { claudeAcp: true },
     });
 
-    expect((await service.readSettings()).experimental.claudeAcp).toEqual({
+    expect((await service.readSettingsProjection()).experimental.claudeAcp).toEqual({
       value: true,
       source: "config",
     });
