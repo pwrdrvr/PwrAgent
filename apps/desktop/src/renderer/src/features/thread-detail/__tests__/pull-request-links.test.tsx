@@ -421,6 +421,121 @@ describe("pull request links in transcript markdown", () => {
     expect(screen.getByText("Draft PR:").parentElement).toBe(markdownNode);
   });
 
+  it.each([
+    {
+      field: "additions",
+      initial: { additions: 12, deletions: 4 },
+      updated: { additions: 18, deletions: 4 },
+      selector: ".diff-stat__added",
+      initialText: "+12",
+      updatedText: "+18",
+    },
+    {
+      field: "deletions",
+      initial: { additions: 12, deletions: 4 },
+      updated: { additions: 12, deletions: 9 },
+      selector: ".diff-stat__removed",
+      initialText: "-4",
+      updatedText: "-9",
+    },
+    {
+      field: "changedFiles",
+      initial: { changedFiles: 3 },
+      updated: { changedFiles: 6 },
+      selector: ".pr-status-card__files",
+      initialText: "3 files",
+      updatedText: "6 files",
+    },
+    {
+      field: "commitCount",
+      initial: { commitCount: 2 },
+      updated: { commitCount: 5 },
+      selector: ".pr-status-card__caption",
+      initialText: "2 commits",
+      updatedText: "5 commits",
+    },
+    {
+      field: "createdAt",
+      initial: { createdAt: Date.parse("2026-08-08T12:00:00Z") },
+      updated: { createdAt: Date.parse("2026-08-07T12:00:00Z") },
+      selector: ".pr-status-card__row-value",
+      initialText: "2d ago",
+      updatedText: "3d ago",
+    },
+    {
+      field: "mergedAt",
+      initial: {
+        state: "merged" as const,
+        lifecycleState: "merged" as const,
+        mergedAt: Date.parse("2026-08-10T10:00:00Z"),
+      },
+      updated: {
+        state: "merged" as const,
+        lifecycleState: "merged" as const,
+        mergedAt: Date.parse("2026-08-10T09:00:00Z"),
+      },
+      selector: ".pr-status-card__row-value",
+      initialText: "2h ago",
+      updatedText: "3h ago",
+    },
+    {
+      field: "closedAt",
+      initial: {
+        state: "closed" as const,
+        lifecycleState: "closed" as const,
+        closedAt: Date.parse("2026-08-10T10:00:00Z"),
+      },
+      updated: {
+        state: "closed" as const,
+        lifecycleState: "closed" as const,
+        closedAt: Date.parse("2026-08-10T09:00:00Z"),
+      },
+      selector: ".pr-status-card__row-value",
+      initialText: "2h ago",
+      updatedText: "3h ago",
+    },
+  ])("updates a visible hover card when only $field changes", ({
+    initial,
+    initialText,
+    selector,
+    updated,
+    updatedText,
+  }) => {
+    vi.spyOn(Date, "now").mockReturnValue(
+      Date.parse("2026-08-10T12:00:00Z"),
+    );
+    const text = `Draft PR: [Giphy/giphy-services#13290](${PR_URL})`;
+    const initialThread = threadSummary([prSummary(initial)]);
+    const { rerender } = render(
+      <PullRequestLinkProvider
+        activeThread={initialThread}
+        threads={[initialThread]}
+      >
+        <ThreadMarkdown text={text} />
+      </PullRequestLinkProvider>,
+    );
+    const markdownNode = screen.getByText("Draft PR:").parentElement;
+    fireEvent.mouseEnter(screen.getByRole("button", {
+      name: /Open Giphy\/giphy-services#13290/,
+    }));
+    expect(screen.getByRole("tooltip").querySelector(selector))
+      .toHaveTextContent(initialText);
+
+    const updatedThread = threadSummary([prSummary(updated)]);
+    rerender(
+      <PullRequestLinkProvider
+        activeThread={updatedThread}
+        threads={[updatedThread]}
+      >
+        <ThreadMarkdown text={text} />
+      </PullRequestLinkProvider>,
+    );
+
+    expect(screen.getByRole("tooltip").querySelector(selector))
+      .toHaveTextContent(updatedText);
+    expect(screen.getByText("Draft PR:").parentElement).toBe(markdownNode);
+  });
+
   it("preserves an authored PR deep link while hydrating its live status", () => {
     const deepLink = `${PR_URL}/files?diff=split`;
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
