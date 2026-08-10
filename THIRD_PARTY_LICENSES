@@ -83,12 +83,12 @@ MIT
 - @napi-rs/canvas-linux-x64-musl@1.0.3 | https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-win32-arm64-msvc@1.0.3 | https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-win32-x64-msvc@1.0.3 | https://github.com/Brooooooklyn/canvas
-- @octokit/endpoint@11.0.3 | github:octokit/endpoint.js
-- @octokit/graphql@9.0.3 | github:octokit/graphql.js
-- @octokit/openapi-types@27.0.0 | https://github.com/octokit/openapi-types.ts
-- @octokit/request@10.0.11 | github:octokit/request.js
-- @octokit/request-error@7.1.0 | github:octokit/request-error.js
-- @octokit/types@16.0.0 | github:octokit/types.ts
+- @octokit/endpoint@11.0.4 | github:octokit/endpoint.js
+- @octokit/graphql@9.0.4 | github:octokit/graphql.js
+- @octokit/openapi-types@28.0.0 | https://github.com/octokit/openapi-types.ts
+- @octokit/request@10.0.13 | github:octokit/request.js
+- @octokit/request-error@7.1.1 | github:octokit/request-error.js
+- @octokit/types@17.0.0 | github:octokit/types.ts
 - @pwrdrvr/agent-acp@0.13.0 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-client@0.6.1 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-core@0.2.0 | https://github.com/pwrdrvr/agent-kit
@@ -243,7 +243,7 @@ MIT
 - jose@6.2.3 | panva/jose
 - js-yaml@4.3.1 | nodeca/js-yaml
 - json-schema-traverse@1.0.0 | https://github.com/epoberezkin/json-schema-traverse
-- json-with-bigint@3.5.8 | https://github.com/Ivan-Korolenko/json-with-bigint
+- json-with-bigint@3.5.10 | https://github.com/Ivan-Korolenko/json-with-bigint
 - jsonfile@6.2.1 | https://github.com/jprichardson/node-jsonfile
 - katex@0.16.47 | https://github.com/KaTeX/KaTeX
 - katex@0.18.1 | https://github.com/KaTeX/KaTeX
@@ -746,15 +746,15 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@octokit/endpoint@11.0.3 (MIT)
+@octokit/endpoint@11.0.4 (MIT)
 ------------------------------
 
 Applies to:
-- @octokit/endpoint@11.0.3 (MIT)
-- @octokit/graphql@9.0.3 (MIT)
-- @octokit/request@10.0.11 (MIT)
+- @octokit/endpoint@11.0.4 (MIT)
+- @octokit/graphql@9.0.4 (MIT)
+- @octokit/request@10.0.13 (MIT)
 
-Representative file: @octokit/endpoint@11.0.3/LICENSE
+Representative file: @octokit/endpoint@11.0.4/LICENSE
 
 The MIT License
 
@@ -778,13 +778,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-@octokit/openapi-types@27.0.0 (MIT)
+@octokit/openapi-types@28.0.0 (MIT)
 -----------------------------------
 
 Applies to:
-- @octokit/openapi-types@27.0.0 (MIT)
+- @octokit/openapi-types@28.0.0 (MIT)
 
-Representative file: @octokit/openapi-types@27.0.0/LICENSE
+Representative file: @octokit/openapi-types@28.0.0/LICENSE
 
 Copyright (c) GitHub 2025 - Licensed as MIT.
 
@@ -794,13 +794,13 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-@octokit/request-error@7.1.0 (MIT)
+@octokit/request-error@7.1.1 (MIT)
 ----------------------------------
 
 Applies to:
-- @octokit/request-error@7.1.0 (MIT)
+- @octokit/request-error@7.1.1 (MIT)
 
-Representative file: @octokit/request-error@7.1.0/LICENSE
+Representative file: @octokit/request-error@7.1.1/LICENSE
 
 The MIT License
 
@@ -824,13 +824,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-@octokit/types@16.0.0 (MIT)
+@octokit/types@17.0.0 (MIT)
 ---------------------------
 
 Applies to:
-- @octokit/types@16.0.0 (MIT)
+- @octokit/types@17.0.0 (MIT)
 
-Representative file: @octokit/types@16.0.0/LICENSE
+Representative file: @octokit/types@17.0.0/LICENSE
 
 MIT License Copyright (c) 2019 Octokit contributors
 
@@ -4122,13 +4122,13 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-json-with-bigint@3.5.8 (MIT)
-----------------------------
+json-with-bigint@3.5.10 (MIT)
+-----------------------------
 
 Applies to:
-- json-with-bigint@3.5.8 (MIT)
+- json-with-bigint@3.5.10 (MIT)
 
-Representative file: json-with-bigint@3.5.8/LICENSE
+Representative file: json-with-bigint@3.5.10/LICENSE
 
 MIT License
 
