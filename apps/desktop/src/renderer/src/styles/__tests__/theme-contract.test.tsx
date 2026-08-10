@@ -1034,6 +1034,21 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps PR chip and hover-card dots on shared color rules", () => {
+    for (const [chipSelector, cardSelector] of [
+      [".pr-chip--passing .pr-chip__dot", ".pr-status-card .pr-status-card__dot--passing"],
+      [".pr-chip--failing .pr-chip__dot", ".pr-status-card .pr-status-card__dot--failing"],
+      [".pr-chip--pending .pr-chip__dot", ".pr-status-card .pr-status-card__dot--pending"],
+      [".pr-chip--merged .pr-chip__dot", ".pr-status-card .pr-status-card__dot--merged"],
+      [".pr-chip--closed .pr-chip__dot", ".pr-status-card .pr-status-card__dot--closed"],
+    ]) {
+      const escapedChip = chipSelector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const escapedCard = cardSelector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      expect(css).toMatch(new RegExp(`${escapedChip},\\s*\\n${escapedCard}\\s*\\{`));
+    }
+    expect(extractRuleBody(css, ".pr-status-card")).toMatch(/z-index:\s*90;/);
+  });
+
   it("keeps thinking scanner variants on one shared visible sweep", () => {
     expect(css).not.toContain("--thinking-scanner-progress");
     expect(css).not.toContain("--thinking-scanner-full-offset");

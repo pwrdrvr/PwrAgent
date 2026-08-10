@@ -281,6 +281,51 @@ describe("navigation automation summaries", () => {
       }),
     );
   });
+
+  it("includes structured PR hover metadata in the navigation snapshot hash", () => {
+    const pr: PrSummary = {
+      provider: "github.com",
+      number: 1455,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1455",
+    };
+    const [thread] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          prs: [pr],
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [buildThread()],
+    });
+    const baseHash = buildNavigationSnapshotHash({
+      backend: "codex",
+      threads: [thread!],
+    });
+    const variants: Partial<PrSummary>[] = [
+      { additions: 412 },
+      { deletions: 198 },
+      { changedFiles: 18 },
+      { commitCount: 137 },
+      { createdAt: 1_700_000_000_000 },
+      { mergedAt: 1_700_100_000_000 },
+      { closedAt: 1_700_200_000_000 },
+    ];
+
+    for (const metadata of variants) {
+      expect(buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [{ ...thread!, prs: [{ ...pr, ...metadata }] }],
+      })).not.toBe(baseHash);
+    }
+  });
 });
 
 describe("navigation Agent metadata", () => {

@@ -258,6 +258,22 @@ export type PrSummary = {
    * branch is deleted.
    */
   commitShas?: string[];
+  /**
+   * Diff size, commit count, and lifecycle timestamps for the PR hover card.
+   *
+   * These stay optional because older cache rows and terminal PRs observed
+   * before this data was collected may never contain them. Readers must treat
+   * absence as "not known" and render nothing, never as zero.
+   */
+  additions?: number;
+  deletions?: number;
+  changedFiles?: number;
+  /** Total commits on the PR; distinct from the sampled `commitShas`. */
+  commitCount?: number;
+  /** Epoch milliseconds. */
+  createdAt?: number;
+  mergedAt?: number;
+  closedAt?: number;
   url: string;
 };
 

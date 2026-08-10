@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -52,6 +53,8 @@ export function useViewportTooltip(options: {
   /** CSS class applied to the rendered tooltip element. */
   className: string;
 }): {
+  /** DOM id for an `aria-describedby` relationship while visible. */
+  tooltipId: string;
   show: (target: HTMLElement, content: ReactNode) => void;
   /**
    * Replace the content of an already-visible tooltip in place (no-op
@@ -65,6 +68,7 @@ export function useViewportTooltip(options: {
   tooltipNode: ReactNode;
 } {
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const tooltipId = useId();
   const [state, setState] = useState<TooltipState | undefined>(undefined);
 
   // Measure the rendered tooltip and clamp position so it stays in the
@@ -140,6 +144,7 @@ export function useViewportTooltip(options: {
           <div
             ref={tooltipRef}
             role="tooltip"
+            id={tooltipId}
             className={options.className}
             style={{
               position: "fixed",
@@ -154,5 +159,5 @@ export function useViewportTooltip(options: {
         )
       : null;
 
-  return { show, update, hide, visible, tooltipNode };
+  return { tooltipId, show, update, hide, visible, tooltipNode };
 }

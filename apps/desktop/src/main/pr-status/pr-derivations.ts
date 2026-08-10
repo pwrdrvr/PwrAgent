@@ -33,7 +33,12 @@ export type GhPrPayload = {
   isDraft: boolean;
   mergeable?: string | null;
   mergeStateStatus?: string | null;
+  additions?: number | null;
+  deletions?: number | null;
+  changedFiles?: number | null;
+  createdAt?: string | null;
   mergedAt: string | null;
+  closedAt?: string | null;
   commits?: { oid?: string | null }[] | null;
   headRefName: string;
   headRepository: { name?: string } | null;
@@ -66,8 +71,38 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     reviewState: deriveReviewState(row),
     mergeState: deriveMergeState(row),
     ...parseCommitShas(row.commits),
+    ...readPrCount(row.additions, "additions"),
+    ...readPrCount(row.deletions, "deletions"),
+    ...readPrCount(row.changedFiles, "changedFiles"),
+    ...readPrTimestamp(row.createdAt, "createdAt"),
+    ...readPrTimestamp(row.mergedAt, "mergedAt"),
+    ...readPrTimestamp(row.closedAt, "closedAt"),
     url: row.url,
   };
+}
+
+function readPrCount<K extends string>(
+  value: number | null | undefined,
+  key: K,
+): Partial<Record<K, number>> {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return {};
+  }
+  return { [key]: Math.trunc(value) } as Record<K, number>;
+}
+
+function readPrTimestamp<K extends string>(
+  value: string | null | undefined,
+  key: K,
+): Partial<Record<K, number>> {
+  if (!value) {
+    return {};
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return {};
+  }
+  return { [key]: parsed } as Record<K, number>;
 }
 
 export function parseCommitShas(

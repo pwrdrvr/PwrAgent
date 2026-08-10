@@ -17,7 +17,7 @@ import type {
 import { EditorIcon } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import { TranscriptDiff } from "./TranscriptDiff";
-import { DiffStat } from "./DiffStat";
+import { DiffStat } from "../../lib/DiffStat";
 import { EditGroupCommitBadge } from "./EditGroupCommitBadge";
 import {
   flattenEditedFileGroups,

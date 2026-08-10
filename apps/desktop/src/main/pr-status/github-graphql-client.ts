@@ -129,7 +129,11 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
   return { owner: match[1]!, repo: match[2]!, number };
 }
 
-/** The PullRequest fields the poller reads. Kept minimal — see the cost note above. */
+/**
+ * The PullRequest fields the poller reads. Diff and timestamp scalars add no
+ * GraphQL connection cost; `totalCount` rides the existing commits connection.
+ * `updatedAt` is intentionally omitted because no surface displays it.
+ */
 const PR_STATUS_FRAGMENT = `
 fragment PrStatus on PullRequest {
   number
@@ -138,9 +142,16 @@ fragment PrStatus on PullRequest {
   state
   isDraft
   mergeable
+  additions
+  deletions
+  changedFiles
+  createdAt
+  mergedAt
+  closedAt
   headRepository { name }
   headRepositoryOwner { login }
   commits(last: 1) {
+    totalCount
     nodes {
       commit {
         oid
@@ -157,9 +168,16 @@ export type GraphqlPrNode = {
   state: string;
   isDraft: boolean;
   mergeable?: string | null;
+  additions?: number | null;
+  deletions?: number | null;
+  changedFiles?: number | null;
+  createdAt?: string | null;
+  mergedAt?: string | null;
+  closedAt?: string | null;
   headRepository?: { name?: string | null } | null;
   headRepositoryOwner?: { login?: string | null } | null;
   commits?: {
+    totalCount?: number | null;
     nodes?: (
       | {
         commit?: {
@@ -315,8 +333,39 @@ export function mapGraphqlPrNode(node: GraphqlPrNode): PrSummary {
     reviewState: deriveReviewState(shaped),
     mergeState: deriveMergeState(shaped),
     ...(commitShas.length > 0 ? { commitShas } : {}),
+    ...readPrCount(node.additions, "additions"),
+    ...readPrCount(node.deletions, "deletions"),
+    ...readPrCount(node.changedFiles, "changedFiles"),
+    ...readPrCount(node.commits?.totalCount, "commitCount"),
+    ...readPrTimestamp(node.createdAt, "createdAt"),
+    ...readPrTimestamp(node.mergedAt, "mergedAt"),
+    ...readPrTimestamp(node.closedAt, "closedAt"),
     url: node.url,
   };
+}
+
+function readPrCount<K extends string>(
+  value: number | null | undefined,
+  key: K,
+): Partial<Record<K, number>> {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return {};
+  }
+  return { [key]: Math.trunc(value) } as Record<K, number>;
+}
+
+function readPrTimestamp<K extends string>(
+  value: string | null | undefined,
+  key: K,
+): Partial<Record<K, number>> {
+  if (!value) {
+    return {};
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return {};
+  }
+  return { [key]: parsed } as Record<K, number>;
 }
 
 /**

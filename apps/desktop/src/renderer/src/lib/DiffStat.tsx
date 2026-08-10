@@ -1,8 +1,4 @@
-/**
- * Added/removed line counts rendered consistently everywhere: `+A` (green)
- * then `-R` (red), no comma, monospace — matching the thread-row dirty chip.
- * Pass `className="diff-stat--chip"` for the pill treatment.
- */
+/** Added/removed line counts rendered consistently across renderer surfaces. */
 export function DiffStat(props: {
   additions: number;
   removals: number;

@@ -522,6 +522,13 @@ export function buildNavigationSnapshotHash(params: {
         lifecycleState: pr.lifecycleState ?? null,
         reviewState: pr.reviewState ?? null,
         mergeState: pr.mergeState ?? null,
+        additions: pr.additions ?? null,
+        deletions: pr.deletions ?? null,
+        changedFiles: pr.changedFiles ?? null,
+        commitCount: pr.commitCount ?? null,
+        createdAt: pr.createdAt ?? null,
+        mergedAt: pr.mergedAt ?? null,
+        closedAt: pr.closedAt ?? null,
         url: pr.url,
       })),
       // Include the breadcrumb fields (parentTitle / ancestorTitle) in
