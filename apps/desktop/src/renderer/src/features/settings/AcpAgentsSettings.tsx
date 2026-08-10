@@ -21,6 +21,7 @@ import {
 } from "./ManagedRuntimeProgress";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
+import { SettingsSwitch } from "./SettingsSwitch";
 import {
   acpRelativeTime,
   acpStatusLabel,
@@ -110,10 +111,6 @@ export function AcpAgentsSettings(props: {
   const [error, setError] = useState<string | undefined>();
   const claudeExperimentalEnabled =
     props.snapshot?.experimental?.claudeAcp?.value ?? true;
-  const visibleEntries = entries.filter(
-    (entry) =>
-      entry.registryId !== "claude-acp" || claudeExperimentalEnabled,
-  );
 
   async function refresh(
     refreshRegistry = false,
@@ -214,9 +211,12 @@ export function AcpAgentsSettings(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
 
-  const visibleEntries = props.only
+  const visibleEntries = (props.only
     ? entries.filter((entry) => entry.registryId === props.only)
-    : displayOrderedAcpEntries(entries);
+    : displayOrderedAcpEntries(entries)).filter(
+      (entry) =>
+        entry.registryId !== "claude-acp" || claudeExperimentalEnabled,
+    );
 
   return (
     <>

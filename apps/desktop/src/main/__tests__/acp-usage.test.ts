@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   foldAcpTurnUsage,
+  readAcpContextWindowUpdate,
   readAcpSelectedModel,
   readAcpUsageEnvelope,
   type AcpTokenUsage,
@@ -86,6 +87,36 @@ describe("ACP usage normalization", () => {
       reasoningOutputTokens: 10,
       totalTokens: 1_250,
     });
+  });
+
+  it("normalizes Claude prompt-response usage and context updates", () => {
+    expect(
+      readAcpUsageEnvelope({
+        kind: "turn_finished",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cachedReadTokens: 900,
+          cachedWriteTokens: 50,
+          totalTokens: 1_070,
+        },
+      }),
+    ).toEqual({
+      scope: "turn",
+      tokenUsage: {
+        cachedInputTokens: 900,
+        inputTokens: 1_050,
+        outputTokens: 20,
+        totalTokens: 1_070,
+      },
+    });
+    expect(
+      readAcpContextWindowUpdate({
+        sessionUpdate: "usage_update",
+        used: 96_000,
+        size: 200_000,
+      }),
+    ).toEqual({ used: 96_000, size: 200_000 });
   });
 
   // Grok Build reports each model call on `response_completed`, a transient

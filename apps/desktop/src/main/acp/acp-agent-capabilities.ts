@@ -34,6 +34,7 @@ const ACP_AGENT_CAPABILITY_CATALOG: Record<string, AcpAgentCapabilities> = {
   "claude-acp": {
     liveWorkspaceHandoff: false,
     managedReview: false,
+    steerTurn: false,
   },
 };
 
