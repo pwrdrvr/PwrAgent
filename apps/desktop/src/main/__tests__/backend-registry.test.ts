@@ -40,6 +40,7 @@ import type {
   TaskMonitorResponse,
   ThreadExecutionMode,
   ThreadOverlayState,
+  ThreadToolAccounting,
   ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -3611,6 +3612,65 @@ describe("DesktopBackendRegistry", () => {
 
     await registry.close();
     expect(acpClient.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes persisted tool accounting when reading ACP threads", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const threadId = "grok-tool-accounting";
+    const toolAccounting: ThreadToolAccounting = {
+      alerts: [],
+      invocations: [
+        {
+          backend: acpBackendId,
+          category: "shell",
+          debugLines: 0,
+          errorLines: 0,
+          estimatedOutputTokens: 550,
+          infoLines: 1,
+          invocationId: "inv-1",
+          itemId: "item-1",
+          noisy: false,
+          observedAt: 3_000,
+          outputChars: 2_200,
+          outputLines: 23,
+          outputTruncated: false,
+          status: "completed",
+          threadId,
+          toolName: "shell",
+          updatedAt: 3_000,
+          warningLines: 0,
+        },
+      ],
+      summaries: [],
+    };
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadToolAccounting: async () => toolAccounting,
+    };
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      overlayStore,
+      sessionId: threadId,
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: threadId,
+          title: "ACP session",
+          createdAt: 1_000,
+          updatedAt: 4_000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+    });
+
+    const response = await registry.readThread({
+      backend: acpBackendId,
+      threadId,
+    });
+    expect(response.toolAccounting).toEqual(toolAccounting);
+
+    await registry.close();
   });
 
   it("includes persisted pricing when reading ACP threads", async () => {

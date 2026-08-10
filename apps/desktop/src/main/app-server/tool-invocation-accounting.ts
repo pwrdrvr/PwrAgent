@@ -208,6 +208,34 @@ export function buildToolOutputMetrics(
   };
 }
 
+/**
+ * Fold one streamed `item/commandExecution/outputDelta` record into the
+ * running accumulator for the same invocation.
+ *
+ * The summing rules mirror `mergeThreadToolInvocationForUpsert` in
+ * `overlay-store-sqlite.ts` for an in-progress row. Lifecycle records must
+ * flush separately because they carry terminal status and command metadata.
+ */
+export function mergeStreamedToolInvocationDeltas(
+  accumulated: ThreadToolInvocationRecord,
+  incoming: ThreadToolInvocationRecord,
+): ThreadToolInvocationRecord {
+  const outputChars = accumulated.outputChars + incoming.outputChars;
+  return {
+    ...incoming,
+    debugLines: accumulated.debugLines + incoming.debugLines,
+    errorLines: accumulated.errorLines + incoming.errorLines,
+    estimatedOutputTokens: Math.ceil(outputChars / OUTPUT_TOKEN_CHAR_RATIO),
+    infoLines: accumulated.infoLines + incoming.infoLines,
+    observedAt: Math.max(accumulated.observedAt, incoming.observedAt),
+    outputChars,
+    outputLines: accumulated.outputLines + incoming.outputLines,
+    outputTruncated: accumulated.outputTruncated || incoming.outputTruncated,
+    updatedAt: Math.max(accumulated.updatedAt, incoming.updatedAt),
+    warningLines: accumulated.warningLines + incoming.warningLines,
+  };
+}
+
 export function normalizeToolInvocationCommand(params: {
   args?: Record<string, unknown>;
   command?: string;
@@ -507,6 +535,11 @@ function readToolOutput(
 ): { text?: string; truncated?: boolean } {
   const data = readRecord(item?.data);
   const text =
+    readString(item, "aggregatedOutput") ??
+    readString(item, "aggregated_output") ??
+    readString(item, "functionCallOutput") ??
+    readString(data, "aggregatedOutput") ??
+    readString(data, "aggregated_output") ??
     readString(data, "output") ??
     readString(data, "text") ??
     readString(data, "result") ??
