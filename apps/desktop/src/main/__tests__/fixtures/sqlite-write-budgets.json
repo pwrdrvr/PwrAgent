@@ -6,9 +6,16 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "cleanup-expired-gc-pass": {
+    "commits": 1,
+    "note": "one whole cleanupExpired GC pass doing real work in both composer sweeps: ageing out 20 drafts past 180 days AND collapsing a 30-row journal prefix chain to 1. commits is the assertion that matters (every sweep rides one transaction); statements/rows legitimately move when a sweep is added, so re-record rather than reading it as a composer regression",
+    "observedWalBytes": 45320,
+    "rowsChanged": 49,
+    "statements": 45
+  },
   "composer-draft-typing": {
     "commits": 70,
-    "note": "typing one 70-character message with a save per keystroke: exactly one journal row survives, and commits track saves because each save is its own transaction",
+    "note": "70 direct store saves (a stress case for prefix collapse, NOT the app's typing cadence \u2014 the renderer coalesces to one save per 5s): exactly one journal row survives, and commits track save calls because each save is its own transaction",
     "observedWalBytes": 1738640,
     "rowsChanged": 140,
     "statements": 209

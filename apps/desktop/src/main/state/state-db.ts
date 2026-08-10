@@ -1016,6 +1016,46 @@ const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
 const COMPOSER_DRAFT_JOURNAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const COMPOSER_DRAFT_JOURNAL_CAP = 300;
+/**
+ * Retention for `composer_draft_latest` — one row per composer scope holding
+ * unsent text. The table had no retention of any kind; rows are deleted only
+ * when the renderer clears that scope's composer, so a draft whose thread the
+ * operator can no longer reach stayed forever. Archiving is how that happens:
+ * `archiveThread` cleans up messaging bindings, child threads, and worktrees,
+ * but has never touched drafts, and both the Drafts lens and the thread-row
+ * chip can only mark threads present in the navigation snapshot.
+ *
+ * **The clock tracks edits.** It did not always: `flushComposerDraftSnapshot`
+ * re-saves on composer unmount with no dirty check, so opening a thread and
+ * navigating away used to re-stamp `updated_at` and this sweep only reached
+ * drafts on threads nobody visited. The durable store now compares against the
+ * content hash actually in sqlite and skips writing unchanged content — and
+ * seeds that hash at hydration — so a thread merely opened does not move its
+ * draft's timestamp. Reverting or bypassing that dirty check silently widens
+ * this sweep back to "not opened in 180 days", which is a different and much
+ * narrower rule than what this comment now promises.
+ *
+ * A staleness sweep rather than a row cap, because staleness is the property
+ * an abandoned draft actually has. A count cap does nothing about orphans —
+ * twenty unreachable rows sitting under a five-hundred-row ceiling are never
+ * evicted, since orphans do not move the count — and at the ceiling it would
+ * evict by recency, destroying whichever unsent text happened to be oldest.
+ *
+ * **This still deletes unsent text with no warning and no undo**, and the
+ * journal's own 30-day retention means there is no recoverable copy left by
+ * the time this fires. Staleness makes that loss predictable and remote
+ * instead of triggered by unrelated volume; it does not eliminate it. That
+ * trade is the reason for the length of the window, not a reason to shorten
+ * it later without thinking about what gets destroyed.
+ *
+ * Note this is NOT primarily a disk-space measure: a row is a draft's text
+ * plus its editor document, on the order of a couple of KB, so even thousands
+ * of orphans are single-digit megabytes on one profile. What it buys is that
+ * the Drafts lens stops accumulating threads the operator walked away from
+ * half a year ago — and only from the next window launch, since the renderer
+ * hydrates the lens once at mount.
+ */
+const COMPOSER_DRAFT_LATEST_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 const PR_STATUS_WATCH_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * Per-platform cap for the messaging activity log. Older rows are
@@ -1568,6 +1608,12 @@ LEFT JOIN federation_peers
            )`,
         )
         .run(COMPOSER_DRAFT_JOURNAL_CAP);
+      // Every row here is unsent by construction — `save()` deletes the row
+      // for any other status — so this needs no status filter. Rides the same
+      // transaction as the sweeps above, costing no additional commit.
+      this.db
+        .prepare("DELETE FROM composer_draft_latest WHERE updated_at < ?")
+        .run(now - COMPOSER_DRAFT_LATEST_RETENTION_MS);
     });
     cleanup();
     this.db.pragma("incremental_vacuum");
