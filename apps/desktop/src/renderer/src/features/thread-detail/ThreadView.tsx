@@ -43,6 +43,7 @@ import type {
   ThreadExecutionMode,
   ThreadPricingSummary,
   ThreadToolAccounting,
+  ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -108,6 +109,7 @@ import {
   readRendererSequence,
   summarizeActivityStatus,
 } from "./live-transcript-activity";
+import { findTranscriptCommandDetailEntryIndex } from "./tool-call-details";
 
 type LaunchpadEnvironmentSetupProgress = {
   command: string;
@@ -895,6 +897,7 @@ export type ThreadViewProps = {
     summaries: ThreadPricingSummary[];
   };
   toolAccounting?: ThreadToolAccounting;
+  threadToolAccountingEnabled?: boolean;
   pricingDisplayOptions?: {
     codexCredits: boolean;
     usd: boolean;
@@ -1117,11 +1120,20 @@ type BranchDriftDialogState = {
   threadKey: string;
 };
 
-type PendingTranscriptTurnTarget = {
-  threadKey: string;
-  turnId: string;
-  turnTimeMs?: number;
-};
+type PendingTranscriptTurnTarget =
+  | {
+      intent: "reveal";
+      threadKey: string;
+      turnId: string;
+      turnTimeMs?: number;
+    }
+  | {
+      intent: "tool-detail";
+      itemId: string;
+      threadKey: string;
+      turnId: string;
+      turnTimeMs?: number;
+    };
 
 const MAX_TRANSCRIPT_TARGET_PAGE_LOADS = 60;
 
@@ -1277,8 +1289,10 @@ export function ThreadView(props: ThreadViewProps) {
   // threaded a value through yet, so the rail is discoverable.
   const contextRailPinned = props.contextRailPinned ?? true;
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
+  const threadToolAccountingEnabled = props.threadToolAccountingEnabled ?? false;
   const activeContextTab =
-    !threadPricingSummaryEnabled && props.activeContextTab === "pricing"
+    (!threadPricingSummaryEnabled && props.activeContextTab === "pricing")
+    || (!threadToolAccountingEnabled && props.activeContextTab === "tool-calls")
       ? DEFAULT_CONTEXT_TAB
       : props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
   const editedFilesDock = props.editedFilesDock ?? DEFAULT_EDITED_FILES_DOCK;
@@ -1437,38 +1451,49 @@ export function ThreadView(props: ThreadViewProps) {
       return;
     }
 
-    const targetIndex = findTranscriptTurnEntryIndex(
-      props.transcriptEntries,
-      target.turnId,
-      target.turnTimeMs,
-    );
+    const targetIndex = target.intent === "tool-detail"
+      ? findTranscriptCommandDetailEntryIndex(
+          props.transcriptEntries,
+          target.itemId,
+        )
+      : findTranscriptTurnEntryIndex(
+          props.transcriptEntries,
+          target.turnId,
+          target.turnTimeMs,
+        );
     if (targetIndex >= 0) {
-      expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
+      if (target.intent === "reveal") {
+        expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
+      }
       setPendingTranscriptTurnTarget(undefined);
       transcriptTurnPageLoadsRef.current = 0;
-      requestAnimationFrame(() => {
+      if (target.intent === "reveal") {
         requestAnimationFrame(() => {
-          const container = transcriptPanelRef.current;
-          if (container) {
-            scrollRenderedTranscriptToTurn(
-              container,
-              target.turnId,
-              target.turnTimeMs,
-            );
-          }
+          requestAnimationFrame(() => {
+            const container = transcriptPanelRef.current;
+            if (container) {
+              scrollRenderedTranscriptToTurn(
+                container,
+                target.turnId,
+                target.turnTimeMs,
+              );
+            }
+          });
         });
-      });
+      }
       return;
     }
 
     const finishAtNearestRenderedTurn = (): void => {
-      const container = transcriptPanelRef.current;
-      if (container) {
-        scrollRenderedTranscriptToTurn(
-          container,
-          target.turnId,
-          target.turnTimeMs,
-        );
+      if (target.intent === "reveal") {
+        const container = transcriptPanelRef.current;
+        if (container) {
+          scrollRenderedTranscriptToTurn(
+            container,
+            target.turnId,
+            target.turnTimeMs,
+          );
+        }
       }
       setPendingTranscriptTurnTarget(undefined);
       transcriptTurnPageLoadsRef.current = 0;
@@ -2045,6 +2070,18 @@ export function ThreadView(props: ThreadViewProps) {
     pendingActivityEntry && activityHasFileDiff(pendingActivityEntry)
       ? pendingActivityEntry
       : undefined;
+  const toolCallEntries = useMemo(
+    () => [
+      ...props.transcriptEntries,
+      ...(pendingActivityEntry ? [pendingActivityEntry] : []),
+      ...(pendingProtocolActivityEntry ? [pendingProtocolActivityEntry] : []),
+    ],
+    [
+      pendingActivityEntry,
+      pendingProtocolActivityEntry,
+      props.transcriptEntries,
+    ],
+  );
   const threadImageGallery = useMemo(
     () =>
       collectThreadImageGallery([
@@ -2177,6 +2214,7 @@ export function ThreadView(props: ThreadViewProps) {
       if (canLoadServerTranscriptHistory && selectedThreadKey) {
         transcriptTurnPageLoadsRef.current = 0;
         setPendingTranscriptTurnTarget({
+          intent: "reveal",
           threadKey: selectedThreadKey,
           turnId,
           turnTimeMs,
@@ -2189,6 +2227,33 @@ export function ThreadView(props: ThreadViewProps) {
     [
       canLoadServerTranscriptHistory,
       expandTranscriptEntryLimit,
+      props.transcriptEntries,
+      selectedThreadKey,
+    ],
+  );
+
+  const handleRequestToolCallDetails = useCallback(
+    (invocation: ThreadToolInvocationRecord) => {
+      if (!invocation.turnId || !selectedThreadKey) {
+        return;
+      }
+      const targetIndex = findTranscriptCommandDetailEntryIndex(
+        props.transcriptEntries,
+        invocation.itemId,
+      );
+      if (targetIndex >= 0 || !canLoadServerTranscriptHistory) {
+        return;
+      }
+      transcriptTurnPageLoadsRef.current = 0;
+      setPendingTranscriptTurnTarget({
+        intent: "tool-detail",
+        itemId: invocation.itemId,
+        threadKey: selectedThreadKey,
+        turnId: invocation.turnId,
+        turnTimeMs: invocation.observedAt,
+      });
+    }, [
+      canLoadServerTranscriptHistory,
       props.transcriptEntries,
       selectedThreadKey,
     ],
@@ -3326,8 +3391,16 @@ export function ThreadView(props: ThreadViewProps) {
           thread={selectedThread!}
           pricing={props.pricing}
           toolAccounting={props.toolAccounting}
+          toolCallEntries={toolCallEntries}
+          loadingToolCallDetailItemId={
+            pendingTranscriptTurnTarget?.intent === "tool-detail"
+              ? pendingTranscriptTurnTarget.itemId
+              : undefined
+          }
+          onRequestToolCallDetails={handleRequestToolCallDetails}
           pricingDisplayOptions={props.pricingDisplayOptions}
           threadPricingSummaryEnabled={threadPricingSummaryEnabled}
+          threadToolAccountingEnabled={threadToolAccountingEnabled}
           worktreeArchiveError={props.worktreeArchiveError}
           onRestoreWorktree={props.onRestoreWorktree}
         />

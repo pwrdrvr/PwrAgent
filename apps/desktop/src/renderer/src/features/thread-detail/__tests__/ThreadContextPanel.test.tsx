@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import type {
   BackendSummary,
+  AppServerThreadEntry,
   NavigationThreadSummary,
   ThreadPricingSummary,
   ThreadToolAccounting,
@@ -158,8 +159,10 @@ type PanelOverrides = Partial<
     | "onEditedFilesDockChange"
     | "pricing"
     | "toolAccounting"
+    | "toolCallEntries"
     | "pricingDisplayOptions"
     | "threadPricingSummaryEnabled"
+    | "threadToolAccountingEnabled"
   >
 >;
 
@@ -734,7 +737,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
   });
 
-  it("renders tool output accounting and noisy polling alerts in Pricing", () => {
+  it("renders tool call groups and full command output in a dedicated tab", () => {
     const toolAccounting: ThreadToolAccounting = {
       alerts: [
         {
@@ -800,20 +803,151 @@ describe("ThreadContextPanel", () => {
         },
       ],
     };
+    const toolCallEntries: AppServerThreadEntry[] = [
+      {
+        type: "activity",
+        id: "activity-tool-1",
+        summary: "Ran 1 command",
+        details: [
+          {
+            id: "tool-1-1",
+            kind: "command",
+            label: "poll session 40500",
+            status: "completed",
+            command: {
+              displayCommand: "poll session 40500",
+              rawCommand: "write_stdin --session 40500 --yield-time-ms 30000",
+              output: "first line\nfull captured output",
+              exitCode: 0,
+            },
+          },
+        ],
+      },
+    ];
 
     renderPanel({
-      activeTab: "pricing",
+      activeTab: "tool-calls",
       pinned: true,
-      threadPricingSummaryEnabled: true,
+      threadToolAccountingEnabled: true,
       toolAccounting,
+      toolCallEntries,
     });
 
-    expect(screen.getByRole("heading", { level: 4, name: "Tool output" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Tool calls" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 3, name: "Pricing" })).not.toBeInTheDocument();
+    expect(screen.getByText("Tool output")).toBeInTheDocument();
+    expect(screen.getByText("3 invocations")).toBeInTheDocument();
+    expect(screen.getByText("6k est. tokens")).toBeInTheDocument();
+    expect(screen.getByText("Diagnostics")).toBeInTheDocument();
     expect(screen.getByText("Noisy polling detected")).toBeInTheDocument();
     expect(screen.getByText(/Repeated write_stdin polling/)).toBeInTheDocument();
     expect(screen.getByText("write_stdin · polling")).toBeInTheDocument();
+    expect(screen.queryByText("poll session 40500")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText("poll session 40500")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+
+    expect(
+      screen.getByText("$ write_stdin --session 40500 --yield-time-ms 30000"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/full captured output/)).toBeInTheDocument();
     expect(screen.getAllByText(/6,000/).length).toBeGreaterThan(0);
+  });
+
+  it("matches ACP transcript command details to their accounting item", () => {
+    const toolAccounting: ThreadToolAccounting = {
+      alerts: [],
+      invocations: [
+        {
+          backend: "acp:grok",
+          category: "search",
+          debugLines: 0,
+          errorLines: 0,
+          estimatedOutputTokens: 25,
+          infoLines: 1,
+          invocationId: "invocation-acp-1",
+          itemId: "tool-acp-1",
+          noisy: false,
+          normalizedCommand: "search source tree",
+          observedAt: 1_800_000_060_000,
+          outputChars: 100,
+          outputLines: 1,
+          outputTruncated: false,
+          status: "completed",
+          threadId: "thread-1",
+          toolName: "code_search",
+          turnId: "turn-1",
+          updatedAt: 1_800_000_060_000,
+          warningLines: 0,
+        },
+      ],
+      summaries: [
+        {
+          category: "search",
+          debugLines: 0,
+          errorLines: 0,
+          estimatedOutputTokens: 25,
+          infoLines: 1,
+          invocationCount: 1,
+          lastObservedAt: 1_800_000_060_000,
+          noisyInvocationCount: 0,
+          outputChars: 100,
+          outputLines: 1,
+          toolName: "code_search",
+          warningLines: 0,
+        },
+      ],
+    };
+    const toolCallEntries: AppServerThreadEntry[] = [
+      {
+        type: "activity",
+        id: "tool-acp-1",
+        summary: "Searched code",
+        details: [
+          {
+            id: "tool-acp-1:detail",
+            kind: "read",
+            label: "Searched code",
+            command: {
+              displayCommand: "search source tree",
+              source: "tool",
+              output: "ACP captured output",
+              exitCode: 0,
+            },
+          },
+        ],
+      },
+    ];
+
+    renderPanel({
+      activeTab: "tool-calls",
+      pinned: true,
+      threadToolAccountingEnabled: true,
+      toolAccounting,
+      toolCallEntries,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const instances = screen.getByRole("list", { name: "Command instances" });
+    fireEvent.click(within(instances).getByRole("button", { name: "Details" }));
+
+    expect(screen.getByText(/ACP captured output/)).toBeInTheDocument();
+    expect(screen.queryByText(/unavailable in transcript history/)).not.toBeInTheDocument();
+  });
+
+  it("hides the Tool calls tab while its experimental flag is off", () => {
+    renderPanel({
+      activeTab: "tool-calls",
+      pinned: true,
+      threadToolAccountingEnabled: false,
+    });
+
+    expect(screen.queryByRole("tab", { name: "Tool calls" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { level: 3, name: "Tool calls" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Thread info" })).toBeInTheDocument();
   });
 
   it("renders cached pricing totals and per-turn model settings", () => {
@@ -881,6 +1015,9 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
+    expect(screen.getByText("Pricing summary")).toBeInTheDocument();
+    expect(screen.getByText("1 row")).toBeInTheDocument();
+    expect(screen.getByText("Token volume")).toBeInTheDocument();
     expect(screen.getByText("$0.010")).toBeInTheDocument();
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.5 · high · Fast")).toBeInTheDocument();
@@ -1121,10 +1258,10 @@ describe("ThreadContextPanel", () => {
 
     expect(screen.getByText("$56.98 · 1,424 Codex Credits estimated")).toBeInTheDocument();
     expect(screen.queryByText("$21.44 · 1,423 Codex Credits")).not.toBeInTheDocument();
-    expect(
-      screen.getByText("2,807,703 uncached, 70,606,976 cached"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("222,825 (37,085 reasoning)")).toBeInTheDocument();
+    expect(document.body).toHaveTextContent("Uncached input2.8M");
+    expect(document.body).toHaveTextContent("Cached input70.6M");
+    expect(document.body).toHaveTextContent("Output222.8k");
+    expect(document.body).toHaveTextContent("Reasoning37.1k");
     expect(screen.getByText("Historical usage estimate")).toBeInTheDocument();
     expect(
       screen.getByText("$56.23 estimated list price · 1,406 Codex Credits estimated"),
@@ -1286,10 +1423,9 @@ describe("ThreadContextPanel", () => {
         "1,172,721 uncached in · 17,628,672 cached · 46,199 out (9,979 reasoning)",
       ),
     ).toBeInTheDocument();
-    // INPUT reflects the full context, including inherited tokens.
-    expect(
-      screen.getByText("1,328,248 uncached, 17,792,768 cached"),
-    ).toBeInTheDocument();
+    // The summary reflects the full context, including inherited tokens.
+    expect(document.body).toHaveTextContent("Uncached input1.3M");
+    expect(document.body).toHaveTextContent("Cached input17.8M");
     // No fabricated cost for the inherited history anywhere in the panel.
     expect(screen.queryByText(/estimated list price/)).not.toBeInTheDocument();
     expect(screen.queryByText(/includes estimates/)).not.toBeInTheDocument();
@@ -1394,7 +1530,8 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.getByText("$0.032 · 0.4 Codex Credits estimated")).toBeInTheDocument();
-    expect(document.body).toHaveTextContent("4 (4 priced, 0 unpriced)");
+    expect(document.body).toHaveTextContent("4 rows$0.032");
+    expect(document.body).toHaveTextContent("4 priced · 0 unpriced");
     expect(screen.getAllByText("Historical usage estimate")).toHaveLength(2);
     expect(screen.getByText("1,000 uncached in · 2,000 cached · 100 out (20 reasoning)")).toBeInTheDocument();
     expect(screen.getByText("500 uncached in · 1,000 cached · 50 out")).toBeInTheDocument();
@@ -2369,7 +2506,8 @@ describe("ThreadContextPanel", () => {
 
     expect(screen.queryByText("No usage pricing recorded yet.")).not.toBeInTheDocument();
     expect(screen.getAllByText("$0.002")[0]).toBeInTheDocument();
-    expect(document.body).toHaveTextContent("1 (1 priced, 0 unpriced)");
+    expect(document.body).toHaveTextContent("1 row$0.002");
+    expect(document.body).toHaveTextContent("1 priced · 0 unpriced");
     expect(screen.getByText("Sub-agent usage")).toBeInTheDocument();
   });
 

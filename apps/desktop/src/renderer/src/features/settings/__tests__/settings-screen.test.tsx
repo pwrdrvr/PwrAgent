@@ -874,7 +874,7 @@ describe("SettingsScreen", () => {
     });
 
     expect(
-      screen.getByRole("switch", { name: "Display tool output accounting" }),
+      screen.getByRole("switch", { name: "Display tool call tracking" }),
     ).not.toBeDisabled();
     expect(
       screen.queryByRole("heading", { name: "Thread pricing" }),
@@ -1259,7 +1259,7 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
     fireEvent.click(
-      screen.getByRole("switch", { name: "Display tool output accounting" }),
+      screen.getByRole("switch", { name: "Display tool call tracking" }),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -1268,7 +1268,7 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("disables thread pricing display chips when summary is off", () => {
+  it("disables pricing units but keeps tool accounting independent", () => {
     const baseSnapshot = createSnapshot();
     const settings = createSettingsState(
       createSnapshot({
@@ -1293,8 +1293,8 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
     expect(
-      screen.getByRole("switch", { name: "Display tool output accounting" }),
-    ).toBeDisabled();
+      screen.getByRole("switch", { name: "Display tool call tracking" }),
+    ).toBeEnabled();
   });
 
   it("saves hot CPU profiling delay and trigger mode presets", async () => {

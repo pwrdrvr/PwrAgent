@@ -17306,6 +17306,106 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 14px;
 }
 
+/* Dense rail summaries share the hierarchy and measurements of the PR and
+   context-window popovers: a strong total, a quiet caption, then compact
+   key/value rows separated by one divider. */
+.rail-summary-card {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-overlay-faint);
+  color: var(--text-primary);
+}
+
+.rail-summary-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rail-summary-card__eyebrow,
+.rail-summary-card__section-title {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rail-summary-card__meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.rail-summary-card__headline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.rail-summary-card__primary {
+  min-width: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.rail-summary-card__secondary {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rail-summary-card__caption {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.rail-summary-card__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.rail-summary-card__section-title {
+  margin-bottom: 2px;
+}
+
+.rail-summary-card__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rail-summary-card__row-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.rail-summary-card__row-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .context-value-row {
   display: inline-flex;
   max-width: 100%;
@@ -17728,14 +17828,14 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.35;
 }
 
-.pricing-tool-output {
+.tool-call-groups {
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin-top: 14px;
 }
 
-.pricing-tool-output h4 {
+.tool-call-groups h4 {
   margin: 0;
   color: var(--text-secondary);
   font-size: 11px;
@@ -17744,14 +17844,92 @@ a.transcript-message__messaging-origin:focus-visible {
   text-transform: uppercase;
 }
 
-.pricing-tool-alert,
-.pricing-tool-invocation-row--noisy {
+.tool-call-alert,
+.tool-call-instance--noisy {
   border-color: color-mix(in srgb, var(--status-warning) 45%, var(--border-subtle));
   box-shadow: inset 2px 0 0 0 var(--status-warning);
 }
 
-.pricing-tool-alert .rail-card__title {
+.tool-call-alert .rail-card__title {
   color: var(--text-primary);
+}
+
+.tool-call-row__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tool-call-row__header > :first-child {
+  min-width: 0;
+}
+
+.tool-call-row__details {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.tool-call-instance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 10px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--border-subtle);
+  list-style: none;
+}
+
+.tool-call-instances__status {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.tool-call-instance {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tool-call-instance:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.tool-call-instance__command {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.tool-call-instance__detail {
+  margin-top: 4px;
+}
+
+.tool-call-instance__detail .transcript-command {
+  margin: 0;
+}
+
+.tool-call-instance__detail-status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.tool-call-instances__empty {
+  margin-top: 10px;
 }
 
 /* The in-progress turn: a calm accent left-stripe + slightly firmer border,

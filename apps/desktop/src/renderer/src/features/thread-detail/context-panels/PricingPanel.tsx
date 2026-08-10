@@ -2,9 +2,6 @@ import type {
   AppServerBackendKind,
   ThreadPricingSummary,
   ThreadSubAgentSummary,
-  ThreadToolAccounting,
-  ThreadToolInvocationRecord,
-  ThreadToolInvocationSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -26,7 +23,11 @@ import {
   isTerminalSubAgent,
   subAgentCompletedAt,
 } from "./subagent-format";
-import { formatTimestamp } from "./context-rail-shared";
+import {
+  formatCompactCount,
+  formatTimestamp,
+  RailSummaryRow,
+} from "./context-rail-shared";
 import { RailStatusChip } from "./RailStatusChip";
 import { subAgentPricingUsageTitle } from "./subagent-kind";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
@@ -39,7 +40,6 @@ type PricingPanelProps = {
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
-  toolAccounting?: ThreadToolAccounting;
   /**
    * Durable sub-agent (task-monitor) summaries for this thread, joined to
    * monitor-scope usage rows by `monitorId` === the row's `sourceItemId`.
@@ -89,7 +89,6 @@ export function PricingPanel(props: PricingPanelProps) {
     aggregateSummaries(displaySummaries) ?? aggregateUsageLines(displayLines);
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   const pricingTotals = buildPricingRunningTotals(displayLines);
-  const toolTotals = aggregateToolAccounting(props.toolAccounting);
   const activeTurnId = props.activeTurnId;
   const subAgentsById = new Map(
     (props.subAgents ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
@@ -106,39 +105,51 @@ export function PricingPanel(props: PricingPanelProps) {
       <h3>Pricing</h3>
       {summary ? (
         <>
-          <dl className="context-grid">
-            <dt>Running total</dt>
-            <dd>
-              {formatSummaryEstimates({
-                codexCreditMicros: pricingTotals.totalCreditMicros,
-                displayOptions,
-                hasEstimates: pricingTotals.hasEstimatedRows,
-                summary,
-              })}
-            </dd>
-            <dt>Usage rows</dt>
-            <dd>
-              {summary.usageLineCount.toLocaleString()}{" "}
-              <span className="context-list__meta">
-                ({summary.pricedUsageLineCount.toLocaleString()} priced,{" "}
-                {summary.unpricedUsageLineCount.toLocaleString()} unpriced)
+          <div className="rail-summary-card pricing-summary-card">
+            <div className="rail-summary-card__header">
+              <span className="rail-summary-card__eyebrow">Pricing summary</span>
+              <span className="rail-summary-card__meta">
+                {summary.usageLineCount.toLocaleString()} row
+                {summary.usageLineCount === 1 ? "" : "s"}
               </span>
-            </dd>
-            <dt>Input</dt>
-            <dd>
-              {formatTokenCount(summary.uncachedInputTokens)} uncached,{" "}
-              {formatTokenCount(summary.cachedInputTokens)} cached
-            </dd>
-            <dt>Output</dt>
-            <dd>
-              {formatTokenCount(summary.outputTokens)}
-              {summary.reasoningOutputTokens > 0
-                ? ` (${formatTokenCount(summary.reasoningOutputTokens)} reasoning)`
-                : ""}
-            </dd>
-            <dt>Updated</dt>
-            <dd>{formatTimestamp(summary.updatedAt)}</dd>
-          </dl>
+            </div>
+            <div className="rail-summary-card__headline">
+              <span className="rail-summary-card__primary">
+                {formatSummaryEstimates({
+                  codexCreditMicros: pricingTotals.totalCreditMicros,
+                  displayOptions,
+                  hasEstimates: pricingTotals.hasEstimatedRows,
+                  summary,
+                })}
+              </span>
+            </div>
+            <div className="rail-summary-card__caption">
+              {summary.pricedUsageLineCount.toLocaleString()} priced ·{" "}
+              {summary.unpricedUsageLineCount.toLocaleString()} unpriced ·{" "}
+              {formatTimestamp(summary.updatedAt)}
+            </div>
+            <div className="rail-summary-card__section">
+              <span className="rail-summary-card__section-title">Token volume</span>
+              <RailSummaryRow
+                label="Uncached input"
+                value={formatCompactCount(summary.uncachedInputTokens)}
+              />
+              <RailSummaryRow
+                label="Cached input"
+                value={formatCompactCount(summary.cachedInputTokens)}
+              />
+              <RailSummaryRow
+                label="Output"
+                value={formatCompactCount(summary.outputTokens)}
+              />
+              {summary.reasoningOutputTokens > 0 ? (
+                <RailSummaryRow
+                  label="Reasoning"
+                  value={formatCompactCount(summary.reasoningOutputTokens)}
+                />
+              ) : null}
+            </div>
+          </div>
           {summary.unpricedUsageLineCount > 0 ? (
             <p className="context-empty context-empty--warning">
               {summary.unpricedUsageLineCount.toLocaleString()} usage row
@@ -170,117 +181,6 @@ export function PricingPanel(props: PricingPanelProps) {
         </>
       ) : displayLines.length === 0 ? (
         <p className="context-empty">No usage pricing recorded yet.</p>
-      ) : null}
-
-      {toolTotals ? (
-        <div className="pricing-tool-output">
-          <h4>Tool output</h4>
-          <dl className="context-grid">
-            <dt>Estimated output tokens</dt>
-            <dd>{formatTokenCount(toolTotals.estimatedOutputTokens)}</dd>
-            <dt>Output volume</dt>
-            <dd>
-              {formatCharacterCount(toolTotals.outputChars)} ·{" "}
-              {toolTotals.outputLines.toLocaleString()} lines
-            </dd>
-            <dt>Invocations</dt>
-            <dd>
-              {toolTotals.invocationCount.toLocaleString()}
-              {toolTotals.noisyInvocationCount > 0 ? (
-                <span className="context-list__meta">
-                  {" "}
-                  ({toolTotals.noisyInvocationCount.toLocaleString()} noisy)
-                </span>
-              ) : null}
-            </dd>
-            <dt>Warnings / errors</dt>
-            <dd>
-              {toolTotals.warningLines.toLocaleString()} /{" "}
-              {toolTotals.errorLines.toLocaleString()}
-            </dd>
-          </dl>
-          {props.toolAccounting?.alerts.length ? (
-            <ul className="context-list context-list--cards pricing-tool-alert-list">
-              {props.toolAccounting.alerts.map((alert) => (
-                <li
-                  key={alert.alertId}
-                  className="rail-card pricing-tool-alert"
-                >
-                  <p className="rail-card__title">Noisy polling detected</p>
-                  <p className="rail-card__usage">{alert.message}</p>
-                  <p className="rail-card__usage">
-                    Suggested steering: {alert.suggestedPrompt}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {props.toolAccounting?.summaries.length ? (
-            <ul className="context-list context-list--cards pricing-tool-summary-list">
-              {props.toolAccounting.summaries.slice(0, 6).map((summary) => (
-                <li
-                  key={`${summary.category}:${summary.toolName}`}
-                  className="rail-card pricing-tool-summary-row"
-                >
-                  <p className="rail-card__title">
-                    {formatToolSummaryTitle(summary)}
-                  </p>
-                  <p className="rail-card__usage">
-                    {formatTokenCount(summary.estimatedOutputTokens)} est. output tokens ·{" "}
-                    {formatCharacterCount(summary.outputChars)}
-                  </p>
-                  <p className="rail-card__usage">
-                    {summary.invocationCount.toLocaleString()} invocation
-                    {summary.invocationCount === 1 ? "" : "s"} ·{" "}
-                    {summary.warningLines.toLocaleString()} warn ·{" "}
-                    {summary.errorLines.toLocaleString()} error ·{" "}
-                    {(summary.infoLines + summary.debugLines).toLocaleString()} info/debug
-                  </p>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {props.toolAccounting?.invocations.length ? (
-            <ul className="context-list context-list--cards pricing-tool-invocation-list">
-              {props.toolAccounting.invocations.slice(0, 8).map((invocation) => (
-                <li
-                  key={invocation.invocationId}
-                  className={`rail-card pricing-tool-invocation-row${
-                    invocation.noisy ? " pricing-tool-invocation-row--noisy" : ""
-                  }`}
-                >
-                  <p className="rail-card__title">
-                    {invocation.normalizedCommand ?? invocation.toolName}
-                  </p>
-                  <p className="rail-card__model">
-                    {invocation.toolName} · {invocation.category} ·{" "}
-                    {invocation.status}
-                    {invocation.exitCode !== undefined
-                      ? ` · exit ${invocation.exitCode}`
-                      : ""}
-                  </p>
-                  <p className="rail-card__usage">
-                    {formatTokenCount(invocation.estimatedOutputTokens)} est. output tokens ·{" "}
-                    {formatCharacterCount(invocation.outputChars)} ·{" "}
-                    {invocation.outputLines.toLocaleString()} lines
-                    {invocation.outputTruncated ? " · truncated" : ""}
-                    {invocation.noisy ? " · noisy" : ""}
-                  </p>
-                  <p className="rail-card__usage">
-                    {invocation.warningLines.toLocaleString()} warn ·{" "}
-                    {invocation.errorLines.toLocaleString()} error ·{" "}
-                    {invocation.infoLines.toLocaleString()} info ·{" "}
-                    {invocation.debugLines.toLocaleString()} debug
-                  </p>
-                  <ToolInvocationTimestamp
-                    invocation={invocation}
-                    onScrollToTurn={props.onScrollToTurn}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
       ) : null}
 
       {displayLines.length > 0 ? (
@@ -427,99 +327,6 @@ export function PricingPanel(props: PricingPanelProps) {
         </div>
       ) : null}
     </section>
-  );
-}
-
-type ToolAccountingTotals = {
-  debugLines: number;
-  errorLines: number;
-  estimatedOutputTokens: number;
-  infoLines: number;
-  invocationCount: number;
-  noisyInvocationCount: number;
-  outputChars: number;
-  outputLines: number;
-  warningLines: number;
-};
-
-function aggregateToolAccounting(
-  toolAccounting: ThreadToolAccounting | undefined,
-): ToolAccountingTotals | undefined {
-  if (!toolAccounting || toolAccounting.summaries.length === 0) {
-    return undefined;
-  }
-  return toolAccounting.summaries.reduce<ToolAccountingTotals>(
-    (totals, summary) => ({
-      debugLines: totals.debugLines + summary.debugLines,
-      errorLines: totals.errorLines + summary.errorLines,
-      estimatedOutputTokens:
-        totals.estimatedOutputTokens + summary.estimatedOutputTokens,
-      infoLines: totals.infoLines + summary.infoLines,
-      invocationCount: totals.invocationCount + summary.invocationCount,
-      noisyInvocationCount:
-        totals.noisyInvocationCount + summary.noisyInvocationCount,
-      outputChars: totals.outputChars + summary.outputChars,
-      outputLines: totals.outputLines + summary.outputLines,
-      warningLines: totals.warningLines + summary.warningLines,
-    }),
-    {
-      debugLines: 0,
-      errorLines: 0,
-      estimatedOutputTokens: 0,
-      infoLines: 0,
-      invocationCount: 0,
-      noisyInvocationCount: 0,
-      outputChars: 0,
-      outputLines: 0,
-      warningLines: 0,
-    },
-  );
-}
-
-function formatToolSummaryTitle(summary: ThreadToolInvocationSummary): string {
-  return `${summary.toolName} · ${summary.category}`;
-}
-
-function formatCharacterCount(chars: number): string {
-  if (chars >= 1_000_000) {
-    return `${(chars / 1_000_000).toFixed(chars >= 10_000_000 ? 0 : 1)}M chars`;
-  }
-  if (chars >= 1_000) {
-    return `${(chars / 1_000).toFixed(chars >= 10_000 ? 0 : 1)}k chars`;
-  }
-  return `${chars.toLocaleString()} chars`;
-}
-
-function ToolInvocationTimestamp(props: {
-  invocation: ThreadToolInvocationRecord;
-  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
-}) {
-  const timestamp = formatTimestamp(props.invocation.observedAt);
-  const canScrollToTurn = Boolean(props.invocation.turnId && props.onScrollToTurn);
-
-  return (
-    <p className="rail-card__times">
-      {canScrollToTurn ? (
-        <button
-          type="button"
-          className="rail-card__time-button"
-          title="Scroll the transcript to this turn"
-          aria-label={`Scroll the transcript to this turn (${timestamp})`}
-          onClick={() =>
-            props.invocation.turnId &&
-            props.onScrollToTurn?.(
-              props.invocation.turnId,
-              props.invocation.observedAt,
-            )
-          }
-        >
-          {timestamp}
-        </button>
-      ) : (
-        timestamp
-      )}
-      {props.invocation.turnId ? ` · ${props.invocation.turnId}` : ""}
-    </p>
   );
 }
 
