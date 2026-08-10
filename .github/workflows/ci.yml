@@ -407,6 +407,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
+        with:
+          lfs: true
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
@@ -446,6 +448,15 @@ jobs:
         timeout-minutes: 10
         with:
           lfs: true
+
+      - name: Materialize Git LFS assets
+        # These jobs reuse persistent runner workspaces. A previous checkout
+        # can leave an LFS pointer at an unchanged path, and checkout --force
+        # does not necessarily rewrite it after fetching the LFS object.
+        # Pull explicitly so Playwright always receives PNG bytes rather than
+        # the pointer text, even when this runner served another job first.
+        timeout-minutes: 5
+        run: git lfs pull
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
