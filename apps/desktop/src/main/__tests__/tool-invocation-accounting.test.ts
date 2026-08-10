@@ -1,4 +1,7 @@
-import type { ThreadToolInvocationRecord } from "@pwragent/shared";
+import type {
+  AppServerNotification,
+  ThreadToolInvocationRecord,
+} from "@pwragent/shared";
 import { describe, expect, it } from "vitest";
 import {
   buildToolOutputMetrics,
@@ -121,6 +124,76 @@ describe("tool invocation accounting", () => {
       turnId: "turn-1",
     });
   });
+
+  it.each([
+    {
+      field: "aggregatedOutput",
+      nestedInData: false,
+      shape: "item.aggregatedOutput",
+    },
+    {
+      field: "aggregated_output",
+      nestedInData: false,
+      shape: "item.aggregated_output",
+    },
+    {
+      field: "functionCallOutput",
+      nestedInData: false,
+      shape: "item.functionCallOutput",
+    },
+    {
+      field: "aggregatedOutput",
+      nestedInData: true,
+      shape: "item.data.aggregatedOutput",
+    },
+    {
+      field: "aggregated_output",
+      nestedInData: true,
+      shape: "item.data.aggregated_output",
+    },
+  ] as const)(
+    "extracts completed Codex command output from $shape",
+    ({ field, nestedInData }) => {
+      const output = [
+        "[info] command started",
+        "[warn] retrying step",
+        "[debug] retry detail",
+        "[error] command failed",
+        "output clipped",
+      ].join("\n");
+      const invocation = toolInvocationFromNotification({
+        backend: "codex",
+        now: 1_800_000_030_000,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "cmd-1",
+              type: "commandExecution",
+              status: "completed",
+              ...(nestedInData
+                ? { data: { [field]: output } }
+                : { [field]: output }),
+            },
+          },
+        } as unknown as AppServerNotification,
+      });
+
+      expect(invocation).toMatchObject({
+        debugLines: 1,
+        errorLines: 1,
+        estimatedOutputTokens: Math.ceil(output.length / 4),
+        infoLines: 1,
+        outputChars: output.length,
+        outputLines: 5,
+        outputTruncated: true,
+        status: "completed",
+        warningLines: 1,
+      });
+    },
+  );
 
   it("marks completed command invocations failed from success false or exit code", () => {
     const successFalseInvocation = toolInvocationFromNotification({

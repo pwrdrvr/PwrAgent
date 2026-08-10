@@ -6,6 +6,10 @@ import type {
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  mergeStreamedToolInvocationDeltas,
+  toolInvocationFromNotification,
+} from "../app-server/tool-invocation-accounting";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 
@@ -142,6 +146,129 @@ describe("SqliteOverlayStore tool invocation accounting", () => {
       outputLines: 10,
       status: "completed",
       warningLines: 3,
+    });
+  });
+
+  it("does not double-count streamed output repeated in a completed Codex snapshot", async () => {
+    const deltas = [
+      "[info] starting\n",
+      "[warn] still working\n",
+      "[error] command failed\n",
+    ];
+    for (const [index, delta] of deltas.entries()) {
+      await store.upsertThreadToolInvocation({
+        invocation: toolInvocationFromNotification({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/outputDelta",
+            params: {
+              delta,
+              itemId: "cmd-with-snapshot",
+              threadId: "thread-1",
+              turnId: "turn-1",
+            },
+          },
+          now: 1_800_000_000_000 + index,
+        })!,
+      });
+    }
+
+    const aggregatedOutput = deltas.join("");
+    await store.upsertThreadToolInvocation({
+      invocation: toolInvocationFromNotification({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              aggregatedOutput,
+              exitCode: 1,
+              id: "cmd-with-snapshot",
+              status: "failed",
+              type: "commandExecution",
+            },
+          },
+        },
+        now: 1_800_000_001_000,
+      })!,
+    });
+
+    const accounting = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(accounting.invocations[0]).toMatchObject({
+      errorLines: 1,
+      estimatedOutputTokens: Math.ceil(aggregatedOutput.length / 4),
+      exitCode: 1,
+      infoLines: 1,
+      outputChars: aggregatedOutput.length,
+      outputLines: 3,
+      status: "failed",
+      warningLines: 1,
+    });
+  });
+
+  it("records coalesced output deltas identically to per-chunk writes", async () => {
+    const deltas = [
+      "warning: slow step\nbuilding module a\n",
+      "error: module b failed\nretrying\n",
+      "info: done\n",
+    ];
+    const records = deltas.map((delta, index) =>
+      toolInvocationFromNotification({
+        backend: "codex",
+        notification: {
+          method: "item/commandExecution/outputDelta",
+          params: {
+            delta,
+            itemId: "cmd-1",
+            threadId: "thread-per-chunk",
+            turnId: "turn-1",
+          },
+        },
+        now: 1_800_000_000_000 + index * 10,
+      })!,
+    );
+    for (const record of records) {
+      await store.upsertThreadToolInvocation({ invocation: record });
+    }
+
+    const coalesced = records
+      .slice(1)
+      .reduce(
+        (accumulated, record) =>
+          mergeStreamedToolInvocationDeltas(accumulated, record),
+        records[0]!,
+      );
+    await store.upsertThreadToolInvocation({
+      invocation: {
+        ...coalesced,
+        invocationId: "coalesced",
+        itemId: "coalesced",
+        threadId: "thread-coalesced",
+      },
+    });
+
+    const perChunk = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-per-chunk",
+    });
+    const single = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-coalesced",
+    });
+    expect(single.invocations[0]).toMatchObject({
+      debugLines: perChunk.invocations[0]!.debugLines,
+      errorLines: perChunk.invocations[0]!.errorLines,
+      estimatedOutputTokens: perChunk.invocations[0]!.estimatedOutputTokens,
+      infoLines: perChunk.invocations[0]!.infoLines,
+      observedAt: perChunk.invocations[0]!.observedAt,
+      outputChars: perChunk.invocations[0]!.outputChars,
+      outputLines: perChunk.invocations[0]!.outputLines,
+      warningLines: perChunk.invocations[0]!.warningLines,
     });
   });
 });
