@@ -28,10 +28,14 @@ import {
   type LatestCodexConfigWarningResponse,
   type ListBackendsRequest,
   type ListBackendsResponse,
+  type ListThreadMcpServersRequest,
+  type ListThreadMcpServersResponse,
   type QueueThreadExecutionModeRequest,
   type QueueThreadExecutionModeResponse,
   type RetainThreadBranchDriftRequest,
   type RetainThreadBranchDriftResponse,
+  type ReloadCodexMcpConfigRequest,
+  type ReloadCodexMcpConfigResponse,
   type RunCodexEnvironmentActionRequest,
   type RunCodexEnvironmentActionResponse,
   type StopCodexEnvironmentActionRequest,
@@ -83,6 +87,8 @@ import {
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
+  AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
+  AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -700,6 +706,44 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL);
+  ipcMain.handle(
+    AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
+    async (
+      _event,
+      request: ListThreadMcpServersRequest,
+    ): Promise<ListThreadMcpServersResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .listThreadMcpServers(stripFederationTarget(request));
+      }
+      return await registry.listThreadMcpServers(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL);
+  ipcMain.handle(
+    AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
+    async (
+      _event,
+      request: ReloadCodexMcpConfigRequest,
+    ): Promise<ReloadCodexMcpConfigResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .reloadCodexMcpConfig(stripFederationTarget(request));
+      }
+      return await registry.reloadCodexMcpConfig(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_INTERRUPT_TURN_CHANNEL,
@@ -1159,6 +1203,8 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_FORK_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_START_REVIEW_CHANNEL);
   ipcMain.removeHandler(AGENT_COMPACT_THREAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL);
+  ipcMain.removeHandler(AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);

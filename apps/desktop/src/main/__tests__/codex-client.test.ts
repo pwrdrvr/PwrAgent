@@ -699,6 +699,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "config/mcpServer/reload") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {},
+        }),
+      );
+      return;
+    }
+
     if (payload.method === "account/rateLimits/read") {
       this.messageHandler(
         JSON.stringify({
@@ -6420,6 +6431,101 @@ describe("CodexAppServerClient", () => {
         ],
       },
     ]);
+
+    await client.close();
+  });
+
+  it("normalizes MCP inventory without forwarding tool schemas", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadMcpServerStatusResult = {
+      data: [
+        {
+          name: "atlassian-rovo",
+          serverInfo: null,
+          authStatus: "oAuth",
+          tools: {
+            search: {
+              description: "Never forward this schema",
+              inputSchema: { type: "object", properties: { query: {} } },
+            },
+            fetch: { inputSchema: { type: "object" } },
+          },
+          resources: [
+            {
+              name: "sites",
+              title: "Confluence sites",
+              uri: "atlassian://sites",
+            },
+          ],
+          resourceTemplates: [
+            {
+              name: "page",
+              uriTemplate: "atlassian://page/{id}",
+            },
+          ],
+        },
+      ],
+      nextCursor: null,
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(client.listMcpServers({
+      threadId: "thread-1",
+      detail: "full",
+    })).resolves.toEqual([
+      {
+        name: "atlassian-rovo",
+        authStatus: "oAuth",
+        tools: ["fetch", "search"],
+        resources: [
+          {
+            name: "sites",
+            title: "Confluence sites",
+            uri: "atlassian://sites",
+          },
+        ],
+        resourceTemplates: [
+          {
+            name: "page",
+            uriTemplate: "atlassian://page/{id}",
+          },
+        ],
+      },
+    ]);
+    const request = MockTransport.instances.at(-1)!.sentMessages
+      .map((message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      })
+      .find((message) => message.method === "mcpServerStatus/list");
+    expect(request?.params).toEqual({
+      threadId: "thread-1",
+      detail: "full",
+      limit: 100,
+    });
+
+    await client.close();
+  });
+
+  it("reloads MCP config through the app-server protocol", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(client.reloadMcpConfig()).resolves.toBeUndefined();
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown },
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "config/mcpServer/reload",
+      }),
+    );
 
     await client.close();
   });

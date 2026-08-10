@@ -112,6 +112,8 @@ import {
   type LatestCodexConfigWarningResponse,
   type ListBackendsRequest,
   type ListBackendsResponse,
+  type ListThreadMcpServersRequest,
+  type ListThreadMcpServersResponse,
   type EditGroupCommitInput,
   type EditGroupCommitState,
   type LinkedDirectorySummary,
@@ -140,6 +142,8 @@ import {
   type SetAcpSessionRuntimeOptionResponse,
   type RenameThreadRequest,
   type RenameThreadResponse,
+  type ReloadCodexMcpConfigRequest,
+  type ReloadCodexMcpConfigResponse,
   applyNavigationLaunchpadProviderSettingsPatch,
   projectNavigationLaunchpadProviderSettings,
   type RestoreWorktreeRequest,
@@ -707,6 +711,11 @@ type BackendClient = {
   compactThread?(params: {
     threadId: string;
   }): Promise<{ threadId: string; turnId: string; itemId?: string }>;
+  listMcpServers?(params: {
+    threadId: string;
+    detail: ListThreadMcpServersResponse["detail"];
+  }): Promise<ListThreadMcpServersResponse["servers"]>;
+  reloadMcpConfig?(): Promise<void>;
   steerTurn?(params: {
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -13670,6 +13679,52 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       turnId: result.turnId,
       itemId: result.itemId,
+    };
+  }
+
+  async listThreadMcpServers(
+    params: ListThreadMcpServersRequest,
+  ): Promise<ListThreadMcpServersResponse> {
+    if (isAcpBackendId(params.backend)) {
+      throw new Error("MCP inventory is only available for Codex threads");
+    }
+    const detail = params.detail ?? "toolsAndAuthOnly";
+    const servers = await this.withCodexThreadClient(
+      params.threadId,
+      async (client) => {
+        if (!client.listMcpServers) {
+          throw new Error("Selected backend does not support MCP inventory");
+        }
+        return await client.listMcpServers({
+          threadId: params.threadId,
+          detail,
+        });
+      },
+    );
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      detail,
+      servers,
+    };
+  }
+
+  async reloadCodexMcpConfig(
+    params: ReloadCodexMcpConfigRequest,
+  ): Promise<ReloadCodexMcpConfigResponse> {
+    if (isAcpBackendId(params.backend)) {
+      throw new Error("MCP config reload is only available for Codex threads");
+    }
+    await this.withCodexThreadClient(params.threadId, async (client) => {
+      if (!client.reloadMcpConfig) {
+        throw new Error("Selected backend does not support MCP config reload");
+      }
+      await client.reloadMcpConfig();
+    });
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      queued: true,
     };
   }
 

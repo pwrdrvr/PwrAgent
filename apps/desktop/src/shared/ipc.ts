@@ -66,6 +66,10 @@ export const SCHEDULED_ACTIONS_CANCEL_CHANNEL = "scheduled-actions:cancel";
 export const SCHEDULED_ACTIONS_SEND_NOW_CHANNEL = "scheduled-actions:send-now";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
 export const AGENT_COMPACT_THREAD_CHANNEL = "agent:compact-thread";
+export const AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL =
+  "agent:list-thread-mcp-servers";
+export const AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL =
+  "agent:reload-codex-mcp-config";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
 export const AGENT_STOP_SUB_AGENT_CHANNEL = "agent:stop-sub-agent";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";

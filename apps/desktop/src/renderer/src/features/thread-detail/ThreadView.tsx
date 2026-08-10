@@ -93,6 +93,10 @@ import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptList } from "./TranscriptList";
 import { LiveWorkRail } from "./LiveWorkRail";
 import {
+  McpInventoryPanel,
+  type McpInventoryPanelRequest,
+} from "./McpInventoryPanel";
+import {
   PwrSnapConnectionPrompt,
   pwrSnapConnectionIds,
 } from "./PwrSnapConnectionPrompt";
@@ -1423,6 +1427,22 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadKey = selectedThread
     ? buildThreadIdentityKey(selectedThread.source, selectedThread.id)
     : undefined;
+  const [mcpInventoryRequest, setMcpInventoryRequest] =
+    useState<McpInventoryPanelRequest>();
+  const mcpInventoryRequestSequence = useRef(0);
+  useEffect(() => {
+    setMcpInventoryRequest(undefined);
+  }, [selectedThreadKey]);
+  const showMcpInventory = useCallback(
+    (detail: McpInventoryPanelRequest["detail"]): void => {
+      mcpInventoryRequestSequence.current += 1;
+      setMcpInventoryRequest({
+        detail,
+        requestId: mcpInventoryRequestSequence.current,
+      });
+    },
+    [],
+  );
   const onLoadOlder = props.onLoadOlder;
   const onRenderedTranscriptEntryLimitChange =
     props.onRenderedTranscriptEntryLimitChange;
@@ -3259,6 +3279,14 @@ export function ThreadView(props: ThreadViewProps) {
             }
           />
 
+          {mcpInventoryRequest && selectedThread?.source === "codex" ? (
+            <McpInventoryPanel
+              desktopApi={props.desktopApi}
+              onDismiss={() => setMcpInventoryRequest(undefined)}
+              request={mcpInventoryRequest}
+              thread={selectedThread}
+            />
+          ) : null}
 
           <Composer
             activeTurnId={props.activeTurnId}
@@ -3269,6 +3297,7 @@ export function ThreadView(props: ThreadViewProps) {
             codexFastAllowed={props.codexFastAllowed}
             desktopApi={props.desktopApi}
             onShowNotice={props.onShowNotice}
+            onShowMcpInventory={showMcpInventory}
             composerImplementation={props.composerImplementation}
             draftStore={props.composerDraftStore}
             directory={props.selectedDirectory}

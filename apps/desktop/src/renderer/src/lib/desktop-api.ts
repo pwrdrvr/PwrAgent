@@ -92,6 +92,8 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListThreadMcpServersRequest,
+  ListThreadMcpServersResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
   AcknowledgeAcpAgentUpdateRequest,
@@ -268,6 +270,8 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
+  ReloadCodexMcpConfigRequest,
+  ReloadCodexMcpConfigResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -611,6 +615,12 @@ export type DesktopApi = {
   compactThread?: (
     request: CompactThreadRequest
   ) => Promise<CompactThreadResponse>;
+  listThreadMcpServers?: (
+    request: ListThreadMcpServersRequest,
+  ) => Promise<ListThreadMcpServersResponse>;
+  reloadCodexMcpConfig?: (
+    request: ReloadCodexMcpConfigRequest,
+  ) => Promise<ReloadCodexMcpConfigResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
   cancelQueuedTurn?: (
     request: CancelQueuedTurnRequest,

@@ -406,6 +406,60 @@ export type CompactThreadResponse = {
   itemId?: string;
 };
 
+export type CodexMcpInventoryDetail = "toolsAndAuthOnly" | "full";
+
+export type CodexMcpAuthStatus =
+  | "unsupported"
+  | "notLoggedIn"
+  | "bearerToken"
+  | "oAuth";
+
+export type CodexMcpResourceSummary = {
+  name: string;
+  title?: string;
+  uri: string;
+};
+
+export type CodexMcpResourceTemplateSummary = {
+  name: string;
+  title?: string;
+  uriTemplate: string;
+};
+
+export type CodexMcpServerSummary = {
+  name: string;
+  authStatus: CodexMcpAuthStatus;
+  tools: string[];
+  resources?: CodexMcpResourceSummary[];
+  resourceTemplates?: CodexMcpResourceTemplateSummary[];
+};
+
+export type ListThreadMcpServersRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  detail?: CodexMcpInventoryDetail;
+};
+
+export type ListThreadMcpServersResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  detail: CodexMcpInventoryDetail;
+  servers: CodexMcpServerSummary[];
+};
+
+export type ReloadCodexMcpConfigRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+};
+
+export type ReloadCodexMcpConfigResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  queued: true;
+};
+
 export type SteerTurnRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;

@@ -37,6 +37,7 @@ import type {
   InterruptTurnResponse,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
+  ListThreadMcpServersResponse,
   MaterializeDirectoryLaunchpadResponse,
   ListModelSettingsRecentsRequest,
   ListModelSettingsRecentsResponse,
@@ -52,6 +53,7 @@ import type {
   ResetFederationEnrollmentRequest,
   RetainThreadBranchDriftResponse,
   RenameThreadResponse,
+  ReloadCodexMcpConfigResponse,
   RunCodexEnvironmentActionResponse,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
@@ -112,9 +114,11 @@ import {
   type InterruptTurnRequest,
   type ListWorktreeUnpublishedCommitsRequest,
   type ListWorktreeUnpublishedCommitsResponse,
+  type ListThreadMcpServersRequest,
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
   type MarkThreadSeenRequest,
+  type ReloadCodexMcpConfigRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
   type SetThreadReactionRequest,
@@ -4174,6 +4178,16 @@ function localBackendOperations(): FederationBackendOperations {
       request: CompactThreadRequest,
     ): Promise<CompactThreadResponse> {
       return await getDesktopBackendRegistry().compactThread(request);
+    },
+    async listThreadMcpServers(
+      request: ListThreadMcpServersRequest,
+    ): Promise<ListThreadMcpServersResponse> {
+      return await getDesktopBackendRegistry().listThreadMcpServers(request);
+    },
+    async reloadCodexMcpConfig(
+      request: ReloadCodexMcpConfigRequest,
+    ): Promise<ReloadCodexMcpConfigResponse> {
+      return await getDesktopBackendRegistry().reloadCodexMcpConfig(request);
     },
     async controlActiveTurn(
       request: ControlActiveTurnRequest,

@@ -1414,6 +1414,11 @@ class MockBackendClient {
   lastCompactThreadParams?: {
     threadId: string;
   };
+  lastListMcpServersParams?: {
+    threadId: string;
+    detail: "toolsAndAuthOnly" | "full";
+  };
+  reloadMcpConfigCallCount = 0;
   lastArchiveThreadParams?: {
     threadId: string;
   };
@@ -1869,6 +1874,24 @@ class MockBackendClient {
       turnId: "compact-turn-1",
       itemId: "compact-item-1",
     };
+  }
+
+  async listMcpServers(params: {
+    threadId: string;
+    detail: "toolsAndAuthOnly" | "full";
+  }) {
+    this.lastListMcpServersParams = params;
+    return [
+      {
+        name: "atlassian-rovo",
+        authStatus: "oAuth" as const,
+        tools: ["fetch", "search"],
+      },
+    ];
+  }
+
+  async reloadMcpConfig(): Promise<void> {
+    this.reloadMcpConfigCallCount += 1;
   }
 
   async trustProject(params: {
@@ -34630,6 +34653,51 @@ script = "printf setup"
     expect(codexClient.lastCompactThreadParams).toEqual({
       threadId: "thread-1",
     });
+
+    await registry.close();
+  });
+
+  it("lists and reloads MCP config through the thread's Codex client", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["mcpServerStatus/list", "config/mcpServer/reload"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+
+    await expect(registry.listThreadMcpServers({
+      backend: "codex",
+      threadId: "thread-1",
+      detail: "toolsAndAuthOnly",
+    })).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      detail: "toolsAndAuthOnly",
+      servers: [
+        {
+          name: "atlassian-rovo",
+          authStatus: "oAuth",
+          tools: ["fetch", "search"],
+        },
+      ],
+    });
+    expect(codexClient.lastListMcpServersParams).toEqual({
+      threadId: "thread-1",
+      detail: "toolsAndAuthOnly",
+    });
+
+    await expect(registry.reloadCodexMcpConfig({
+      backend: "codex",
+      threadId: "thread-1",
+    })).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      queued: true,
+    });
+    expect(codexClient.reloadMcpConfigCallCount).toBe(1);
 
     await registry.close();
   });
