@@ -85,6 +85,8 @@ import {
   placeStarMapView,
 } from "./star-map-view-geometry";
 import { StarMapViewOptions } from "./StarMapViewOptions";
+import { StarMapKeyHint } from "./StarMapKeyHint";
+import { useStarMapCameraKeys } from "./useStarMapCameraKeys";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
 import {
   StarMapLoadCard,
@@ -937,6 +939,30 @@ export function StarMapScreen(props: StarMapScreenProps) {
     viewportSize.width,
     viewportSize.height,
   ]);
+
+  const claimView = useCallback(() => {
+    operatorMovedViewRef.current = true;
+  }, []);
+
+  /**
+   * WASD / arrows fly the camera, `-` and `=` work the zoom, `0` resets.
+   *
+   * A map you fly over should move the way every other map you fly over
+   * moves, and the pointer gestures alone leave the operator's other hand
+   * with nothing to do. Disabled while a thread floats over the map: the
+   * map has shoved aside and `w` belongs to the composer.
+   */
+  const heldCameraKeys = useStarMapCameraKeys({
+    enabled: !props.floating,
+    layerRef,
+    canvasRef,
+    view,
+    canvas: panZoomCanvas,
+    viewport: viewportSize,
+    onChange: setView,
+    onMoveStart: claimView,
+    onResetView: resetView,
+  });
 
   const peerById = useMemo(
     () => new Map(peers.map((peer) => [peer.id, peer])),
@@ -2127,6 +2153,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
           </span>
         </div>
       ) : null}
+      {/* Bottom-left: the keys the map flies with. Hidden while a thread
+          floats over the map, because the camera is off then. */}
+      {props.floating ? null : <StarMapKeyHint held={heldCameraKeys} />}
       {/* The only thing on the surface that admits a selection exists.
           `role="status"` so the count is heard, not just seen — the cards
           themselves carry no selected state to a screen reader. */}
