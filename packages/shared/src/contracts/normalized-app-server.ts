@@ -1141,6 +1141,12 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "backend/acpUpdateStatus/updated";
+      params: {
+        backend: AppServerBackendKind;
+      };
+    }
+  | {
       method: "item/commandExecution/outputDelta";
       params: {
         threadId: string;

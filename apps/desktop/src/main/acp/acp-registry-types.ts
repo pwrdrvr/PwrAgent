@@ -1,4 +1,5 @@
 import type {
+  AcpAgentUpdateStatus,
   AcpAgentInstance,
   AcpBackendId,
   BackendAcpAuthStatus,
@@ -114,4 +115,6 @@ export type AcpInstalledAgentRecord = {
   // preference). `launchDescriptor.command` mirrors `activeCommand`.
   instances?: AcpAgentInstance[];
   activeCommand?: string;
+  update?: AcpAgentUpdateStatus;
+  updateCommand?: string;
 };

@@ -120,4 +120,41 @@ describe("AppNoticeToast", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
+
+  it("uses exactly the supplied operator actions", () => {
+    const copyCommand = vi.fn();
+    const snooze = vi.fn();
+    const dismissVersion = vi.fn();
+    const onDismiss = vi.fn();
+
+    const { container } = render(
+      <AppNoticeToast
+        notice={{
+          ...notice,
+          actions: [
+            { label: "Copy command", onClick: copyCommand, tone: "primary" },
+            { label: "Tomorrow", onClick: snooze },
+            { label: "Dismiss version", onClick: dismissVersion },
+          ],
+          autoDismiss: false,
+        }}
+        onDismiss={onDismiss}
+      />,
+    );
+
+    expect(screen.getAllByRole("button")).toHaveLength(3);
+    expect(screen.queryByRole("button", { name: "Copy notice" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss notice" })).toBeNull();
+    expect(
+      container.querySelector(".app-notice-toast__actions"),
+    ).toHaveAttribute("data-custom-actions", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy command" }));
+    fireEvent.click(screen.getByRole("button", { name: "Tomorrow" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss version" }));
+    expect(copyCommand).toHaveBeenCalledOnce();
+    expect(snooze).toHaveBeenCalledOnce();
+    expect(dismissVersion).toHaveBeenCalledOnce();
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
 });

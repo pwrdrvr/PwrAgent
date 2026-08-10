@@ -293,6 +293,16 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps custom toast actions from collapsing the message column", () => {
+    const customActionsRule = extractRuleBody(
+      css,
+      '.app-notice-toast__actions[data-custom-actions="true"]',
+    );
+
+    expect(customActionsRule).toContain("grid-column: 1 / -1;");
+    expect(customActionsRule).toContain("justify-content: flex-end;");
+  });
+
   it("lets transcript scroll restoration own scroll anchoring", () => {
     expect(css).toMatch(
       /\.transcript-list__items\s*\{[\s\S]*?overflow-anchor:\s*none;[\s\S]*?\}/

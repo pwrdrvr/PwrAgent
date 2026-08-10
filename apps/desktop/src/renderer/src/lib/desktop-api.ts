@@ -81,6 +81,8 @@ import type {
   ListBackendsResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
+  AcknowledgeAcpAgentUpdateRequest,
+  AcknowledgeAcpAgentUpdateResponse,
   ListDesktopPwrAgentProfilesResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
@@ -509,6 +511,9 @@ export type DesktopApi = {
   listAcpAgents?: (
     request?: ListAcpAgentSettingsRequest
   ) => Promise<ListAcpAgentSettingsResponse>;
+  acknowledgeAcpAgentUpdate?: (
+    request: AcknowledgeAcpAgentUpdateRequest,
+  ) => Promise<AcknowledgeAcpAgentUpdateResponse>;
   readSettings?: (
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;
