@@ -216,13 +216,8 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
 
 type ThreadPinDragSession = {
   canceled: boolean;
+  sourceElement: HTMLDivElement;
   sourceWasPinned: boolean;
-  sourceBounds: {
-    bottom: number;
-    left: number;
-    right: number;
-    top: number;
-  };
   threadKey: string;
 };
 
@@ -230,17 +225,18 @@ function isPointInsideDragSource(
   session: ThreadPinDragSession,
   point: { x: number; y: number },
 ): boolean {
+  const sourceBounds = session.sourceElement.getBoundingClientRect();
   if (
-    session.sourceBounds.right <= session.sourceBounds.left
-    || session.sourceBounds.bottom <= session.sourceBounds.top
+    sourceBounds.right <= sourceBounds.left
+    || sourceBounds.bottom <= sourceBounds.top
   ) {
     return false;
   }
   return (
-    point.x >= session.sourceBounds.left
-    && point.x <= session.sourceBounds.right
-    && point.y >= session.sourceBounds.top
-    && point.y <= session.sourceBounds.bottom
+    point.x >= sourceBounds.left
+    && point.x <= sourceBounds.right
+    && point.y >= sourceBounds.top
+    && point.y <= sourceBounds.bottom
   );
 }
 function getDirectoryRowLinkedDirectoryMode(
@@ -364,16 +360,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
     threadKey: string,
     sourceWasPinned: boolean,
   ): void => {
-    const sourceRect = event.currentTarget.getBoundingClientRect();
     threadPinDragSessionRef.current = {
       canceled: false,
+      sourceElement: event.currentTarget,
       sourceWasPinned,
-      sourceBounds: {
-        bottom: sourceRect.bottom,
-        left: sourceRect.left,
-        right: sourceRect.right,
-        top: sourceRect.top,
-      },
       threadKey,
     };
     setDraggedThreadKey(threadKey);

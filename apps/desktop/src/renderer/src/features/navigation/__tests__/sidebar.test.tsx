@@ -3865,6 +3865,70 @@ describe("Sidebar", () => {
     expect(onReorderThreadPins).toHaveBeenCalledWith(["codex:thread-1"]);
   });
 
+  it("uses the source row's live bounds after directory-list scrolling", () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const row = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell");
+    const sourceBounds = vi.spyOn(row!, "getBoundingClientRect");
+    sourceBounds.mockReturnValue({
+      bottom: 200,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
+    });
+    const dataTransfer = createDataTransfer("codex:thread-1");
+    fireEvent.dragStart(row!, { clientX: 50, clientY: 150, dataTransfer });
+
+    sourceBounds.mockReturnValue({
+      bottom: 120,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 20,
+      width: 300,
+      x: 0,
+      y: 20,
+    });
+    const appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
+    });
+    fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 50 });
+    expect(appendTarget).not.toHaveClass("is-drop-target-before");
+
+    fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 150 });
+    expect(appendTarget).toHaveClass("is-drop-target-before");
+    fireDragEventAt(appendTarget, "drop", dataTransfer, { x: 50, y: 150 });
+    expect(onReorderThreadPins).toHaveBeenCalledWith(["codex:thread-1"]);
+  });
+
   it("keeps an escaped directory pin drag canceled through release", () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
 
