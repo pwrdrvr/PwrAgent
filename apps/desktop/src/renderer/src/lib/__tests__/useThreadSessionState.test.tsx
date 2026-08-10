@@ -70,6 +70,7 @@ function readThreadResponse(params: {
   fetchedAt?: number;
   hasPreviousPage: boolean;
   previousCursor?: string;
+  readDurationMs?: number;
   supportsPagination?: boolean;
   threadId?: string;
   threadStatus?: AppServerReadThreadResponse["threadStatus"];
@@ -77,6 +78,7 @@ function readThreadResponse(params: {
   return {
     backend: "codex",
     fetchedAt: params.fetchedAt ?? Date.now(),
+    readDurationMs: params.readDurationMs,
     threadId: params.threadId ?? "thread-1",
     threadStatus: params.threadStatus ?? "idle",
     replay: {
@@ -169,6 +171,42 @@ describe("useThreadSessionState", () => {
     expect(getContextWindowMoonPhase(97.5)).toBe(8);
     expect(getContextWindowMoonPhase(100)).toBe(8);
     expect(getContextWindowMoonPhase(100.01)).toBe(8);
+  });
+
+  it("keeps the first successful thread-read duration across later hydrations", async () => {
+    let readCount = 0;
+    const readThread = vi.fn(async () => {
+      readCount += 1;
+      return readThreadResponse({
+        entries: [],
+        fetchedAt: readCount,
+        hasPreviousPage: false,
+        readDurationMs: readCount === 1 ? 725 : 12,
+      });
+    });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitFor(() => {
+      expect(result.current.initialLoadDurationMs).toBe(725);
+    });
+
+    rerender({ updatedAt: 2_000 });
+    await waitFor(() => {
+      expect(result.current.response?.fetchedAt).toBe(2);
+    });
+    expect(readThread).toHaveBeenCalledTimes(2);
+    expect(result.current.initialLoadDurationMs).toBe(725);
   });
 
   it("exposes selected thread busy state from the same thinking state as row indicators", () => {

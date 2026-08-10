@@ -620,12 +620,20 @@ export function registerFederationBackendHandlers(params: {
         !response.replay.pagination.supportsPagination
         && (request.before !== undefined || request.limit !== undefined)
       ) {
+        const boundedReadDurationMs = response.readDurationMs;
         const {
           before: _before,
           limit: _limit,
           ...unpagedRequest
         } = request;
         response = await params.backend.readThread(unpagedRequest);
+        if (typeof boundedReadDurationMs === "number") {
+          response = {
+            ...response,
+            readDurationMs:
+              boundedReadDurationMs + (response.readDurationMs ?? 0),
+          };
+        }
       }
 
       // Bound non-paginating replays before they reach the federation

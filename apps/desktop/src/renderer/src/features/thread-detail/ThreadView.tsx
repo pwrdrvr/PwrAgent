@@ -882,6 +882,7 @@ export type ThreadViewProps = {
   composerDraftStore?: ComposerDraftStore;
   composerImplementation?: DesktopChatReplyComposer;
   desktopApi?: DesktopApi;
+  initialLoadDurationMs?: number;
   launchpadError?: string;
   onShowNotice?: (notice: AppNoticeToastNotice) => void;
   onProviderSelected?: (
@@ -3407,6 +3408,7 @@ export function ThreadView(props: ThreadViewProps) {
           threadToolAccountingEnabled={threadToolAccountingEnabled}
           worktreeArchiveError={props.worktreeArchiveError}
           onRestoreWorktree={props.onRestoreWorktree}
+          initialLoadDurationMs={props.initialLoadDurationMs}
         />
       </div>
 

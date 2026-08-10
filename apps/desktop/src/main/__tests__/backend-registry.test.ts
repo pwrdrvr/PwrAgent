@@ -5094,6 +5094,7 @@ describe("DesktopBackendRegistry", () => {
 
     expect(response.replay.entries.filter((entry) => entry.type === "review"))
       .toEqual([startedEntry, resultEntry]);
+    expect(response.readDurationMs).toEqual(expect.any(Number));
     expect(response.replay.entries.map((entry) => entry.id)).toEqual([
       startedEntry.id,
       resultEntry.id,
@@ -10654,6 +10655,7 @@ script = "echo setup"
       threadId: "thread-1",
     });
 
+    expect(response.readDurationMs).toEqual(expect.any(Number));
     expect(response.replay.entries.map((entry) => entry.id)).toEqual([
       "assistant-turn-1",
       "command-turn-1",

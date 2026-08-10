@@ -89,6 +89,7 @@ type ThreadContextPanelProps = {
   backendError?: string;
   backends: BackendSummary[];
   desktopApi?: DesktopApi;
+  initialLoadDurationMs?: number;
   onRefreshNavigation?: () => Promise<void>;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
@@ -711,6 +712,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             onRefreshNavigation={props.onRefreshNavigation}
             showTooltip={showRailTooltip}
             hideTooltip={hideRailTooltip}
+            initialLoadDurationMs={props.initialLoadDurationMs}
           />
         );
       case "edits":

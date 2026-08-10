@@ -22,6 +22,7 @@ type ThreadInfoPanelProps = {
   backends: BackendSummary[];
   platform?: string;
   desktopApi?: DesktopApi;
+  initialLoadDurationMs?: number;
   onRefreshNavigation?: () => Promise<void>;
   showTooltip: ShowRailTooltip;
   hideTooltip: HideRailTooltip;
@@ -127,6 +128,14 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
           <div>
             <dt>Backend</dt>
             <dd>{formatBackendLabel(props.thread.source, props.backends)}</dd>
+          </div>
+          <div>
+            <dt>Initial load</dt>
+            <dd>
+              {typeof props.initialLoadDurationMs === "number"
+                ? `${Math.max(0, Math.round(props.initialLoadDurationMs)).toLocaleString()} ms`
+                : "Unknown"}
+            </dd>
           </div>
           <div>
             <dt>Thread ID</dt>

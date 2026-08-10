@@ -735,6 +735,7 @@ describe("federation backend bridge", () => {
         return {
           backend: "codex" as const,
           fetchedAt: 1_000,
+          readDurationMs: request.limit === undefined ? 3 : 17,
           threadId: "thread-1",
           replay: {
             entries,
@@ -791,6 +792,7 @@ describe("federation backend bridge", () => {
       kind: "response",
       requestId: "latest-request",
       result: {
+        readDurationMs: 20,
         replay: {
           entries: [{ id: "latest-user" }, { id: "latest-assistant" }],
           pagination: {
