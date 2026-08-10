@@ -68,6 +68,7 @@ import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIn
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
+import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
 import { resolveBackendErrorNotice } from "./features/notifications/backend-error-notice";
 import {
   buildHeapSnapshotHandoffMessage,
@@ -274,6 +275,8 @@ function DesktopAppShell(props: {
   // is the only signal the user gets that they were quietly not run, so it
   // stays until dismissed.
   const [automationLoadNotice, setAutomationLoadNotice] =
+    useState<AppNoticeToastNotice>();
+  const [grokCliUpdateNotice, setGrokCliUpdateNotice] =
     useState<AppNoticeToastNotice>();
   // Latest thread list, mirrored into a ref so the backend-error toast
   // subscription can resolve a thread's title without re-subscribing on
@@ -1589,7 +1592,16 @@ function DesktopAppShell(props: {
         ) : null}
 
         <CodexConfigWarningBanner desktopApi={desktopApi} />
+        <GrokCliUpdateNotice
+          desktopApi={desktopApi}
+          onNoticeChanged={setGrokCliUpdateNotice}
+        />
         <div className="app-toast-stack" aria-live="polite">
+          <AppNoticeToast
+            desktopApi={desktopApi}
+            notice={grokCliUpdateNotice}
+            onDismiss={() => setGrokCliUpdateNotice(undefined)}
+          />
           <AppNoticeToast
             desktopApi={desktopApi}
             notice={navigation.archiveThreadNotice}

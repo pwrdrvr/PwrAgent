@@ -79,6 +79,11 @@ import {
   shouldSurfaceAcpThoughtsAsMessages,
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
+import {
+  checkGrokCliUpdate,
+  preserveGrokUpdateAcknowledgement,
+  shouldCheckGrokCliUpdate,
+} from "../acp/grok-cli-update";
 import { getMainLogger } from "../log";
 import {
   getAppStateDb,
@@ -159,6 +164,7 @@ export type AcpBackendAdapterOptions = {
   discoverLocalAcpAgents?: LocalAcpDiscovery;
   resolveLocalAcpDiscoveryEnv?: () => Promise<NodeJS.ProcessEnv>;
   isAcpAgentEnabled?: (registryId: string) => boolean;
+  checkGrokCliUpdate?: typeof checkGrokCliUpdate | null;
   emit: (event: AgentEvent) => Promise<void>;
   handleServerRequest: (
     backend: AcpBackendId,
@@ -829,6 +835,8 @@ export class AcpBackendAdapter {
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
+  private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
+  private readonly grokUpdateRefreshes = new Map<AcpBackendId, Promise<void>>();
   private closed = false;
   private readonly liveTurnUsage = new Map<string, AcpLiveTurnUsage>();
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
@@ -839,6 +847,10 @@ export class AcpBackendAdapter {
     this.automationInspectionMcpCommand = options.automationInspectionMcpCommand;
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
+    this.grokUpdateChecker = options.checkGrokCliUpdate === null
+      ? undefined
+      : options.checkGrokCliUpdate
+        ?? (isAppStateInitialized() ? checkGrokCliUpdate : undefined);
     this.acpAgentStore =
       options.acpAgentStore === null
         ? undefined
@@ -908,6 +920,7 @@ export class AcpBackendAdapter {
       if (agent.registryId !== "grok" || !summary.available) {
         return summary;
       }
+      this.refreshGrokUpdateStatusInBackground(agent);
       // Backend discovery is also used by launchpad and messaging flows.
       // Merge only cached decoration here; vendor billing must never delay it.
       const providerStatus = this.providerStatuses.get(agent.backendId);
@@ -920,6 +933,82 @@ export class AcpBackendAdapter {
           }
         : summary;
     });
+  }
+
+  private refreshGrokUpdateStatusInBackground(
+    agent: AcpInstalledAgentRecord,
+  ): void {
+    const checker = this.grokUpdateChecker;
+    const command = agent.activeCommand ?? agent.launchDescriptor?.command;
+    const previous =
+      agent.updateCommand === command
+      && agent.version === agent.update?.currentVersion
+        ? agent.update
+        : undefined;
+    if (
+      !checker
+      || !command
+      || this.closed
+      || this.grokUpdateRefreshes.has(agent.backendId)
+      || !shouldCheckGrokCliUpdate({
+        command,
+        installedVersion: agent.version,
+        now: Date.now(),
+        previous,
+        previousCommand: agent.updateCommand,
+      })
+    ) {
+      return;
+    }
+
+    const refresh = checker(command, {
+      installedVersion: agent.version,
+      previous,
+    })
+      .then(async (update) => {
+        if (this.closed) return;
+        const current = this.acpAgentStore?.getInstalledAgent(agent.backendId)
+          ?? agent;
+        const currentCommand =
+          current.activeCommand ?? current.launchDescriptor?.command;
+        if (
+          currentCommand !== command
+          || current.version !== agent.version
+        ) {
+          return;
+        }
+        const mergedUpdate = preserveGrokUpdateAcknowledgement(
+          current.update,
+          update,
+        );
+        this.acpAgentStore?.upsertInstalledAgent({
+          ...current,
+          ...(mergedUpdate.status !== "failed"
+            && mergedUpdate.currentVersion !== "unknown"
+            ? { version: mergedUpdate.currentVersion }
+            : {}),
+          update: mergedUpdate,
+          updateCommand: command,
+        });
+        await this.emit({
+          backend: agent.backendId,
+          notification: {
+            method: "backend/acpUpdateStatus/updated",
+            params: { backend: agent.backendId },
+          },
+        });
+      })
+      .catch((error) => {
+        acpBackendAdapterLog.debug("grok_update_check_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (this.grokUpdateRefreshes.get(agent.backendId) === refresh) {
+          this.grokUpdateRefreshes.delete(agent.backendId);
+        }
+      });
+    this.grokUpdateRefreshes.set(agent.backendId, refresh);
   }
 
   private refreshProviderStatusInBackground(backend: AcpBackendId): void {
@@ -1441,6 +1530,7 @@ export class AcpBackendAdapter {
     this.providerStatuses.clear();
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
+    this.grokUpdateRefreshes.clear();
     this.liveTurnUsage.clear();
     await Promise.all(
       acpClients.map(async (clientPromise) => {

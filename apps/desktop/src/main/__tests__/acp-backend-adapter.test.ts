@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  AcpAgentUpdateStatus,
   AcpBackendId,
   AgentEvent,
   AppServerPendingRequestNotification,
@@ -1296,6 +1297,215 @@ describe("AcpBackendAdapter", () => {
     expect(summary?.account).toBeUndefined();
     expect(readProviderStatus).toHaveBeenCalledTimes(1);
 
+    await adapter.close();
+  });
+
+  it("checks Grok updates in the background and persists one daily result", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    let stored: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version: "0.2.118",
+      activeCommand: "/opt/grok",
+    };
+    const upsertInstalledAgent = vi.fn((record: AcpInstalledAgentRecord) => {
+      stored = record;
+    });
+    const updateCheck = vi.fn(async () => ({
+      status: "available" as const,
+      checkedAt: Date.now(),
+      currentVersion: "0.2.118",
+      latestVersion: "1.0.0",
+      channel: "stable",
+    }));
+    const emit = vi.fn(async () => undefined);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored,
+        listInstalledAgents: () => [stored],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      checkGrokCliUpdate: updateCheck,
+      discoverLocalAcpAgents: async () => [],
+      emit,
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    const [summary] = await adapter.describeInstalledBackends();
+    expect(summary?.kind).toBe(backendId);
+    expect(updateCheck).toHaveBeenCalledOnce();
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledWith({
+        backend: backendId,
+        notification: {
+          method: "backend/acpUpdateStatus/updated",
+          params: { backend: backendId },
+        },
+      });
+    });
+    expect(upsertInstalledAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ latestVersion: "1.0.0" }),
+        updateCommand: "/opt/grok",
+      }),
+    );
+
+    await adapter.describeInstalledBackends();
+    expect(updateCheck).toHaveBeenCalledOnce();
+    await adapter.close();
+  });
+
+  it.each([
+    {
+      change: "selected command",
+      installedVersion: "0.2.118",
+      command: "/new/grok",
+      previousCommand: "/old/grok",
+    },
+    {
+      change: "installed version",
+      installedVersion: "1.0.0",
+      command: "/opt/grok",
+      previousCommand: "/opt/grok",
+    },
+  ])("does not reuse update state after a $change change", async ({
+    installedVersion,
+    command,
+    previousCommand,
+  }) => {
+    const backendId = "acp:grok" as AcpBackendId;
+    let stored: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version: installedVersion,
+      activeCommand: command,
+      update: {
+        status: "available",
+        checkedAt: 100,
+        currentVersion: "0.2.118",
+        latestVersion: "1.0.0",
+      },
+      updateCommand: previousCommand,
+    };
+    const updateCheck = vi.fn(async (
+      _command: string,
+      options?: {
+        installedVersion?: string;
+        previous?: AcpAgentUpdateStatus;
+      },
+    ): Promise<AcpAgentUpdateStatus> => ({
+      status: "failed",
+      checkedAt: 500,
+      currentVersion: options?.installedVersion ?? "unknown",
+      error: "offline",
+    }));
+    const emit = vi.fn(async () => undefined);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored,
+        listInstalledAgents: () => [stored],
+        upsertInstalledAgent: (record) => {
+          stored = record;
+        },
+      },
+      captureStores: [],
+      checkGrokCliUpdate: updateCheck,
+      discoverLocalAcpAgents: async () => [],
+      emit,
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    await adapter.describeInstalledBackends();
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledOnce();
+    });
+
+    expect(updateCheck).toHaveBeenCalledWith(command, {
+      installedVersion,
+      previous: undefined,
+    });
+    expect(stored.version).toBe(installedVersion);
+    expect(stored.update).toMatchObject({
+      status: "failed",
+      currentVersion: installedVersion,
+      error: "offline",
+    });
+    await adapter.close();
+  });
+
+  it("preserves an acknowledgement committed while an update check runs", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    let stored: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      version: "0.2.118",
+      activeCommand: "/opt/grok",
+      update: {
+        status: "available",
+        checkedAt: 100,
+        currentVersion: "0.2.118",
+        latestVersion: "1.0.0",
+      },
+      updateCommand: "/opt/grok",
+    };
+    let finishUpdate: ((update: AcpAgentUpdateStatus) => void) | undefined;
+    const updateCheck = vi.fn(async () =>
+      await new Promise<AcpAgentUpdateStatus>((resolve) => {
+        finishUpdate = resolve;
+      }),
+    );
+    const emit = vi.fn(async () => undefined);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored,
+        listInstalledAgents: () => [stored],
+        upsertInstalledAgent: (record) => {
+          stored = record;
+        },
+      },
+      captureStores: [],
+      checkGrokCliUpdate: updateCheck,
+      discoverLocalAcpAgents: async () => [],
+      emit,
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    await adapter.describeInstalledBackends();
+    await vi.waitFor(() => {
+      expect(updateCheck).toHaveBeenCalledOnce();
+    });
+    stored = {
+      ...stored,
+      update: {
+        ...stored.update!,
+        dismissedAt: 400,
+      },
+    };
+    finishUpdate?.({
+      status: "available",
+      checkedAt: 500,
+      currentVersion: "0.2.118",
+      latestVersion: "1.0.0",
+    });
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledOnce();
+    });
+
+    expect(stored.update).toMatchObject({
+      checkedAt: 500,
+      latestVersion: "1.0.0",
+      dismissedAt: 400,
+    });
     await adapter.close();
   });
 
