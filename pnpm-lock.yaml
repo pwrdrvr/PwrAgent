@@ -71,7 +71,7 @@ importers:
     dependencies:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
-        version: 1.30.0(zod@4.3.6)
+        version: 1.30.0(zod@4.4.3)
       '@napi-rs/canvas':
         specifier: 1.0.3
         version: 1.0.3
@@ -104,10 +104,10 @@ importers:
         version: link:../../packages/shared
       '@pwrdrvr/agent-acp':
         specifier: ^0.13.0
-        version: 0.13.0(zod@4.3.6)
+        version: 0.13.0(zod@4.4.3)
       '@pwrdrvr/agent-client':
-        specifier: ^0.6.1
-        version: 0.6.1
+        specifier: ^0.7.0
+        version: 0.7.0
       '@pwrdrvr/agent-core':
         specifier: ^0.2.0
         version: 0.2.0
@@ -1057,18 +1057,14 @@ packages:
   '@pwrdrvr/agent-acp@0.13.0':
     resolution: {integrity: sha512-PHPLX++fnS1mWRruQV7eUJEDmcphKGCDUsVEcEmqYSObDbn6BqOKYAsmVaYJu3TnAdF0k5GJbmnbvALz/Jv3Lg==}
 
-  '@pwrdrvr/agent-client@0.6.1':
-    resolution: {integrity: sha512-Q8jyGN9c3BfGTW1ba3baFliaF0bWpabV2rYgKmgwZypB3BoPiraZ3qv4X4piHNKVHJ+XK8PdNtyGC78c6sLHNA==}
+  '@pwrdrvr/agent-client@0.7.0':
+    resolution: {integrity: sha512-b1PNsaVtcXN69HLSF5uK7yqD1AhJocURSqZT9j9EhKSUugcp+8KqLsU4m2v+PBiz/Au+FlHjWsiPz0Yz/NN/eg==}
 
   '@pwrdrvr/agent-core@0.2.0':
     resolution: {integrity: sha512-zTo7vJGekyZX2h9xWYiZfQvt+qKTPhuciWyCouow1shaKgg0Bn6B8S5lTRvMzxvT7feKOZ7zy/To2Cu6+1i1+A==}
 
   '@pwrdrvr/agent-transport@0.1.6':
     resolution: {integrity: sha512-lkKHg4q/4+1XB+h8r8Vl7dq2LpV4uFG5XZ10t0MCIW19IW/DAWCm6w+etxcef5KkC9XUjDV2ZIGjWW91C5QomA==}
-
-  '@pwrdrvr/codex-app-server-protocol@0.133.0':
-    resolution: {integrity: sha512-mt+geA0RZEz5A3kEK8poDE3wYDrteWGb2syfXS4/kzzgWEe26DUbQlbdQyFYoa7Zs/Z6L64gNGIfFHgemfzj8g==}
-    engines: {node: '>=20'}
 
   '@pwrdrvr/codex-app-server-protocol@0.144.0':
     resolution: {integrity: sha512-WmURXzmmNEY8lmnNZunNQj/Bnn3yjzS6Rc0gzlDU7sBHMd0kvtskXE9BCMcR+E7sVJ53V/gwjfksRUli0xUgdA==}
@@ -4413,6 +4409,9 @@ packages:
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
@@ -4420,9 +4419,9 @@ snapshots:
 
   '@adobe/css-tools@4.4.4': {}
 
-  '@agentclientprotocol/sdk@1.3.0(zod@4.3.6)':
+  '@agentclientprotocol/sdk@1.3.0(zod@4.4.3)':
     dependencies:
-      zod: 4.3.6
+      zod: 4.4.3
 
   '@asamuzakjp/css-color@5.1.11':
     dependencies:
@@ -4974,7 +4973,7 @@ snapshots:
     optionalDependencies:
       typescript: 6.0.3
 
-  '@modelcontextprotocol/sdk@1.30.0(zod@4.3.6)':
+  '@modelcontextprotocol/sdk@1.30.0(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 2.0.10(hono@4.12.34)
       ajv: 8.20.0
@@ -4991,8 +4990,8 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.3.6
-      zod-to-json-schema: 3.25.2(zod@4.3.6)
+      zod: 4.4.3
+      zod-to-json-schema: 3.25.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
 
@@ -5135,29 +5134,27 @@ snapshots:
 
   '@protobufjs/utf8@1.1.2': {}
 
-  '@pwrdrvr/agent-acp@0.13.0(zod@4.3.6)':
+  '@pwrdrvr/agent-acp@0.13.0(zod@4.4.3)':
     dependencies:
-      '@agentclientprotocol/sdk': 1.3.0(zod@4.3.6)
+      '@agentclientprotocol/sdk': 1.3.0(zod@4.4.3)
       '@pwrdrvr/agent-core': 0.2.0
       '@pwrdrvr/agent-transport': 0.1.6
     transitivePeerDependencies:
       - zod
 
-  '@pwrdrvr/agent-client@0.6.1':
+  '@pwrdrvr/agent-client@0.7.0':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
       '@pwrdrvr/agent-transport': 0.1.6
-      '@pwrdrvr/codex-app-server-protocol': 0.133.0
+      '@pwrdrvr/codex-app-server-protocol': 0.144.0
       '@pwrdrvr/codex-discovery': 0.1.4
-      zod: 4.3.6
+      zod: 4.4.3
 
   '@pwrdrvr/agent-core@0.2.0': {}
 
   '@pwrdrvr/agent-transport@0.1.6':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
-
-  '@pwrdrvr/codex-app-server-protocol@0.133.0': {}
 
   '@pwrdrvr/codex-app-server-protocol@0.144.0': {}
 
@@ -8933,14 +8930,16 @@ snapshots:
 
   yocto-queue@0.1.0: {}
 
-  zod-to-json-schema@3.25.2(zod@4.3.6):
+  zod-to-json-schema@3.25.2(zod@4.4.3):
     dependencies:
-      zod: 4.3.6
+      zod: 4.4.3
 
   zod-validation-error@4.0.2(zod@4.3.6):
     dependencies:
       zod: 4.3.6
 
   zod@4.3.6: {}
+
+  zod@4.4.3: {}
 
   zwitch@2.0.4: {}
