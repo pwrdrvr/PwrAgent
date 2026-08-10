@@ -5267,6 +5267,35 @@ textarea,
   padding-right: 8px;
 }
 
+.directory-row__pin-drop-slot {
+  position: relative;
+  height: 18px;
+  flex: 0 0 auto;
+  margin: -2px 6px;
+  cursor: grabbing;
+}
+
+.directory-row__pin-drop-slot::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  left: 8px;
+  height: 1px;
+  border-radius: 999px;
+  background: var(--border-subtle);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.directory-row__pin-drop-slot.is-drop-target-before::after {
+  height: 3px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--row-active-tint-strong),
+    0 0 14px var(--accent-shadow);
+}
+
 .directory-row__thread-divider {
   appearance: none;
   padding: 0;

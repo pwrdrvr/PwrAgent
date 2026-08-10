@@ -1,5 +1,5 @@
 import {
-  useCallback,
+  useEffect,
   useState,
   type DragEvent,
 } from "react";
@@ -12,37 +12,55 @@ export type DropIndicatorState = {
 };
 
 /**
- * Native dragover fires continuously while the pointer remains over a row.
- * Preserve the current object when the visible indicator did not change so
- * React can bail out instead of rerendering the entire navigation list for
- * every event. This matters especially when a trackpad scroll is running at
- * the same time as the drag.
+ * Moving an insertion line does not change application state. Keep it out of
+ * React's render path so scrolling successive rows under a held card does not
+ * rebuild the entire navigation tree for every new target.
  */
-export function resolveDropIndicatorState(
-  current: DropIndicatorState | undefined,
-  next: DropIndicatorState | undefined,
-): DropIndicatorState | undefined {
-  if (
-    current?.targetKey === next?.targetKey
-    && current?.position === next?.position
-  ) {
-    return current;
-  }
-  return next;
+export type DropIndicatorController = {
+  clear: () => void;
+  show: (element: HTMLElement, next: DropIndicatorState) => void;
+};
+
+const DROP_INDICATOR_CLASSES = [
+  "is-drop-target-before",
+  "is-drop-target-after",
+] as const;
+
+export function createDropIndicatorController(): DropIndicatorController {
+  let active:
+    | { element: HTMLElement; state: DropIndicatorState }
+    | undefined;
+
+  const clear = (): void => {
+    if (!active) return;
+    active.element.classList.remove(...DROP_INDICATOR_CLASSES);
+    active = undefined;
+  };
+
+  return {
+    clear,
+    show: (element, next) => {
+      if (
+        active?.element === element
+        && active.state.targetKey === next.targetKey
+        && active.state.position === next.position
+      ) {
+        return;
+      }
+      clear();
+      element.classList.add(`is-drop-target-${next.position}`);
+      active = { element, state: next };
+    },
+  };
 }
 
-export function useDropIndicatorState(): readonly [
-  DropIndicatorState | undefined,
-  (next: DropIndicatorState | undefined) => void,
-] {
-  const [indicator, setIndicator] = useState<DropIndicatorState | undefined>();
-  const updateIndicator = useCallback(
-    (next: DropIndicatorState | undefined) => {
-      setIndicator((current) => resolveDropIndicatorState(current, next));
-    },
-    [],
+export function useDropIndicatorController(): DropIndicatorController {
+  const [controller] = useState(createDropIndicatorController);
+  useEffect(
+    () => () => controller.clear(),
+    [controller],
   );
-  return [indicator, updateIndicator] as const;
+  return controller;
 }
 
 export function getDropIndicatorPosition(

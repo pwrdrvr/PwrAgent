@@ -36,7 +36,7 @@ import {
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
-  useDropIndicatorState,
+  useDropIndicatorController,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -279,10 +279,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [unpinnedExpandedByKey, setUnpinnedExpandedByKey] = useState<
     Record<string, boolean>
   >({});
-  const [dropIndicator, setDropIndicator] = useDropIndicatorState();
-  const [dividerDropTarget, setDividerDropTarget] = useState<
-    string | undefined
-  >(undefined);
+  const dropIndicator = useDropIndicatorController();
   const [draggedThreadKey, setDraggedThreadKey] = useState<string | undefined>(
     undefined,
   );
@@ -294,8 +291,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [draggedSubthreadKey, setDraggedSubthreadKey] = useState<
     string | undefined
   >(undefined);
-  const [subthreadDropIndicator, setSubthreadDropIndicator] =
-    useDropIndicatorState();
+  const subthreadDropIndicator = useDropIndicatorController();
   // Directory drag/drop state (plan 2026-05-09-002 Unit K). Mirrors
   // the per-thread state above but tracks directory keys rather
   // than thread keys. The `directoriesPinnedDividerDropTarget`
@@ -304,8 +300,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [draggedDirectoryKey, setDraggedDirectoryKey] = useState<
     string | undefined
   >(undefined);
-  const [directoryDropIndicator, setDirectoryDropIndicator] =
-    useDropIndicatorState();
+  const directoryDropIndicator = useDropIndicatorController();
   const [directoriesPinnedDividerDropTarget, setDirectoriesPinnedDividerDropTarget] =
     useState(false);
   const previousSelectedItemKeyRef = useRef<string | undefined>(undefined);
@@ -673,9 +668,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // directory is already pinned (matches the thread-pin pattern:
       // first pin lives via context menu, drag is reordering).
       (directoryPinned || pinnedDirectories.length > 0);
-    const isDirectoryDropTarget =
-      directoryDropIndicator?.targetKey === directory.key;
-
     const selectedLaunchpad =
       props.selectedItemKey === buildLaunchpadSelectionKey(directory.key);
     const selectedDirectory = selectedLaunchpad || Boolean(
@@ -746,11 +738,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
               composerSourceThreadKey={props.composerSourceThreadKey}
               compact
               draggable={reorderable}
-              dropIndicator={
-                subthreadDropIndicator?.targetKey === rowDropKey
-                  ? subthreadDropIndicator.position
-                  : undefined
-              }
               includeLinkedDirectories
               linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
               nested
@@ -780,28 +767,28 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
                 ) {
                   event.dataTransfer.dropEffect = "none";
-                  setSubthreadDropIndicator(undefined);
+                  subthreadDropIndicator.clear();
                   return;
                 }
                 event.dataTransfer.dropEffect = "move";
-                setSubthreadDropIndicator({
+                subthreadDropIndicator.show(event.currentTarget, {
                   targetKey: rowDropKey,
                   position: getDropIndicatorPosition(event),
                 });
               }}
               onDragLeaveThread={(event) => {
                 if (didDragLeaveCurrentTarget(event)) {
-                  setSubthreadDropIndicator(undefined);
+                  subthreadDropIndicator.clear();
                 }
               }}
               onDragEndThread={() => {
                 setDraggedSubthreadKey(undefined);
-                setSubthreadDropIndicator(undefined);
+                subthreadDropIndicator.clear();
               }}
               onDropOnThread={(event) => {
                 event.preventDefault();
                 setDraggedSubthreadKey(undefined);
-                setSubthreadDropIndicator(undefined);
+                subthreadDropIndicator.clear();
                 const draggedKey = event.dataTransfer.getData(
                   "application/x-pwragent-subthread",
                 );
@@ -860,6 +847,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
       selectionOrder,
       unpinnedExpanded,
     } = expandedThreadModel;
+    const showPinnedAppendTarget = Boolean(
+      props.onReorderThreadPins
+      && draggedThreadKey
+      && directory.threadKeys.includes(draggedThreadKey)
+    );
     // Render one unpinned thread row. Shared by the always-shown capped
     // slice and the overflow slice so the "Show more / Show less" toggle
     // sits at a fixed pivot between them — collapsing never makes the
@@ -912,8 +904,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }}
             onDragEndThread={() => {
               setDraggedThreadKey(undefined);
-              setDropIndicator(undefined);
-              setDividerDropTarget(undefined);
+              dropIndicator.clear();
             }}
             onOpenContextMenu={props.onOpenThreadContextMenu}
             onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
@@ -933,14 +924,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
       );
     };
 
-    const dropIndicatorClass = isDirectoryDropTarget
-      ? ` is-drop-target-${directoryDropIndicator!.position}`
-      : "";
-
     return (
       <section
         key={directory.key}
-        className={`directory-row${dropIndicatorClass}`}
+        className="directory-row"
         onDragOver={
           directoryDragEnabled
             ? (event) => {
@@ -968,7 +955,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 }
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
-                setDirectoryDropIndicator({
+                directoryDropIndicator.show(event.currentTarget, {
                   targetKey: directory.key,
                   position: getDropIndicatorPosition(event),
                 });
@@ -980,7 +967,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
           directoryDragEnabled
             ? (event) => {
                 if (didDragLeaveCurrentTarget(event)) {
-                  setDirectoryDropIndicator(undefined);
+                  directoryDropIndicator.clear();
                 }
               }
             : undefined
@@ -1000,7 +987,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 }
                 event.preventDefault();
                 setDraggedDirectoryKey(undefined);
-                setDirectoryDropIndicator(undefined);
+                directoryDropIndicator.clear();
                 setDirectoriesPinnedDividerDropTarget(false);
                 lastDirectoryDragEndedAtRef.current = Date.now();
                 if (draggedKey === directory.key) {
@@ -1068,7 +1055,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             directoryDragEnabled
               ? () => {
                   setDraggedDirectoryKey(undefined);
-                  setDirectoryDropIndicator(undefined);
+                  directoryDropIndicator.clear();
                   setDirectoriesPinnedDividerDropTarget(false);
                   // Record drag-end so the summary button's click
                   // handler can suppress the synthetic post-release
@@ -1231,11 +1218,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           draftThreadKeys={props.draftThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           compact
-                          dropIndicator={
-                            dropIndicator?.targetKey === rowDropKey
-                              ? dropIndicator.position
-                              : undefined
-                          }
                           draggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
                           linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
@@ -1269,16 +1251,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
                               !directory.threadKeys.includes(draggedThreadKey)
                             ) {
                               event.dataTransfer.dropEffect = "none";
-                              setDropIndicator(undefined);
+                              dropIndicator.clear();
                               return;
                             }
 
                             event.dataTransfer.dropEffect = "move";
-                            setDropIndicator({
+                            dropIndicator.show(event.currentTarget, {
                               targetKey: rowDropKey,
                               position: getDropIndicatorPosition(event),
                             });
-                            setDividerDropTarget(undefined);
                           }}
                           onDragStartThread={(event) => {
                             setDraggedThreadKey(threadKey);
@@ -1287,19 +1268,17 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           }}
                           onDragLeaveThread={(event) => {
                             if (didDragLeaveCurrentTarget(event)) {
-                              setDropIndicator(undefined);
+                              dropIndicator.clear();
                             }
                           }}
                           onDragEndThread={() => {
                             setDraggedThreadKey(undefined);
-                            setDropIndicator(undefined);
-                            setDividerDropTarget(undefined);
+                            dropIndicator.clear();
                           }}
                           onDropOnThread={(event) => {
                             event.preventDefault();
                             setDraggedThreadKey(undefined);
-                            setDropIndicator(undefined);
-                            setDividerDropTarget(undefined);
+                            dropIndicator.clear();
                             const draggedKey = event.dataTransfer.getData("text/plain");
                             if (!draggedKey) return;
                             const position = getDropIndicatorPosition(event);
@@ -1337,15 +1316,51 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                      );
                     })}
 
+                    {showPinnedAppendTarget ? (
+                      <div
+                        aria-label={`Pin thread after pinned threads for ${directory.label}`}
+                        className="directory-row__pin-drop-slot"
+                        role="separator"
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          if (
+                            !draggedThreadKey
+                            || !directory.threadKeys.includes(draggedThreadKey)
+                          ) {
+                            event.dataTransfer.dropEffect = "none";
+                            dropIndicator.clear();
+                            return;
+                          }
+
+                          event.dataTransfer.dropEffect = "move";
+                          dropIndicator.show(event.currentTarget, {
+                            targetKey: `pinned-append:${directory.key}`,
+                            position: "before",
+                          });
+                        }}
+                        onDragLeave={(event) => {
+                          if (didDragLeaveCurrentTarget(event)) {
+                            dropIndicator.clear();
+                          }
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          lastDirectoryThreadDropAtRef.current = Date.now();
+                          setDraggedThreadKey(undefined);
+                          dropIndicator.clear();
+                          dropThreadAfterDirectoryPins(
+                            directory,
+                            event.dataTransfer.getData("text/plain"),
+                          );
+                        }}
+                      />
+                    ) : null}
+
                     {directoryPinnedThreads.length > 0 &&
                     directoryUnpinnedThreadCount > 0 ? (
                       <button
                         type="button"
-                        className={`recents-pinned-divider directory-row__thread-divider${
-                          dividerDropTarget === directory.key
-                            ? " is-drop-target"
-                            : ""
-                        }`}
+                        className="recents-pinned-divider directory-row__thread-divider"
                         aria-expanded={!directoryThreadsCollapsed}
                         aria-label={`${
                           directoryThreadsCollapsed ? "Show" : "Hide"
@@ -1361,36 +1376,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           void props.onSetDirectoryThreadsCollapsed?.(
                             directory,
                             !directoryThreadsCollapsed,
-                          );
-                        }}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          if (
-                            !draggedThreadKey ||
-                            !directory.threadKeys.includes(draggedThreadKey)
-                          ) {
-                            event.dataTransfer.dropEffect = "none";
-                            setDividerDropTarget(undefined);
-                            return;
-                          }
-
-                          event.dataTransfer.dropEffect = "move";
-                          setDropIndicator(undefined);
-                          setDividerDropTarget(directory.key);
-                        }}
-                        onDragLeave={(event) => {
-                          if (didDragLeaveCurrentTarget(event)) {
-                            setDividerDropTarget(undefined);
-                          }
-                        }}
-                        onDrop={(event) => {
-                          event.preventDefault();
-                          lastDirectoryThreadDropAtRef.current = Date.now();
-                          setDraggedThreadKey(undefined);
-                          setDividerDropTarget(undefined);
-                          dropThreadAfterDirectoryPins(
-                            directory,
-                            event.dataTransfer.getData("text/plain"),
                           );
                         }}
                       >
@@ -1474,7 +1459,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }
             event.preventDefault();
             event.dataTransfer.dropEffect = "move";
-            setDirectoryDropIndicator(undefined);
+            directoryDropIndicator.clear();
             setDirectoriesPinnedDividerDropTarget(true);
           }}
           onDragLeave={(event) => {
