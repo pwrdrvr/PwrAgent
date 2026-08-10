@@ -292,10 +292,21 @@ describe("ActiveSubAgentsStrip", () => {
     it("routes Stop through desktopApi with the thread's backend and federation target", async () => {
       const stopSubAgent = vi.fn().mockResolvedValue({ ok: true });
       const onRefreshNavigation = vi.fn().mockResolvedValue(undefined);
-      const thread = {
+      const federationTarget = {
+        scope: "remote",
+        instanceId: "peer-instance",
+      } as const;
+      const thread: NavigationThreadSummary = {
         ...buildThread([buildSubAgent({ monitorId: "monitor-1" })]),
-        federation: { ref: { target: "peer-instance" } },
-      } as NavigationThreadSummary;
+        federation: {
+          ref: {
+            backend: "codex",
+            target: federationTarget,
+            threadId: "remote-thread",
+          },
+          instanceLabel: "Peer",
+        },
+      };
 
       render(
         <ActiveSubAgentsStrip
@@ -309,7 +320,7 @@ describe("ActiveSubAgentsStrip", () => {
       await waitFor(() => {
         expect(stopSubAgent).toHaveBeenCalledWith({
           backend: "codex",
-          federationTarget: "peer-instance",
+          federationTarget,
           threadId: "parent-thread",
           monitorId: "monitor-1",
         });
