@@ -147,6 +147,10 @@ type ThreadStatusObservation = {
   threadStatus: AppServerThreadStatus;
 };
 
+type ThreadNameObservation = {
+  threadName: string;
+};
+
 type PrChipLocation = {
   threadIndex: number;
   prIndex: number;
@@ -887,6 +891,34 @@ function applyConcurrentThreadStatusObservations(
     return {
       ...thread,
       threadStatus: observation.threadStatus,
+    };
+  });
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
+function applyObservedThreadNames(
+  snapshot: NavigationSnapshot,
+  observations: ReadonlyMap<string, ThreadNameObservation>,
+): NavigationSnapshot {
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    const observation = observations.get(
+      buildThreadIdentityKey(thread.source, thread.id),
+    );
+    if (
+      !observation
+      || (
+        thread.title === observation.threadName
+        && thread.titleSource === "explicit"
+      )
+    ) {
+      return thread;
+    }
+    changed = true;
+    return {
+      ...thread,
+      title: observation.threadName,
+      titleSource: "explicit" as const,
     };
   });
   return changed ? { ...snapshot, threads } : snapshot;
@@ -2858,6 +2890,13 @@ export function useThreadNavigation(
   const threadStatusObservationsRef = useRef(
     new Map<string, ThreadStatusObservation>(),
   );
+  // A newly-created thread can be named by the helper before the materialize
+  // IPC response gives the renderer an optimistic row to update. Retain the
+  // authoritative event so that response and a stale first refresh cannot
+  // put "Untitled thread" back over the generated name.
+  const threadNameObservationsRef = useRef(
+    new Map<string, ThreadNameObservation>(),
+  );
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
   const stateRef = useRef(state);
 
@@ -3024,9 +3063,13 @@ export function useThreadNavigation(
             };
           }
 
+          const responseWithObservedThreadNames = applyObservedThreadNames(
+            response,
+            threadNameObservationsRef.current,
+          );
           const responseWithConcurrentThreadStatuses =
             applyConcurrentThreadStatusObservations(
-              response,
+              responseWithObservedThreadNames,
               threadStatusObservationsRef.current,
               threadStatusSequenceAtRefreshStart,
             );
@@ -3718,21 +3761,24 @@ export function useThreadNavigation(
           threadId: string;
           threadName?: string;
         };
+        const nextThreadName = threadName?.trim();
+        if (!nextThreadName) {
+          return;
+        }
+        threadNameObservationsRef.current.set(
+          buildThreadIdentityKey(event.backend, threadId),
+          { threadName: nextThreadName },
+        );
         setState((current) => ({
           ...current,
           response: applyThreadNameUpdate(current.response, {
             backend: event.backend,
             threadId,
-            threadName,
+            threadName: nextThreadName,
           }),
         }));
         setOptimisticThread((current) => {
           if (current?.source !== event.backend || current.id !== threadId) {
-            return current;
-          }
-
-          const nextThreadName = threadName?.trim();
-          if (!nextThreadName) {
             return current;
           }
 
@@ -5914,6 +5960,16 @@ export function useThreadNavigation(
             }
           : undefined,
       });
+      const observedThreadName = threadNameObservationsRef.current.get(
+        buildThreadIdentityKey(response.backend, response.threadId),
+      )?.threadName;
+      const namedOptimisticMaterializedThread = observedThreadName
+        ? {
+            ...optimisticMaterializedThread,
+            title: observedThreadName,
+            titleSource: "explicit" as const,
+          }
+        : optimisticMaterializedThread;
       const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
       // Sub-thread launchpads drop the new child directly below their source
       // card. Plain new-thread launchpads have no parent and skip this. Await
@@ -5941,7 +5997,7 @@ export function useThreadNavigation(
         shouldSelectMaterializedThread || !optimisticThreadRef.current;
       setOptimisticThread((current) =>
         shouldSelectMaterializedThread || !current
-          ? optimisticMaterializedThread
+          ? namedOptimisticMaterializedThread
           : current
       );
       if (shouldSelectMaterializedThread) {
@@ -5994,7 +6050,9 @@ export function useThreadNavigation(
       try {
         await refresh(
           shouldSelectMaterializedThread ? nextThreadKey : undefined,
-          shouldProjectOptimisticThread ? optimisticMaterializedThread : undefined,
+          shouldProjectOptimisticThread
+            ? namedOptimisticMaterializedThread
+            : undefined,
         );
       } catch (error) {
         setLaunchpadError(error instanceof Error ? error.message : String(error));

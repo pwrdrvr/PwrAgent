@@ -3603,6 +3603,146 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("keeps an eager generated name that arrives while a scheduled thread materializes", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrSuiteLab";
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const initialSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory",
+          label: "PwrSuiteLab",
+          path: "/Users/huntharo/github/PwrSuiteLab",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory",
+            directoryLabel: "PwrSuiteLab",
+            directoryPath: "/Users/huntharo/github/PwrSuiteLab",
+            backend: "codex",
+            executionMode: "full-access",
+            prompt: "Update all Tart VMs to macOS 26.6.1",
+            workMode: "local",
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const scheduledFor = Date.now() + 60 * 60 * 1_000;
+    const staleHydratedSnapshot: NavigationSnapshot = {
+      ...initialSnapshot,
+      fetchedAt: 2_000,
+      inboxThreadKeys: ["codex:thread-scheduled"],
+      threads: [
+        {
+          id: "thread-scheduled",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+          scheduledStart: {
+            actionId: "scheduled-action:1",
+            scheduledFor,
+            state: "scheduled",
+          },
+          updatedAt: 2_000,
+        },
+      ],
+      directories: [
+        {
+          ...initialSnapshot.directories[0]!,
+          threadKeys: ["codex:thread-scheduled"],
+          launchpad: undefined,
+        },
+      ],
+    };
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValue(staleHydratedSnapshot);
+    const materializeDirectoryLaunchpad: NonNullable<
+      DesktopApi["materializeDirectoryLaunchpad"]
+    > = vi.fn(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/name/updated",
+          params: {
+            threadId: "thread-scheduled",
+            threadName: "Update Tart VMs to macOS 26.6.1",
+          },
+        },
+      });
+      return {
+        backend: "codex" as const,
+        threadId: "thread-scheduled",
+        executionMode: "full-access" as const,
+        workMode: "local" as const,
+        scheduledAction: {
+          id: "scheduled-action:1",
+          backend: "codex" as const,
+          threadId: "thread-scheduled",
+          kind: "turn" as const,
+          origin: "desktop" as const,
+          status: "scheduled" as const,
+          scheduledFor,
+          displayText: "Update all Tart VMs to macOS 26.6.1",
+          createdAt: 1_000,
+          updatedAt: 1_000,
+        },
+      };
+    });
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.directoryKey).toBe(directoryKey);
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(
+        directoryKey,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        scheduledFor,
+      );
+    });
+
+    expect(result.current.selectedThread).toMatchObject({
+      id: "thread-scheduled",
+      title: "Update Tart VMs to macOS 26.6.1",
+      titleSource: "explicit",
+      scheduledStart: {
+        scheduledFor,
+        state: "scheduled",
+      },
+    });
+  });
+
   it("clears the viewer-persisted launchpad after remote materialization", async () => {
     const federationTarget = {
       scope: "remote" as const,
