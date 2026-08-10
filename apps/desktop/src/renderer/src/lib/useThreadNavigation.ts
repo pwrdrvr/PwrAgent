@@ -34,6 +34,7 @@ import {
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   compareThreadsByCreatedAtDesc,
+  federatedThreadIdentityKey,
   insertSubthreadIdAfter,
   isRemoteFederationTarget,
   isSubthreadLaunchpadKey,
@@ -50,6 +51,7 @@ import {
 } from "./navigation-snapshot-transport";
 import { resolveThreadWorkingStatePath } from "./thread-working-state-path";
 import {
+  agentEventMatchesThread,
   agentEventThreadIdentityKey,
   federationTargetsEqual,
   threadSummaryIdentityKey,
@@ -150,6 +152,10 @@ type NavigationRefreshOptions = {
 type ThreadStatusObservation = {
   sequence: number;
   threadStatus: AppServerThreadStatus;
+};
+
+type ThreadNameObservation = {
+  threadName: string;
 };
 
 type PrChipLocation = {
@@ -897,6 +903,34 @@ function applyConcurrentThreadStatusObservations(
   return changed ? { ...snapshot, threads } : snapshot;
 }
 
+function applyObservedThreadNames(
+  snapshot: NavigationSnapshot,
+  observations: Map<string, ThreadNameObservation>,
+): NavigationSnapshot {
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    const threadKey = threadSummaryIdentityKey(thread);
+    const observation = observations.get(threadKey);
+    if (!observation) {
+      return thread;
+    }
+    if (
+      thread.title === observation.threadName
+      && thread.titleSource === "explicit"
+    ) {
+      observations.delete(threadKey);
+      return thread;
+    }
+    changed = true;
+    return {
+      ...thread,
+      title: observation.threadName,
+      titleSource: "explicit" as const,
+    };
+  });
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
 function applyDirectoryGitStatusUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: NavigationDirectoryGitStatusUpdatedNotification["params"],
@@ -1618,16 +1652,28 @@ function getFallbackSelectionAfterRemoval(
 
 function applyThreadNameUpdate(
   snapshot: NavigationSnapshot | undefined,
-  params: { backend: AppServerBackendKind; threadId: string; threadName?: string }
+  params: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    threadName?: string;
+  }
 ): NavigationSnapshot | undefined {
   const threadName = params.threadName?.trim();
   if (!snapshot || !threadName) {
     return snapshot;
   }
 
+  const threadKey = params.federationTarget
+    ? federatedThreadIdentityKey({
+        backend: params.backend,
+        target: params.federationTarget,
+        threadId: params.threadId,
+      })
+    : buildThreadIdentityKey(params.backend, params.threadId);
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (threadSummaryIdentityKey(thread) !== threadKey) {
       return thread;
     }
 
@@ -2863,6 +2909,13 @@ export function useThreadNavigation(
   const threadStatusObservationsRef = useRef(
     new Map<string, ThreadStatusObservation>(),
   );
+  // A newly-created thread can be named by the helper before the materialize
+  // IPC response gives the renderer an optimistic row to update. Retain the
+  // authoritative event so that response and a stale first refresh cannot
+  // put "Untitled thread" back over the generated name.
+  const threadNameObservationsRef = useRef(
+    new Map<string, ThreadNameObservation>(),
+  );
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
   const stateRef = useRef(state);
   const navigationSnapshotTransportByScopeRef = useRef(
@@ -3080,6 +3133,10 @@ export function useThreadNavigation(
         const optimisticThreadKey = optimisticSelection
           ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
           : undefined;
+        const responseWithObservedThreadNames = applyObservedThreadNames(
+          response,
+          threadNameObservationsRef.current,
+        );
 
         setState((current) => {
           if (current.response && response.unchanged && !preferredSelectionKey) {
@@ -3093,7 +3150,7 @@ export function useThreadNavigation(
 
           const responseWithConcurrentThreadStatuses =
             applyConcurrentThreadStatusObservations(
-              response,
+              responseWithObservedThreadNames,
               threadStatusObservationsRef.current,
               threadStatusSequenceAtRefreshStart,
             );
@@ -3785,21 +3842,25 @@ export function useThreadNavigation(
           threadId: string;
           threadName?: string;
         };
+        const nextThreadName = threadName?.trim();
+        if (!nextThreadName) {
+          return;
+        }
+        threadNameObservationsRef.current.set(
+          agentEventThreadIdentityKey(event, threadId),
+          { threadName: nextThreadName },
+        );
         setState((current) => ({
           ...current,
           response: applyThreadNameUpdate(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
-            threadName,
+            threadName: nextThreadName,
           }),
         }));
         setOptimisticThread((current) => {
-          if (current?.source !== event.backend || current.id !== threadId) {
-            return current;
-          }
-
-          const nextThreadName = threadName?.trim();
-          if (!nextThreadName) {
+          if (!current || !agentEventMatchesThread(event, current, threadId)) {
             return current;
           }
 
@@ -5981,6 +6042,22 @@ export function useThreadNavigation(
             }
           : undefined,
       });
+      const observedThreadName = threadNameObservationsRef.current.get(
+        federationTarget
+          ? federatedThreadIdentityKey({
+              backend: response.backend,
+              target: federationTarget,
+              threadId: response.threadId,
+            })
+          : buildThreadIdentityKey(response.backend, response.threadId),
+      )?.threadName;
+      const namedOptimisticMaterializedThread = observedThreadName
+        ? {
+            ...optimisticMaterializedThread,
+            title: observedThreadName,
+            titleSource: "explicit" as const,
+          }
+        : optimisticMaterializedThread;
       const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
       // Sub-thread launchpads drop the new child directly below their source
       // card. Plain new-thread launchpads have no parent and skip this. Await
@@ -6008,7 +6085,7 @@ export function useThreadNavigation(
         shouldSelectMaterializedThread || !optimisticThreadRef.current;
       setOptimisticThread((current) =>
         shouldSelectMaterializedThread || !current
-          ? optimisticMaterializedThread
+          ? namedOptimisticMaterializedThread
           : current
       );
       if (shouldSelectMaterializedThread) {
@@ -6061,7 +6138,9 @@ export function useThreadNavigation(
       try {
         await refresh(
           shouldSelectMaterializedThread ? nextThreadKey : undefined,
-          shouldProjectOptimisticThread ? optimisticMaterializedThread : undefined,
+          shouldProjectOptimisticThread
+            ? namedOptimisticMaterializedThread
+            : undefined,
         );
       } catch (error) {
         setLaunchpadError(error instanceof Error ? error.message : String(error));
@@ -6352,12 +6431,14 @@ export function useThreadNavigation(
         ...current,
         response: applyThreadNameUpdate(current.response, {
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target,
           threadId: thread.id,
           threadName: nextName,
         }),
       }));
       setRetainedUnreadThread((current) =>
-        current?.source === thread.source && current.id === thread.id
+        current
+        && threadSummaryIdentityKey(current) === threadSummaryIdentityKey(thread)
           ? {
               ...current,
               title: nextName,
@@ -6366,7 +6447,8 @@ export function useThreadNavigation(
           : current
       );
       setOptimisticThread((current) =>
-        current?.source === thread.source && current.id === thread.id
+        current
+        && threadSummaryIdentityKey(current) === threadSummaryIdentityKey(thread)
           ? {
               ...current,
               title: nextName,
