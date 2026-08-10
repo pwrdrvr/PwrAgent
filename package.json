@@ -24,7 +24,7 @@
     "lint:electron-version": "node ./scripts/check-electron-version-policy.mjs",
     "lint:eslint": "pnpm lint:eslint:cached && pnpm lint:eslint:typed",
     "lint:eslint:cached": "eslint \"packages/**/*.{ts,tsx}\" \"apps/*/src/**/*.{ts,tsx}\" --cache --cache-strategy content --cache-location .eslintcache-untyped",
-    "lint:eslint:typed": "eslint \"packages/**/*.{ts,tsx}\" \"apps/*/src/**/*.{ts,tsx}\" --config eslint.typed.config.mjs",
+    "lint:eslint:typed": "eslint \"packages/**/*.{ts,tsx}\" \"apps/*/src/**/*.{ts,tsx}\" --config eslint.typed.config.mjs --no-inline-config --report-unused-disable-directives-severity off",
     "lint:sql": "node ./scripts/lint-sql-templates.mjs",
     "release:check": "node ./scripts/check-desktop-release-metadata.mjs",
     "test:desktop-e2e": "pnpm --filter @pwragent/desktop test:e2e",

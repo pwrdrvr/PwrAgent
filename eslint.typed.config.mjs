@@ -1,7 +1,9 @@
 // Type-aware lint rules run uncached because their results can depend on
 // imported declarations. ESLint's per-file cache does not track that type
 // dependency graph, so caching this pass could hide errors in unchanged
-// consumers when an imported type changes.
+// consumers when an imported type changes. The package script also disables
+// inline configuration so directives intended for the broad cached ruleset
+// are neither parsed here nor allowed to suppress this correctness check.
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
