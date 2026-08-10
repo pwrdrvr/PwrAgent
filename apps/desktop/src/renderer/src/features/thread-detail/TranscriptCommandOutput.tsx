@@ -109,10 +109,21 @@ function isAgentCommand(rawCommand: string | undefined): boolean {
 }
 
 function sanitizeCommandOutput(value: string | undefined): string {
-  return (value ?? "")
+  const normalizedNewlines = (value ?? "")
     .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "\uFFFD");
+    .replace(/\r/g, "\n");
+  let sanitized = "";
+  for (const character of normalizedNewlines) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const isDisallowedControl =
+      codePoint <= 0x08
+      || codePoint === 0x0b
+      || codePoint === 0x0c
+      || (codePoint >= 0x0e && codePoint <= 0x1f)
+      || codePoint === 0x7f;
+    sanitized += isDisallowedControl ? "\uFFFD" : character;
+  }
+  return sanitized;
 }
 
 function buildOutputPreview(

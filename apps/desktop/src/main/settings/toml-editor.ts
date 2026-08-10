@@ -99,9 +99,9 @@ type SourceModel = {
   sections: SectionLocation[];
 };
 
-const KEY_LINE = /^(\s*)([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*/;
-const SECTION_HEADER = /^\s*\[\s*([^\[\]]+?)\s*\]\s*(#.*)?$/;
-const ARRAY_OF_TABLES_HEADER = /^\s*\[\[\s*([^\[\]]+?)\s*\]\]\s*(#.*)?$/;
+const KEY_LINE = /^(\s*)([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*/;
+const SECTION_HEADER = /^\s*\[\s*([^[\]]+?)\s*\]\s*(#.*)?$/;
+const ARRAY_OF_TABLES_HEADER = /^\s*\[\[\s*([^[\]]+?)\s*\]\]\s*(#.*)?$/;
 const INTEGER_LITERAL = /^-?\d+$/;
 const FLOAT_LITERAL = /^-?(?:\d+\.\d+(?:[eE][-+]?\d+)?|\d+[eE][-+]?\d+)$/;
 
@@ -762,7 +762,7 @@ function parseInlineTable(
     if (eq === -1) return undefined;
     const key = field.slice(0, eq).trim();
     const valueText = field.slice(eq + 1).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_\-]*$/.test(key)) return undefined;
+    if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)) return undefined;
     const parsed = tryParseValue(valueText);
     if (!parsed) return undefined;
     if (

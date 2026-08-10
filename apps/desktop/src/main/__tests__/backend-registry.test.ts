@@ -36185,7 +36185,7 @@ script = "printf setup"
     const messagingStore = createMessagingArchiveCleanupStoreMock({
       bindings: [{ id: "binding-telegram", threadId: "thread-1" }],
     });
-    let registry!: DesktopBackendRegistry;
+    const registryRef: { current?: DesktopBackendRegistry } = {};
     let nestedNavigationResolved = false;
     const messagingArchiveCleaner = {
       requests: [] as Array<{
@@ -36199,17 +36199,18 @@ script = "printf setup"
         origin: "thread-archive";
       }) {
         messagingArchiveCleaner.requests.push(request);
-        await registry.listThreads();
+        await registryRef.current!.listThreads();
         nestedNavigationResolved = true;
         return { notifiedCount: 1, revokedCount: 1 };
       },
     };
-    registry = new DesktopBackendRegistry({
+    const registry = new DesktopBackendRegistry({
       codexClient,
       messagingArchiveCleaner,
       messagingStore,
       overlayStore: createOverlayStoreMock(),
     });
+    registryRef.current = registry;
 
     const timeout = new Promise<"timeout">((resolve) => {
       setTimeout(() => resolve("timeout"), 100);

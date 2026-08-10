@@ -60,6 +60,31 @@ describe("image input files", () => {
     ]);
   });
 
+  it("removes ASCII control characters from materialized image paths", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));
+    try {
+      const result = await materializeLocalImageInputs(
+        [{
+          type: "image",
+          name: "unsafe\u0000\u001fname.png",
+          url: "data:image/png;base64,AQID",
+        }],
+        { resolveRoot: () => tempDir },
+      );
+
+      const imagePath = result[0]?.type === "localImage" ? result[0].path : "";
+      expect(imagePath).toBe(
+        path.join(
+          tempDir,
+          "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+          "unsafename.png",
+        ),
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("converts file URLs for supported local image paths", async () => {
     const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-source-"));
     const materializedRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));

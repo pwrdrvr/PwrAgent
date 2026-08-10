@@ -229,8 +229,23 @@ function isMarkdownFilePath(filePath: string): boolean {
 function markdownAttachmentName(filePath: string): string {
   const normalized = filePath.replace(/\\/g, "/");
   const basename = path.posix.basename(normalized) || "artifact.md";
-  const safe = basename.replace(/[\x00-\x1f\x7f/\\]/g, "_").trim();
+  const safe = sanitizeMarkdownAttachmentBasename(basename).trim();
   return safe.toLowerCase().endsWith(".md") ? safe : `${safe || "artifact"}.md`;
+}
+
+function sanitizeMarkdownAttachmentBasename(value: string): string {
+  let result = "";
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    result +=
+      codePoint <= 0x1f
+      || codePoint === 0x7f
+      || character === "/"
+      || character === "\\"
+        ? "_"
+        : character;
+  }
+  return result;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {

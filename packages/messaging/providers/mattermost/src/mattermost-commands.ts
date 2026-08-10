@@ -315,7 +315,7 @@ export async function reconcileMattermostCommands(params: {
     desiredByTrigger.set(spec.trigger, spec);
   }
 
-  let existing: MattermostCommandRecord[] = [];
+  let existing: MattermostCommandRecord[];
   try {
     existing = await params.api.getCustomTeamCommands(params.teamId);
   } catch (error) {

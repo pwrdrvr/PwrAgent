@@ -2178,7 +2178,7 @@ describe("AcpSessionReplayNormalizer", () => {
       const normalizer = new AcpSessionReplayNormalizer({
         surfaceThoughtsAsMessages: false,
       });
-      let replay = normalizer.replay();
+      let replay: ReturnType<typeof normalizer.replay> | undefined;
       for (const record of grokReviewSession.parentUpdates) {
         replay = normalizer.apply({
           sessionId: record.params.sessionId,
@@ -2189,7 +2189,7 @@ describe("AcpSessionReplayNormalizer", () => {
         // capture cannot place them; inject them where they landed live —
         // between the assistant's first and last streamed chunks.
         if (record.params.update.sessionUpdate === "agent_message_chunk") {
-          replay = normalizer.apply({
+          normalizer.apply({
             sessionId: record.params.sessionId,
             receivedAt: record.params._meta.agentTimestampMs + 1,
             update: grokReviewSession.liveOnlyUpdates.sessionInfoUpdate,
@@ -2201,7 +2201,7 @@ describe("AcpSessionReplayNormalizer", () => {
           });
         }
       }
-      return replay;
+      return replay ?? normalizer.replay();
     }
 
     it("shows the operator's prompt without the review artifact", () => {

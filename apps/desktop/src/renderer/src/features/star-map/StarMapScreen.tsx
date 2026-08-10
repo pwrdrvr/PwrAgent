@@ -22,9 +22,6 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
 import {
-  STAR_MAP_ATTENTION_CATEGORIES,
-  STAR_MAP_ATTENTION_LABELS,
-  type StarMapAttentionCategory,
   type StarMapSessionKeys,
 } from "./attention";
 import {
@@ -32,7 +29,6 @@ import {
   computeCardSlots,
   computeStarMapLayout,
   generateStarField,
-  STAR_MAP_BODY_ROW_Y,
   STAR_MAP_CARD_GAP,
   STAR_MAP_CLOUD_TOP,
   STAR_MAP_ESTIMATED_CARD_HEIGHT,

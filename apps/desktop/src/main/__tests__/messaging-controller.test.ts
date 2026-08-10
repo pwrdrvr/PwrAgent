@@ -2003,9 +2003,9 @@ describe("MessagingController", () => {
         workspaceId: "T012WORKSPACE",
       },
     };
-    let harnessDelivered: MessagingSurfaceIntent[] | undefined;
+    const harnessDeliveredRef: { current?: MessagingSurfaceIntent[] } = {};
     const deliver = options?.deliver ?? (async (intent: MessagingSurfaceIntent) => {
-      harnessDelivered?.push(intent);
+      harnessDeliveredRef.current?.push(intent);
       const surface = {
         channel: "slack" as const,
         id: `surface:${intent.id}`,
@@ -2107,7 +2107,7 @@ describe("MessagingController", () => {
         ? { toolUpdateDefaultMode: options.toolUpdateDefaultMode }
         : {}),
     });
-    harnessDelivered = harness.delivered;
+    harnessDeliveredRef.current = harness.delivered;
     await harness.store.upsertBinding({
       id: "binding-slack-signals",
       authorizedActorIds: ["user-1"],
@@ -6303,7 +6303,6 @@ describe("MessagingController", () => {
   });
 
   it("does not double-report materialized first-turn start failures that emitted backend failure events", async () => {
-    let harness: Awaited<ReturnType<typeof createHarness>>;
     const materializeDirectoryLaunchpad = vi.fn(
       async (
         request: MaterializeDirectoryLaunchpadRequest,
@@ -6344,7 +6343,7 @@ describe("MessagingController", () => {
         };
       },
     );
-    harness = await createHarness({ materializeDirectoryLaunchpad });
+    const harness = await createHarness({ materializeDirectoryLaunchpad });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
     await harness.controller.handleInboundEvent(
@@ -6373,7 +6372,6 @@ describe("MessagingController", () => {
   });
 
   it("binds a materialized thread before fast first-turn terminal events", async () => {
-    let harness: Awaited<ReturnType<typeof createHarness>>;
     const materializeDirectoryLaunchpad = vi.fn(
       async (
         request: MaterializeDirectoryLaunchpadRequest,
@@ -6414,7 +6412,7 @@ describe("MessagingController", () => {
         };
       },
     );
-    harness = await createHarness({ materializeDirectoryLaunchpad });
+    const harness = await createHarness({ materializeDirectoryLaunchpad });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
     await harness.controller.handleInboundEvent(
@@ -6460,7 +6458,6 @@ describe("MessagingController", () => {
   });
 
   it("routes quick follow-ups to the materialized binding while the first turn starts", async () => {
-    let harness: Awaited<ReturnType<typeof createHarness>>;
     let resolveMaterialized!: () => void;
     let resolveFirstTurn!: () => void;
     const materialized = new Promise<void>((resolve) => {
@@ -6505,7 +6502,7 @@ describe("MessagingController", () => {
         };
       },
     );
-    harness = await createHarness({ materializeDirectoryLaunchpad });
+    const harness = await createHarness({ materializeDirectoryLaunchpad });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
     await harness.controller.handleInboundEvent(
@@ -21822,10 +21819,10 @@ async function createHarness(options?: {
   // Mirror the real BackendRegistry emit-after-mutation behavior: the
   // mutation methods also fan out a notification on the bus so the
   // controller's refreshStatusSurfacesForThread path runs end-to-end.
-  let controllerRef: MessagingController | undefined;
+  const controllerRef: { current?: MessagingController } = {};
   const setThreadExecutionMode = vi.fn(async (request: SetThreadExecutionModeRequest) => {
-    if (controllerRef) {
-      await controllerRef.handleBackendEvent({
+    if (controllerRef.current) {
+      await controllerRef.current.handleBackendEvent({
         backend: request.backend,
         notification: {
           method: "thread/executionMode/updated",
@@ -21841,8 +21838,8 @@ async function createHarness(options?: {
   const setAcpSessionRuntimeOption = vi.fn(
     options?.setAcpSessionRuntimeOption ??
       (async (request: SetAcpSessionRuntimeOptionRequest) => {
-        if (controllerRef) {
-          await controllerRef.handleBackendEvent({
+        if (controllerRef.current) {
+          await controllerRef.current.handleBackendEvent({
             backend: request.backend,
             notification: {
               method: "thread/acpRuntime/updated",
@@ -21887,8 +21884,8 @@ async function createHarness(options?: {
     }),
   );
   const setThreadModelSettings = vi.fn(async (request: SetThreadModelSettingsRequest) => {
-    if (controllerRef) {
-      await controllerRef.handleBackendEvent({
+    if (controllerRef.current) {
+      await controllerRef.current.handleBackendEvent({
         backend: request.backend,
         notification: {
           method: "thread/modelSettings/updated",
@@ -22054,7 +22051,7 @@ async function createHarness(options?: {
     showStreamingOption: options?.showStreamingOption,
     toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
   });
-  controllerRef = controller;
+  controllerRef.current = controller;
 
   return {
     controller,

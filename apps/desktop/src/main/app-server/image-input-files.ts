@@ -161,13 +161,14 @@ function sanitizeImageBasename(
   name: string | undefined,
   extension: string,
 ): string | undefined {
-  const normalized = name
+  const basename = name
     ?.trim()
     .replace(/\\/g, "/")
     .split("/")
-    .pop()
-    ?.replace(/[\u0000-\u001f\u007f]/g, "")
-    .trim();
+    .pop();
+  const normalized = basename
+    ? stripAsciiControlCharacters(basename).trim()
+    : basename;
   if (!normalized) {
     return undefined;
   }
@@ -182,6 +183,17 @@ function sanitizeImageBasename(
   }
 
   return `${stem}.${extension}`;
+}
+
+function stripAsciiControlCharacters(value: string): string {
+  let result = "";
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint > 0x1f && codePoint !== 0x7f) {
+      result += character;
+    }
+  }
+  return result;
 }
 
 function extensionForMimeType(mimeType: "image/jpeg" | "image/png"): "jpg" | "png" {
