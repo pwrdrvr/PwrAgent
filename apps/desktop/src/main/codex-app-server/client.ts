@@ -7461,7 +7461,19 @@ export class CodexAppServerClient {
         thread: EnrichedCodexThread;
       }> => {
         const projectKey = await resolveThreadProjectKey(thread);
-        const enrichment = await this.threadDirectoryEnricher(projectKey);
+        let enrichment: ThreadDirectoryEnrichment;
+        try {
+          enrichment = await this.threadDirectoryEnricher(projectKey);
+        } catch (error) {
+          codexClientLog.warn("thread directory enrichment failed", {
+            threadId: thread.id,
+            projectKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          enrichment = {
+            linkedDirectories: buildProjectKeyLinkedDirectories(projectKey),
+          };
+        }
         const {
           codexThreadSourceKind: _codexThreadSourceKind,
           originator: _originator,

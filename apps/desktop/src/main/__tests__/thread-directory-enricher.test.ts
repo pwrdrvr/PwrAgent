@@ -165,6 +165,104 @@ describe("createThreadDirectoryEnricher", () => {
     });
   });
 
+  it.each([
+    {
+      failure: "cannot execute git",
+      error: Object.assign(new Error("spawn git EACCES"), { code: "EACCES" }),
+    },
+    {
+      failure: "git crashes",
+      error: Object.assign(new Error("git terminated by SIGSEGV"), { signal: "SIGSEGV" }),
+    },
+    {
+      failure: "git times out",
+      error: Object.assign(new Error("git timed out"), { code: "ETIMEDOUT", killed: true }),
+    },
+  ])("preserves a managed worktree identity when $failure", async ({ error }) => {
+    const projectPath = "/Users/vitaliy/.codex/worktrees/a21d/giphy-services";
+    const execFileMock = vi.fn(
+      (
+        _file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: Error | null) => void,
+      ) => callback(error),
+    );
+    vi.doMock("node:fs/promises", () => ({
+      access: vi.fn(async (targetPath: string) => {
+        if (targetPath === path.resolve(projectPath)) {
+          return undefined;
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }),
+      readFile: vi.fn(),
+    }));
+    vi.doMock("node:child_process", () => ({
+      execFile: execFileMock,
+    }));
+
+    const { createThreadDirectoryEnricher } = await import(
+      "../app-server/thread-directory-enricher"
+    );
+    const enricher = createThreadDirectoryEnricher();
+
+    await expect(enricher(projectPath)).resolves.toEqual({
+      linkedDirectories: [
+        {
+          id: expectedDir(projectPath),
+          path: expectedDir(projectPath),
+          worktreePath: expectedDir(projectPath),
+          label: "giphy-services",
+          kind: "worktree",
+        },
+      ],
+    });
+    expect(execFileMock).toHaveBeenCalledWith(
+      "git",
+      expect.arrayContaining(["-C", projectPath]),
+      expect.objectContaining({ timeout: 2_000 }),
+      expect.any(Function),
+    );
+  });
+
+  it("keeps a normal directory usable when git is unavailable", async () => {
+    const projectPath = "/Users/vitaliy/projects/not-a-repository";
+    vi.doMock("node:fs/promises", () => ({
+      access: vi.fn(async (targetPath: string) => {
+        if (targetPath === path.resolve(projectPath)) {
+          return undefined;
+        }
+        throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+      }),
+      readFile: vi.fn(),
+    }));
+    vi.doMock("node:child_process", () => ({
+      execFile: vi.fn(
+        (
+          _file: string,
+          _args: string[],
+          _options: unknown,
+          callback: (error: Error | null) => void,
+        ) => callback(Object.assign(new Error("spawn git EACCES"), { code: "EACCES" })),
+      ),
+    }));
+
+    const { createThreadDirectoryEnricher } = await import(
+      "../app-server/thread-directory-enricher"
+    );
+
+    await expect(createThreadDirectoryEnricher()(projectPath)).resolves.toEqual({
+      linkedDirectories: [
+        {
+          id: expectedDir(projectPath),
+          path: expectedDir(projectPath),
+          label: "not-a-repository",
+          kind: "local",
+        },
+      ],
+    });
+  });
+
   it("returns no linked directories when the anchored path no longer exists", async () => {
     vi.doMock("node:fs/promises", () => ({
       access: vi.fn(async () => {
