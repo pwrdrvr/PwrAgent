@@ -9291,22 +9291,6 @@ textarea,
   fill: currentColor;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .star-map__star {
-    animation: star-map-twinkle 5.5s ease-in-out infinite;
-  }
-}
-
-@keyframes star-map-twinkle {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-
 .star-map__links {
   position: absolute;
   inset: 0;
@@ -9332,30 +9316,6 @@ textarea,
 .star-map__link--dead {
   stroke: var(--border-strong);
   stroke-dasharray: 6 5;
-}
-
-/* Comet dots streaming along healthy arcs. Static under reduced motion
-   (the solid arc already encodes "healthy"). */
-.star-map__link-flow {
-  fill: none;
-  stroke: var(--accent-bright);
-  stroke-width: 2.25;
-  stroke-linecap: round;
-  stroke-dasharray: 1 26;
-  opacity: 0;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .star-map__link-flow {
-    opacity: 0.95;
-    animation: star-map-flow 2.4s linear infinite;
-  }
-}
-
-@keyframes star-map-flow {
-  to {
-    stroke-dashoffset: -27;
-  }
 }
 
 .star-map__anchor {
@@ -10530,6 +10490,12 @@ textarea,
   left: 0;
   top: 0;
   transform-origin: 0 0;
+}
+
+/* Promote the large canvas only for the direct-manipulation window. Keeping
+   the whole off-screen map permanently promoted retains a large compositor
+   surface even while the operator is only reading it. */
+.star-map__viewport.is-panning .star-map__canvas.is-transformed {
   will-change: transform;
 }
 

@@ -292,8 +292,6 @@ export type StarMapStar = {
   y: number;
   radius: number;
   opacity: number;
-  /** Twinkle phase offset in seconds. */
-  twinkleDelay: number;
 };
 
 /**
@@ -318,7 +316,6 @@ export function generateStarField(count: number, seed = 7): StarMapStar[] {
       y: next() * 100,
       radius: 0.5 + brightness * 1.1,
       opacity: 0.25 + brightness * 0.65,
-      twinkleDelay: next() * 6,
     });
   }
   return stars;
