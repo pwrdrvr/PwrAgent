@@ -2264,7 +2264,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         ...(parsed.summary && typeof parsed.summary === "object"
           ? { summary: parsed.summary as NavigationThreadSummary }
           : {}),
-        ...(parsed.pinnedVia === "companion" || parsed.pinnedVia === "explicit"
+        ...(parsed.pinnedVia === "child"
+          || parsed.pinnedVia === "companion"
+          || parsed.pinnedVia === "explicit"
           ? { pinnedVia: parsed.pinnedVia }
           : {}),
         ...(typeof parsed.localPinnedRank === "string" && parsed.localPinnedRank

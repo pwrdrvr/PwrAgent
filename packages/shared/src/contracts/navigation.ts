@@ -79,6 +79,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
      * peer is connected directly or advertised through a gateway relay. */
     capabilities?: FederationCapability[];
     /**
+     * This row was carried into the viewer with a mounted parent rather than
+     * selected by its own viewer-owned pin. Per-row removal is unavailable;
+     * removing the parent removes the derived row with it.
+     */
+    derivedFromMountedParent?: boolean;
+    /**
      * The owning instance's celestial identity icon, resolved from the
      * federation-wide assignment map at stamping time. Absent for peers
      * that haven't been assigned one (e.g. pre-celestial builds) —

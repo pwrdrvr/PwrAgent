@@ -251,6 +251,12 @@ export class RemoteThreadSummaryCache {
       group.push(pin);
       pinsByInstanceId.set(pin.ref.target.instanceId, group);
     }
+    const directPinKeys = new Set(
+      pins.map((pin) =>
+        buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId)
+      ),
+    );
+    const selectedKeys = new Set<string>();
 
     for (const [instanceId, group] of pinsByInstanceId) {
       const peer = connectedByInstanceId.get(instanceId);
@@ -272,7 +278,6 @@ export class RemoteThreadSummaryCache {
           thread,
         ]),
       );
-      const selectedKeys = new Set<string>();
       for (const pin of group) {
         const threadKey = buildThreadIdentityKey(
           pin.ref.backend,
@@ -280,10 +285,12 @@ export class RemoteThreadSummaryCache {
         );
         const servedThread = servedByKey.get(threadKey);
         if (servedThread) {
-          selectedKeys.add(threadKey);
-          threads.push(
-            fetchFailed ? this.dimDegraded(servedThread) : servedThread,
-          );
+          if (!selectedKeys.has(threadKey)) {
+            selectedKeys.add(threadKey);
+            threads.push(
+              fetchFailed ? this.dimDegraded(servedThread) : servedThread,
+            );
+          }
           if (!fetchFailed) {
             refreshed.push({
               ref: pin.ref,
@@ -298,8 +305,10 @@ export class RemoteThreadSummaryCache {
           archived.push(pin.ref);
           continue;
         }
-        threads.push(this.fallbackThread(pin, fetchFailed));
-        selectedKeys.add(threadKey);
+        if (!selectedKeys.has(threadKey)) {
+          threads.push(this.fallbackThread(pin, fetchFailed));
+          selectedKeys.add(threadKey);
+        }
       }
 
       // A mounted remote parent may itself have mounted a child from another
@@ -313,6 +322,15 @@ export class RemoteThreadSummaryCache {
         ),
       );
       for (const candidate of served ?? []) {
+        const candidateFederation = candidate.federation;
+        const candidateOwner = candidateFederation?.ref.target;
+        if (
+          !candidateFederation
+          || candidateOwner?.scope !== "remote"
+          || candidateOwner.instanceId === instanceId
+        ) {
+          continue;
+        }
         const parentThreadId = candidate.parentThreadId?.trim();
         if (!parentThreadId) {
           continue;
@@ -328,11 +346,24 @@ export class RemoteThreadSummaryCache {
           parentThreadId,
         );
         const candidateKey = buildThreadIdentityKey(candidate.source, candidate.id);
-        if (!pinnedParentKeys.has(parentKey) || selectedKeys.has(candidateKey)) {
+        if (
+          !pinnedParentKeys.has(parentKey)
+          || directPinKeys.has(candidateKey)
+          || selectedKeys.has(candidateKey)
+        ) {
           continue;
         }
         selectedKeys.add(candidateKey);
-        threads.push(fetchFailed ? this.dimDegraded(candidate) : candidate);
+        const derivedCandidate = {
+          ...candidate,
+          federation: {
+            ...candidateFederation,
+            derivedFromMountedParent: true,
+          },
+        };
+        threads.push(
+          fetchFailed ? this.dimDegraded(derivedCandidate) : derivedCandidate,
+        );
       }
     }
     return { threads, refreshed, archived };

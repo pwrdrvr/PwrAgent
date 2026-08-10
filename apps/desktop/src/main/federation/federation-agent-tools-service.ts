@@ -71,6 +71,12 @@ type ResolvedInstance = {
   target?: FederationRemoteTarget;
 };
 
+type GroupingParent = {
+  threadId: string;
+  backend: PwrAgentFederationContext["backend"];
+  instanceId: FederationInstanceId;
+};
+
 type FederationAgentThreadStore = RemoteThreadTargetStore & {
   addRemoteThreadPin?: (params: {
     ref: FederatedThreadRef;
@@ -379,19 +385,6 @@ async function createInstanceThread(
   }
   const instance = resolved.instance;
   const groupingMode = args.groupingMode ?? "none";
-  const parentThreadInstanceId = groupingMode === "subthread" && !instance.isLocal
-    ? (await runtime.health()).instanceId
-    : undefined;
-  if (
-    groupingMode === "subthread"
-    && !instance.isLocal
-    && !parentThreadInstanceId
-  ) {
-    return failure(
-      "internal_error",
-      "The local federation instance identity is unavailable, so the cross-instance parent relationship cannot be recorded.",
-    );
-  }
   const backend = backendFor(runtime, instance);
   const snapshot = await backend.getNavigationSnapshot({});
   const directory = snapshot.directories.find(
@@ -403,15 +396,37 @@ async function createInstanceThread(
       `No project with key ${args.projectKey} on ${instance.label}. Use list_instance_projects for the current project list.`,
     );
   }
+  let groupingParent: GroupingParent | undefined;
+  if (groupingMode === "subthread") {
+    const localInstanceId = (await runtime.health()).instanceId;
+    if (!localInstanceId) {
+      return failure(
+        "internal_error",
+        "The local federation instance identity is unavailable, so the cross-instance parent relationship cannot be recorded.",
+      );
+    }
+    const localSnapshot = instance.isLocal
+      ? snapshot
+      : await runtime.localBackend().getNavigationSnapshot({});
+    groupingParent = resolveGroupingParent(
+      localSnapshot,
+      context,
+      localInstanceId,
+    );
+  }
+  const parentThreadInstanceId = groupingParent
+    && groupingParent.instanceId !== instance.instanceId
+    ? groupingParent.instanceId
+    : undefined;
   const draft = buildLaunchpadDraft({ snapshot, directory, args });
   const response = await backend.materializeDirectoryLaunchpad({
     directoryKey: args.projectKey,
     launchpad: draft,
-    ...(groupingMode === "subthread"
+    ...(groupingParent
       ? {
-          parentThreadId: context.threadId,
-          parentThreadBackend: context.backend,
-          ...(!instance.isLocal
+          parentThreadId: groupingParent.threadId,
+          parentThreadBackend: groupingParent.backend,
+          ...(parentThreadInstanceId
             ? { parentThreadInstanceId }
             : {}),
         }
@@ -426,17 +441,11 @@ async function createInstanceThread(
       threadId: response.threadId,
     };
     let mounted = false;
-    if (groupingMode === "subthread") {
-      if (!parentThreadInstanceId) {
-        return failure(
-          "internal_error",
-          "The local federation instance identity is unavailable, so the cross-instance parent relationship cannot be recorded.",
-        );
-      }
+    if (groupingParent) {
       mounted = await rememberRemoteChildPin(targetStore, {
         ...remoteTarget,
-        parentThreadId: context.threadId,
-        parentThreadBackend: context.backend,
+        parentThreadId: groupingParent.threadId,
+        parentThreadBackend: groupingParent.backend,
         parentThreadInstanceId,
         title: directory.label,
       });
@@ -476,8 +485,8 @@ async function createInstanceThread(
     workMode: response.workMode,
     turnId: response.turnId,
     groupingMode,
-    ...(groupingMode === "subthread"
-      ? { groupedUnderThreadId: context.threadId }
+    ...(groupingParent
+      ? { groupedUnderThreadId: groupingParent.threadId }
       : {}),
     threadUrl: buildThreadUrl(threadLinkRef),
     threadLink: buildThreadMarkdownLink({
@@ -688,6 +697,37 @@ function backendFor(
     : runtime.remoteBackend(instance.target);
 }
 
+/**
+ * Navigation groups are one level deep. If the calling thread is already a
+ * child, delegate beneath its existing root so the new thread renders as a
+ * sibling instead of becoming an invisible grandchild. A missing caller row
+ * falls back to the caller itself, matching the renderer when a root is gone.
+ */
+function resolveGroupingParent(
+  snapshot: NavigationSnapshot,
+  context: PwrAgentFederationContext,
+  localInstanceId: FederationInstanceId,
+): GroupingParent {
+  const caller = snapshot.threads.find(
+    (thread) =>
+      thread.source === context.backend
+      && thread.id === context.threadId,
+  );
+  const parentThreadId = caller?.parentThreadId?.trim();
+  if (!caller || !parentThreadId) {
+    return {
+      threadId: context.threadId,
+      backend: context.backend,
+      instanceId: localInstanceId,
+    };
+  }
+  return {
+    threadId: parentThreadId,
+    backend: caller.parentThreadBackend ?? caller.source,
+    instanceId: caller.parentThreadInstanceId ?? localInstanceId,
+  };
+}
+
 function buildLaunchpadDraft(params: {
   snapshot: NavigationSnapshot;
   directory: NavigationSnapshot["directories"][number];
@@ -791,7 +831,7 @@ async function rememberRemoteChildPin(
     threadId: string;
     parentThreadId: string;
     parentThreadBackend: PwrAgentFederationContext["backend"];
-    parentThreadInstanceId: string;
+    parentThreadInstanceId?: string;
     title: string;
   },
 ): Promise<boolean> {
@@ -812,7 +852,9 @@ async function rememberRemoteChildPin(
         inbox: { inInbox: false },
         parentThreadId: params.parentThreadId,
         parentThreadBackend: params.parentThreadBackend,
-        parentThreadInstanceId: params.parentThreadInstanceId,
+        ...(params.parentThreadInstanceId
+          ? { parentThreadInstanceId: params.parentThreadInstanceId }
+          : {}),
       },
     });
     return true;

@@ -713,7 +713,7 @@ describe("federation agent tools service", () => {
     expect(data.groupingMode).toBe("none");
   });
 
-  it("groups and mounts a remotely created child beneath the calling thread", async () => {
+  it("groups and mounts a remote child beneath the caller's group root", async () => {
     const materializeDirectoryLaunchpad = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "remote-child",
@@ -746,6 +746,21 @@ describe("federation agent tools service", () => {
               capabilities: ["thread_navigation", "environment_actions"],
             }],
           }),
+        localBackend: (() => ({
+          getNavigationSnapshot: async () =>
+            buildSnapshot({
+              threads: [{
+                source: "codex",
+                id: "thread-1",
+                title: "Existing child",
+                titleSource: "derived",
+                linkedDirectories: [],
+                inbox: { inInbox: false },
+                parentThreadId: "group-root",
+                parentThreadBackend: "acp:grok",
+              }] as NavigationSnapshot["threads"],
+            }),
+        })) as never,
         remoteBackend: (() => ({
           getNavigationSnapshot: async () =>
             buildSnapshot({
@@ -776,8 +791,8 @@ describe("federation agent tools service", () => {
 
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
-        parentThreadId: "thread-1",
-        parentThreadBackend: "codex",
+        parentThreadId: "group-root",
+        parentThreadBackend: "acp:grok",
         parentThreadInstanceId: "pwr_local",
       }),
     );
@@ -790,8 +805,8 @@ describe("federation agent tools service", () => {
       instanceLabel: "Studio Mac",
       pinnedVia: "child",
       summary: expect.objectContaining({
-        parentThreadId: "thread-1",
-        parentThreadBackend: "codex",
+        parentThreadId: "group-root",
+        parentThreadBackend: "acp:grok",
         parentThreadInstanceId: "pwr_local",
       }),
     }));
@@ -804,7 +819,7 @@ describe("federation agent tools service", () => {
       ok: true,
       data: {
         groupingMode: "subthread",
-        groupedUnderThreadId: "thread-1",
+        groupedUnderThreadId: "group-root",
       },
     });
   });

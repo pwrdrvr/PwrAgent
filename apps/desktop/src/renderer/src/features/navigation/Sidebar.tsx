@@ -1204,7 +1204,9 @@ export function Sidebar(props: SidebarProps) {
       !federationTarget,
   );
   const contextMenuCanRemoveRemotePin = Boolean(
-    contextMenuIsMainWindowRemoteRow && props.onRemoveRemoteThreadPin,
+    contextMenuIsMainWindowRemoteRow
+    && !contextMenu?.thread.federation?.derivedFromMountedParent
+    && props.onRemoveRemoteThreadPin,
   );
   const contextMenuCanRename =
     contextMenu && !contextMenuIsBulk && !contextMenuIsMainWindowRemoteRow
