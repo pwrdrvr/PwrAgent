@@ -2688,10 +2688,13 @@ describe("Sidebar", () => {
     render(
       <Sidebar
         backends={forkBackends}
-        browseMode="recents"
+        // Move Up / Move Down only surface where a pinned section is
+        // rendered, which is the Directories lens.
+        browseMode="directories"
         directories={directories}
         inboxThreads={[pinnedThread]}
         loading={false}
+        selectedItemKey="codex:thread-1"
         threads={[pinnedThread]}
         onArchiveThread={async () => undefined}
         onBrowseModeChange={() => undefined}
@@ -2826,7 +2829,7 @@ describe("Sidebar", () => {
     });
   });
 
-  it("pins from the row menu and renders pinned threads above recents", () => {
+  it("pins from the row menu and leaves pinned threads in sort order", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const pinnedThread = {
       ...updatedSinceSeenThread,
@@ -2857,11 +2860,18 @@ describe("Sidebar", () => {
     const rows = within(browseSection as HTMLElement).getAllByRole("button", {
       name: /Cross-project cleanup|Updated thread/i,
     });
-    expect(rows[0]).toHaveTextContent("Updated thread");
+    // Created is a pure sort order: the pinned thread keeps the position the
+    // caller's ordering gave it instead of floating to a pinned section.
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Cross-project cleanup"),
+      expect.stringContaining("Updated thread"),
+    ]);
     expect(
-      within(threadCard(rows[0]!)).getByRole("button", { name: "Unpin thread" }),
+      within(threadCard(rows[1]!)).getByRole("button", { name: "Unpin thread" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("separator", { name: "Unpinned threads" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("separator", { name: "Unpinned threads" }),
+    ).not.toBeInTheDocument();
 
     const unpinnedRow = within(browseSection as HTMLElement).getByRole("button", {
       name: /Cross-project cleanup/i,
@@ -2897,14 +2907,19 @@ describe("Sidebar", () => {
     render(
       <Sidebar
         backends={backends}
-        browseMode="recents"
+        browseMode="directories"
         createThreadError={undefined}
-        directories={directories}
+        directories={[
+          {
+            ...directories[0]!,
+            threadKeys: ["codex:thread-top", "codex:thread-bottom"],
+          },
+        ]}
         inboxThreads={[]}
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
-        selectedItemKey={undefined}
+        selectedItemKey="codex:thread-top"
         threads={[pinnedTop, pinnedBottom]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -3300,7 +3315,10 @@ describe("Sidebar", () => {
     expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
   });
 
-  it("shows recents drop targets for row edges and the pin divider", () => {
+  it("shows directory drop targets for row edges and the pin divider", () => {
+    // Pin reorder-by-drag lives only where a pinned section is rendered, which
+    // after the Updated/Created lenses became pure sort orders means the
+    // Directories lens alone.
     const pinnedThread = {
       ...updatedSinceSeenThread,
       pinnedRank: "1024",
@@ -3309,9 +3327,14 @@ describe("Sidebar", () => {
     render(
       <Sidebar
         backends={backends}
-        browseMode="recents"
+        browseMode="directories"
         createThreadError={undefined}
-        directories={directories}
+        directories={[
+          {
+            ...directories[0]!,
+            threadKeys: ["codex:thread-1", "codex:thread-updated"],
+          },
+        ]}
         inboxThreads={[sharedThread]}
         launchpadError={undefined}
         loading={false}
@@ -3360,11 +3383,50 @@ describe("Sidebar", () => {
     });
     expect(pinnedRow).not.toHaveClass("is-drop-target-before");
 
-    const divider = screen.getByRole("separator", { name: "Unpinned threads" });
+    const divider = screen.getByRole("button", {
+      name: "Hide directory threads for PwrAgent",
+    });
     fireEvent.dragOver(divider, {
       dataTransfer,
     });
     expect(divider).toHaveClass("is-drop-target");
+  });
+
+  it("renders no pinned section or drag affordance in the Created lens", () => {
+    const pinnedThread = {
+      ...updatedSinceSeenThread,
+      pinnedRank: "1024",
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    expect(
+      screen.queryByRole("separator", { name: /Unpinned threads/ }),
+    ).not.toBeInTheDocument();
+    for (const title of [/Cross-project cleanup/i, /Updated thread/i]) {
+      const shell = screen
+        .getByRole("button", { name: title })
+        .closest(".thread-row-shell");
+      expect(shell).not.toHaveAttribute("draggable", "true");
+    }
   });
 
   it("ignores attempts to drop a thread on another directory pin divider", () => {
@@ -5164,6 +5226,17 @@ describe("Sidebar directory pinning", () => {
 });
 
 describe("Sidebar thread pinning Move items", () => {
+  // Move Up / Move Down only surface in the Directories lens — the only lens
+  // that still renders a pinned section, and therefore the only one where a
+  // reorder visibly moves the row. Updated and Created are pure sort orders.
+  const pinnedThreadsDirectory = (
+    threadKeys: string[],
+  ): NavigationDirectorySummary => ({
+    ...directories[0]!,
+    needsAttentionCount: 0,
+    threadKeys,
+  });
+
   it("moves a pin across backends — pin order is global, not per-backend", async () => {
     // Pin order is global across backends (mirrors directory pinning). The
     // top global pin can Move Down past another backend's pins, producing an
@@ -5195,14 +5268,20 @@ describe("Sidebar thread pinning Move items", () => {
     render(
       <Sidebar
         backends={backends}
-        browseMode="recents"
+        browseMode="directories"
         createThreadError={undefined}
-        directories={[]}
+        directories={[
+          pinnedThreadsDirectory([
+            "codex:codex-top",
+            "acp:grok:grok-middle",
+            "acp:grok:grok-bottom",
+          ]),
+        ]}
         inboxThreads={[]}
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
-        selectedItemKey={undefined}
+        selectedItemKey="codex:codex-top"
         threads={[codexTop, grokMiddle, grokBottom]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -5260,14 +5339,16 @@ describe("Sidebar thread pinning Move items", () => {
     render(
       <Sidebar
         backends={backends}
-        browseMode="recents"
+        browseMode="directories"
         createThreadError={undefined}
-        directories={[]}
+        directories={[
+          pinnedThreadsDirectory(["codex:thread-top", "codex:thread-bottom"]),
+        ]}
         inboxThreads={[]}
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
-        selectedItemKey={undefined}
+        selectedItemKey="codex:thread-top"
         threads={[pinnedTop, pinnedBottom]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}

@@ -181,10 +181,10 @@ The sidebar is a structured queue. It should contain:
 
 Rules:
 
-- Inbox is the default thread lens and should include user-curated Pins at the
-  top of its scrollable list
-- Recents keeps the pinned section but sorts unpinned rows by thread creation
-  time
+- Inbox is the default thread lens, sorted by recent activity
+- Recents sorts by thread creation time
+- Inbox and Recents are pure sort orders: no pinned section, no pinned-first
+  float. Pins float only inside a directory in the Directories lens
 - unread work is a row-local state shown with the orange cookie marker
 - section headers should be quiet, compact, and utility-first
 - rows should carry metadata inline

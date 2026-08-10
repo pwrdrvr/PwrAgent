@@ -193,11 +193,14 @@ accidental.
 
 - Threads are first-class and may exist without a directory.
 - Inbox, Recents, and Directories share the thread lens switch.
-- Inbox is the default browsing lens. Its thread population and ordering match
-  the former Recents behavior: all threads, user-curated Pins at the top, and
-  unpinned threads in recent-activity order.
-- Recents keeps the same pinned section, but unpinned threads sort by thread
-  creation time so active threads do not jump around.
+- Inbox is the default browsing lens: all threads in recent-activity order.
+- Recents shows all threads in thread-creation order so active threads do not
+  jump around.
+- Inbox and Recents are **pure sort orders** — they do not float pinned threads
+  into a section. A pinned thread appears in its natural position by
+  updated/created time. Pin *ordering* (drag, the ⌘⇧↑/↓ shortcut, and the
+  context menu's Move Up / Move Down) is offered only in Directories, the one
+  lens where pin order is visible.
 - Directories keep pinned threads first within each directory, then sort
   unpinned threads by thread creation time.
 - Unread state remains available as the orange cookie marker on thread rows
