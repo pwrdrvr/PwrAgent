@@ -7,6 +7,7 @@ import type {
   FederationInstanceDescriptor,
   FederationInstanceId,
   FederationLoadStatus,
+  FederatedThreadRef,
   FederationRemoteTarget,
   FederationThreadSearchResultSummary,
   ListFederationInstancesResult,
@@ -15,13 +16,16 @@ import type {
   ListInstanceProjectsToolArgs,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
+  NavigationThreadSummary,
   PwrAgentFederationErrorCode,
+  PwrAgentFederationContext,
   PwrAgentFederationResponse,
   SearchFederationThreadsResult,
   SearchFederationThreadsToolArgs,
 } from "@pwragent/shared";
 import {
   FEDERATION_CAPABILITIES,
+  buildFederatedThreadRef,
   buildThreadMarkdownLink,
   buildThreadUrl,
   formatFederationPeerDisplayLabel,
@@ -67,6 +71,15 @@ type ResolvedInstance = {
   target?: FederationRemoteTarget;
 };
 
+type FederationAgentThreadStore = RemoteThreadTargetStore & {
+  addRemoteThreadPin?: (params: {
+    ref: FederatedThreadRef;
+    instanceLabel: string;
+    pinnedVia?: "child";
+    summary?: NavigationThreadSummary;
+  }) => Promise<unknown>;
+};
+
 /**
  * Dispatches the `federation` agent-tool catalog. Lives in federation-land
  * (not `BackendRegistry`) because the runtime already imports the registry —
@@ -85,7 +98,12 @@ export function createFederationAgentToolsHandler(
     runtime?: () => DesktopFederationRuntime;
     collectHostInfo?: () => Promise<FederationHostInfo>;
     collectLoadStatus?: () => Promise<FederationLoadStatus>;
-    targetStore?: RemoteThreadTargetStore;
+    targetStore?: FederationAgentThreadStore;
+    onRemoteChildMounted?: (params: {
+      instanceId: string;
+      backend: CreateInstanceThreadResult["backend"];
+      threadId: string;
+    }) => Promise<void> | void;
   } = {},
 ): PwrAgentFederationHandler {
   const runtime = options.runtime ?? getDesktopFederationRuntime;
@@ -111,8 +129,10 @@ export function createFederationAgentToolsHandler(
         return await createInstanceThread(
           runtime(),
           request.args,
+          request.context,
           collectHostInfo,
           options.targetStore,
+          options.onRemoteChildMounted,
         );
       }
       return await searchFederationThreads(
@@ -344,14 +364,34 @@ async function listInstanceProjects(
 async function createInstanceThread(
   runtime: DesktopFederationRuntime,
   args: CreateInstanceThreadToolArgs,
+  context: PwrAgentFederationContext,
   collectHostInfo: () => Promise<FederationHostInfo>,
-  targetStore: RemoteThreadTargetStore | undefined,
+  targetStore: FederationAgentThreadStore | undefined,
+  onRemoteChildMounted: ((params: {
+    instanceId: string;
+    backend: CreateInstanceThreadResult["backend"];
+    threadId: string;
+  }) => Promise<void> | void) | undefined,
 ): Promise<PwrAgentFederationResponse> {
   const resolved = await resolveInstance(runtime, args.instanceId, collectHostInfo);
   if (!resolved.ok) {
     return resolved.response;
   }
   const instance = resolved.instance;
+  const groupingMode = args.groupingMode ?? "none";
+  const parentThreadInstanceId = groupingMode === "subthread" && !instance.isLocal
+    ? (await runtime.health()).instanceId
+    : undefined;
+  if (
+    groupingMode === "subthread"
+    && !instance.isLocal
+    && !parentThreadInstanceId
+  ) {
+    return failure(
+      "internal_error",
+      "The local federation instance identity is unavailable, so the cross-instance parent relationship cannot be recorded.",
+    );
+  }
   const backend = backendFor(runtime, instance);
   const snapshot = await backend.getNavigationSnapshot({});
   const directory = snapshot.directories.find(
@@ -367,15 +407,59 @@ async function createInstanceThread(
   const response = await backend.materializeDirectoryLaunchpad({
     directoryKey: args.projectKey,
     launchpad: draft,
+    ...(groupingMode === "subthread"
+      ? {
+          parentThreadId: context.threadId,
+          parentThreadBackend: context.backend,
+          ...(!instance.isLocal
+            ? { parentThreadInstanceId }
+            : {}),
+        }
+      : {}),
     ...(args.input ? { input: [{ type: "text", text: args.input }] } : {}),
   });
   if (!instance.isLocal) {
-    await rememberTarget(targetStore, {
+    const remoteTarget = {
       instanceId: instance.instanceId,
       instanceLabel: instance.label,
       backend: response.backend,
       threadId: response.threadId,
-    });
+    };
+    let mounted = false;
+    if (groupingMode === "subthread") {
+      if (!parentThreadInstanceId) {
+        return failure(
+          "internal_error",
+          "The local federation instance identity is unavailable, so the cross-instance parent relationship cannot be recorded.",
+        );
+      }
+      mounted = await rememberRemoteChildPin(targetStore, {
+        ...remoteTarget,
+        parentThreadId: context.threadId,
+        parentThreadBackend: context.backend,
+        parentThreadInstanceId,
+        title: directory.label,
+      });
+    }
+    if (mounted) {
+      try {
+        await onRemoteChildMounted?.({
+          instanceId: remoteTarget.instanceId,
+          backend: remoteTarget.backend,
+          threadId: remoteTarget.threadId,
+        });
+      } catch (error) {
+        log.warn("failed to announce remotely created child mount", {
+          backend: remoteTarget.backend,
+          error: error instanceof Error ? error.message : String(error),
+          instanceId: remoteTarget.instanceId,
+          threadId: remoteTarget.threadId,
+        });
+      }
+    }
+    if (!mounted) {
+      await rememberTarget(targetStore, remoteTarget);
+    }
   }
   const threadLinkRef = {
     threadId: response.threadId,
@@ -391,6 +475,10 @@ async function createInstanceThread(
     executionMode: response.executionMode,
     workMode: response.workMode,
     turnId: response.turnId,
+    groupingMode,
+    ...(groupingMode === "subthread"
+      ? { groupedUnderThreadId: context.threadId }
+      : {}),
     threadUrl: buildThreadUrl(threadLinkRef),
     threadLink: buildThreadMarkdownLink({
       ...threadLinkRef,
@@ -691,5 +779,50 @@ async function rememberTarget(
       instanceId: target.instanceId,
       threadId: target.threadId,
     });
+  }
+}
+
+async function rememberRemoteChildPin(
+  targetStore: FederationAgentThreadStore | undefined,
+  params: {
+    instanceId: string;
+    instanceLabel: string;
+    backend: CreateInstanceThreadResult["backend"];
+    threadId: string;
+    parentThreadId: string;
+    parentThreadBackend: PwrAgentFederationContext["backend"];
+    parentThreadInstanceId: string;
+    title: string;
+  },
+): Promise<boolean> {
+  if (!targetStore?.addRemoteThreadPin) {
+    return false;
+  }
+  try {
+    await targetStore.addRemoteThreadPin({
+      ref: buildFederatedThreadRef(params),
+      instanceLabel: params.instanceLabel,
+      pinnedVia: "child",
+      summary: {
+        source: params.backend,
+        id: params.threadId,
+        title: params.title,
+        titleSource: "fallback",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+        parentThreadId: params.parentThreadId,
+        parentThreadBackend: params.parentThreadBackend,
+        parentThreadInstanceId: params.parentThreadInstanceId,
+      },
+    });
+    return true;
+  } catch (error) {
+    log.warn("failed to mount remotely created child thread", {
+      backend: params.backend,
+      error: error instanceof Error ? error.message : String(error),
+      instanceId: params.instanceId,
+      threadId: params.threadId,
+    });
+    return false;
   }
 }

@@ -1556,19 +1556,40 @@ export class DesktopFederationRuntime {
     );
     const peerStatus = visiblePeer?.status ?? peer?.status;
     const threads = response.threads.map((thread) => {
+      const existingOwner = thread.federation?.ref.target;
+      const ownerInstanceId = existingOwner
+        && isRemoteFederationTarget(existingOwner)
+        ? existingOwner.instanceId
+        : target.instanceId;
+      const ownerVisiblePeer = visible.find(
+        (candidate) => candidate.id === ownerInstanceId,
+      );
+      const ownerPeer =
+        ownerVisiblePeer ?? this.store().getPeer(ownerInstanceId);
+      const ownerLabel = ownerInstanceId === target.instanceId
+        ? instanceLabel
+        : ownerPeer
+          ? formatFederationPeerDisplayLabel(ownerPeer, visible)
+          : thread.federation?.instanceLabel ?? ownerInstanceId;
       const ref = buildFederatedThreadRef({
         backend: thread.source,
-        instanceId: target.instanceId,
+        instanceId: ownerInstanceId,
         threadId: thread.id,
       });
       return {
         ...thread,
         federation: {
           ref,
-          instanceLabel,
-          peerStatus,
-          capabilities,
-          celestialIcon: visiblePeer?.celestialIcon,
+          instanceLabel: ownerLabel,
+          peerStatus:
+            ownerInstanceId === target.instanceId
+              ? peerStatus
+              : ownerVisiblePeer?.status ?? ownerPeer?.status,
+          capabilities:
+            ownerInstanceId === target.instanceId
+              ? capabilities
+              : this.viewerCapabilitiesFor(ownerInstanceId, ownerVisiblePeer),
+          celestialIcon: ownerVisiblePeer?.celestialIcon,
         },
       };
     });

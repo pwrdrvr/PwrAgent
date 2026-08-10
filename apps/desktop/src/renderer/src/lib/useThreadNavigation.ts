@@ -790,6 +790,7 @@ function threadSummariesEqual(
     left.pinnedRank === right.pinnedRank &&
     left.parentThreadId === right.parentThreadId &&
     left.parentThreadBackend === right.parentThreadBackend &&
+    left.parentThreadInstanceId === right.parentThreadInstanceId &&
     JSON.stringify(left.subthreadOrder ?? []) ===
       JSON.stringify(right.subthreadOrder ?? []) &&
     left.subthreadsCollapsed === right.subthreadsCollapsed &&
@@ -1096,6 +1097,7 @@ function updateThreadParentInSnapshot(
     threadId: string;
     parentThreadId?: string;
     parentThreadBackend?: AppServerBackendKind;
+    parentThreadInstanceId?: string;
   },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
@@ -1110,6 +1112,7 @@ function updateThreadParentInSnapshot(
     if (
       thread.parentThreadId === params.parentThreadId
       && thread.parentThreadBackend === params.parentThreadBackend
+      && thread.parentThreadInstanceId === params.parentThreadInstanceId
     ) {
       return thread;
     }
@@ -1119,6 +1122,9 @@ function updateThreadParentInSnapshot(
       parentThreadId: params.parentThreadId,
       parentThreadBackend: params.parentThreadId
         ? params.parentThreadBackend ?? params.backend
+        : undefined,
+      parentThreadInstanceId: params.parentThreadId
+        ? params.parentThreadInstanceId
         : undefined,
       pinnedRank: params.parentThreadId ? undefined : thread.pinnedRank,
     };
@@ -1158,6 +1164,7 @@ function ungroupChildThreadsInSnapshot(
       ...thread,
       parentThreadId: undefined,
       parentThreadBackend: undefined,
+      parentThreadInstanceId: undefined,
     };
   });
 
@@ -4135,10 +4142,16 @@ export function useThreadNavigation(
       }
 
       if (method === "thread/parent/set") {
-        const { threadId, parentThreadId, parentThreadBackend } = event.notification.params as {
+        const {
+          threadId,
+          parentThreadId,
+          parentThreadBackend,
+          parentThreadInstanceId,
+        } = event.notification.params as {
           threadId: string;
           parentThreadId: string;
           parentThreadBackend?: AppServerBackendKind;
+          parentThreadInstanceId?: string;
         };
         setState((current) => ({
           ...current,
@@ -4147,6 +4160,7 @@ export function useThreadNavigation(
             threadId,
             parentThreadId,
             parentThreadBackend,
+            parentThreadInstanceId,
           }),
         }));
         scheduleRefresh();

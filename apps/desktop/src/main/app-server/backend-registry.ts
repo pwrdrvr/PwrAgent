@@ -10633,6 +10633,7 @@ export class DesktopBackendRegistry {
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
     parentThreadId?: string;
     parentThreadBackend?: AppServerBackendKind;
+    parentThreadInstanceId?: string;
     prAutoDispatchEnabled?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
@@ -10648,6 +10649,7 @@ export class DesktopBackendRegistry {
       requiredWorkMode,
       parentThreadId,
       parentThreadBackend,
+      parentThreadInstanceId,
       prAutoDispatchEnabled,
       mcpConnectionIds,
       ...request
@@ -11010,6 +11012,7 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         parentThreadId,
         parentThreadBackend,
+        parentThreadInstanceId,
       });
       await this.emit({
         backend,
@@ -11019,6 +11022,7 @@ export class DesktopBackendRegistry {
             threadId: result.threadId,
             parentThreadId,
             parentThreadBackend,
+            parentThreadInstanceId,
           },
         },
       });
@@ -11324,6 +11328,7 @@ export class DesktopBackendRegistry {
           threadId: result.threadId,
           parentThreadId: request.parentThreadId,
           parentThreadBackend: request.parentThreadBackend,
+          parentThreadInstanceId: request.parentThreadInstanceId,
         });
         await this.emit({
           backend,
@@ -11333,6 +11338,7 @@ export class DesktopBackendRegistry {
               threadId: result.threadId,
               parentThreadId: request.parentThreadId,
               parentThreadBackend: request.parentThreadBackend,
+              parentThreadInstanceId: request.parentThreadInstanceId,
             },
           },
         });
@@ -16597,6 +16603,8 @@ export class DesktopBackendRegistry {
       parentThreadId: request.parentThreadId ?? launchpad.parentThreadId,
       parentThreadBackend:
         request.parentThreadBackend ?? launchpad.parentThreadBackend,
+      parentThreadInstanceId:
+        request.parentThreadInstanceId ?? launchpad.parentThreadInstanceId,
     });
     const linkedDirectory = linkedDirectories?.[0];
     if (linkedDirectory) {

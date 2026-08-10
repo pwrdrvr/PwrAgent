@@ -1682,6 +1682,7 @@ export type AppServerNotification =
         threadId: string;
         parentThreadId: string;
         parentThreadBackend?: AppServerBackendKind;
+        parentThreadInstanceId?: string;
       };
     }
   | {

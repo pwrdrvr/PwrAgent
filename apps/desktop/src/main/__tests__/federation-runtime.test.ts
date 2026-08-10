@@ -15,6 +15,7 @@ import type {
 import {
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
+  buildFederatedThreadRef,
   findPreferredReviewWorkspaceCwd,
 } from "@pwragent/shared";
 import {
@@ -342,6 +343,83 @@ describe("DesktopFederationRuntime", () => {
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
       pwrAgentWorktree,
     );
+  });
+
+  it("preserves a transitive child's true federation owner", async () => {
+    const response = {
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [{
+        id: "child",
+        title: "Remote child",
+        titleSource: "derived" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+        parentThreadId: "parent",
+        parentThreadBackend: "codex" as const,
+        parentThreadInstanceId: "parent-peer",
+        federation: {
+          ref: buildFederatedThreadRef({
+            backend: "codex",
+            instanceId: "child-peer",
+            threadId: "child",
+          }),
+          instanceLabel: "Child Mac",
+        },
+      }],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    } as NavigationSnapshot;
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.remoteBackend = () => ({
+      getNavigationSnapshot: async () => response,
+      listThreads: async () => ({ backend: "codex", fetchedAt: 1_000, threads: [] }),
+    });
+    runtime.store = () => ({
+      getPeer: (instanceId: string) => ({
+        label: instanceId === "child-peer" ? "Child Mac" : "Parent Mac",
+        status: "connected",
+      }),
+      listPeers: () => [],
+    });
+    runtime.visiblePeers = () => [
+      {
+        id: "parent-peer",
+        label: "Parent Mac",
+        role: "client",
+        status: "connected",
+        capabilities: ["thread_navigation"],
+      },
+      {
+        id: "child-peer",
+        label: "Child Mac",
+        role: "client",
+        status: "connected",
+        capabilities: ["thread_navigation", "remote_pty"],
+      },
+    ];
+
+    const snapshot = await runtime.remoteNavigationSnapshot(
+      { scope: "remote", instanceId: "parent-peer" },
+      {},
+    );
+
+    expect(snapshot.threads[0]).toMatchObject({
+      parentThreadInstanceId: "parent-peer",
+      federation: {
+        instanceLabel: "Child Mac",
+        capabilities: ["thread_navigation", "remote_pty"],
+        ref: {
+          target: { scope: "remote", instanceId: "child-peer" },
+        },
+      },
+    });
   });
 
   it("records gateway-advertised peers for client instance health and opening", () => {

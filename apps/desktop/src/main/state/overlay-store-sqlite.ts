@@ -2572,6 +2572,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threadId: string;
     parentThreadId?: string | null;
     parentThreadBackend?: ThreadOverlayState["backend"] | null;
+    parentThreadInstanceId?: string | null;
   }): Promise<ThreadOverlayState> {
     if (
       params.parentThreadId === params.threadId
@@ -2590,14 +2591,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const parentThreadBackend = parentThreadId
       ? params.parentThreadBackend ?? params.backend
       : undefined;
+    const parentThreadInstanceId = parentThreadId
+      ? params.parentThreadInstanceId?.trim() || undefined
+      : undefined;
     const nextState: ThreadOverlayState = {
       ...current,
       parentThreadId: parentThreadId || undefined,
       parentThreadBackend,
+      parentThreadInstanceId,
       pinnedRank: parentThreadId ? undefined : current.pinnedRank,
     };
     this.putThread(threadKey, nextState);
-    if (parentThreadId) {
+    if (parentThreadId && !parentThreadInstanceId) {
       const parentKey = buildThreadIdentityKey(parentThreadBackend!, parentThreadId);
       const parent = this.getThread(parentKey) ?? {
         backend: parentThreadBackend!,

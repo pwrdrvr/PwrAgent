@@ -92,6 +92,7 @@ const federationMock = vi.hoisted(() => {
     remoteBackend,
     remoteThreadSummaries,
     runtime: {
+      health: vi.fn(async () => ({ instanceId: "pwr_local" })),
       hydrateThreadMessageOrigins: vi.fn(async (response) => response),
       remoteBackend: vi.fn(() => remoteBackend),
       remoteTargetSupportsCapability: vi.fn(() => true),
@@ -2681,6 +2682,7 @@ describe("app server ipc", () => {
         title: "Fix PwrSnap controls",
         titleSource: "explicit" as const,
         parentThreadId: "parent-1",
+        parentThreadInstanceId: "peer-parent",
         linkedDirectories: [],
         inbox: { inInbox: false },
       },
@@ -2694,11 +2696,18 @@ describe("app server ipc", () => {
     expect(addRemoteThreadPinStore.mock.calls[1][0]).toMatchObject({
       ref: buildFederatedThreadRef({
         backend: "codex",
-        instanceId: "peer-laptop",
+        instanceId: "peer-parent",
         threadId: "parent-1",
       }),
       summary: parentSummary,
       pinnedVia: "companion",
+    });
+    expect(
+      federationMock.remoteThreadSummaries.threadFromPeer,
+    ).toHaveBeenCalledWith({
+      target: { scope: "remote", instanceId: "peer-parent" },
+      backend: "codex",
+      threadId: "parent-1",
     });
   });
 

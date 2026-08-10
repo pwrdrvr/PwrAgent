@@ -1,4 +1,11 @@
 {
+  "federated-child-mount": {
+    "commits": 2,
+    "note": "persist one cross-instance child mount and its routing target",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 2
+  },
   "idle-hour-runtime-leases": {
     "commits": 0,
     "note": "one idle hour: PID-owned messaging and federation leases",

@@ -6,6 +6,7 @@ import type {
   AppServerThreadReplay,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
+import { buildFederatedThreadRef } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
@@ -674,6 +675,37 @@ describe("sqlite write metrics", () => {
     expectSqliteWriteBudget({
       note: "one idle hour: PID-owned messaging and federation leases",
       scenario: "idle-hour-runtime-leases",
+      writes,
+    });
+  });
+
+  it("holds a federated child mount to its write budget", async () => {
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.addRemoteThreadPin({
+        ref: buildFederatedThreadRef({
+          backend: "codex",
+          instanceId: "pwr_child",
+          threadId: "thread-child",
+        }),
+        instanceLabel: "Child Mac",
+        pinnedVia: "child",
+        summary: {
+          source: "codex",
+          id: "thread-child",
+          title: "Remote child",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          parentThreadId: "thread-parent",
+          parentThreadBackend: "codex",
+          parentThreadInstanceId: "pwr_parent",
+        },
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note: "persist one cross-instance child mount and its routing target",
+      scenario: "federated-child-mount",
       writes,
     });
   });

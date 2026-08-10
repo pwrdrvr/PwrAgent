@@ -427,6 +427,42 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(resolved.refreshed[0].summary.title).toBe("Fresh title");
   });
 
+  it("carries a transitive remote child with its mounted parent", async () => {
+    const parent = stampedThread({
+      instanceId: "peer-a",
+      threadId: "parent",
+      title: "Parent",
+    });
+    const child = stampedThread({
+      instanceId: "peer-b",
+      threadId: "child",
+      title: "Child",
+    });
+    child.parentThreadId = "parent";
+    child.parentThreadBackend = "codex";
+    child.parentThreadInstanceId = "peer-a";
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([parent, child]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+    });
+    const pins = [pin({ instanceId: "peer-a", threadId: "parent" })];
+
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    const resolved = await cache.resolvePinnedThreads(pins);
+
+    expect(resolved.threads.map((thread) => thread.id)).toEqual([
+      "parent",
+      "child",
+    ]);
+    expect(resolved.threads[1].federation?.ref.target).toEqual({
+      scope: "remote",
+      instanceId: "peer-b",
+    });
+  });
+
   it("returns promptly with cached rows while a peer fetch hangs", async () => {
     let now = 0;
     let hang = false;

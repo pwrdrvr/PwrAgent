@@ -272,6 +272,7 @@ export class RemoteThreadSummaryCache {
           thread,
         ]),
       );
+      const selectedKeys = new Set<string>();
       for (const pin of group) {
         const threadKey = buildThreadIdentityKey(
           pin.ref.backend,
@@ -279,6 +280,7 @@ export class RemoteThreadSummaryCache {
         );
         const servedThread = servedByKey.get(threadKey);
         if (servedThread) {
+          selectedKeys.add(threadKey);
           threads.push(
             fetchFailed ? this.dimDegraded(servedThread) : servedThread,
           );
@@ -297,6 +299,40 @@ export class RemoteThreadSummaryCache {
           continue;
         }
         threads.push(this.fallbackThread(pin, fetchFailed));
+        selectedKeys.add(threadKey);
+      }
+
+      // A mounted remote parent may itself have mounted a child from another
+      // instance. Carry direct children with the pinned parent so a third
+      // viewer sees the same nested tree instead of an orphaned parent row.
+      // The child's existing federation stamp identifies its true owner and
+      // is preserved by DesktopFederationRuntime when snapshots relay.
+      const pinnedParentKeys = new Set(
+        group.map((pin) =>
+          buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId)
+        ),
+      );
+      for (const candidate of served ?? []) {
+        const parentThreadId = candidate.parentThreadId?.trim();
+        if (!parentThreadId) {
+          continue;
+        }
+        if (
+          candidate.parentThreadInstanceId
+          && candidate.parentThreadInstanceId !== instanceId
+        ) {
+          continue;
+        }
+        const parentKey = buildThreadIdentityKey(
+          candidate.parentThreadBackend ?? candidate.source,
+          parentThreadId,
+        );
+        const candidateKey = buildThreadIdentityKey(candidate.source, candidate.id);
+        if (!pinnedParentKeys.has(parentKey) || selectedKeys.has(candidateKey)) {
+          continue;
+        }
+        selectedKeys.add(candidateKey);
+        threads.push(fetchFailed ? this.dimDegraded(candidate) : candidate);
       }
     }
     return { threads, refreshed, archived };

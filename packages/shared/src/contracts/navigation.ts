@@ -29,6 +29,7 @@ import type { CelestialIconId } from "./celestial";
 import type {
   FederatedThreadRef,
   FederationCapability,
+  FederationInstanceId,
   FederationPeerSummary,
   FederationTarget,
 } from "./federation";
@@ -113,6 +114,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   parentThreadId?: ThreadIdentifier;
   /** Provider that owns `parentThreadId`; defaults to this thread's provider. */
   parentThreadBackend?: AppServerBackendKind;
+  /** Federation instance that owns the parent when it differs from this thread's owner. */
+  parentThreadInstanceId?: FederationInstanceId;
   /**
    * Set only when this thread inherited copied context by forking another
    * thread. Renderer surfaces use this to distinguish fork baseline history
@@ -693,6 +696,7 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   branchName?: string;
   parentThreadId?: string;
   parentThreadBackend?: AppServerBackendKind;
+  parentThreadInstanceId?: FederationInstanceId;
   parentThreadTitle?: string;
   /**
    * The thread card this launchpad was spawned from. May differ from
@@ -1316,11 +1320,11 @@ export type RemoteThreadPin = {
   /** Last successfully fetched summary (unstamped), for offline rendering. */
   summary?: NavigationThreadSummary;
   /**
-   * How this pin came to exist. "companion" marks a parent pulled in
-   * automatically when one of its sub-threads was pinned, so future UX can
-   * treat it differently (e.g. offer group removal). Absent = explicit.
+   * How this pin came to exist. "companion" marks a parent pulled in when one
+   * of its sub-threads was pinned; "child" marks a cross-instance child mounted
+   * by create_instance_thread. Absent = explicit.
    */
-  pinnedVia?: "explicit" | "companion";
+  pinnedVia?: "explicit" | "companion" | "child";
   /**
    * VIEWER-owned rank in the local pinned section. Completely independent
    * of the owner's own pinnedRank (which never crosses into the viewer's
@@ -1420,6 +1424,7 @@ export type SetThreadParentRequest = {
   threadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier | null;
   parentThreadBackend?: AppServerBackendKind | null;
+  parentThreadInstanceId?: FederationInstanceId | null;
 };
 
 export type SetThreadParentResponse = {
@@ -1427,6 +1432,7 @@ export type SetThreadParentResponse = {
   threadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier;
   parentThreadBackend?: AppServerBackendKind;
+  parentThreadInstanceId?: FederationInstanceId;
 };
 
 export type UpdateSubthreadOrderRequest = {
@@ -1767,6 +1773,8 @@ export type ThreadOverlayState = {
   parentThreadId?: ThreadIdentifier;
   /** Provider that owns `parentThreadId`; defaults to this thread's provider. */
   parentThreadBackend?: AppServerBackendKind;
+  /** Federation instance that owns the parent when it differs from this thread's owner. */
+  parentThreadInstanceId?: FederationInstanceId;
   /**
    * Set only when this thread was created by forking another thread
    * (`thread/fork`). Records the source thread the fork inherited its context
