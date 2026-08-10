@@ -3010,6 +3010,161 @@ describe("AcpBackendAdapter", () => {
     }
   });
 
+  it("keeps a stale client alive until its active turn finishes", async () => {
+    const backendId = "acp:gemini" as AcpBackendId;
+    const firstAgent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      version: "1.0.0",
+      activeCommand: "/path/gemini",
+      launchDescriptor: {
+        backendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: "/path/gemini",
+        args: ["--acp", "--skip-trust"],
+        env: {},
+      },
+    };
+    const overrideAgent: AcpInstalledAgentRecord = {
+      ...firstAgent,
+      activeCommand: "/override/gemini",
+      launchDescriptor: {
+        ...firstAgent.launchDescriptor!,
+        command: "/override/gemini",
+      },
+    };
+    let discovered = firstAgent;
+    let active = true;
+    const firstDispose = vi.fn(async () => undefined);
+    const secondDispose = vi.fn(async () => undefined);
+    const firstClient = {
+      dispose: firstDispose,
+      hasActiveTurns: () => active,
+      initialize: vi.fn(async () => undefined),
+    };
+    const secondClient = {
+      dispose: secondDispose,
+      hasActiveTurns: () => false,
+      initialize: vi.fn(async () => undefined),
+    };
+    const createAcpClient = vi
+      .fn()
+      .mockReturnValueOnce(firstClient)
+      .mockReturnValueOnce(secondClient);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => firstAgent,
+        listInstalledAgents: () => [firstAgent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: createAcpClient as never,
+      discoverLocalAcpAgents: async () => [discovered],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
+    discovered = overrideAgent;
+    adapter.invalidateLocalAgentDiscovery();
+
+    await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
+    expect(firstDispose).not.toHaveBeenCalled();
+    expect(createAcpClient).toHaveBeenCalledOnce();
+
+    active = false;
+    await expect(adapter.getClient(backendId)).resolves.toBe(secondClient);
+    expect(firstDispose).toHaveBeenCalledOnce();
+    expect(createAcpClient).toHaveBeenCalledTimes(2);
+
+    await adapter.close();
+    expect(secondDispose).toHaveBeenCalledOnce();
+  });
+
+  it("merges discovery with agent metadata written while discovery was pending", async () => {
+    const backendId = "acp:gemini" as AcpBackendId;
+    const launchDescriptor = {
+      backendId,
+      registryId: "gemini",
+      distributionKind: "local" as const,
+      command: "/path/gemini",
+      args: ["--acp", "--skip-trust"],
+      env: {},
+    };
+    const discovered: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      version: "1.0.0",
+      activeCommand: launchDescriptor.command,
+      launchDescriptor,
+      updatedAt: 2000,
+    };
+    let cached: AcpInstalledAgentRecord = {
+      ...discovered,
+      updatedAt: 1000,
+    };
+    let finishDiscovery:
+      | ((agents: AcpInstalledAgentRecord[]) => void)
+      | undefined;
+    const upsertInstalledAgent = vi.fn((record: AcpInstalledAgentRecord) => {
+      cached = record;
+    });
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => cached,
+        listInstalledAgents: () => [cached],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      discoverLocalAcpAgents: () =>
+        new Promise((resolve) => {
+          finishDiscovery = resolve;
+        }),
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const listing = adapter.listAvailableAgents();
+    await vi.waitFor(() => expect(finishDiscovery).toBeDefined());
+    cached = {
+      ...cached,
+      updatedAt: 4000,
+      lastDiscoveredAt: 4000,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        checkedAt: 4000,
+        models: {
+          currentModelId: "gemini-2.5-pro",
+          availableModels: [
+            { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+          ],
+        },
+      },
+      update: {
+        status: "up-to-date",
+        checkedAt: 4000,
+        currentVersion: "1.0.0",
+      },
+      updateCommand: launchDescriptor.command,
+    };
+    finishDiscovery?.([discovered]);
+
+    await expect(listing).resolves.toEqual([
+      expect.objectContaining({
+        updatedAt: 4000,
+        lastDiscoveredAt: 4000,
+        runtimeCapabilities: cached.runtimeCapabilities,
+        update: cached.update,
+        updateCommand: launchDescriptor.command,
+      }),
+    ]);
+    expect(upsertInstalledAgent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ updatedAt: 2000 }),
+    );
+
+    await adapter.close();
+  });
+
   it("replaces a cached Kimi model catalog with a legacy-CLI diagnostic", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const cached: AcpInstalledAgentRecord = {

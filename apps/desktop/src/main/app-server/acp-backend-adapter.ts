@@ -128,6 +128,7 @@ export type AcpRuntimeClient = Pick<
     Pick<
       AcpAgentClient,
       | "didSessionLoadReplayHistory"
+      | "hasActiveTurns"
       | "readProviderStatus"
       | "sendControlPrompt"
       | "setRuntimeOption"
@@ -146,6 +147,7 @@ export type AcpSessionStoreLike =
 
 type AcpClientEntry = {
   client: AcpRuntimeClient;
+  launchIdentity: string;
   promise: Promise<AcpRuntimeClient>;
   disposePromise?: Promise<void>;
 };
@@ -399,12 +401,23 @@ function normalizeInstalledAcpAgent(
     : { ...agent, runtimeCapabilities };
 }
 
-function isLegacyKimiInstalledRecord(agent: AcpInstalledAgentRecord): boolean {
-  if (agent.registryId !== "kimi") {
-    return false;
-  }
-  const major = Number.parseInt(agent.version?.split(".")[0] ?? "", 10);
-  return Number.isFinite(major) && major >= 1;
+function acpAgentLaunchIdentity(agent: AcpInstalledAgentRecord): string {
+  const descriptor = agent.launchDescriptor;
+  return JSON.stringify({
+    activeCommand: agent.activeCommand,
+    launchDescriptor: descriptor
+      ? {
+          backendId: descriptor.backendId,
+          registryId: descriptor.registryId,
+          distributionKind: descriptor.distributionKind,
+          command: descriptor.command,
+          args: descriptor.args,
+          env: Object.fromEntries(Object.entries(descriptor.env).sort()),
+          cwd: descriptor.cwd,
+          installPath: descriptor.installPath,
+        }
+      : undefined,
+  });
 }
 
 function effectiveAcpAgentCapabilities(
@@ -927,6 +940,10 @@ export class AcpBackendAdapter {
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
   private readonly acpClients = new Map<AcpBackendId, AcpClientEntry>();
+  private readonly acpClientResolutions = new Map<
+    AcpBackendId,
+    Promise<AcpRuntimeClient>
+  >();
   private readonly liveNotificationFingerprints = new Map<string, string>();
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
@@ -1367,18 +1384,50 @@ export class AcpBackendAdapter {
     if (this.closed) {
       throw new Error("ACP backend adapter is closed");
     }
-    const cached = this.acpClients.get(backend);
-    if (cached) {
-      return await cached.promise;
+    const resolving = this.acpClientResolutions.get(backend);
+    if (resolving) {
+      return await resolving;
     }
 
+    const resolution = this.resolveClient(backend);
+    this.acpClientResolutions.set(backend, resolution);
+    try {
+      return await resolution;
+    } finally {
+      if (this.acpClientResolutions.get(backend) === resolution) {
+        this.acpClientResolutions.delete(backend);
+      }
+    }
+  }
+
+  private async resolveClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
     const agent = await this.resolveInstalledAgent(backend);
     if (this.closed) {
       throw new Error("ACP backend adapter is closed");
     }
+    const launchIdentity = acpAgentLaunchIdentity(agent);
+    const cached = this.acpClients.get(backend);
+    if (cached?.launchIdentity === launchIdentity) {
+      return await cached.promise;
+    }
+    if (cached) {
+      // One ACP client owns every live turn for this backend. Keep routing
+      // control and session operations to that process until its last turn
+      // reaches a terminal state; the next idle lookup adopts the new path.
+      if (cached.client.hasActiveTurns?.() === true) {
+        return await cached.promise;
+      }
+      this.acpClients.delete(backend);
+      await this.disposeAcpClient(cached);
+      if (this.closed) {
+        throw new Error("ACP backend adapter is closed");
+      }
+    }
+
     const client = this.createAcpClient(agent);
     const entry: AcpClientEntry = {
       client,
+      launchIdentity,
       promise: Promise.resolve(client),
     };
     entry.promise = (async () => {
@@ -1626,28 +1675,33 @@ export class AcpBackendAdapter {
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
+    const discoveredAgents = (await this.readLocalAgentsOnce())
+      .map(normalizeInstalledAcpAgent)
+      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
+    // Discovery probes are asynchronous and can overlap runtime-capability or
+    // update-check writes. Read the durable cache only after discovery, then
+    // merge and persist synchronously so those newer fields cannot be rolled
+    // back by a snapshot captured before the probe started.
     const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? [])
       .map(normalizeInstalledAcpAgent)
       .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
     const installedByBackendId = new Map(
       installedAgents.map((agent) => [agent.backendId, agent]),
     );
-    const discoveredAgents = (await this.readLocalAgentsOnce())
-      .map(normalizeInstalledAcpAgent)
-      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
-    const effectiveDiscoveredAgents = discoveredAgents.flatMap((agent) => {
+    const effectiveDiscoveredAgents = discoveredAgents.map((agent) => {
       const cached = installedByBackendId.get(agent.backendId);
-      if (cached && !isLegacyKimiInstalledRecord(cached)) {
-        return [];
-      }
       const sameRuntime =
         agent.installStatus === "installed"
         && cached?.installStatus === "installed"
         && cached.version === agent.version
-        && cached.activeCommand === agent.activeCommand;
-      return [{
+        && acpAgentLaunchIdentity(cached) === acpAgentLaunchIdentity(agent);
+      return {
         ...agent,
         installedAt: cached?.installedAt ?? agent.installedAt,
+        updatedAt:
+          sameRuntime && cached
+            ? Math.max(agent.updatedAt, cached.updatedAt)
+            : agent.updatedAt,
         ...(sameRuntime && cached?.runtimeCapabilities
           ? { runtimeCapabilities: cached.runtimeCapabilities }
           : {}),
@@ -1657,14 +1711,21 @@ export class AcpBackendAdapter {
         ...(sameRuntime && cached?.lastDiscoveryError !== undefined
           ? { lastDiscoveryError: cached.lastDiscoveryError }
           : {}),
-      }];
+        ...(sameRuntime && cached?.update !== undefined
+          ? { update: cached.update }
+          : {}),
+        ...(sameRuntime && cached?.updateCommand !== undefined
+          ? { updateCommand: cached.updateCommand }
+          : {}),
+      };
     });
     for (const agent of effectiveDiscoveredAgents) {
-      // A known legacy Kimi cache must never outrank fresh local discovery: it
-      // may now resolve to the supported side-by-side install, or to a durable
-      // non-launchable compatibility diagnostic. Other cached providers retain
-      // the existing cache-first behavior.
-      this.acpAgentStore?.upsertInstalledAgent(agent);
+      const cached = installedByBackendId.get(agent.backendId);
+      if (!cached || JSON.stringify(cached) !== JSON.stringify(agent)) {
+        // Fresh discovery owns launch selection. The durable record is a cache
+        // of that result, never an authority that can suppress a new override.
+        this.acpAgentStore?.upsertInstalledAgent(agent);
+      }
     }
     const discoveredBackendIds = new Set(
       effectiveDiscoveredAgents.map((agent) => agent.backendId),
@@ -1684,6 +1745,7 @@ export class AcpBackendAdapter {
     this.closed = true;
     const acpClients = [...this.acpClients.entries()];
     this.acpClients.clear();
+    this.acpClientResolutions.clear();
     this.liveNotificationFingerprints.clear();
     this.providerStatuses.clear();
     this.providerStatusRefreshAttempts.clear();
