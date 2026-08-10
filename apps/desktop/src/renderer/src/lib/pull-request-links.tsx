@@ -38,6 +38,13 @@ function samePullRequestChip(
     && left.lifecycleState === right.lifecycleState
     && left.reviewState === right.reviewState
     && left.mergeState === right.mergeState
+    && left.additions === right.additions
+    && left.deletions === right.deletions
+    && left.changedFiles === right.changedFiles
+    && left.commitCount === right.commitCount
+    && left.createdAt === right.createdAt
+    && left.mergedAt === right.mergedAt
+    && left.closedAt === right.closedAt
     && left.url === right.url,
   );
 }

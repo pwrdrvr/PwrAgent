@@ -370,6 +370,51 @@ describe("pull request links in transcript markdown", () => {
     expect(screen.getByText("Draft PR:").parentElement).toBe(markdownNode);
   });
 
+  it("updates a visible tooltip when only structured card metadata changes", () => {
+    const text = `Draft PR: [Giphy/giphy-services#13290](${PR_URL})`;
+    const initialPr = prSummary({
+      additions: 10,
+      deletions: 5,
+      changedFiles: 2,
+      commitCount: 1,
+      createdAt: Date.now() - (2 * 60 * 60 * 1000),
+    });
+    const { rerender } = renderWithPullRequests(text, [initialPr]);
+
+    const markdownNode = screen.getByText("Draft PR:").parentElement;
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: /draft · checks pending/ }),
+    );
+    expect(screen.getByRole("tooltip")).toHaveTextContent("+10");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("2 files");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("1 commit");
+
+    rerender(
+      <PullRequestLinkProvider
+        threads={[
+          threadSummary([
+            {
+              ...initialPr,
+              additions: 25,
+              deletions: 9,
+              changedFiles: 4,
+              commitCount: 3,
+              createdAt: Date.now() - (4 * 60 * 60 * 1000),
+            },
+          ]),
+        ]}
+      >
+        <ThreadMarkdown text={text} />
+      </PullRequestLinkProvider>,
+    );
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent("+25");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("-9");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("4 files");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("3 commits");
+    expect(screen.getByText("Draft PR:").parentElement).toBe(markdownNode);
+  });
+
   it("preserves an authored PR deep link while hydrating its live status", () => {
     const deepLink = `${PR_URL}/files?diff=split#discussion_r1`;
     const open = vi.spyOn(window, "open").mockImplementation(() => null);

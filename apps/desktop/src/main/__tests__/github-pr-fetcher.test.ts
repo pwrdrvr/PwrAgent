@@ -21,7 +21,12 @@ function rawMergedPr() {
     isDraft: false,
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
+    additions: 412,
+    deletions: 198,
+    changedFiles: 18,
+    createdAt: "2026-04-27T20:06:31Z",
     mergedAt: "2026-05-05T00:06:31Z",
+    closedAt: "2026-05-05T00:06:31Z",
     commits: [
       { oid: "a".repeat(40) },
       { oid: "b".repeat(40) },
@@ -54,6 +59,13 @@ describe("parseGhPrPayload", () => {
       reviewState: "ready_for_review",
       mergeState: "unknown",
       commitShas: ["a".repeat(40), "b".repeat(40)],
+      additions: 412,
+      deletions: 198,
+      changedFiles: 18,
+      commitCount: 2,
+      createdAt: Date.parse("2026-04-27T20:06:31Z"),
+      mergedAt: Date.parse("2026-05-05T00:06:31Z"),
+      closedAt: Date.parse("2026-05-05T00:06:31Z"),
       url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     });
   });
@@ -72,6 +84,31 @@ describe("parseGhPrPayload", () => {
     });
     expect(summary.org).toBe("");
     expect(summary.repo).toBe("");
+  });
+
+  it("omits unavailable structured card metadata", () => {
+    const summary = parseGhPrPayload({
+      ...rawMergedPr(),
+      additions: null,
+      deletions: null,
+      changedFiles: null,
+      createdAt: null,
+      mergedAt: null,
+      closedAt: null,
+      commits: null,
+    });
+
+    for (const field of [
+      "additions",
+      "deletions",
+      "changedFiles",
+      "commitCount",
+      "createdAt",
+      "mergedAt",
+      "closedAt",
+    ]) {
+      expect(summary).not.toHaveProperty(field);
+    }
   });
 });
 
@@ -551,6 +588,13 @@ describe("GithubPrFetcher", () => {
           reviewState: "ready_for_review",
           mergeState: "unknown",
           commitShas: ["a".repeat(40), "b".repeat(40)],
+          additions: 412,
+          deletions: 198,
+          changedFiles: 18,
+          commitCount: 2,
+          createdAt: Date.parse("2026-04-27T20:06:31Z"),
+          mergedAt: Date.parse("2026-05-05T00:06:31Z"),
+          closedAt: Date.parse("2026-05-05T00:06:31Z"),
           url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
         },
       ]);
@@ -567,7 +611,19 @@ describe("GithubPrFetcher", () => {
         "--limit",
         "5",
       ]);
-      expect(args[args.indexOf("--json") + 1]).toContain("title");
+      const fields = args[args.indexOf("--json") + 1];
+      expect(fields).toEqual(expect.stringContaining("title"));
+      for (const field of [
+        "additions",
+        "deletions",
+        "changedFiles",
+        "createdAt",
+        "mergedAt",
+        "closedAt",
+        "commits",
+      ]) {
+        expect(fields?.split(",")).toContain(field);
+      }
     });
 
     it("returns [] on subprocess failure", async () => {
@@ -601,6 +657,13 @@ describe("GithubPrFetcher", () => {
         reviewState: "ready_for_review",
         mergeState: "unknown",
         commitShas: ["a".repeat(40), "b".repeat(40)],
+        additions: 412,
+        deletions: 198,
+        changedFiles: 18,
+        commitCount: 2,
+        createdAt: Date.parse("2026-04-27T20:06:31Z"),
+        mergedAt: Date.parse("2026-05-05T00:06:31Z"),
+        closedAt: Date.parse("2026-05-05T00:06:31Z"),
         url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
       });
       expect(exec).toHaveBeenCalledWith("/tmp/repo", [
