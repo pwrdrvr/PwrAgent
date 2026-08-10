@@ -2605,16 +2605,43 @@ function slackConversationUrl(channelId: string, teamId?: string): string {
 export function stripBotMention(text: string, botUserId: string | undefined): string {
   if (!botUserId) return text;
   const mention = `<@${botUserId}>`;
-  const mentionIndex = text.indexOf(mention);
+  const mentionIndex = findSlackMentionOutsideCode(text, mention);
   if (mentionIndex < 0) return text;
 
   const before = text.slice(0, mentionIndex);
   const after = text.slice(mentionIndex + mention.length);
-  if (!before.trim()) return after.trimStart();
-  if (!after.trim()) return before.trimEnd();
+  const trailingWhitespace = before.match(/[ \t]+$/u)?.[0] ?? "";
+  const leadingWhitespace = after.match(/^[ \t]+/u)?.[0] ?? "";
+  const prefix = before.slice(0, before.length - trailingWhitespace.length);
+  const suffix = after.slice(leadingWhitespace.length);
+  const prefixEndsLine = prefix.length === 0 || /[\r\n]$/u.test(prefix);
+  const suffixStartsLine = suffix.length === 0 || /^[\r\n]/u.test(suffix);
+  const needsSpace = !prefixEndsLine
+    && !suffixStartsLine
+    && Boolean(trailingWhitespace || leadingWhitespace);
+  return `${prefix}${needsSpace ? " " : ""}${suffix}`;
+}
 
-  const separated = /\s$/u.test(before) || /^\s/u.test(after);
-  return `${before.trimEnd()}${separated ? " " : ""}${after.trimStart()}`;
+function findSlackMentionOutsideCode(text: string, mention: string): number {
+  let inFencedCode = false;
+  let inInlineCode = false;
+  for (let index = 0; index < text.length;) {
+    if (!inInlineCode && text.startsWith("```", index)) {
+      inFencedCode = !inFencedCode;
+      index += 3;
+      continue;
+    }
+    if (!inFencedCode && text[index] === "`") {
+      inInlineCode = !inInlineCode;
+      index += 1;
+      continue;
+    }
+    if (!inFencedCode && !inInlineCode && text.startsWith(mention, index)) {
+      return index;
+    }
+    index += 1;
+  }
+  return -1;
 }
 
 function parseCommand(text: string): { command: string; args: string[] } | undefined {
