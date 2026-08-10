@@ -66,7 +66,8 @@ export function threadProjectKey(thread: NavigationThreadSummary): string {
   return primary?.path ?? STAR_MAP_NO_PROJECT_KEY;
 }
 
-function projectLabel(thread: NavigationThreadSummary): string {
+/** Display label for a thread's project; shared with the cluster layout. */
+export function threadProjectLabel(thread: NavigationThreadSummary): string {
   const primary = thread.linkedDirectories[0];
   if (!primary) return NO_PROJECT_LABEL;
   // Prefer the repo folder name over a worktree-generated label.
@@ -97,7 +98,7 @@ export function groupThreadsByProject(
           key,
           label: key === STAR_MAP_NO_PROJECT_KEY
             ? NO_PROJECT_LABEL
-            : projectLabel(thread),
+            : threadProjectLabel(thread),
           lastActivityAt: thread.updatedAt ?? 0,
           mass: 0,
           threads: [thread],

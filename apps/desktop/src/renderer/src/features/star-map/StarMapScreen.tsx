@@ -37,11 +37,17 @@ import {
   type StarMapCardSlot,
 } from "./star-map-layout";
 import {
+  cardRingExtent,
   cardRingSlots,
   computeOrbitPlacement,
   galaxyArmPath,
   shouldStartCanvasPan,
 } from "./star-map-orbit";
+import {
+  buildInstanceClusters,
+  computeClusterCloud,
+  type StarMapClusterPlacement,
+} from "./star-map-clusters";
 import {
   addFilterMatchCounts,
   countFilterMatches,
@@ -103,10 +109,15 @@ import { useStarMapThreads } from "./useStarMapThreads";
  */
 const LANE_MAX_CARDS_PER_INSTANCE = 40;
 const STAR_COUNT = 130;
-/** Orbit rings use a fixed card width; lanes narrow theirs to fit. */
+/** Orbit clouds use a fixed card width; lanes narrow theirs to fit. */
 const ORBIT_CARD_WIDTH = 200;
-/** A ring crowds geometrically, so orbit stays shallower than a column. */
-const ORBIT_MAX_CARDS_PER_INSTANCE = 16;
+/**
+ * Projects-lens ring cap: a ring crowds geometrically, so a project body
+ * stays shallower than a column. The orbit lens no longer rings — its caps
+ * live in star-map-clusters (per-group plus a cloud backstop), each cloud
+ * carrying its own "+N more" chip instead of truncating silently.
+ */
+const PROJECT_MAX_CARDS_PER_BODY = 16;
 /** Breathing room past the longest column / widest lane when panning. */
 const LANE_CANVAS_PADDING = 120;
 /**
@@ -230,6 +241,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const observedCardElementsRef = useRef(new Map<HTMLElement, string>());
   const [preferences, setPreferences] = useState<StarMapViewPreferences>(
     readStoredPreferences,
+  );
+  /**
+   * Project clouds the operator expanded past the per-group cap, keyed
+   * `instanceId::clusterKey`. View-local like the selection: how much of a
+   * cloud is unfolded is a "what am I looking at" gesture, not fleet state.
+   */
+  const [expandedClusters, setExpandedClusters] = useState<Set<string>>(
+    new Set(),
   );
   // Orbit places bodies on a canvas larger than the window, so the surface
   // pans and zooms rather than compressing the map to fit.
@@ -608,6 +627,50 @@ export function StarMapScreen(props: StarMapScreenProps) {
     remote,
   ]);
 
+  /**
+   * Orbit-lens project clouds: each instance's threads grouped by project,
+   * capped per group, and seated around the body. Undefined outside orbit
+   * so the other lenses pay nothing for it.
+   */
+  const clusterClouds = useMemo(() => {
+    if (!orbitMode) return undefined;
+    const clouds = new Map<
+      string,
+      ReturnType<typeof computeClusterCloud>
+    >();
+    for (const [instanceId, threads] of attentionByInstance) {
+      const prefix = `${instanceId}::`;
+      const expandedKeys = new Set<string>();
+      for (const entry of expandedClusters) {
+        if (entry.startsWith(prefix)) {
+          expandedKeys.add(entry.slice(prefix.length));
+        }
+      }
+      clouds.set(
+        instanceId,
+        computeClusterCloud({
+          clusters: buildInstanceClusters({ threads, expandedKeys }),
+          cardWidth: ORBIT_CARD_WIDTH,
+          heightForThread: (threadKey) =>
+            cardHeights.get(threadKey) ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+        }),
+      );
+    }
+    return clouds;
+  }, [attentionByInstance, cardHeights, expandedClusters, orbitMode]);
+
+  const toggleClusterExpanded = useCallback(
+    (instanceId: string, clusterKey: string) => {
+      setExpandedClusters((current) => {
+        const next = new Set(current);
+        const key = `${instanceId}::${clusterKey}`;
+        if (!next.delete(key)) next.add(key);
+        return next;
+      });
+    },
+    [],
+  );
+
   const projects = useMemo(
     () => groupThreadsByProject(attentionByInstance),
     [attentionByInstance],
@@ -626,7 +689,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           key: project.key,
           cardCount: Math.min(
             project.threads.length,
-            ORBIT_MAX_CARDS_PER_INSTANCE,
+            PROJECT_MAX_CARDS_PER_BODY,
           ),
           mass: project.mass,
         })),
@@ -689,27 +752,37 @@ export function StarMapScreen(props: StarMapScreenProps) {
       { threads: NavigationThreadSummary[]; heights: number[]; count: number }
     >();
     for (const [instanceId, threads] of attentionByInstance) {
+      // Orbit reads its cloud layout: the flat list is already grouped,
+      // capped per cluster, and slot-aligned, so the lane triple simply
+      // mirrors it. Per-cloud "+N more" chips carry the overflow.
+      if (orbitMode) {
+        const cloud = clusterClouds?.get(instanceId);
+        result.set(instanceId, {
+          threads: cloud?.threads ?? [],
+          heights: cloud?.heights ?? [],
+          count: cloud?.threads.length ?? 0,
+        });
+        continue;
+      }
       const heights = threads.map(
         (thread) =>
           cardHeights.get(buildThreadIdentityKey(thread.source, thread.id))
           ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
       );
       // A lane is no longer bounded by the window: the column grows as long
-      // as it needs and the operator pans and zooms into it, the way the
-      // orbit lens already worked. Truncating at the fold hid curated
-      // threads that were never coming back into view — the cap that
-      // remains is a DOM-size backstop, not a design limit.
-      const count = orbitMode
-        ? Math.min(threads.length, ORBIT_MAX_CARDS_PER_INSTANCE)
-        : visibleCardCount({
-            heights,
-            availableHeight: Number.POSITIVE_INFINITY,
-            max: LANE_MAX_CARDS_PER_INSTANCE,
-          });
+      // as it needs and the operator pans and zooms into it. Truncating at
+      // the fold hid curated threads that were never coming back into
+      // view — the cap that remains is a DOM-size backstop, not a design
+      // limit.
+      const count = visibleCardCount({
+        heights,
+        availableHeight: Number.POSITIVE_INFINITY,
+        max: LANE_MAX_CARDS_PER_INSTANCE,
+      });
       result.set(instanceId, { threads, heights, count });
     }
     return result;
-  }, [attentionByInstance, cardHeights, orbitMode]);
+  }, [attentionByInstance, cardHeights, clusterClouds, orbitMode]);
 
   const topology = useMemo(
     () =>
@@ -727,38 +800,55 @@ export function StarMapScreen(props: StarMapScreenProps) {
       computeOrbitPlacement({
         nodes: topology,
         cardCounts: new Map(
-          // Deliberately NOT counting the load card: ring radius is derived
-          // from card count, so including it would move every thread card
-          // on the ring the moment the load card opened.
+          // Deliberately NOT counting the load card: extent is derived
+          // from the cards, so including it would move every thread card
+          // in the cloud the moment the load card opened.
           [...lanes].map(([instanceId, lane]) => [instanceId, lane.count]),
         ),
         cardWidth: ORBIT_CARD_WIDTH,
+        // Cloud extents measured from the seated clusters, so instance
+        // spacing tracks what is actually drawn rather than a ring formula.
+        extents: clusterClouds
+          ? new Map(
+              [...clusterClouds].map(([instanceId, cloud]) => [
+                instanceId,
+                cloud.extent,
+              ]),
+            )
+          : undefined,
       }),
-    [lanes, topology],
+    [clusterClouds, lanes, topology],
   );
 
   /** Bodies plus their card slots, in whichever space the layout uses. */
   const bodies = useMemo(() => {
     if (orbitMode) {
-      return orbit.instances.map((instance) => ({
-        instanceId: instance.instanceId,
-        isHub: instance.isHub,
-        x: instance.x,
-        y: instance.y,
-        slots: instance.cardSlots,
-        cardWidth: ORBIT_CARD_WIDTH,
-        // Above the body, at a radius that does not depend on how many
-        // cards the rings hold — so opening it disturbs nothing. Gated on
-        // membership like the lanes branch: without the check the card
-        // rendered forever in this lens, and dismissing it only flipped the
-        // toggle that reads the same membership.
-        loadSlot: loadCardInstances.has(instance.instanceId)
-          ? { dx: 0, dy: ORBIT_LOAD_CARD_DY }
-          : undefined,
-        // Rings grow their radius, so orbit's canvas is already sized by
-        // `computeOrbitPlacement`; only lanes derive theirs from content.
-        contentBottom: 0,
-      }));
+      return orbit.instances.map((instance) => {
+        const cloud = clusterClouds?.get(instance.instanceId);
+        return {
+          instanceId: instance.instanceId,
+          isHub: instance.isHub,
+          x: instance.x,
+          y: instance.y,
+          // Cloud slots when the instance has a thread feed; the ring
+          // fallback only ever renders zero cards (no cloud, no lane).
+          slots: cloud?.slots ?? instance.cardSlots,
+          clusters: cloud?.clusters,
+          clusterIndexByCard: cloud?.clusterIndexByCard,
+          cardWidth: ORBIT_CARD_WIDTH,
+          // Above the body, at a radius that does not depend on how many
+          // cards the clouds hold — so opening it disturbs nothing. Gated
+          // on membership like the lanes branch: without the check the card
+          // rendered forever in this lens, and dismissing it only flipped
+          // the toggle that reads the same membership.
+          loadSlot: loadCardInstances.has(instance.instanceId)
+            ? { dx: 0, dy: ORBIT_LOAD_CARD_DY }
+            : undefined,
+          // Clouds grow their extent, so orbit's canvas is already sized by
+          // `computeOrbitPlacement`; only lanes derive theirs from content.
+          contentBottom: 0,
+        };
+      });
     }
     return laneLayout.positions.map((position) => {
       const lane = lanes.get(position.instanceId);
@@ -790,7 +880,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             : 0,
       };
     });
-  }, [laneLayout, lanes, loadCardInstances, orbit, orbitMode]);
+  }, [clusterClouds, laneLayout, lanes, loadCardInstances, orbit, orbitMode]);
 
   /**
    * Lanes canvas: as wide as the instance row and as tall as the longest
@@ -1398,6 +1488,34 @@ export function StarMapScreen(props: StarMapScreenProps) {
     });
   }, []);
 
+  /**
+   * A cloud's label pill selects its visible cards as one group, so the
+   * existing group drag moves the whole cloud. Only visible cards join —
+   * a hidden card has no shell to move, and a selection entry that cannot
+   * be seen would surface as a card teleporting on some later expand.
+   */
+  const toggleClusterSelection = useCallback(
+    (instanceId: string, cluster: StarMapClusterPlacement) => {
+      const keys = cluster.threads
+        .slice(0, cluster.visibleCount)
+        .map(
+          (thread) =>
+            `${instanceId}::${buildThreadIdentityKey(thread.source, thread.id)}`,
+        );
+      if (keys.length === 0) return;
+      setSelection((current) => {
+        const allSelected = keys.every((key) => current.has(key));
+        const next = new Set(current);
+        for (const key of keys) {
+          if (allSelected) next.delete(key);
+          else next.add(key);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
   const commitSelectionMove = useCallback(
     (draggedKey: string, delta: { dx: number; dy: number }) => {
       if (!selection.has(draggedKey)) return;
@@ -1500,6 +1618,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
     cardWidth: number;
     /** Set when this instance shows a load card; never a thread slot. */
     loadSlot?: StarMapCardSlot;
+    /** Orbit lens: project clouds with outlines, pills and overflow chips. */
+    clusters?: StarMapClusterPlacement[];
+    /** Cluster index per flat card, aligned with `slots`. */
+    clusterIndexByCard?: number[];
   }) => {
     const lane = lanes.get(position.instanceId);
     const threads = lane?.threads ?? [];
@@ -1540,6 +1662,22 @@ export function StarMapScreen(props: StarMapScreenProps) {
             }}
           />
         ) : null}
+        {/* Outlines paint under the cards: same layer, earlier in DOM. */}
+        {position.clusters?.map((cluster) =>
+          cluster.chromeless ? null : (
+            <div
+              key={`cluster:${cluster.key}`}
+              className="star-map__cluster"
+              aria-hidden="true"
+              style={{
+                left: cluster.rect.x,
+                top: cluster.rect.y,
+                width: cluster.rect.width,
+                height: cluster.rect.height,
+              }}
+            />
+          ),
+        )}
         {loadSlot ? (
           <StarMapLoadCard
             key={`load:${position.instanceId}`}
@@ -1591,6 +1729,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
         {visible.map((thread, index) => {
           const slot = slots[index];
           const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+          const clusterIndex = position.clusterIndexByCard?.[index];
+          const cardCluster =
+            clusterIndex !== undefined
+              ? position.clusters?.[clusterIndex]
+              : undefined;
           return (
             <StarMapThreadCard
               key={threadKey}
@@ -1610,14 +1753,27 @@ export function StarMapScreen(props: StarMapScreenProps) {
               baseSlot={slot}
               offset={arrangement.offsetFor(position.instanceId, threadKey)}
               width={position.cardWidth}
-              centered={orbitMode}
+              // Cloud slots hang cards from the top like lanes; only the
+              // ring fallback (which renders no cards) centred on its slot.
+              centered={orbitMode && !position.clusters}
               stackIndex={index}
               cardKey={`${position.instanceId}::${threadKey}`}
               selected={selection.has(`${position.instanceId}::${threadKey}`)}
               onToggleSelect={() =>
                 toggleSelected(`${position.instanceId}::${threadKey}`)
               }
-              cardFields={preferences.cardFields}
+              // Inside a labeled project cloud the directory chips repeat
+              // the pill; the projects lens sets the same precedent ("the
+              // project IS the sun").
+              cardFields={
+                cardCluster?.isProject
+                  ? {
+                      ...preferences.cardFields,
+                      primaryDirectory: false,
+                      secondaryDirectories: false,
+                    }
+                  : preferences.cardFields
+              }
               menuActions={cardMenuActions(thread, position.instanceId)}
               drag={
                 // Drags persist + sync only once the durable instance id is
@@ -1671,6 +1827,62 @@ export function StarMapScreen(props: StarMapScreenProps) {
             +{overflow} more
           </span>
         ) : null}
+        {position.clusters?.map((cluster) => {
+          if (cluster.chromeless) return null;
+          const clusterCardKeys = cluster.threads
+            .slice(0, cluster.visibleCount)
+            .map(
+              (thread) =>
+                `${position.instanceId}::${buildThreadIdentityKey(
+                  thread.source,
+                  thread.id,
+                )}`,
+            );
+          const allSelected =
+            clusterCardKeys.length > 0
+            && clusterCardKeys.every((key) => selection.has(key));
+          return (
+            <button
+              key={`cluster-pill:${cluster.key}`}
+              type="button"
+              className="star-map__cluster-pill"
+              style={{ left: cluster.rect.x + 12, top: cluster.rect.y + 10 }}
+              aria-pressed={allSelected}
+              aria-label={`Select the ${cluster.label} cards (${cluster.threads.length} threads)`}
+              onClick={() =>
+                toggleClusterSelection(position.instanceId, cluster)
+              }
+            >
+              <span className="star-map__cluster-label">{cluster.label}</span>
+              <span className="star-map__cluster-count">
+                {cluster.threads.length}
+              </span>
+            </button>
+          );
+        })}
+        {position.clusters?.map((cluster) =>
+          cluster.overflowSlot ? (
+            <button
+              key={`cluster-overflow:${cluster.key}`}
+              type="button"
+              className="star-map__cluster-overflow"
+              style={{
+                left: cluster.overflowSlot.dx,
+                top: cluster.overflowSlot.dy,
+              }}
+              aria-label={
+                cluster.overflow > 0
+                  ? `Show ${cluster.overflow} more ${cluster.label} threads`
+                  : `Show fewer ${cluster.label} threads`
+              }
+              onClick={() =>
+                toggleClusterExpanded(position.instanceId, cluster.key)
+              }
+            >
+              {cluster.overflow > 0 ? `+${cluster.overflow} more` : "Show fewer"}
+            </button>
+          ) : null,
+        )}
       </div>
     );
   };
@@ -1921,9 +2133,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
               if (!project) return null;
               const visible = project.threads.slice(
                 0,
-                ORBIT_MAX_CARDS_PER_INSTANCE,
+                PROJECT_MAX_CARDS_PER_BODY,
               );
               const slots = cardRingSlots(visible.length, ORBIT_CARD_WIDTH);
+              const ringOverflow = project.threads.length - visible.length;
               return (
                 <div
                   key={`project:${placement.key}`}
@@ -1986,6 +2199,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
                       />
                     );
                   })}
+                  {/* The ring truncates silently otherwise — the same lie
+                      the orbit lens used to tell. */}
+                  {ringOverflow > 0 ? (
+                    <span
+                      className="star-map__cloud-overflow"
+                      style={{
+                        transform: `translate(-50%, ${
+                          cardRingExtent(visible.length, ORBIT_CARD_WIDTH).ry
+                          + 24
+                        }px)`,
+                      }}
+                    >
+                      +{ringOverflow} more
+                    </span>
+                  ) : null}
                 </div>
               );
             })

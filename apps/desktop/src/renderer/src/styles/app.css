@@ -9895,6 +9895,98 @@ textarea,
   white-space: nowrap;
 }
 
+/* Project cloud chrome in the orbit lens. The outline is decorative and
+   never intercepts a gesture: pans start straight through it, and the
+   pill/chip controls are separate sibling buttons painted above the
+   cards. */
+.star-map__cluster {
+  position: absolute;
+  z-index: 0;
+  border: 1px dashed color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel) 22%, transparent);
+  pointer-events: none;
+}
+
+/* Pill and chip paint above the thread cards (z 0..n by stack position)
+   and below the load card (STAR_MAP_LOAD_CARD_Z = 50). */
+.star-map__cluster-pill {
+  display: inline-flex;
+  position: absolute;
+  z-index: 48;
+  align-items: center;
+  gap: 6px;
+  max-width: 208px;
+  padding: 3px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.star-map__cluster-pill:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+/* Pressed = every visible card in the cloud is in the selection. */
+.star-map__cluster-pill[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.star-map__cluster-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.star-map__cluster-count {
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 15px;
+  text-align: center;
+}
+
+.star-map__cluster-pill[aria-pressed="true"] .star-map__cluster-count {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text-primary);
+}
+
+/* Slot is the chip's centre, so the button centres itself on it. */
+.star-map__cluster-overflow {
+  position: absolute;
+  z-index: 48;
+  transform: translate(-50%, -50%);
+  padding: 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 75%, transparent);
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.star-map__cluster-overflow:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.star-map__cluster-pill:focus-visible,
+.star-map__cluster-overflow:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 /* Shell: position, stacking, drag target and rise animation. The visual
    card is a plain button inside it, so the kebab can be a sibling rather
    than a button nested in a button. */
@@ -10750,7 +10842,10 @@ textarea,
 .star-map-card,
 .star-map-card *,
 .star-map-load-card,
-.star-map-load-card * {
+.star-map-load-card *,
+.star-map__cluster-pill,
+.star-map__cluster-pill *,
+.star-map__cluster-overflow {
   -webkit-app-region: no-drag;
 }
 

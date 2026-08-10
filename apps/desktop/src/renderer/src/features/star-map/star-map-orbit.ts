@@ -44,6 +44,16 @@ const KEEPOUT_GAP = 10;
 const INSTANCE_KEEPOUT_ABOVE = 58;
 
 /**
+ * The keep-out box shared with the cluster layout, so project clouds clear
+ * the same chrome the ring slots do.
+ */
+export const STAR_MAP_INSTANCE_KEEPOUT = {
+  halfWidth: INSTANCE_KEEPOUT_HALF_WIDTH,
+  above: INSTANCE_KEEPOUT_ABOVE,
+  below: INSTANCE_KEEPOUT_BELOW,
+} as const;
+
+/**
  * Does a card centred here clear the instance's own chrome?
  *
  * Only the handful of slots that actually collide get pushed out (see
@@ -265,13 +275,20 @@ export function computeOrbitPlacement(params: {
   /** Visible card count per instance. */
   cardCounts: ReadonlyMap<string, number>;
   cardWidth: number;
+  /**
+   * Measured half-extent of an instance's drawn cloud, when the caller
+   * lays cards out itself (the project-cluster clouds). Instances without
+   * an entry fall back to the ring extent their card count implies.
+   */
+  extents?: ReadonlyMap<string, { rx: number; ry: number }>;
 }): OrbitPlacement {
   const root = params.nodes.find((node) => node.depth === 0);
   if (!root) {
     return { instances: [], links: [], canvasWidth: 0, canvasHeight: 0 };
   }
   const extentFor = (instanceId: string) =>
-    cardRingExtent(params.cardCounts.get(instanceId) ?? 0, params.cardWidth);
+    params.extents?.get(instanceId)
+    ?? cardRingExtent(params.cardCounts.get(instanceId) ?? 0, params.cardWidth);
   const radiusFor = (instanceId: string) => extentFor(instanceId).rx;
 
   const raw = new Map<string, { x: number; y: number }>();
