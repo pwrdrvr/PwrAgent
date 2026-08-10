@@ -33,6 +33,13 @@ function samePullRequestChip(
     && left.repo === right.repo
     && left.number === right.number
     && left.title === right.title
+    && left.additions === right.additions
+    && left.deletions === right.deletions
+    && left.changedFiles === right.changedFiles
+    && left.commitCount === right.commitCount
+    && left.createdAt === right.createdAt
+    && left.mergedAt === right.mergedAt
+    && left.closedAt === right.closedAt
     && left.state === right.state
     && left.checkState === right.checkState
     && left.checksStillRunning === right.checksStillRunning
