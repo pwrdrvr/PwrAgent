@@ -40,7 +40,7 @@ BSD-2-Clause
 
 BSD-3-Clause
 ~~~~~~~~~~~~
-- fast-uri@3.1.4 | https://github.com/fastify/fast-uri
+- fast-uri@3.1.5 | https://github.com/fastify/fast-uri
 - ieee754@1.2.1 | https://github.com/feross/ieee754
 - qs@6.15.2 | https://github.com/ljharb/qs
 
@@ -66,8 +66,8 @@ MIT
 - @floating-ui/core@1.8.0 | https://github.com/floating-ui/floating-ui
 - @floating-ui/dom@1.8.0 | https://github.com/floating-ui/floating-ui
 - @floating-ui/utils@0.2.12 | https://github.com/floating-ui/floating-ui
-- @hono/node-server@1.19.14 | https://github.com/honojs/node-server
-- @modelcontextprotocol/sdk@1.29.0 | https://github.com/modelcontextprotocol/typescript-sdk
+- @hono/node-server@2.0.10 | https://github.com/honojs/node-server
+- @modelcontextprotocol/sdk@1.30.0 | https://github.com/modelcontextprotocol/typescript-sdk
 - @octokit/endpoint@11.0.3 | github:octokit/endpoint.js
 - @octokit/graphql@9.0.3 | github:octokit/graphql.js
 - @octokit/openapi-types@27.0.0 | https://github.com/octokit/openapi-types.ts
@@ -137,7 +137,7 @@ MIT
 - bl@4.1.0 | https://github.com/rvagg/bl
 - body-parser@2.3.0 | expressjs/body-parser
 - buffer@5.7.1 | https://github.com/feross/buffer
-- builder-util-runtime@9.5.1 | https://github.com/electron-userland/electron-builder
+- builder-util-runtime@9.7.0 | https://github.com/electron-userland/electron-builder
 - bytes@3.1.2 | visionmedia/bytes.js
 - call-bind-apply-helpers@1.0.2 | https://github.com/ljharb/call-bind-apply-helpers
 - call-bound@1.0.4 | https://github.com/ljharb/call-bound
@@ -167,7 +167,7 @@ MIT
 - ee-first@1.1.1 | jonathanong/ee-first
 - electron@41.7.1 | https://github.com/electron/electron
 - electron-log@5.4.4 | megahertz/electron-log
-- electron-updater@6.8.3 | https://github.com/electron-userland/electron-builder
+- electron-updater@6.8.9 | https://github.com/electron-userland/electron-builder
 - encodeurl@2.0.0 | pillarjs/encodeurl
 - encoding@0.1.13 | https://github.com/andris9/encoding
 - end-of-stream@1.4.5 | https://github.com/mafintosh/end-of-stream
@@ -201,14 +201,14 @@ MIT
 - hasown@2.0.4 | https://github.com/inspect-js/hasOwn
 - hast-util-to-jsx-runtime@2.3.6 | syntax-tree/hast-util-to-jsx-runtime
 - hast-util-whitespace@3.0.0 | syntax-tree/hast-util-whitespace
-- hono@4.12.31 | https://github.com/honojs/hono
+- hono@4.12.34 | https://github.com/honojs/hono
 - html-url-attributes@3.0.1 | https://github.com/rehypejs/rehype-minify/tree/main/packages/html-url-attributes
 - http-errors@2.0.1 | jshttp/http-errors
 - iconv-lite@0.6.3 | https://github.com/ashtuchkin/iconv-lite
 - iconv-lite@0.7.3 | https://github.com/pillarjs/iconv-lite
 - indent-string@4.0.0 | sindresorhus/indent-string
 - inline-style-parser@0.2.7 | https://github.com/remarkablemark/inline-style-parser
-- ip-address@10.2.0 | https://github.com/beaugunderson/ip-address
+- ip-address@10.3.1 | https://github.com/beaugunderson/ip-address
 - ipaddr.js@1.9.1 | https://github.com/whitequark/ipaddr.js
 - is-alphabetical@2.0.1 | wooorm/is-alphabetical
 - is-alphanumerical@2.0.1 | wooorm/is-alphanumerical
@@ -217,7 +217,7 @@ MIT
 - is-plain-obj@4.1.0 | sindresorhus/is-plain-obj
 - is-promise@4.0.0 | https://github.com/then/is-promise
 - jose@6.2.3 | panva/jose
-- js-yaml@4.2.0 | nodeca/js-yaml
+- js-yaml@4.3.1 | nodeca/js-yaml
 - json-schema-traverse@1.0.0 | https://github.com/epoberezkin/json-schema-traverse
 - json-with-bigint@3.5.8 | https://github.com/Ivan-Korolenko/json-with-bigint
 - jsonfile@6.2.1 | https://github.com/jprichardson/node-jsonfile
@@ -411,13 +411,13 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-@hono/node-server@1.19.14 (MIT)
--------------------------------
+@hono/node-server@2.0.10 (MIT)
+------------------------------
 
 Applies to:
-- @hono/node-server@1.19.14 (MIT)
+- @hono/node-server@2.0.10 (MIT)
 
-Representative file: @hono/node-server@1.19.14/LICENSE
+Representative file: @hono/node-server@2.0.10/LICENSE
 
 MIT License
 
@@ -441,13 +441,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@modelcontextprotocol/sdk@1.29.0 (MIT)
+@modelcontextprotocol/sdk@1.30.0 (MIT)
 --------------------------------------
 
 Applies to:
-- @modelcontextprotocol/sdk@1.29.0 (MIT)
+- @modelcontextprotocol/sdk@1.30.0 (MIT)
 
-Representative file: @modelcontextprotocol/sdk@1.29.0/LICENSE
+Representative file: @modelcontextprotocol/sdk@1.30.0/LICENSE
 
 MIT License
 
@@ -1666,14 +1666,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-builder-util-runtime@9.5.1 (MIT)
+builder-util-runtime@9.7.0 (MIT)
 --------------------------------
 
 Applies to:
-- builder-util-runtime@9.5.1 (MIT)
-- electron-updater@6.8.3 (MIT)
+- builder-util-runtime@9.7.0 (MIT)
+- electron-updater@6.8.9 (MIT)
 
-Representative file: builder-util-runtime@9.5.1/LICENSE
+Representative file: builder-util-runtime@9.7.0/LICENSE
 
 The MIT License (MIT)
 
@@ -3091,13 +3091,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-fast-uri@3.1.4 (BSD-3-Clause)
+fast-uri@3.1.5 (BSD-3-Clause)
 -----------------------------
 
 Applies to:
-- fast-uri@3.1.4 (BSD-3-Clause)
+- fast-uri@3.1.5 (BSD-3-Clause)
 
-Representative file: fast-uri@3.1.4/LICENSE
+Representative file: fast-uri@3.1.5/LICENSE
 
 Copyright (c) 2011-2021, Gary Court until https://github.com/garycourt/uri-js/commit/a1acf730b4bba3f1097c9f52e7d9d3aba8cdcaae
 Copyright (c) 2021-present The Fastify team <https://github.com/fastify/fastify#team>
@@ -3506,13 +3506,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-hono@4.12.31 (MIT)
+hono@4.12.34 (MIT)
 ------------------
 
 Applies to:
-- hono@4.12.31 (MIT)
+- hono@4.12.34 (MIT)
 
-Representative file: hono@4.12.31/LICENSE
+Representative file: hono@4.12.34/LICENSE
 
 MIT License
 
@@ -3689,13 +3689,13 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-ip-address@10.2.0 (MIT)
+ip-address@10.3.1 (MIT)
 -----------------------
 
 Applies to:
-- ip-address@10.2.0 (MIT)
+- ip-address@10.3.1 (MIT)
 
-Representative file: ip-address@10.2.0/LICENSE
+Representative file: ip-address@10.3.1/LICENSE
 
 Copyright (C) 2011 by Beau Gunderson
 
@@ -3803,13 +3803,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-js-yaml@4.2.0 (MIT)
+js-yaml@4.3.1 (MIT)
 -------------------
 
 Applies to:
-- js-yaml@4.2.0 (MIT)
+- js-yaml@4.3.1 (MIT)
 
-Representative file: js-yaml@4.2.0/LICENSE
+Representative file: js-yaml@4.3.1/LICENSE
 
 (The MIT License)
 
