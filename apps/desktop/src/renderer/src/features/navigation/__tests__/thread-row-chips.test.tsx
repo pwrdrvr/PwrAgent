@@ -464,6 +464,74 @@ describe("ThreadRow chip flow", () => {
     expect(screen.queryByText("now fix/current")).not.toBeInTheDocument();
   });
 
+  describe("unsent draft chip", () => {
+    const draftKeys = { [`${baseThread.source}:${baseThread.id}`]: true };
+
+    it("renders only when the thread's scope holds unsent text", () => {
+      const { container: without } = renderRow();
+      expect(without.querySelector('[data-thread-draft="unsent"]')).toBeNull();
+
+      cleanup();
+
+      const { container: with_ } = renderRow({ draftThreadKeys: draftKeys });
+      const chip = with_.querySelector('[data-thread-draft="unsent"]');
+      expect(chip).not.toBeNull();
+      expect(chip).toHaveTextContent("Draft");
+    });
+
+    it("names itself for assistive tech without shadowing the composer", () => {
+      // role="img" is load-bearing: on a generic element `aria-label` is
+      // prohibited and dropped, so the chip would announce only as "Draft".
+      // The label deliberately omits the word "reply" — `getByLabel` is a
+      // substring match and 31 E2E call sites drive the composer with
+      // `getByLabel("Reply")`.
+      const { container } = renderRow({ draftThreadKeys: draftKeys });
+      const chip = container.querySelector('[data-thread-draft="unsent"]')!;
+      expect(chip).toHaveAttribute("role", "img");
+      expect(chip).toHaveAttribute("aria-label", "Unsent draft");
+      expect(chip.getAttribute("aria-label")).not.toMatch(/reply/i);
+    });
+
+    it("sits inside the shared chip flow, before bindings and PR chips", () => {
+      const { container } = renderRow({
+        draftThreadKeys: draftKeys,
+        thread: {
+          ...baseThread,
+          messagingBindings: [telegramBinding],
+          reactions: ["🙂"],
+          prs: [
+            {
+              provider: "github.com",
+              number: 123,
+              org: "pwrdrvr",
+              repo: "PwrAgent",
+              state: "passing",
+              url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+            },
+          ],
+        },
+      });
+      const flow = container.querySelector(".thread-row__chips") as HTMLElement;
+      expect(flow.querySelector('[data-thread-draft="unsent"]')).not.toBeNull();
+
+      const chipNodes = Array.from(flow.children) as HTMLElement[];
+      const indexOf = (selector: string): number =>
+        chipNodes.findIndex(
+          (el) => el.matches(selector) || el.querySelector(selector) !== null,
+        );
+      const draftIdx = indexOf('[data-thread-draft="unsent"]');
+      const bindingIdx = indexOf(
+        ".thread-row__chip--binding, .thread-row__chip-wrap",
+      );
+      const prIdx = indexOf(".thread-row__chip--pr, [data-pr-chip]");
+      // Draft is meta, so it packs with the fixed-width metadata ahead of
+      // the variable-count binding / PR chips rather than trailing them.
+      expect(draftIdx).toBeGreaterThanOrEqual(0);
+      if (bindingIdx >= 0) expect(draftIdx).toBeLessThan(bindingIdx);
+      if (prIdx >= 0) expect(draftIdx).toBeLessThan(prIdx);
+    });
+  });
+
   it("orders chips: meta → bindings → PR → reactions", () => {
     const threadWithEverything: NavigationThreadSummary = {
       ...baseThread,

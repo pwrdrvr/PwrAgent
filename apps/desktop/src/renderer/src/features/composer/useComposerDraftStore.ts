@@ -1,6 +1,7 @@
 import { useMemo, useRef } from "react";
 import type { JSONContent } from "@tiptap/react";
 import type {
+  AppServerBackendKind,
   AppServerReviewTarget,
   AppServerTurnInputItem,
   ComposerDraftLifecycle,
@@ -9,6 +10,7 @@ import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
   ModelSettingsRecent,
+  ThreadIdentifier,
 } from "@pwragent/shared";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
 
@@ -70,8 +72,8 @@ export type ComposerPendingSteerSnapshot = {
  * before this existed four hand-rolled copies of the template literal did.
  */
 export function buildThreadComposerScopeKey(
-  backend: string,
-  threadId: string,
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
 ): string {
   return `thread:${backend}:${threadId}`;
 }
