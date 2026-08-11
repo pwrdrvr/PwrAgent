@@ -39,6 +39,7 @@ export type StdioJsonRpcTransportOptions = {
     env: NodeJS.ProcessEnv;
   }) => Promise<ResolvedCodexCommandCandidate>;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
+  platform?: NodeJS.Platform;
 };
 
 export { compareCodexCliVersions };
@@ -137,6 +138,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       command: command.command,
       args: ["app-server", ...args],
       env: childEnv,
+      platform: this.options.platform,
     });
     const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],

@@ -72,40 +72,47 @@ describe("stdio transport Codex CLI resolution", () => {
 });
 
 describe("StdioJsonRpcTransport", () => {
-  it("routes a Windows Codex batch shim through ComSpec", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.stubEnv("ComSpec", "C:\\Windows\\System32\\cmd.exe");
-    try {
-      const child = new MockCodexChildProcess();
-      spawnMock.mockReturnValue(child);
-      const transport = new StdioJsonRpcTransport({
-        command: "C:\\Users\\Ops & Dev\\AppData\\Roaming\\npm\\codex.cmd",
-        env: {
-          ComSpec: "C:\\Windows\\System32\\cmd.exe",
-          PATH: "C:\\Windows\\System32",
-        },
-      });
+  it("launches a resolved Windows batch shim through ComSpec", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const command = "C:\\nvm4w & tools\\nodejs\\codex.cmd";
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      args: ["--feature", "value & whoami"],
+      env: {
+        ComSpec: "C:\\Windows\\System32\\cmd.exe",
+        PATH: "C:\\nvm4w & tools\\nodejs",
+      },
+      platform: "win32",
+      resolveCommand: async () => ({
+        command,
+        source: "path",
+        version: "0.126.0",
+      }),
+    });
 
-      await transport.connect();
+    await transport.connect();
 
-      expect(spawnMock).toHaveBeenCalledWith(
-        "C:\\Windows\\System32\\cmd.exe",
-        [
-          "/d",
-          "/s",
-          "/c",
-          expect.stringMatching(/codex\.cmd.*app-server/i),
-        ],
-        expect.objectContaining({
-          detached: false,
-          windowsVerbatimArguments: true,
-        }),
-      );
-      await transport.close();
-    } finally {
-      platform.mockRestore();
-      vi.unstubAllEnvs();
-    }
+    expect(spawnMock).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\cmd.exe",
+      [
+        "/d",
+        "/s",
+        "/c",
+        expect.stringContaining(
+          "C:\\nvm4w^ ^&^ tools\\nodejs\\codex.cmd ^\"app-server^\"",
+        ),
+      ],
+      expect.objectContaining({
+        windowsVerbatimArguments: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    );
+    expect(spawnMock.mock.calls[0]?.[1]?.[3]).toContain(
+      "^\"value^ ^&^ whoami^\"",
+    );
+
+    await transport.close();
   });
 
   it("does not pass PwrAgent's renderer URL to the Codex app server", async () => {
