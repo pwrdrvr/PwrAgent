@@ -19000,10 +19000,14 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--danger-text);
 }
 
-.composer__queued--env-action.composer__queued--env-action-exited {
-  border-color: color-mix(in srgb, var(--status-warning) 36%, var(--border-subtle));
-  background: var(--bg-panel-elevated);
-}
+/* `exited` deliberately has NO at-rest chrome, which is what makes the
+   transparent base above reachable at all. Every run carries exactly one of
+   the three status modifiers, so while this one also painted a background and
+   a border, no row was ever quiet and a stack of finished actions still read
+   as a stack of cards — the exact complaint the flat base was added to fix.
+   A clean exit is also not a caution, so the old --status-warning border was
+   saying the wrong thing about `exit 0`. The label and `exit N · ran Xs` carry
+   the outcome; chrome arrives on hover, focus, or open like any other row. */
 
 /* padding-left matches `.live-strip__row`'s 8px so the two disclosure rows in
    this band share a left edge — their chevrons stack directly above one
@@ -19408,19 +19412,36 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: nowrap;
 }
 
+/* A reserved, right-aligned column. Left to size themselves, "0m 12s" and
+   "Failed" ended 17px apart and the rail read as ragged across four rows. */
 .live-strip__item-time {
   flex: 0 0 auto;
+  min-width: 56px;
   color: var(--text-muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Holds the row's action, or holds its place when the row has none. */
+.live-strip__item-slot {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  min-width: 62px;
 }
 
 .live-strip__item--failed .live-strip__item-time {
   color: var(--danger-text);
 }
 
+/* 24px min-height is the WCAG 2.2 AA target-size floor (2.5.8). The padding
+   alone left these around 22px, and the 28px row has the room. */
 .live-strip__item-action {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
+  min-height: 24px;
   padding: 2px 6px;
   border: 1px solid transparent;
   border-radius: 6px;

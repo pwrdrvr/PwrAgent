@@ -170,13 +170,18 @@ export function ActiveSubAgentsStrip(props: {
           <span className="live-strip__chevron" aria-hidden="true" />
           <span className="live-strip__label">{heading}</span>
           <span className="live-strip__count">{headingCount}</span>
+          {/* Beside the count, not at the far edge. Parked after the spacer it
+              sat ~730px from the label it modifies and read as a stray artifact
+              rather than "these are working". Only genuine work sweeps — a
+              strip holding nothing but blocked or failed rows must not imply
+              something is progressing. */}
+          {running.length > 0 ? <ThinkingScanner compact /> : null}
+          <span className="live-strip__row-spacer" />
+          {/* Trailing, so the tally sits next to the Dismiss all that acts on
+              it. Leading, it collided with the count and read as "1 12". */}
           {failedNote ? (
             <span className="live-strip__note">{failedNote}</span>
           ) : null}
-          <span className="live-strip__row-spacer" />
-          {/* Only genuine work sweeps. A strip holding nothing but blocked or
-              failed rows must not imply something is progressing. */}
-          {running.length > 0 ? <ThinkingScanner compact /> : null}
         </button>
         {/* Clearing failures one at a time is fine for one or two and a chore
             at a dozen. Only ever clears failures — a running sub-agent is
@@ -241,26 +246,32 @@ export function ActiveSubAgentsStrip(props: {
                     screen reader — and page-wide `name: "Stop"` is the
                     established E2E handle for the composer's stop-the-turn
                     button, which this must not shadow. */}
-                {failedRow ? (
-                  <button
-                    aria-label={`Dismiss failed sub-agent: ${subAgent.task}`}
-                    className="live-strip__item-action"
-                    type="button"
-                    onClick={() => dismissFailure(subAgent.monitorId)}
-                  >
-                    Dismiss
-                  </button>
-                ) : canStop ? (
-                  <button
-                    aria-label={`Stop sub-agent: ${subAgent.task}`}
-                    className="live-strip__item-action live-strip__item-action--danger"
-                    disabled={stopping}
-                    type="button"
-                    onClick={() => void stopSubAgent(subAgent)}
-                  >
-                    {stopping ? "Stopping…" : "Stop"}
-                  </button>
-                ) : null}
+                {/* Always rendered, even when empty. A blocked row has no
+                    action, and without a reserved slot its state text slid
+                    right to the edge while every neighbour's stopped short —
+                    the right rail stopped being a column. */}
+                <span className="live-strip__item-slot">
+                  {failedRow ? (
+                    <button
+                      aria-label={`Dismiss failed sub-agent: ${subAgent.task}`}
+                      className="live-strip__item-action"
+                      type="button"
+                      onClick={() => dismissFailure(subAgent.monitorId)}
+                    >
+                      Dismiss
+                    </button>
+                  ) : canStop ? (
+                    <button
+                      aria-label={`Stop sub-agent: ${subAgent.task}`}
+                      className="live-strip__item-action live-strip__item-action--danger"
+                      disabled={stopping}
+                      type="button"
+                      onClick={() => void stopSubAgent(subAgent)}
+                    >
+                      {stopping ? "Stopping…" : "Stop"}
+                    </button>
+                  ) : null}
+                </span>
               </li>
             );
           })}

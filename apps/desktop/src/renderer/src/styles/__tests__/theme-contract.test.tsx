@@ -175,6 +175,28 @@ describe("Tangerine Terminal theme contract", () => {
     ).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("leaves finished env-action rows flat so the quiet base stays reachable", () => {
+    // Every run carries exactly one of three status modifiers, so while all
+    // three painted at-rest chrome the transparent base and its :hover rule
+    // could never match — a stack of finished actions still rendered as a
+    // stack of cards, which is the complaint the flat base exists to answer.
+    // Only a live run and a failure earn chrome without being pointed at.
+    const painted = ["running", "failed", "exited"].filter((status) =>
+      new RegExp(
+        `\\.composer__queued--env-action\\.composer__queued--env-action-${status}\\s*\\{[^}]*(background|border-color)`,
+      ).test(css),
+    );
+
+    expect(painted).toEqual(["running", "failed"]);
+  });
+
+  it("keeps compact row actions at the WCAG 2.2 target-size floor", () => {
+    // 2.5.8 AA is 24x24. Padding alone left these around 22px.
+    expect(extractRuleBody(css, ".live-strip__item-action")).toMatch(
+      /min-height:\s*24px;/,
+    );
+  });
+
   it("keeps every border chevron on one size", () => {
     // The band above the composer stacks two disclosure rows whose chevrons
     // sit directly above one another. `.composer__queued-env-action-chevron`
