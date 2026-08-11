@@ -15,12 +15,14 @@
  *                       packaging plan)
  *       --prepare-only: build + prepare release-stage, no package/sign/publish
  *       --sign-stage-only:
- *                       sign/notarize/publish an already prepared release-stage
- *                       without reinstalling dependencies or rerunning tests
+ *                       package/sign an already prepared release-stage without
+ *                       reinstalling dependencies or rerunning tests. Defaults
+ *                       to macOS; combine with --win for Windows NSIS.
  *       --linux       : build/package a Linux .deb for the current native
  *                       architecture (or PWRAGENT_LINUX_ARCH=x64|arm64)
- *       --win         : build/package a Windows x64 NSIS installer (unsigned;
- *                       no publish). Run on a Windows host/runner.
+ *       --win         : build/package a Windows x64 NSIS installer (unsigned
+ *                       unless Azure signing env is present; no publish). Run
+ *                       on a Windows host/runner.
  *       (default)     : build + package signed/notarized + publish to the
  *                       channel configured in electron-builder.yml
  *   - In CI, the App Store Connect API key may arrive as a base64-encoded
@@ -83,10 +85,6 @@ if (prepareOnly && signStageOnly) {
 
 if (linux && signStageOnly) {
   throw new Error("--linux cannot be combined with --sign-stage-only");
-}
-
-if (win && signStageOnly) {
-  throw new Error("--win cannot be combined with --sign-stage-only");
 }
 
 if (win && linux) {
