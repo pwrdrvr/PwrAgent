@@ -7162,6 +7162,22 @@ export class DesktopBackendRegistry {
         parts: promptPayload.parts,
         turnId: syntheticStartedTurnId,
       });
+      const syntheticActiveTurnKey = buildActiveTurnKey(
+        params.backend,
+        params.threadId,
+        syntheticStartedTurnId,
+      );
+      const resolvedActiveTurnKey = buildActiveTurnKey(
+        params.backend,
+        result.sessionId,
+        result.turnId,
+      );
+      if (
+        syntheticActiveTurnKey !== resolvedActiveTurnKey
+        && this.activeTurnKeys.delete(syntheticActiveTurnKey)
+      ) {
+        this.activeTurnKeys.add(resolvedActiveTurnKey);
+      }
       this.invalidateThreadListCache(params.backend);
       return {
         backend: params.backend,
@@ -17103,7 +17119,7 @@ export class DesktopBackendRegistry {
         await this.withCodexThreadClient(params.threadId, async (client) => {
           await updateWithClient(client);
         });
-      } else {
+      } else if (params.backend === "grok") {
         await updateWithClient(this.grokClient);
       }
     } catch (error) {
@@ -22330,10 +22346,16 @@ export class DesktopBackendRegistry {
           turnId,
         });
       }
-      if (turnId) {
-        this.activeTurnKeys.delete(
-          buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
-        );
+      const hadGenericActiveTurn = turnId
+        ? this.activeTurnKeys.delete(
+            buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
+          )
+        : false;
+      if (isAcpBackendId(event.backend) && hadGenericActiveTurn) {
+        await this.adoptThreadBranchChangeFromActiveTurn({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+        });
       }
       if (event.backend === "codex" && turnId) {
         const activeTurnModeKey = buildActiveTurnModeKey(
@@ -22489,6 +22511,7 @@ export class DesktopBackendRegistry {
         this.threadHasActiveCodexReviewTurn(threadId);
       const endedTurnIds = new Set<string>();
       const genericKeyPrefix = `${event.backend}:${event.notification.params.threadId}:`;
+      let hadGenericActiveTurn = false;
       for (const key of Array.from(this.activeTurnKeys)) {
         if (key.startsWith(genericKeyPrefix)) {
           const parsed = parseActiveTurnKey(key);
@@ -22501,6 +22524,7 @@ export class DesktopBackendRegistry {
           ) {
             continue;
           }
+          hadGenericActiveTurn = true;
           if (parsed?.turnId && !parsed.turnId.startsWith("pending:")) {
             endedTurnIds.add(parsed.turnId);
           }
@@ -22509,6 +22533,12 @@ export class DesktopBackendRegistry {
       }
       if (event.backend !== "codex") {
         if (isAcpBackendId(event.backend)) {
+          if (hadGenericActiveTurn) {
+            await this.adoptThreadBranchChangeFromActiveTurn({
+              backend: event.backend,
+              threadId: event.notification.params.threadId,
+            });
+          }
           if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
             await this.flushQueuedExecutionModeIfPresent(
               event.notification.params.threadId,

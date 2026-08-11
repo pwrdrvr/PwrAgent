@@ -1773,6 +1773,7 @@ function createKimiAcpRegistry(options?: {
   startPrompt?: KimiStartPrompt;
   overlayStore?: ReturnType<typeof createOverlayStoreMock>;
   codexClient?: MockBackendClient;
+  grokClient?: MockBackendClient;
   codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
   gitDirectoryService?: unknown;
   gitWorkspaceHandoffService?: unknown;
@@ -1841,7 +1842,7 @@ function createKimiAcpRegistry(options?: {
   };
   const registry = new DesktopBackendRegistry({
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
-    grokClient: new MockBackendClient({ threads: [] }),
+    grokClient: options?.grokClient ?? new MockBackendClient({ threads: [] }),
     overlayStore: options?.overlayStore ?? createOverlayStoreMock(),
     acpAgentStore: createAcpAgentStoreMock([
       createKimiAgentRecord(acpBackendId, options?.runtimeCapabilities),
@@ -29683,6 +29684,177 @@ script = "printf setup"
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it.each(["terminal", "idle"] as const)(
+    "adopts a named branch change from an ACP turn at the %s boundary",
+    async (boundary) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-turn-branch-"));
+      const repo = path.join(root, "app");
+      await mkdir(repo, { recursive: true });
+      await git(repo, ["init", "-b", "feature/old"]);
+      await git(repo, [
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "user.name=Test User",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "init",
+      ]);
+
+      const acpBackendId = "acp:kimi" as AcpBackendId;
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "acp:kimi:thread-branch": {
+            backend: acpBackendId,
+            threadId: "thread-branch",
+            executionMode: "default",
+            gitBranch: "feature/old",
+            observedGitBranch: "feature/old",
+            extraLinkedDirectories: [],
+          },
+        },
+      });
+      const grokClient = new MockBackendClient({ threads: [] });
+      const { registry } = createKimiAcpRegistry({
+        acpBackendId,
+        sessionId: "thread-branch",
+        sessions: [
+          {
+            backendId: acpBackendId,
+            sessionId: "thread-branch",
+            title: "Active ACP branch turn",
+            cwd: repo,
+            createdAt: 1_000,
+            updatedAt: 2_000,
+            executionMode: "default",
+            status: "idle",
+          },
+        ],
+        grokClient,
+        overlayStore,
+      });
+      const eventMethods: string[] = [];
+      const unsubscribe = registry.onEvent((event) => {
+        eventMethods.push(event.notification.method);
+      });
+
+      try {
+        const startedTurn = await registry.startTurn({
+          backend: acpBackendId,
+          threadId: "thread-branch",
+          input: [{ type: "text", text: "Switch to a named branch" }],
+        });
+        expect(startedTurn.turnId).toBe("turn-1");
+        await git(repo, ["switch", "-c", "fix/acp-branch-adoption"]);
+
+        if (boundary === "terminal") {
+          await registry.publishLocalEvent({
+            backend: acpBackendId,
+            notification: {
+              method: "turn/completed",
+              params: {
+                threadId: "thread-branch",
+                turnId: startedTurn.turnId,
+                turn: {
+                  id: startedTurn.turnId,
+                  status: "completed",
+                  output: [],
+                },
+              },
+            },
+          });
+        } else {
+          await registry.publishLocalEvent({
+            backend: acpBackendId,
+            notification: {
+              method: "thread/status/changed",
+              params: {
+                threadId: "thread-branch",
+                status: { type: "idle" },
+              },
+            },
+          });
+        }
+
+        await expect(
+          overlayStore.getThreadOverlayState({
+            backend: acpBackendId,
+            threadId: "thread-branch",
+          }),
+        ).resolves.toMatchObject({
+          gitBranch: "fix/acp-branch-adoption",
+          observedGitBranch: "fix/acp-branch-adoption",
+        });
+        expect(eventMethods).toEqual([
+          "turn/started",
+          "thread/branch/updated",
+          boundary === "terminal" ? "turn/completed" : "thread/status/changed",
+        ]);
+        expect(grokClient.lastUpdateThreadMetadataParams).toBeUndefined();
+      } finally {
+        unsubscribe();
+        await registry.close();
+        await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    },
+  );
+
+  it("keeps a newer ACP turn active when an older terminal event arrives", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const { registry } = createKimiAcpRegistry({ acpBackendId });
+
+    try {
+      for (const turnId of ["turn-old", "turn-new"]) {
+        await registry.publishLocalEvent({
+          backend: acpBackendId,
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "thread-race",
+              turnId,
+              turn: {
+                id: turnId,
+                status: "in_progress",
+              },
+            },
+          },
+        });
+      }
+
+      for (let duplicate = 0; duplicate < 2; duplicate += 1) {
+        await registry.publishLocalEvent({
+          backend: acpBackendId,
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-race",
+              turnId: "turn-old",
+              turn: {
+                id: "turn-old",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+
+        expect(
+          registry.getActiveTurnForThread({
+            backend: acpBackendId,
+            threadId: "thread-race",
+          }),
+        ).toEqual({
+          backend: acpBackendId,
+          threadId: "thread-race",
+          turnId: "turn-new",
+        });
+      }
+    } finally {
+      await registry.close();
     }
   });
 
