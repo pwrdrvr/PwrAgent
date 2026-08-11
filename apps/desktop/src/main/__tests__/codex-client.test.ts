@@ -141,6 +141,9 @@ class MockTransport implements JsonRpcTransport {
     nextCursor: null,
   };
   static mcpServerStatusError: { code?: number; message: string } | undefined;
+  static mcpServerStatusThreadError:
+    | { code?: number; message: string }
+    | undefined;
   static lastConfigValueWritePayload: unknown;
   static rateLimitsResult: unknown = {
     rateLimitsByLimitId: {}
@@ -680,14 +683,18 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "mcpServerStatus/list") {
-      if (MockTransport.mcpServerStatusError) {
+      const error = payload.params?.threadId
+        ? MockTransport.mcpServerStatusThreadError
+          ?? MockTransport.mcpServerStatusError
+        : MockTransport.mcpServerStatusError;
+      if (error) {
         this.messageHandler(
           JSON.stringify({
             jsonrpc: "2.0",
             id: payload.id,
             error: {
-              code: MockTransport.mcpServerStatusError.code ?? -32000,
-              message: MockTransport.mcpServerStatusError.message,
+              code: error.code ?? -32000,
+              message: error.message,
             },
           }),
         );
@@ -698,6 +705,17 @@ class MockTransport implements JsonRpcTransport {
           jsonrpc: "2.0",
           id: payload.id,
           result: MockTransport.threadMcpServerStatusResult,
+        }),
+      );
+      return;
+    }
+
+    if (payload.method === "config/mcpServer/reload") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {},
         }),
       );
       return;
@@ -1184,6 +1202,7 @@ describe("CodexAppServerClient", () => {
     };
     MockTransport.configReadError = undefined;
     MockTransport.mcpServerStatusError = undefined;
+    MockTransport.mcpServerStatusThreadError = undefined;
     MockTransport.threadMcpServerStatusResult = {
       data: [],
       nextCursor: null,
@@ -6559,6 +6578,156 @@ describe("CodexAppServerClient", () => {
         ],
       },
     ]);
+
+    await client.close();
+  });
+
+  it("normalizes MCP inventory without forwarding tool schemas", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadMcpServerStatusResult = {
+      data: [
+        {
+          name: "atlassian-rovo",
+          serverInfo: null,
+          authStatus: "oAuth",
+          tools: {
+            search: {
+              description: "Never forward this schema",
+              inputSchema: { type: "object", properties: { query: {} } },
+            },
+            fetch: { inputSchema: { type: "object" } },
+          },
+          resources: [
+            {
+              name: "sites",
+              title: "Confluence sites",
+              uri: "atlassian://sites",
+            },
+          ],
+          resourceTemplates: [
+            {
+              name: "page",
+              uriTemplate: "atlassian://page/{id}",
+            },
+          ],
+        },
+      ],
+      nextCursor: null,
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(client.listMcpServers({
+      threadId: "thread-1",
+      detail: "full",
+    })).resolves.toEqual([
+      {
+        name: "atlassian-rovo",
+        authStatus: "oAuth",
+        tools: ["fetch", "search"],
+        resources: [
+          {
+            name: "sites",
+            title: "Confluence sites",
+            uri: "atlassian://sites",
+          },
+        ],
+        resourceTemplates: [
+          {
+            name: "page",
+            uriTemplate: "atlassian://page/{id}",
+          },
+        ],
+      },
+    ]);
+    const request = MockTransport.instances.at(-1)!.sentMessages
+      .map((message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      })
+      .find((message) => message.method === "mcpServerStatus/list");
+    expect(request?.params).toEqual({
+      threadId: "thread-1",
+      detail: "full",
+      limit: 100,
+    });
+
+    await client.close();
+  });
+
+  it("falls back to global MCP inventory when the thread is not loaded", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.mcpServerStatusThreadError = {
+      code: -32602,
+      message: "thread not found: thread-idle",
+    };
+    MockTransport.threadMcpServerStatusResult = {
+      data: [
+        {
+          name: "atlassian-rovo",
+          serverInfo: null,
+          authStatus: "oAuth",
+          tools: { search: { inputSchema: { type: "object" } } },
+          resources: [],
+          resourceTemplates: [],
+        },
+      ],
+      nextCursor: null,
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(client.listMcpServers({
+      threadId: "thread-idle",
+      detail: "toolsAndAuthOnly",
+    })).resolves.toEqual([
+      {
+        name: "atlassian-rovo",
+        authStatus: "oAuth",
+        tools: ["search"],
+      },
+    ]);
+    const requests = MockTransport.instances.at(-1)!.sentMessages
+      .map((message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      })
+      .filter((message) => message.method === "mcpServerStatus/list");
+    expect(requests.map((request) => request.params)).toEqual([
+      {
+        threadId: "thread-idle",
+        detail: "toolsAndAuthOnly",
+        limit: 100,
+      },
+      {
+        detail: "toolsAndAuthOnly",
+        limit: 100,
+      },
+    ]);
+
+    await client.close();
+  });
+
+  it("reloads MCP config through the app-server protocol", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(client.reloadMcpConfig()).resolves.toBeUndefined();
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown },
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "config/mcpServer/reload",
+      }),
+    );
 
     await client.close();
   });

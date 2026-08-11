@@ -41,6 +41,8 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListThreadMcpServersRequest,
+  ListThreadMcpServersResponse,
   ListModelSettingsRecentsRequest,
   ListModelSettingsRecentsResponse,
   ListRecentFileReferencesResponse,
@@ -84,6 +86,8 @@ import type {
   ResolveThreadResponse,
   RetainThreadBranchDriftRequest,
   RetainThreadBranchDriftResponse,
+  ReloadCodexMcpConfigRequest,
+  ReloadCodexMcpConfigResponse,
   RenameThreadRequest,
   RenameThreadResponse,
   ResolveActiveTurnRequest,
@@ -272,6 +276,8 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelScheduledThreadAction: "backend.cancelScheduledThreadAction",
   sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
+  listThreadMcpServers: "backend.listThreadMcpServers",
+  reloadCodexMcpConfig: "backend.reloadCodexMcpConfig",
   controlActiveTurn: "backend.controlActiveTurn",
   resolveActiveTurn: "backend.resolveActiveTurn",
   interruptTurn: "backend.interruptTurn",
@@ -364,6 +370,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.listThreadMcpServers]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.reloadCodexMcpConfig]: "turn_control",
   [FEDERATION_BACKEND_METHODS.controlActiveTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.resolveActiveTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.interruptTurn]: "turn_control",
@@ -501,6 +509,12 @@ export type FederationBackendOperations = {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
+  listThreadMcpServers(
+    request: ListThreadMcpServersRequest,
+  ): Promise<ListThreadMcpServersResponse>;
+  reloadCodexMcpConfig(
+    request: ReloadCodexMcpConfigRequest,
+  ): Promise<ReloadCodexMcpConfigResponse>;
   controlActiveTurn?(
     request: ControlActiveTurnRequest,
   ): Promise<ControlActiveTurnResponse>;
@@ -878,6 +892,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.compactThread(
         envelope.params as CompactThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.listThreadMcpServers,
+    async (envelope) =>
+      await params.backend.listThreadMcpServers(
+        envelope.params as ListThreadMcpServersRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.reloadCodexMcpConfig,
+    async (envelope) =>
+      await params.backend.reloadCodexMcpConfig(
+        envelope.params as ReloadCodexMcpConfigRequest,
       ),
   );
   if (params.backend.controlActiveTurn) {
@@ -1408,6 +1436,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<CompactThreadResponse> {
     return await this.rpc.request<CompactThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.compactThread,
+      params: request,
+    });
+  }
+
+  async listThreadMcpServers(
+    request: ListThreadMcpServersRequest,
+  ): Promise<ListThreadMcpServersResponse> {
+    return await this.rpc.request<ListThreadMcpServersResponse>({
+      method: FEDERATION_BACKEND_METHODS.listThreadMcpServers,
+      params: request,
+    });
+  }
+
+  async reloadCodexMcpConfig(
+    request: ReloadCodexMcpConfigRequest,
+  ): Promise<ReloadCodexMcpConfigResponse> {
+    return await this.rpc.request<ReloadCodexMcpConfigResponse>({
+      method: FEDERATION_BACKEND_METHODS.reloadCodexMcpConfig,
       params: request,
     });
   }

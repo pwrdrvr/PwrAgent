@@ -2220,6 +2220,25 @@ describe("federation backend bridge", () => {
         threadId: "thread-1",
         turnId: "compact-1",
       })),
+      listThreadMcpServers: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        detail: "full" as const,
+        servers: [
+          {
+            name: "atlassian-rovo",
+            authStatus: "oAuth" as const,
+            tools: ["search"],
+            resources: [],
+            resourceTemplates: [],
+          },
+        ],
+      })),
+      reloadCodexMcpConfig: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        queued: true as const,
+      })),
       controlActiveTurn: vi.fn(async (request) => ({
         ok: true as const,
         backend: request.backend,
@@ -2290,6 +2309,7 @@ describe("federation backend bridge", () => {
     router.registerConnection({
       peerId: "gateway_one",
       capabilities: [
+        "thread_detail",
         "turn_control",
         "pending_request_control",
         "environment_actions",
@@ -2316,6 +2336,36 @@ describe("federation backend bridge", () => {
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
         createdAt: 1_000,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "mcp-inventory-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.listThreadMcpServers,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          detail: "full",
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_010,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "mcp-reload-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.reloadCodexMcpConfig,
+        params: { backend: "codex", threadId: "thread-1" },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_020,
       },
     });
     await router.routeEnvelope({
@@ -2402,6 +2452,15 @@ describe("federation backend bridge", () => {
       backend: "codex",
       threadId: "thread-1",
     });
+    expect(backend.listThreadMcpServers).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      detail: "full",
+    });
+    expect(backend.reloadCodexMcpConfig).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
     expect(backend.resolveActiveTurn).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -2446,6 +2505,25 @@ describe("federation backend bridge", () => {
         kind: "response",
         requestId: "compact-request",
         result: { turnId: "compact-1" },
+      },
+      {
+        kind: "response",
+        requestId: "mcp-inventory-request",
+        result: {
+          detail: "full",
+          servers: [
+            {
+              name: "atlassian-rovo",
+              authStatus: "oAuth",
+              tools: ["search"],
+            },
+          ],
+        },
+      },
+      {
+        kind: "response",
+        requestId: "mcp-reload-request",
+        result: { queued: true },
       },
       {
         kind: "response",
@@ -2521,6 +2599,8 @@ describe("federation backend bridge", () => {
         cancelScheduledThreadAction: vi.fn(),
         sendScheduledThreadActionNow: vi.fn(),
         compactThread: vi.fn(),
+        listThreadMcpServers: vi.fn(),
+        reloadCodexMcpConfig: vi.fn(),
         resolveActiveTurn: vi.fn(),
         interruptTurn: vi.fn(),
         stopSubAgent: vi.fn(),

@@ -13927,6 +13927,179 @@ a.transcript-message__messaging-origin:focus-visible {
   display: none;
 }
 
+.mcp-inventory-panel {
+  max-height: min(44vh, 420px);
+}
+
+.mcp-inventory-panel__reload,
+.mcp-inventory-panel__dismiss {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mcp-inventory-panel__reload {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.mcp-inventory-panel__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.mcp-inventory-panel__reload:hover:not(:disabled),
+.mcp-inventory-panel__dismiss:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.mcp-inventory-panel__reload:focus-visible,
+.mcp-inventory-panel__dismiss:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.mcp-inventory-panel__reload:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.mcp-inventory-panel__reload--success:disabled {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+  opacity: 1;
+}
+
+.mcp-inventory-panel__servers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-inventory-panel__server {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.mcp-inventory-panel__server-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mcp-inventory-panel__server-name {
+  min-width: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.mcp-inventory-panel__auth {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.mcp-inventory-panel__line {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.mcp-inventory-panel__line-label {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.mcp-inventory-panel__line-count {
+  font-weight: 400;
+}
+
+.mcp-inventory-panel__line-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.mcp-inventory-panel__line-items {
+  min-width: 0;
+}
+
+.mcp-inventory-panel__line-toggle {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  user-select: none;
+}
+
+.mcp-inventory-panel__line-toggle:hover {
+  color: var(--accent-bright);
+}
+
+.mcp-inventory-panel__line-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.mcp-inventory-panel__state,
+.mcp-inventory-panel__reload-status {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.mcp-inventory-panel__state--error {
+  color: var(--danger-text);
+}
+
+.mcp-inventory-panel__reload-status {
+  padding: 7px 8px;
+  border: 1px solid var(--info-border);
+  border-radius: 6px;
+  background: var(--info-soft);
+  color: var(--info-text);
+}
+
 .live-work-rail__section {
   display: flex;
   flex-direction: column;

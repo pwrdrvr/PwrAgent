@@ -10,10 +10,12 @@ import type {
   ForkThreadRequest,
   InterruptTurnRequest,
   ListBackendsRequest,
+  ListThreadMcpServersRequest,
   MaterializeDirectoryLaunchpadRequest,
   QueueThreadExecutionModeRequest,
   RunCodexEnvironmentActionRequest,
   RetainThreadBranchDriftRequest,
+  ReloadCodexMcpConfigRequest,
   StopCodexEnvironmentActionRequest,
   SetAcpSessionRuntimeOptionRequest,
   SetCodexThreadEnvironmentRequest,
@@ -96,6 +98,17 @@ const registry = {
     threadId: request.threadId,
     reviewThreadId: request.threadId,
     turnId: "turn-review-1",
+  })),
+  listThreadMcpServers: vi.fn(async (request: ListThreadMcpServersRequest) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    detail: request.detail ?? "toolsAndAuthOnly" as const,
+    servers: [],
+  })),
+  reloadCodexMcpConfig: vi.fn(async (request: ReloadCodexMcpConfigRequest) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    queued: true as const,
   })),
   cancelQueuedTurn: vi.fn(() => true),
   cancelQueuedTurnWithDisposition: vi.fn((queueEntryId: string) => ({
@@ -191,6 +204,17 @@ const federationMock = vi.hoisted(() => {
       backend: request.backend,
       threadId: request.threadId,
       turnId: "remote-compact-1",
+    })),
+    listThreadMcpServers: vi.fn(async (request: ListThreadMcpServersRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      detail: request.detail ?? "toolsAndAuthOnly" as const,
+      servers: [],
+    })),
+    reloadCodexMcpConfig: vi.fn(async (request: ReloadCodexMcpConfigRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      queued: true as const,
     })),
     interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
       backend: request.backend,
@@ -415,6 +439,8 @@ describe("agent ipc", () => {
     registry.startTurn.mockClear();
     registry.submitTurn.mockClear();
     registry.startReview.mockClear();
+    registry.listThreadMcpServers.mockClear();
+    registry.reloadCodexMcpConfig.mockClear();
     registry.cancelQueuedTurn.mockClear();
     registry.cancelQueuedTurnWithDisposition.mockClear();
     registry.interruptTurn.mockClear();
@@ -453,6 +479,8 @@ describe("agent ipc", () => {
       AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
       AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
       AGENT_COMPACT_THREAD_CHANNEL,
+      AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
+      AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
       AGENT_FORK_THREAD_CHANNEL,
       AGENT_INTERRUPT_TURN_CHANNEL,
       AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -512,6 +540,17 @@ describe("agent ipc", () => {
       target: { type: "uncommittedChanges" },
     });
     await handlers.get(AGENT_COMPACT_THREAD_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+    });
+    await handlers.get(AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      detail: "full",
+    });
+    await handlers.get(AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL)?.({}, {
       backend: "codex",
       federationTarget,
       threadId: "thread-1",
@@ -743,6 +782,17 @@ describe("agent ipc", () => {
     });
     expect(registry.sendThreadPrAutoDispatchNow).not.toHaveBeenCalled();
     expect(registry.applyThreadModelMigration).not.toHaveBeenCalled();
+    expect(federationMock.remoteBackend.listThreadMcpServers).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      detail: "full",
+    });
+    expect(federationMock.remoteBackend.reloadCodexMcpConfig).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(registry.listThreadMcpServers).not.toHaveBeenCalled();
+    expect(registry.reloadCodexMcpConfig).not.toHaveBeenCalled();
     expect(federationMock.remoteBackend.checkThreadBranchDrift).toHaveBeenCalledWith({
       backend: "codex",
       expectedBranch: "feature/expected",

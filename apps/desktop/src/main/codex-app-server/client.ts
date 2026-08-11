@@ -49,6 +49,8 @@ import type {
   BackendModelOption,
   BackendRateLimitSummary,
   CodexThreadEnvironmentRuntime,
+  CodexMcpInventoryDetail,
+  CodexMcpServerSummary,
   LinkedDirectorySummary,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
@@ -701,6 +703,94 @@ function readMcpServerInventoryPage(value: unknown): {
     throw new Error("codex_title_mcp_inventory_invalid_cursor");
   }
   return { names, namesWithTools, nextCursor: nextCursorValue.trim() };
+}
+
+function readMcpAuthStatus(value: unknown): CodexMcpServerSummary["authStatus"] {
+  if (
+    value === "unsupported"
+    || value === "notLoggedIn"
+    || value === "bearerToken"
+    || value === "oAuth"
+  ) {
+    return value;
+  }
+  throw new Error("codex_mcp_inventory_invalid_auth_status");
+}
+
+function readMcpResourceSummaries(
+  value: unknown,
+): NonNullable<CodexMcpServerSummary["resources"]> {
+  if (!Array.isArray(value)) {
+    throw new Error("codex_mcp_inventory_invalid_resources");
+  }
+  return value.map((item) => {
+    const record = asRecord(item);
+    const name = readStringFromRecord(record, "name");
+    const uri = readStringFromRecord(record, "uri");
+    if (!name || !uri) {
+      throw new Error("codex_mcp_inventory_invalid_resource");
+    }
+    const title = readStringFromRecord(record, "title");
+    return { name, uri, ...(title ? { title } : {}) };
+  });
+}
+
+function readMcpResourceTemplateSummaries(
+  value: unknown,
+): NonNullable<CodexMcpServerSummary["resourceTemplates"]> {
+  if (!Array.isArray(value)) {
+    throw new Error("codex_mcp_inventory_invalid_resource_templates");
+  }
+  return value.map((item) => {
+    const record = asRecord(item);
+    const name = readStringFromRecord(record, "name");
+    const uriTemplate = readStringFromRecord(record, "uriTemplate");
+    if (!name || !uriTemplate) {
+      throw new Error("codex_mcp_inventory_invalid_resource_template");
+    }
+    const title = readStringFromRecord(record, "title");
+    return { name, uriTemplate, ...(title ? { title } : {}) };
+  });
+}
+
+function readMcpServerStatusPage(
+  value: unknown,
+  detail: CodexMcpInventoryDetail,
+): { servers: CodexMcpServerSummary[]; nextCursor?: string } {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.data)) {
+    throw new Error("codex_mcp_inventory_invalid_response");
+  }
+
+  const servers = record.data.map((item) => {
+    const server = asRecord(item);
+    const name = readStringFromRecord(server, "name");
+    const tools = asRecord(server?.tools);
+    if (!name || !tools) {
+      throw new Error("codex_mcp_inventory_invalid_server");
+    }
+    return {
+      name,
+      authStatus: readMcpAuthStatus(server?.authStatus),
+      tools: Object.keys(tools).sort((left, right) => left.localeCompare(right)),
+      ...(detail === "full"
+        ? {
+            resources: readMcpResourceSummaries(server?.resources),
+            resourceTemplates: readMcpResourceTemplateSummaries(
+              server?.resourceTemplates,
+            ),
+          }
+        : {}),
+    } satisfies CodexMcpServerSummary;
+  });
+  const nextCursorValue = record.nextCursor;
+  if (nextCursorValue === null || nextCursorValue === undefined) {
+    return { servers };
+  }
+  if (typeof nextCursorValue !== "string" || !nextCursorValue.trim()) {
+    throw new Error("codex_mcp_inventory_invalid_cursor");
+  }
+  return { servers, nextCursor: nextCursorValue.trim() };
 }
 
 function readThreadInstructionSources(value: unknown): string[] | null {
@@ -5587,6 +5677,11 @@ function isUnmaterializedThreadError(error: unknown): boolean {
   );
 }
 
+function isThreadNotFoundError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.toLowerCase().includes("thread not found:");
+}
+
 function readCodexThreadSourceKind(
   record: Record<string, unknown>,
   sessionRecord: Record<string, unknown> | null,
@@ -7593,6 +7688,62 @@ export class CodexAppServerClient {
     });
 
     return extractSkillCatalog(result);
+  }
+
+  async listMcpServers(params: {
+    threadId: string;
+    detail: CodexMcpInventoryDetail;
+  }): Promise<CodexMcpServerSummary[]> {
+    await this.ensureInitialized();
+
+    const listPages = async (threadId?: string) => {
+      const servers: CodexMcpServerSummary[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const result = await requestWithFallbacks({
+          client: this.connection,
+          methods: ["mcpServerStatus/list"],
+          payloads: [{
+            ...(threadId ? { threadId } : {}),
+            detail: params.detail,
+            limit: 100,
+            ...(cursor ? { cursor } : {}),
+          }],
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        });
+        const page = readMcpServerStatusPage(result, params.detail);
+        servers.push(...page.servers);
+        cursor = page.nextCursor;
+        if (cursor) {
+          if (seenCursors.has(cursor)) {
+            throw new Error("codex_mcp_inventory_repeated_cursor");
+          }
+          seenCursors.add(cursor);
+        }
+      } while (cursor);
+
+      return servers.sort((left, right) => left.name.localeCompare(right.name));
+    };
+
+    try {
+      return await listPages(params.threadId);
+    } catch (error) {
+      if (!isThreadNotFoundError(error)) {
+        throw error;
+      }
+      return await listPages();
+    }
+  }
+
+  async reloadMcpConfig(): Promise<void> {
+    await this.ensureInitialized();
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["config/mcpServer/reload"],
+      payloads: [undefined],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
   }
 
   async listModels(

@@ -40,11 +40,15 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListThreadMcpServersRequest,
+  ListThreadMcpServersResponse,
   ListDesktopPwrAgentProfilesResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
+  ReloadCodexMcpConfigRequest,
+  ReloadCodexMcpConfigResponse,
   LatestCodexConfigWarningResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
@@ -408,6 +412,8 @@ import {
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
+  AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
+  AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -1340,6 +1346,14 @@ const desktopApi = Object.freeze({
     request: CompactThreadRequest
   ): Promise<CompactThreadResponse> =>
     await ipcRenderer.invoke(AGENT_COMPACT_THREAD_CHANNEL, request),
+  listThreadMcpServers: async (
+    request: ListThreadMcpServersRequest,
+  ): Promise<ListThreadMcpServersResponse> =>
+    await ipcRenderer.invoke(AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL, request),
+  reloadCodexMcpConfig: async (
+    request: ReloadCodexMcpConfigRequest,
+  ): Promise<ReloadCodexMcpConfigResponse> =>
+    await ipcRenderer.invoke(AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL, request),
   startTurn: async (
     request: StartTurnRequest
   ): Promise<StartTurnResponse> =>

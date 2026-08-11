@@ -26,6 +26,7 @@ import type {
   BackendSummary,
   CodexEnvironmentOption,
   CodexEnvironmentActionRun,
+  CodexMcpInventoryDetail,
   CodexThreadEnvironmentRuntime,
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationsSnapshot,
@@ -314,6 +315,7 @@ type ComposerProps = {
     { label: string; path: string } | undefined
   >;
   onClearPickDirectoryError?: () => void;
+  onShowMcpInventory?: (detail: CodexMcpInventoryDetail) => void;
   pickDirectoryError?: string;
   pickingDirectory?: boolean;
   setExecutionModeError?: string;
@@ -691,6 +693,25 @@ const SLASH_COMMANDS: SlashCommandSuggestion[] = [
     description: "Review current staged, unstaged, and untracked changes",
     source: "pwragent",
     sourceLabel: "PwrAgent",
+  },
+];
+
+const CODEX_MCP_SLASH_COMMANDS: SlashCommandSuggestion[] = [
+  {
+    id: "codex-mcp",
+    label: "/mcp",
+    insertText: "/mcp",
+    description: "List MCP tools and authentication status",
+    source: "pwragent",
+    sourceLabel: "Codex",
+  },
+  {
+    id: "codex-mcp-verbose",
+    label: "/mcp verbose",
+    insertText: "/mcp verbose",
+    description: "List MCP tools, resources, and resource templates",
+    source: "pwragent",
+    sourceLabel: "Codex",
   },
 ];
 
@@ -2047,6 +2068,7 @@ function ComposerThreadOptionsMenu(props: {
   disabled?: boolean;
   existingCodexThread?: boolean;
   onAgentThreadChange?: (agentThread: boolean) => void;
+  onShowMcpInventory?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const menuId = useId();
@@ -2110,6 +2132,22 @@ function ComposerThreadOptionsMenu(props: {
               </span>
             </button>
           </div>
+          {props.onShowMcpInventory ? (
+            <>
+              <div className="composer-dropdown__separator" role="separator" />
+              <button
+                className="composer-dropdown__option composer-thread-options__option"
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  props.onShowMcpInventory?.();
+                }}
+              >
+                <span className="composer-thread-options__label">MCP tools</span>
+              </button>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -3260,6 +3298,10 @@ export function Composer(props: ComposerProps) {
       );
     })
   );
+  const supportsMcpInventory =
+    !isLaunchpad
+    && props.thread?.source === "codex"
+    && Boolean(props.onShowMcpInventory);
 
   const selectionStart = Math.min(
     inputRef.current?.selectionStart ?? draft.length,
@@ -4557,8 +4599,17 @@ export function Composer(props: ComposerProps) {
       props.providerCommands?.map((command) =>
         providerCommandToSlashSuggestion(command, props.backends)
       ) ?? [];
-    return supportsReview ? [...SLASH_COMMANDS, ...commands] : commands;
-  }, [props.backends, props.providerCommands, supportsReview]);
+    const localCommands = supportsReview ? [...SLASH_COMMANDS] : [];
+    if (supportsMcpInventory) {
+      localCommands.push(...CODEX_MCP_SLASH_COMMANDS);
+    }
+    return [...localCommands, ...commands];
+  }, [
+    props.backends,
+    props.providerCommands,
+    supportsMcpInventory,
+    supportsReview,
+  ]);
   const filteredSlashCommands = useMemo(() => {
     if (!slashTrigger) {
       return [];
@@ -4819,6 +4870,12 @@ export function Composer(props: ComposerProps) {
   const parsedReviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
   const isBareReviewCommand = draft.trim() === "/review";
   const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
+  const mcpInventoryDetail: CodexMcpInventoryDetail | undefined =
+    supportsMcpInventory && draft.trim().toLowerCase() === "/mcp"
+      ? "toolsAndAuthOnly"
+      : supportsMcpInventory && draft.trim().toLowerCase() === "/mcp verbose"
+        ? "full"
+        : undefined;
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
@@ -5909,6 +5966,44 @@ export function Composer(props: ComposerProps) {
       props.onActiveTurnIdChange?.(undefined);
       setSendError(error instanceof Error ? error.message : String(error));
     }
+  };
+
+  const showMcpInventory = (detail: CodexMcpInventoryDetail): void => {
+    if (imageAttachments.length > 0 || fileAttachments.length > 0) {
+      setSendError("/mcp does not accept attachments.");
+      return;
+    }
+    if (!supportsMcpInventory || !props.onShowMcpInventory) {
+      setSendError("MCP inventory is not available for this thread.");
+      return;
+    }
+
+    const submittedScopeKey = composerScopeKey;
+    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    const emptySnapshot = createEmptyComposerDraftSnapshot();
+    clearComposerDraftSnapshot(submittedScopeKey);
+    latestDraftSnapshotRef.current = {
+      scopeKey: submittedScopeKey,
+      snapshot: emptySnapshot,
+    };
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: "",
+      expectedSkillTokensSignature: getComposerSkillTokensSignature([]),
+      staleDraft: submittedSnapshot.draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(
+        submittedSnapshot.skillTokens,
+      ),
+    };
+    flushSync(() => {
+      clearComposerDraft();
+      setImageAttachments([]);
+      setFileAttachments([]);
+      setReviewConfig(undefined);
+    });
+    setSendError(undefined);
+    recordComposerDraftHistory(submittedScopeKey, submittedSnapshot, "sent");
+    props.onShowMcpInventory(detail);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   /**
@@ -7387,6 +7482,10 @@ export function Composer(props: ComposerProps) {
     }
     if (isCompactCommand) {
       await submitCompactThread();
+      return;
+    }
+    if (mcpInventoryDetail) {
+      showMcpInventory(mcpInventoryDetail);
       return;
     }
 
@@ -9495,6 +9594,16 @@ export function Composer(props: ComposerProps) {
 
     if (command.label.toLowerCase() === "/compact") {
       void submitCompactThread();
+      return true;
+    }
+
+    if (command.id === "codex-mcp") {
+      showMcpInventory("toolsAndAuthOnly");
+      return true;
+    }
+
+    if (command.id === "codex-mcp-verbose") {
+      showMcpInventory("full");
       return true;
     }
 
@@ -11933,6 +12042,11 @@ export function Composer(props: ComposerProps) {
                       void changeAgentThread(agentThread);
                     }
                   : undefined
+            }
+            onShowMcpInventory={
+              supportsMcpInventory
+                ? () => props.onShowMcpInventory?.("toolsAndAuthOnly")
+                : undefined
             }
           />
         </div>

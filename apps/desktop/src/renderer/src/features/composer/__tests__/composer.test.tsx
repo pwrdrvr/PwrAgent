@@ -12027,6 +12027,75 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("opens Codex MCP inventory locally instead of sending a turn", async () => {
+    const onShowMcpInventory = vi.fn();
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        onShowMcpInventory={onShowMcpInventory}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "MCP inventory",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/mcp verbose" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(onShowMcpInventory).toHaveBeenCalledWith("full");
+    expect(startTurn).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(textarea).toHaveValue("");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "MCP tools" }));
+    expect(onShowMcpInventory).toHaveBeenLastCalledWith("toolsAndAuthOnly");
+  });
+
+  it("does not advertise MCP inventory for ACP threads", async () => {
+    render(
+      <Composer
+        disabled={false}
+        onShowMcpInventory={vi.fn()}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "ACP thread",
+          titleSource: "explicit",
+          source: "acp:grok",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/mcp" },
+    });
+    const commands = screen.queryByRole("listbox", { name: "Commands" });
+    expect(commands?.textContent ?? "").not.toContain("MCP tools");
+  });
+
   it("runs exact compact slash command on Enter even after review was selected", async () => {
     const compactThreadResponse = createDeferred<{
       backend: CompactThreadRequest["backend"];
