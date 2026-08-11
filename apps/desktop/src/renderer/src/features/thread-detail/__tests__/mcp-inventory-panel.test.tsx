@@ -5,7 +5,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -13,6 +12,7 @@ import { McpInventoryPanel } from "../McpInventoryPanel";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   delete (window as typeof window & {
     __pwragentFederationTarget?: unknown;
   }).__pwragentFederationTarget;
@@ -63,7 +63,7 @@ describe("McpInventoryPanel", () => {
     });
   });
 
-  it("queues a config reload and explains the next-turn boundary", async () => {
+  it("holds confirmed reload feedback and explains the next-turn boundary", async () => {
     const reloadCodexMcpConfig = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
@@ -93,17 +93,31 @@ describe("McpInventoryPanel", () => {
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
       "Re-read installed MCP configuration",
     );
-    fireEvent.click(reload);
-
-    await waitFor(() => {
-      expect(reloadCodexMcpConfig).toHaveBeenCalledWith({
-        backend: "codex",
-        threadId: "thread-1",
-      });
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(reload);
+      await Promise.resolve();
     });
-    expect(await screen.findByRole("status")).toHaveTextContent(
+
+    expect(reloadCodexMcpConfig).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const confirmed = screen.getByRole("button", { name: "Reload queued" });
+    expect(confirmed).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(
       "applies when the next turn starts",
     );
+
+    await act(async () => {
+      vi.advanceTimersByTime(4_999);
+    });
+    expect(screen.getByRole("button", { name: "Reload queued" })).toBeDisabled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.getByRole("button", { name: "Reload Config" })).toBeEnabled();
   });
 
   it("collapses large server catalogs into expandable previews", async () => {

@@ -1,11 +1,11 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   CodexMcpAuthStatus,
   CodexMcpInventoryDetail,
   CodexMcpServerSummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { CloseIcon } from "../../icons";
+import { CheckIcon, CloseIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -27,6 +27,7 @@ const RELOAD_TOOLTIP =
   + "Each thread receives the updated MCP list when its next turn starts.";
 const TOOL_PREVIEW_LIMIT = 8;
 const CATALOG_PREVIEW_LIMIT = 3;
+const RELOAD_CONFIRMATION_MS = 5_000;
 
 export function McpInventoryPanel(props: McpInventoryPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -34,7 +35,9 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [reloading, setReloading] = useState(false);
+  const [reloadConfirmed, setReloadConfirmed] = useState(false);
   const [reloadStatus, setReloadStatus] = useState<string>();
+  const reloadConfirmationTimeoutRef = useRef<number | undefined>(undefined);
   const bodyId = useId();
   const reloadTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const rendererFederationTarget = useMemo(
@@ -79,9 +82,26 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
     props.thread.source,
   ]);
 
+  useEffect(() => {
+    return () => {
+      if (reloadConfirmationTimeoutRef.current !== undefined) {
+        window.clearTimeout(reloadConfirmationTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const reloadConfig = async (): Promise<void> => {
-    if (!props.desktopApi?.reloadCodexMcpConfig || reloading) return;
+    if (
+      !props.desktopApi?.reloadCodexMcpConfig
+      || reloading
+      || reloadConfirmed
+    ) return;
+    if (reloadConfirmationTimeoutRef.current !== undefined) {
+      window.clearTimeout(reloadConfirmationTimeoutRef.current);
+      reloadConfirmationTimeoutRef.current = undefined;
+    }
     setReloading(true);
+    setReloadConfirmed(false);
     setReloadStatus(undefined);
     try {
       await props.desktopApi.reloadCodexMcpConfig({
@@ -92,7 +112,13 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
       setReloadStatus(
         "Config reload queued. The updated MCP list applies when the next turn starts.",
       );
+      setReloadConfirmed(true);
+      reloadConfirmationTimeoutRef.current = window.setTimeout(() => {
+        reloadConfirmationTimeoutRef.current = undefined;
+        setReloadConfirmed(false);
+      }, RELOAD_CONFIRMATION_MS);
     } catch (nextError) {
+      setReloadConfirmed(false);
       setReloadStatus(
         nextError instanceof Error ? nextError.message : String(nextError),
       );
@@ -131,11 +157,21 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
         <div className="live-work-rail__header-actions">
           <button
             type="button"
-            className="mcp-inventory-panel__reload"
+            className={
+              `mcp-inventory-panel__reload${
+                reloadConfirmed
+                  ? " mcp-inventory-panel__reload--success"
+                  : ""
+              }`
+            }
             aria-describedby={
               reloadTooltip.visible ? reloadTooltip.tooltipId : undefined
             }
-            disabled={reloading || !props.desktopApi?.reloadCodexMcpConfig}
+            disabled={
+              reloading
+              || reloadConfirmed
+              || !props.desktopApi?.reloadCodexMcpConfig
+            }
             onClick={() => void reloadConfig()}
             onMouseEnter={(event) =>
               reloadTooltip.show(event.currentTarget, RELOAD_TOOLTIP)
@@ -146,7 +182,12 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
             }
             onBlur={reloadTooltip.hide}
           >
-            {reloading ? "Reloading…" : "Reload Config"}
+            {reloadConfirmed ? (
+              <>
+                <CheckIcon size={12} aria-hidden="true" />
+                Reload queued
+              </>
+            ) : reloading ? "Reloading…" : "Reload Config"}
           </button>
           {reloadTooltip.tooltipNode}
           <button
