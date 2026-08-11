@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.1-prerelease.1 - 2026-08-11
+
+- Windows Installer - Added Azure Artifact Signing for the Windows NSIS installer. Release builds now fail rather than silently producing an unsigned installer; the signed installer remains a workflow artifact for this first validation run.
+- Pull Request Details - Added a hover card with status, diff size, changed-file and commit counts, and lifecycle timing.
+- Pull Request Status - Prevented slower or stale GitHub results from replacing newer status; added a clear notice when GitHub authentication is unavailable.
+- Grok Updates - PwrAgent now checks enabled system Grok installations for updates and offers a copyable update command with snooze and dismiss controls.
+- ACP Conversations - Improved completion handling so late tool progress and provider metadata do not split assistant responses or leave a thread appearing to think after it is finished.
+- Thread Directories - Made startup directory discovery best-effort, with bounded Git probes and resilient worktree fallbacks when Git metadata is missing or unavailable.
+- Performance - Significantly reduced SQLite write volume for streamed tool output and live token accounting.
+- Maintenance - Updated the 1.0 security and packaging baseline, including more robust Windows ASAR validation and installer compression.
+
 ## v1.0.0 - 2026-08-09
 
 - Thread-Centric Agent Workspace - Shipped the desktop workspace for coding-agent threads, with native Codex sub-agent visibility, per-thread terminals, worktree-aware edits, linked projects, and durable handoffs.
