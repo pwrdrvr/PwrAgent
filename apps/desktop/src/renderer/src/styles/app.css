@@ -13887,7 +13887,7 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .mcp-inventory-panel__line {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: 88px minmax(0, 1fr);
   gap: 8px;
   font-size: 11px;
   line-height: 1.45;
@@ -13898,12 +13898,45 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 600;
 }
 
+.mcp-inventory-panel__line-count {
+  font-weight: 400;
+}
+
 .mcp-inventory-panel__line-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   min-width: 0;
   color: var(--text-secondary);
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
   user-select: text;
+}
+
+.mcp-inventory-panel__line-items {
+  min-width: 0;
+}
+
+.mcp-inventory-panel__line-toggle {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  user-select: none;
+}
+
+.mcp-inventory-panel__line-toggle:hover {
+  color: var(--accent-bright);
+}
+
+.mcp-inventory-panel__line-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .mcp-inventory-panel__state,

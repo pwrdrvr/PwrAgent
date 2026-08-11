@@ -106,6 +106,56 @@ describe("McpInventoryPanel", () => {
     );
   });
 
+  it("collapses large server catalogs into expandable previews", async () => {
+    const tools = Array.from({ length: 10 }, (_, index) => `tool-${index + 1}`);
+    const resources = Array.from({ length: 4 }, (_, index) => ({
+      name: `resource-${index + 1}`,
+      uri: `plugin://resource-${index + 1}`,
+    }));
+
+    render(
+      <McpInventoryPanel
+        desktopApi={{
+          listThreadMcpServers: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            detail: "full",
+            servers: [
+              {
+                name: "codex_apps",
+                authStatus: "oAuth",
+                tools,
+                resources,
+                resourceTemplates: [],
+              },
+            ],
+          }),
+        }}
+        onDismiss={vi.fn()}
+        request={{ detail: "full", requestId: 1 }}
+        thread={thread}
+      />,
+    );
+
+    const panel = await screen.findByRole("complementary", {
+      name: "MCP Tools · 1 server · 10 tools",
+    });
+    expect(panel).toHaveTextContent("tool-8");
+    expect(panel).not.toHaveTextContent("tool-9");
+    expect(panel).toHaveTextContent("resource-3");
+    expect(panel).not.toHaveTextContent("resource-4");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 more Tools" }));
+    expect(panel).toHaveTextContent("tool-10");
+    fireEvent.click(screen.getByRole("button", { name: "Show fewer Tools" }));
+    expect(panel).not.toHaveTextContent("tool-9");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show 1 more Resources" }),
+    );
+    expect(panel).toHaveTextContent("resource-4");
+  });
+
   it("keeps the federation-window target stable across state updates", async () => {
     (window as typeof window & {
       __pwragentFederationTarget?: {

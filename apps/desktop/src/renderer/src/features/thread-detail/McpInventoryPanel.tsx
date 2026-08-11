@@ -25,6 +25,8 @@ type McpInventoryPanelProps = {
 const RELOAD_TOOLTIP =
   "Re-read installed MCP configuration and queue it for loaded Codex threads. "
   + "Each thread receives the updated MCP list when its next turn starts.";
+const TOOL_PREVIEW_LIMIT = 8;
+const CATALOG_PREVIEW_LIMIT = 3;
 
 export function McpInventoryPanel(props: McpInventoryPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -202,17 +204,23 @@ function McpServerRow(props: {
           {formatAuthStatus(props.server.authStatus)}
         </span>
       </div>
-      <InventoryLine label="Tools" values={props.server.tools} />
+      <InventoryLine
+        label="Tools"
+        previewLimit={TOOL_PREVIEW_LIMIT}
+        values={props.server.tools}
+      />
       {props.detail === "full" ? (
         <>
           <InventoryLine
             label="Resources"
+            previewLimit={CATALOG_PREVIEW_LIMIT}
             values={(props.server.resources ?? []).map((resource) =>
               `${resource.title ?? resource.name} (${resource.uri})`
             )}
           />
           <InventoryLine
             label="Templates"
+            previewLimit={CATALOG_PREVIEW_LIMIT}
             values={(props.server.resourceTemplates ?? []).map((template) =>
               `${template.title ?? template.name} (${template.uriTemplate})`
             )}
@@ -223,13 +231,46 @@ function McpServerRow(props: {
   );
 }
 
-function InventoryLine(props: { label: string; values: string[] }) {
+function InventoryLine(props: {
+  label: string;
+  previewLimit: number;
+  values: string[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const hasOverflow = props.values.length > props.previewLimit;
+  const visibleValues = expanded || !hasOverflow
+    ? props.values
+    : props.values.slice(0, props.previewLimit);
+  const hiddenCount = props.values.length - visibleValues.length;
+
   return (
     <div className="mcp-inventory-panel__line">
-      <span className="mcp-inventory-panel__line-label">{props.label}</span>
-      <span className="mcp-inventory-panel__line-value">
-        {props.values.length > 0 ? props.values.join(", ") : "None"}
+      <span className="mcp-inventory-panel__line-label">
+        {props.label}
+        <span className="mcp-inventory-panel__line-count">
+          {` · ${props.values.length}`}
+        </span>
       </span>
+      <div className="mcp-inventory-panel__line-value">
+        <span className="mcp-inventory-panel__line-items">
+          {visibleValues.length > 0 ? visibleValues.join(", ") : "None"}
+        </span>
+        {hasOverflow ? (
+          <button
+            type="button"
+            className="mcp-inventory-panel__line-toggle"
+            aria-expanded={expanded}
+            aria-label={
+              expanded
+                ? `Show fewer ${props.label}`
+                : `Show ${hiddenCount} more ${props.label}`
+            }
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? "Show less" : `Show ${hiddenCount} more`}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
