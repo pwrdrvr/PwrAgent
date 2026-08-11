@@ -16080,6 +16080,15 @@ a.transcript-message__messaging-origin:focus-visible {
    `pwragent://thread/…` link (or a bare thread id an agent wrote as code).
    Sits on the `.chip` primitive so it carries the same pill geometry as the
    skill chip; the interactive states are what set it apart. */
+.thread-chip-group {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 2px;
+  vertical-align: middle;
+}
+
 .thread-chip {
   max-width: 100%;
   height: 22px;
@@ -16109,6 +16118,33 @@ a.transcript-message__messaging-origin:focus-visible {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.thread-chip__popout {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.thread-chip__popout:hover,
+.thread-chip__popout:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent);
+}
+
+.thread-chip__popout:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .context-rail {

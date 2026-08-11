@@ -3312,6 +3312,201 @@ describe("App", () => {
     });
   });
 
+  it("adds a remote transcript link to this window while its pop-out opens the viewer", async () => {
+    const remoteTarget = {
+      scope: "remote" as const,
+      instanceId: "studio-mac",
+    };
+    const localThread = {
+      id: "thread-local",
+      title: "Local planning thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "new-thread" as const },
+      updatedAt: 2_000,
+    };
+    const remoteThread = {
+      id: "thread-remote",
+      title: "M4 Mac Mini runner-host conversion preflight",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "new-thread" as const },
+      updatedAt: 1_000,
+      federation: {
+        ref: {
+          backend: "codex" as const,
+          target: remoteTarget,
+          threadId: "thread-remote",
+        },
+        instanceLabel: "Studio Mac",
+        peerStatus: "connected" as const,
+      },
+    };
+    let remotePinned = false;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: remotePinned
+        ? ["codex:thread-local", "codex:thread-remote"]
+        : ["codex:thread-local"],
+      threads: remotePinned ? [localThread, remoteThread] : [localThread],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const addRemoteThreadPin = vi.fn(async (request: {
+      ref: typeof remoteThread.federation.ref;
+    }) => {
+      remotePinned = true;
+      return {
+        pin: {
+          ref: request.ref,
+          addedAt: Date.now(),
+          instanceLabel: "Studio Mac",
+        },
+      };
+    });
+    const openFederationWindow = vi.fn(async () => ({ windowId: 2 }));
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        addRemoteThreadPin,
+        getNavigationSnapshot,
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read"],
+              capabilities: {
+                listThreads: true,
+                createThread: false,
+                resumeThread: true,
+                renameThread: false,
+                readThread: true,
+                startTurn: false,
+                interruptTurn: false,
+                steerTurn: false,
+                transcriptPagination: false,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true,
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+              ],
+            },
+          ],
+        }),
+        listSkills: async () => ({
+          backend: "codex" as const,
+          fetchedAt: Date.now(),
+          data: [],
+        }),
+        markThreadSeen: async (request: {
+          backend: AppServerBackendKind;
+          threadId: string;
+        }) => ({ ...request, seenAt: Date.now() }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        openFederationWindow,
+        platform: "darwin",
+        readThread: async (request: {
+          backend: AppServerBackendKind;
+          threadId: string;
+        }) => ({
+          ...request,
+          fetchedAt: Date.now(),
+          replay: {
+            entries: request.threadId === "thread-local"
+              ? [
+                  {
+                    type: "message" as const,
+                    id: "message-link",
+                    role: "assistant" as const,
+                    text:
+                      "Open [runner preflight](pwragent://thread/thread-remote"
+                      + "?backend=codex&instanceId=studio-mac)",
+                  },
+                ]
+              : [],
+            messages: request.threadId === "thread-local"
+              ? [
+                  {
+                    id: "message-link",
+                    role: "assistant" as const,
+                    text:
+                      "Open [runner preflight](pwragent://thread/thread-remote"
+                      + "?backend=codex&instanceId=studio-mac)",
+                  },
+                ]
+              : [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        }),
+        versions: { electron: "41.2.1" },
+      },
+    });
+
+    render(<App />);
+    await screen.findByRole("heading", { level: 2, name: localThread.title });
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Open remote viewer for studio-mac",
+    }));
+    expect(openFederationWindow).toHaveBeenCalledWith({
+      target: remoteTarget,
+      initialThread: {
+        backend: "codex",
+        target: remoteTarget,
+        threadId: "thread-remote",
+      },
+    });
+    expect(addRemoteThreadPin).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Open thread runner preflight",
+    }));
+
+    await waitFor(() => expect(addRemoteThreadPin).toHaveBeenCalledWith({
+      ref: remoteThread.federation.ref,
+      instanceLabel: undefined,
+    }));
+    expect(openFederationWindow).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("heading", {
+      level: 2,
+      name: remoteThread.title,
+    })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Local planning thread/i }));
+    await screen.findByRole("heading", { level: 2, name: localThread.title });
+    fireEvent.click(screen.getByRole("button", {
+      name: "Open thread M4 Mac Mini runner-host conversion preflight",
+    }));
+
+    expect(await screen.findByRole("heading", {
+      level: 2,
+      name: remoteThread.title,
+    })).toBeInTheDocument();
+    expect(addRemoteThreadPin).toHaveBeenCalledTimes(1);
+  });
+
   it("reuses cached thread history when reselecting an unchanged thread", async () => {
     const readThread = vi.fn(
       async ({

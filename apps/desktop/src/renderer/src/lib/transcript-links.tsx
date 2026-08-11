@@ -10,15 +10,24 @@ import { ThreadLinkProvider } from "./thread-links";
 export function TranscriptLinkProvider(props: {
   activeThread?: NavigationThreadSummary;
   children: ReactNode;
+  onOpenRemoteViewer?: (request: {
+    backend: AppServerBackendKind;
+    instanceId: FederationInstanceId;
+    instanceLabel?: string;
+    threadId: string;
+  }) => void;
   onShowThread: (request: {
     backend: AppServerBackendKind;
     instanceId?: FederationInstanceId;
+    instanceLabel?: string;
+    inThreadList?: boolean;
     threadId: string;
   }) => void;
   threads: NavigationThreadSummary[];
 }) {
   return (
     <ThreadLinkProvider
+      onOpenRemoteViewer={props.onOpenRemoteViewer}
       onShowThread={props.onShowThread}
       threads={props.threads}
     >
