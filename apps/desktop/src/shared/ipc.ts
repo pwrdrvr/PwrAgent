@@ -228,6 +228,8 @@ export const AUTOMATIONS_RESUME_CHANNEL = "automations:resume";
 export const AUTOMATIONS_RUN_NOW_CHANNEL = "automations:run-now";
 export const AUTOMATIONS_LIST_RUNS_CHANNEL = "automations:list-runs";
 export const AUTOMATIONS_SEARCH_SENDERS_CHANNEL = "automations:search-senders";
+export const AUTOMATIONS_ALLOCATE_WORKSPACE_CHANNEL =
+  "automations:allocate-workspace";
 export const AUTOMATIONS_LIST_CARDS_CHANNEL = "automations:list-cards";
 export const AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL =
   "automations:get-run-artifact";

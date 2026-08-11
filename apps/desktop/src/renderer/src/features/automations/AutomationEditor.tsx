@@ -17,6 +17,7 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
   MessagingSenderSuggestion,
+  NavigationDirectorySummary,
   NavigationThreadSummary,
   ThreadExecutionMode,
   ThreadIdentifier,
@@ -43,6 +44,7 @@ import { copyText } from "../../lib/copy-text";
 import { HelpCircleIcon } from "../../icons";
 import { AutomationConditionEditor } from "./AutomationConditionEditor";
 import { AutomationMcpPicker } from "./AutomationMcpPicker";
+import { ProjectPicker } from "../composer/ProjectPicker";
 import { AutomationFlow, AutomationStage } from "./AutomationFunnel";
 
 type AutomationEditorMode =
@@ -76,6 +78,8 @@ type AutomationEditorProps = {
   onSubmit: (submission: AutomationEditorSubmit) => Promise<void>;
   saving?: boolean;
   threads?: NavigationThreadSummary[];
+  /** Tracked project directories, for the working-directory picker. */
+  directories?: NavigationDirectorySummary[];
 };
 
 type ScheduleFormKind = "interval" | "weekdays" | "weekly";
@@ -868,6 +872,33 @@ export function AutomationEditor(props: AutomationEditorProps) {
     kind
       ? backendCatalog?.find((backend) => backend.kind === kind)?.label ?? kind
       : "";
+
+  const [cwdCopied, setCwdCopied] = useState(false);
+  const [allocatingWorkspace, setAllocatingWorkspace] = useState(false);
+
+  const allocateWorkspace = async (): Promise<void> => {
+    const allocate = props.desktopApi?.allocateAutomationWorkspace;
+    if (!allocate) return;
+    setAllocatingWorkspace(true);
+    try {
+      const result = await allocate();
+      setProfileCwd(result.path);
+      setValidationError(undefined);
+    } catch (caught) {
+      setValidationError(
+        caught instanceof Error ? caught.message : String(caught),
+      );
+    } finally {
+      setAllocatingWorkspace(false);
+    }
+  };
+
+  const copyCwd = async (): Promise<void> => {
+    if (!profileCwd.trim()) return;
+    await copyText(profileCwd.trim());
+    setCwdCopied(true);
+    setTimeout(() => setCwdCopied(false), 1_500);
+  };
 
   const browseForCwd = async (): Promise<void> => {
     const pick = props.desktopApi?.pickDirectoryFromDisk;
@@ -1791,7 +1822,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
               Optional. Leave these alone to inherit the Agent's settings.
             </p>
           <div className="automation-fieldset">
-            <legend>Execution</legend>
+            <p className="automation-fieldset__legend">Execution</p>
             <div className="automation-field-group">
               <label className="automation-field">
                 <span>Working directory</span>
@@ -1801,6 +1832,33 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     placeholder="Inherit the Agent's directory"
                     onChange={(event) => setProfileCwd(event.currentTarget.value)}
                   />
+                  {profileCwd.trim() ? (
+                    <button
+                      className="button button--ghost"
+                      type="button"
+                      onClick={() => void copyCwd()}
+                    >
+                      {cwdCopied ? "Copied" : "Copy"}
+                    </button>
+                  ) : null}
+                </div>
+              </label>
+              <div className="automation-cwd-actions">
+                {props.directories ? (
+                  <ProjectPicker
+                    directories={props.directories}
+                    value={props.directories.find(
+                      (directory) =>
+                        directory.path !== undefined
+                        && directory.path === profileCwd.trim(),
+                    )}
+                    onSelect={(directory) => {
+                      if (directory.path) setProfileCwd(directory.path);
+                      setValidationError(undefined);
+                    }}
+                    onPickFromDisk={() => void browseForCwd()}
+                  />
+                ) : (
                   <button
                     className="button button--ghost"
                     type="button"
@@ -1808,8 +1866,25 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   >
                     Browse…
                   </button>
-                </div>
-              </label>
+                )}
+                {props.desktopApi?.allocateAutomationWorkspace ? (
+                  <button
+                    className="button button--ghost"
+                    disabled={allocatingWorkspace}
+                    type="button"
+                    onClick={() => void allocateWorkspace()}
+                  >
+                    {allocatingWorkspace
+                      ? "Allocating…"
+                      : "Allocate Workspace sandbox"}
+                  </button>
+                ) : null}
+              </div>
+              <p className="automation-field__hint">
+                Runs execute here. Pick a project, or allocate a fresh sandbox
+                under this profile&rsquo;s Workspaces directory when the
+                automation shouldn&rsquo;t touch a repo.
+              </p>
             </div>
             <div className="automation-inline-fields">
               <label className="automation-field">
@@ -1964,13 +2039,15 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 />
               </label>
               <p className="automation-field__hint">
-                Comma-separated tool names. Leave blank to inherit the Agent's tools.
+                Restrict which individual tools the run may call. Leave blank to
+                allow every tool from the servers above plus the Agent&rsquo;s
+                built-ins.
               </p>
             </div>
           </div>
 
           <div className="automation-fieldset">
-            <legend>Gate</legend>
+            <p className="automation-fieldset__legend">Gate</p>
             <label className="automation-checkbox">
               <input
                 checked={gateEnabled}

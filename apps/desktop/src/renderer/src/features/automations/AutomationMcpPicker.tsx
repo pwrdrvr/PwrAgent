@@ -94,7 +94,7 @@ export function AutomationMcpPicker(props: {
       {selected.length > 0 ? (
         <ul className="automation-sender-picker__chips">
           {selected.map((name) => (
-            <li className="automation-sender-chip" key={name}>
+            <li className="chip automation-sender-chip" key={name}>
               <span className="automation-sender-chip__label">{name}</span>
               <button
                 type="button"

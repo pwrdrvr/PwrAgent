@@ -464,6 +464,7 @@ export type DesktopApi = {
   searchAutomationSenders?: (
     request: SearchMessagingSendersRequest,
   ) => Promise<SearchMessagingSendersResponse>;
+  allocateAutomationWorkspace?: () => Promise<{ path: string }>;
   getAutomationRunArtifact?: (
     request: GetAutomationRunArtifactRequest,
   ) => Promise<GetAutomationRunArtifactResponse>;

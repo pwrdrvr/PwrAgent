@@ -17505,11 +17505,23 @@ a.transcript-message__messaging-origin:focus-visible {
   border: 0;
 }
 
-.automation-fieldset legend {
+.automation-fieldset legend,
+.automation-fieldset__legend {
+  margin: 0;
   padding: 0;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
+}
+
+/* Section rhythm inside the Advanced disclosure: space before each section
+   heading and before the trailing Backlog field. */
+.automation-advanced .automation-fieldset {
+  margin-top: 12px;
+}
+
+.automation-advanced > .automation-field {
+  margin-top: 12px;
 }
 
 /* A switch is sized by its options, not by the panel. Stretching two choices
@@ -17844,6 +17856,13 @@ a.transcript-message__messaging-origin:focus-visible {
   max-width: 460px;
 }
 
+.automation-cwd-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .automation-sender-picker {
   position: relative;
   display: flex;
@@ -17860,15 +17879,10 @@ a.transcript-message__messaging-origin:focus-visible {
   list-style: none;
 }
 
+/* Composes the app-wide .chip primitive; this class only adds the selected
+   accent border and hosts the avatar/remove extras. */
 .automation-sender-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 6px 2px 2px;
   border: 1px solid var(--accent-border);
-  border-radius: 999px;
-  background: var(--bg-row-active);
-  font-size: 12px;
 }
 
 .automation-sender-chip__avatar,

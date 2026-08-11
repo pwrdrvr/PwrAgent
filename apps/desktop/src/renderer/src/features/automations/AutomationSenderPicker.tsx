@@ -150,7 +150,7 @@ export function AutomationSenderPicker(
       {props.selected.length > 0 ? (
         <ul className="automation-sender-picker__chips">
           {props.selected.map((platformUserId) => (
-            <li className="automation-sender-chip" key={platformUserId}>
+            <li className="chip automation-sender-chip" key={platformUserId}>
               <span className="automation-sender-chip__avatar" aria-hidden="true">
                 {initials(props.labels[platformUserId] ?? platformUserId)}
               </span>

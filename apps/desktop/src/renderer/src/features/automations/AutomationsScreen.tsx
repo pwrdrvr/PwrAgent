@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type {
   AutomationDetail,
   MessagingChannelKind,
+  NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
@@ -31,6 +32,7 @@ type AutomationsScreenProps = {
   onRefreshNavigation?: () => Promise<void>;
   onSelectThread?: (thread: NavigationThreadSummary) => void;
   threads: NavigationThreadSummary[];
+  directories?: NavigationDirectorySummary[];
 };
 
 export function AutomationsScreen(props: AutomationsScreenProps) {
@@ -146,6 +148,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
             <div className="automations-editor-panel">
               <AutomationEditor
                 desktopApi={props.desktopApi}
+                directories={props.directories}
                 mode={
                   editorMode.kind === "create"
                     ? { kind: "create" }

@@ -448,6 +448,7 @@ import {
   AUTOMATIONS_LIST_CHANNEL,
   AUTOMATIONS_LIST_RUNS_CHANNEL,
   AUTOMATIONS_LOAD_ISSUES_CHANNEL,
+  AUTOMATIONS_ALLOCATE_WORKSPACE_CHANNEL,
   AUTOMATIONS_SEARCH_SENDERS_CHANNEL,
   AUTOMATIONS_PAUSE_CHANNEL,
   AUTOMATIONS_RESUME_CHANNEL,
@@ -895,6 +896,8 @@ const desktopApi = Object.freeze({
     request: SearchMessagingSendersRequest,
   ): Promise<SearchMessagingSendersResponse> =>
     await ipcRenderer.invoke(AUTOMATIONS_SEARCH_SENDERS_CHANNEL, request),
+  allocateAutomationWorkspace: async (): Promise<{ path: string }> =>
+    await ipcRenderer.invoke(AUTOMATIONS_ALLOCATE_WORKSPACE_CHANNEL),
   getAutomationRunArtifact: async (
     request: GetAutomationRunArtifactRequest,
   ): Promise<GetAutomationRunArtifactResponse> =>
