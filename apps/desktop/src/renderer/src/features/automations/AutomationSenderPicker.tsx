@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   MessagingChannelKind,
   MessagingSenderSuggestion,
@@ -51,6 +51,10 @@ export function AutomationSenderPicker(
     directoryTruncated?: boolean;
   }>({ suggestions: [], directorySupported: false });
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Several sender conditions render several pickers; a hardcoded id would
+  // duplicate in the DOM and leave aria-controls pointing at an ambiguous
+  // target (which the axe WCAG gate flags as duplicate-id-aria).
+  const listId = useId();
 
   const search = props.searchSenders;
   useEffect(() => {
@@ -112,25 +116,27 @@ export function AutomationSenderPicker(
     })).filter((entry) => entry.actors.length > 0);
   }, [props.observedSenders, props.selected, query, remote.suggestions]);
 
+  const { onChange, selected } = props;
+
   const select = useCallback(
     (actor: MessagingSenderSuggestion) => {
       const label = actor.displayName ?? actor.username ?? actor.platformUserId;
-      props.onChange([...props.selected, actor.platformUserId], {
+      onChange([...selected, actor.platformUserId], {
         [actor.platformUserId]: label,
       });
       setQuery("");
     },
-    [props],
+    [onChange, selected],
   );
 
   const remove = useCallback(
     (platformUserId: string) => {
-      props.onChange(
-        props.selected.filter((value) => value !== platformUserId),
+      onChange(
+        selected.filter((value) => value !== platformUserId),
         {},
       );
     },
-    [props],
+    [onChange, selected],
   );
 
   const sourceLabel = (source: MessagingSenderSuggestion["source"]): string => {
@@ -176,7 +182,7 @@ export function AutomationSenderPicker(
         autoComplete="off"
         role="combobox"
         aria-expanded={open}
-        aria-controls="automation-sender-picker-list"
+        aria-controls={listId}
         onFocus={() => setOpen(true)}
         onChange={(event) => {
           setQuery(event.target.value);
@@ -188,7 +194,7 @@ export function AutomationSenderPicker(
       />
 
       {open ? (
-        <div className="automation-sender-picker__menu" id="automation-sender-picker-list">
+        <div className="automation-sender-picker__menu" id={listId}>
           {grouped.length === 0 ? (
             <p className="automation-sender-picker__empty">
               {remote.directorySupported

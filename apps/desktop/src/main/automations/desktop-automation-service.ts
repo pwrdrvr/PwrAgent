@@ -61,6 +61,15 @@ import { mergeTranscriptEvents } from "./transcript-merge.js";
 
 const automationServiceLog = getMainLogger("pwragent:automations");
 
+/**
+ * How long past-run sender actors stay cached. `searchSenders` runs per
+ * debounced keystroke, so re-reading run rows per character is wasted work for
+ * a set that only changes when a run completes.
+ */
+const RUN_ACTOR_CACHE_TTL_MS = 30_000;
+/** Runs scanned for distinct actors. Bounds the read on a long-lived automation. */
+const RUN_ACTOR_SCAN_LIMIT = 200;
+
 let service: DesktopAutomationService | null = null;
 let storeOverride: AutomationStore | null = null;
 
@@ -99,6 +108,10 @@ export class DesktopAutomationService {
   private readonly scheduler: AutomationScheduler;
   private readonly inspectionBus: AutomationInspectionBus;
   private unsubscribeRegistryEvents?: () => void;
+  private readonly runActorCache = new Map<
+    string,
+    { actors: MessagingDirectoryActor[]; readAt: number }
+  >();
 
   constructor(
     private readonly options: {
@@ -266,13 +279,7 @@ export class DesktopAutomationService {
       });
     };
 
-    const runs = request.automationId
-      ? this.options.store.listRunsForAutomation(request.automationId, 200)
-      : [];
-    for (const run of runs) {
-      const actor = run.source?.actor;
-      if (!actor) continue;
-      if (run.source?.conversation.channel !== request.provider) continue;
+    for (const actor of this.readRunActors(request)) {
       add(actor, "automation_runs");
     }
 
@@ -292,6 +299,46 @@ export class DesktopAutomationService {
       ...(directory.label ? { directoryLabel: directory.label } : {}),
       ...(directory.truncated ? { directoryTruncated: true } : {}),
     };
+  }
+
+  /**
+   * Distinct actors seen in this automation's past runs.
+   *
+   * Cached because `searchSenders` runs per debounced keystroke, and reading
+   * plus deserializing 200 run rows on every character is a lot of work for a
+   * set that changes only when a run completes. The window is short enough
+   * that a run finishing mid-search shows up on the next search.
+   */
+  private readRunActors(
+    request: SearchMessagingSendersRequest,
+  ): MessagingDirectoryActor[] {
+    if (!request.automationId) return [];
+    const key = `${request.automationId}:${request.provider}`;
+    const cached = this.runActorCache.get(key);
+    const now = Date.now();
+    if (cached && now - cached.readAt < RUN_ACTOR_CACHE_TTL_MS) {
+      return cached.actors;
+    }
+
+    const byId = new Map<string, MessagingDirectoryActor>();
+    for (const run of this.options.store.listRunsForAutomation(
+      request.automationId,
+      RUN_ACTOR_SCAN_LIMIT,
+    )) {
+      const actor = run.source?.actor;
+      if (!actor) continue;
+      if (run.source?.conversation.channel !== request.provider) continue;
+      if (byId.has(actor.platformUserId)) continue;
+      byId.set(actor.platformUserId, {
+        platformUserId: actor.platformUserId,
+        ...(actor.displayName ? { displayName: actor.displayName } : {}),
+        ...(actor.username ? { username: actor.username } : {}),
+        ...(actor.isBot ? { isBot: true } : {}),
+      });
+    }
+    const actors = [...byId.values()];
+    this.runActorCache.set(key, { actors, readAt: now });
+    return actors;
   }
 
   listRuns(request: ListAutomationRunsRequest): ListAutomationRunsResponse {

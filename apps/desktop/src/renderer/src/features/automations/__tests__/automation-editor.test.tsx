@@ -190,6 +190,40 @@ describe("AutomationEditor", () => {
     });
   });
 
+  it("collapses the filter and throttling stages for a schedule trigger", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        threads={[]}
+        onCancel={() => {}}
+        onSubmit={async () => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    expect(screen.getByRole("heading", { name: "Filters" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Coalescing & rate limit" }),
+    ).toBeInTheDocument();
+
+    // A schedule has nothing to filter and nothing to batch, so those stages
+    // disappear rather than rendering empty. The remaining stages renumber via
+    // a CSS counter, which is why no stage carries a hard-coded number.
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    expect(screen.queryByRole("heading", { name: "Filters" })).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Coalescing & rate limit" }),
+    ).toBeNull();
+    expect(screen.getByRole("heading", { name: "Trigger" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "AI evaluation" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Where results go" }),
+    ).toBeInTheDocument();
+  });
+
   it("offers a Slack channel picker from authorized channels", async () => {
     const onSubmit = vi.fn(async () => undefined);
 
@@ -281,7 +315,21 @@ describe("AutomationEditor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
 
-    expect(screen.getByText(/Each matching inbound message starts/)).toBeInTheDocument();
+    // The funnel itself explains the pipeline now: each stage carries a
+    // lead-in verb, and the connectors say what survives into the next stage.
+    expect(
+      screen.getByRole("heading", { name: "Trigger" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Filters" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Coalescing & rate limit" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "AI evaluation" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Where results go" }),
+    ).toBeInTheDocument();
     // The authorized group appears in the picker once settings load.
     await waitFor(() =>
       expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
@@ -603,8 +651,12 @@ describe("AutomationEditor", () => {
     );
     expect(senderChips).toHaveLength(1);
     expect(senderChips[0]).toHaveTextContent("Datadog");
+    // The plain-language summary lives on the funnel connector below the
+    // Filters stage, so it states what survives into the next stage.
     expect(
-      screen.getByText(/sender is Datadog/i, { selector: ".automation-conditions__summary" }),
+      screen.getByText(/sender is Datadog/i, {
+        selector: ".automation-flow__caption",
+      }),
     ).toBeInTheDocument();
   });
 

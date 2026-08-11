@@ -1318,11 +1318,24 @@ function isSupportedAutomationTrigger(
     }
     // A malformed condition group is not persisted: the matcher could not
     // honor it, and storing it would leave an automation whose displayed
-    // filter and actual behavior disagree.
+    // filter and actual behavior disagree. Dropping the trigger silently would
+    // leave an automation that simply stops firing with nothing to explain it,
+    // so say so — this is the only signal an operator gets.
     if (
       trigger.conditionGroup !== undefined &&
       !isSupportedAutomationInboundConditionGroup(trigger.conditionGroup)
     ) {
+      automationStoreLog.warn(
+        "dropping inbound trigger with an unparseable condition group",
+        {
+          triggerId: trigger.id,
+          channel: trigger.conversation.channel,
+          conditionCount: Array.isArray(trigger.conditionGroup?.conditions)
+            ? trigger.conditionGroup.conditions.length
+            : undefined,
+          join: trigger.conditionGroup?.join,
+        },
+      );
       return false;
     }
     return true;

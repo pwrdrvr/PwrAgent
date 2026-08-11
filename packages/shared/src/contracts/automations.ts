@@ -364,6 +364,44 @@ function evaluateConditionSubject(
   }
 }
 
+/**
+ * Longest regex pattern accepted from an operator. Long patterns are where
+ * catastrophic constructs hide, and no realistic message filter needs more.
+ */
+export const AUTOMATION_CONDITION_MAX_REGEX_LENGTH = 200;
+
+/**
+ * Longest message text a regex is evaluated against. Backtracking cost grows
+ * with input length, so the text is truncated before matching. This is well
+ * above any realistic alert line, and `contains` / `equals` are unaffected.
+ */
+export const AUTOMATION_CONDITION_MAX_REGEX_INPUT = 4_000;
+
+/**
+ * Conservative catastrophic-backtracking check: a quantified group that itself
+ * contains a quantifier (`(a+)+`, `(a*)*`, `(a|a)+`), which is the shape behind
+ * essentially every practical ReDoS.
+ *
+ * This is a mitigation, not a proof — JavaScript has no interruptible regex
+ * engine, so a linear-time guarantee would mean an RE2-class dependency. It
+ * exists because the PATTERN is operator-authored but the TEXT arrives from a
+ * messaging platform and is treated as hostile; a sloppy pattern plus crafted
+ * text would otherwise stall the main process on the inbound hot path.
+ */
+const NESTED_QUANTIFIER = /\([^)]*[+*}][^)]*\)\s*[+*]|\([^)]*[+*}][^)]*\)\s*\{\d/;
+
+export function isSafeAutomationConditionRegex(pattern: string): boolean {
+  if (pattern.length === 0) return false;
+  if (pattern.length > AUTOMATION_CONDITION_MAX_REGEX_LENGTH) return false;
+  if (NESTED_QUANTIFIER.test(pattern)) return false;
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function matchesConditionText(
   text: string,
   value: string,
@@ -373,10 +411,14 @@ function matchesConditionText(
     condition.operator === "matches_regex"
     || condition.operator === "not_matches_regex"
   ) {
-    // An operator-authored pattern that fails to compile must not break
-    // matching for every other automation, so it simply does not match.
+    // A pattern that cannot compile, is over-long, or carries a catastrophic
+    // construct simply does not match, rather than breaking inbound matching
+    // for every other automation.
+    if (!isSafeAutomationConditionRegex(value)) return false;
     try {
-      return new RegExp(value, condition.caseSensitive ? "" : "i").test(text);
+      return new RegExp(value, condition.caseSensitive ? "" : "i").test(
+        text.slice(0, AUTOMATION_CONDITION_MAX_REGEX_INPUT),
+      );
     } catch {
       return false;
     }
@@ -390,8 +432,19 @@ function matchesConditionText(
     case "starts_with":
     case "not_starts_with":
       return left.startsWith(right);
-    default:
+    case "contains":
+    case "not_contains":
       return left.includes(right);
+    // Membership operators are offered for senders, not text. If one reaches
+    // here from stored data, "the text is one of these values" is equality
+    // across the value list — the caller already maps over `values`. Spelled
+    // out rather than left to a default branch, so the semantics are reviewed
+    // rather than inherited.
+    case "is_one_of":
+    case "is_not_one_of":
+      return left === right;
+    default:
+      return false;
   }
 }
 
@@ -522,7 +575,13 @@ export function normalizeInboundTriggerConditions(
       values: [trigger.sender.isBot ? "bot" : "human"],
     });
   }
-  if (trigger.textFilter?.text) {
+  // Gate on the filter's PRESENCE, not on its text. A legacy trigger holding
+  // `textFilter: { text: "" }` matched nothing under the old matcher
+  // (`if (!filter?.text) return false`). Skipping it here would leave an empty
+  // condition list, which matches EVERY message — inverting "never fires" into
+  // "fires on everything". Emitting the row with an empty value keeps it inert,
+  // which reproduces the old semantics exactly.
+  if (trigger.textFilter) {
     conditions.push({
       id: "legacy-text",
       field: "message_text",

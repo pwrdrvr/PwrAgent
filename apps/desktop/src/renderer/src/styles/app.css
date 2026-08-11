@@ -17487,6 +17487,171 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--accent-bright);
 }
 
+/* ---------------------------------------------------------------------------
+   Automation funnel
+
+   The editor reads as a pipeline: message in, filtered, batched, analyzed,
+   delivered. Stages sit on a left rail with numbered nodes; the connector
+   between two stages is captioned with what survives into the next one.
+
+   Numbering is a CSS counter rather than a prop, because the filter and
+   throttling stages do not exist for a schedule trigger — a counter renumbers
+   what remains instead of leaving a gap where stage 2 used to be.
+--------------------------------------------------------------------------- */
+.automation-funnel {
+  counter-reset: automation-stage;
+  display: flex;
+  flex-direction: column;
+}
+
+.automation-stage {
+  counter-increment: automation-stage;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  column-gap: 14px;
+}
+
+.automation-stage__rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+/* Rail segment running from under this stage's node to the next connector. */
+.automation-stage__rail::before {
+  content: "";
+  position: absolute;
+  top: 30px;
+  bottom: -4px;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--border-subtle);
+}
+
+.automation-stage:last-of-type .automation-stage__rail::before {
+  display: none;
+}
+
+.automation-stage__node {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-top: 1px;
+  border: 1px solid var(--accent-border);
+  border-radius: 50%;
+  background: var(--bg-panel);
+  color: var(--accent-bright);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.automation-stage__node::after {
+  content: counter(automation-stage);
+}
+
+.automation-stage__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 0 4px;
+}
+
+.automation-stage__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 26px;
+}
+
+.automation-stage__verb {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.automation-stage__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.automation-flow {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  column-gap: 14px;
+  min-height: 32px;
+}
+
+.automation-flow__rail {
+  position: relative;
+}
+
+.automation-flow__rail::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--border-subtle);
+}
+
+.automation-flow__caption {
+  align-self: center;
+  margin: 0;
+  padding: 6px 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Delivery lanes: the Agent thread always receives results; a messaging reply
+   is optional. Showing them side by side is what makes the always-on Agent
+   delivery visible instead of implied. */
+.automation-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.automation-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+
+.automation-lane--agent {
+  border-color: var(--accent-border);
+}
+
+.automation-lane__tag {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.automation-lane--agent .automation-lane__tag {
+  color: var(--accent);
+}
+
 /* Compact ALL/ANY joiner inside the condition list: two options, sized to
    content, rather than the three equal columns the trigger switch uses. */
 .automation-segmented--compact {
@@ -17601,13 +17766,6 @@ a.transcript-message__messaging-origin:focus-visible {
 .automation-conditions__actions {
   display: flex;
   gap: 8px;
-}
-
-.automation-conditions__summary {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 .automation-sender-picker {

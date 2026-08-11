@@ -1,6 +1,5 @@
 import { useCallback } from "react";
 import {
-  formatAutomationInboundConditionGroup,
   type AutomationInboundCondition,
   type AutomationInboundConditionField,
   type AutomationInboundConditionGroup,
@@ -131,15 +130,6 @@ export function AutomationConditionEditor(
     [group, onChange],
   );
 
-  const summary = formatAutomationInboundConditionGroup(group, {
-    resolveLabel: (value, condition) =>
-      condition.field === "sender"
-        ? props.senderLabels[value] ?? value
-        : condition.field === "sender_type"
-          ? (SENDER_TYPE_VALUES.find((entry) => entry.value === value)?.label
-            ?? value).toLowerCase()
-          : `"${value}"`,
-  });
 
   return (
     <div className="automation-conditions">
@@ -271,7 +261,24 @@ export function AutomationConditionEditor(
                   searchSenders={props.searchSenders}
                   onChange={(values, labels) => {
                     updateCondition(condition.id, { values });
-                    props.onSenderLabelsChange({ ...props.senderLabels, ...labels });
+                    // Prune labels no sender condition references any more, so
+                    // removing a chip does not leave its display name behind
+                    // to accumulate for the life of the editor.
+                    const referenced = new Set(
+                      group.conditions.flatMap((entry) =>
+                        entry.field === "sender"
+                          ? entry.id === condition.id
+                            ? values
+                            : entry.values
+                          : [],
+                      ),
+                    );
+                    const merged = { ...props.senderLabels, ...labels };
+                    props.onSenderLabelsChange(
+                      Object.fromEntries(
+                        Object.entries(merged).filter(([id]) => referenced.has(id)),
+                      ),
+                    );
                   }}
                 />
               )}
@@ -314,8 +321,6 @@ export function AutomationConditionEditor(
           + Condition
         </button>
       </div>
-
-      <p className="automation-conditions__summary">{summary}</p>
     </div>
   );
 }
