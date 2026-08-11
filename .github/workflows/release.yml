@@ -209,7 +209,12 @@ jobs:
           retention-days: 7
 
   windows-package:
-    name: Package Windows installer (unsigned)
+    name: Package Windows installer
+    # Signing config + service-principal credentials live in this environment,
+    # not at repo scope. Without this line `vars.WIN_AZURE_SIGN_*` and
+    # `secrets.AZURE_*` resolve to empty and the installer builds UNSIGNED with
+    # no error — see the failure-modes table in docs/desktop-windows-signing.md.
+    environment: windows-signing
     # node-pty's Electron rebuild currently pulls node-gyp 11.x, which does
     # not recognize Visual Studio 2026 on windows-latest/windows-2025.
     # Keep installer packaging on VS 2022 until that toolchain catches up.
@@ -232,11 +237,22 @@ jobs:
           node-version: 24.14.1
           working-directory: .
 
-      # NSIS installer is currently unsigned (no Windows code-signing identity
-      # yet). Uploaded as a workflow artifact, not published to the GitHub
-      # Release, until signing is in place.
-      - name: Package Windows installer (unsigned, no publish)
-        run: node apps/desktop/scripts/release.mjs --win --no-publish
+      # Signs via Azure Artifact Signing when the `windows-signing` environment
+      # provides the config (vars.WIN_AZURE_SIGN_*) and the Entra
+      # service-principal secrets (AZURE_*). With none of them set, release.mjs
+      # builds an UNSIGNED installer; with only some, it fails rather than
+      # silently shipping unsigned. See docs/desktop-windows-signing.md. Not
+      # published to the GitHub Release yet — uploaded as an artifact below.
+      - name: Package Windows installer
+        env:
+          WIN_AZURE_SIGN_PUBLISHER_NAME: ${{ vars.WIN_AZURE_SIGN_PUBLISHER_NAME }}
+          WIN_AZURE_SIGN_ENDPOINT: ${{ vars.WIN_AZURE_SIGN_ENDPOINT }}
+          WIN_AZURE_SIGN_ACCOUNT: ${{ vars.WIN_AZURE_SIGN_ACCOUNT }}
+          WIN_AZURE_SIGN_PROFILE: ${{ vars.WIN_AZURE_SIGN_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: node apps/desktop/scripts/release.mjs --win --no-publish --require-signing
 
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
