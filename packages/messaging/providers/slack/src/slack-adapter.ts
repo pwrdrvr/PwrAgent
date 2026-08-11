@@ -139,6 +139,7 @@ export type SlackApi = {
     cursor?: string;
     limit?: number;
   }): Promise<SlackUserListPage>;
+  botsInfo?(params: { bot: string }): Promise<{ name?: string } | undefined>;
 };
 
 export type SlackUserListPage = {
@@ -189,6 +190,7 @@ export type SlackThreadMessageInfo = {
 
 export type SlackHistoryMessageInfo = {
   bot_id?: string;
+  bot_profile?: { name?: string };
   subtype?: string;
   text?: string;
   ts?: string;
@@ -285,6 +287,7 @@ type SlackEventsApiBody = {
 type SlackMessageEvent = {
   attachments?: SlackMessageAttachment[];
   bot_id?: string;
+  bot_profile?: SlackBotProfile;
   channel?: string;
   channel_type?: string;
   event_ts?: string;
@@ -302,6 +305,10 @@ type SlackMessageAttachment = {
   fallback?: string;
   text?: string;
   title?: string;
+};
+
+type SlackBotProfile = {
+  name?: string;
 };
 
 type SlackAppHomeOpenedEvent = {
@@ -416,6 +423,11 @@ export class SlackAdapter implements SlackProviderAdapter {
   // there are forwarded flagged observedOnly instead of being dropped by the
   // per-user access gate. Pushed by the desktop runtime; empty by default.
   private observedConversationIds = new Set<string>();
+  // Bot display names, keyed by B… id. Seeded free from bot_profile on the
+  // event when Slack includes it; otherwise lazily via bots.info (cached, and
+  // self-disabling on missing_scope like the user-profile lookup above it).
+  private readonly botNameCache = new Map<string, string | undefined>();
+  private botInfoLookupDisabled = false;
   // Per-stream posted surfaces, keyed by `intent.stream.key`. Slack has no
   // "create-or-edit" primitive, so the first chunk posts a new message and
   // records its `ts` here; later chunks (and the final) edit it in place — the
@@ -1046,7 +1058,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (this.isDuplicateMessageEvent(event, ids)) return;
 
     const actor = ids.botId
-      ? this.actorForSlackBot(ids.botId)
+      ? await this.actorForSlackBot(ids.botId, event.bot_profile?.name)
       : await this.actorForSlackUser(ids.userId);
     const channel = await this.channelRefForSlack({
       channelId: ids.channelId,
@@ -2140,13 +2152,52 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
-  private actorForSlackBot(botId: string): MessagingActorIdentity {
+  private async actorForSlackBot(
+    botId: string,
+    eventProfileName?: string,
+  ): Promise<MessagingActorIdentity> {
+    const profileName = eventProfileName?.trim();
+    if (profileName) {
+      this.botNameCache.set(botId, profileName);
+    }
     const contact = this.config.authorizedActorIds.find((item) => item.id === botId);
+    const displayName =
+      profileName
+      ?? contact?.displayName
+      ?? (await this.lookupSlackBotName(botId));
     return {
       platformUserId: botId,
-      displayName: contact?.displayName ?? botId,
+      // The raw B… id is the last resort — an operator recognizes
+      // "Spinnaker", not "B01TZS7V371".
+      displayName: displayName ?? botId,
       isBot: true,
     };
+  }
+
+  private async lookupSlackBotName(botId: string): Promise<string | undefined> {
+    if (this.botNameCache.has(botId)) {
+      return this.botNameCache.get(botId);
+    }
+    if (this.botInfoLookupDisabled || !this.api.botsInfo) {
+      this.botNameCache.set(botId, undefined);
+      return undefined;
+    }
+    try {
+      const bot = await this.api.botsInfo({ bot: botId });
+      const name = bot?.name?.trim() || undefined;
+      this.botNameCache.set(botId, name);
+      return name;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (reason.includes("missing_scope")) {
+        this.botInfoLookupDisabled = true;
+        this.logger.warn?.("slack bot name lookup unavailable", {
+          reason: "missing_scope",
+        });
+      }
+      this.botNameCache.set(botId, undefined);
+      return undefined;
+    }
   }
 
   /**
@@ -2443,7 +2494,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         continue;
       }
       const actor = message.bot_id
-        ? this.actorForSlackBot(message.bot_id)
+        ? await this.actorForSlackBot(message.bot_id, message.bot_profile?.name)
         : message.user
           ? await this.actorForSlackUser(message.user, message.username)
           : undefined;
@@ -2734,6 +2785,11 @@ export function createSlackApi(botToken: string): SlackApi {
     async usersInfo(params) {
       const response = await client.users.info(params);
       return response.user as SlackUserInfo | undefined;
+    },
+    async botsInfo(params) {
+      const response = await client.bots.info({ bot: params.bot });
+      const bot = response.bot as { name?: string } | undefined;
+      return bot ? { name: bot.name } : undefined;
     },
     async usersList(params) {
       const response = await client.users.list({

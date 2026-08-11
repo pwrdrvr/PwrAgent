@@ -545,8 +545,9 @@ export type RejectMessagingPairingResponse = {
 /**
  * A compact, bounded view of a single inbound message, surfaced live to the
  * Automations editor so an operator can see which recent messages their
- * trigger filter would match. Capture is going-forward only (messages that
- * arrive while the preview is open); provider history backfill is not implied.
+ * trigger filter would match. Providers that support it backfill recent
+ * conversation history when the preview opens (marked `origin: "history"`);
+ * everything else is captured going-forward while the preview is open.
  */
 export type InboundPreviewMessage = {
   id: string;
@@ -554,6 +555,12 @@ export type InboundPreviewMessage = {
   conversationId: string;
   parentId?: string;
   receivedAt: number;
+  /**
+   * Absent for live-captured messages. History rows can be arbitrarily old —
+   * a quiet channel's "recent 15" may reach back months — so the editor
+   * shows their age instead of letting stale posts read as live traffic.
+   */
+  origin?: "history";
   actor: {
     platformUserId: string;
     displayName?: string;

@@ -17540,6 +17540,15 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: nowrap;
 }
 
+/* Message age. History backfill can surface months-old posts in a quiet
+   channel; without a visible age they read as live traffic. */
+.automation-preview__time {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
 .automation-preview__text {
   color: var(--text-primary);
   word-break: break-word;
@@ -18096,7 +18105,7 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--bg-input);
 }
 
-.automation-lane--agent {
+.automation-lane--active {
   border-color: var(--accent-border);
 }
 
@@ -18108,7 +18117,7 @@ a.transcript-message__messaging-origin:focus-visible {
   text-transform: uppercase;
 }
 
-.automation-lane--agent .automation-lane__tag {
+.automation-lane--active .automation-lane__tag {
   color: var(--accent);
 }
 

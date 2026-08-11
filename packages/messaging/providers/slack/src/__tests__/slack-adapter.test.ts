@@ -57,6 +57,8 @@ function conversationKey(channel: MessagingChannelRef): string {
 function fakeApi(spies: {
   assistantStatusError?: Error;
   assistantStatuses?: Array<{ channelId: string; status: string; threadTs: string }>;
+  bots?: Record<string, string>;
+  botsInfoCalls?: string[];
   conversations?: Record<string, string>;
   mpimChannels?: string[];
   permalinks?: Record<string, string>;
@@ -117,6 +119,11 @@ function fakeApi(spies: {
     updateMessage: async (params) => {
       spies.updated?.push(params);
       return { channel: params.channel, ts: params.ts };
+    },
+    botsInfo: async (params) => {
+      spies.botsInfoCalls?.push(params.bot);
+      const name = spies.bots?.[params.bot];
+      return name ? { name } : undefined;
     },
     usersInfo: async (params) => {
       const user = spies.users?.[params.user];
@@ -1361,6 +1368,83 @@ describe("SlackAdapter", () => {
       expect(event.text).toContain("Pipeline failed for SEARCHGRPC");
       expect(event.text).toContain("searchgrpc-prod pipeline has failed");
     }
+  });
+
+  it("names bot senders from the event's bot_profile without an API lookup", async () => {
+    const socket = fakeSocket();
+    const botsInfoCalls: string[] = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ botsInfoCalls }),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    adapter.updateObservedConversations(["C012ABCDEF0"]);
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        subtype: "bot_message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        bot_id: "B012SPINNKR",
+        bot_profile: { name: "Spinnaker" },
+        ts: "1712023032.000800",
+        text: "Pipeline complete",
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.actor.platformUserId).toBe("B012SPINNKR");
+    expect(events[0]?.actor.displayName).toBe("Spinnaker");
+    expect(botsInfoCalls).toEqual([]);
+  });
+
+  it("falls back to bots.info for bot names and caches the answer", async () => {
+    const socket = fakeSocket();
+    const botsInfoCalls: string[] = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ bots: { B012DATADOG: "Datadog" }, botsInfoCalls }),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    adapter.updateObservedConversations(["C012ABCDEF0"]);
+
+    for (const ts of ["1712023032.000900", "1712023032.001000"]) {
+      await socket.emitEvent("slack_event", {
+        ack: async () => undefined,
+        event: {
+          type: "message",
+          subtype: "bot_message",
+          channel: "C012ABCDEF0",
+          channel_type: "channel",
+          team: "T012ABCDEF0",
+          bot_id: "B012DATADOG",
+          ts,
+          text: "Monitor triggered",
+        },
+      });
+    }
+
+    expect(events).toHaveLength(2);
+    expect(events[0]?.actor.displayName).toBe("Datadog");
+    expect(events[1]?.actor.displayName).toBe("Datadog");
+    // One lookup, then the cache answers — bots.info is rate-limited and the
+    // same integrations post repeatedly.
+    expect(botsInfoCalls).toEqual(["B012DATADOG"]);
   });
 
   it("drops unauthorized-sender messages in conversations nothing observes", async () => {

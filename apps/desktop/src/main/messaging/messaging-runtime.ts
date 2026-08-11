@@ -816,9 +816,19 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         message.conversationId === params.conversationId ||
         message.parentId === params.conversationId
       ) {
-        messages.push(message);
+        messages.push({ ...message, origin: "history" });
       }
     }
+    // Breadcrumb for "why is the preview showing X": records exactly which
+    // conversation the provider was asked for and how much survived the
+    // conversation-scope check, so a suspected cross-channel leak can be
+    // ruled in or out from the profile log.
+    messagingLog.debug("preview history backfill", {
+      provider: params.provider,
+      conversationId: params.conversationId,
+      fetched: events.length,
+      forwarded: messages.length,
+    });
     return messages;
   }
 

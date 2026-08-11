@@ -43,6 +43,7 @@ import {
 import { copyText } from "../../lib/copy-text";
 import { HelpCircleIcon } from "../../icons";
 import { AutomationConditionEditor } from "./AutomationConditionEditor";
+import { formatAutomationRelative } from "./automation-format";
 import { AutomationMcpPicker } from "./AutomationMcpPicker";
 import { ProjectPicker } from "../composer/ProjectPicker";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
@@ -1569,8 +1570,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       {previewOpen && previewConversationId ? (
                         <div className="automation-preview__panel" role="status">
                           <p className="automation-field__hint">
-                            Showing messages as they arrive (no history). Messages your
-                            filter would match are highlighted.
+                            Showing recent history where the platform allows it, then
+                            messages as they arrive. Messages your filter would match
+                            are highlighted.
                           </p>
                           {previewMessages.length === 0 ? (
                             <p className="automation-preview__empty">
@@ -1598,6 +1600,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                           {message.actor.platformUserId}
                                         </span>
                                       ) : null}
+                                      <span className="automation-preview__time">
+                                        {message.origin === "history"
+                                          ? `history · ${formatAutomationRelative(
+                                              message.receivedAt,
+                                            )}`
+                                          : formatAutomationRelative(message.receivedAt)}
+                                      </span>
                                     </span>
                                     <span className="automation-preview__text">
                                       {message.text || "(no text)"}
@@ -2125,7 +2134,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
         <AutomationStage verb="Deliver" title="Where results go">
           <div className="automation-lanes">
-            <div className="automation-lane automation-lane--agent">
+            <div className="automation-lane automation-lane--active">
               <span className="automation-lane__tag">Agent thread · always</span>
               {shouldShowAgentPicker(props) ? (
                 <div className="automation-field automation-agent-field">
@@ -2304,7 +2313,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
               </p>
             </div>
             {triggerKind === "inbound_message" ? (
-              <div className="automation-lane">
+              <div
+                className={
+                  resultMode === "agent_only"
+                    ? "automation-lane"
+                    : "automation-lane automation-lane--active"
+                }
+              >
                 <span className="automation-lane__tag">Messaging · optional</span>
                       <div className="automation-field-group">
                         <label className="automation-field">
