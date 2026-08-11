@@ -17617,6 +17617,23 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 12px;
 }
 
+.automation-section-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* Backend pill + model line, wrapping in the rail's narrow column. */
+.automation-row__runtime {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+
 .automation-section-header__meta,
 .automation-row__meta,
 .automation-row__schedule,
@@ -18897,11 +18914,17 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 6px 10px;
 }
 
-/* Trailing edge, so the row reads left-to-right as facts then controls. */
 .automation-run-history__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* In the table the row is wide enough to read as facts-then-controls, so the
+   controls take the trailing edge. In the thread rail the line always wraps,
+   where that would strand the button alone on a line of its own — there it
+   just follows the facts inline. */
+.automations-table__history .automation-run-history__actions {
   margin-left: auto;
 }
 

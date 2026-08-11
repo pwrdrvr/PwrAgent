@@ -11,6 +11,7 @@ import type {
 import { ChevronRightIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
   formatAutomationRunUsage,
   formatAutomationRunRuntime,
@@ -18,7 +19,9 @@ import {
   formatAutomationStatus,
   formatAutomationTimestamp,
   formatBacklogPolicy,
+  formatCostTodayMicros,
   formatRunStatus,
+  formatWorkspacePathLabel,
 } from "./automation-format";
 import {
   AutomationEditor,
@@ -34,6 +37,8 @@ import {
 type ThreadAutomationsPanelProps = {
   desktopApi?: DesktopApi;
   thread: NavigationThreadSummary;
+  /** Opens the full Automations screen; omitted where there is nowhere to go. */
+  onOpenAutomations?: () => void;
   onRefreshNavigation?: () => Promise<void>;
 };
 
@@ -82,19 +87,31 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
             {formatThreadAutomationSummary(props.thread)}
           </p>
         </div>
-        <button
-          className="context-list__action"
-          disabled={!isAgentThread}
-          title={
-            isAgentThread
-              ? "Add automation"
-              : "Mark this thread as an Agent first"
-          }
-          type="button"
-          onClick={() => setEditorMode({ kind: "create" })}
-        >
-          Add
-        </button>
+        <div className="automation-section-header__actions">
+          {props.onOpenAutomations ? (
+            <button
+              className="context-list__action"
+              title="Open the Automations screen"
+              type="button"
+              onClick={props.onOpenAutomations}
+            >
+              Open all ↗
+            </button>
+          ) : null}
+          <button
+            className="context-list__action"
+            disabled={!isAgentThread}
+            title={
+              isAgentThread
+                ? "Add automation"
+                : "Mark this thread as an Agent first"
+            }
+            type="button"
+            onClick={() => setEditorMode({ kind: "create" })}
+          >
+            Add
+          </button>
+        </div>
       </div>
 
       {editorMode ? (
@@ -198,6 +215,21 @@ function AutomationSummary(props: {
     }
   };
 
+  // Same information rules as the Automations screen, narrower canvas: what
+  // it runs as leads, backlog policy only speaks for schedules, and a next
+  // run is only claimed when one exists.
+  const profile = props.automation.executionProfile;
+  const runtimeDetails = [
+    profile?.model,
+    profile?.reasoningEffort,
+    profile?.fastMode ? "Fast" : undefined,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+  const scheduleTriggered = props.automation.triggers.some(
+    (trigger) => trigger.kind === "schedule",
+  );
+  const costToday = formatCostTodayMicros(props.automation.costTodayMicros);
   return (
     <article className="automation-row">
       <div className="automation-row__main">
@@ -208,10 +240,45 @@ function AutomationSummary(props: {
           </span>
         </div>
         <p className="automation-row__schedule">{props.automation.scheduleSummary}</p>
-        <p className="automation-row__meta">
-          next {formatAutomationRelative(props.automation.nextRunAt)} -{" "}
-          {formatBacklogPolicy(props.automation.backlogPolicy)}
+        <p className="automation-row__runtime">
+          <span className="automation-runtime__provider">
+            {formatBackendLabel(profile?.backend ?? props.automation.backend)}
+          </span>
+          <span className="automation-runtime__model">
+            {runtimeDetails || "Agent default"}
+          </span>
+          {profile?.executionMode ? (
+            <span
+              className={`automation-runtime__access${
+                profile.executionMode === "full-access"
+                  ? " automation-runtime__access--elevated"
+                  : ""
+              }`}
+            >
+              {formatExecutionModeLabel(profile.executionMode)}
+            </span>
+          ) : null}
         </p>
+        {profile?.cwd ? (
+          <p className="automations-table__cwd" title={profile.cwd}>
+            {formatWorkspacePathLabel(profile.cwd)}
+          </p>
+        ) : null}
+        {props.automation.nextRunAt || scheduleTriggered ? (
+          <p className="automation-row__meta">
+            {[
+              props.automation.nextRunAt
+                ? `next ${formatAutomationRelative(props.automation.nextRunAt)}`
+                : undefined,
+              scheduleTriggered
+                ? formatBacklogPolicy(props.automation.backlogPolicy)
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        ) : null}
+        {costToday ? <p className="automation-row__meta">{costToday}</p> : null}
         {props.automation.pendingRunCount || props.automation.coalescedWindowCount ? (
           <p className="automation-row__meta">
             {props.automation.pendingRunCount ?? 0} queued -{" "}
@@ -232,15 +299,20 @@ function AutomationSummary(props: {
           Edit
         </button>
         <button
+          aria-expanded={props.expanded}
+          className="context-list__action"
+          type="button"
+          onClick={props.onExpand}
+        >
+          {props.expanded ? "Hide runs" : "Runs"}
+        </button>
+        <button
           className="context-list__action"
           disabled={Boolean(busy)}
           type="button"
           onClick={() => void runAction("pause", props.onPauseResume)}
         >
           {props.automation.status === "paused" ? "Resume" : "Pause"}
-        </button>
-        <button className="context-list__action" type="button" onClick={props.onExpand}>
-          {props.expanded ? "Hide" : "History"}
         </button>
         <button
           className="context-list__action context-list__action--danger"
