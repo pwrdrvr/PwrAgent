@@ -6571,6 +6571,13 @@ export class DesktopBackendRegistry {
    */
   private readonly notificationThreadTitles = new Map<string, string>();
   private readonly notificationThreadProjectLabels = new Map<string, string>();
+  /**
+   * Live `thread/name/updated` observations are newer than the provider's
+   * thread list during an active turn. Reconcile list rows through this map so
+   * federation snapshots and remote search do not regress to a placeholder
+   * after the local renderer has already received the generated name.
+   */
+  private readonly observedThreadNames = new Map<string, string>();
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
@@ -18715,7 +18722,7 @@ export class DesktopBackendRegistry {
       "codex",
       allThreads,
       params,
-    );
+    ).map((thread) => this.withObservedThreadName(thread));
 
     const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
       backend: "codex",
@@ -28137,10 +28144,9 @@ export class DesktopBackendRegistry {
       if (typeof threadId === "string" && typeof threadName === "string") {
         const trimmed = threadName.trim();
         if (trimmed) {
-          this.notificationThreadTitles.set(
-            buildThreadIdentityKey(event.backend, threadId),
-            trimmed,
-          );
+          const key = buildThreadIdentityKey(event.backend, threadId);
+          this.notificationThreadTitles.set(key, trimmed);
+          this.observedThreadNames.set(key, trimmed);
         }
       }
       return;
@@ -28156,6 +28162,25 @@ export class DesktopBackendRegistry {
       }
       this.rememberThreadNotificationContext(event.backend, threadId, params.thread);
     }
+  }
+
+  private withObservedThreadName(
+    thread: AppServerThreadSummary,
+  ): AppServerThreadSummary {
+    const observedName = this.observedThreadNames.get(
+      buildThreadIdentityKey(thread.source, thread.id),
+    );
+    if (
+      !observedName
+      || (thread.title === observedName && thread.titleSource === "explicit")
+    ) {
+      return thread;
+    }
+    return {
+      ...thread,
+      title: observedName,
+      titleSource: "explicit",
+    };
   }
 
   private rememberThreadNotificationContext(

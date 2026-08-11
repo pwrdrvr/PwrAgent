@@ -4447,6 +4447,57 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("exposes live Codex thread names while thread/list still returns the placeholder", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        title: "Untitled thread",
+        titleSource: "fallback",
+      }),
+    ]);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "Sync generated names over federation",
+        },
+      },
+    });
+
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        title: "Sync generated names over federation",
+        titleSource: "explicit",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("invalidates cached ACP thread summaries when runtime mode changes", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [
