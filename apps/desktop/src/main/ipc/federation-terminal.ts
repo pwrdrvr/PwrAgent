@@ -293,10 +293,16 @@ export class FederationTerminalBridge {
    * only it — as the quit dialog's row link once did — reports "no such
    * session" for every shell running on a peer and reveals nothing.
    */
-  revealSession(threadKey: string): WebContents[] {
+  revealSession(threadKey: string, instanceId?: string): WebContents[] {
     const owners: WebContents[] = [];
     for (const session of this.sessionsById.values()) {
       if (session.threadKey !== threadKey || session.webContents.isDestroyed()) {
+        continue;
+      }
+      // Two instances can hold the same `backend:threadId`. When the caller
+      // knows which one it means, honor it rather than revealing a shell on
+      // the wrong machine.
+      if (instanceId && session.target.instanceId !== instanceId) {
         continue;
       }
       if (session.panelHidden) {

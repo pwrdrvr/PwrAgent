@@ -70,6 +70,20 @@ export type IntegratedTerminalQuitSnapshot = {
   threads: IntegratedTerminalQuitThread[];
 };
 
+/**
+ * Code-unit order, matching the plain `.sort()` these keys used before they
+ * became objects. `localeCompare` would reorder around the `:` and `-` that
+ * fill thread keys depending on the host locale, which is not something a
+ * quit dialog's row order should depend on.
+ */
+export function byThreadKey(
+  left: { threadKey: string },
+  right: { threadKey: string },
+): number {
+  if (left.threadKey === right.threadKey) return 0;
+  return left.threadKey < right.threadKey ? -1 : 1;
+}
+
 type IntegratedTerminalServiceOptions = {
   loadNodePty?: () => Promise<Pick<NodePtyModule, "spawn">>;
   now?: () => number;
@@ -273,7 +287,7 @@ export class IntegratedTerminalService {
       sessionIds: sessions.map((session) => session.sessionId).sort(),
       threads: sessions
         .map((session) => ({ threadKey: session.threadKey }))
-        .sort((left, right) => left.threadKey.localeCompare(right.threadKey)),
+        .sort(byThreadKey),
     };
   }
 

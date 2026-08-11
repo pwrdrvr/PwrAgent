@@ -149,6 +149,30 @@ describe("quit dialog row links", () => {
     });
   });
 
+  // A thread key does not identify a thread across instances, so a peer's row
+  // and a same-keyed local row would otherwise encode to the same action and
+  // the click could not tell them apart.
+  it("round-trips the owning instance for a remote row", () => {
+    const item: QuitBlockerItem = {
+      kind: "terminal",
+      backend: "codex",
+      threadId: "thread-3",
+      threadKey: "codex:thread-3",
+      target: { scope: "remote", instanceId: "peer-a" },
+    };
+
+    expect(parseQuitItemAction(formatQuitItemAction(item))).toEqual({
+      threadKey: "codex:thread-3",
+      kind: "terminal",
+      instanceId: "peer-a",
+    });
+
+    // A local row carries no instance, and must not grow one.
+    expect(
+      parseQuitItemAction(formatQuitItemAction({ ...item, target: undefined })),
+    ).toEqual({ threadKey: "codex:thread-3", kind: "terminal" });
+  });
+
   it("ignores actions that are not row links", () => {
     expect(parseQuitItemAction("manual-confirm")).toBeUndefined();
     expect(parseQuitItemAction("countdown-cancel")).toBeUndefined();
@@ -318,6 +342,7 @@ describe("clicking a quit dialog row", () => {
 
     expect(revealIntegratedTerminal).toHaveBeenCalledWith(
       "codex:0f9c2b7a-remote",
+      { instanceId: "peer-a" },
     );
     // The dialog is what has focus, so requestShowThread would otherwise fall
     // back to whichever window subscribed first — for a peer's terminal that
@@ -348,6 +373,10 @@ describe("clicking a quit dialog row", () => {
 
     clickRow(window, formatQuitItemAction(item));
 
+    expect(revealIntegratedTerminal).toHaveBeenCalledWith(
+      "codex:local-thread",
+      {},
+    );
     expect(requestShowThread).toHaveBeenCalledWith(
       { backend: "codex", threadId: "local-thread" },
       { preferWebContents: undefined },

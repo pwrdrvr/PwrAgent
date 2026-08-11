@@ -577,7 +577,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
     const listLocalThreads = vi.fn(async () => [
       { source: "codex" as const, id: "local-thread", title: "Local Work" },
     ]);
-    const cachedRemoteThreadSummary = vi.fn(() => ({
+    const cachedRemoteThreadName = vi.fn(() => ({
       title: "Reap Windows Worktrees",
       titleSource: "derived" as const,
     }));
@@ -585,7 +585,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
 
     const titles = await resolveQuitBlockerThreadTitles([localItem, remoteItem], {
       listLocalThreads,
-      cachedRemoteThreadSummary,
+      cachedRemoteThreadName,
       listRemoteThreadPins,
     });
 
@@ -593,7 +593,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
       "Reap Windows Worktrees",
     );
     expect(titles.get(quitBlockerTitleKey(localItem))).toBe("Local Work");
-    expect(cachedRemoteThreadSummary).toHaveBeenCalledWith({
+    expect(cachedRemoteThreadName).toHaveBeenCalledWith({
       target: { scope: "remote", instanceId: "peer-a" },
       backend: "codex",
       threadId: "0f9c2b7a-remote",
@@ -612,7 +612,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
 
     const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
       listLocalThreads: async () => [],
-      cachedRemoteThreadSummary: () => undefined,
+      cachedRemoteThreadName: () => undefined,
       listRemoteThreadPins: async () => [
         {
           ref: {
@@ -651,7 +651,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
 
     const pending = resolveQuitBlockerThreadTitles([remoteItem], {
       listLocalThreads: async () => [],
-      cachedRemoteThreadSummary: () => ({
+      cachedRemoteThreadName: () => ({
         title: "Reap Windows Worktrees",
         titleSource: "derived" as const,
       }),
@@ -674,7 +674,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
 
     const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
       listLocalThreads: async () => [],
-      cachedRemoteThreadSummary: () => ({
+      cachedRemoteThreadName: () => ({
         title: "0f9c2b7a-remote",
         titleSource: "fallback" as const,
       }),
@@ -699,7 +699,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
       [collidingLocal, remoteItem],
       {
         listLocalThreads: async () => [],
-        cachedRemoteThreadSummary: () => ({
+        cachedRemoteThreadName: () => ({
           title: "Reap Windows Worktrees",
           titleSource: "derived" as const,
         }),
@@ -722,7 +722,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
       listLocalThreads: async () => [
         { source: "codex" as const, id: "local-thread", title: "Local Work" },
       ],
-      cachedRemoteThreadSummary: () => {
+      cachedRemoteThreadName: () => {
         throw new Error("federation runtime unavailable");
       },
       listRemoteThreadPins: async () => {

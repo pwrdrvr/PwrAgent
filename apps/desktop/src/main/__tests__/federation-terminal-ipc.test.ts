@@ -76,7 +76,12 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../terminal/integrated-terminal-service", () => ({
+vi.mock("../terminal/integrated-terminal-service", async (importOriginal) => ({
+  // byThreadKey is a pure comparator the merge under test uses; only the
+  // service itself needs faking.
+  ...(await importOriginal<
+    typeof import("../terminal/integrated-terminal-service")
+  >()),
   IntegratedTerminalService: class {
     constructor(options: { onSessionsChanged: (sessions: unknown[]) => void }) {
       mocks.localSessionsChanged = options.onSessionsChanged;
@@ -452,6 +457,62 @@ describe("integrated terminal IPC federation branch", () => {
     mocks.localRevealSession.mockReturnValue(false);
 
     expect(revealIntegratedTerminal("codex:vanished").revealed).toBe(false);
+  });
+
+  // Remote mounts allocate a PTY per viewer window, so the same peer thread
+  // can be open twice. Reporting no owner would drop the caller back to the
+  // focused-or-first window, which is the bug the owner exists to avoid.
+  it("names an owner even when two windows host the same remote thread", async () => {
+    const first = fakeWebContents(21);
+    const second = fakeWebContents(22);
+    for (const [id, sender] of [
+      [21, first],
+      [22, second],
+    ] as const) {
+      mocks.federationWindowIds.add(id);
+      mocks.federationTargets.set(id, { scope: "remote", instanceId: "peer-a" });
+      mocks.remotePtyOpen.mockResolvedValueOnce({
+        sessionId: `remote-session-${id}`,
+        cwd: "/owner/worktree",
+        shell: "/bin/zsh",
+      });
+      await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+        threadKey: "codex:shared-thread",
+        cols: 80,
+        rows: 24,
+      });
+    }
+
+    const result = revealIntegratedTerminal("codex:shared-thread");
+    expect(result.revealed).toBe(true);
+    expect([first, second]).toContain(result.owner);
+  });
+
+  // A local shell and a peer's shell can share a thread key. Naming the
+  // instance must reach the peer's session, not the local registry.
+  it("skips the local registry when the caller names an owning instance", async () => {
+    mocks.localRevealSession.mockReturnValue(true);
+    const federationWindow = fakeWebContents(31);
+    mocks.federationWindowIds.add(31);
+    mocks.federationTargets.set(31, { scope: "remote", instanceId: "peer-a" });
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, federationWindow, {
+      threadKey: "codex:shared-key",
+      cols: 80,
+      rows: 24,
+    });
+
+    const result = revealIntegratedTerminal("codex:shared-key", {
+      instanceId: "peer-a",
+    });
+
+    expect(mocks.localRevealSession).not.toHaveBeenCalled();
+    expect(result.owner).toBe(federationWindow);
+
+    // ...and a different instance owns nothing here.
+    expect(
+      revealIntegratedTerminal("codex:shared-key", { instanceId: "peer-b" })
+        .revealed,
+    ).toBe(false);
   });
 
   it("throws for a federation window with no remote target instead of spawning locally", async () => {

@@ -17,7 +17,10 @@ import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { getIntegratedTerminalQuitSnapshot } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
-import type { IntegratedTerminalQuitThread } from "./terminal/integrated-terminal-service";
+import {
+  byThreadKey,
+  type IntegratedTerminalQuitThread,
+} from "./terminal/integrated-terminal-service";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import {
   focusActiveQuitConfirmationDialog,
@@ -228,9 +231,7 @@ export function buildQuitBlockerSnapshot(params: {
   actionRuns?: DetachedCommandSummary[];
 }): QuitBlockerSnapshot {
   const threadIds = [...params.inProgressThreads.threadIds].sort();
-  const terminalThreads = [...params.terminalSessions.threads].sort(
-    (left, right) => left.threadKey.localeCompare(right.threadKey),
-  );
+  const terminalThreads = [...params.terminalSessions.threads].sort(byThreadKey);
   const terminalThreadKeys = terminalThreads.map((thread) => thread.threadKey);
   const actionRuns = params.actionRuns ?? [];
 
@@ -345,10 +346,10 @@ export type QuitBlockerTitleResolverDependencies = {
     }>
   >;
   /**
-   * A peer's summary of one of its threads out of data ALREADY held locally.
+   * What a peer calls one of its threads, out of names ALREADY seen locally.
    * Synchronous by contract: this must not become a peer round trip.
    */
-  cachedRemoteThreadSummary: (params: {
+  cachedRemoteThreadName: (params: {
     target: FederationRemoteTarget;
     backend: AppServerBackendKind;
     threadId: string;
@@ -367,15 +368,21 @@ export type QuitBlockerTitleResolverDependencies = {
  * asked to decide about a uuid while their sidebar showed that same thread by
  * name.
  *
- * Reaching the peer (tier 3) is deliberately NOT done here. A thread can only
- * be a quit blocker because it is mounted in a window on this machine, which
- * means its summary was already fetched and cached — the name is in hand. A
- * round trip could only re-answer a question we can already answer, while
- * making shutdown wait on a machine that may be asleep.
+ * Reaching the peer (tier 3) is deliberately NOT done here. A remote thread
+ * is a quit blocker because a window on this machine has its terminal open,
+ * which means some snapshot named it on the way to the screen — so the name
+ * is normally already in hand, and a round trip would re-answer a question we
+ * can answer while making shutdown wait on a machine that may be asleep.
  *
- * Two cached sources, both local reads: the peer navigation-summary cache in
- * memory, and the pinned rows' persisted summaries (which survive a restart,
- * so a freshly launched app can still name a pinned remote thread).
+ * Two cached sources, both local reads: the remembered names from every peer
+ * snapshot this instance has seen, and the pinned rows' persisted summaries
+ * (which survive a restart, so a freshly launched app can still name a pinned
+ * remote thread before anything has talked to that peer).
+ *
+ * Neither is a guarantee. A peer's thread that no snapshot has named on this
+ * instance — nothing pinned it and no navigation read reached it — still
+ * falls back to its thread id, which is the correct outcome: the alternative
+ * is blocking shutdown on a peer to learn something cosmetic.
  *
  * Every lookup degrades to "no title" rather than throwing: a row that reads
  * as a thread id still links correctly, and nothing here is worth delaying a
@@ -407,9 +414,9 @@ export async function resolveQuitBlockerThreadTitles(
 
   const resolveRemote = async (): Promise<void> => {
     if (remoteItems.length === 0) return;
-    const summaries = remoteItems.map(({ item, target }) => {
+    const names = remoteItems.map(({ item, target }) => {
       try {
-        return dependencies.cachedRemoteThreadSummary({
+        return dependencies.cachedRemoteThreadName({
           target,
           backend: item.backend as AppServerBackendKind,
           threadId: item.threadId,
@@ -418,11 +425,10 @@ export async function resolveQuitBlockerThreadTitles(
         return undefined;
       }
     });
-    // One store read for the whole batch, and only when the in-memory cache
-    // left something unnamed — a fresh launch, typically, where nothing has
-    // fetched from the peer yet.
-    const needsPins = remoteItems.some((_, index) => !summaries[index]);
-    const pins = needsPins
+    // One store read for the whole batch, and only when the remembered names
+    // left something unnamed — a fresh launch, typically, where no snapshot
+    // has reached that peer yet.
+    const pins = names.some((name) => !name)
       ? await dependencies
           .listRemoteThreadPins()
           .catch(() => [] as ReadonlyArray<RemoteThreadPin>)
@@ -442,7 +448,7 @@ export async function resolveQuitBlockerThreadTitles(
       record(
         titles,
         item,
-        summaries[index] ?? pinnedByTitleKey.get(quitBlockerTitleKey(item)),
+        names[index] ?? pinnedByTitleKey.get(quitBlockerTitleKey(item)),
       );
     });
   };
@@ -498,13 +504,13 @@ export const appQuitManager = createQuitManager({
         await getDesktopBackendRegistry().listThreads({
           callerReason: "quit-confirmation",
         }),
-      // Cache read, no peer round trip: the same in-memory snapshot the
-      // sidebar renders these threads from, which is why it already holds
-      // the name for anything that could be blocking the quit.
-      cachedRemoteThreadSummary: (params) =>
+      // Map read, no peer round trip: names remembered from every peer
+      // snapshot this instance has seen, which is why the name is normally
+      // in hand for anything that could be blocking the quit.
+      cachedRemoteThreadName: (params) =>
         getDesktopFederationRuntime()
           .remoteThreadSummaries()
-          .cachedThreadFromPeer(params),
+          .cachedThreadNameFromPeer(params),
       listRemoteThreadPins: async () =>
         await getDesktopOverlayStore().listRemoteThreadPins(),
     }),

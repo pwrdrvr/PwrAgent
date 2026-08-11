@@ -267,7 +267,11 @@ export async function showQuitConfirmationDialog(
           // peer's thread is a window that never mounted it.
           const revealed =
             target.kind === "terminal"
-              ? revealIntegratedTerminal(target.threadKey)
+              ? revealIntegratedTerminal(target.threadKey, {
+                  ...(target.instanceId
+                    ? { instanceId: target.instanceId }
+                    : {}),
+                })
               : undefined;
           requestShowThread(parsed, { preferWebContents: revealed?.owner });
         }
@@ -376,33 +380,49 @@ const QUIT_ITEM_GROUPS: ReadonlyArray<{
 ];
 
 /**
- * Encode a row's target as a single URL segment.
+ * Encode a row's target as URL segments.
  *
  * The thread key travels whole rather than as `backend/threadId`: an ACP
  * backend kind ("acp:grok") contains a colon, and thread ids are opaque, so
  * splitting on delimiters here corrupts the key that the terminal registry and
  * the renderer both index by.
+ *
+ * The owning instance rides along for remote rows. A thread key does not
+ * identify a thread across instances — the same reason titles are resolved per
+ * instance — so without it a peer's row and a same-keyed local row encode to
+ * the same action and the click cannot tell them apart.
  */
 export function formatQuitItemAction(item: QuitBlockerItem): string {
-  return `show-thread/${encodeURIComponent(item.threadKey)}/${encodeURIComponent(
-    item.kind,
-  )}`;
+  const segments = [
+    "show-thread",
+    encodeURIComponent(item.threadKey),
+    encodeURIComponent(item.kind),
+  ];
+  if (item.target) {
+    segments.push(encodeURIComponent(item.target.instanceId));
+  }
+  return segments.join("/");
 }
 
 export function parseQuitItemAction(
   action: string,
-): { threadKey: string; kind: string } | undefined {
+): { threadKey: string; kind: string; instanceId?: string } | undefined {
   if (!action.startsWith("show-thread/")) {
     return undefined;
   }
-  const [, encodedThreadKey, encodedKind] = action.split("/");
+  const [, encodedThreadKey, encodedKind, encodedInstanceId] =
+    action.split("/");
   if (!encodedThreadKey) {
     return undefined;
   }
   try {
+    const instanceId = encodedInstanceId
+      ? decodeURIComponent(encodedInstanceId)
+      : undefined;
     return {
       threadKey: decodeURIComponent(encodedThreadKey),
       kind: decodeURIComponent(encodedKind ?? ""),
+      ...(instanceId ? { instanceId } : {}),
     };
   } catch {
     return undefined;

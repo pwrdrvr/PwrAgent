@@ -87,6 +87,7 @@ const federationMock = vi.hoisted(() => {
     ),
     searchForJump: vi.fn(async () => ({ results: [] })),
     threadFromPeer: vi.fn(async (): Promise<unknown> => undefined),
+    rememberThreadNames: vi.fn(),
   };
   return {
     remoteBackend,
@@ -1815,6 +1816,52 @@ describe("app server ipc", () => {
         federation: { peerStatus: "disconnected" },
       }],
     });
+  });
+
+  // Remote thread names are remembered here because a federation window's
+  // navigation never reaches RemoteThreadSummaryCache. That is a side errand:
+  // the operator asked for a snapshot, and losing a name costs a thread id in
+  // a quit dialog somewhere, not this window's contents.
+  it("remembers remote thread names without letting that break the snapshot", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "peer_remembers_names",
+    };
+    const snapshot = {
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      federationTarget,
+      unchanged: false,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    };
+    federationMock.runtime.remoteNavigationSnapshot
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce(snapshot);
+
+    registerAppServerIpcHandlers();
+    const handler = handlers.get(NAVIGATION_SNAPSHOT_CHANNEL);
+
+    await expect(handler?.({}, { federationTarget })).resolves.toBe(snapshot);
+    expect(
+      federationMock.remoteThreadSummaries.rememberThreadNames,
+    ).toHaveBeenCalledWith("peer_remembers_names", snapshot.threads);
+
+    federationMock.remoteThreadSummaries.rememberThreadNames.mockImplementationOnce(
+      () => {
+        throw new Error("federation runtime unavailable");
+      },
+    );
+    await expect(
+      handler?.({}, { federationTarget, forceRefresh: true, refreshMode: "full" }),
+    ).resolves.toBe(snapshot);
   });
 
   it("overlays viewer-owned directory disclosure state on remote snapshots", async () => {
