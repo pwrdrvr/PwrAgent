@@ -6822,6 +6822,80 @@ describe("CodexAppServerClient", () => {
         startupError: "invalid_grant",
         tools: [],
       }]);
+    await client.reloadMcpConfig();
+    await expect(client.listMcpServers({ detail: "toolsAndAuthOnly" }))
+      .resolves.toEqual([{
+        name: "datadog",
+        authStatus: "oAuth",
+        tools: [],
+      }]);
+
+    await client.close();
+  });
+
+  it("keeps MCP startup status scoped to its inventory thread", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadMcpServerStatusResult = {
+      data: [{
+        name: "atlassian",
+        serverInfo: null,
+        authStatus: "oAuth",
+        tools: {},
+        resources: [],
+        resourceTemplates: [],
+      }],
+      nextCursor: null,
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    await client.getInitializeResult();
+    const transport = MockTransport.instances.at(-1)!;
+    transport.emitInbound({
+      jsonrpc: "2.0",
+      method: "mcpServer/startupStatus/updated",
+      params: {
+        threadId: "thread-a",
+        name: "atlassian",
+        status: "failed",
+        error: "thread-a invalid_grant",
+      },
+    });
+    transport.emitInbound({
+      jsonrpc: "2.0",
+      method: "mcpServer/startupStatus/updated",
+      params: {
+        threadId: "thread-b",
+        name: "atlassian",
+        status: "ready",
+        error: null,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await expect(client.listMcpServers({
+      threadId: "thread-a",
+      detail: "toolsAndAuthOnly",
+    })).resolves.toEqual([expect.objectContaining({
+      name: "atlassian",
+      startupStatus: "failed",
+      startupError: "thread-a invalid_grant",
+    })]);
+    await expect(client.listMcpServers({
+      threadId: "thread-b",
+      detail: "toolsAndAuthOnly",
+    })).resolves.toEqual([expect.objectContaining({
+      name: "atlassian",
+      startupStatus: "ready",
+    })]);
+    await expect(client.listMcpServers({
+      detail: "toolsAndAuthOnly",
+    })).resolves.toEqual([{
+      name: "atlassian",
+      authStatus: "oAuth",
+      tools: [],
+    }]);
 
     await client.close();
   });

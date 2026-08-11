@@ -6911,12 +6911,15 @@ export class CodexAppServerClient {
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
-  private readonly mcpStartupStatusByName = new Map<
+  private readonly mcpStartupStatusByContext = new Map<
     string,
-    {
-      status: NonNullable<CodexMcpServerSummary["startupStatus"]>;
-      error?: string;
-    }
+    Map<
+      string,
+      {
+        status: NonNullable<CodexMcpServerSummary["startupStatus"]>;
+        error?: string;
+      }
+    >
   >();
   private readonly recordedThreadNames = new Map<string, string>();
   private readonly requestListeners = new Set<
@@ -6985,6 +6988,7 @@ export class CodexAppServerClient {
         const name = readStringFromRecord(params, "name");
         const status = readStringFromRecord(params, "status");
         const error = readStringFromRecord(params, "error");
+        const threadId = extractRequestMetadata(params).threadId;
         if (
           name
           && (status === "starting"
@@ -6992,10 +6996,16 @@ export class CodexAppServerClient {
             || status === "failed"
             || status === "cancelled")
         ) {
-          this.mcpStartupStatusByName.set(name, {
+          const contextKey = threadId
+            ? `thread:${threadId}`
+            : "global";
+          const statuses = this.mcpStartupStatusByContext.get(contextKey)
+            ?? new Map();
+          statuses.set(name, {
             status,
             ...(error ? { error } : {}),
           });
+          this.mcpStartupStatusByContext.set(contextKey, statuses);
         }
       }
 
@@ -7066,7 +7076,7 @@ export class CodexAppServerClient {
     this.recordedThreadNames.clear();
     this.helperThreadIds.clear();
     this.completedHelperTurnResults.clear();
-    this.mcpStartupStatusByName.clear();
+    this.mcpStartupStatusByContext.clear();
     this.helperTurnTitleObjects.clear();
     this.helperTurnTokenUsage.clear();
     this.helperThreadPredicates.clear();
@@ -7724,6 +7734,7 @@ export class CodexAppServerClient {
 
     const listPages = async (threadId?: string) => {
       const servers: CodexMcpServerSummary[] = [];
+      const contextKey = threadId ? `thread:${threadId}` : "global";
       const seenCursors = new Set<string>();
       let cursor: string | undefined;
       do {
@@ -7751,7 +7762,9 @@ export class CodexAppServerClient {
 
       return servers
         .map((server) => {
-          const startup = this.mcpStartupStatusByName.get(server.name);
+          const startup = this.mcpStartupStatusByContext
+            .get(contextKey)
+            ?.get(server.name);
           return startup
             ? {
                 ...server,
@@ -7778,6 +7791,7 @@ export class CodexAppServerClient {
 
   async reloadMcpConfig(): Promise<void> {
     await this.ensureInitialized();
+    this.mcpStartupStatusByContext.clear();
     await requestWithFallbacks({
       client: this.connection,
       methods: ["config/mcpServer/reload"],
@@ -7825,7 +7839,9 @@ export class CodexAppServerClient {
       payloads: [payload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
-    this.mcpStartupStatusByName.delete(params.name);
+    for (const statuses of this.mcpStartupStatusByContext.values()) {
+      statuses.delete(params.name);
+    }
     await this.reloadMcpConfig();
     const remaining = await this.listMcpServers({
       detail: "toolsAndAuthOnly",

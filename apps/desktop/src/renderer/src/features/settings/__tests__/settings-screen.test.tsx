@@ -4306,6 +4306,10 @@ describe("SettingsScreen", () => {
         startupStatus: "failed" as const,
         startupError: "invalid_grant",
         tools: [],
+      }, {
+        name: "atlassian",
+        authStatus: "oAuth" as const,
+        tools: ["search"],
       }],
     }));
     const reloadCodexMcpServers = vi.fn(async () => ({ queued: true as const }));
@@ -4339,7 +4343,19 @@ describe("SettingsScreen", () => {
     );
 
     expect(await screen.findByText("invalid_grant")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Relogin" }));
+    const datadogRow = screen.getByText("datadog")
+      .closest<HTMLElement>(".settings-mcp-row");
+    const atlassianRow = screen.getByText("atlassian")
+      .closest<HTMLElement>(".settings-mcp-row");
+    expect(datadogRow).not.toBeNull();
+    expect(atlassianRow).not.toBeNull();
+    fireEvent.click(within(datadogRow!).getByRole("button", { name: "Relogin" }));
+    expect(
+      within(atlassianRow!).getByRole("button", { name: "Relogin" }),
+    ).toBeDisabled();
+    expect(
+      within(atlassianRow!).getByRole("button", { name: "Remove" }),
+    ).toBeDisabled();
     await waitFor(() => {
       expect(startCodexMcpServerLogin).toHaveBeenCalledWith({ name: "datadog" });
       expect(openSpy).toHaveBeenCalledWith(
@@ -4358,10 +4374,24 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    expect(await screen.findByText("datadog login completed.")).toBeInTheDocument();
+    expect(
+      within(atlassianRow!).getByRole("button", { name: "Relogin" }),
+    ).toBeDisabled();
+    await act(async () => {
+      agentEventListener?.({
+        backend: "codex",
+        notification: {
+          method: "mcpServer/startupStatus/updated",
+          params: { name: "datadog", status: "ready" },
+        },
+      });
+    });
+    expect(await screen.findByText(
+      "datadog login completed and its row was refreshed.",
+    )).toBeInTheDocument();
     expect(reloadCodexMcpServers).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(datadogRow!).getByRole("button", { name: "Remove" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove server" }));
     await waitFor(() => {
       expect(removeCodexMcpServer).toHaveBeenCalledWith({ name: "datadog" });
