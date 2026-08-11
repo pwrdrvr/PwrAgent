@@ -490,6 +490,88 @@ describe("DesktopAutomationService", () => {
     });
   });
 
+  it("captures run usage from a turn-scope pricing event", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    // The registry-event subscription lives in start() — the boot path calls
+    // it; a service that was never started hears no pricing events.
+    service.start();
+    const created = await service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      schedule: { kind: "interval", every: 5, unit: "minutes" },
+    });
+    const runNow = await service.runNow({ automationId: created.automation.id });
+
+    // Bind the backend turn id to the run the way the live app does.
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              threadId: "thread-1",
+              queueEntryId: runNow.queueEntryId ?? "headless:run-1",
+              origin: "automation",
+              status: "started",
+              automationRunId: runNow.run.id,
+              backendThreadId: "headless-thread-1",
+              turnId: "turn-1",
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+
+    // The registry nests readThreadPricing's result under `pricing` — the
+    // capture must read that real shape, not a flattened `lines` array.
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/pricing/updated",
+            params: {
+              threadId: "thread-1",
+              pricing: {
+                summaries: [],
+                lines: [
+                  {
+                    scope: "turn",
+                    turnId: "turn-1",
+                    model: "gpt-5",
+                    uncachedInputTokens: 1_000,
+                    cachedInputTokens: 2_000,
+                    outputTokens: 300,
+                    reasoningOutputTokens: 100,
+                    totalTokens: 3_300,
+                    totalCostMicros: 123_456,
+                    currency: "USD",
+                  },
+                ],
+              },
+            },
+          },
+          // Partial ThreadUsageLineRecord: only the fields the capture reads.
+        } as unknown as AgentEvent),
+      ),
+    );
+
+    const [run] = store.listRunsForAutomation(created.automation.id, 1);
+    expect(run?.usage).toEqual({
+      model: "gpt-5",
+      uncachedInputTokens: 1_000,
+      cachedInputTokens: 2_000,
+      outputTokens: 300,
+      reasoningOutputTokens: 100,
+      totalTokens: 3_300,
+      totalCostMicros: 123_456,
+      currency: "USD",
+    });
+  });
+
   it("lists an active run as the latest automation status", async () => {
     const service = new DesktopAutomationService({ registry, store });
     const created = await service.create({

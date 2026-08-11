@@ -773,12 +773,6 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   /**
-   * Fetch recent messages for the Automations editor live preview. Delegates
-   * to the provider adapter's optional history fetch (Slack today), maps to the
-   * compact preview shape, and filters to the requested conversation scope.
-   * Returns `[]` when the provider has no history support or the call fails.
-   */
-  /**
    * Whether a provider's adapter can read recent conversation history (Slack
    * today). Callers use this to tell "no history support" apart from "the
    * conversation is simply empty", which fetchRecentPreviewMessages cannot.
@@ -788,6 +782,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     return Boolean(adapter?.fetchRecentMessages);
   }
 
+  /**
+   * Fetch recent messages for the Automations editor live preview. Delegates
+   * to the provider adapter's optional history fetch (Slack today), maps to the
+   * compact preview shape, and filters to the requested conversation scope.
+   * Returns `[]` when the provider has no history support or the call fails.
+   */
   async fetchRecentPreviewMessages(params: {
     provider: MessagingChannelKind;
     conversationId: string;

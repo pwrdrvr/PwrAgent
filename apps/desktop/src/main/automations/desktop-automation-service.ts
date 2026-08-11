@@ -787,11 +787,15 @@ export class DesktopAutomationService {
    * final line is the one carrying the turn's full totals.
    */
   private captureRunUsageFromPricingEvent(event: AgentEvent): void {
+    // Event shape is `{ threadId, pricing: { lines, summaries } }` — the
+    // registry's emitThreadPricingUpdated nests readThreadPricing's result
+    // under `pricing`, it does not spread it.
     const params = event.notification.params as
-      | { lines?: Array<Record<string, unknown>> }
+      | { pricing?: { lines?: Array<Record<string, unknown>> } }
       | undefined;
-    if (!Array.isArray(params?.lines)) return;
-    for (const line of params.lines) {
+    const lines = params?.pricing?.lines;
+    if (!Array.isArray(lines)) return;
+    for (const line of lines) {
       if (line.scope !== "turn" || typeof line.turnId !== "string") continue;
       const run =
         this.options.store.findRunningRunByBackendTurnId({
