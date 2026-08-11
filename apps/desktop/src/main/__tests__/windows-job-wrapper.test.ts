@@ -15,6 +15,7 @@ import {
   WINDOWS_JOB_STARTUP_PROGRESS_TIMEOUT_MS,
   wrapCommandInWindowsJob,
 } from "../windows-job-wrapper";
+import { runGitCommand } from "../app-server/git-executable";
 import { resolveWindowsBashShell } from "../windows-shell";
 
 function decodeBase64(value: string): string {
@@ -22,7 +23,7 @@ function decodeBase64(value: string): string {
 }
 
 async function runWrappedCommand(params: {
-  args: [string, string];
+  args: string[];
   command: string;
   cwd: string;
 }): Promise<{
@@ -106,16 +107,16 @@ describe("wrapCommandInWindowsJob", () => {
       "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
     );
     expect(
-      decodeBase64(wrapped.env.PWRAGENT_JOB_WRAPPER_ARGUMENT_0!),
-    ).toBe("-lc");
-    expect(
-      decodeBase64(wrapped.env.PWRAGENT_JOB_WRAPPER_ARGUMENT_1!),
-    ).toBe(
+      JSON.parse(
+        decodeBase64(wrapped.env.PWRAGENT_JOB_WRAPPER_ARGUMENTS!),
+      ),
+    ).toEqual([
+      "-lc",
       [
         "trap 'pwragent_exit=$?; trap - EXIT; set +e; pwragent_exit_file=$(/usr/bin/cygpath.exe -u \"$PWRAGENT_JOB_WRAPPER_EXIT_FILE\"); if [ -n \"$pwragent_exit_file\" ]; then printf \"%s\" \"$pwragent_exit\" > \"$pwragent_exit_file\"; fi; exit \"$pwragent_exit\"' EXIT",
         command,
       ].join("\n"),
-    );
+    ]);
     expect(wrapped.env.PWRAGENT_JOB_WRAPPER_CWD).toBe("C:\\work tree");
     expect(wrapped.env.PWRAGENT_JOB_WRAPPER_READY_FILE).toBe(
       wrapped.readyFilePath,
@@ -136,6 +137,29 @@ describe("wrapCommandInWindowsJob", () => {
       PATH: "C:\\tools",
       SystemRoot: "C:\\Windows",
     });
+    wrapped.cleanup();
+  });
+
+  it("preserves a native command's complete argument vector", () => {
+    const args = [
+      "-C",
+      "C:\\repo with spaces",
+      "worktree",
+      "remove",
+      "--force",
+      "C:\\worktrees\\feature with spaces",
+    ];
+    const wrapped = wrapCommandInWindowsJob({
+      args,
+      command: "C:\\Program Files\\Git\\cmd\\git.exe",
+      env: { SystemRoot: "C:\\Windows" },
+    });
+
+    expect(
+      JSON.parse(
+        decodeBase64(wrapped.env.PWRAGENT_JOB_WRAPPER_ARGUMENTS!),
+      ),
+    ).toEqual(args);
     wrapped.cleanup();
   });
 
@@ -330,6 +354,11 @@ describe("wrapCommandInWindowsJob", () => {
           stderr: "",
         });
         expect(nativeResult.stdout).toContain("job-native");
+
+        const gitResult = await runGitCommand(root, ["init", "-b", "main"], {
+          ownProcessTree: true,
+        });
+        expect(gitResult.stderr).toBe("");
 
         const bashResult = await runWrappedCommand({
           args: [

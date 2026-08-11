@@ -9,8 +9,7 @@ import os from "node:os";
 import path from "node:path";
 
 const EXECUTABLE_ENV = "PWRAGENT_JOB_WRAPPER_EXECUTABLE";
-const ARGUMENT_0_ENV = "PWRAGENT_JOB_WRAPPER_ARGUMENT_0";
-const ARGUMENT_1_ENV = "PWRAGENT_JOB_WRAPPER_ARGUMENT_1";
+const ARGUMENTS_ENV = "PWRAGENT_JOB_WRAPPER_ARGUMENTS";
 const WORKING_DIRECTORY_ENV = "PWRAGENT_JOB_WRAPPER_CWD";
 const READY_FILE_ENV = "PWRAGENT_JOB_WRAPPER_READY_FILE";
 const EXIT_FILE_ENV = "PWRAGENT_JOB_WRAPPER_EXIT_FILE";
@@ -28,16 +27,15 @@ const BASH_EXIT_TRAP =
 const WINDOWS_JOB_WRAPPER_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
 $application = [string]$env:PWRAGENT_JOB_WRAPPER_EXECUTABLE
-$argument0 = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$env:PWRAGENT_JOB_WRAPPER_ARGUMENT_0))
-$argument1 = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$env:PWRAGENT_JOB_WRAPPER_ARGUMENT_1))
+$argumentsJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$env:PWRAGENT_JOB_WRAPPER_ARGUMENTS))
+$arguments = @((ConvertFrom-Json -InputObject $argumentsJson) | ForEach-Object { [string]$_ })
 $workingDirectory = [string]$env:PWRAGENT_JOB_WRAPPER_CWD
 $readyFile = [string]$env:PWRAGENT_JOB_WRAPPER_READY_FILE
 $exitFile = [string]$env:PWRAGENT_JOB_WRAPPER_EXIT_FILE
 $startupStartedAt = [long]$env:PWRAGENT_JOB_WRAPPER_STARTED_AT
 $startupStatusFile = [string]$env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_EXECUTABLE -ErrorAction SilentlyContinue
-Remove-Item Env:PWRAGENT_JOB_WRAPPER_ARGUMENT_0 -ErrorAction SilentlyContinue
-Remove-Item Env:PWRAGENT_JOB_WRAPPER_ARGUMENT_1 -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_ARGUMENTS -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_CWD -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_READY_FILE -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTED_AT -ErrorAction SilentlyContinue
@@ -430,7 +428,7 @@ try {
   Write-StartupPhase -Phase 'helper-ready'
   $exitCode = [PwrAgentWindowsJobRunner]::Run(
     $application,
-    [string[]]@($argument0, $argument1),
+    [string[]]$arguments,
     $workingDirectory,
     $readyFile,
     $startupStatusFile,
@@ -657,7 +655,7 @@ function encodeArgument(value: string): string {
 }
 
 export function wrapCommandInWindowsJob(params: {
-  args: [string, string];
+  args: string[];
   command: string;
   cwd?: string;
   env: NodeJS.ProcessEnv;
@@ -694,10 +692,10 @@ export function wrapCommandInWindowsJob(params: {
   // native process created above is therefore not always the process whose
   // exit code represents the shell script. Have every POSIX `-lc` invocation
   // report its own exact status for the wrapper to return.
-  const argument1 =
-    params.args[0] === "-lc"
-      ? `${BASH_EXIT_TRAP}\n${params.args[1]}`
-      : params.args[1];
+  const wrappedArgs = [...params.args];
+  if (wrappedArgs[0] === "-lc" && wrappedArgs[1] !== undefined) {
+    wrappedArgs[1] = `${BASH_EXIT_TRAP}\n${wrappedArgs[1]}`;
+  }
   return {
     command: powershell,
     args: [
@@ -720,8 +718,7 @@ export function wrapCommandInWindowsJob(params: {
     env: {
       ...params.env,
       [EXECUTABLE_ENV]: params.command,
-      [ARGUMENT_0_ENV]: encodeArgument(params.args[0]),
-      [ARGUMENT_1_ENV]: encodeArgument(argument1),
+      [ARGUMENTS_ENV]: encodeArgument(JSON.stringify(wrappedArgs)),
       [WORKING_DIRECTORY_ENV]: params.cwd ?? process.cwd(),
       [READY_FILE_ENV]: readyFilePath,
       [EXIT_FILE_ENV]: exitFilePath,

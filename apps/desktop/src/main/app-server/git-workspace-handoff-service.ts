@@ -115,8 +115,7 @@ async function runGit(
   args: string[],
   env?: NodeJS.ProcessEnv,
 ): Promise<GitResult> {
-  return await execFileAsync("git", args, {
-    cwd,
+  return await execFileAsync("git", ["-C", cwd, ...args], {
     env: buildPwrAgentChildProcessEnv(env ?? process.env),
     maxBuffer: 1024 * 1024 * 10,
   });
