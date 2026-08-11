@@ -77,6 +77,14 @@ const RUN_ACTOR_CACHE_TTL_MS = 30_000;
 /** Runs scanned for distinct actors. Bounds the read on a long-lived automation. */
 const RUN_ACTOR_SCAN_LIMIT = 200;
 
+/**
+ * How long a changed usage snapshot may sit in memory before its sqlite
+ * write. One second matches the registry's live token-usage flush window:
+ * pricing stays responsive while a streaming turn's repeated updates share
+ * one payload rewrite instead of taking one commit each.
+ */
+const RUN_USAGE_FLUSH_INTERVAL_MS = 1_000;
+
 let service: DesktopAutomationService | null = null;
 let storeOverride: AutomationStore | null = null;
 
@@ -120,6 +128,16 @@ export class DesktopAutomationService {
     { actors: MessagingDirectoryActor[]; readAt: number }
   >();
   private readonly automationsChangedListeners = new Set<() => void>();
+  /**
+   * Latest usage snapshot per run, waiting for one sqlite write. Pricing
+   * events carry cumulative totals, so repeated observations for a run
+   * replace each other in memory and only the newest needs to be durable —
+   * the same shape as the registry's live token-usage batching (PR #1417),
+   * at automation scale. Best-effort, not banking: a crash inside the flush
+   * window loses at most the last in-flight snapshot of a cost estimate.
+   */
+  private readonly pendingRunUsage = new Map<string, AutomationRunUsage>();
+  private pendingRunUsageTimer: NodeJS.Timeout | undefined;
 
   constructor(
     private readonly options: {
@@ -191,6 +209,11 @@ export class DesktopAutomationService {
     this.scheduler.stop();
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
+    if (this.pendingRunUsageTimer) {
+      clearTimeout(this.pendingRunUsageTimer);
+      this.pendingRunUsageTimer = undefined;
+    }
+    this.flushPendingRunUsage();
     this.options.registry.setAutomationInspectionHandler?.(null);
   }
 
@@ -829,7 +852,41 @@ export class DesktopAutomationService {
           : {}),
         ...(typeof line.currency === "string" ? { currency: line.currency } : {}),
       };
-      this.options.store.setRunUsage({ runId: run.id, usage });
+      this.bufferRunUsage(run, usage);
+    }
+  }
+
+  /**
+   * Debounced write path for run usage. A streaming turn emits pricing
+   * updates repeatedly, and each setRunUsage rewrites the whole run payload
+   * row — so identical snapshots are dropped, changed ones wait out one flush
+   * window, and terminal events drain their run immediately.
+   */
+  private bufferRunUsage(run: AutomationRunSummary, usage: AutomationRunUsage): void {
+    const current = this.pendingRunUsage.get(run.id) ?? run.usage;
+    if (current && automationRunUsageEquals(current, usage)) return;
+    this.pendingRunUsage.set(run.id, usage);
+    if (this.pendingRunUsageTimer) return;
+    const timer = setTimeout(() => {
+      this.pendingRunUsageTimer = undefined;
+      this.flushPendingRunUsage();
+    }, RUN_USAGE_FLUSH_INTERVAL_MS);
+    timer.unref?.();
+    this.pendingRunUsageTimer = timer;
+  }
+
+  private flushPendingRunUsage(runId?: string): void {
+    if (runId !== undefined) {
+      const usage = this.pendingRunUsage.get(runId);
+      if (!usage) return;
+      this.pendingRunUsage.delete(runId);
+      this.options.store.setRunUsage({ runId, usage });
+      return;
+    }
+    const entries = [...this.pendingRunUsage.entries()];
+    this.pendingRunUsage.clear();
+    for (const [id, usage] of entries) {
+      this.options.store.setRunUsage({ runId: id, usage });
     }
   }
 
@@ -867,6 +924,15 @@ export class DesktopAutomationService {
       errorMessage: params.errorMessage,
     });
     if (params.automationRunId) {
+      if (
+        params.status === "failed"
+        || params.status === "cancelled"
+        || params.status === "terminal"
+      ) {
+        // The run just ended — make whatever usage we have durable now. A
+        // final pricing line landing after this still flushes on the timer.
+        this.flushPendingRunUsage(params.automationRunId);
+      }
       await this.publishAutomationRunUpdate({
         backend: event.backend,
         runId: params.automationRunId,
@@ -913,6 +979,9 @@ export class DesktopAutomationService {
 
     const finalText = finalTextFromTerminalTurnNotification(event.notification);
     const errorMessage = errorMessageFromTerminalTurnNotification(event.notification);
+    // Turn end is a durability boundary for the debounced usage snapshot. A
+    // final pricing line arriving afterwards still flushes on the timer.
+    this.flushPendingRunUsage(activeRun.id);
     await this.scheduler.handleTurnQueueUpdate({
       automationRunId: activeRun.id,
       status: "terminal",
@@ -1631,4 +1700,21 @@ function summarizeAutomationCard(params: {
 function firstLine(value: string | undefined): string | undefined {
   const line = value?.split(/\r?\n/).find((candidate) => candidate.trim());
   return line?.trim();
+}
+
+/** Field-wise equality so unchanged pricing snapshots never schedule a write. */
+function automationRunUsageEquals(
+  a: AutomationRunUsage,
+  b: AutomationRunUsage,
+): boolean {
+  return (
+    a.model === b.model
+    && a.uncachedInputTokens === b.uncachedInputTokens
+    && a.cachedInputTokens === b.cachedInputTokens
+    && a.outputTokens === b.outputTokens
+    && a.reasoningOutputTokens === b.reasoningOutputTokens
+    && a.totalTokens === b.totalTokens
+    && a.totalCostMicros === b.totalCostMicros
+    && a.currency === b.currency
+  );
 }

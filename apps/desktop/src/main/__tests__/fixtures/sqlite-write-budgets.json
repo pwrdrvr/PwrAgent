@@ -1,4 +1,11 @@
 {
+  "automation-run-usage": {
+    "commits": 1,
+    "note": "50 cumulative pricing snapshots for one run, one debounced payload write",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "composer-draft-typing": {
     "commits": 70,
     "note": "typing one 70-character message with a save per keystroke: exactly one journal row survives, and commits track saves because each save is its own transaction",

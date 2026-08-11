@@ -490,7 +490,9 @@ describe("DesktopAutomationService", () => {
     });
   });
 
-  it("captures run usage from a turn-scope pricing event", async () => {
+  it("captures run usage from pricing events through one debounced write", async () => {
+    vi.useFakeTimers();
+    const setRunUsage = vi.spyOn(store, "setRunUsage");
     const service = new DesktopAutomationService({ registry, store });
     // The registry-event subscription lives in start() — the boot path calls
     // it; a service that was never started hears no pricing events.
@@ -527,37 +529,46 @@ describe("DesktopAutomationService", () => {
 
     // The registry nests readThreadPricing's result under `pricing` — the
     // capture must read that real shape, not a flattened `lines` array.
-    await Promise.all(
-      registryListeners.map((listener) =>
-        listener({
-          backend: "codex",
-          notification: {
-            method: "thread/pricing/updated",
-            params: {
-              threadId: "thread-1",
-              pricing: {
-                summaries: [],
-                lines: [
-                  {
-                    scope: "turn",
-                    turnId: "turn-1",
-                    model: "gpt-5",
-                    uncachedInputTokens: 1_000,
-                    cachedInputTokens: 2_000,
-                    outputTokens: 300,
-                    reasoningOutputTokens: 100,
-                    totalTokens: 3_300,
-                    totalCostMicros: 123_456,
-                    currency: "USD",
-                  },
-                ],
-              },
+    // Partial ThreadUsageLineRecord: only the fields the capture reads.
+    const pricingEvent = (totalCostMicros: number): AgentEvent =>
+      ({
+        backend: "codex",
+        notification: {
+          method: "thread/pricing/updated",
+          params: {
+            threadId: "thread-1",
+            pricing: {
+              summaries: [],
+              lines: [
+                {
+                  scope: "turn",
+                  turnId: "turn-1",
+                  model: "gpt-5",
+                  uncachedInputTokens: 1_000,
+                  cachedInputTokens: 2_000,
+                  outputTokens: 300,
+                  reasoningOutputTokens: 100,
+                  totalTokens: 3_300,
+                  totalCostMicros,
+                  currency: "USD",
+                },
+              ],
             },
           },
-          // Partial ThreadUsageLineRecord: only the fields the capture reads.
-        } as unknown as AgentEvent),
-      ),
-    );
+        },
+      }) as unknown as AgentEvent;
+
+    // A streaming turn re-emits cumulative snapshots: two identical events,
+    // then a newer total. Only the newest snapshot may reach sqlite, and only
+    // after the flush window — the write must not scale with event count.
+    for (const totalCostMicros of [100_000, 100_000, 123_456]) {
+      await Promise.all(
+        registryListeners.map((listener) => listener(pricingEvent(totalCostMicros))),
+      );
+    }
+    expect(setRunUsage).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(setRunUsage).toHaveBeenCalledTimes(1);
 
     const [run] = store.listRunsForAutomation(created.automation.id, 1);
     expect(run?.usage).toEqual({
@@ -570,6 +581,16 @@ describe("DesktopAutomationService", () => {
       totalCostMicros: 123_456,
       currency: "USD",
     });
+
+    // A re-emitted, unchanged snapshot after the flush schedules nothing.
+    await Promise.all(
+      registryListeners.map((listener) => listener(pricingEvent(123_456))),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(setRunUsage).toHaveBeenCalledTimes(1);
+
+    service.dispose();
+    vi.useRealTimers();
   });
 
   it("lists an active run as the latest automation status", async () => {

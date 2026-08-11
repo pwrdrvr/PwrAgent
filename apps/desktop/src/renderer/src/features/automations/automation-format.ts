@@ -4,6 +4,7 @@ import type {
   AutomationScheduleDefinition,
   AutomationStatus,
 } from "@pwragent/shared";
+import { formatUsd } from "../thread-detail/context-panels/subagent-format";
 
 export function formatAutomationTimestamp(timestamp: number | undefined): string {
   if (!timestamp) {
@@ -63,8 +64,9 @@ export function formatScheduleKind(schedule: AutomationScheduleDefinition): stri
 
 /**
  * One-line run cost/usage summary: "$0.38 · 6.4k in · 1.2k out". Cost is the
- * list price frozen at run time (micros). Returns undefined when the run has
- * no recorded usage, so callers can omit the line entirely.
+ * list price frozen at run time (micros), rendered with the same sub-ten-cent
+ * extra decimal the sub-agent cost line uses. Returns undefined when the run
+ * has no recorded usage, so callers can omit the line entirely.
  */
 export function formatAutomationRunUsage(
   usage:
@@ -79,7 +81,7 @@ export function formatAutomationRunUsage(
   if (!usage) return undefined;
   const parts: string[] = [];
   if (typeof usage.totalCostMicros === "number") {
-    parts.push(`$${(usage.totalCostMicros / 1_000_000).toFixed(2)}`);
+    parts.push(formatUsd(usage.totalCostMicros / 1_000_000));
   }
   const inputTokens =
     (usage.uncachedInputTokens ?? 0) + (usage.cachedInputTokens ?? 0);
@@ -98,5 +100,5 @@ function formatTokenCount(count: number): string {
 
 export function formatCostTodayMicros(micros: number | undefined): string | undefined {
   if (micros === undefined) return undefined;
-  return `$${(micros / 1_000_000).toFixed(2)} today`;
+  return `${formatUsd(micros / 1_000_000)} today`;
 }
