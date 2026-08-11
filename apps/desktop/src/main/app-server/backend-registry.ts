@@ -24067,6 +24067,24 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private async buildAgentMessageOrigin(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<AppServerThreadMessageOrigin> {
+    const sourceThread = await this.resolveThread(params).catch(() => undefined);
+    const sourceTitle = sourceThread?.title.trim();
+    return {
+      kind: "agent",
+      sourceThread: {
+        backend: params.backend,
+        threadId: params.threadId,
+        ...(sourceTitle && sourceThread?.titleSource !== "fallback"
+          ? { title: sourceTitle }
+          : {}),
+      },
+    };
+  }
+
   private async sendMessageToThread(
     request: PwrAgentThreadOrchestrationRequest<"send_message_to_thread">,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
@@ -24138,13 +24156,10 @@ export class DesktopBackendRegistry {
         ...(request.args.sandbox ? { sandbox: request.args.sandbox } : {}),
       };
       const input = [{ type: "text" as const, text: prompt }];
-      const messageOrigin = {
-        kind: "agent" as const,
-        sourceThread: {
-          backend: request.context.backend,
-          threadId: request.context.threadId,
-        },
-      };
+      const messageOrigin = await this.buildAgentMessageOrigin({
+        backend: request.context.backend,
+        threadId: request.context.threadId,
+      });
       let targetTitle: string | undefined;
       let targetInstanceId: string | undefined;
       let turn: {
@@ -24387,6 +24402,10 @@ export class DesktopBackendRegistry {
       );
     }
 
+    const messageOrigin = await this.buildAgentMessageOrigin({
+      backend: request.context.backend,
+      threadId: request.context.threadId,
+    });
     const remoteRequest = {
       operation: request.operation === "stop_thread" ? "stop" as const : "steer" as const,
       backend,
@@ -24400,13 +24419,7 @@ export class DesktopBackendRegistry {
             input: [{ type: "text" as const, text: request.args.prompt }],
           }
         : {}),
-      messageOrigin: {
-        kind: "agent" as const,
-        sourceThread: {
-          backend: request.context.backend,
-          threadId: request.context.threadId,
-        },
-      },
+      messageOrigin,
     };
 
     try {
