@@ -10,6 +10,60 @@ let stateDb: StateDb;
 let store: ComposerDraftRecoveryStore;
 let tempDir: string;
 
+const RECOVERABLE_NON_TEXT_VARIANTS: Array<{
+  label: string;
+  patch: Partial<ComposerDraftSnapshotRecord>;
+}> = [
+  {
+    label: "editor document",
+    patch: {
+      editorDocument: {
+        type: "doc",
+        content: [{ type: "paragraph" }],
+      },
+    },
+  },
+  {
+    label: "skill tokens",
+    patch: {
+      skillTokens: [
+        {
+          id: "skill-1",
+          index: 0,
+          name: "review",
+          path: "/skills/review",
+        },
+      ],
+    },
+  },
+  {
+    label: "image attachments",
+    patch: {
+      imageAttachments: [
+        {
+          id: "image-1",
+          name: "reference.png",
+          size: 128,
+          type: "image/png",
+          url: "data:image/png;base64,abc",
+        },
+      ],
+    },
+  },
+  {
+    label: "file attachments",
+    patch: {
+      fileAttachments: [
+        {
+          id: "file-1",
+          label: "notes.txt",
+          path: "/tmp/notes.txt",
+        },
+      ],
+    },
+  },
+];
+
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-composer-drafts-"));
   stateDb = StateDb.open(path.join(tempDir, "state.db"));
@@ -293,6 +347,52 @@ describe("journal prefix collapse", () => {
     expect(journalTexts()).toEqual([sentence]);
   });
 
+  it("keeps one row when editor text grows with the plain-text prefix", () => {
+    ["I like", "I like ", "I like dogs"].forEach((text, index) => {
+      store.save({
+        draft: buildDraft({
+          scopeKey: "thread:codex:typing",
+          threadId: "typing",
+          text,
+          editorDocument: buildEditorDocument(text),
+          updatedAt: 1000 + index,
+          contentHash: `editor-${text}`,
+        }),
+        recordHistory: true,
+      });
+    });
+
+    expect(journalTexts()).toEqual(["I like dogs"]);
+  });
+
+  it.each(RECOVERABLE_NON_TEXT_VARIANTS)(
+    "keeps equal-text rows with different $label",
+    ({ patch }) => {
+      const text = "A long draft whose non-text recovery state changed.";
+      store.save({
+        draft: buildDraft({
+          ...patch,
+          scopeKey: "thread:codex:typing",
+          threadId: "typing",
+          text,
+          contentHash: "",
+        }),
+        recordHistory: true,
+      });
+      store.save({
+        draft: buildDraft({
+          scopeKey: "thread:codex:typing",
+          threadId: "typing",
+          text,
+          contentHash: "",
+        }),
+        recordHistory: true,
+      });
+
+      expect(journalTexts()).toEqual([text, text]);
+    },
+  );
+
   it("starts a new row when the text stops being an extension", () => {
     // Backspacing past what was already journalled is a real branch, not a
     // continuation, and keeping it is the point of a recovery journal.
@@ -372,6 +472,31 @@ describe("journal prefix-chain collapse on the GC pass", () => {
     ]);
   });
 
+  it("collapses legacy editor documents that differ only by prefix text", () => {
+    seedLegacyJournal([
+      {
+        payload: JSON.stringify({
+          editorDocument: buildEditorDocument("I like"),
+          text: "I like",
+        }),
+        text: "I like",
+      },
+      {
+        payload: JSON.stringify({
+          editorDocument: buildEditorDocument("I like dogs"),
+          text: "I like dogs",
+        }),
+        text: "I like dogs",
+      },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    expect(readJournal()).toEqual([
+      { status: "unsent", text: "I like dogs" },
+    ]);
+  });
+
   it("collapses abandoned prefix chains too", () => {
     seedLegacyJournal([
       { status: "abandoned", text: "A recoverable" },
@@ -431,6 +556,31 @@ describe("journal prefix-chain collapse on the GC pass", () => {
     ]);
   });
 
+  it.each(RECOVERABLE_NON_TEXT_VARIANTS)(
+    "does not collapse legacy prefixes across different $label",
+    ({ patch }) => {
+      seedLegacyJournal([
+        {
+          payload: JSON.stringify({
+            ...patch,
+            text: "I like dogs",
+          }),
+          text: "I like dogs",
+        },
+        { text: "I like dogs and cats" },
+      ]);
+
+      stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+      const payloads = stateDb.raw
+        .prepare(
+          "SELECT payload FROM composer_draft_journal ORDER BY updated_at, id",
+        )
+        .all() as Array<{ payload: string }>;
+      expect(payloads).toHaveLength(2);
+    },
+  );
+
   it("leaves malformed payloads alone and does not collapse across them", () => {
     seedLegacyJournal([
       { text: "I like" },
@@ -485,5 +635,19 @@ function buildDraft(
     contentHash: `hash-${text.length}-${patch.status ?? "unsent"}`,
     charCount: text.length,
     ...patch,
+  };
+}
+
+function buildEditorDocument(
+  text: string,
+): ComposerDraftSnapshotRecord["editorDocument"] {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "text", text }],
+      },
+    ],
   };
 }

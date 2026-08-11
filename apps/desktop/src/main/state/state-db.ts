@@ -5,6 +5,7 @@ import type BetterSqlite3 from "better-sqlite3";
 import {
   estimateTokenUsageCost,
   resolveOpenAiPricingServiceTier,
+  type ComposerDraftSnapshotRecord,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
@@ -1135,10 +1136,11 @@ export class StateDb {
  * - Only `unsent`/`abandoned` rows participate, matching the runtime's
  *   previous-row query. `sent` rows are never read and never deleted.
  * - Within a scope, rows are walked oldest-first and a row is dropped only
- *   when the NEXT surviving row's trimmed text starts with it — i.e. the later
- *   row already contains everything the earlier one held. The longest text in
- *   each chain always survives, so no content is lost, only redundant
- *   snapshots of the way there.
+ *   when the NEXT surviving row's trimmed text starts with it AND its editor
+ *   document, skill tokens, image attachments, and file attachments match.
+ *   The later row therefore contains everything recoverable from the earlier
+ *   one. The longest text in each chain survives, so no content is lost, only
+ *   redundant snapshots of the way there.
  * - A row that is not an extension starts a new chain and both are kept.
  *   Backspacing and retyping something different is a real branch, and keeping
  *   it is what a recovery journal is for.
@@ -1166,43 +1168,109 @@ function collapseComposerDraftJournalPrefixChains(
   const deleteRow = db.prepare("DELETE FROM composer_draft_journal WHERE id = ?");
   const superseded: number[] = [];
   let chainScopeKey: string | undefined;
-  let keeper: { id: number; text: string } | undefined;
+  let keeper:
+    | { draft: ComposerDraftJournalCollapsePayload; id: number }
+    | undefined;
 
   for (const row of rows) {
-    let text: string;
-    try {
-      text = ((JSON.parse(row.payload) as { text?: unknown }).text ?? "") as string;
-    } catch {
+    const draft = parseComposerDraftJournalCollapsePayload(row.payload);
+    if (!draft) {
       // An unparseable payload is left strictly alone: it cannot be compared,
       // so it can neither absorb a neighbour nor be absorbed.
       chainScopeKey = row.scope_key;
       keeper = undefined;
       continue;
     }
-    if (typeof text !== "string") {
-      chainScopeKey = row.scope_key;
-      keeper = undefined;
-      continue;
-    }
-    const trimmed = text.trimEnd();
 
     if (row.scope_key !== chainScopeKey) {
       chainScopeKey = row.scope_key;
-      keeper = { id: row.id, text: trimmed };
+      keeper = { draft, id: row.id };
       continue;
     }
 
-    if (keeper && keeper.text.length > 0 && trimmed.startsWith(keeper.text)) {
+    if (keeper && shouldCollapseComposerDraftJournalPrefix(keeper.draft, draft)) {
       // This row already contains everything the keeper held, so the keeper is
       // a redundant waypoint rather than a distinct draft.
       superseded.push(keeper.id);
     }
-    keeper = { id: row.id, text: trimmed };
+    keeper = { draft, id: row.id };
   }
 
   for (const id of superseded) {
     deleteRow.run(id);
   }
+}
+
+type ComposerDraftJournalCollapsePayload = Pick<
+  ComposerDraftSnapshotRecord,
+  | "editorDocument"
+  | "fileAttachments"
+  | "imageAttachments"
+  | "skillTokens"
+  | "text"
+>;
+
+function parseComposerDraftJournalCollapsePayload(
+  payload: string,
+): ComposerDraftJournalCollapsePayload | undefined {
+  try {
+    const parsed = JSON.parse(payload) as Partial<ComposerDraftSnapshotRecord>;
+    if (!parsed || typeof parsed !== "object" || typeof parsed.text !== "string") {
+      return undefined;
+    }
+    return {
+      editorDocument: parsed.editorDocument,
+      fileAttachments: parsed.fileAttachments,
+      imageAttachments: parsed.imageAttachments ?? [],
+      skillTokens: parsed.skillTokens ?? [],
+      text: parsed.text,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function shouldCollapseComposerDraftJournalPrefix(
+  previous: ComposerDraftJournalCollapsePayload,
+  next: ComposerDraftJournalCollapsePayload,
+): boolean {
+  const previousText = previous.text.trimEnd();
+  const nextText = next.text.trimEnd();
+  return previousText.length > 0
+    && nextText.startsWith(previousText)
+    && serializeRecoverableNonTextDraftContent(previous)
+      === serializeRecoverableNonTextDraftContent(next);
+}
+
+function serializeRecoverableNonTextDraftContent(
+  draft: Omit<ComposerDraftJournalCollapsePayload, "text">,
+): string {
+  return JSON.stringify({
+    // Text-node strings are represented by `text` and checked as a prefix
+    // above. Keep every other part of the editor document in the comparison.
+    editorDocument: withoutEditorTextNodeContent(draft.editorDocument),
+    skillTokens: draft.skillTokens,
+    imageAttachments: draft.imageAttachments,
+    fileAttachments: draft.fileAttachments ?? [],
+  });
+}
+
+function withoutEditorTextNodeContent(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(withoutEditorTextNodeContent);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(record).map(([key, child]) => [
+      key,
+      record.type === "text" && key === "text" && typeof child === "string"
+        ? ""
+        : withoutEditorTextNodeContent(child),
+    ]),
+  );
 }
 
 function ensureCurrentSchema(db: BetterSqlite3.Database): void {

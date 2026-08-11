@@ -102,7 +102,6 @@ export function useDurableComposerDraftStore(
         "unsent",
         createdAtRef,
       );
-      persistedHashRef.current.set(scopeKey, record.contentHash);
       if (shouldRecordHistory(pending.snapshot, "unsent")) {
         rememberLocalRecoveryCandidate(record);
       }
@@ -110,6 +109,15 @@ export function useDurableComposerDraftStore(
         .saveComposerDraft({
           draft: record,
           recordHistory: shouldRecordHistory(pending.snapshot, "unsent"),
+        })
+        .then((response) => {
+          // This map describes what is ACTUALLY durable, not what was merely
+          // attempted. Leaving the old hash in place on failure lets a later
+          // unchanged composer flush retry instead of suppressing the save.
+          persistedHashRef.current.set(
+            scopeKey,
+            response.draft.contentHash,
+          );
         })
         .catch((error) => {
           console.warn("Failed to save composer draft", error);
@@ -503,8 +511,12 @@ function shouldReplacePreviousUnsentCandidate(
   // composer-draft-recovery-store.ts — this is the in-memory half of the same
   // rule, and it carried the same bug: both sides are `trimEnd`ed, so a
   // strict length comparison failed on every typed space and left one
-  // candidate per word instead of one per edit.
-  return previousText.length > 0 && nextText.startsWith(previousText);
+  // candidate per word instead of one per edit. Non-text recovery content must
+  // also remain distinct when attachments, tokens, or editor state change.
+  return previousText.length > 0
+    && nextText.startsWith(previousText)
+    && serializeRecoverableNonTextDraftContent(previous)
+      === serializeRecoverableNonTextDraftContent(next);
 }
 
 /**
@@ -528,23 +540,63 @@ function shouldReplacePreviousUnsentCandidate(
 function hashDraftContent(snapshot: ComposerDraftSnapshot): string {
   const content = JSON.stringify({
     text: snapshot.draft,
-    editorDocument: snapshot.editorDocument,
-    skillTokens: snapshot.skillTokens.map((token) => ({
-      id: token.id,
-      index: token.index,
-      name: token.name,
-      path: token.path,
-    })),
-    imageAttachments: snapshot.imageAttachments.map((attachment) => ({
-      url: attachment.url,
-    })),
-    fileAttachments: (snapshot.fileAttachments ?? []).map((attachment) => ({
-      path: attachment.path,
-    })),
+    ...getRecoverableNonTextDraftContent(snapshot),
   });
   let hash = 5381;
   for (let index = 0; index < content.length; index += 1) {
     hash = (hash * 33) ^ content.charCodeAt(index);
   }
   return `h${(hash >>> 0).toString(36)}`;
+}
+
+function serializeRecoverableNonTextDraftContent(
+  draft: Pick<
+    ComposerDraftSnapshotRecord,
+    | "editorDocument"
+    | "fileAttachments"
+    | "imageAttachments"
+    | "skillTokens"
+  >,
+): string {
+  return JSON.stringify(getRecoverableNonTextDraftContent(draft));
+}
+
+function getRecoverableNonTextDraftContent(draft: {
+  editorDocument?: unknown;
+  fileAttachments?: readonly unknown[];
+  imageAttachments: readonly unknown[];
+  skillTokens: readonly unknown[];
+}): {
+  editorDocument: unknown;
+  fileAttachments: readonly unknown[];
+  imageAttachments: readonly unknown[];
+  skillTokens: readonly unknown[];
+} {
+  return {
+    // `draft` carries the changing plain text. Normalize only Tiptap text-node
+    // strings here so prefix typing remains collapsible while structure,
+    // marks, attributes, and every other editor-state field remain distinct.
+    editorDocument: withoutEditorTextNodeContent(draft.editorDocument),
+    skillTokens: draft.skillTokens,
+    imageAttachments: draft.imageAttachments,
+    fileAttachments: draft.fileAttachments ?? [],
+  };
+}
+
+function withoutEditorTextNodeContent(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(withoutEditorTextNodeContent);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(record).map(([key, child]) => [
+      key,
+      record.type === "text" && key === "text" && typeof child === "string"
+        ? ""
+        : withoutEditorTextNodeContent(child),
+    ]),
+  );
 }

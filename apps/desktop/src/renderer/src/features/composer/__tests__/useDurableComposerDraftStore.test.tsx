@@ -11,6 +11,60 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const RECOVERABLE_NON_TEXT_VARIANTS: Array<{
+  label: string;
+  patch: Partial<Omit<ComposerDraftSnapshot, "draft">>;
+}> = [
+  {
+    label: "editor document",
+    patch: {
+      editorDocument: {
+        type: "doc",
+        content: [{ type: "paragraph" }],
+      },
+    },
+  },
+  {
+    label: "skill tokens",
+    patch: {
+      skillTokens: [
+        {
+          id: "skill-1",
+          index: 0,
+          name: "review",
+          path: "/skills/review",
+        },
+      ],
+    },
+  },
+  {
+    label: "image attachments",
+    patch: {
+      imageAttachments: [
+        {
+          id: "image-1",
+          name: "reference.png",
+          size: 128,
+          type: "image/png",
+          url: "data:image/png;base64,abc",
+        },
+      ],
+    },
+  },
+  {
+    label: "file attachments",
+    patch: {
+      fileAttachments: [
+        {
+          id: "file-1",
+          label: "notes.txt",
+          path: "/tmp/notes.txt",
+        },
+      ],
+    },
+  },
+];
+
 describe("useDurableComposerDraftStore", () => {
   it("does not rewrite a hydrated draft when a thread is merely opened and left", async () => {
     // The PR's headline claim, and the one that depends on a fragile
@@ -178,23 +232,89 @@ describe("useDurableComposerDraftStore", () => {
       );
     });
 
-    it("does not write when nothing changed", () => {
+    it("does not write when nothing changed", async () => {
       // The composer re-saves on unmount with no dirty check, so an unchanged
       // snapshot arrives here just from opening a thread and leaving.
       const { result, saveComposerDraft } = setup();
 
-      act(() => {
+      await act(async () => {
         result.current.set("thread:codex:thread-1", buildSnapshot("Same text."));
-        vi.advanceTimersByTime(5_000);
+        await vi.advanceTimersByTimeAsync(5_000);
       });
       expect(saveComposerDraft).toHaveBeenCalledOnce();
 
-      act(() => {
+      await act(async () => {
         result.current.set("thread:codex:thread-1", buildSnapshot("Same text."));
-        vi.advanceTimersByTime(60_000);
+        await vi.advanceTimersByTimeAsync(60_000);
       });
 
       expect(saveComposerDraft).toHaveBeenCalledOnce();
+    });
+
+    it("writes when only recoverable non-text content changes", async () => {
+      const { result, saveComposerDraft } = setup();
+      const text = "The visible text stays the same.";
+
+      await act(async () => {
+        result.current.set("thread:codex:thread-1", buildSnapshot(text));
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      await act(async () => {
+        result.current.set(
+          "thread:codex:thread-1",
+          buildSnapshot(text, RECOVERABLE_NON_TEXT_VARIANTS[2]!.patch),
+        );
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(saveComposerDraft).toHaveBeenCalledTimes(2);
+      expect(saveComposerDraft).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          draft: expect.objectContaining({
+            imageAttachments: expect.arrayContaining([
+              expect.objectContaining({ id: "image-1" }),
+            ]),
+          }),
+        }),
+      );
+    });
+
+    it("retries unchanged content after a save fails", async () => {
+      vi.useFakeTimers();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const saveComposerDraft = vi
+        .fn<NonNullable<DesktopApi["saveComposerDraft"]>>()
+        .mockRejectedValueOnce(new Error("database is busy"))
+        .mockImplementation(async (request) => ({ draft: request.draft }));
+      const desktopApi = {
+        saveComposerDraft,
+      } as Partial<DesktopApi> as DesktopApi;
+      const { result } = renderHook(() =>
+        useDurableComposerDraftStore(useComposerDraftStore(), desktopApi),
+      );
+
+      await act(async () => {
+        result.current.set(
+          "thread:codex:thread-1",
+          buildSnapshot("Retry this unchanged draft."),
+        );
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(saveComposerDraft).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        "Failed to save composer draft",
+        expect.any(Error),
+      );
+
+      await act(async () => {
+        result.current.set(
+          "thread:codex:thread-1",
+          buildSnapshot("Retry this unchanged draft."),
+        );
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(saveComposerDraft).toHaveBeenCalledTimes(2);
     });
 
     it("flushes pending work when the window loses focus", () => {
@@ -430,20 +550,23 @@ describe("useDurableComposerDraftStore", () => {
     const { result } = renderHook(() =>
       useDurableComposerDraftStore(useComposerDraftStore(), desktopApi),
     );
+    const shorter =
+      "the quick fox typed enough context to be treated as a complete recoverable draft before it grew past the minimum recovery threshold";
+    const longer = `${shorter} into a longer coherent prompt`;
 
     act(() => {
       result.current.recordHistory?.(
         "thread:codex:thread-1",
-        buildSnapshot(
-          "the quick fox typed enough context to be treated as a complete recoverable draft before it grew past the minimum recovery threshold",
-        ),
+        buildSnapshot(shorter, {
+          editorDocument: buildEditorDocument(shorter),
+        }),
         "abandoned",
       );
       result.current.recordHistory?.(
         "thread:codex:thread-1",
-        buildSnapshot(
-          "the quick fox typed enough context to be treated as a complete recoverable draft before it grew past the minimum recovery threshold into a longer coherent prompt",
-        ),
+        buildSnapshot(longer, {
+          editorDocument: buildEditorDocument(longer),
+        }),
         "abandoned",
       );
     });
@@ -456,17 +579,77 @@ describe("useDurableComposerDraftStore", () => {
 
     expect(candidates).toEqual([
       expect.objectContaining({
-        text: "the quick fox typed enough context to be treated as a complete recoverable draft before it grew past the minimum recovery threshold into a longer coherent prompt",
+        text: longer,
       }),
     ]);
   });
+
+  it.each(RECOVERABLE_NON_TEXT_VARIANTS)(
+    "keeps optimistic equal-text candidates with different $label",
+    async ({ patch }) => {
+      const recordComposerDraftHistory = vi.fn<
+        NonNullable<DesktopApi["recordComposerDraftHistory"]>
+      >(async (request) => ({ candidate: request.draft }));
+      const listComposerDraftRecoveryCandidates = vi.fn<
+        NonNullable<DesktopApi["listComposerDraftRecoveryCandidates"]>
+      >(async () => ({ candidates: [] }));
+      const desktopApi = {
+        listComposerDraftRecoveryCandidates,
+        recordComposerDraftHistory,
+      } as Partial<DesktopApi> as DesktopApi;
+      const { result } = renderHook(() =>
+        useDurableComposerDraftStore(useComposerDraftStore(), desktopApi),
+      );
+      const text =
+        "This prompt is intentionally longer than the recovery threshold so both equal-text snapshots enter history while their editor state, tokens, or attachments change independently.";
+
+      act(() => {
+        result.current.recordHistory?.(
+          "thread:codex:thread-1",
+          buildSnapshot(text, patch),
+          "abandoned",
+        );
+        result.current.recordHistory?.(
+          "thread:codex:thread-1",
+          buildSnapshot(text),
+          "abandoned",
+        );
+      });
+
+      const candidates = await result.current.listRecoveryCandidates?.({
+        backend: "codex",
+        scopeKey: "thread:codex:thread-1",
+        threadId: "thread-1",
+      });
+
+      expect(candidates).toHaveLength(2);
+    },
+  );
 });
 
-function buildSnapshot(draft: string): ComposerDraftSnapshot {
+function buildSnapshot(
+  draft: string,
+  patch: Partial<Omit<ComposerDraftSnapshot, "draft">> = {},
+): ComposerDraftSnapshot {
   return {
     draft,
     editorDocument: undefined,
     imageAttachments: [],
     skillTokens: [],
+    ...patch,
+  };
+}
+
+function buildEditorDocument(
+  text: string,
+): NonNullable<ComposerDraftSnapshot["editorDocument"]> {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "text", text }],
+      },
+    ],
   };
 }
