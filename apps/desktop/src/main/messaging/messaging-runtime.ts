@@ -38,6 +38,7 @@ import type {
   MessagingAdapterDiagnosticEvent,
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingCapabilityProfile,
+  MessagingDirectoryActor,
   MessagingChannelRef,
   MessagingChannelKind,
   MessagingClientRateLimitStrategy,
@@ -108,6 +109,12 @@ export type DesktopMessagingAdapter = {
   deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult>;
   resolveDeliveryScope?(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
+  /**
+   * Optional people/app directory search, gated by
+   * `capabilityProfile.directory`. Providers without a searchable directory
+   * omit it and callers fall back to senders already observed.
+   */
+  searchDirectoryActors?: MessagingAdapter["searchDirectoryActors"];
   /**
    * Optional history fetch for the Automations editor live preview. Providers
    * that can read recent conversation messages (e.g. Slack) implement this;
@@ -794,6 +801,50 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       }
     }
     return messages;
+  }
+
+  /**
+   * Search a provider's directory for candidate senders.
+   *
+   * Returns an empty, `supported: false` result when the provider advertises
+   * no directory capability. The capability is the gate — not the presence of
+   * `searchDirectoryActors` — so an adapter that loses the scope at runtime can
+   * turn the feature off in exactly one place and every caller follows.
+   */
+  async searchDirectoryActors(params: {
+    provider: MessagingChannelKind;
+    conversationId?: string;
+    query: string;
+    limit?: number;
+  }): Promise<{
+    actors: MessagingDirectoryActor[];
+    label?: string;
+    supported: boolean;
+    truncated?: boolean;
+  }> {
+    const adapter = this.adapters.find((entry) => entry.channel === params.provider);
+    const directory = adapter?.capabilityProfile.directory;
+    const search = adapter?.searchDirectoryActors?.bind(adapter);
+    if (!directory?.supportsActorSearch || !search) {
+      return { actors: [], supported: false };
+    }
+    try {
+      const result = await search({
+        query: params.query,
+        ...(params.conversationId ? { conversationId: params.conversationId } : {}),
+        ...(params.limit ? { limit: params.limit } : {}),
+      });
+      return {
+        actors: result.actors,
+        supported: true,
+        ...(directory.actorSearchLabel ? { label: directory.actorSearchLabel } : {}),
+        ...(result.truncated ? { truncated: true } : {}),
+      };
+    } catch {
+      // A directory outage must not break the picker — observed senders still
+      // answer most searches.
+      return { actors: [], supported: true };
+    }
   }
 
   /**

@@ -1,4 +1,5 @@
 import type {
+  AutomationPriorRunContext,
   AutomationRunSourceBatchedEntry,
   AutomationGateRunResult,
   AutomationRunSkipReason,
@@ -470,6 +471,7 @@ export class AutomationScheduler {
         if (coalesced?.queueEntryId) {
           this.options.runner.updateQueuedRunInput?.({
             automation,
+            priorRuns: this.collectPriorRunContext(automation, coalesced.id, now),
             queueEntryId: coalesced.queueEntryId,
             run: coalesced,
           });
@@ -543,6 +545,7 @@ export class AutomationScheduler {
       const result = await this.options.runner.submitRun({
         automation: params.automation,
         gateResult,
+        priorRuns: this.collectPriorRunContext(params.automation, run.id, params.now),
         run,
       });
       if (result.status === "queued") {
@@ -592,6 +595,54 @@ export class AutomationScheduler {
       });
       return undefined;
     }
+  }
+
+  /**
+   * Assemble the prior-run history a new run may see, or undefined when the
+   * automation has lookback off (`undefined` also suppresses the prompt
+   * section entirely, so "no lookback" and "lookback found nothing" render
+   * differently).
+   *
+   * Only completed runs qualify — a failed or skipped run has no outcome to
+   * compare against, and including it would teach the prompt that "the
+   * automation errored" is an event pattern.
+   */
+  private collectPriorRunContext(
+    automation: AutomationRecord,
+    currentRunId: string,
+    now: number,
+  ): AutomationPriorRunContext[] | undefined {
+    const lookback = automation.priorRunLookback;
+    if (!lookback) return undefined;
+    const cutoff =
+      lookback.maxAgeMs !== undefined ? now - lookback.maxAgeMs : undefined;
+    const context: AutomationPriorRunContext[] = [];
+    // Over-fetch (bounded) since non-completed runs are filtered out below.
+    const candidates = this.options.store.listRunsForAutomation(
+      automation.id,
+      lookback.maxRuns * 3 + 5,
+    );
+    for (const run of candidates) {
+      if (context.length >= lookback.maxRuns) break;
+      if (run.id === currentRunId) continue;
+      if (run.status !== "completed") continue;
+      const completedAt = run.completedAt ?? run.startedAt;
+      if (completedAt === undefined) continue;
+      if (cutoff !== undefined && completedAt < cutoff) continue;
+      const artifact = this.options.store.getRunArtifact?.(run.id);
+      const decision = artifact?.outputDecision;
+      context.push({
+        completedAt,
+        status: run.status,
+        ...(decision?.summary
+          ? { summary: decision.summary }
+          : artifact?.finalText
+            ? { summary: artifact.finalText }
+            : {}),
+        ...(decision?.details ? { details: decision.details } : {}),
+      });
+    }
+    return context;
   }
 
   private async runGateIfNeeded(params: {

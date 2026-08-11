@@ -118,27 +118,23 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Channel ID"), {
       target: { value: "C123" },
     });
-    fireEvent.change(screen.getByLabelText("Sender type"), {
-      target: { value: "true" },
-    });
-    fireEvent.change(screen.getByLabelText("Sender ID (optional)"), {
-      target: { value: "B999" },
-    });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "Datadog monitor alert" },
     });
     fireEvent.click(
       screen.getByLabelText("Also broadcast the reply to the channel"),
     );
-    fireEvent.change(screen.getByLabelText("Access mode"), {
-      target: { value: "full-access" },
-    });
-    fireEvent.change(screen.getByLabelText("Model"), {
-      target: { value: "gpt-5" },
-    });
-    fireEvent.change(screen.getByLabelText("Reasoning"), {
-      target: { value: "high" },
-    });
+    // Run settings are the composer's chip dropdowns: click the chip, then
+    // pick an option from its listbox.
+    fireEvent.click(screen.getByRole("button", { name: "Automation access" }));
+    fireEvent.click(screen.getByRole("option", { name: "Full Access" }));
+    fireEvent.click(screen.getByRole("button", { name: "Automation model" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "gpt-5" })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("option", { name: "gpt-5" }));
+    fireEvent.click(screen.getByRole("button", { name: "Automation reasoning" }));
+    fireEvent.click(screen.getByRole("option", { name: "high" }));
     fireEvent.change(screen.getByLabelText("Max runs per hour"), {
       target: { value: "5" },
     });
@@ -178,19 +174,108 @@ describe("AutomationEditor", () => {
             id: "inbound-message",
             includeThreadReplies: false,
             kind: "inbound_message",
-            name: "Datadog monitor alert",
-            sender: {
-              isBot: true,
-              platformUserId: "B999",
-            },
-            textFilter: {
-              mode: "contains",
-              text: "Datadog monitor alert",
+            name: 'text contains "Datadog monitor alert"',
+            conditionGroup: {
+              join: "all",
+              conditions: [
+                {
+                  id: expect.any(String),
+                  field: "message_text",
+                  operator: "contains",
+                  values: ["Datadog monitor alert"],
+                },
+              ],
             },
           },
         ],
       }),
     });
+  });
+
+  it("submits prior-run lookback bounds when enabled", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        threads={[]}
+        onCancel={() => {}}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Escalation-aware triage" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "If this happened before, raise the urgency." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Slack" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Provider"), {
+      target: { value: "slack" },
+    });
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C123" },
+    });
+    fireEvent.change(screen.getByLabelText("Value"), {
+      target: { value: "ERROR" },
+    });
+
+    fireEvent.click(
+      screen.getByLabelText("Show this run the outcomes of its own recent runs"),
+    );
+    fireEvent.change(screen.getByLabelText("Include up to"), {
+      target: { value: "10" },
+    });
+    fireEvent.change(screen.getByLabelText("No older than"), {
+      target: { value: String(60 * 60 * 1000) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        priorRunLookback: { maxRuns: 10, maxAgeMs: 60 * 60 * 1000 },
+      }),
+    });
+  });
+
+  it("collapses the filter and throttling stages for a schedule trigger", async () => {
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        threads={[]}
+        onCancel={() => {}}
+        onSubmit={async () => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    expect(screen.getByRole("heading", { name: "Filters" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Coalescing & rate limit" }),
+    ).toBeInTheDocument();
+
+    // A schedule has nothing to filter and nothing to batch, so those stages
+    // disappear rather than rendering empty. The remaining stages renumber via
+    // a CSS counter, which is why no stage carries a hard-coded number.
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    expect(screen.queryByRole("heading", { name: "Filters" })).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Coalescing & rate limit" }),
+    ).toBeNull();
+    expect(screen.getByRole("heading", { name: "Trigger" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "AI evaluation" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Where results go" }),
+    ).toBeInTheDocument();
   });
 
   it("offers a Slack channel picker from authorized channels", async () => {
@@ -233,7 +318,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Channel"), {
       target: { value: "C0ALERTS" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -284,7 +369,21 @@ describe("AutomationEditor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
 
-    expect(screen.getByText(/Each matching inbound message starts/)).toBeInTheDocument();
+    // The funnel itself explains the pipeline now: each stage carries a
+    // lead-in verb, and the connectors say what survives into the next stage.
+    expect(
+      screen.getByRole("heading", { name: "Trigger" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Filters" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Coalescing & rate limit" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "AI evaluation" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Where results go" }),
+    ).toBeInTheDocument();
     // The authorized group appears in the picker once settings load.
     await waitFor(() =>
       expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
@@ -296,13 +395,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Topic ID"), {
       target: { value: "42" },
     });
-    fireEvent.change(screen.getByLabelText("Sender type"), {
-      target: { value: "false" },
-    });
-    fireEvent.change(screen.getByLabelText("Sender ID (optional)"), {
-      target: { value: "123456" },
-    });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "automation alert" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -322,13 +415,16 @@ describe("AutomationEditor", () => {
               parentId: "-1001234567890",
               parentTitle: "Ops Room",
             },
-            sender: {
-              isBot: false,
-              platformUserId: "123456",
-            },
-            textFilter: {
-              mode: "contains",
-              text: "automation alert",
+            conditionGroup: {
+              join: "all",
+              conditions: [
+                {
+                  id: expect.any(String),
+                  field: "message_text",
+                  operator: "contains",
+                  values: ["automation alert"],
+                },
+              ],
             },
           }),
         ],
@@ -389,12 +485,14 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Group ID"), {
       target: { value: "-1001234567890" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
-    fireEvent.change(screen.getByLabelText("Allowed MCP servers"), {
-      target: { value: "datadog, aws-readonly" },
-    });
+    const mcpInput = screen.getByLabelText("Allowed MCP servers");
+    fireEvent.change(mcpInput, { target: { value: "datadog" } });
+    fireEvent.keyDown(mcpInput, { key: "Enter" });
+    fireEvent.change(mcpInput, { target: { value: "aws-readonly" } });
+    fireEvent.keyDown(mcpInput, { key: "Enter" });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -557,7 +655,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Group ID"), {
       target: { value: "-100" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.click(
@@ -598,13 +696,24 @@ describe("AutomationEditor", () => {
     ).not.toHaveClass("is-match");
 
     // The sender ID is visible (not just the display name) and copyable, and
-    // "Use sender" drops it straight into the filter.
+    // "Use sender" adds that sender as a condition rather than making the
+    // operator copy an opaque platform id into a text box.
     expect(matchRow).toHaveTextContent("B1");
     fireEvent.click(
       matchRow!.querySelector(".automation-preview__use-sender") as Element,
     );
-    expect(screen.getByLabelText("Sender ID (optional)")).toHaveValue("B1");
-    expect(screen.getByLabelText("Sender type")).toHaveValue("true");
+    const senderChips = screen.getAllByRole("listitem").filter((item) =>
+      item.classList.contains("automation-sender-chip"),
+    );
+    expect(senderChips).toHaveLength(1);
+    expect(senderChips[0]).toHaveTextContent("Datadog");
+    // The plain-language summary lives on the funnel connector below the
+    // Filters stage, so it states what survives into the next stage.
+    expect(
+      screen.getByText(/sender is Datadog/i, {
+        selector: ".automation-flow__caption",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("offers a topic picker from known topics and submits its name", async () => {
@@ -652,7 +761,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Topic"), {
       target: { value: "42" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -708,7 +817,7 @@ describe("AutomationEditor", () => {
       expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
     );
     fireEvent.change(screen.getByLabelText("Group"), { target: { value: "-100" } });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.change(screen.getByLabelText("Where should the result go?"), {
@@ -773,7 +882,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Group ID"), {
       target: { value: "-200" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -818,7 +927,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Group"), {
       target: { value: "-100" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.change(screen.getByLabelText("Where should the result go?"), {
@@ -1347,6 +1456,32 @@ function fakeSettings(params: {
 function fakeDesktopApi(settings: ReadDesktopSettingsResponse): DesktopApi {
   return {
     readSettings: async () => settings,
+    // The execution Model/Reasoning selects are populated from this catalog —
+    // the same source the composer reads — so tests that pick a model exercise
+    // the real wiring instead of a hardcoded list.
+    listBackends: async () => ({
+      fetchedAt: 0,
+      backends: [
+        {
+          kind: "codex",
+          label: "Codex",
+          available: true,
+          methods: [],
+          capabilities: {},
+          executionModes: [],
+          launchpadOptions: {
+            models: [
+              {
+                id: "gpt-5",
+                reasoningEfforts: ["low", "medium", "high"],
+              },
+              { id: "gpt-5.4-mini" },
+            ],
+            reasoningEfforts: ["low", "medium", "high"],
+          },
+        },
+      ],
+    }),
   } as unknown as DesktopApi;
 }
 

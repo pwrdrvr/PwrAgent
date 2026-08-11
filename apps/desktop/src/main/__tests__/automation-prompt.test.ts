@@ -138,4 +138,66 @@ describe("buildAutomationTurnInput", () => {
     expect(text).toContain("Sender: Datadog (bot)");
     expect(text).toContain("ERROR api latency high");
   });
+
+  it("injects bounded prior-run context, newest first", () => {
+    const [item] = buildAutomationTurnInput({
+      automation: buildAutomation(),
+      run: {
+        id: "run-3",
+        automationId: "automation-1",
+        trigger: "scheduled",
+        status: "running",
+        scheduledWindows: [{ scheduledFor: Date.UTC(2026, 4, 13, 14, 0) }],
+      },
+      priorRuns: [
+        {
+          completedAt: Date.UTC(2026, 4, 13, 13, 40),
+          status: "completed",
+          summary: "ERROR spike on search-api again; second occurrence.",
+          details: "p99 held above SLO for 4 minutes.",
+        },
+        {
+          completedAt: Date.UTC(2026, 4, 13, 13, 5),
+          status: "completed",
+          summary: "Single ERROR line, looked transient.",
+        },
+      ],
+    });
+
+    const text = item?.type === "text" ? item.text : "";
+    expect(text).toContain("Prior runs of this automation, newest first (2");
+    expect(text).toContain("second occurrence");
+    expect(text).toContain("p99 held above SLO");
+    expect(text).toContain("looked transient");
+    expect(text).toContain(
+      "judge whether the current event is new, recurring, or escalating",
+    );
+    // Newest first: the 13:40 run must precede the 13:05 run.
+    expect(text.indexOf("second occurrence")).toBeLessThan(
+      text.indexOf("looked transient"),
+    );
+  });
+
+  it("distinguishes empty lookback from lookback off", () => {
+    const base = {
+      automation: buildAutomation(),
+      run: {
+        id: "run-1",
+        automationId: "automation-1",
+        trigger: "scheduled" as const,
+        status: "running" as const,
+        scheduledWindows: [{ scheduledFor: Date.UTC(2026, 4, 13, 14, 0) }],
+      },
+    };
+
+    const [withEmpty] = buildAutomationTurnInput({ ...base, priorRuns: [] });
+    const emptyText = withEmpty?.type === "text" ? withEmpty.text : "";
+    expect(emptyText).toContain(
+      "Prior runs of this automation (within the configured lookback): none.",
+    );
+
+    const [withoutLookback] = buildAutomationTurnInput(base);
+    const offText = withoutLookback?.type === "text" ? withoutLookback.text : "";
+    expect(offText).not.toContain("Prior runs of this automation");
+  });
 });

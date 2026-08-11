@@ -60,6 +60,8 @@ import type {
   MessagingAttachmentDownloadRequest,
   MessagingAttachmentDownloadResult,
   MessagingCapabilityProfile,
+  MessagingDirectorySearchRequest,
+  MessagingDirectorySearchResult,
   MessagingClientRateLimitStrategy,
   MessagingInboundEvent,
   MessagingImagePart,
@@ -143,6 +145,15 @@ export type MessagingAdapter = {
   deleteManagedConversation?(
     request: MessagingManagedConversationActionRequest,
   ): Promise<MessagingManagedConversationActionResult>;
+  /**
+   * Search the provider's people/app directory. Only meaningful when
+   * `capabilityProfile.directory?.supportsActorSearch` is true; callers must
+   * check the capability rather than probing for the method, so an adapter that
+   * loses the scope at runtime can turn the capability off in one place.
+   */
+  searchDirectoryActors?(
+    request: MessagingDirectorySearchRequest,
+  ): Promise<MessagingDirectorySearchResult>;
 };
 
 export type MessagingBackendBridge = {

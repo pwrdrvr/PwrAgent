@@ -227,6 +227,9 @@ export const AUTOMATIONS_PAUSE_CHANNEL = "automations:pause";
 export const AUTOMATIONS_RESUME_CHANNEL = "automations:resume";
 export const AUTOMATIONS_RUN_NOW_CHANNEL = "automations:run-now";
 export const AUTOMATIONS_LIST_RUNS_CHANNEL = "automations:list-runs";
+export const AUTOMATIONS_SEARCH_SENDERS_CHANNEL = "automations:search-senders";
+export const AUTOMATIONS_ALLOCATE_WORKSPACE_CHANNEL =
+  "automations:allocate-workspace";
 export const AUTOMATIONS_LIST_CARDS_CHANNEL = "automations:list-cards";
 export const AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL =
   "automations:get-run-artifact";
@@ -296,6 +299,8 @@ export const MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL =
   "messaging:inbound-preview-event";
 export const MESSAGING_LIST_INBOUND_TOPICS_CHANNEL =
   "messaging:list-inbound-topics";
+export const MESSAGING_SEARCH_DIRECTORY_ACTORS_CHANNEL =
+  "messaging:search-directory-actors";
 export const NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:ensure-directory-launchpad";
 export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =

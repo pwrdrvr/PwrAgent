@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   AutomationBacklogPolicy,
   AutomationExecutionProfile,
+  AutomationPriorRunLookback,
   AutomationGateConfig,
   AutomationListItemSummary,
   AutomationLoadIssue,
@@ -29,6 +30,8 @@ import {
   DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
   buildThreadIdentityKey,
   formatAutomationScheduleSummary,
+  isSupportedAutomationInboundConditionGroup,
+  normalizeAutomationPriorRunLookback,
   resolveAutomationRunsPerHour,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log.js";
@@ -68,6 +71,7 @@ export type AutomationRecord = {
   scheduleSummary: string;
   backlogPolicy: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
   outputActions: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
@@ -90,6 +94,7 @@ export type CreateAutomationInput = {
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
@@ -108,6 +113,7 @@ export type UpdateAutomationInput = {
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile | null;
+  priorRunLookback?: AutomationPriorRunLookback | null;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
@@ -196,6 +202,7 @@ type AutomationPayload = {
   schedule?: AutomationScheduleDefinition;
   scheduleSummary: string;
   executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
@@ -280,6 +287,7 @@ export class AutomationStore {
         : formatAutomationTriggerSummary(triggers),
       backlogPolicy: input.backlogPolicy ?? DEFAULT_AUTOMATION_BACKLOG_POLICY,
       executionProfile: input.executionProfile,
+      priorRunLookback: normalizeAutomationPriorRunLookback(input.priorRunLookback),
       outputActions: normalizeAutomationOutputActions(input.outputActions),
       maxRunsPerHour: resolveAutomationRunsPerHour(input.maxRunsPerHour),
       inboundCoalesceWindowMs: normalizeInboundCoalesceWindowMs(
@@ -325,6 +333,11 @@ export class AutomationStore {
         input.executionProfile === null
           ? undefined
           : input.executionProfile ?? current.executionProfile,
+      priorRunLookback:
+        input.priorRunLookback === null
+          ? undefined
+          : normalizeAutomationPriorRunLookback(input.priorRunLookback)
+            ?? current.priorRunLookback,
       outputActions: input.outputActions ?? current.outputActions,
       maxRunsPerHour:
         input.maxRunsPerHour === undefined
@@ -949,6 +962,7 @@ export class AutomationStore {
       schedule: record.schedule,
       scheduleSummary: record.scheduleSummary,
       executionProfile: record.executionProfile,
+      priorRunLookback: record.priorRunLookback,
       outputActions: record.outputActions,
       inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
       maxRunsPerHour: record.maxRunsPerHour,
@@ -1149,6 +1163,7 @@ export class AutomationStore {
       status: row.status,
       triggers,
       schedule,
+      priorRunLookback: normalizeAutomationPriorRunLookback(payload.priorRunLookback),
       scheduleSummary:
         payload.scheduleSummary ??
         (schedule
@@ -1308,11 +1323,36 @@ function isSupportedAutomationTrigger(
     return isUnderstoodSchedule(trigger.schedule);
   }
   if (trigger.kind === "inbound_message") {
-    return Boolean(
-      trigger.id &&
-        trigger.conversation?.channel &&
-        trigger.conversation.conversationId,
-    );
+    if (
+      !trigger.id ||
+      !trigger.conversation?.channel ||
+      !trigger.conversation.conversationId
+    ) {
+      return false;
+    }
+    // A malformed condition group is not persisted: the matcher could not
+    // honor it, and storing it would leave an automation whose displayed
+    // filter and actual behavior disagree. Dropping the trigger silently would
+    // leave an automation that simply stops firing with nothing to explain it,
+    // so say so — this is the only signal an operator gets.
+    if (
+      trigger.conditionGroup !== undefined &&
+      !isSupportedAutomationInboundConditionGroup(trigger.conditionGroup)
+    ) {
+      automationStoreLog.warn(
+        "dropping inbound trigger with an unparseable condition group",
+        {
+          triggerId: trigger.id,
+          channel: trigger.conversation.channel,
+          conditionCount: Array.isArray(trigger.conditionGroup?.conditions)
+            ? trigger.conditionGroup.conditions.length
+            : undefined,
+          join: trigger.conditionGroup?.join,
+        },
+      );
+      return false;
+    }
+    return true;
   }
   return false;
 }

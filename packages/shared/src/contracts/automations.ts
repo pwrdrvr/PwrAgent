@@ -167,6 +167,97 @@ export type AutomationInboundSenderFilter = {
   isBot?: boolean;
 };
 
+/**
+ * Fields an inbound condition can test. Deliberately small: the operator set
+ * (including negations and multi-value membership) carries the expressiveness,
+ * so operators can grow without widening what a condition reaches into.
+ */
+export const AUTOMATION_INBOUND_CONDITION_FIELDS = [
+  "message_text",
+  "sender",
+  "sender_type",
+] as const;
+
+export type AutomationInboundConditionField =
+  (typeof AUTOMATION_INBOUND_CONDITION_FIELDS)[number];
+
+/**
+ * Condition operators. Each negating operator is its own discriminant rather
+ * than a `negate: true` flag so a stored condition reads the same way the
+ * editor renders it, and so an unknown operator from a newer build is skipped
+ * as a unit instead of silently inverting.
+ */
+export const AUTOMATION_INBOUND_CONDITION_OPERATORS = [
+  "contains",
+  "not_contains",
+  "equals",
+  "not_equals",
+  "starts_with",
+  "not_starts_with",
+  "matches_regex",
+  "not_matches_regex",
+  "is_one_of",
+  "is_not_one_of",
+] as const;
+
+export type AutomationInboundConditionOperator =
+  (typeof AUTOMATION_INBOUND_CONDITION_OPERATORS)[number];
+
+/**
+ * Operators whose result is the boolean inverse of their positive twin. Kept as
+ * a map (rather than a name-prefix test) so the matcher never infers semantics
+ * from string shape.
+ */
+export const AUTOMATION_INBOUND_CONDITION_NEGATIONS: Readonly<
+  Record<AutomationInboundConditionOperator, AutomationInboundConditionOperator>
+> = {
+  contains: "not_contains",
+  not_contains: "contains",
+  equals: "not_equals",
+  not_equals: "equals",
+  starts_with: "not_starts_with",
+  not_starts_with: "starts_with",
+  matches_regex: "not_matches_regex",
+  not_matches_regex: "matches_regex",
+  is_one_of: "is_not_one_of",
+  is_not_one_of: "is_one_of",
+};
+
+export function isNegatedAutomationInboundConditionOperator(
+  operator: AutomationInboundConditionOperator,
+): boolean {
+  return (
+    operator === "not_contains"
+    || operator === "not_equals"
+    || operator === "not_starts_with"
+    || operator === "not_matches_regex"
+    || operator === "is_not_one_of"
+  );
+}
+
+/**
+ * One row in the filter list. `values` is always an array so single-value and
+ * membership operators share a shape; single-value operators read `values[0]`.
+ */
+export type AutomationInboundCondition = {
+  id: string;
+  field: AutomationInboundConditionField;
+  operator: AutomationInboundConditionOperator;
+  values: string[];
+  caseSensitive?: boolean;
+};
+
+/** How the condition rows combine. Flat by design — there is no nesting. */
+export const AUTOMATION_INBOUND_CONDITION_JOINS = ["all", "any"] as const;
+
+export type AutomationInboundConditionJoin =
+  (typeof AUTOMATION_INBOUND_CONDITION_JOINS)[number];
+
+export type AutomationInboundConditionGroup = {
+  join: AutomationInboundConditionJoin;
+  conditions: AutomationInboundCondition[];
+};
+
 export type AutomationMessagingConversationSnapshot = {
   channel: MessagingChannelKind;
   conversationId: string;
@@ -182,10 +273,325 @@ export type AutomationInboundMessageTriggerDefinition = {
   kind: "inbound_message";
   name?: string;
   conversation: AutomationMessagingConversationSnapshot;
+  /**
+   * Canonical filter shape. When present it is authoritative and the legacy
+   * `sender` / `textFilter` fields below are ignored by the matcher.
+   */
+  conditionGroup?: AutomationInboundConditionGroup;
+  /**
+   * @deprecated Superseded by {@link conditionGroup}. Still read so automations
+   * written by older builds keep matching; `normalizeInboundTriggerConditions`
+   * converts them forward. Retained on disk rather than rewritten in place so a
+   * downgrade to a prior build does not silently lose the operator's filter.
+   */
   sender?: AutomationInboundSenderFilter;
+  /** @deprecated Superseded by {@link conditionGroup}. See `sender`. */
   textFilter?: AutomationInboundTextFilter;
   includeThreadReplies?: boolean;
 };
+
+/** The parts of a message a condition can be evaluated against. */
+export type AutomationInboundConditionSubject = {
+  text: string;
+  platformUserId: string;
+  isBot?: boolean;
+};
+
+/**
+ * Evaluate a condition group against one message.
+ *
+ * This lives in shared, and is the ONLY implementation, because two callers
+ * must agree exactly: the main-process matcher that decides whether to start a
+ * run, and the editor's live preview that tells the operator which messages
+ * would match. A preview that disagrees with the matcher is worse than no
+ * preview — it teaches the operator a filter they do not have.
+ *
+ * An empty condition list matches everything: an inbound trigger with no
+ * filters has always meant "every message in this conversation". Note that
+ * holds for `any` too — an `any` over zero rows must not become "reject all".
+ */
+export function evaluateAutomationInboundConditions(
+  group: AutomationInboundConditionGroup,
+  subject: AutomationInboundConditionSubject,
+): boolean {
+  if (group.conditions.length === 0) return true;
+  const test = (condition: AutomationInboundCondition): boolean =>
+    evaluateAutomationInboundCondition(condition, subject);
+  return group.join === "any"
+    ? group.conditions.some(test)
+    : group.conditions.every(test);
+}
+
+/**
+ * A condition that cannot be evaluated is inert: it matches in NEITHER sense.
+ *
+ * Emptiness and unknown fields are resolved before negation for that reason.
+ * Returning "unsatisfied" and letting negation invert it would turn a
+ * half-written `does not contain ""` row — or any negated field a newer build
+ * introduced — into a filter matching every message in the conversation, which
+ * is the loudest possible failure mode.
+ */
+export function evaluateAutomationInboundCondition(
+  condition: AutomationInboundCondition,
+  subject: AutomationInboundConditionSubject,
+): boolean {
+  const values = condition.values.filter((value) => value.length > 0);
+  if (values.length === 0) return false;
+  if (!AUTOMATION_INBOUND_CONDITION_FIELDS.includes(condition.field)) return false;
+
+  const satisfied = evaluateConditionSubject(condition, values, subject);
+  return isNegatedAutomationInboundConditionOperator(condition.operator)
+    ? !satisfied
+    : satisfied;
+}
+
+function evaluateConditionSubject(
+  condition: AutomationInboundCondition,
+  values: string[],
+  subject: AutomationInboundConditionSubject,
+): boolean {
+  switch (condition.field) {
+    case "message_text":
+      return values.some((value) => matchesConditionText(subject.text, value, condition));
+    case "sender":
+      return values.some((value) => value === subject.platformUserId);
+    case "sender_type": {
+      const actual = subject.isBot ? "bot" : "human";
+      return values.some((value) => value === actual);
+    }
+    default:
+      return false;
+  }
+}
+
+/**
+ * Longest regex pattern accepted from an operator. Long patterns are where
+ * catastrophic constructs hide, and no realistic message filter needs more.
+ */
+export const AUTOMATION_CONDITION_MAX_REGEX_LENGTH = 200;
+
+/**
+ * Longest message text a regex is evaluated against. Backtracking cost grows
+ * with input length, so the text is truncated before matching. This is well
+ * above any realistic alert line, and `contains` / `equals` are unaffected.
+ */
+export const AUTOMATION_CONDITION_MAX_REGEX_INPUT = 4_000;
+
+/**
+ * Conservative catastrophic-backtracking check: a quantified group that itself
+ * contains a quantifier (`(a+)+`, `(a*)*`, `(a|a)+`), which is the shape behind
+ * essentially every practical ReDoS.
+ *
+ * This is a mitigation, not a proof — JavaScript has no interruptible regex
+ * engine, so a linear-time guarantee would mean an RE2-class dependency. It
+ * exists because the PATTERN is operator-authored but the TEXT arrives from a
+ * messaging platform and is treated as hostile; a sloppy pattern plus crafted
+ * text would otherwise stall the main process on the inbound hot path.
+ */
+const NESTED_QUANTIFIER = /\([^)]*[+*}][^)]*\)\s*[+*]|\([^)]*[+*}][^)]*\)\s*\{\d/;
+
+export function isSafeAutomationConditionRegex(pattern: string): boolean {
+  if (pattern.length === 0) return false;
+  if (pattern.length > AUTOMATION_CONDITION_MAX_REGEX_LENGTH) return false;
+  if (NESTED_QUANTIFIER.test(pattern)) return false;
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function matchesConditionText(
+  text: string,
+  value: string,
+  condition: AutomationInboundCondition,
+): boolean {
+  if (
+    condition.operator === "matches_regex"
+    || condition.operator === "not_matches_regex"
+  ) {
+    // A pattern that cannot compile, is over-long, or carries a catastrophic
+    // construct simply does not match, rather than breaking inbound matching
+    // for every other automation.
+    if (!isSafeAutomationConditionRegex(value)) return false;
+    try {
+      return new RegExp(value, condition.caseSensitive ? "" : "i").test(
+        text.slice(0, AUTOMATION_CONDITION_MAX_REGEX_INPUT),
+      );
+    } catch {
+      return false;
+    }
+  }
+  const left = condition.caseSensitive ? text : text.toLowerCase();
+  const right = condition.caseSensitive ? value : value.toLowerCase();
+  switch (condition.operator) {
+    case "equals":
+    case "not_equals":
+      return left === right;
+    case "starts_with":
+    case "not_starts_with":
+      return left.startsWith(right);
+    case "contains":
+    case "not_contains":
+      return left.includes(right);
+    // Membership operators are offered for senders, not text. If one reaches
+    // here from stored data, "the text is one of these values" is equality
+    // across the value list — the caller already maps over `values`. Spelled
+    // out rather than left to a default branch, so the semantics are reviewed
+    // rather than inherited.
+    case "is_one_of":
+    case "is_not_one_of":
+      return left === right;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Structural check for a persisted condition group. The desktop store runs this
+ * before writing so a group this build cannot evaluate never reaches disk, and
+ * so a group written by a newer build is recognized as unparseable rather than
+ * half-applied.
+ */
+export function isSupportedAutomationInboundConditionGroup(
+  group: AutomationInboundConditionGroup | undefined,
+): boolean {
+  if (!group || typeof group !== "object") return false;
+  if (!AUTOMATION_INBOUND_CONDITION_JOINS.includes(group.join)) return false;
+  if (!Array.isArray(group.conditions)) return false;
+  return group.conditions.every(
+    (condition) =>
+      Boolean(condition)
+      && typeof condition === "object"
+      && typeof condition.id === "string"
+      && condition.id.length > 0
+      && AUTOMATION_INBOUND_CONDITION_FIELDS.includes(condition.field)
+      && AUTOMATION_INBOUND_CONDITION_OPERATORS.includes(condition.operator)
+      && Array.isArray(condition.values)
+      && condition.values.every((value) => typeof value === "string"),
+  );
+}
+
+const AUTOMATION_INBOUND_CONDITION_OPERATOR_LABELS: Readonly<
+  Record<AutomationInboundConditionOperator, string>
+> = {
+  contains: "contains",
+  not_contains: "does not contain",
+  equals: "equals",
+  not_equals: "does not equal",
+  starts_with: "starts with",
+  not_starts_with: "does not start with",
+  matches_regex: "matches",
+  not_matches_regex: "does not match",
+  is_one_of: "is",
+  is_not_one_of: "is not",
+};
+
+const AUTOMATION_INBOUND_CONDITION_FIELD_LABELS: Readonly<
+  Record<AutomationInboundConditionField, string>
+> = {
+  message_text: "text",
+  sender: "sender",
+  sender_type: "sender",
+};
+
+export function formatAutomationInboundConditionOperator(
+  operator: AutomationInboundConditionOperator,
+): string {
+  return AUTOMATION_INBOUND_CONDITION_OPERATOR_LABELS[operator] ?? operator;
+}
+
+export function formatAutomationInboundConditionField(
+  field: AutomationInboundConditionField,
+): string {
+  return AUTOMATION_INBOUND_CONDITION_FIELD_LABELS[field] ?? field;
+}
+
+/**
+ * Render a condition group as a sentence, e.g.
+ * `text contains "ERROR" and text does not contain "staging"`.
+ *
+ * Lives in shared (not the renderer) so the editor's summary line and any
+ * main-process surface that explains why an automation fired stay worded
+ * identically. `resolveLabel` lets the caller substitute a display name for an
+ * opaque platform id — the editor knows PagerDuty, the store only knows B04KM21.
+ */
+export function formatAutomationInboundConditionGroup(
+  group: AutomationInboundConditionGroup,
+  options: { resolveLabel?: (value: string, condition: AutomationInboundCondition) => string } = {},
+): string {
+  const parts = group.conditions
+    .map((condition) => {
+      const values = condition.values.filter((value) => value.length > 0);
+      if (values.length === 0) return undefined;
+      const rendered = values.map((value) =>
+        options.resolveLabel ? options.resolveLabel(value, condition) : `"${value}"`,
+      );
+      const joined =
+        rendered.length === 1
+          ? rendered[0]
+          : `${rendered.slice(0, -1).join(", ")} or ${rendered[rendered.length - 1]}`;
+      return `${formatAutomationInboundConditionField(condition.field)} ${formatAutomationInboundConditionOperator(condition.operator)} ${joined}`;
+    })
+    .filter((part): part is string => part !== undefined);
+
+  if (parts.length === 0) return "every message in the conversation";
+  return parts.join(group.join === "any" ? " or " : " and ");
+}
+
+/**
+ * Resolve a trigger's effective filter, converting the legacy
+ * `sender` / `textFilter` pair into the condition shape when no
+ * `conditionGroup` is stored.
+ *
+ * Legacy semantics were a strict AND across every populated field, so the
+ * converted group always joins with `all`. An empty result means "no filtering"
+ * — every message in the conversation matches, which is what an inbound trigger
+ * with no filters has always meant.
+ */
+export function normalizeInboundTriggerConditions(
+  trigger: Pick<
+    AutomationInboundMessageTriggerDefinition,
+    "conditionGroup" | "sender" | "textFilter"
+  >,
+): AutomationInboundConditionGroup {
+  if (trigger.conditionGroup) return trigger.conditionGroup;
+
+  const conditions: AutomationInboundCondition[] = [];
+  if (trigger.sender?.platformUserId) {
+    conditions.push({
+      id: "legacy-sender",
+      field: "sender",
+      operator: "is_one_of",
+      values: [trigger.sender.platformUserId],
+    });
+  }
+  if (trigger.sender?.isBot !== undefined) {
+    conditions.push({
+      id: "legacy-sender-type",
+      field: "sender_type",
+      operator: "is_one_of",
+      values: [trigger.sender.isBot ? "bot" : "human"],
+    });
+  }
+  // Gate on the filter's PRESENCE, not on its text. A legacy trigger holding
+  // `textFilter: { text: "" }` matched nothing under the old matcher
+  // (`if (!filter?.text) return false`). Skipping it here would leave an empty
+  // condition list, which matches EVERY message — inverting "never fires" into
+  // "fires on everything". Emitting the row with an empty value keeps it inert,
+  // which reproduces the old semantics exactly.
+  if (trigger.textFilter) {
+    conditions.push({
+      id: "legacy-text",
+      field: "message_text",
+      operator: trigger.textFilter.mode === "equals" ? "equals" : "contains",
+      values: [trigger.textFilter.text],
+      ...(trigger.textFilter.caseSensitive ? { caseSensitive: true } : {}),
+    });
+  }
+  return { join: "all", conditions };
+}
 
 export type AutomationTriggerDefinition =
   | AutomationScheduleTriggerDefinition
@@ -227,6 +633,55 @@ export type AutomationRunSourceBatchedEntry = {
   receivedAt: number;
   actor: AutomationRunSourceActorSnapshot;
   message?: AutomationRunSourceMessage;
+};
+
+/**
+ * Bounds on how much of an automation's own history a new run may see.
+ *
+ * Each run is an ephemeral sub-agent that starts from the prompt every time,
+ * so without this it has no memory: "ERROR rate spike" reads the same on the
+ * first occurrence and the fifth. Feeding the last few run outcomes back in
+ * lets a prompt ask "is this becoming a pattern?" and escalate — once is
+ * noise, twice is a coincidence, three times in an hour is a problem.
+ *
+ * Presence enables the feature; `undefined` on the automation means runs see
+ * no history. Both bounds are caps, applied together.
+ */
+export type AutomationPriorRunLookback = {
+  /** Most-recent completed runs to include, 1..{@link AUTOMATION_PRIOR_RUN_LOOKBACK_MAX_RUNS}. */
+  maxRuns: number;
+  /** Ignore runs older than this. Undefined = bounded by count alone. */
+  maxAgeMs?: number;
+};
+
+export const AUTOMATION_PRIOR_RUN_LOOKBACK_MAX_RUNS = 20;
+
+export function normalizeAutomationPriorRunLookback(
+  value: AutomationPriorRunLookback | undefined,
+): AutomationPriorRunLookback | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const maxRuns = Math.floor(Number(value.maxRuns));
+  if (!Number.isFinite(maxRuns) || maxRuns < 1) return undefined;
+  const maxAgeMs =
+    value.maxAgeMs !== undefined && Number.isFinite(value.maxAgeMs) && value.maxAgeMs > 0
+      ? Math.floor(value.maxAgeMs)
+      : undefined;
+  return {
+    maxRuns: Math.min(maxRuns, AUTOMATION_PRIOR_RUN_LOOKBACK_MAX_RUNS),
+    ...(maxAgeMs !== undefined ? { maxAgeMs } : {}),
+  };
+}
+
+/**
+ * One prior run as the prompt builder receives it: the outcome, not the
+ * transcript. Assembled by the scheduler from run rows + artifacts so the
+ * prompt builder stays a pure function.
+ */
+export type AutomationPriorRunContext = {
+  completedAt: number;
+  status: AutomationRunStatus;
+  summary?: string;
+  details?: string;
 };
 
 export type AutomationExecutionProfile = {
@@ -396,6 +851,7 @@ export type AutomationDetail = AutomationListItemSummary & {
   taskPrompt: string;
   gate?: AutomationGateConfig;
   executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
   outputActions: AutomationOutputActionDefinition[];
   /**
    * Inbound coalescing window in milliseconds. 0 disables coalescing (one run
@@ -523,6 +979,7 @@ export type CreateAutomationRequest = AutomationAgentAssignment & {
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
@@ -541,6 +998,7 @@ export type UpdateAutomationRequest = {
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile | null;
+  priorRunLookback?: AutomationPriorRunLookback | null;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;

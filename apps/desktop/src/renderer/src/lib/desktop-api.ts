@@ -89,6 +89,8 @@ import type {
   LatestCodexConfigWarningResponse,
   ListAutomationCardsRequest,
   ListAutomationCardsResponse,
+  SearchMessagingSendersRequest,
+  SearchMessagingSendersResponse,
   ListAutomationLoadIssuesResponse,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
@@ -459,6 +461,10 @@ export type DesktopApi = {
   listAutomationCards?: (
     request: ListAutomationCardsRequest,
   ) => Promise<ListAutomationCardsResponse>;
+  searchAutomationSenders?: (
+    request: SearchMessagingSendersRequest,
+  ) => Promise<SearchMessagingSendersResponse>;
+  allocateAutomationWorkspace?: () => Promise<{ path: string }>;
   getAutomationRunArtifact?: (
     request: GetAutomationRunArtifactRequest,
   ) => Promise<GetAutomationRunArtifactResponse>;

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type {
   AutomationDetail,
   MessagingChannelKind,
+  NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
@@ -31,6 +32,7 @@ type AutomationsScreenProps = {
   onRefreshNavigation?: () => Promise<void>;
   onSelectThread?: (thread: NavigationThreadSummary) => void;
   threads: NavigationThreadSummary[];
+  directories?: NavigationDirectorySummary[];
 };
 
 export function AutomationsScreen(props: AutomationsScreenProps) {
@@ -99,6 +101,14 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
         <button className="settings-nav__exit" type="button" onClick={props.onClose}>
           <span aria-hidden="true">&lt;</span> Exit Automations
         </button>
+        <button
+          className="settings-nav__new"
+          type="button"
+          onClick={() => setEditorMode({ kind: "create" })}
+        >
+          <span aria-hidden="true" className="settings-nav__new-plus">+</span>{" "}
+          New Automation
+        </button>
         <p className="settings-nav__group-label">Schedules</p>
         <button
           aria-current="page"
@@ -132,19 +142,13 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
               <p className="eyebrow">Serial Agent queues</p>
               <h2>Automations</h2>
             </div>
-            <button
-              className="button button--primary"
-              type="button"
-              onClick={() => setEditorMode({ kind: "create" })}
-            >
-              New Automation
-            </button>
           </div>
 
           {editorMode ? (
             <div className="automations-editor-panel">
               <AutomationEditor
                 desktopApi={props.desktopApi}
+                directories={props.directories}
                 mode={
                   editorMode.kind === "create"
                     ? { kind: "create" }

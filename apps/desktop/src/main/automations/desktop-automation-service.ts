@@ -22,10 +22,17 @@ import type {
   ListAutomationRunsResponse,
   ListAutomationsRequest,
   ListAutomationsResponse,
+  MessagingChannelKind,
+  MessagingSenderSuggestion,
   RunAutomationNowResponse,
+  SearchMessagingSendersRequest,
+  SearchMessagingSendersResponse,
   UpdateAutomationRequest,
 } from "@pwragent/shared";
-import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
+import type {
+  MessagingDirectoryActor,
+  MessagingInboundEvent,
+} from "@pwragent/messaging-interface";
 import {
   automationSuppressesBindingBroadcast,
   validateAutomationScheduleDefinition,
@@ -53,6 +60,15 @@ import {
 import { mergeTranscriptEvents } from "./transcript-merge.js";
 
 const automationServiceLog = getMainLogger("pwragent:automations");
+
+/**
+ * How long past-run sender actors stay cached. `searchSenders` runs per
+ * debounced keystroke, so re-reading run rows per character is wasted work for
+ * a set that only changes when a run completes.
+ */
+const RUN_ACTOR_CACHE_TTL_MS = 30_000;
+/** Runs scanned for distinct actors. Bounds the read on a long-lived automation. */
+const RUN_ACTOR_SCAN_LIMIT = 200;
 
 let service: DesktopAutomationService | null = null;
 let storeOverride: AutomationStore | null = null;
@@ -92,6 +108,10 @@ export class DesktopAutomationService {
   private readonly scheduler: AutomationScheduler;
   private readonly inspectionBus: AutomationInspectionBus;
   private unsubscribeRegistryEvents?: () => void;
+  private readonly runActorCache = new Map<
+    string,
+    { actors: MessagingDirectoryActor[]; readAt: number }
+  >();
 
   constructor(
     private readonly options: {
@@ -197,6 +217,130 @@ export class DesktopAutomationService {
     };
   }
 
+  /**
+   * Candidate senders for the inbound filter picker, merged from every source
+   * we have: actors seen in past runs of this automation, and the provider's
+   * own directory.
+   *
+   * Ordering is deliberate — observed senders first, directory last. Someone
+   * who has actually posted in the conversation is far more likely to be the
+   * intended target than a name that merely exists in the workspace, and the
+   * whole point of this control is that an operator should never have to go
+   * hunting for a platform id.
+   */
+  async searchSenders(
+    request: SearchMessagingSendersRequest,
+    deps: {
+      searchDirectory: (params: {
+        provider: MessagingChannelKind;
+        conversationId?: string;
+        query: string;
+        limit?: number;
+      }) => Promise<{
+        actors: MessagingDirectoryActor[];
+        label?: string;
+        supported: boolean;
+        truncated?: boolean;
+      }>;
+    },
+  ): Promise<SearchMessagingSendersResponse> {
+    const limit = Math.max(1, Math.min(request.limit ?? 20, 50));
+    const query = request.query.trim().toLowerCase();
+    const matches = (actor: {
+      platformUserId: string;
+      displayName?: string;
+      username?: string;
+    }): boolean =>
+      query.length === 0
+      || actor.displayName?.toLowerCase().includes(query) === true
+      || actor.username?.toLowerCase().includes(query) === true
+      || actor.platformUserId.toLowerCase() === query;
+
+    const suggestions: MessagingSenderSuggestion[] = [];
+    const seen = new Set<string>();
+    const add = (
+      actor: {
+        platformUserId: string;
+        displayName?: string;
+        username?: string;
+        isBot?: boolean;
+      },
+      source: MessagingSenderSuggestion["source"],
+    ): void => {
+      if (seen.has(actor.platformUserId)) return;
+      if (!matches(actor)) return;
+      seen.add(actor.platformUserId);
+      suggestions.push({
+        platformUserId: actor.platformUserId,
+        ...(actor.displayName ? { displayName: actor.displayName } : {}),
+        ...(actor.username ? { username: actor.username } : {}),
+        ...(actor.isBot ? { isBot: true } : {}),
+        source,
+      });
+    };
+
+    for (const actor of this.readRunActors(request)) {
+      add(actor, "automation_runs");
+    }
+
+    const directory = await deps.searchDirectory({
+      provider: request.provider,
+      query: request.query,
+      ...(request.conversationId ? { conversationId: request.conversationId } : {}),
+      limit,
+    });
+    for (const actor of directory.actors) {
+      add(actor, "directory");
+    }
+
+    return {
+      suggestions: suggestions.slice(0, limit),
+      directorySupported: directory.supported,
+      ...(directory.label ? { directoryLabel: directory.label } : {}),
+      ...(directory.truncated ? { directoryTruncated: true } : {}),
+    };
+  }
+
+  /**
+   * Distinct actors seen in this automation's past runs.
+   *
+   * Cached because `searchSenders` runs per debounced keystroke, and reading
+   * plus deserializing 200 run rows on every character is a lot of work for a
+   * set that changes only when a run completes. The window is short enough
+   * that a run finishing mid-search shows up on the next search.
+   */
+  private readRunActors(
+    request: SearchMessagingSendersRequest,
+  ): MessagingDirectoryActor[] {
+    if (!request.automationId) return [];
+    const key = `${request.automationId}:${request.provider}`;
+    const cached = this.runActorCache.get(key);
+    const now = Date.now();
+    if (cached && now - cached.readAt < RUN_ACTOR_CACHE_TTL_MS) {
+      return cached.actors;
+    }
+
+    const byId = new Map<string, MessagingDirectoryActor>();
+    for (const run of this.options.store.listRunsForAutomation(
+      request.automationId,
+      RUN_ACTOR_SCAN_LIMIT,
+    )) {
+      const actor = run.source?.actor;
+      if (!actor) continue;
+      if (run.source?.conversation.channel !== request.provider) continue;
+      if (byId.has(actor.platformUserId)) continue;
+      byId.set(actor.platformUserId, {
+        platformUserId: actor.platformUserId,
+        ...(actor.displayName ? { displayName: actor.displayName } : {}),
+        ...(actor.username ? { username: actor.username } : {}),
+        ...(actor.isBot ? { isBot: true } : {}),
+      });
+    }
+    const actors = [...byId.values()];
+    this.runActorCache.set(key, { actors, readAt: now });
+    return actors;
+  }
+
   listRuns(request: ListAutomationRunsRequest): ListAutomationRunsResponse {
     if (request.automationId) {
       return {
@@ -278,6 +422,7 @@ export class DesktopAutomationService {
       schedule,
       backlogPolicy: request.backlogPolicy,
       executionProfile: request.executionProfile,
+      priorRunLookback: request.priorRunLookback,
       outputActions: request.outputActions,
       inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
       maxRunsPerHour: request.maxRunsPerHour,
@@ -342,6 +487,7 @@ export class DesktopAutomationService {
       schedule: request.schedule,
       backlogPolicy: request.backlogPolicy,
       executionProfile: request.executionProfile,
+      priorRunLookback: request.priorRunLookback,
       outputActions: request.outputActions,
       inboundCoalesceWindowMs: request.inboundCoalesceWindowMs,
       maxRunsPerHour: request.maxRunsPerHour,
@@ -959,6 +1105,7 @@ function toAutomationDetail(
     scheduleSummary: record.scheduleSummary,
     backlogPolicy: record.backlogPolicy,
     executionProfile: record.executionProfile,
+    priorRunLookback: record.priorRunLookback,
     outputActions: record.outputActions,
     inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
     maxRunsPerHour: record.maxRunsPerHour,

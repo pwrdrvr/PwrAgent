@@ -2183,6 +2183,7 @@ function DesktopAppShell(props: {
           <div className="app-shell__settings-layer">
             <AutomationsScreen
               desktopApi={desktopApi}
+              directories={navigation.directories}
               threads={navigation.threads}
               onClose={() => setMainView("thread")}
               onOpenMessagingActivity={openMessagingActivityWindow}
