@@ -865,6 +865,8 @@ export type AutomationListItemSummary = AutomationThreadAssignment & {
   nextRunAt?: number;
   lastRunAt?: number;
   lastRunStatus?: AutomationRunStatus;
+  /** Identifies the run behind lastRunStatus, so a caller can open it. */
+  lastRunId?: string;
   pendingRunCount?: number;
   coalescedWindowCount?: number;
   updatedAt: number;

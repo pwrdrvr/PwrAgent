@@ -20878,6 +20878,17 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--bg-panel);
 }
 
+/* A header that is a label rather than a disclosure: no chevron, no hover
+   chrome, no pointer — nothing here is clickable. */
+.live-strip__row--static {
+  cursor: default;
+}
+
+.live-strip__row--static:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
 .live-strip__row:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;

@@ -3,7 +3,6 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
-import { buildAutomationCardActivityEntries } from "../automation-card-entries";
 import { TranscriptList } from "../TranscriptList";
 
 const compactMarkdownTable = `| Key | Value |
@@ -1037,26 +1036,29 @@ describe("TranscriptList", () => {
     expect(secondLoad).toHaveBeenCalledTimes(1);
   });
 
-  it("renders automation card details as markdown in the transcript", () => {
+  it("renders activity entry details as markdown in the transcript", () => {
     const automationMarkdown = `| Priority | Service | Next step |
 |---|---|---|
 | P1 | \`transcoding-worker\` | Triage failing traces. |`;
     const { container } = render(
       <TranscriptList
-        entries={buildAutomationCardActivityEntries([
+        entries={[
           {
-            id: "automation-card:run-1",
-            backend: "codex",
-            threadId: "thread-1",
-            automationId: "automation-1",
-            automationName: "Daily health",
-            runId: "run-1",
-            status: "completed",
+            type: "activity",
+            id: "activity-1",
             summary: "Daily health: found actionable outliers",
-            details: automationMarkdown,
-            occurredAt: 1_000,
+            createdAt: 1_000,
+            status: "completed",
+            details: [
+              {
+                id: "activity-1:details",
+                kind: "read",
+                label: automationMarkdown,
+                markdown: automationMarkdown,
+              },
+            ],
           },
-        ])}
+        ]}
         loading={false}
         loadingMore={false}
         onLoadOlder={async () => undefined}
@@ -1065,7 +1067,7 @@ describe("TranscriptList", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: /Automation - Daily health: found actionable outliers/i,
+        name: /Daily health: found actionable outliers/i,
       })
     );
 

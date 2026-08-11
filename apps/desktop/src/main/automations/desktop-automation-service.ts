@@ -1385,6 +1385,7 @@ function toAutomationDetail(
     nextRunAt: record.nextRunAt,
     lastRunAt: useLatestRun ? latestRunAt : record.lastRunAt,
     lastRunStatus: useLatestRun ? latestRun.status : record.lastRunStatus,
+    ...(useLatestRun ? { lastRunId: latestRun.id } : {}),
     updatedAt: record.updatedAt,
     createdAt: record.createdAt,
     deletedAt: record.deletedAt,
