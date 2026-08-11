@@ -1,4 +1,4 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { ComposerDraftSnapshot } from "../useComposerDraftStore";
@@ -11,6 +11,83 @@ afterEach(() => {
 });
 
 describe("useDurableComposerDraftStore", () => {
+  it("does not rewrite a hydrated draft when a thread is merely opened and left", async () => {
+    // The PR's headline claim, and the one that depends on a fragile
+    // round-trip: hydration seeds the persisted-hash map from the STORED
+    // `contentHash`, so suppressing this write requires
+    // `snapshotFromDraftRecord` -> `hashDraftContent` to reproduce exactly the
+    // hash the record was written with. Add a field to the snapshot and update
+    // only one side and this silently either stops suppressing (harmless) or
+    // suppresses a real edit (not).
+    //
+    // The composer re-saves on unmount with no dirty check, so an unchanged
+    // snapshot arrives here just from opening a thread and navigating away.
+    vi.useFakeTimers();
+    const saveComposerDraft = vi.fn<NonNullable<DesktopApi["saveComposerDraft"]>>(
+      async (request) => ({ draft: request.draft }),
+    );
+
+    // Establish the hash the renderer itself produces for this content, so the
+    // fixture cannot drift from the real implementation.
+    const probeApi = { saveComposerDraft } as Partial<DesktopApi> as DesktopApi;
+    const probe = renderHook(() =>
+      useDurableComposerDraftStore(useComposerDraftStore(), probeApi),
+    );
+    act(() => {
+      probe.result.current.set(
+        "thread:codex:thread-1",
+        buildSnapshot("A draft from a previous launch."),
+      );
+      vi.advanceTimersByTime(5_000);
+    });
+    const storedHash = saveComposerDraft.mock.calls[0]![0].draft.contentHash;
+    probe.unmount();
+    saveComposerDraft.mockClear();
+
+    const hydratedApi = {
+      saveComposerDraft,
+      listComposerDraftLatest: async () => ({
+        drafts: [
+          {
+            scopeKey: "thread:codex:thread-1",
+            scopeKind: "thread" as const,
+            backend: "codex" as const,
+            threadId: "thread-1",
+            text: "A draft from a previous launch.",
+            skillTokens: [],
+            imageAttachments: [],
+            fileAttachments: [],
+            status: "unsent" as const,
+            createdAt: 1,
+            updatedAt: 2,
+            contentHash: storedHash,
+            charCount: 31,
+          },
+        ],
+      }),
+    } as Partial<DesktopApi> as DesktopApi;
+    // Hydration resolves a promise, and fake timers do not flush microtasks —
+    // so let it settle on real timers before measuring the cadence.
+    vi.useRealTimers();
+    const { result } = renderHook(() =>
+      useDurableComposerDraftStore(useComposerDraftStore(), hydratedApi),
+    );
+    await waitFor(() => {
+      expect(result.current.get("thread:codex:thread-1")).toBeDefined();
+    });
+    vi.useFakeTimers();
+
+    act(() => {
+      result.current.set(
+        "thread:codex:thread-1",
+        buildSnapshot("A draft from a previous launch."),
+      );
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(saveComposerDraft).not.toHaveBeenCalled();
+  });
+
   describe("write cadence", () => {
     const setup = () => {
       vi.useFakeTimers();
@@ -58,23 +135,46 @@ describe("useDurableComposerDraftStore", () => {
     it("still writes while typing continuously, rather than waiting for a pause", () => {
       // A trailing debounce would fail this: someone typing without a gap
       // would never reach the quiet window and nothing would persist at all.
+      // Assert the count and the boundary, not merely that something happened
+      // — a per-keystroke implementation would satisfy `toHaveBeenCalled()`
+      // and this is the test standing between the two designs.
       const { result, saveComposerDraft } = setup();
 
       act(() => {
         result.current.set("thread:codex:thread-1", buildSnapshot("a"));
       });
-      for (let tick = 0; tick < 3; tick += 1) {
-        act(() => {
-          vi.advanceTimersByTime(2_500);
-          result.current.set(
-            "thread:codex:thread-1",
-            buildSnapshot(`a${"b".repeat(tick + 1)}`),
-          );
-        });
-      }
 
-      // ~7.5s of unbroken typing, so the interval has elapsed and written.
-      expect(saveComposerDraft).toHaveBeenCalled();
+      // Keep editing across the whole window without ever pausing.
+      act(() => {
+        vi.advanceTimersByTime(2_500);
+        result.current.set("thread:codex:thread-1", buildSnapshot("ab"));
+      });
+      expect(saveComposerDraft).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(2_500);
+        result.current.set("thread:codex:thread-1", buildSnapshot("abc"));
+      });
+
+      // Exactly one write, at the 5s boundary, carrying the newest text —
+      // the edit that landed at 5s is coalesced into it rather than queued.
+      expect(saveComposerDraft).toHaveBeenCalledOnce();
+      expect(saveComposerDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          draft: expect.objectContaining({ text: "ab" }),
+        }),
+      );
+
+      // ...and the edit made after that write starts a fresh window.
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(saveComposerDraft).toHaveBeenCalledTimes(2);
+      expect(saveComposerDraft).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          draft: expect.objectContaining({ text: "abc" }),
+        }),
+      );
     });
 
     it("does not write when nothing changed", () => {
@@ -94,6 +194,44 @@ describe("useDurableComposerDraftStore", () => {
       });
 
       expect(saveComposerDraft).toHaveBeenCalledOnce();
+    });
+
+    it("flushes pending work when the window loses focus", () => {
+      // The unmount cleanup is a React lifecycle hook, and a renderer being
+      // torn down (window closed, app quit) does not run it. Blur lands well
+      // before teardown, so this is what keeps "typed for four seconds then
+      // quit" from losing the text now that the interval is 5s rather than
+      // 200ms.
+      const { result, saveComposerDraft } = setup();
+
+      act(() => {
+        result.current.set(
+          "thread:codex:thread-1",
+          buildSnapshot("Typed just before quitting."),
+        );
+      });
+      expect(saveComposerDraft).not.toHaveBeenCalled();
+
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+
+      expect(saveComposerDraft).toHaveBeenCalledOnce();
+      expect(saveComposerDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          draft: expect.objectContaining({ text: "Typed just before quitting." }),
+        }),
+      );
+    });
+
+    it("writes nothing on blur when there is nothing pending", () => {
+      const { saveComposerDraft } = setup();
+
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+
+      expect(saveComposerDraft).not.toHaveBeenCalled();
     });
 
     it("writes again once the draft actually changes", () => {

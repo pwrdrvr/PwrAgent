@@ -173,14 +173,56 @@ export function useDurableComposerDraftStore(
     };
   }, [baseStore, desktopApi]);
 
+  const flushAllPendingSaves = useCallback((): void => {
+    for (const [scopeKey, pending] of [...pendingSavesRef.current]) {
+      flushPendingSave(scopeKey, pending);
+    }
+  }, [flushPendingSave]);
+
   useEffect(() => {
-    const pendingSaves = pendingSavesRef.current;
     return () => {
-      for (const [scopeKey, pending] of [...pendingSaves]) {
-        flushPendingSave(scopeKey, pending);
+      flushAllPendingSaves();
+    };
+  }, [flushAllPendingSaves]);
+
+  /**
+   * Flush whenever the operator stops interacting with this window.
+   *
+   * The unmount cleanup above is a React lifecycle hook, and a renderer being
+   * torn down — window closed, app quit — does not run it. That was near
+   * enough to harmless while the write interval was 200ms; at 5s it would mean
+   * typing for four seconds, quitting, and losing it, which is precisely the
+   * failure a draft-recovery feature exists to prevent.
+   *
+   * Blur and `visibilitychange` both land well BEFORE teardown, so the async
+   * IPC has a normal amount of time to complete — unlike `beforeunload`, where
+   * an in-flight `invoke` may never be delivered. `beforeunload` is registered
+   * anyway as a last resort for paths that somehow skip the others; it is
+   * best-effort by nature, not the thing being relied on.
+   *
+   * Flushing on blur is cheap because the dirty check already gates it: a
+   * window that lost focus with nothing pending writes nothing.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const flushIfHidden = (): void => {
+      if (document.visibilityState === "hidden") {
+        flushAllPendingSaves();
       }
     };
-  }, [flushPendingSave]);
+
+    window.addEventListener("blur", flushAllPendingSaves);
+    window.addEventListener("beforeunload", flushAllPendingSaves);
+    document.addEventListener("visibilitychange", flushIfHidden);
+    return () => {
+      window.removeEventListener("blur", flushAllPendingSaves);
+      window.removeEventListener("beforeunload", flushAllPendingSaves);
+      document.removeEventListener("visibilitychange", flushIfHidden);
+    };
+  }, [flushAllPendingSaves]);
 
   return useMemo(
     () => ({
@@ -481,6 +523,24 @@ function shouldReplacePreviousUnsentCandidate(
   return previousText.length > 0 && nextText.startsWith(previousText);
 }
 
+/**
+ * Content fingerprint for a snapshot.
+ *
+ * Note what this now decides. It started as a dedupe/ranking key for recovery
+ * candidates, where a collision merely merged two entries in a list. It is now
+ * also the dirty check that decides whether an edit is persisted AT ALL, so a
+ * collision means a draft change is silently never written. djb2/32-bit makes
+ * that vanishingly unlikely between successive edits of one document, and the
+ * consequence is bounded (the next distinct edit writes), but the risk class
+ * changed when the second caller arrived — do not widen its use further
+ * without swapping in something with real collision resistance.
+ *
+ * It must also stay in step with the record round-trip: hydration seeds the
+ * persisted-hash map straight from a stored `contentHash`, so if this function
+ * and `snapshotFromDraftRecord` ever disagree about which fields matter, the
+ * dirty check either stops suppressing (harmless) or suppresses a real edit
+ * (not). `useDurableComposerDraftStore.test.tsx` pins that round-trip.
+ */
 function hashDraftContent(snapshot: ComposerDraftSnapshot): string {
   const content = JSON.stringify({
     text: snapshot.draft,
