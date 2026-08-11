@@ -1,15 +1,22 @@
 {
-  "federated-child-mount": {
-    "commits": 2,
-    "note": "persist one cross-instance child mount and its routing target",
-    "observedWalBytes": 24720,
-    "rowsChanged": 2,
-    "statements": 2
+  "composer-draft-typing": {
+    "commits": 70,
+    "note": "typing one 70-character message with a save per keystroke: exactly one journal row survives, and commits track saves because each save is its own transaction",
+    "observedWalBytes": 1738640,
+    "rowsChanged": 140,
+    "statements": 209
   },
   "federated-child-archive-ungroup": {
     "commits": 2,
     "note": "clear one child-owner parent overlay and refresh its root-owner pin",
     "observedWalBytes": 20600,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "federated-child-mount": {
+    "commits": 2,
+    "note": "persist one cross-instance child mount and its routing target",
+    "observedWalBytes": 24720,
     "rowsChanged": 2,
     "statements": 2
   },
@@ -19,20 +26,6 @@
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
-  },
-  "runtime-lease-dead-owner-takeover": {
-    "commits": 5,
-    "note": "observe one dead owner, wait one minute, replace both runtime leases",
-    "observedWalBytes": 74160,
-    "rowsChanged": 8,
-    "statements": 8
-  },
-  "runtime-lease-lifecycle": {
-    "commits": 6,
-    "note": "register once, acquire and release both runtime leases, mark exited",
-    "observedWalBytes": 94760,
-    "rowsChanged": 8,
-    "statements": 8
   },
   "live-thread-token-usage": {
     "commits": 1,
@@ -47,6 +40,20 @@
     "observedWalBytes": 547960,
     "rowsChanged": 30,
     "statements": 30
+  },
+  "runtime-lease-dead-owner-takeover": {
+    "commits": 5,
+    "note": "observe one dead owner, wait one minute, replace both runtime leases",
+    "observedWalBytes": 74160,
+    "rowsChanged": 8,
+    "statements": 8
+  },
+  "runtime-lease-lifecycle": {
+    "commits": 6,
+    "note": "register once, acquire and release both runtime leases, mark exited",
+    "observedWalBytes": 94760,
+    "rowsChanged": 8,
+    "statements": 8
   },
   "streamed-command-output": {
     "commits": 2,
