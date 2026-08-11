@@ -13,8 +13,40 @@ export type StarMapView = { x: number; y: number; scale: number };
 
 export type StarMapViewBox = { width: number; height: number };
 
-export const MIN_ZOOM = 0.35;
+/**
+ * How far out the map can be pulled.
+ *
+ * Well below the point where a card is readable, on purpose: past
+ * `STAR_MAP_OVERVIEW_ZOOM` the map stops drawing cards at all and shows
+ * named clouds instead, so the far end of the range is for answering
+ * "which solar system am I in" rather than for reading anything.
+ */
+export const MIN_ZOOM = 0.12;
 export const MAX_ZOOM = 2;
+
+/**
+ * Below this scale a thread card is a ~130px smudge of unreadable text
+ * that still costs a full subtree to mount. The map trades all of them
+ * for one label per cloud — the fleet stays legible AND the DOM shrinks
+ * to a handful of nodes exactly when there would otherwise be hundreds.
+ */
+export const STAR_MAP_OVERVIEW_ZOOM = 0.5;
+
+/** Whether the view is far enough out to drop to named clouds. */
+export function isOverviewZoom(scale: number): boolean {
+  return scale < STAR_MAP_OVERVIEW_ZOOM;
+}
+
+/**
+ * Counter-scale for chrome that must stay readable while the canvas
+ * shrinks under it. Capped so a label does not grow without bound as the
+ * operator keeps pulling out — past the cap the labels shrink too, which
+ * is the honest signal that there is more map than window.
+ */
+export function overviewChromeScale(scale: number): number {
+  const safe = scale > 0 ? scale : 1;
+  return Math.min(1 / safe, 1 / MIN_ZOOM / 1.6);
+}
 
 /**
  * How much of the canvas has to stay on screen, per axis, as a fraction of

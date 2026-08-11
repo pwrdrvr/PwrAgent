@@ -37,11 +37,22 @@ import {
   type StarMapCardSlot,
 } from "./star-map-layout";
 import {
+  cardRingExtent,
   cardRingSlots,
   computeOrbitPlacement,
   galaxyArmPath,
+  shouldPanOnWheel,
   shouldStartCanvasPan,
 } from "./star-map-orbit";
+import {
+  buildInstanceClusters,
+  computeClusterCloud,
+  emptyCloudMemory,
+  forgetCluster,
+  resolveCloudDrop,
+  type StarMapClusterPlacement,
+  type StarMapCloudMemory,
+} from "./star-map-clusters";
 import {
   addFilterMatchCounts,
   countFilterMatches,
@@ -70,6 +81,7 @@ import { computeProjectLayout } from "./star-map-project-layout";
 import { StarMapProjectBody } from "./StarMapProjectBody";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { StarMapChatCard } from "./StarMapChatCard";
+import { chatCardEdgeToward } from "./star-map-chat-card-geometry";
 import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
@@ -80,8 +92,10 @@ import {
 } from "./star-map-preferences";
 import {
   clampStarMapView,
+  isOverviewZoom,
   MAX_ZOOM,
   MIN_ZOOM,
+  overviewChromeScale,
   placeStarMapView,
   type StarMapView,
 } from "./star-map-view-geometry";
@@ -106,10 +120,15 @@ import { useStarMapThreads } from "./useStarMapThreads";
  */
 const LANE_MAX_CARDS_PER_INSTANCE = 40;
 const STAR_COUNT = 130;
-/** Orbit rings use a fixed card width; lanes narrow theirs to fit. */
+/** Orbit clouds use a fixed card width; lanes narrow theirs to fit. */
 const ORBIT_CARD_WIDTH = 200;
-/** A ring crowds geometrically, so orbit stays shallower than a column. */
-const ORBIT_MAX_CARDS_PER_INSTANCE = 16;
+/**
+ * Projects-lens ring cap: a ring crowds geometrically, so a project body
+ * stays shallower than a column. The orbit lens no longer rings — its caps
+ * live in star-map-clusters (per-group plus a cloud backstop), each cloud
+ * carrying its own "+N more" chip instead of truncating silently.
+ */
+const PROJECT_MAX_CARDS_PER_BODY = 16;
 /** Breathing room past the longest column / widest lane when panning. */
 const LANE_CANVAS_PADDING = 120;
 /**
@@ -119,12 +138,26 @@ const LANE_CANVAS_PADDING = 120;
  */
 const ORBIT_LOAD_CARD_DY = -150;
 /**
- * The load card paints above every thread card in its cloud. Thread cards
- * take z 0..n by stack position, so a load card left at 0 ends up UNDER the
- * cards it sits among — and an operator-summoned readout hiding behind a
- * thread card reads as a broken button.
+ * Paint layers inside one cloud. `.star-map__cloud` is positioned with a
+ * z-index, so it opens a stacking context and these values are local to
+ * one instance's cards.
+ *
+ * Thread cards take 0..n by stack position, and n is NO LONGER BOUNDED —
+ * a cloud expands as far as the operator asks — so everything that must
+ * paint above the stack is pinned well clear of it rather than derived
+ * from a card cap. Deriving the load card's layer from the lane cap is
+ * exactly how it ended up underneath the 50th card, and the CSS hover
+ * raise (which must also clear the stack) had the same bug: a hovered
+ * card was pushed BELOW its neighbours instead of above them.
+ *
+ * `.star-map__cluster-label` / `-overflow` (chrome) and
+ * `.star-map-card-shell:hover` live in app.css and are pinned to these
+ * numbers by star-map-z-layers.test.ts.
  */
-const STAR_MAP_LOAD_CARD_Z = LANE_MAX_CARDS_PER_INSTANCE + 10;
+export const STAR_MAP_CARD_MAX_Z = 4000;
+export const STAR_MAP_CLOUD_CHROME_Z = 5000;
+export const STAR_MAP_CARD_HOVER_Z = 6000;
+const STAR_MAP_LOAD_CARD_Z = 7000;
 /**
  * Chat cards float above the map chrome (close button, filters, view
  * options) so a card being read is never underneath a control strip.
@@ -252,6 +285,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const [enteringThreadKeys, setEnteringThreadKeys] = useState<Set<string>>(
     new Set(),
   );
+  /**
+   * Threads the operator archived from a card whose snapshot has not
+   * caught up yet. Hidden immediately — a remote instance's feed refreshes
+   * on its own cadence, and an Archive click that visibly does nothing for
+   * ten seconds reads as broken. Restored on failure; released once the
+   * thread leaves its source feed for real.
+   */
+  const [archivedThreadKeys, setArchivedThreadKeys] = useState<Set<string>>(
+    new Set(),
+  );
   const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
   // Cards vary in height with their chip rows, so lanes stack from real
   // measurements - a fixed pitch clipped tall cards mid-glyph.
@@ -263,6 +306,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const [preferences, setPreferences] = useState<StarMapViewPreferences>(
     readStoredPreferences,
   );
+  /**
+   * Project clouds the operator expanded past the per-group cap, keyed
+   * `instanceId::clusterKey`. View-local like the selection: how much of a
+   * cloud is unfolded is a "what am I looking at" gesture, not fleet state.
+   */
+  const [expandedClusters, setExpandedClusters] = useState<Set<string>>(
+    new Set(),
+  );
+  /**
+   * Last cloud layout per instance. Held in a ref rather than state: it is
+   * an output of the layout that the next layout reads back, so writing it
+   * must not itself schedule a render. See `StarMapCloudMemory`.
+   */
+  const cloudMemory = useRef(new Map<string, StarMapCloudMemory>());
   // Orbit places bodies on a canvas larger than the window, so the surface
   // pans and zooms rather than compressing the map to fit.
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
@@ -322,6 +379,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [paintView],
   );
   const orbitMode = preferences.layout === "orbit";
+  /**
+   * Pulled far enough out that cards are unreadable. The map draws named
+   * clouds instead — legible at a glance, and a few DOM nodes instead of
+   * every card in the fleet.
+   */
+  const overview = isOverviewZoom(view.scale);
+  const chromeScale = overviewChromeScale(view.scale);
   /** Projects as suns: threads pooled across instances, one body per repo. */
   const projectsMode = preferences.layout === "projects";
   /**
@@ -660,6 +724,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   const attentionByInstance = useMemo(() => {
+    const withoutArchived = (threads: NavigationThreadSummary[]) =>
+      archivedThreadKeys.size === 0
+        ? threads
+        : threads.filter(
+            (thread) =>
+              !archivedThreadKeys.has(
+                buildThreadIdentityKey(thread.source, thread.id),
+              ),
+          );
     const result = new Map<string, NavigationThreadSummary[]>();
     // The main-window snapshot also carries viewer-side pinned REMOTE
     // threads (Cmd+K unification). Those render under their owning
@@ -667,30 +740,139 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // locally-owned threads only, or pinned remote cards would double up.
     result.set(
       localInstanceId,
-      selectFilteredThreads({
-        threads: props.localThreads.filter(
-          (thread) =>
-            !thread.federation
-            || !isRemoteFederationTarget(thread.federation.ref.target),
-        ),
-        selection: filterSelection,
-        sessionKeys: props.sessionKeys,
-      }),
+      withoutArchived(
+        selectFilteredThreads({
+          threads: props.localThreads.filter(
+            (thread) =>
+              !thread.federation
+              || !isRemoteFederationTarget(thread.federation.ref.target),
+          ),
+          selection: filterSelection,
+          sessionKeys: props.sessionKeys,
+        }),
+      ),
     );
     for (const [instanceId, threads] of remote.threadsByInstance) {
       result.set(
         instanceId,
-        selectFilteredThreads({ threads, selection: filterSelection }),
+        withoutArchived(
+          selectFilteredThreads({ threads, selection: filterSelection }),
+        ),
       );
     }
     return result;
   }, [
+    archivedThreadKeys,
     filterSelection,
     localInstanceId,
     props.localThreads,
     props.sessionKeys,
     remote,
   ]);
+
+  // Release optimistic hides once the thread has left its feed for real,
+  // so a future thread reusing the key is not silently invisible.
+  useEffect(() => {
+    if (archivedThreadKeys.size === 0) return;
+    const present = new Set<string>();
+    for (const thread of props.localThreads) {
+      present.add(buildThreadIdentityKey(thread.source, thread.id));
+    }
+    for (const threads of remote.threadsByInstance.values()) {
+      for (const thread of threads) {
+        present.add(buildThreadIdentityKey(thread.source, thread.id));
+      }
+    }
+    setArchivedThreadKeys((current) => {
+      const kept = [...current].filter((key) => present.has(key));
+      return kept.length === current.size ? current : new Set(kept);
+    });
+    // Keyed on `.size` rather than the set: the guard above returns the
+    // same reference when nothing is released, so identity would be a
+    // stable dep too — but size makes the "runs when the set grows or
+    // shrinks" intent explicit and cannot loop through its own setState.
+  }, [archivedThreadKeys.size, props.localThreads, remote]);
+
+  /**
+   * Orbit-lens project clouds: each instance's threads grouped by project,
+   * capped per group, and seated around the body. Undefined outside orbit
+   * so the other lenses pay nothing for it.
+   */
+  const clusterClouds = useMemo(() => {
+    if (!orbitMode) return undefined;
+    const clouds = new Map<
+      string,
+      ReturnType<typeof computeClusterCloud>
+    >();
+    for (const [instanceId, threads] of attentionByInstance) {
+      const prefix = `${instanceId}::`;
+      const expandedKeys = new Set<string>();
+      for (const entry of expandedClusters) {
+        if (entry.startsWith(prefix)) {
+          expandedKeys.add(entry.slice(prefix.length));
+        }
+      }
+      const cloud = computeClusterCloud({
+        clusters: buildInstanceClusters({ threads, expandedKeys }),
+        cardWidth: ORBIT_CARD_WIDTH,
+        heightForThread: (threadKey) =>
+          cardHeights.get(threadKey) ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+        memory: cloudMemory.current.get(instanceId),
+      });
+      // Carrying the layout forward is what keeps an archived thread from
+      // moving everything else: seats, ring allocation and cloud centres
+      // all persist across the snapshot that removed it. Re-running this
+      // memo with the same input is idempotent — every thread and cloud
+      // simply keeps what it was just given.
+      cloudMemory.current.set(instanceId, cloud.memory);
+      clouds.set(instanceId, cloud);
+    }
+    return clouds;
+  }, [attentionByInstance, cardHeights, expandedClusters, orbitMode]);
+
+  /**
+   * The anchor a hand-placed card's stored offset is measured from in the
+   * cluster lens: its cloud's centre. A placed card therefore rides with
+   * its cloud when the cloud re-seats, and holds its spot in the cloud
+   * when cloudmates come and go — the scatter slots reflow around it
+   * without touching it. Undefined outside orbit (lanes keep slot-relative
+   * offsets) and for non-thread cards like the load card.
+   */
+  const clusterAnchorFor = useCallback(
+    (instanceId: string, threadKey: string) => {
+      const cloud = clusterClouds?.get(instanceId);
+      if (!cloud) return undefined;
+      const index = cloud.threads.findIndex(
+        (thread) =>
+          buildThreadIdentityKey(thread.source, thread.id) === threadKey,
+      );
+      if (index < 0) return undefined;
+      const cluster = cloud.clusters[cloud.clusterIndexByCard[index]];
+      return { slot: cloud.slots[index], center: cluster.center };
+    },
+    [clusterClouds],
+  );
+
+  const toggleClusterExpanded = useCallback(
+    (instanceId: string, clusterKey: string) => {
+      // Unfolding or folding a cloud is a request to re-fit THAT cloud, so
+      // it forgets its seats and centre. Everything else keeps its layout.
+      cloudMemory.current.set(
+        instanceId,
+        forgetCluster(
+          cloudMemory.current.get(instanceId) ?? emptyCloudMemory(),
+          clusterKey,
+        ),
+      );
+      setExpandedClusters((current) => {
+        const next = new Set(current);
+        const key = `${instanceId}::${clusterKey}`;
+        if (!next.delete(key)) next.add(key);
+        return next;
+      });
+    },
+    [],
+  );
 
   const projects = useMemo(
     () => groupThreadsByProject(attentionByInstance),
@@ -710,7 +892,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           key: project.key,
           cardCount: Math.min(
             project.threads.length,
-            ORBIT_MAX_CARDS_PER_INSTANCE,
+            PROJECT_MAX_CARDS_PER_BODY,
           ),
           mass: project.mass,
         })),
@@ -773,27 +955,37 @@ export function StarMapScreen(props: StarMapScreenProps) {
       { threads: NavigationThreadSummary[]; heights: number[]; count: number }
     >();
     for (const [instanceId, threads] of attentionByInstance) {
+      // Orbit reads its cloud layout: the flat list is already grouped,
+      // capped per cluster, and slot-aligned, so the lane triple simply
+      // mirrors it. Per-cloud "+N more" chips carry the overflow.
+      if (orbitMode) {
+        const cloud = clusterClouds?.get(instanceId);
+        result.set(instanceId, {
+          threads: cloud?.threads ?? [],
+          heights: cloud?.heights ?? [],
+          count: cloud?.threads.length ?? 0,
+        });
+        continue;
+      }
       const heights = threads.map(
         (thread) =>
           cardHeights.get(buildThreadIdentityKey(thread.source, thread.id))
           ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
       );
       // A lane is no longer bounded by the window: the column grows as long
-      // as it needs and the operator pans and zooms into it, the way the
-      // orbit lens already worked. Truncating at the fold hid curated
-      // threads that were never coming back into view — the cap that
-      // remains is a DOM-size backstop, not a design limit.
-      const count = orbitMode
-        ? Math.min(threads.length, ORBIT_MAX_CARDS_PER_INSTANCE)
-        : visibleCardCount({
-            heights,
-            availableHeight: Number.POSITIVE_INFINITY,
-            max: LANE_MAX_CARDS_PER_INSTANCE,
-          });
+      // as it needs and the operator pans and zooms into it. Truncating at
+      // the fold hid curated threads that were never coming back into
+      // view — the cap that remains is a DOM-size backstop, not a design
+      // limit.
+      const count = visibleCardCount({
+        heights,
+        availableHeight: Number.POSITIVE_INFINITY,
+        max: LANE_MAX_CARDS_PER_INSTANCE,
+      });
       result.set(instanceId, { threads, heights, count });
     }
     return result;
-  }, [attentionByInstance, cardHeights, orbitMode]);
+  }, [attentionByInstance, cardHeights, clusterClouds, orbitMode]);
 
   const topology = useMemo(
     () =>
@@ -811,38 +1003,55 @@ export function StarMapScreen(props: StarMapScreenProps) {
       computeOrbitPlacement({
         nodes: topology,
         cardCounts: new Map(
-          // Deliberately NOT counting the load card: ring radius is derived
-          // from card count, so including it would move every thread card
-          // on the ring the moment the load card opened.
+          // Deliberately NOT counting the load card: extent is derived
+          // from the cards, so including it would move every thread card
+          // in the cloud the moment the load card opened.
           [...lanes].map(([instanceId, lane]) => [instanceId, lane.count]),
         ),
         cardWidth: ORBIT_CARD_WIDTH,
+        // Cloud extents measured from the seated clusters, so instance
+        // spacing tracks what is actually drawn rather than a ring formula.
+        extents: clusterClouds
+          ? new Map(
+              [...clusterClouds].map(([instanceId, cloud]) => [
+                instanceId,
+                cloud.extent,
+              ]),
+            )
+          : undefined,
       }),
-    [lanes, topology],
+    [clusterClouds, lanes, topology],
   );
 
   /** Bodies plus their card slots, in whichever space the layout uses. */
   const bodies = useMemo(() => {
     if (orbitMode) {
-      return orbit.instances.map((instance) => ({
-        instanceId: instance.instanceId,
-        isHub: instance.isHub,
-        x: instance.x,
-        y: instance.y,
-        slots: instance.cardSlots,
-        cardWidth: ORBIT_CARD_WIDTH,
-        // Above the body, at a radius that does not depend on how many
-        // cards the rings hold — so opening it disturbs nothing. Gated on
-        // membership like the lanes branch: without the check the card
-        // rendered forever in this lens, and dismissing it only flipped the
-        // toggle that reads the same membership.
-        loadSlot: loadCardInstances.has(instance.instanceId)
-          ? { dx: 0, dy: ORBIT_LOAD_CARD_DY }
-          : undefined,
-        // Rings grow their radius, so orbit's canvas is already sized by
-        // `computeOrbitPlacement`; only lanes derive theirs from content.
-        contentBottom: 0,
-      }));
+      return orbit.instances.map((instance) => {
+        const cloud = clusterClouds?.get(instance.instanceId);
+        return {
+          instanceId: instance.instanceId,
+          isHub: instance.isHub,
+          x: instance.x,
+          y: instance.y,
+          // Cloud slots when the instance has a thread feed; the ring
+          // fallback only ever renders zero cards (no cloud, no lane).
+          slots: cloud?.slots ?? instance.cardSlots,
+          clusters: cloud?.clusters,
+          clusterIndexByCard: cloud?.clusterIndexByCard,
+          cardWidth: ORBIT_CARD_WIDTH,
+          // Above the body, at a radius that does not depend on how many
+          // cards the clouds hold — so opening it disturbs nothing. Gated
+          // on membership like the lanes branch: without the check the card
+          // rendered forever in this lens, and dismissing it only flipped
+          // the toggle that reads the same membership.
+          loadSlot: loadCardInstances.has(instance.instanceId)
+            ? { dx: 0, dy: ORBIT_LOAD_CARD_DY }
+            : undefined,
+          // Clouds grow their extent, so orbit's canvas is already sized by
+          // `computeOrbitPlacement`; only lanes derive theirs from content.
+          contentBottom: 0,
+        };
+      });
     }
     return laneLayout.positions.map((position) => {
       const lane = lanes.get(position.instanceId);
@@ -865,6 +1074,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         x: position.x,
         y: position.y,
         slots,
+        // Lanes have no clouds; present for a uniform body shape so the
+        // shared consumers (cardRects, renderCloud) can branch on them.
+        clusters: undefined,
+        clusterIndexByCard: undefined,
         cardWidth: laneLayout.cardWidth,
         loadSlot: hasLoad ? { dx: 0, dy: STAR_MAP_CLOUD_TOP } : undefined,
         contentBottom: lastSlot
@@ -874,7 +1087,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             : 0,
       };
     });
-  }, [laneLayout, lanes, loadCardInstances, orbit, orbitMode]);
+  }, [clusterClouds, laneLayout, lanes, loadCardInstances, orbit, orbitMode]);
 
   /**
    * Lanes canvas: as wide as the instance row and as tall as the longest
@@ -904,6 +1117,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       ? { width: projectLayout.canvasWidth, height: projectLayout.canvasHeight }
       : lanesCanvas;
 
+  /** Canvas extent for callbacks defined above it (see `cardRectsRef`). */
+  const canvasBoundsRef = useRef(panZoomCanvas);
+  canvasBoundsRef.current = panZoomCanvas;
+
   // Trackpad: two-finger drag pans, pinch (ctrl+wheel) zooms about the
   // pointer. Registered natively because the listener must not be passive.
   // Sits below panZoomCanvas because the clamp needs the canvas size.
@@ -915,6 +1132,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       viewport: { width: viewportSize.width, height: viewportSize.height },
     };
     const onWheel = (event: WheelEvent) => {
+      // Pinch (ctrl+wheel) is a map gesture wherever the pointer is; a
+      // plain scroll over a chat card belongs to that card's transcript.
+      if (!event.ctrlKey && !shouldPanOnWheel(event.target)) return;
       event.preventDefault();
       // Both branches read the LIVE view rather than a `setView` updater's
       // `current`. During a keyboard flight the committed state is frozen at
@@ -1155,6 +1375,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [displayLabelPartsById, peers]);
 
   const chatCards = useStarMapChatCards();
+  /** Threads with a chat card open, so their card can say so. */
+  const chattingThreadKeys = useMemo(
+    () => new Set(chatCards.cards.map((card) => card.key)),
+    [chatCards.cards],
+  );
   const { desktopApi, onFocusLocalInstance, onOpenLocalThread } = props;
   const openInstance = useCallback(
     (instanceId: string) => {
@@ -1175,7 +1400,37 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // thread needs no pin and no snapshot merge.
   const openThread = useCallback(
     (thread: NavigationThreadSummary) => {
-      chatCards.open(thread);
+      // Open beside the thread's own card, in map coordinates. `cardRects`
+      // is read through a ref because it is declared further down; the
+      // callback only ever runs after a render has computed it.
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      let anchor: SnapRect | undefined;
+      // `cardRects` is built from the lane/orbit bodies, which is NOT where
+      // the projects lens draws its cards — anchoring to it there would
+      // open the chat at a position unrelated to anything on screen. That
+      // lens falls back to the cascade until it publishes its own rects.
+      if (!projectsModeRef.current) {
+        for (const [key, rect] of cardRectsRef.current) {
+          if (key.endsWith(`::${threadKey}`)) {
+            anchor = rect;
+            break;
+          }
+        }
+      }
+      chatCards.open(
+        thread,
+        anchor
+          ? {
+              anchor: {
+                height: anchor.height,
+                width: anchor.width,
+                x: anchor.x,
+                y: anchor.y,
+              },
+              bounds: canvasBoundsRef.current,
+            }
+          : undefined,
+      );
     },
     [chatCards],
   );
@@ -1449,13 +1704,28 @@ export function StarMapScreen(props: StarMapScreenProps) {
               ? `Archive ${targets.all.length} threads`
               : "Archive thread",
           onSelect: () => {
+            const keys = targets.all.map((target) =>
+              buildThreadIdentityKey(target.thread.source, target.thread.id),
+            );
+            // Hide the cards NOW, all of them. A remote feed refreshes on
+            // its own cadence, and an Archive that visibly does nothing
+            // until the next tick reads as a broken button.
+            setArchivedThreadKeys((current) => {
+              const next = new Set(current);
+              for (const key of keys) next.add(key);
+              return next;
+            });
             runOnCardTargets({
               describeFailure: (failed, total) =>
                 total === 1
                   ? "Could not archive that thread"
                   : `Could not archive ${failed} of ${total} threads`,
-              run: (target) =>
-                desktopApi
+              run: (target) => {
+                const threadKey = buildThreadIdentityKey(
+                  target.thread.source,
+                  target.thread.id,
+                );
+                return desktopApi
                   .archiveThread?.({
                     backend: target.thread.source,
                     federationTarget:
@@ -1464,12 +1734,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     threadId: target.thread.id,
                   })
                   .then(() => {
-                    chatCards.close(
-                      buildThreadIdentityKey(
-                        target.thread.source,
-                        target.thread.id,
-                      ),
-                    );
+                    chatCards.close(threadKey);
                     // An archived card is gone for good, unlike one a
                     // filter or a flapping instance takes off the map, so
                     // the selection drops it rather than counting it
@@ -1477,7 +1742,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     // archive was refused is still sitting there, and
                     // still selected.
                     dropFromSelection(target);
-                  }),
+                  })
+                  .catch((error: unknown) => {
+                    // This archive did not happen; that card comes back.
+                    // Per card, so one refusal out of five does not undo
+                    // the four that worked.
+                    setArchivedThreadKeys((current) => {
+                      const next = new Set(current);
+                      next.delete(threadKey);
+                      return next;
+                    });
+                    // Rethrown so the run still counts as a failure and
+                    // reports through the summary above.
+                    throw error;
+                  });
+              },
               targets: targets.all,
             });
           },
@@ -1551,14 +1830,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
         if (!slot) return;
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
         const offset = arrangement.offsetFor(position.instanceId, threadKey);
+        // Placed cards anchor to their cloud centre in the cluster lens —
+        // the same rule the render path applies — so their rects land
+        // where the cards actually paint.
+        const cardCluster =
+          offset !== undefined && position.clusterIndexByCard !== undefined
+            ? position.clusters?.[position.clusterIndexByCard[index]]
+            : undefined;
+        const anchor = cardCluster
+          ? { dx: cardCluster.center.x, dy: cardCluster.center.y }
+          : slot;
         // `||`, not `??`: an unmeasured card reports 0, and a zero-height
         // rect is invisible to both snapping and selection.
         const height = lane.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT;
         rects.set(`${position.instanceId}::${threadKey}`, {
           // Cards are centred on their slot horizontally (marginLeft is
           // -width/2), so the rect's left edge is half a card back.
-          x: position.x + slot.dx + (offset?.dx ?? 0) - position.cardWidth / 2,
-          y: position.y + slot.dy + (offset?.dy ?? 0),
+          x:
+            position.x + anchor.dx + (offset?.dx ?? 0) - position.cardWidth / 2,
+          y: position.y + anchor.dy + (offset?.dy ?? 0),
           width: position.cardWidth,
           height,
         });
@@ -1566,6 +1856,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     return rects;
   }, [arrangement, bodies, lanes, projectsMode]);
+
+  /**
+   * Latest card geometry and canvas extent, for callbacks defined above
+   * them (opening a chat card beside its thread). Refs rather than deps so
+   * those callbacks stay stable across every snapshot.
+   */
+  const cardRectsRef = useRef(cardRects);
+  cardRectsRef.current = cardRects;
+  const projectsModeRef = useRef(projectsMode);
+  projectsModeRef.current = projectsMode;
 
   /**
    * Canvas scale for the overlays drawn inside the transform. Every lens
@@ -1705,6 +2005,34 @@ export function StarMapScreen(props: StarMapScreenProps) {
     });
   }, []);
 
+  /**
+   * A cloud's label pill selects its visible cards as one group, so the
+   * existing group drag moves the whole cloud. Only visible cards join —
+   * a hidden card has no shell to move, and a selection entry that cannot
+   * be seen would surface as a card teleporting on some later expand.
+   */
+  const toggleClusterSelection = useCallback(
+    (instanceId: string, cluster: StarMapClusterPlacement) => {
+      const keys = cluster.threads
+        .slice(0, cluster.visibleCount)
+        .map(
+          (thread) =>
+            `${instanceId}::${buildThreadIdentityKey(thread.source, thread.id)}`,
+        );
+      if (keys.length === 0) return;
+      setSelection((current) => {
+        const allSelected = keys.every((key) => current.has(key));
+        const next = new Set(current);
+        for (const key of keys) {
+          if (allSelected) next.delete(key);
+          else next.add(key);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
   const commitSelectionMove = useCallback(
     (draggedKey: string, delta: { dx: number; dy: number }) => {
       if (!selection.has(draggedKey)) return;
@@ -1725,17 +2053,29 @@ export function StarMapScreen(props: StarMapScreenProps) {
         if (separator < 0) continue;
         const instanceId = key.slice(0, separator);
         const threadKey = key.slice(separator + 2);
-        const current = arrangement.offsetFor(instanceId, threadKey) ?? {
-          dx: 0,
-          dy: 0,
-        };
+        const current = arrangement.offsetFor(instanceId, threadKey);
+        // A passenger placed for the first time by this group move needs
+        // the same cloud-centre anchoring a directly-dragged card gets:
+        // its stored offset will be read against the cloud centre, so its
+        // scatter position has to be folded in before the delta.
+        const anchor =
+          current === undefined
+            ? clusterAnchorFor(instanceId, threadKey)
+            : undefined;
+        const base = current
+          ?? (anchor
+            ? {
+                dx: anchor.slot.dx - anchor.center.x,
+                dy: anchor.slot.dy - anchor.center.y,
+              }
+            : { dx: 0, dy: 0 });
         arrangement.setCardPosition(instanceId, threadKey, {
-          dx: current.dx + delta.dx,
-          dy: current.dy + delta.dy,
+          dx: base.dx + delta.dx,
+          dy: base.dy + delta.dy,
         });
       }
     },
-    [arrangement, selection, shellsByKey],
+    [arrangement, clusterAnchorFor, selection, shellsByKey],
   );
 
   /**
@@ -1753,34 +2093,44 @@ export function StarMapScreen(props: StarMapScreenProps) {
       override?: { baseSlot: StarMapCardSlot; height: number },
     ) => {
       const selfKey = `${instanceId}::${threadKey}`;
-      if (!cardRects.has(selfKey)) return undefined;
-      // A card carrying a selection must not snap to the rest of it. Those
-      // cards travel rigidly with this one, so their relative offset never
-      // changes and every "alignment" against them is a false latch at
-      // whatever spacing the group already had.
-      const passengers = selection.has(selfKey) ? selection : undefined;
-      const others = [...cardRects.entries()]
-        .filter(([key]) => key !== selfKey && !passengers?.has(key))
-        .map(([, rect]) => rect);
-      if (others.length === 0) return undefined;
-
-      const body = bodies.find((entry) => entry.instanceId === instanceId);
-      const lane = lanes.get(instanceId);
-      const index =
-        lane?.threads.findIndex(
-          (thread) =>
-            buildThreadIdentityKey(thread.source, thread.id) === threadKey,
-        ) ?? -1;
-      const baseSlot =
-        override?.baseSlot ?? (index >= 0 ? body?.slots[index] : undefined);
-      if (!body || !baseSlot) return undefined;
-
-      // See the note in `cardRects`: unmeasured cards report 0, not undefined.
-      const height =
-        override?.height ?? (lane?.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT);
-      const scale = view.scale > 0 ? view.scale : 1;
-
+      // Everything below runs INSIDE the returned closure, which only runs
+      // while a card is actually being dragged. Doing it here instead cost
+      // a full pass over every card's rect — plus a thread-key rebuild per
+      // lane entry — once per card per render, so a map of n cards paid
+      // O(n^2) on every snapshot while nothing was being dragged at all.
       return (offset: { dx: number; dy: number }) => {
+        const unchanged = { dx: offset.dx, dy: offset.dy, guides: [] };
+        const selfRect = cardRects.get(selfKey);
+        if (!selfRect) return unchanged;
+        // A card carrying a selection must not snap to the rest of it.
+        // Those cards travel rigidly with this one, so their relative
+        // offset never changes and every "alignment" against them is a
+        // false latch at whatever spacing the group already had.
+        const passengers = selection.has(selfKey) ? selection : undefined;
+        const others: SnapRect[] = [];
+        for (const [key, rect] of cardRects) {
+          if (key === selfKey || passengers?.has(key)) continue;
+          others.push(rect);
+        }
+        if (others.length === 0) return unchanged;
+
+        const body = bodies.find((entry) => entry.instanceId === instanceId);
+        const lane = lanes.get(instanceId);
+        const index =
+          lane?.threads.findIndex(
+            (thread) =>
+              buildThreadIdentityKey(thread.source, thread.id) === threadKey,
+          ) ?? -1;
+        const baseSlot =
+          override?.baseSlot ?? (index >= 0 ? body?.slots[index] : undefined);
+        if (!body || !baseSlot) return unchanged;
+
+        // See the note in `cardRects`: unmeasured cards report 0, not
+        // undefined.
+        const height =
+          override?.height
+          ?? (lane?.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT);
+        const scale = view.scale > 0 ? view.scale : 1;
         const snap = resolveSnap({
           defaultGap: STAR_MAP_CARD_GAP,
           moving: {
@@ -1804,6 +2154,139 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [bodies, cardRects, lanes, selection, view.scale],
   );
 
+  /**
+   * A line from each open chat card to the thread card it belongs to.
+   *
+   * Opening beside the source does most of the work, but a card can be
+   * dragged anywhere in the galaxy afterwards — and five open chats with
+   * no visible owner is the thing to avoid. Drawn inside the canvas, so
+   * it pans and zooms with both of its endpoints for free.
+   *
+   * A chat card whose thread has no card on the map (filtered out, or
+   * folded into a cloud's overflow) simply gets no tether: a line to
+   * nowhere is worse than no line.
+   */
+  const chatTethers = useMemo(() => {
+    if (chatCards.cards.length === 0 || projectsMode) return [];
+    return chatCards.cards.flatMap((card) => {
+      let source: SnapRect | undefined;
+      for (const [key, rect] of cardRects) {
+        if (key.endsWith(`::${card.key}`)) {
+          source = rect;
+          break;
+        }
+      }
+      if (!source) return [];
+      const target = {
+        x: source.x + source.width / 2,
+        y: source.y + source.height / 2,
+      };
+      const from = chatCardEdgeToward(card.rect, target);
+      const midX = (from.x + target.x) / 2;
+      const midY = (from.y + target.y) / 2;
+      // A shallow arc, so the tether reads as part of the same sky as the
+      // instance links rather than as a UI connector.
+      const lift = 0.12;
+      return [
+        {
+          key: card.key,
+          path:
+            `M ${from.x.toFixed(2)} ${from.y.toFixed(2)}`
+            + ` Q ${(midX + (target.y - from.y) * lift).toFixed(2)}`
+            + ` ${(midY - (target.x - from.x) * lift).toFixed(2)}`
+            + ` ${target.x.toFixed(2)} ${target.y.toFixed(2)}`,
+          target,
+        },
+      ];
+    });
+  }, [cardRects, chatCards.cards, projectsMode]);
+
+  const chatTetherPaths =
+    chatTethers.length > 0 ? (
+      <svg
+        className="star-map__tethers"
+        width={panZoomCanvas.width || viewportSize.width}
+        height={panZoomCanvas.height || viewportSize.height}
+        aria-hidden="true"
+      >
+        {chatTethers.map((tether) => (
+          <g key={tether.key}>
+            <path className="star-map__tether" d={tether.path} />
+            <circle
+              className="star-map__tether-anchor"
+              cx={tether.target.x}
+              cy={tether.target.y}
+              r={3}
+            />
+          </g>
+        ))}
+      </svg>
+    ) : null;
+
+  /**
+   * A card dropped inside another cloud joins it, where "joining" is a
+   * thing the data can actually express — see `resolveCloudDrop`. Only
+   * parent/child membership moves: a project cloud groups on the thread's
+   * workspace, and a drag does not get to relink that.
+   *
+   * The hand-placed offset is cleared on the way, because it was measured
+   * from the OLD cloud's centre; keeping it would fling the card back out
+   * of the cloud it was just dropped into.
+   */
+  const applyCloudDrop = useCallback(
+    (params: {
+      instanceId: string;
+      thread: NavigationThreadSummary;
+      point: { x: number; y: number };
+    }): boolean => {
+      const cloud = clusterClouds?.get(params.instanceId);
+      if (!cloud || !desktopApi?.setThreadParent) return false;
+      const drop = resolveCloudDrop({
+        clusters: cloud.clusters,
+        point: params.point,
+        thread: params.thread,
+      });
+      if (drop.kind === "none") return false;
+
+      const threadKey = buildThreadIdentityKey(
+        params.thread.source,
+        params.thread.id,
+      );
+      arrangement.setCardPosition(params.instanceId, threadKey, null);
+      // The target cloud is about to gain or lose a card, so it re-fits
+      // rather than trying to seat the newcomer in a shape built without
+      // it. Every other cloud keeps its layout.
+      cloudMemory.current.set(
+        params.instanceId,
+        forgetCluster(
+          cloudMemory.current.get(params.instanceId) ?? emptyCloudMemory(),
+          drop.clusterKey,
+        ),
+      );
+      void desktopApi
+        .setThreadParent({
+          backend: params.thread.source,
+          threadId: params.thread.id,
+          ...(drop.kind === "adopt"
+            ? {
+                parentThreadId: drop.parent.id,
+                parentThreadBackend: drop.parent.source,
+              }
+            : { parentThreadId: null, parentThreadBackend: null }),
+        })
+        .then(() => refreshOwner(params.instanceId))
+        .catch((error: unknown) => {
+          setCardError(
+            error instanceof Error
+              ? error.message
+              : "Could not regroup that thread.",
+          );
+        });
+      return true;
+    },
+    [arrangement, clusterClouds, desktopApi, refreshOwner],
+  );
+
   const renderCloud = (position: {
     instanceId: string;
     x: number;
@@ -1812,6 +2295,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
     cardWidth: number;
     /** Set when this instance shows a load card; never a thread slot. */
     loadSlot?: StarMapCardSlot;
+    /** Orbit lens: project clouds with outlines, pills and overflow chips. */
+    clusters?: StarMapClusterPlacement[];
+    /** Cluster index per flat card, aligned with `slots`. */
+    clusterIndexByCard?: number[];
   }) => {
     const lane = lanes.get(position.instanceId);
     const threads = lane?.threads ?? [];
@@ -1852,6 +2339,24 @@ export function StarMapScreen(props: StarMapScreenProps) {
             }}
           />
         ) : null}
+        {/* Nebula smudges paint under the cards: same layer, earlier in
+            DOM. Sized past the card extent so the glow falls off around
+            the cloud instead of stopping at it. */}
+        {position.clusters?.map((cluster) =>
+          cluster.chromeless ? null : (
+            <span
+              key={`cluster-halo:${cluster.key}`}
+              className="star-map__cluster-halo"
+              aria-hidden="true"
+              style={{
+                left: cluster.center.x,
+                top: cluster.center.y,
+                width: cluster.extent.rx * 2.6,
+                height: cluster.extent.ry * 2.7,
+              }}
+            />
+          ),
+        )}
         {loadSlot ? (
           <StarMapLoadCard
             key={`load:${position.instanceId}`}
@@ -1900,9 +2405,26 @@ export function StarMapScreen(props: StarMapScreenProps) {
             onDismiss={() => toggleLoadCard(position.instanceId)}
           />
         ) : null}
-        {visible.map((thread, index) => {
+        {(overview && position.clusters ? [] : visible).map((thread, index) => {
           const slot = slots[index];
           const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+          const storedOffset = arrangement.offsetFor(
+            position.instanceId,
+            threadKey,
+          );
+          const cardCluster =
+            position.clusterIndexByCard !== undefined
+              ? position.clusters?.[position.clusterIndexByCard[index]]
+              : undefined;
+          // A placed card anchors to its cloud's centre instead of its
+          // scatter slot: cloudmates arriving or archiving away reflow the
+          // scatter, and an offset over a moving slot made every arranged
+          // card jump. See `clusterAnchorFor`.
+          const anchored =
+            cardCluster !== undefined && storedOffset !== undefined;
+          const anchorSlot = anchored
+            ? { dx: cardCluster.center.x, dy: cardCluster.center.y }
+            : slot;
           return (
             <StarMapThreadCard
               key={threadKey}
@@ -1920,16 +2442,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   ? undefined
                   : position.instanceId,
               )}
-              baseSlot={slot}
-              offset={arrangement.offsetFor(position.instanceId, threadKey)}
+              baseSlot={anchorSlot}
+              offset={storedOffset}
               width={position.cardWidth}
-              centered={orbitMode}
-              stackIndex={index}
+              // Cloud slots hang cards from the top like lanes; only the
+              // ring fallback (which renders no cards) centred on its slot.
+              centered={orbitMode && !position.clusters}
+              // Clamped so a deep cloud can never reach the layers above
+              // the stack (chrome, hover raise, load card).
+              stackIndex={Math.min(index, STAR_MAP_CARD_MAX_Z)}
               cardKey={`${position.instanceId}::${threadKey}`}
               selected={selection.has(`${position.instanceId}::${threadKey}`)}
+              chatting={chattingThreadKeys.has(threadKey)}
               onToggleSelect={() =>
                 toggleSelected(`${position.instanceId}::${threadKey}`)
               }
+              // Cards keep their full chip anatomy inside a cloud — the
+              // cloud label groups them, it does not replace what they say.
               cardFields={preferences.cardFields}
               menuActions={cardMenuActions(thread, position.instanceId)}
               drag={
@@ -1945,6 +2474,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         position.instanceId,
                         threadKey,
                         position.cardWidth,
+                        // Anchored cards drag from the cloud centre, which
+                        // the lane-slot lookup inside snapFor cannot know.
+                        anchored
+                          ? {
+                              baseSlot: anchorSlot,
+                              height:
+                                heights[index]
+                                ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+                            }
+                          : undefined,
                       ),
                       onGuidesChange: setActiveGuides,
                       onGroupDelta: (delta) =>
@@ -1957,12 +2496,46 @@ export function StarMapScreen(props: StarMapScreenProps) {
                           `${position.instanceId}::${threadKey}`,
                           delta,
                         ),
-                      onCommitOffset: (offset) =>
+                      onCommitOffset: (offset) => {
+                        // Where the card actually landed, body-relative
+                        // and by its centre — a drop is about the middle
+                        // of the card, not its top-left corner.
+                        if (
+                          cardCluster
+                          && applyCloudDrop({
+                            instanceId: position.instanceId,
+                            point: {
+                              x: anchorSlot.dx + offset.dx,
+                              y:
+                                anchorSlot.dy
+                                + offset.dy
+                                + (heights[index]
+                                  ?? STAR_MAP_ESTIMATED_CARD_HEIGHT) / 2,
+                            },
+                            thread,
+                          })
+                        ) {
+                          // Regrouped: the card belongs to another cloud
+                          // now and `applyCloudDrop` already cleared the
+                          // offset this would otherwise write back.
+                          return;
+                        }
                         arrangement.setCardPosition(
                           position.instanceId,
                           threadKey,
-                          offset,
-                        ),
+                          // First placement: the drag ran against the
+                          // scatter slot, so re-express the result from
+                          // the cloud centre before it persists.
+                          cardCluster && !anchored
+                            ? {
+                                dx:
+                                  slot.dx + offset.dx - cardCluster.center.x,
+                                dy:
+                                  slot.dy + offset.dy - cardCluster.center.y,
+                              }
+                            : offset,
+                        );
+                      },
                     }
                   : undefined
               }
@@ -1984,6 +2557,75 @@ export function StarMapScreen(props: StarMapScreenProps) {
             +{overflow} more
           </span>
         ) : null}
+        {position.clusters?.map((cluster) => {
+          if (cluster.chromeless) return null;
+          const clusterCardKeys = cluster.threads
+            .slice(0, cluster.visibleCount)
+            .map(
+              (thread) =>
+                `${position.instanceId}::${buildThreadIdentityKey(
+                  thread.source,
+                  thread.id,
+                )}`,
+            );
+          const allSelected =
+            clusterCardKeys.length > 0
+            && clusterCardKeys.every((key) => selection.has(key));
+          return (
+            <button
+              key={`cluster-label:${cluster.key}`}
+              type="button"
+              className={`star-map__cluster-label${
+                overview ? " star-map__cluster-label--overview" : ""
+              }`}
+              style={{
+                left: cluster.labelSlot.dx,
+                // In overview the label IS the cloud, so it sits on the
+                // centre rather than above the cards it is captioning, and
+                // counter-scales to stay readable as the canvas shrinks.
+                top: overview ? cluster.center.y : cluster.labelSlot.dy,
+                ...(overview
+                  ? {
+                      transform: `translate(-50%, -50%) scale(${chromeScale})`,
+                    }
+                  : {}),
+              }}
+              aria-pressed={allSelected}
+              aria-label={`Select the ${cluster.label} cards (${cluster.threads.length} threads)`}
+              onClick={() =>
+                toggleClusterSelection(position.instanceId, cluster)
+              }
+            >
+              <span className="star-map__cluster-name">{cluster.label}</span>
+              <span className="star-map__cluster-count">
+                {cluster.threads.length}
+              </span>
+            </button>
+          );
+        })}
+        {position.clusters?.map((cluster) =>
+          cluster.overflowSlot ? (
+            <button
+              key={`cluster-overflow:${cluster.key}`}
+              type="button"
+              className="star-map__cluster-overflow"
+              style={{
+                left: cluster.overflowSlot.dx,
+                top: cluster.overflowSlot.dy,
+              }}
+              aria-label={
+                cluster.overflow > 0
+                  ? `Show ${cluster.overflow} more ${cluster.label} threads`
+                  : `Show fewer ${cluster.label} threads`
+              }
+              onClick={() =>
+                toggleClusterExpanded(position.instanceId, cluster.key)
+              }
+            >
+              {cluster.overflow > 0 ? `+${cluster.overflow} more` : "Show fewer"}
+            </button>
+          ) : null,
+        )}
       </div>
     );
   };
@@ -2101,8 +2743,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
           return (
             <div
               key={position.instanceId}
-              className="star-map__anchor"
-              style={{ left: position.x, top: position.y }}
+              className={`star-map__anchor${
+                overview ? " star-map__anchor--overview" : ""
+              }`}
+              style={{
+                left: position.x,
+                top: position.y,
+                // In overview the body is the only thing naming the
+                // machine — its cards are gone — so it counter-scales with
+                // the cloud labels rather than shrinking into the sky. The
+                // translate keeps it centred on its anchor point; the
+                // scale is applied about that same centre.
+                ...(overview
+                  ? {
+                      transform: `translate(-50%, -50%) scale(${chromeScale})`,
+                    }
+                  : {}),
+              }}
             >
               <StarMapInstanceCard
                 instanceId={position.instanceId}
@@ -2234,9 +2891,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
               if (!project) return null;
               const visible = project.threads.slice(
                 0,
-                ORBIT_MAX_CARDS_PER_INSTANCE,
+                PROJECT_MAX_CARDS_PER_BODY,
               );
               const slots = cardRingSlots(visible.length, ORBIT_CARD_WIDTH);
+              const ringOverflow = project.threads.length - visible.length;
               return (
                 <div
                   key={`project:${placement.key}`}
@@ -2302,10 +2960,59 @@ export function StarMapScreen(props: StarMapScreenProps) {
                       />
                     );
                   })}
+                  {/* The ring truncates silently otherwise — the same lie
+                      the orbit lens used to tell. */}
+                  {ringOverflow > 0 ? (
+                    <span
+                      className="star-map__cloud-overflow"
+                      style={{
+                        transform: `translate(-50%, ${
+                          cardRingExtent(visible.length, ORBIT_CARD_WIDTH).ry
+                          + 24
+                        }px)`,
+                      }}
+                    >
+                      +{ringOverflow} more
+                    </span>
+                  ) : null}
                 </div>
               );
             })
           : null}
+        {chatTetherPaths}
+        {/* Chat cards live INSIDE `.star-map__canvas`: they are objects in
+            the galaxy, not windows over it. Panning away and coming back
+            finds the open chats exactly where they were left, which is the
+            whole point of opening five of them and scooting off. */}
+        {chatCards.cards.map((card) => {
+          const target = card.thread.federation?.ref.target;
+          const cardInstanceId =
+            target && isRemoteFederationTarget(target)
+              ? target.instanceId
+              : undefined;
+          return (
+            <StarMapChatCard
+              key={card.key}
+              cardKey={card.key}
+              desktopApi={props.desktopApi}
+              instanceIcon={celestialIcons.iconFor(cardInstanceId)}
+              instanceLabel={
+                cardInstanceId
+                  ? displayLabelById.get(cardInstanceId)
+                  : displayLabelById.get(localInstanceId ?? "")
+              }
+              onClose={chatCards.close}
+              onOpenFull={openThreadFully}
+              onRaise={chatCards.raise}
+              onRectChange={chatCards.setRect}
+              rect={card.rect}
+              thread={card.thread}
+              scale={view.scale}
+              bounds={panZoomCanvas}
+              zIndex={STAR_MAP_CHAT_CARD_BASE_Z + chatCards.depthOf(card.key)}
+            />
+          );
+        })}
         </div>
       </div>
       {intakeTarget ? (
@@ -2334,36 +3041,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
           }}
         />
       ) : null}
-      {/* Chat cards sit outside `.star-map__canvas` on purpose: they are
-          windows over the star field, not objects in it, so panning and
-          zooming the map must not move or scale them. */}
-      {chatCards.cards.map((card) => {
-        const target = card.thread.federation?.ref.target;
-        const cardInstanceId =
-          target && isRemoteFederationTarget(target)
-            ? target.instanceId
-            : undefined;
-        return (
-          <StarMapChatCard
-            key={card.key}
-            cardKey={card.key}
-            desktopApi={props.desktopApi}
-            instanceIcon={celestialIcons.iconFor(cardInstanceId)}
-            instanceLabel={
-              cardInstanceId
-                ? displayLabelById.get(cardInstanceId)
-                : displayLabelById.get(localInstanceId ?? "")
-            }
-            onClose={chatCards.close}
-            onOpenFull={openThreadFully}
-            onRaise={chatCards.raise}
-            onRectChange={chatCards.setRect}
-            rect={card.rect}
-            thread={card.thread}
-            zIndex={STAR_MAP_CHAT_CARD_BASE_Z + chatCards.depthOf(card.key)}
-          />
-        );
-      })}
       {cardError ? (
         <p className="star-map__card-error" role="alert">
           {cardError}

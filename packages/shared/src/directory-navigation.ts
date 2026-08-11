@@ -15,7 +15,7 @@ import {
   isToolManagedWorktreePath,
 } from "./worktree-paths.js";
 
-type DirectoryDescriptor = Pick<
+export type DirectoryDescriptor = Pick<
   NavigationDirectorySummary,
   "key" | "kind" | "label" | "path"
 >;
@@ -117,7 +117,17 @@ function matchCodexChatsRoot(value: string): string | undefined {
   return codexChatsRootMatch?.[1];
 }
 
-function classifyDirectory(directory: LinkedDirectorySummary): DirectoryDescriptor {
+/**
+ * Classify a linked directory into the row the Directories lens would file
+ * it under: scratch checkouts collapse into one "Workspaces" pseudo-
+ * directory, Codex chat dirs into "Codex Chats", worktrees onto their repo
+ * root. Exported so the Star Map groups threads by the same brain — twenty
+ * scratch chats must read as one Workspaces cloud, not twenty hash-named
+ * bodies.
+ */
+export function classifyDirectory(
+  directory: LinkedDirectorySummary,
+): DirectoryDescriptor {
   // Canonicalize separators up front so a directory keyed via different path
   // representations (Windows `C:\…` vs the forward-slashed `C:/…` we normalize
   // codex/git paths to) collapses to ONE directory row instead of duplicating.

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  centerStarMapView,
-  clampStarMapView,
   MAX_ZOOM,
   MIN_VISIBLE_FRACTION,
   MIN_ZOOM,
+  STAR_MAP_OVERVIEW_ZOOM,
+  centerStarMapView,
+  clampStarMapView,
+  isOverviewZoom,
+  overviewChromeScale,
   type StarMapView,
 } from "../star-map-view-geometry";
 
@@ -107,5 +110,40 @@ describe("centerStarMapView", () => {
       const centered = centerStarMapView({ canvas, viewport: VIEWPORT });
       expect(clamp(centered, canvas)).toEqual(centered);
     }
+  });
+});
+
+describe("overview zoom", () => {
+  it("lets the operator pull out well past card legibility", () => {
+    // The galaxy outgrew the old floor: a fleet of clouds did not fit on
+    // screen at 0.35, so there was no view that answered "where am I".
+    expect(MIN_ZOOM).toBeLessThan(0.35);
+    expect(MIN_ZOOM).toBeLessThan(STAR_MAP_OVERVIEW_ZOOM);
+  });
+
+  it("switches to named clouds below the threshold, not at reading zoom", () => {
+    expect(isOverviewZoom(MIN_ZOOM)).toBe(true);
+    expect(isOverviewZoom(STAR_MAP_OVERVIEW_ZOOM - 0.01)).toBe(true);
+    expect(isOverviewZoom(STAR_MAP_OVERVIEW_ZOOM)).toBe(false);
+    expect(isOverviewZoom(1)).toBe(false);
+  });
+
+  it("counter-scales chrome so a label survives the shrinking canvas", () => {
+    // A 13px label at 0.2 scale paints at 2.6px without this.
+    expect(overviewChromeScale(0.5)).toBeCloseTo(2, 5);
+    expect(overviewChromeScale(0.25)).toBeCloseTo(4, 5);
+  });
+
+  it("caps the counter-scale rather than growing labels without bound", () => {
+    const atFloor = overviewChromeScale(MIN_ZOOM);
+    expect(atFloor).toBeLessThan(1 / MIN_ZOOM);
+    // Past the cap labels shrink with the map, which is the honest signal
+    // that there is more map than window.
+    expect(overviewChromeScale(MIN_ZOOM / 2)).toBe(atFloor);
+  });
+
+  it("treats a nonsense scale as unzoomed rather than dividing by zero", () => {
+    expect(Number.isFinite(overviewChromeScale(0))).toBe(true);
+    expect(overviewChromeScale(0)).toBe(1);
   });
 });

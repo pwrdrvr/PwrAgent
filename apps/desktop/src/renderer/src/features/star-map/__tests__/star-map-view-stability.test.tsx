@@ -293,9 +293,9 @@ describe("star map view bounds", () => {
     window.localStorage.removeItem("pwragent.starMap.filterSelection");
   });
 
-  async function openOrbit() {
+  async function openOrbit(count = 9) {
     seedLayout("orbit");
-    const rendered = renderMap({ threads: threads(9) });
+    const rendered = renderMap({ threads: threads(count) });
     await waitFor(() => {
       expect(
         screen.getByRole("button", { name: /Open this instance/ }),
@@ -439,33 +439,30 @@ describe("star map view bounds", () => {
     // Resetting is also how the operator says "you place it again" — the
     // ownership flag has to clear, or auto-centring stays off for the life
     // of the mounted map.
-    const { rerender } = await openOrbit();
+    //
+    // The canvas is resized here by EXPANDING a cloud rather than by
+    // taking threads away: cloud layout is incremental now, so losing a
+    // card deliberately leaves every seat, extent and centre alone (see
+    // star-map-clusters). Unfolding a cloud is an operator action, and
+    // re-fitting that cloud is the point of it.
+    await openOrbit(12);
 
     pan(-900, -600);
     fireEvent.click(screen.getByRole("button", { name: "View" }));
     fireEvent.click(screen.getByRole("button", { name: "Reset view" }));
     const beforeResize = canvas().style.transform;
 
-    rerender(
-      <StarMapScreen
-        desktopApi={buildDesktopApi()}
-        localThreads={threads(4)}
-        sessionKeys={{}}
-        localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
-        onOpenLocalThread={() => undefined}
-        onFocusLocalInstance={() => undefined}
-      />,
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show 4 more PwrSnap threads/ }),
     );
-
     await waitFor(() => {
       expect(
-        screen.queryByRole("button", { name: /Open thread: Thread t8/ }),
-      ).toBeNull();
+        screen.getAllByRole("button", { name: /^Open thread:/ }),
+      ).toHaveLength(12);
     });
-    // The smaller cloud re-centres, which it would not do if the map were
-    // still treating the view as the operator's.
+
+    // The re-fitted cloud re-centres, which it would not do if the map
+    // were still treating the view as the operator's.
     expect(canvas().style.transform).not.toBe(beforeResize);
     const box = canvasBox();
     expect(readTransform()).toEqual({
@@ -482,7 +479,20 @@ describe("star map view bounds", () => {
     // a legally-parked view can leave nothing on screen. Recovery is
     // manual. If a future change closes this properly, this test should
     // fail and be rewritten, not deleted.
-    const { rerender } = await openOrbit();
+    //
+    // The shrink is driven by folding an expanded cloud back up. Archiving
+    // no longer shrinks anything: cloud seats, extents and centres are
+    // carried forward so losing a card moves nothing else, which closed
+    // the far more common route into this gap.
+    await openOrbit(12);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show 4 more PwrSnap threads/ }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("button", { name: /^Open thread:/ }),
+      ).toHaveLength(12);
+    });
     const wide = canvasBox();
 
     // Park hard against the left bound: the canvas's right edge is all
@@ -492,22 +502,13 @@ describe("star map view bounds", () => {
       visible(readTransform().x, wide.width, VIEWPORT.width),
     ).toBeGreaterThanOrEqual(VIEWPORT.width * MIN_VISIBLE_FRACTION);
 
-    rerender(
-      <StarMapScreen
-        desktopApi={buildDesktopApi()}
-        localThreads={threads(1)}
-        sessionKeys={{}}
-        localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
-        onOpenLocalThread={() => undefined}
-        onFocusLocalInstance={() => undefined}
-      />,
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show fewer PwrSnap threads/ }),
     );
     await waitFor(() => {
       expect(
-        screen.queryByRole("button", { name: /Open thread: Thread t8/ }),
-      ).toBeNull();
+        screen.getAllByRole("button", { name: /^Open thread:/ }),
+      ).toHaveLength(8);
     });
 
     const narrow = canvasBox();

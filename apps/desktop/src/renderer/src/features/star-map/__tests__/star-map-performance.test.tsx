@@ -144,3 +144,4 @@ describe("star map idle performance", () => {
     expect(offsetHeight).not.toHaveBeenCalled();
   });
 });
+

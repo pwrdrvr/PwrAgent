@@ -78,6 +78,8 @@ function renderCard(params: {
       onRectChange={() => undefined}
       rect={RECT}
       thread={params.thread}
+      scale={1}
+      bounds={{ width: 4000, height: 3000 }}
       zIndex={40}
     />,
   );

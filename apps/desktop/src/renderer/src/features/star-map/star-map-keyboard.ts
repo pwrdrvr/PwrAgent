@@ -146,9 +146,10 @@ export function isStarMapResetViewKey(stroke: StarMapKeyStroke): boolean {
  * Whether a key event aimed at this element should be left alone.
  *
  * The map layer hosts real text entry — chat card composers, and any input
- * a card grows later — and a chat card is a window *over* the star field
- * rather than part of it, so `w` typed into one must reach the composer,
- * not fly the camera.
+ * a card grows later — so `w` typed into one must reach the composer, not
+ * fly the camera. Chat cards are objects IN the galaxy now rather than
+ * windows over it, which changes nothing here: what matters is that the
+ * keystroke was aimed at text, not where the text is anchored.
  */
 export function isStarMapTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;

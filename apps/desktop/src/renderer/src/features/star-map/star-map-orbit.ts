@@ -44,6 +44,16 @@ const KEEPOUT_GAP = 10;
 const INSTANCE_KEEPOUT_ABOVE = 58;
 
 /**
+ * The keep-out box shared with the cluster layout, so project clouds clear
+ * the same chrome the ring slots do.
+ */
+export const STAR_MAP_INSTANCE_KEEPOUT = {
+  halfWidth: INSTANCE_KEEPOUT_HALF_WIDTH,
+  above: INSTANCE_KEEPOUT_ABOVE,
+  below: INSTANCE_KEEPOUT_BELOW,
+} as const;
+
+/**
  * Does a card centred here clear the instance's own chrome?
  *
  * Only the handful of slots that actually collide get pushed out (see
@@ -265,13 +275,20 @@ export function computeOrbitPlacement(params: {
   /** Visible card count per instance. */
   cardCounts: ReadonlyMap<string, number>;
   cardWidth: number;
+  /**
+   * Measured half-extent of an instance's drawn cloud, when the caller
+   * lays cards out itself (the project-cluster clouds). Instances without
+   * an entry fall back to the ring extent their card count implies.
+   */
+  extents?: ReadonlyMap<string, { rx: number; ry: number }>;
 }): OrbitPlacement {
   const root = params.nodes.find((node) => node.depth === 0);
   if (!root) {
     return { instances: [], links: [], canvasWidth: 0, canvasHeight: 0 };
   }
   const extentFor = (instanceId: string) =>
-    cardRingExtent(params.cardCounts.get(instanceId) ?? 0, params.cardWidth);
+    params.extents?.get(instanceId)
+    ?? cardRingExtent(params.cardCounts.get(instanceId) ?? 0, params.cardWidth);
   const radiusFor = (instanceId: string) => extentFor(instanceId).rx;
 
   const raw = new Map<string, { x: number; y: number }>();
@@ -395,10 +412,33 @@ export function computeOrbitPlacement(params: {
  * to match nothing here and so started a pan. It is the card's own mark
  * and overhangs the card's top-right corner, so dragging the card from it
  * is the right behaviour — but it is a change, not just a port.
+ *
+ * `.star-map-chat-card` is listed for the same reason, and it became load
+ * bearing the moment chat cards moved INSIDE the canvas: a press on a
+ * chat card bubbles to the viewport, so without it the card dragged and
+ * the whole galaxy panned underneath it at the same time. Its transcript,
+ * title bar and resize corner are all plain containers, so only naming
+ * the card itself covers them.
  */
+/**
+ * Whether a wheel event over the map should pan the canvas.
+ *
+ * A chat card is a scrollable window that now lives INSIDE the canvas, so
+ * its wheel events reach the viewport listener — which preventDefaults
+ * every one of them and turns it into a pan. That silently took scrolling
+ * away from every open transcript. Pinch-zoom (ctrl+wheel) is deliberately
+ * NOT routed through here: it is unambiguously a map gesture, and a
+ * transcript cannot consume it.
+ */
+export function shouldPanOnWheel(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true;
+  return !target.closest(".star-map-chat-card");
+}
+
 export function shouldStartCanvasPan(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return !target.closest(
-    "button, a, input, label, .star-map-card-shell, .star-map__chrome, .star-map__filters",
+    "button, a, input, label, .star-map-card-shell, .star-map-chat-card,"
+      + " .star-map__chrome, .star-map__filters",
   );
 }

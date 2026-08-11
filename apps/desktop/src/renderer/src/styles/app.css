@@ -10050,6 +10050,119 @@ textarea,
   white-space: nowrap;
 }
 
+/* Cloud chrome in the orbit lens: a nebula, not a box. The smudge is a
+   soft accent-tinted glow under the cards — like a nebula low in a dark
+   sky — and never intercepts a gesture: pans start straight through it,
+   and the label/chip controls are separate sibling buttons. */
+.star-map__cluster-halo {
+  position: absolute;
+  z-index: 0;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      42% 40% at 38% 42%,
+      color-mix(in srgb, var(--accent) 9%, transparent),
+      transparent 100%
+    ),
+    radial-gradient(
+      closest-side at 50% 50%,
+      color-mix(in srgb, var(--accent) 8%, transparent),
+      color-mix(in srgb, var(--accent) 4%, transparent) 55%,
+      transparent 82%
+    );
+  pointer-events: none;
+}
+
+/* Label and chip paint above the thread cards (z 0..n by stack position)
+   and below the load card. The label floats over the sky the way the
+   instance name does — no box around it. See the layer scale in
+   StarMapScreen, pinned by star-map-z-layers.test.ts. */
+.star-map__cluster-label {
+  display: inline-flex;
+  position: absolute;
+  z-index: 5000;
+  transform: translate(-50%, -50%);
+  align-items: baseline;
+  gap: 6px;
+  max-width: 240px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.star-map__cluster-label:hover {
+  background: color-mix(in srgb, var(--bg-panel) 60%, transparent);
+  color: var(--text-primary);
+}
+
+/* Pressed = every visible card in the cloud is in the selection. */
+.star-map__cluster-label[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+/* Overview: the label stops captioning a cloud and becomes the cloud.
+   Sized in ems so the counter-scale in StarMapScreen carries it. */
+.star-map__cluster-label--overview {
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel) 70%, transparent);
+  color: var(--text-primary);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.star-map__cluster-label--overview .star-map__cluster-count {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.star-map__cluster-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.star-map__cluster-count {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Slot is the chip's centre, so the button centres itself on it. Quiet
+   like the lanes overflow text, but clickable. */
+.star-map__cluster-overflow {
+  position: absolute;
+  z-index: 5000;
+  transform: translate(-50%, -50%);
+  padding: 3px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.star-map__cluster-overflow:hover {
+  background: color-mix(in srgb, var(--bg-panel) 60%, transparent);
+  color: var(--text-primary);
+}
+
+.star-map__cluster-label:focus-visible,
+.star-map__cluster-overflow:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+
 /* Shell: position, stacking, drag target and rise animation. The visual
    card is a plain button inside it, so the kebab can be a sibling rather
    than a button nested in a button. */
@@ -10085,7 +10198,13 @@ textarea,
    everything below the first line unclickable.) No transform: the card
    must not move under the pointer. */
 .star-map-card-shell:hover {
-  z-index: 5;
+  /* !important because each shell carries an inline z-index (its stack
+     position), which otherwise beats any hover rule. The value has to
+     clear EVERY stacked card: cloud membership is unbounded, so a raise
+     pinned just above a card cap silently became a demotion for cards
+     past it. See the layer scale in StarMapScreen (pinned by
+     star-map-z-layers.test.ts). */
+  z-index: 6000 !important;
 }
 
 .star-map-card-shell:hover .star-map-card {
@@ -11007,7 +11126,10 @@ textarea,
 .star-map-card,
 .star-map-card *,
 .star-map-load-card,
-.star-map-load-card * {
+.star-map-load-card *,
+.star-map__cluster-label,
+.star-map__cluster-label *,
+.star-map__cluster-overflow {
   -webkit-app-region: no-drag;
 }
 
@@ -25386,4 +25508,47 @@ a.transcript-message__messaging-origin:focus-visible {
   box-shadow: inset 3px 0 0 var(--accent-bright),
     0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent),
     0 8px 28px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+/* Tether from an open chat card to the thread card it belongs to. Drawn
+   inside the canvas, so it pans and zooms with both endpoints. */
+.star-map__tethers {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.star-map__tether {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 45%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+
+.star-map__tether-anchor {
+  fill: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* Names the accent ring for a screen reader without painting anything.
+   Scoped to the map rather than added as a global utility: this PR is the
+   only caller, and a repo-wide visually-hidden primitive deserves its own
+   decision. */
+.star-map-card__state {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The card end of that tether: the thread whose chat is open. */
+.star-map-card-shell--chatting .star-map-card {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
 }
