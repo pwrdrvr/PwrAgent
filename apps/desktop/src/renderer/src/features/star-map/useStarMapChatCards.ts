@@ -14,6 +14,12 @@ export type StarMapChatCardEntry = {
   key: string;
   rect: ChatCardRect;
   thread: NavigationThreadSummary;
+  /** The context satellite card is open, docked to the right. */
+  contextOpen?: boolean;
+  /** The terminal satellite card is open, docked below. */
+  terminalOpen?: boolean;
+  /** Operator-resized terminal height; the dock geometry supplies a default. */
+  terminalHeight?: number;
 };
 
 export type StarMapChatCardsController = {
@@ -37,6 +43,11 @@ export type StarMapChatCardsController = {
   ) => void;
   raise: (cardKey: string) => void;
   setRect: (cardKey: string, rect: ChatCardRect) => void;
+  /** Open/close the satellites. They live on the entry, so closing the
+   * chat card closes its whole group for free. */
+  toggleContext: (cardKey: string) => void;
+  toggleTerminal: (cardKey: string) => void;
+  setTerminalHeight: (cardKey: string, height: number) => void;
 };
 
 function viewportSize(): { width: number; height: number } {
@@ -110,6 +121,37 @@ export function useStarMapChatCards(): StarMapChatCardsController {
     );
   }, []);
 
+  const toggleContext = useCallback((cardKey: string) => {
+    setCards((current) =>
+      current.map((card) =>
+        card.key === cardKey
+          ? { ...card, contextOpen: !card.contextOpen }
+          : card,
+      ),
+    );
+  }, []);
+
+  const toggleTerminal = useCallback((cardKey: string) => {
+    setCards((current) =>
+      current.map((card) =>
+        card.key === cardKey
+          ? { ...card, terminalOpen: !card.terminalOpen }
+          : card,
+      ),
+    );
+  }, []);
+
+  const setTerminalHeight = useCallback(
+    (cardKey: string, height: number) => {
+      setCards((current) =>
+        current.map((card) =>
+          card.key === cardKey ? { ...card, terminalHeight: height } : card,
+        ),
+      );
+    },
+    [],
+  );
+
   const depthOf = useCallback(
     (cardKey: string) => {
       const index = order.indexOf(cardKey);
@@ -118,5 +160,16 @@ export function useStarMapChatCards(): StarMapChatCardsController {
     [order],
   );
 
-  return { cards, close, closeAll, depthOf, open, raise, setRect };
+  return {
+    cards,
+    close,
+    closeAll,
+    depthOf,
+    open,
+    raise,
+    setRect,
+    setTerminalHeight,
+    toggleContext,
+    toggleTerminal,
+  };
 }

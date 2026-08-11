@@ -80,6 +80,8 @@ function renderCard(params: {
       thread={params.thread}
       scale={1}
       bounds={{ width: 4000, height: 3000 }}
+      onToggleContext={() => undefined}
+      onToggleTerminal={() => undefined}
       zIndex={40}
     />,
   );
@@ -233,5 +235,72 @@ describe("StarMapChatCard send failures", () => {
     expect(
       await screen.findByText("in flight", { ignore: "textarea" }),
     ).toBeTruthy();
+  });
+});
+
+describe("satellite toggles", () => {
+  function renderToggleCard(props?: {
+    contextOpen?: boolean;
+    terminalOpen?: boolean;
+    onToggleContext?: (cardKey: string) => void;
+    onToggleTerminal?: (cardKey: string) => void;
+  }) {
+    return render(
+      <StarMapChatCard
+        cardKey="card-1"
+        desktopApi={buildApi()}
+        onClose={() => undefined}
+        onOpenFull={() => undefined}
+        onRaise={() => undefined}
+        onRectChange={() => undefined}
+        rect={RECT}
+        scale={1}
+        bounds={{ width: 4000, height: 3000 }}
+        thread={localThread()}
+        contextOpen={props?.contextOpen}
+        terminalOpen={props?.terminalOpen}
+        onToggleContext={props?.onToggleContext ?? (() => undefined)}
+        onToggleTerminal={props?.onToggleTerminal ?? (() => undefined)}
+        zIndex={40}
+      />,
+    );
+  }
+
+  it("asks the controller for the context satellite, and reflects it", () => {
+    const onToggleContext = vi.fn();
+    renderToggleCard({ onToggleContext });
+    const toggle = screen.getByRole("button", { name: /Show thread context/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(onToggleContext).toHaveBeenCalledWith("card-1");
+  });
+
+  it("names the open state once the satellite is up", () => {
+    renderToggleCard({ contextOpen: true, terminalOpen: true });
+    expect(
+      screen
+        .getByRole("button", { name: /Hide thread context/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("button", { name: /Close terminal/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  it("asks the controller for the terminal satellite", () => {
+    const onToggleTerminal = vi.fn();
+    renderToggleCard({ onToggleTerminal });
+    fireEvent.click(screen.getByRole("button", { name: /Open terminal/ }));
+    expect(onToggleTerminal).toHaveBeenCalledWith("card-1");
+  });
+
+  it("keeps the satellites OUT of the card: no rail pane inside", () => {
+    // The first cut rendered ThreadContextPanel inside the card, which
+    // popped over the transcript instead of docking beside it. Satellites
+    // are the screen's to render; the card only carries the toggles.
+    const { container } = renderToggleCard({ contextOpen: true });
+    expect(container.querySelector(".context-rail")).toBeNull();
   });
 });

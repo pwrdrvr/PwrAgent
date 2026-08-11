@@ -41,6 +41,11 @@ export type StarMapChatCardProps = {
   onOpenFull: (thread: NavigationThreadSummary) => void;
   onRaise: (cardKey: string) => void;
   onRectChange: (cardKey: string, rect: ChatCardRect) => void;
+  /** Satellite cards, docked to this card and owned by the controller. */
+  contextOpen?: boolean;
+  terminalOpen?: boolean;
+  onToggleContext: (cardKey: string) => void;
+  onToggleTerminal: (cardKey: string) => void;
   rect: ChatCardRect;
   /**
    * Canvas scale. The card lives IN the map, so a pointer that travels N
@@ -76,6 +81,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const { bounds, cardKey, desktopApi, onOpenFull, onRaise, onRectChange, rect, scale, thread } =
     props;
   const dragRef = useRef<DragState | undefined>(undefined);
+  // Read by callbacks that must not re-bind on every pointermove.
+  const rectRef = useRef(rect);
+  rectRef.current = rect;
   const [sendError, setSendError] = useState<string | undefined>(undefined);
   // The card is draggable and clipped; a native `title` fights both, and
   // UI-THEME.md rules it out regardless.
@@ -171,8 +179,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // — so a card left outside the new bounds would be unreachable. Read
   // through a ref so this fires on a bounds change and not on every frame
   // of a drag.
-  const rectRef = useRef(rect);
-  rectRef.current = rect;
   useEffect(() => {
     const clamped = clampChatCardRect(rectRef.current, {
       width: bounds.width,
@@ -344,6 +350,38 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             {props.instanceLabel}
           </span>
         ) : undefined}
+        <button
+          aria-expanded={props.contextOpen ?? false}
+          aria-label={
+            props.contextOpen
+              ? `Hide thread context for ${thread.title}`
+              : `Show thread context for ${thread.title}`
+          }
+          className={`star-map-chat-card__rail-toggle${
+            props.contextOpen ? " is-on" : ""
+          }`}
+          onClick={() => props.onToggleContext(cardKey)}
+          onPointerDown={(event) => event.stopPropagation()}
+          type="button"
+        >
+          ⌸
+        </button>
+        <button
+          aria-expanded={props.terminalOpen ?? false}
+          aria-label={
+            props.terminalOpen
+              ? `Close terminal for ${thread.title}`
+              : `Open terminal for ${thread.title}`
+          }
+          className={`star-map-chat-card__rail-toggle${
+            props.terminalOpen ? " is-on" : ""
+          }`}
+          onClick={() => props.onToggleTerminal(cardKey)}
+          onPointerDown={(event) => event.stopPropagation()}
+          type="button"
+        >
+          &gt;_
+        </button>
         <button
           aria-label={`Open ${thread.title} in the full thread view`}
           className="star-map-chat-card__expand"

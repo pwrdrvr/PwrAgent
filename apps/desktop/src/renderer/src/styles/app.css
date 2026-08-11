@@ -25552,3 +25552,104 @@ a.transcript-message__messaging-origin:focus-visible {
   border-color: var(--accent-border);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
 }
+
+.star-map-chat-card__rail-toggle {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.star-map-chat-card__rail-toggle:hover {
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.star-map-chat-card__rail-toggle.is-on {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.star-map-chat-card__rail-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Satellite cards docked to a chat card: the context rail and the
+   terminal as cards of their own, sharing the chat card's surface
+   language. Their rects derive from the host, so there is no drag
+   affordance here — the host's title bar moves the group. */
+.star-map-satellite-card {
+  display: flex;
+  position: absolute;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+}
+
+.star-map-satellite-card__bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.star-map-satellite-card__title {
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-satellite-card__close {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.star-map-satellite-card__close:hover {
+  color: var(--text-primary);
+}
+
+.star-map-satellite-card__close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* The rail positions against its nearest positioned ancestor. */
+.star-map-satellite-card__body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+/* The rail's own max-width keeps a 32px peek margin in the thread view.
+   Inside a satellite card that margin is the bug: the card is sized to
+   panel + spine exactly, so the cap squeezed the rail 32px narrower than
+   its no-shrink children — a blank strip on the card's left, and the tab
+   spine shoved out past the card's clip on the right. The card IS the
+   rail's whole world here; it gets all of it. */
+.star-map-satellite-card__body .context-rail {
+  max-width: 100%;
+}

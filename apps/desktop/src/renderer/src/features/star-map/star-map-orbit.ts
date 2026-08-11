@@ -432,13 +432,15 @@ export function computeOrbitPlacement(params: {
  */
 export function shouldPanOnWheel(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return true;
-  return !target.closest(".star-map-chat-card");
+  // Satellites scroll too: the context rail's panels and the terminal's
+  // buffer both own their wheel.
+  return !target.closest(".star-map-chat-card, .star-map-satellite-card");
 }
 
 export function shouldStartCanvasPan(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return !target.closest(
     "button, a, input, label, .star-map-card-shell, .star-map-chat-card,"
-      + " .star-map__chrome, .star-map__filters",
+      + " .star-map-satellite-card, .star-map__chrome, .star-map__filters",
   );
 }

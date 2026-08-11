@@ -81,7 +81,16 @@ import { computeProjectLayout } from "./star-map-project-layout";
 import { StarMapProjectBody } from "./StarMapProjectBody";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { StarMapChatCard } from "./StarMapChatCard";
-import { chatCardEdgeToward } from "./star-map-chat-card-geometry";
+import {
+  StarMapContextCard,
+  StarMapTerminalCard,
+  STAR_MAP_TERMINAL_CARD_HEIGHT,
+} from "./StarMapSatelliteCards";
+import {
+  chatCardEdgeToward,
+  dockContextRect,
+  dockTerminalRect,
+} from "./star-map-chat-card-geometry";
 import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
@@ -3037,6 +3046,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             target && isRemoteFederationTarget(target)
               ? target.instanceId
               : undefined;
+          const cardZ = STAR_MAP_CHAT_CARD_BASE_Z + chatCards.depthOf(card.key);
           return (
             <StarMapChatCard
               key={card.key}
@@ -3056,10 +3066,55 @@ export function StarMapScreen(props: StarMapScreenProps) {
               thread={card.thread}
               scale={view.scale}
               bounds={panZoomCanvas}
-              zIndex={STAR_MAP_CHAT_CARD_BASE_Z + chatCards.depthOf(card.key)}
+              contextOpen={card.contextOpen}
+              terminalOpen={card.terminalOpen}
+              onToggleContext={chatCards.toggleContext}
+              onToggleTerminal={chatCards.toggleTerminal}
+              zIndex={cardZ}
             />
           );
         })}
+        {/* Satellites, docked to their hosts. Rects derive from the host's
+            on every render, so the group moves as one for free; they hide
+            with the thread cards in overview, where nothing card-sized is
+            readable anyway. */}
+        {overview
+          ? null
+          : chatCards.cards.map((card) => {
+              if (!card.contextOpen && !card.terminalOpen) return null;
+              const cardZ =
+                STAR_MAP_CHAT_CARD_BASE_Z + chatCards.depthOf(card.key);
+              return (
+                <div key={`satellites:${card.key}`}>
+                  {card.contextOpen ? (
+                    <StarMapContextCard
+                      desktopApi={props.desktopApi}
+                      thread={card.thread}
+                      rect={dockContextRect(card.rect)}
+                      zIndex={cardZ}
+                      onClose={() => chatCards.toggleContext(card.key)}
+                    />
+                  ) : null}
+                  {card.terminalOpen ? (
+                    <StarMapTerminalCard
+                      desktopApi={props.desktopApi}
+                      thread={card.thread}
+                      threadKey={card.key}
+                      rect={dockTerminalRect(card.rect, {
+                        contextOpen: card.contextOpen,
+                        height:
+                          card.terminalHeight ?? STAR_MAP_TERMINAL_CARD_HEIGHT,
+                      })}
+                      zIndex={cardZ}
+                      onClose={() => chatCards.toggleTerminal(card.key)}
+                      onHeightChange={(height) =>
+                        chatCards.setTerminalHeight(card.key, height)
+                      }
+                    />
+                  ) : null}
+                </div>
+              );
+            })}
         </div>
       </div>
       {intakeTarget ? (
