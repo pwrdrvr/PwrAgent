@@ -39,7 +39,10 @@ export function createProtocolCaptureFromEnv(params: {
   const rootDir =
     process.env[CAPTURE_ROOT_ENV]?.trim() ||
     resolveActiveProfilePath("state/protocol-captures");
-  const captureId = buildCaptureId(params.backend, params.backendInstance);
+  const captureId = buildProtocolCaptureId(
+    params.backend,
+    params.backendInstance,
+  );
   const store = new ProtocolCaptureStore({
     backend: params.backend,
     backendInstance: params.backendInstance,
@@ -64,8 +67,12 @@ export function createProtocolCaptureFromEnv(params: {
   };
 }
 
-function buildCaptureId(backend: string, backendInstance: string): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+export function buildProtocolCaptureId(
+  backend: string,
+  backendInstance: string,
+  timestampMs = Date.now(),
+): string {
+  const timestamp = new Date(timestampMs).toISOString().replace(/[:.]/g, "-");
   return `${timestamp}-${backend}-${sanitizeCapturePart(backendInstance)}`;
 }
 

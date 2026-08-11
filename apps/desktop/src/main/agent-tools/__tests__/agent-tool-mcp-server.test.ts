@@ -3,7 +3,10 @@ import {
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentToolRouter } from "../agent-tool-router";
+import {
+  AgentToolRouter,
+  PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
+} from "../agent-tool-router";
 import {
   AgentToolMcpServer,
   type AgentToolMcpClientContext,
@@ -60,6 +63,9 @@ describe("AgentToolMcpServer", () => {
 
     const client = await connectClient(registration);
     try {
+      expect(client.getInstructions()).toBe(
+        PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
+      );
       await expect(client.listTools()).resolves.toMatchObject({
         tools: [
           {

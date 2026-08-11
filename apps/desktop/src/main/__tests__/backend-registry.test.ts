@@ -8868,19 +8868,19 @@ script = "echo setup"
     const getThreadStatusTool = pwragentDynamicTools(dynamicTools)
       .find((tool) => tool.name === "get_thread_status");
     expect(getThreadStatusTool?.description).toContain(
-      "Omit backend and threadId to inspect the current thread",
+      "Omit backend and threadId for the current thread",
     );
     expect(getThreadStatusTool?.inputSchema?.required ?? []).toEqual([]);
     const attachPullRequestTool = pwragentDynamicTools(dynamicTools)
       .find((tool) => tool.name === "attach_thread_pull_request");
     expect(attachPullRequestTool?.description).toContain(
-      "Omit backend and threadId to attach to the current thread",
+      "Omit backend and threadId for the current thread",
     );
     expect(attachPullRequestTool?.inputSchema?.required ?? []).toEqual([]);
     const checkPullRequestStatusTool = pwragentDynamicTools(dynamicTools)
       .find((tool) => tool.name === "check_thread_pull_request_status");
     expect(checkPullRequestStatusTool?.description).toContain(
-      "Omit backend and threadId to check the current thread",
+      "Omit backend and threadId for the current thread",
     );
     expect(checkPullRequestStatusTool?.inputSchema?.required ?? []).toEqual([]);
     await expect(
@@ -27753,6 +27753,12 @@ script = "printf setup"
         titleSource: "fallback",
         source: "codex",
         linkedDirectories: [],
+      }, {
+        id: "parent-thread",
+        title: "M4 runner-host conversion preflight",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
       }],
     });
     const overlayStore = createOverlayStoreMock();
@@ -27863,6 +27869,7 @@ script = "printf setup"
               sourceThread: {
                 backend: "codex",
                 threadId: "parent-thread",
+                title: "M4 runner-host conversion preflight",
               },
             },
           },
@@ -27878,6 +27885,7 @@ script = "printf setup"
         sourceThread: {
           backend: "codex",
           threadId: "parent-thread",
+          title: "M4 runner-host conversion preflight",
         },
       },
     });
@@ -28872,6 +28880,13 @@ script = "printf setup"
   it("resolves and sends to a federated thread after a local UUID miss", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        id: "parent-thread",
+        title: "M4 runner-host conversion preflight",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      }],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -28948,6 +28963,7 @@ script = "printf setup"
         sourceThread: {
           backend: "codex",
           threadId: "parent-thread",
+          title: "M4 runner-host conversion preflight",
         },
       },
       executionMode: undefined,
@@ -29021,6 +29037,13 @@ script = "printf setup"
   it("routes stop and steer controls to an explicit federated owner", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        id: "parent-thread",
+        title: "M4 runner-host conversion preflight",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      }],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -29083,6 +29106,7 @@ script = "printf setup"
         sourceThread: {
           backend: "codex",
           threadId: "parent-thread",
+          title: "M4 runner-host conversion preflight",
         },
       },
     });

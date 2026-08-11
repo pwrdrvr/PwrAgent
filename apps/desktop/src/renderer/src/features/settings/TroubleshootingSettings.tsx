@@ -5,7 +5,15 @@ import type {
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
 import type { AppMetadata } from "../../../../shared/app-metadata";
+import {
+  buildCodexProtocolCaptureHandoffMessage,
+  formatCodexProtocolCaptureSize,
+  type CodexProtocolCaptureResult,
+  type CodexProtocolCaptureStatus,
+} from "../../../../shared/codex-protocol-capture";
 import { HEAP_SNAPSHOT_SECRET_WARNING } from "../../../../shared/heap-snapshot";
+import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
+import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsField,
@@ -63,6 +71,7 @@ function formatHotCpuStartDelay(delayMs: DesktopHotCpuProfileStartDelayMs): stri
 
 export function TroubleshootingSettings(props: {
   desktopApi?: DesktopApi;
+  onShowNotice?: (notice: AppNoticeToastNotice) => void;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onDeveloperModeChange: (value: boolean) => Promise<void>;
@@ -87,6 +96,14 @@ export function TroubleshootingSettings(props: {
   const [heapSnapshotCountdownRemainingMs, setHeapSnapshotCountdownRemainingMs] =
     useState(0);
   const [appMetadata, setAppMetadata] = useState<AppMetadata>();
+  const [protocolCaptureStatus, setProtocolCaptureStatus] = useState<
+    CodexProtocolCaptureStatus | undefined
+  >();
+  const [protocolCaptureBusy, setProtocolCaptureBusy] = useState(false);
+  const [protocolCaptureError, setProtocolCaptureError] = useState<string>();
+  const [lastProtocolCapture, setLastProtocolCapture] = useState<
+    CodexProtocolCaptureResult | undefined
+  >();
   const developerMode = props.snapshot.general.developerMode;
   const hotCpuProfilingEnabled =
     props.snapshot.general.hotCpuProfilingEnabled;
@@ -187,6 +204,114 @@ export function TroubleshootingSettings(props: {
     }
   };
 
+  const protocolCaptureApiAvailable = Boolean(
+    props.desktopApi?.getCodexProtocolCaptureStatus
+    && props.desktopApi.startCodexProtocolCapture
+    && props.desktopApi.stopCodexProtocolCapture,
+  );
+  const protocolCaptureStatusText = protocolCaptureBusy
+    ? "Updating"
+    : protocolCaptureStatus?.active
+      ? "Recording"
+      : !protocolCaptureApiAvailable
+          || protocolCaptureStatus?.available === false
+        ? "Unavailable"
+        : protocolCaptureStatus === undefined
+          ? "Checking"
+          : "Idle";
+
+  useEffect(() => {
+    let canceled = false;
+    if (!props.desktopApi?.getCodexProtocolCaptureStatus) {
+      setProtocolCaptureStatus({ active: false, available: false });
+      return;
+    }
+
+    void props.desktopApi.getCodexProtocolCaptureStatus()
+      .then((status) => {
+        if (!canceled) {
+          setProtocolCaptureStatus(status);
+        }
+      })
+      .catch((error) => {
+        if (!canceled) {
+          setProtocolCaptureError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [props.desktopApi]);
+
+  const startProtocolCapture = async () => {
+    if (!props.desktopApi?.startCodexProtocolCapture) {
+      return;
+    }
+    setProtocolCaptureBusy(true);
+    setProtocolCaptureError(undefined);
+    try {
+      setProtocolCaptureStatus(
+        await props.desktopApi.startCodexProtocolCapture(),
+      );
+      setLastProtocolCapture(undefined);
+    } catch (error) {
+      setProtocolCaptureError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setProtocolCaptureBusy(false);
+    }
+  };
+
+  const stopProtocolCapture = async () => {
+    if (!props.desktopApi?.stopCodexProtocolCapture) {
+      return;
+    }
+    setProtocolCaptureBusy(true);
+    setProtocolCaptureError(undefined);
+    try {
+      const result = await props.desktopApi.stopCodexProtocolCapture();
+      setProtocolCaptureStatus({ active: false, available: true });
+      if (!result) {
+        return;
+      }
+      setLastProtocolCapture(result);
+      const handoff = buildCodexProtocolCaptureHandoffMessage(result);
+      const captureSize = result.sizeBytes === undefined
+        ? "Size unavailable"
+        : `Saved ${formatCodexProtocolCaptureSize(result.sizeBytes)}`;
+      props.onShowNotice?.({
+        actions: [
+          {
+            label: "Copy details",
+            onClick: () => {
+              void copyText(handoff, props.desktopApi);
+            },
+            tone: "primary",
+          },
+        ],
+        copyText: handoff,
+        detail: result.captureFilePath,
+        id: `codex-protocol-capture:${result.stoppedAt}`,
+        message: result.finalizationError
+          ? `${captureSize}. Finalization reported a warning, so the capture may be partial. Copy the details for the diagnostic path and warning.`
+          : `${captureSize}. Review the capture before sharing it; raw protocol traffic can contain conversation or workspace content.`,
+        title: result.finalizationError
+          ? "Codex protocol capture stopped with warning"
+          : "Codex protocol capture saved",
+        tone: result.finalizationError ? "warning" : "success",
+      });
+    } catch (error) {
+      setProtocolCaptureError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setProtocolCaptureBusy(false);
+    }
+  };
+
   const processIds = appMetadata ? formatProcessIds(appMetadata) : undefined;
 
   useEffect(() => {
@@ -250,6 +375,86 @@ export function TroubleshootingSettings(props: {
               )
             }
           />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Troubleshooting"
+        title="Codex protocol capture"
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Diagnostic snippet"
+            sub="Start immediately before reproducing an issue, then stop as soon as it occurs. The capture stays local until you choose to share it."
+            help="Raw protocol traffic can contain conversation content, file paths, and tool output. Review the file before sharing it."
+            control={
+              <div className="settings-hot-cpu-capture">
+                {protocolCaptureStatus?.active ? (
+                  <button
+                    type="button"
+                    className="button button--secondary"
+                    disabled={protocolCaptureBusy}
+                    onClick={() => {
+                      void stopProtocolCapture();
+                    }}
+                  >
+                    Stop Protocol Capture
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    disabled={
+                      protocolCaptureBusy
+                      || !protocolCaptureApiAvailable
+                      || protocolCaptureStatus?.available === false
+                      || protocolCaptureStatus === undefined
+                    }
+                    onClick={() => {
+                      void startProtocolCapture();
+                    }}
+                  >
+                    Start Protocol Capture
+                  </button>
+                )}
+                <span
+                  className="settings-hot-cpu-capture__status"
+                  aria-live="polite"
+                >
+                  {protocolCaptureStatusText}
+                </span>
+              </div>
+            }
+          />
+          {lastProtocolCapture ? (
+            <SettingsField
+              label="Last capture"
+              sub={[
+                lastProtocolCapture.sizeBytes === undefined
+                  ? "Size unavailable."
+                  : `${formatCodexProtocolCaptureSize(lastProtocolCapture.sizeBytes)} saved.`,
+                lastProtocolCapture.finalizationError
+                  ? "Finalization reported a warning; the capture may be partial."
+                  : "",
+                "Copy the details to hand the diagnostic path to another agent.",
+              ].filter(Boolean).join(" ")}
+              control={
+                <SettingsCopyValue
+                  copyValue={buildCodexProtocolCaptureHandoffMessage(
+                    lastProtocolCapture,
+                  )}
+                  desktopApi={props.desktopApi}
+                  label="protocol capture details"
+                  value={lastProtocolCapture.captureFilePath}
+                />
+              }
+            />
+          ) : null}
+          {protocolCaptureError ? (
+            <p className="settings-row__error" role="alert">
+              {protocolCaptureError}
+            </p>
+          ) : null}
         </div>
       </SettingsSection>
 

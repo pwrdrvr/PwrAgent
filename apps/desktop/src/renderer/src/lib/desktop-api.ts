@@ -10,6 +10,10 @@ import type {
   CaptureHeapSnapshotRequest,
   CaptureHeapSnapshotResult,
 } from "../../../shared/heap-snapshot";
+import type {
+  CodexProtocolCaptureResult,
+  CodexProtocolCaptureStatus,
+} from "../../../shared/codex-protocol-capture";
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
 import type {
   GithubPrAuthenticationFailureEvent,
@@ -799,6 +803,11 @@ export type DesktopApi = {
   captureHeapSnapshot?: (
     request: CaptureHeapSnapshotRequest,
   ) => Promise<{ delayMs: number }>;
+  getCodexProtocolCaptureStatus?: () => Promise<CodexProtocolCaptureStatus>;
+  startCodexProtocolCapture?: () => Promise<CodexProtocolCaptureStatus>;
+  stopCodexProtocolCapture?: () => Promise<
+    CodexProtocolCaptureResult | undefined
+  >;
   onHeapSnapshotCaptured?: (
     callback: (result: CaptureHeapSnapshotResult) => void,
   ) => () => void;

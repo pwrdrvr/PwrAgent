@@ -35,7 +35,9 @@ export function selectVisibleRateLimits(
         return true;
       }
       const { label } = splitRateLimitName(limit.name);
-      return label === "5h limit" || label === "Weekly limit";
+      return label === "5h limit"
+        || label === "Weekly limit"
+        || label === "Individual limit";
     })
     .sort((left, right) => {
       const leftName = splitRateLimitName(left.name);
@@ -57,6 +59,18 @@ export function formatRateLimitLine(limit: BackendRateLimitSummary): string {
   const displayLabel = isSparkRateLimit(limit) ? `Spark ${label}` : label;
   const resetText = formatRateLimitReset(limit.resetAt);
   const suffix = resetText ? `, resets ${resetText}` : "";
+  if (
+    label === "Individual limit"
+    && typeof limit.used === "number"
+    && typeof limit.limit === "number"
+  ) {
+    const remainingPercent = typeof limit.usedPercent === "number"
+      ? Math.max(0, Math.round(100 - limit.usedPercent))
+      : Math.max(0, Math.round(((limit.limit - limit.used) / limit.limit) * 100));
+    return `${displayLabel}: ${formatWholeNumber(limit.used)}/${formatWholeNumber(
+      limit.limit,
+    )} used, ${remainingPercent}% left${suffix}`;
+  }
   if (typeof limit.usedPercent === "number") {
     const remaining = Math.max(0, Math.round(100 - limit.usedPercent));
     return `${displayLabel}: ${remaining}% left${suffix}`;
@@ -85,7 +99,14 @@ function splitRateLimitName(name: string): {
   if (lower.endsWith("weekly limit")) {
     return { label: "Weekly limit", labelOrder: 1 };
   }
+  if (lower.endsWith("individual limit")) {
+    return { label: "Individual limit", labelOrder: 2 };
+  }
   return { label: trimmed, labelOrder: 99 };
+}
+
+function formatWholeNumber(value: number): string {
+  return Math.round(value).toLocaleString();
 }
 
 function isSparkRateLimit(limit: BackendRateLimitSummary): boolean {

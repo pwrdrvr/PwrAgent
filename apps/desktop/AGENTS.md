@@ -306,6 +306,25 @@ Two things to know before running it:
   are rewritten, but an agent can echo anything it read into a transcript.
   Read a capture before committing it as a fixture.
 
+## Capturing Codex Account Protocol
+
+`scripts/capture-codex-usage-protocol.ts` records a complete Codex App Server
+probe without reading Codex-owned storage. It reads account, rate-limit, and
+account-wide usage state; runs one isolated ephemeral structured turn with
+profile tools, hooks, apps, skills, and MCP servers disabled; and reads the
+same state again:
+
+```bash
+pnpm --filter @pwragent/desktop capture:codex-usage -- \
+  --codex-home /path/to/codex-profile \
+  --capture-root .local/protocol-captures
+```
+
+Use this when an account type appears to expose incomplete quota or usage
+information. The JSONL output contains every protocol frame and can include
+account identity, local paths, prompts, and model output. Keep captures under
+`.local/`, which is gitignored; never commit a raw account capture.
+
 ## Accessibility
 
 The renderer is audited against WCAG 2.0 / 2.1 / 2.2 Level AA via

@@ -98,6 +98,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
+        with:
+          sparse-checkout: |
+            **/package.json
+            .npmrc
+            .pnpmfile.cjs
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            apps/desktop/scripts/ensure-electron-runtime.mjs
+            apps/desktop/scripts/rebuild-native-for-electron.mjs
+          sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
@@ -448,8 +458,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
-        with:
-          lfs: true
+        # Keep this checkout full: sparse state can persist on the self-hosted
+        # macOS runner and break a later job's checkout.
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1

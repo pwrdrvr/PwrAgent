@@ -372,6 +372,10 @@ import type {
   CaptureHeapSnapshotResult,
 } from "../shared/heap-snapshot";
 import type {
+  CodexProtocolCaptureResult,
+  CodexProtocolCaptureStatus,
+} from "../shared/codex-protocol-capture";
+import type {
   IntegratedTerminalCloseRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
@@ -477,7 +481,10 @@ import {
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
   SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL,
   DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
+  DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL,
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
+  DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,
+  DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
@@ -1193,6 +1200,15 @@ const desktopApi = Object.freeze({
       DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
       request,
     ),
+  getCodexProtocolCaptureStatus: async (): Promise<CodexProtocolCaptureStatus> =>
+    await ipcRenderer.invoke(
+      DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL,
+    ),
+  startCodexProtocolCapture: async (): Promise<CodexProtocolCaptureStatus> =>
+    await ipcRenderer.invoke(DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL),
+  stopCodexProtocolCapture: async (): Promise<
+    CodexProtocolCaptureResult | undefined
+  > => await ipcRenderer.invoke(DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL),
   onHeapSnapshotCaptured: (
     callback: (result: CaptureHeapSnapshotResult) => void,
   ): (() => void) => {

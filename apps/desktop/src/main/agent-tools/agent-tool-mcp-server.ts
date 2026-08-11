@@ -24,6 +24,7 @@ import { getMainLogger } from "../log.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
 import { agentToolFailure } from "./agent-tool-definition.js";
 import {
+  PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
   toMcpToolResponse,
   type AgentMcpToolCallResponse,
 } from "./agent-tool-router.js";
@@ -242,8 +243,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         capabilities: {
           tools: {},
         },
-        instructions:
-          "Tools for inspecting and controlling the PwrAgent thread that registered this MCP server.",
+        instructions: PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
       },
     );
     mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({

@@ -25,7 +25,7 @@ const TOOL_CATALOG: Record<
   },
   summarize_automation_status: {
     description:
-      "Summarize automation health and recent run activity for this PwrAgent Agent thread; use this before answering whether an inbound alert is recurring.",
+      "Summarize automation health and recent runs for this PwrAgent Agent thread. Use this before you decide that an inbound alert is recurring.",
     inputSchema: {
       type: "object",
       properties: {
@@ -37,7 +37,7 @@ const TOOL_CATALOG: Record<
   },
   list_automation_runs: {
     description:
-      "List recent automation runs for this Agent thread or one attached automation, including inbound source metadata for recurrence analysis.",
+      "List recent runs for this Agent thread or one attached automation. Include inbound source data for recurrence analysis.",
     inputSchema: {
       type: "object",
       properties: {
@@ -54,7 +54,7 @@ const TOOL_CATALOG: Record<
   },
   get_automation_run: {
     description:
-      "Inspect one automation run's status, timing, trigger, inbound source metadata, output summary, and error metadata.",
+      "Inspect one automation run. Return its status, timing, trigger, inbound source, output summary, and errors.",
     inputSchema: {
       type: "object",
       properties: {
@@ -66,7 +66,7 @@ const TOOL_CATALOG: Record<
   },
   get_automation_run_artifact: {
     description:
-      "Fetch one automation run's stored output artifact, card decision, action results, and bounded transcript events.",
+      "Get one automation run artifact with its output, card decision, actions, and bounded transcript events.",
     inputSchema: {
       type: "object",
       properties: {

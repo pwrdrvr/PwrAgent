@@ -76,7 +76,7 @@ export function buildPwrAgentAppToolDefinitions(
 function descriptionForOperation(operation: PwrAgentAppOperationName): string {
   switch (operation) {
     case "manage_pwragent":
-      return "Read PwrAgent runtime/update status, check for upgrades, or request a PwrAgent restart/stop.";
+      return "Read PwrAgent status, check for an upgrade, or request a restart or stop.";
   }
 }
 
@@ -94,7 +94,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: PWRAGENT_APP_MANAGEMENT_ACTIONS,
             description:
-              "`status` reports version, start time, uptime, and update state. `upgrade_check` checks for an available or downloaded update. `restart` restarts PwrAgent and installs a downloaded update when one is ready. `stop` quits PwrAgent.",
+              "`status` gets version, start time, uptime, and update state. `upgrade_check` checks for an available or downloaded upgrade. `restart` installs a ready upgrade and restarts PwrAgent. `stop` quits PwrAgent.",
           },
         },
       };
