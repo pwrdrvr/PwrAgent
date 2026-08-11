@@ -8,6 +8,7 @@ import {
 } from "./acp-launch-descriptor.js";
 import type { AcpJsonRpcTransport } from "./acp-client.js";
 import {
+  createCommandInvocation,
   JsonRpcConnection,
   type JsonRpcId,
   type JsonRpcObserver,
@@ -44,6 +45,7 @@ export type AcpStdioJsonRpcTransportOptions = {
   requestTimeoutMs?: number;
   observer?: JsonRpcObserver;
   spawn?: AcpStdioSpawn;
+  platform?: NodeJS.Platform;
 };
 
 function appendExecutableSearchPaths(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -91,6 +93,7 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
     this.lineTransport = new AcpLineStdioTransport({
       launchDescriptor: options.launchDescriptor,
       spawn: options.spawn,
+      platform: options.platform,
     });
     this.connection = new JsonRpcConnection(
       this.lineTransport,
@@ -185,6 +188,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     private readonly options: {
       launchDescriptor: AcpLaunchDescriptor;
       spawn?: AcpStdioSpawn;
+      platform?: NodeJS.Platform;
     },
   ) {}
 
@@ -212,6 +216,12 @@ class AcpLineStdioTransport implements JsonRpcTransport {
         buildPwrAgentChildProcessEnv(process.env, descriptor.env),
       ),
     );
+    const invocation = createCommandInvocation({
+      command: descriptor.command,
+      args: descriptor.args,
+      env,
+      platform: this.options.platform,
+    });
     const spawnProcess = this.options.spawn ?? spawn;
     acpTransportLog.info("launch ACP agent", {
       backendId: descriptor.backendId,
@@ -220,11 +230,12 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       registryId: descriptor.registryId,
     });
 
-    const child = spawnProcess(descriptor.command, descriptor.args, {
+    const child = spawnProcess(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env,
       cwd: descriptor.cwd,
       detached: process.platform !== "win32",
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
 
     if (this.closed || generation !== this.lifecycleGeneration) {

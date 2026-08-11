@@ -3,10 +3,12 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import readline from "node:readline";
-import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
+import {
+  createCommandInvocation,
+  type JsonRpcTransport,
+} from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { createCommandInvocation } from "../command-invocation";
 import { terminateOwnedProcessTree } from "../process-tree";
 import {
   compareCodexCliVersions,

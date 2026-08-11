@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { createCommandInvocation } from "../command-invocation";
+import { createCommandInvocation } from "@pwrdrvr/agent-transport";
 
 const execFile = promisify(execFileCallback);
 
