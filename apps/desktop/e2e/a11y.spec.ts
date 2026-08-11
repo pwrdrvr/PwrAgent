@@ -32,6 +32,11 @@ import AxeBuilder from "@axe-core/playwright";
 import type { DesktopAppearanceTheme } from "@pwragent/shared";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import {
+  buildAuditSubAgents,
+  seedThreadSubAgents,
+} from "./fixtures/sub-agent-state-seeding";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -333,6 +338,84 @@ for (const theme of AUDIT_THEMES) {
             }),
           ).toBeVisible();
           await runAxe(app.window, "sidebar rows carrying copy chips");
+        });
+      } finally {
+        await app.close();
+      }
+    });
+
+    // The active sub-agents strip above the composer. Nothing else in this
+    // gate renders it: it only appears when a thread has a non-terminal
+    // sub-agent or an undismissed failure, and no fixture produces one.
+    //
+    // It carries contrast pairs nothing else does — the `--status-*` dots, the
+    // `--danger-text` "Failed" cell, the neutral count pill, and two row
+    // controls sized right at the WCAG 2.2 target floor — so it went unaudited
+    // in both themes for as long as it shipped without this block.
+    //
+    // No dedicated replay fixture, unlike the copy-chip block: the surface's
+    // data comes from the sqlite seeder rather than the fixture, so a private
+    // fixture would be a file containing nothing this test depends on. What it
+    // does need from the smoke fixture — a thread that exists and opens — is
+    // exactly what that fixture guarantees for every other block here.
+    test("active sub-agents strip has no violations", async () => {
+      const app = await launchAuditApp({ theme });
+      try {
+        seedThreadSubAgents({
+          stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
+          subAgents: buildAuditSubAgents(),
+          threadId: "thread-smoke",
+        });
+        // The renderer does not re-poll on a direct sqlite mutation.
+        await app.window.reload();
+
+        const smokeThread = app.window
+          .getByRole("button", { name: /Replay smoke thread/i })
+          .first();
+        await expect(smokeThread).toBeVisible();
+        await smokeThread.click();
+
+        // Four rows seeds the disclosure collapsed, so the header audits
+        // first and the list is opened deliberately below.
+        const strip = app.window.getByRole("button", {
+          name: /^Active sub-agents \(2\), 2 failed$/,
+        });
+
+        await test.step("sub-agents strip header", async () => {
+          await expect(strip).toBeVisible();
+          await expect(strip).toHaveAttribute("aria-expanded", "false");
+          // Bulk dismiss only renders past one failure; assert it is painted
+          // so the audit cannot go quiet by the seed drifting to a single one.
+          await expect(
+            app.window.getByRole("button", {
+              name: "Dismiss all 2 failed sub-agents",
+            }),
+          ).toBeVisible();
+          await runAxe(app.window, "sub-agents strip header");
+        });
+
+        await test.step("sub-agents strip expanded rows", async () => {
+          await strip.click();
+          await expect(strip).toHaveAttribute("aria-expanded", "true");
+          // One assertion per row branch. Without these the scan still passes
+          // on an empty list and stops auditing the states it exists for.
+          await expect(
+            app.window.getByRole("button", {
+              name: /^Stop sub-agent: Run and monitor/,
+            }),
+          ).toBeVisible();
+          // Exact: `getByText` matches substrings, and "Blocked on approval"
+          // is sanctioned copy elsewhere in the style guide.
+          await expect(
+            app.window.getByText("Blocked", { exact: true }),
+          ).toBeVisible();
+          await expect(
+            app.window.getByRole("button", {
+              name: /^Dismiss failed sub-agent: Build and verify/,
+            }),
+          ).toBeVisible();
+          await expect(app.window.locator(".live-strip__item")).toHaveCount(4);
+          await runAxe(app.window, "sub-agents strip expanded rows");
         });
       } finally {
         await app.close();
