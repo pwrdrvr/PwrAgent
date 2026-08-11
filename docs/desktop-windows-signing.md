@@ -146,13 +146,25 @@ outside the environment reads every value as empty, which is otherwise
 indistinguishable from an intentional unsigned build. Local and PR builds omit
 the flag and stay unsigned.
 
-## Renewal
+## Certificate lifetime and renewal
 
-Signing breaks when any of these lapse — put them on a calendar:
+**The certificate profile's *Expiry date* is always a couple of days out, and
+that is not a problem.** Artifact Signing issues short-lived certificates and
+reissues them on a rolling basis; the near-term date in the portal is the
+current certificate, not a deadline. No action is needed, and no calendar entry
+belongs on it.
+
+Signatures outlive those certificates because they are **timestamped**.
+electron-builder defaults to `http://timestamp.acs.microsoft.com` with SHA256
+(see `TimestampRfc3161` / `TimestampDigest` in `app-builder-lib`'s
+`windowsSignAzureManager.js`) and we do not override either, so an installer
+signed today still verifies long after its signing certificate has expired.
+
+Two things genuinely do lapse and will break signing — put *these* on a
+calendar:
 
 | Item | Expires | Renew via |
 |---|---|---|
-| Certificate profile `pwrdrvr-public-trust` | 2026-08-13 | Azure portal → certificate profile |
 | Client secret (`AZURE_CLIENT_SECRET`) | ≤24 mo from creation | Entra app registration → Certificates & secrets, then update the GitHub secret |
 | Identity validation | 2028-09-29 | Azure portal → Identity validation → **Renew** |
 
