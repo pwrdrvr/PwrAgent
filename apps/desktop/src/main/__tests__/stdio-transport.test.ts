@@ -294,4 +294,47 @@ describe("StdioJsonRpcTransport", () => {
     );
     await transport.close();
   });
+
+  it("launches a resolved Windows batch shim through ComSpec", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const command = "C:\\nvm4w & tools\\nodejs\\codex.cmd";
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      args: ["--feature", "value & whoami"],
+      env: {
+        ComSpec: "C:\\Windows\\System32\\cmd.exe",
+        PATH: "C:\\nvm4w & tools\\nodejs",
+      },
+      platform: "win32",
+      resolveCommand: async () => ({
+        command,
+        source: "path",
+        version: "0.126.0",
+      }),
+    });
+
+    await transport.connect();
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\cmd.exe",
+      [
+        "/d",
+        "/s",
+        "/c",
+        expect.stringContaining(
+          "C:\\nvm4w^ ^&^ tools\\nodejs\\codex.cmd ^\"app-server^\"",
+        ),
+      ],
+      expect.objectContaining({
+        windowsVerbatimArguments: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    );
+    expect(spawnMock.mock.calls[0]?.[1]?.[3]).toContain(
+      "^\"value^ ^&^ whoami^\"",
+    );
+
+    await transport.close();
+  });
 });

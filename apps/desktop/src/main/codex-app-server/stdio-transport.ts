@@ -6,6 +6,7 @@ import readline from "node:readline";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { createCommandInvocation } from "../command-invocation";
 import { terminateOwnedProcessTree } from "../process-tree";
 import {
   compareCodexCliVersions,
@@ -36,6 +37,7 @@ export type StdioJsonRpcTransportOptions = {
     env: NodeJS.ProcessEnv;
   }) => Promise<ResolvedCodexCommandCandidate>;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
+  platform?: NodeJS.Platform;
 };
 
 export { compareCodexCliVersions };
@@ -124,16 +126,23 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     });
     this.assertCurrentGeneration(generation);
     const childEnv = buildPwrAgentChildProcessEnv(commandEnv);
+    const invocation = createCommandInvocation({
+      command: command.command,
+      args: ["app-server", ...args],
+      env: childEnv,
+      platform: this.options.platform,
+    });
     codexTransportLog.info("launch app-server", {
       command: command.command,
       source: command.source,
       version: command.version ?? null,
     });
 
-    const child = spawn(command.command, ["app-server", ...args], {
+    const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: childEnv,
       detached: process.platform !== "win32",
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
 
     this.childProcess = child;
