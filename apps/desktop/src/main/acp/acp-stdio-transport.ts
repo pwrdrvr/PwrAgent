@@ -44,6 +44,7 @@ export type AcpStdioJsonRpcTransportOptions = {
   requestTimeoutMs?: number;
   observer?: JsonRpcObserver;
   spawn?: AcpStdioSpawn;
+  platform?: NodeJS.Platform;
 };
 
 function appendExecutableSearchPaths(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -91,6 +92,7 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
     this.lineTransport = new AcpLineStdioTransport({
       launchDescriptor: options.launchDescriptor,
       spawn: options.spawn,
+      platform: options.platform,
     });
     this.connection = new JsonRpcConnection(
       this.lineTransport,
@@ -184,6 +186,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     private readonly options: {
       launchDescriptor: AcpLaunchDescriptor;
       spawn?: AcpStdioSpawn;
+      platform?: NodeJS.Platform;
     },
   ) {}
 
@@ -222,6 +225,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       command: descriptor.command,
       args: descriptor.args,
       env,
+      platform: this.options.platform,
     });
     const child = spawnProcess(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
