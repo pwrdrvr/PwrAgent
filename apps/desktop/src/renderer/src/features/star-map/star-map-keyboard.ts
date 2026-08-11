@@ -156,7 +156,8 @@ export function isStarMapTypingTarget(target: EventTarget | null): boolean {
   if (target instanceof HTMLElement && target.isContentEditable) return true;
   return Boolean(
     target.closest(
-      "input, textarea, select, [contenteditable], [role='dialog'], .star-map-chat-card",
+      "input, textarea, select, [contenteditable], [role='dialog'],"
+        + " .star-map-chat-card, .star-map-satellite-card",
     ),
   );
 }

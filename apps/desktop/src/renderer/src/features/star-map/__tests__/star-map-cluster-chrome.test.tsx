@@ -565,6 +565,49 @@ describe("star map chat cards in map space", () => {
     });
   });
 
+  it("docks satellite cards to their chat card as one group", async () => {
+    const { container } = renderOrbit([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+      projectThread("a2", "/repo/alpha", "AlphaDir"),
+    ]);
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread a1/ }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-chat-card")).not.toBeNull();
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show thread context/ }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-context-card")).not.toBeNull();
+    });
+
+    // Docked, not overlapping: the satellite starts past the host's right
+    // edge, top-aligned. Both live INSIDE the canvas so they pan together.
+    const chat = container.querySelector(".star-map-chat-card") as HTMLElement;
+    const satellite = container.querySelector(
+      ".star-map-context-card",
+    ) as HTMLElement;
+    expect(
+      container.querySelector(".star-map__canvas .star-map-context-card"),
+    ).not.toBeNull();
+    expect(Number.parseFloat(satellite.style.left)).toBeGreaterThan(
+      Number.parseFloat(chat.style.left) + Number.parseFloat(chat.style.width),
+    );
+    expect(satellite.style.top).toBe(chat.style.top);
+
+    // It closes from its own title bar too.
+    fireEvent.click(
+      screen.getByRole("button", { name: /Close thread context/ }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-context-card")).toBeNull();
+    });
+  });
+
   it("draws no tether when the thread has no card on the map", async () => {
     const { container, rerenderThreads } = renderOrbit([
       projectThread("a1", "/repo/alpha", "AlphaDir"),

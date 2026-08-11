@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   CHAT_CARD_CASCADE_STEP,
   CHAT_CARD_CASCADE_WRAP,
+  CHAT_CARD_CONTEXT_WIDTH,
   CHAT_CARD_DEFAULT_HEIGHT,
   CHAT_CARD_DEFAULT_WIDTH,
+  CHAT_CARD_DOCK_GAP,
   CHAT_CARD_MIN_HEIGHT,
   CHAT_CARD_MIN_WIDTH,
   cascadeChatCardRect,
   chatCardEdgeToward,
   clampChatCardRect,
+  dockContextRect,
+  dockTerminalRect,
   placeChatCardBesideAnchor,
   raiseChatCard,
   resizeChatCardRect,
@@ -267,5 +271,39 @@ describe("chatCardEdgeToward", () => {
       x: 200,
       y: 150,
     });
+  });
+});
+
+describe("satellite docking", () => {
+  const host = { left: 500, top: 400, width: 420, height: 520 };
+
+  it("docks the context card on the host's right edge, matching height", () => {
+    const rect = dockContextRect(host);
+    expect(rect.left).toBe(host.left + host.width + CHAT_CARD_DOCK_GAP);
+    expect(rect.top).toBe(host.top);
+    expect(rect.height).toBe(host.height);
+    expect(rect.width).toBe(CHAT_CARD_CONTEXT_WIDTH);
+  });
+
+  it("docks the terminal under the host at the host's width", () => {
+    const rect = dockTerminalRect(host);
+    expect(rect.left).toBe(host.left);
+    expect(rect.top).toBe(host.top + host.height + CHAT_CARD_DOCK_GAP);
+    expect(rect.width).toBe(host.width);
+  });
+
+  it("spans the whole group when the context card is open", () => {
+    const rect = dockTerminalRect(host, { contextOpen: true });
+    expect(rect.width).toBe(
+      host.width + CHAT_CARD_DOCK_GAP + CHAT_CARD_CONTEXT_WIDTH,
+    );
+  });
+
+  it("derives from the host, so a moved host moves the whole group", () => {
+    const moved = { ...host, left: host.left + 300, top: host.top - 120 };
+    const before = dockContextRect(host);
+    const after = dockContextRect(moved);
+    expect(after.left - before.left).toBe(300);
+    expect(after.top - before.top).toBe(-120);
   });
 });

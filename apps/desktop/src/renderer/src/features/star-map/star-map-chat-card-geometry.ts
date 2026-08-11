@@ -212,3 +212,44 @@ export function chatCardEdgeToward(
   const scale = Math.min(scaleX, scaleY);
   return { x: centerX + dx * scale, y: centerY + dy * scale };
 }
+
+/** Gap between a chat card and a satellite docked to it. */
+export const CHAT_CARD_DOCK_GAP = 12;
+/** Width of the docked context card; matches the rail's own minimum. */
+export const CHAT_CARD_CONTEXT_WIDTH = 300;
+/** Default height of the docked terminal card. */
+export const CHAT_CARD_TERMINAL_HEIGHT = 260;
+
+/**
+ * Where a chat card's context satellite docks: on the host's right edge,
+ * top-aligned, matching its height — the same posture the rail has in the
+ * full thread view, as its own card instead of a pane inside the host.
+ */
+export function dockContextRect(host: ChatCardRect): ChatCardRect {
+  return {
+    left: host.left + host.width + CHAT_CARD_DOCK_GAP,
+    top: host.top,
+    width: CHAT_CARD_CONTEXT_WIDTH,
+    height: host.height,
+  };
+}
+
+/**
+ * Where a chat card's terminal satellite docks: under the host, spanning
+ * the whole group — host plus context card when that is open — so the
+ * group reads as one object with a work surface along its bottom edge.
+ */
+export function dockTerminalRect(
+  host: ChatCardRect,
+  options?: { contextOpen?: boolean; height?: number },
+): ChatCardRect {
+  const width = options?.contextOpen
+    ? host.width + CHAT_CARD_DOCK_GAP + CHAT_CARD_CONTEXT_WIDTH
+    : host.width;
+  return {
+    left: host.left,
+    top: host.top + host.height + CHAT_CARD_DOCK_GAP,
+    width,
+    height: options?.height ?? CHAT_CARD_TERMINAL_HEIGHT,
+  };
+}
