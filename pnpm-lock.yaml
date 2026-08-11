@@ -103,8 +103,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@pwrdrvr/agent-acp':
-        specifier: ^0.13.0
-        version: 0.13.0(zod@4.4.3)
+        specifier: ^0.13.1
+        version: 0.13.1(zod@4.4.3)
       '@pwrdrvr/agent-client':
         specifier: ^0.7.0
         version: 0.7.0
@@ -112,14 +112,14 @@ importers:
         specifier: ^0.2.0
         version: 0.2.0
       '@pwrdrvr/agent-transport':
-        specifier: ^0.1.6
-        version: 0.1.6
+        specifier: ^0.1.7
+        version: 0.1.7
       '@pwrdrvr/codex-app-server-protocol':
         specifier: 0.144.0
         version: 0.144.0
       '@pwrdrvr/codex-discovery':
-        specifier: ^0.1.4
-        version: 0.1.4
+        specifier: ^0.1.6
+        version: 0.1.6
       '@shutterstock/p-map-iterable':
         specifier: ^1.1.2
         version: 1.1.2(aggregate-error@3.1.0)
@@ -1064,8 +1064,8 @@ packages:
   '@protobufjs/utf8@1.1.2':
     resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
 
-  '@pwrdrvr/agent-acp@0.13.0':
-    resolution: {integrity: sha512-PHPLX++fnS1mWRruQV7eUJEDmcphKGCDUsVEcEmqYSObDbn6BqOKYAsmVaYJu3TnAdF0k5GJbmnbvALz/Jv3Lg==}
+  '@pwrdrvr/agent-acp@0.13.1':
+    resolution: {integrity: sha512-AUPX0/+cbLaIYR23i8Z37RmaOkZrjdyIA2wTWqvZSDcWQT1wLxyGKLtKuQAq3z2Ka5Dk/hmT/PCrDTNTcVmjxw==}
 
   '@pwrdrvr/agent-client@0.7.0':
     resolution: {integrity: sha512-b1PNsaVtcXN69HLSF5uK7yqD1AhJocURSqZT9j9EhKSUugcp+8KqLsU4m2v+PBiz/Au+FlHjWsiPz0Yz/NN/eg==}
@@ -1073,15 +1073,15 @@ packages:
   '@pwrdrvr/agent-core@0.2.0':
     resolution: {integrity: sha512-zTo7vJGekyZX2h9xWYiZfQvt+qKTPhuciWyCouow1shaKgg0Bn6B8S5lTRvMzxvT7feKOZ7zy/To2Cu6+1i1+A==}
 
-  '@pwrdrvr/agent-transport@0.1.6':
-    resolution: {integrity: sha512-lkKHg4q/4+1XB+h8r8Vl7dq2LpV4uFG5XZ10t0MCIW19IW/DAWCm6w+etxcef5KkC9XUjDV2ZIGjWW91C5QomA==}
+  '@pwrdrvr/agent-transport@0.1.7':
+    resolution: {integrity: sha512-91LJLC+jdWO6v3WIqoWI/CLHkMJebF4hEqk0vOkgK6DlawrA926EP7kHQ1VOE/iQRo5LCRqFqxjtWn6mQcs/EQ==}
 
   '@pwrdrvr/codex-app-server-protocol@0.144.0':
     resolution: {integrity: sha512-WmURXzmmNEY8lmnNZunNQj/Bnn3yjzS6Rc0gzlDU7sBHMd0kvtskXE9BCMcR+E7sVJ53V/gwjfksRUli0xUgdA==}
     engines: {node: '>=20'}
 
-  '@pwrdrvr/codex-discovery@0.1.4':
-    resolution: {integrity: sha512-jCk4LtJJFret0o8Mlzb53X8zrllA6dX1XX0Gvut+05bYjKRzXF/x9Y7mV3yfO1B5xdyp7ftw6FN8+qzxb1vH0w==}
+  '@pwrdrvr/codex-discovery@0.1.6':
+    resolution: {integrity: sha512-iC5FGfY7x32xwgEhFuU0YqVspPOYy6s+rfWJOhy6tVJ1L9KmuTM+spl9PEVOK1DDhYRZdQr6u4xWvlHqBwXsSg==}
 
   '@rolldown/binding-android-arm64@1.0.3':
     resolution: {integrity: sha512-454rs7jHngixp/NMxd5srYD57OnzSlZ/eFTETjORQHLwJG1lRtmNOJcBerZlfu4GjKqeq8aCCIQrMdHyhI51Hw==}
@@ -5147,33 +5147,34 @@ snapshots:
 
   '@protobufjs/utf8@1.1.2': {}
 
-  '@pwrdrvr/agent-acp@0.13.0(zod@4.4.3)':
+  '@pwrdrvr/agent-acp@0.13.1(zod@4.4.3)':
     dependencies:
       '@agentclientprotocol/sdk': 1.3.0(zod@4.4.3)
       '@pwrdrvr/agent-core': 0.2.0
-      '@pwrdrvr/agent-transport': 0.1.6
+      '@pwrdrvr/agent-transport': 0.1.7
     transitivePeerDependencies:
       - zod
 
   '@pwrdrvr/agent-client@0.7.0':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
-      '@pwrdrvr/agent-transport': 0.1.6
+      '@pwrdrvr/agent-transport': 0.1.7
       '@pwrdrvr/codex-app-server-protocol': 0.144.0
-      '@pwrdrvr/codex-discovery': 0.1.4
+      '@pwrdrvr/codex-discovery': 0.1.6
       zod: 4.4.3
 
   '@pwrdrvr/agent-core@0.2.0': {}
 
-  '@pwrdrvr/agent-transport@0.1.6':
+  '@pwrdrvr/agent-transport@0.1.7':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
 
   '@pwrdrvr/codex-app-server-protocol@0.144.0': {}
 
-  '@pwrdrvr/codex-discovery@0.1.4':
+  '@pwrdrvr/codex-discovery@0.1.6':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
+      '@pwrdrvr/agent-transport': 0.1.7
 
   '@rolldown/binding-android-arm64@1.0.3':
     optional: true

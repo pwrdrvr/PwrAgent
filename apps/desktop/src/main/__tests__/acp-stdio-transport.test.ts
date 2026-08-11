@@ -94,6 +94,39 @@ describe("AcpStdioJsonRpcTransport", () => {
     await expect(request).resolves.toEqual({ ok: true });
   });
 
+  it("launches a resolved Windows batch shim through ComSpec", async () => {
+    const child = new MockAcpChildProcess();
+    const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];
+    const spawn: AcpStdioSpawn = (command, args, options) => {
+      spawnCalls.push([command, args, options]);
+      return child;
+    };
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor({
+        command: "C:\\npm & tools\\qwen.cmd",
+        args: ["--acp", "value & whoami"],
+        env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+      }),
+      platform: "win32",
+      spawn,
+    });
+
+    await transport.connect();
+
+    expect(spawnCalls[0]?.[0]).toMatch(/^C:\\Windows\\System32\\cmd\.exe$/i);
+    expect(spawnCalls[0]?.[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    expect(spawnCalls[0]?.[1][3]).toContain(
+      "C:\\npm^ ^&^ tools\\qwen.cmd ^\"--acp^\"",
+    );
+    expect(spawnCalls[0]?.[1][3]).toContain("^\"value^ ^&^ whoami^\"");
+    expect(spawnCalls[0]?.[2]).toMatchObject({
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: true,
+    });
+
+    await transport.close();
+  });
+
   it("does not pass PwrAgent's renderer URL to ACP agent sessions", async () => {
     const child = new MockAcpChildProcess();
     const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];
