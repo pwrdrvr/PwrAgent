@@ -424,6 +424,47 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const selectedGroup = telegramGroups.find(
     (group) => group.id === groupSelection,
   );
+
+  // Same reconciliation the destination picker does below: `groupSelection`
+  // starts at MANUAL_GROUP_VALUE when editing (the catalog loads async), so
+  // without this, reopening an automation shows "Enter Channel ID manually…"
+  // with the raw platform id even though the catalog lists the channel by
+  // name. Runs once on the first catalog load that contains the initial id,
+  // and bails the moment the operator changes the conversation.
+  const inboundSelectionReconciledRef = useRef(false);
+  const initialInboundGroupId = initialIsTopic
+    ? initialConversation?.parentId
+    : initialConversation?.conversationId;
+  useEffect(() => {
+    if (inboundSelectionReconciledRef.current) return;
+    if (!initialConversation || !initialInboundGroupId) return;
+    if (inboundProvider !== initialConversation.channel) return;
+    if (inboundGroupId !== initialInboundGroupId) return;
+    const match = telegramGroups.find(
+      (group) => group.id === initialInboundGroupId,
+    );
+    if (!match) return;
+    setGroupSelection(match.id);
+    inboundSelectionReconciledRef.current = true;
+  }, [
+    telegramGroups,
+    inboundGroupId,
+    inboundProvider,
+    initialConversation,
+    initialInboundGroupId,
+  ]);
+
+  // The title snapshot stored on the trigger keeps naming the conversation
+  // even when the settings catalog does not list it (or has not loaded yet),
+  // as long as the operator has not pointed the trigger elsewhere.
+  const storedGroupTitle =
+    initialConversation
+    && inboundProvider === initialConversation.channel
+    && inboundGroupId.trim() === initialInboundGroupId
+      ? (initialIsTopic
+          ? initialConversation.parentTitle
+          : initialConversation.title)
+      : undefined;
   const destGroups = useMemo(
     () => providerGroups[destProvider] ?? [],
     [destProvider, providerGroups],
@@ -748,6 +789,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const inboundConversationLabel =
     selectedGroup?.title
     ?? capturedGroupTitle
+    ?? storedGroupTitle
     ?? (inboundGroupId.trim() || "this conversation");
 
   const inboundFilterSummary =
@@ -1053,7 +1095,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       broadcast: sourceReplyBroadcast,
       conditionGroup: stampConditionLabels(inboundConditions, senderLabels),
       groupId: inboundGroupId,
-      groupTitle: selectedGroup?.title ?? capturedGroupTitle,
+      groupTitle: selectedGroup?.title ?? capturedGroupTitle ?? storedGroupTitle,
       includeThreadReplies: inboundIncludeReplies,
       provider: inboundProvider,
       replyDestination,
