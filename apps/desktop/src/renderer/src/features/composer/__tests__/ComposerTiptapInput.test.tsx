@@ -278,6 +278,50 @@ describe("ComposerTiptapInput", () => {
     ).toBe(false);
   });
 
+  it("keeps a copied rendered table as Markdown source", async () => {
+    const markdown = [
+      "## Quick matrix",
+      "",
+      "| Harness | Exe | Auth |",
+      "|---|---|---|",
+      "| Alpha | `alpha` | Browser sign-in |",
+      "| Beta | `beta` | API key |",
+    ].join("\n");
+    const html = [
+      "<h2>Quick matrix</h2>",
+      "<table>",
+      "<thead><tr><th>Harness</th><th>Exe</th><th>Auth</th></tr></thead>",
+      "<tbody>",
+      "<tr><td>Alpha</td><td><code>alpha</code></td><td>Browser sign-in</td></tr>",
+      "<tr><td>Beta</td><td><code>beta</code></td><td>API key</td></tr>",
+      "</tbody>",
+      "</table>",
+    ].join("");
+    const { container, onChange } = renderTiptapInput();
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return html;
+          }
+          return type === "text/plain" ? markdown : "";
+        },
+        items: [],
+        types: ["text/html", "text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(markdown, []);
+    });
+    expect(container.querySelector("table")).not.toBeInTheDocument();
+    expect(container.querySelector(".composer-tiptap-input__editor"))
+      .toHaveTextContent("|---|---|---|");
+  });
+
   it("keeps HTML-only double-blank-line SQL paste inside an active code block", async () => {
     const { container, onChange } = renderTiptapInput({ value: "```\n```" });
     const textbox = await screen.findByRole("textbox", { name: "Reply" });

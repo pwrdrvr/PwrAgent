@@ -455,6 +455,29 @@ function containsBlockMarkdown(text: string): boolean {
   return text.split("\n").some((line) => isMarkdownBlockStart(line));
 }
 
+function isMarkdownTableDelimiterRow(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|")) {
+    return false;
+  }
+
+  const cells = trimmed
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function containsMarkdownTable(text: string): boolean {
+  const lines = text.split("\n");
+  return lines.some(
+    (line, index) =>
+      line.includes("|")
+      && isMarkdownTableDelimiterRow(lines[index + 1] ?? ""),
+  );
+}
+
 function isMarkdownSectionLabelLine(line: string): boolean {
   return /^[^\s].*:\s*$/.test(line);
 }
@@ -1515,12 +1538,17 @@ function pastePlainMarkdownText(
   event: ClipboardEvent<HTMLDivElement>,
 ): boolean {
   const text = getPlainTextFromPaste(event);
+  const preserveMarkdownTableSource = containsMarkdownTable(text);
   // Only reroute through the markdown parser when the text carries block
-  // structure the default paste won't rebuild (fences, bullet/ordered lists).
+  // structure the default paste won't rebuild (fences, bullet/ordered lists),
+  // or when text/plain contains a GFM table. In that table case, text/plain is
+  // the lossless Markdown source: ProseMirror adds blank paragraphs between
+  // rows for plain-only paste, while the rich HTML path flattens adjacent cell
+  // text because the composer schema deliberately has no table node.
   // Pure prose — and inline-only markdown like **bold** / `code`, which paste
   // rules already handle — stays on the default path so we don't disturb
   // mid-sentence pastes.
-  if (!containsBlockMarkdown(text)) {
+  if (!containsBlockMarkdown(text) && !preserveMarkdownTableSource) {
     return false;
   }
 
@@ -1542,7 +1570,10 @@ function pastePlainMarkdownText(
   // this targets — one rendered message copied with both flavors — and is not
   // meant to be a general markdown/HTML merge. Note <p> alone does NOT count:
   // bare paragraph HTML around a text/plain fence must still reach the parser.
-  if (clipboardHtmlHasStructuredBlocks(event)) {
+  if (
+    !preserveMarkdownTableSource
+    && clipboardHtmlHasStructuredBlocks(event)
+  ) {
     return false;
   }
 
