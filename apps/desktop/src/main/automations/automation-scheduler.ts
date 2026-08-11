@@ -471,6 +471,7 @@ export class AutomationScheduler {
         if (coalesced?.queueEntryId) {
           this.options.runner.updateQueuedRunInput?.({
             automation,
+            priorRuns: this.collectPriorRunContext(automation, coalesced.id, now),
             queueEntryId: coalesced.queueEntryId,
             run: coalesced,
           });

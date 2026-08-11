@@ -36,6 +36,7 @@ export type AutomationRunner = {
   }): Promise<AutomationRunSubmissionResult>;
   updateQueuedRunInput?(params: {
     automation: AutomationRecord;
+    priorRuns?: AutomationPriorRunContext[];
     queueEntryId: string;
     run: AutomationRunSummary;
   }): void;
@@ -158,6 +159,7 @@ export class ThreadQueueAutomationRunner implements AutomationRunner {
 
   updateQueuedRunInput(params: {
     automation: AutomationRecord;
+    priorRuns?: AutomationPriorRunContext[];
     queueEntryId: string;
     run: AutomationRunSummary;
   }): void {
@@ -165,6 +167,9 @@ export class ThreadQueueAutomationRunner implements AutomationRunner {
       params.queueEntryId,
       buildAutomationTurnInput({
         automation: params.automation,
+        // Without this, a coalesced rewrite would silently drop the lookback
+        // section the original submission included.
+        priorRuns: params.priorRuns,
         run: params.run,
       }),
     );

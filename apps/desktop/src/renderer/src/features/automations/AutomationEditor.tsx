@@ -1891,7 +1891,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
               <span>Run settings</span>
               <div className="automation-execution-chips">
                 <ComposerDropdown
-                  ariaLabel="Access mode"
+                  ariaLabel="Automation access"
                   options={[
                     { label: "Inherit Agent access", value: "" },
                     ...ACCESS_MODE_OPTIONS,
@@ -1902,7 +1902,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   }
                 />
                 <ComposerDropdown
-                  ariaLabel="Model provider"
+                  ariaLabel="Automation model provider"
                   options={[
                     {
                       label: agentAssignment
@@ -1940,7 +1940,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   }}
                 />
                 <ComposerDropdown
-                  ariaLabel="Model"
+                  ariaLabel="Automation model"
                   disabled={!effectiveBackendKind}
                   options={[
                     {
@@ -1981,7 +1981,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   }}
                 />
                 <ComposerDropdown
-                  ariaLabel="Reasoning"
+                  ariaLabel="Automation reasoning"
                   disabled={!effectiveBackendKind}
                   options={[
                     {

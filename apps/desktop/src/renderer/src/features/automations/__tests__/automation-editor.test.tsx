@@ -126,14 +126,14 @@ describe("AutomationEditor", () => {
     );
     // Run settings are the composer's chip dropdowns: click the chip, then
     // pick an option from its listbox.
-    fireEvent.click(screen.getByRole("button", { name: "Access mode" }));
+    fireEvent.click(screen.getByRole("button", { name: "Automation access" }));
     fireEvent.click(screen.getByRole("option", { name: "Full Access" }));
-    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Automation model" }));
     await waitFor(() =>
       expect(screen.getByRole("option", { name: "gpt-5" })).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByRole("option", { name: "gpt-5" }));
-    fireEvent.click(screen.getByRole("button", { name: "Reasoning" }));
+    fireEvent.click(screen.getByRole("button", { name: "Automation reasoning" }));
     fireEvent.click(screen.getByRole("option", { name: "high" }));
     fireEvent.change(screen.getByLabelText("Max runs per hour"), {
       target: { value: "5" },
