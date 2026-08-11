@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CHAT_CARD_CASCADE_STEP,
   CHAT_CARD_CASCADE_WRAP,
+  CHAT_CARD_CONTEXT_SPINE_WIDTH,
   CHAT_CARD_CONTEXT_WIDTH,
   CHAT_CARD_DEFAULT_HEIGHT,
   CHAT_CARD_DEFAULT_WIDTH,
@@ -282,7 +283,11 @@ describe("satellite docking", () => {
     expect(rect.left).toBe(host.left + host.width + CHAT_CARD_DOCK_GAP);
     expect(rect.top).toBe(host.top);
     expect(rect.height).toBe(host.height);
-    expect(rect.width).toBe(CHAT_CARD_CONTEXT_WIDTH);
+    // Panel plus the always-visible tab spine: the rail's panel sizes
+    // itself, and a panel-only card left its 48px misfit as a blank strip.
+    expect(rect.width).toBe(
+      CHAT_CARD_CONTEXT_WIDTH + CHAT_CARD_CONTEXT_SPINE_WIDTH,
+    );
   });
 
   it("docks the terminal under the host at the host's width", () => {
@@ -295,7 +300,10 @@ describe("satellite docking", () => {
   it("spans the whole group when the context card is open", () => {
     const rect = dockTerminalRect(host, { contextOpen: true });
     expect(rect.width).toBe(
-      host.width + CHAT_CARD_DOCK_GAP + CHAT_CARD_CONTEXT_WIDTH,
+      host.width
+      + CHAT_CARD_DOCK_GAP
+      + CHAT_CARD_CONTEXT_WIDTH
+      + CHAT_CARD_CONTEXT_SPINE_WIDTH,
     );
   });
 

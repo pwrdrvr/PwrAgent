@@ -6,6 +6,7 @@ import { isRemoteFederationTarget } from "@pwragent/shared";
 import { ThreadContextPanel } from "../thread-detail/ThreadContextPanel";
 import type { ContextTabId } from "../thread-detail/context-panels/context-tab";
 import {
+  CHAT_CARD_CONTEXT_SPINE_WIDTH,
   CHAT_CARD_TERMINAL_HEIGHT,
   type ChatCardRect,
 } from "./star-map-chat-card-geometry";
@@ -60,8 +61,22 @@ export function StarMapContextCard(props: {
         </button>
       </header>
       {/* The rail anchors to its nearest positioned ancestor; this body is
-          that ancestor, so the rail fills it edge to edge. */}
-      <div className="star-map-satellite-card__body">
+          that ancestor, so the rail fills it edge to edge. The panel sizes
+          itself from `--context-rail-effective`, which `.thread-view`
+          defines in the full app and nothing defines here — left unset it
+          fell back to 380px inside a 300px card, overflowing the body and
+          reading as a blank strip on the left. Pin it to the width this
+          card actually gives the panel: the card minus the tab spine. */}
+      <div
+        className="star-map-satellite-card__body"
+        style={
+          {
+            "--context-rail-effective": `${
+              props.rect.width - CHAT_CARD_CONTEXT_SPINE_WIDTH
+            }px`,
+          } as CSSProperties
+        }
+      >
         <ThreadContextPanel
           activeTab={tab}
           backends={[]}
@@ -69,7 +84,7 @@ export function StarMapContextCard(props: {
           onActiveTabChange={setTab}
           pinned
           thread={props.thread}
-          width={props.rect.width}
+          width={props.rect.width - CHAT_CARD_CONTEXT_SPINE_WIDTH}
         />
       </div>
     </section>

@@ -752,6 +752,16 @@ describe("star map chat cards in map space", () => {
     );
     expect(satellite.style.top).toBe(chat.style.top);
 
+    // The panel fills the card it was given: the width var is pinned to
+    // card-minus-spine, so the 380px fallback cannot overflow and leave a
+    // blank strip where the misfit was clipped.
+    const body = satellite.querySelector(
+      ".star-map-satellite-card__body",
+    ) as HTMLElement;
+    expect(body.style.getPropertyValue("--context-rail-effective")).toBe(
+      `${Number.parseFloat(satellite.style.width) - 48}px`,
+    );
+
     // It closes from its own title bar too.
     fireEvent.click(
       screen.getByRole("button", { name: /Close thread context/ }),

@@ -215,8 +215,16 @@ export function chatCardEdgeToward(
 
 /** Gap between a chat card and a satellite docked to it. */
 export const CHAT_CARD_DOCK_GAP = 12;
-/** Width of the docked context card; matches the rail's own minimum. */
+/** Panel width inside the docked context card; the rail's own minimum. */
 export const CHAT_CARD_CONTEXT_WIDTH = 300;
+/**
+ * The rail's always-visible tab spine, to the right of its panel. The
+ * card has to be panel + spine wide: the panel sizes itself from a CSS
+ * var (`--context-rail-effective`) that nothing inside a card defines,
+ * so its 380px fallback overflowed a panel-only card and left the
+ * misfit as a blank strip on the card's left edge.
+ */
+export const CHAT_CARD_CONTEXT_SPINE_WIDTH = 48;
 /** Default height of the docked terminal card. */
 export const CHAT_CARD_TERMINAL_HEIGHT = 260;
 
@@ -229,7 +237,7 @@ export function dockContextRect(host: ChatCardRect): ChatCardRect {
   return {
     left: host.left + host.width + CHAT_CARD_DOCK_GAP,
     top: host.top,
-    width: CHAT_CARD_CONTEXT_WIDTH,
+    width: CHAT_CARD_CONTEXT_WIDTH + CHAT_CARD_CONTEXT_SPINE_WIDTH,
     height: host.height,
   };
 }
@@ -244,7 +252,10 @@ export function dockTerminalRect(
   options?: { contextOpen?: boolean; height?: number },
 ): ChatCardRect {
   const width = options?.contextOpen
-    ? host.width + CHAT_CARD_DOCK_GAP + CHAT_CARD_CONTEXT_WIDTH
+    ? host.width
+      + CHAT_CARD_DOCK_GAP
+      + CHAT_CARD_CONTEXT_WIDTH
+      + CHAT_CARD_CONTEXT_SPINE_WIDTH
     : host.width;
   return {
     left: host.left,
