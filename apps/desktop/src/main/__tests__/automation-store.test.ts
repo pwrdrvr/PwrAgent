@@ -889,3 +889,51 @@ describe("AutomationStore", () => {
     expect(store.getAutomationLoadIssues()).toEqual([]);
   });
 });
+
+describe("automation run usage", () => {
+  it("persists distilled usage on the run payload and round-trips it", () => {
+    {
+      const automation = store.createAutomation({
+        backend: "codex",
+        threadId: "thread-1",
+        name: "Usage",
+        taskPrompt: "Check.",
+        schedule: { kind: "interval", every: 5, unit: "minutes", anchorAt: 0 },
+        now: 0,
+      });
+      const run = store.createRun({
+        automationId: automation.id,
+        trigger: "manual",
+        scheduledWindows: [],
+        now: 1_000,
+      });
+      expect(run).toBeDefined();
+
+      const updated = store.setRunUsage({
+        runId: run!.id,
+        usage: {
+          model: "gpt-5.6-sol",
+          uncachedInputTokens: 6_356,
+          cachedInputTokens: 581_888,
+          outputTokens: 1_192,
+          reasoningOutputTokens: 668,
+          totalCostMicros: 380_000,
+          currency: "USD",
+        },
+        now: 2_000,
+      });
+      expect(updated?.usage?.totalCostMicros).toBe(380_000);
+
+      const [listed] = store.listRunsForAutomation(automation.id, 1);
+      expect(listed?.usage).toEqual({
+        model: "gpt-5.6-sol",
+        uncachedInputTokens: 6_356,
+        cachedInputTokens: 581_888,
+        outputTokens: 1_192,
+        reasoningOutputTokens: 668,
+        totalCostMicros: 380_000,
+        currency: "USD",
+      });
+    }
+  });
+});

@@ -875,6 +875,12 @@ export type AutomationDetail = AutomationListItemSummary & {
   gate?: AutomationGateConfig;
   executionProfile?: AutomationExecutionProfile;
   priorRunLookback?: AutomationPriorRunLookback;
+  /**
+   * Summed run cost since local midnight, computed from retained runs at read
+   * time. A durable lifetime total needs a denormalized counter (schema
+   * migration) and is deliberately not attempted here.
+   */
+  costTodayMicros?: number;
   outputActions: AutomationOutputActionDefinition[];
   /**
    * Inbound coalescing window in milliseconds. 0 disables coalescing (one run
@@ -914,6 +920,24 @@ export type AutomationRunWindow = {
  */
 export type AutomationRunSkipReason = "lane_busy" | "rate_limited";
 
+/**
+ * Token/cost accounting for one run's headless turn, distilled from the
+ * turn-scope ThreadUsageLineRecord the pricing pipeline computes. Cost is the
+ * list price at the time the run happened (micros, USD) — deliberately frozen
+ * rather than recomputed, so later pricing-table changes don't rewrite the
+ * history an operator already read.
+ */
+export type AutomationRunUsage = {
+  model?: string;
+  uncachedInputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+  totalCostMicros?: number;
+  currency?: string;
+};
+
 export type AutomationRunSummary = {
   id: string;
   automationId: string;
@@ -937,6 +961,7 @@ export type AutomationRunSummary = {
    */
   coalescedCount?: number;
   source?: AutomationRunSourceMetadata;
+  usage?: AutomationRunUsage;
 };
 
 export type AutomationRunOutputDecision =
@@ -992,6 +1017,13 @@ export type AutomationTimelineCard = AutomationAgentAssignment & {
   summary: string;
   details?: string;
   occurredAt: number;
+};
+
+export type OpenAutomationRunWindowRequest = {
+  automationId: string;
+  runId: string;
+  /** Window-title hint; the window fetches authoritative data itself. */
+  title?: string;
 };
 
 export type ListAutomationReplayCandidatesRequest = {

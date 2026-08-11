@@ -15,6 +15,7 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import {
+  formatCostTodayMicros,
   formatAutomationRelative,
   formatAutomationStatus,
   formatBacklogPolicy,
@@ -341,6 +342,9 @@ function AutomationTableRow(props: {
             {formatAutomationStatus(props.automation.status)}
           </span>
           <p>{formatAutomationLatestRun(props.automation)}</p>
+          {formatCostTodayMicros(props.automation.costTodayMicros) ? (
+            <p>{formatCostTodayMicros(props.automation.costTodayMicros)}</p>
+          ) : null}
         </div>
         <div className="automations-table__actions" role="cell">
           {inboundTriggered ? (

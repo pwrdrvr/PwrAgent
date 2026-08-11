@@ -6376,6 +6376,71 @@ textarea,
   background: var(--bg-panel);
 }
 
+/* Automation run window: activity-window chrome around one run's captured
+   events, so a long transcript stops competing with the table for space. */
+.automation-run-window {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.automation-run-window .activity-screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.automation-run-window__content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.automation-run-window__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.automation-run-window__identity h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.automation-run-window__identity p {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.automation-run-window__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.automation-run-window__close:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
 /* Replay panel under an inbound automation's row: recent conversation
    messages with the filter's live verdict, reusing the editor preview's
    row/badge styling so match state reads identically in both places. */

@@ -4,6 +4,7 @@ import type {
   AutomationBacklogPolicy,
   AutomationExecutionProfile,
   AutomationPriorRunLookback,
+  AutomationRunUsage,
   AutomationGateConfig,
   AutomationListItemSummary,
   AutomationLoadIssue,
@@ -216,6 +217,7 @@ type AutomationRunPayload = {
   skipReason?: AutomationRunSkipReason;
   coalescedCount?: number;
   source?: AutomationRunSourceMetadata;
+  usage?: AutomationRunUsage;
 };
 
 type AutomationRunArtifactPayload = {
@@ -1012,6 +1014,28 @@ export class AutomationStore {
       );
   }
 
+  setRunUsage(params: {
+    runId: string;
+    usage: AutomationRunUsage;
+    now?: number;
+  }): AutomationRunSummary | undefined {
+    const row = this.stateDb.raw
+      .prepare("SELECT * FROM automation_runs WHERE run_id = ?")
+      .get(params.runId) as AutomationRunRow | undefined;
+    if (!row) return undefined;
+    const run = this.runFromRow(row);
+    if (!run) return undefined;
+    const payload = parseJson<AutomationRunPayload>(row.payload);
+    if (!payload) return undefined;
+    const updated: AutomationRunPayload = { ...payload, usage: params.usage };
+    this.stateDb.raw
+      .prepare(
+        "UPDATE automation_runs SET payload = ?, updated_at = ? WHERE run_id = ?",
+      )
+      .run(JSON.stringify(updated), params.now ?? Date.now(), params.runId);
+    return { ...run, usage: params.usage };
+  }
+
   private upsertRun(
     run: AutomationRunSummary,
     metadata: {
@@ -1029,6 +1053,7 @@ export class AutomationStore {
       skipReason: run.skipReason,
       coalescedCount: run.coalescedCount,
       source: run.source,
+      usage: run.usage,
     };
     this.stateDb.raw
       .prepare(
@@ -1205,6 +1230,7 @@ export class AutomationStore {
       errorMessage: payload.errorMessage,
       skipReason: payload.skipReason,
       coalescedCount: payload.coalescedCount,
+      usage: payload.usage,
     };
   }
 

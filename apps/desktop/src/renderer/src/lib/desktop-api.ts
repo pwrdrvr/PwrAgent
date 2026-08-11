@@ -91,6 +91,7 @@ import type {
   ListAutomationCardsResponse,
   ListAutomationReplayCandidatesRequest,
   ListAutomationReplayCandidatesResponse,
+  OpenAutomationRunWindowRequest,
   ReplayAutomationInboundRequest,
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
@@ -474,6 +475,9 @@ export type DesktopApi = {
   replayAutomationInbound?: (
     request: ReplayAutomationInboundRequest,
   ) => Promise<RunAutomationNowResponse>;
+  openAutomationRunWindow?: (
+    request: OpenAutomationRunWindowRequest,
+  ) => Promise<{ opened: true }>;
   getAutomationRunArtifact?: (
     request: GetAutomationRunArtifactRequest,
   ) => Promise<GetAutomationRunArtifactResponse>;

@@ -10,6 +10,7 @@ import type {
   AutomationMutationResponse,
   AutomationRunSummary,
   AutomationRunStatus,
+  AutomationRunUsage,
   AutomationRunTranscriptEvent,
   AutomationTimelineCard,
   AutomationTriggerDefinition,
@@ -213,14 +214,38 @@ export class DesktopAutomationService {
             if (request.threadId && automation.threadId !== request.threadId) return false;
             return true;
           });
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const todayMs = startOfToday.getTime();
     return {
       automations: automations.map((automation) =>
         toAutomationDetail(
           automation,
           this.options.store.getLatestRunForAutomation(automation.id),
+          this.sumRunCostSince(automation.id, todayMs),
         ),
       ),
     };
+  }
+
+  /**
+   * Summed run cost since `sinceMs`, from retained runs. This is honest only
+   * within the run-history window — a lifetime total needs a denormalized
+   * counter that survives pruning, which is a schema change deferred on
+   * purpose.
+   */
+  private sumRunCostSince(automationId: string, sinceMs: number): number | undefined {
+    let total = 0;
+    let sawCost = false;
+    for (const run of this.options.store.listRunsForAutomation(automationId, 200)) {
+      const at = run.completedAt ?? run.startedAt;
+      if (at === undefined || at < sinceMs) continue;
+      if (typeof run.usage?.totalCostMicros === "number") {
+        total += run.usage.totalCostMicros;
+        sawCost = true;
+      }
+    }
+    return sawCost ? total : undefined;
   }
 
   /**
@@ -723,7 +748,64 @@ export class DesktopAutomationService {
     return this.options.store.buildThreadSummaries();
   }
 
+  /**
+   * Distill the pricing pipeline's turn-scope usage lines onto their runs.
+   *
+   * The registry already computes tokens AND list-price cost for every
+   * headless automation turn (recordLiveThreadUsage) — this just correlates
+   * the line to a run by backend turn id and freezes the numbers on the run
+   * payload. Lookup is any-status, not running-only: the final line can land
+   * after the turn-completion event has marked the run completed, and that
+   * final line is the one carrying the turn's full totals.
+   */
+  private captureRunUsageFromPricingEvent(event: AgentEvent): void {
+    const params = event.notification.params as
+      | { lines?: Array<Record<string, unknown>> }
+      | undefined;
+    if (!Array.isArray(params?.lines)) return;
+    for (const line of params.lines) {
+      if (line.scope !== "turn" || typeof line.turnId !== "string") continue;
+      const run =
+        this.options.store.findRunningRunByBackendTurnId({
+          backend: event.backend,
+          backendTurnId: line.turnId,
+        })
+        ?? this.options.store.findRunByBackendTurnId?.({
+          backend: event.backend,
+          backendTurnId: line.turnId,
+        });
+      if (!run) continue;
+      const usage: AutomationRunUsage = {
+        ...(typeof line.model === "string" ? { model: line.model } : {}),
+        ...(typeof line.uncachedInputTokens === "number"
+          ? { uncachedInputTokens: line.uncachedInputTokens }
+          : {}),
+        ...(typeof line.cachedInputTokens === "number"
+          ? { cachedInputTokens: line.cachedInputTokens }
+          : {}),
+        ...(typeof line.outputTokens === "number"
+          ? { outputTokens: line.outputTokens }
+          : {}),
+        ...(typeof line.reasoningOutputTokens === "number"
+          ? { reasoningOutputTokens: line.reasoningOutputTokens }
+          : {}),
+        ...(typeof line.totalTokens === "number"
+          ? { totalTokens: line.totalTokens }
+          : {}),
+        ...(typeof line.totalCostMicros === "number"
+          ? { totalCostMicros: line.totalCostMicros }
+          : {}),
+        ...(typeof line.currency === "string" ? { currency: line.currency } : {}),
+      };
+      this.options.store.setRunUsage({ runId: run.id, usage });
+    }
+  }
+
   private async handleRegistryEvent(event: AgentEvent): Promise<void> {
+    if (event.notification.method === "thread/pricing/updated") {
+      this.captureRunUsageFromPricingEvent(event);
+      return;
+    }
     if (event.notification.method !== "thread/turnQueue/updated") {
       await this.captureAutomationRunTranscriptEvent(event);
       if (isTerminalTurnNotification(event.notification)) {
@@ -1171,6 +1253,7 @@ function automationInspectionFailure(
 function toAutomationDetail(
   record: AutomationRecord,
   latestRun?: AutomationRunSummary,
+  costTodayMicros?: number,
 ): AutomationDetail {
   const latestRunAt = latestRun ? automationRunActivityAt(latestRun) : undefined;
   const useLatestRun =
@@ -1191,6 +1274,7 @@ function toAutomationDetail(
     backlogPolicy: record.backlogPolicy,
     executionProfile: record.executionProfile,
     priorRunLookback: record.priorRunLookback,
+    ...(costTodayMicros !== undefined ? { costTodayMicros } : {}),
     outputActions: record.outputActions,
     inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
     maxRunsPerHour: record.maxRunsPerHour,

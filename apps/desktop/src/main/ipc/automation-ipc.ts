@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { BrowserWindow, ipcMain } from "electron";
 import type {
   AutomationIdRequest,
   DraftAutomationPromptRequest,
@@ -16,6 +16,7 @@ import type {
   ListAutomationsResponse,
   ListAutomationReplayCandidatesRequest,
   ListAutomationReplayCandidatesResponse,
+  OpenAutomationRunWindowRequest,
   ReplayAutomationInboundRequest,
   RunAutomationNowResponse,
   SearchMessagingSendersRequest,
@@ -34,6 +35,7 @@ import {
   AUTOMATIONS_ALLOCATE_WORKSPACE_CHANNEL,
   AUTOMATIONS_LIST_REPLAY_CANDIDATES_CHANNEL,
   AUTOMATIONS_REPLAY_INBOUND_CHANNEL,
+  AUTOMATION_RUN_WINDOW_OPEN_CHANNEL,
   AUTOMATIONS_SEARCH_SENDERS_CHANNEL,
   AUTOMATIONS_PAUSE_CHANNEL,
   AUTOMATIONS_RESUME_CHANNEL,
@@ -47,6 +49,7 @@ import {
 import { generateAutomationPromptDraft } from "../app-server/automation-prompt-draft-service";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { createScratchProjectDirectory } from "../app-server/scratch-projects";
+import { showAutomationRunWindow } from "../automation-run-window";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 
 export function registerAutomationIpcHandlers(): void {
@@ -151,6 +154,20 @@ export function registerAutomationIpcHandlers(): void {
         supportsHistory: (provider) =>
           getDesktopMessagingRuntime().supportsPreviewHistory(provider),
       }),
+  );
+
+  ipcMain.removeHandler(AUTOMATION_RUN_WINDOW_OPEN_CHANNEL);
+  ipcMain.handle(
+    AUTOMATION_RUN_WINDOW_OPEN_CHANNEL,
+    async (
+      event,
+      request: OpenAutomationRunWindowRequest,
+    ): Promise<{ opened: true }> => {
+      showAutomationRunWindow(request, {
+        sourceWindow: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+      });
+      return { opened: true };
+    },
   );
 
   ipcMain.removeHandler(AUTOMATIONS_REPLAY_INBOUND_CHANNEL);

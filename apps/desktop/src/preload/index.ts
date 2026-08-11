@@ -35,6 +35,7 @@ import type {
   ListAutomationCardsResponse,
   ListAutomationReplayCandidatesRequest,
   ListAutomationReplayCandidatesResponse,
+  OpenAutomationRunWindowRequest,
   ReplayAutomationInboundRequest,
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
@@ -454,6 +455,7 @@ import {
   AUTOMATIONS_ALLOCATE_WORKSPACE_CHANNEL,
   AUTOMATIONS_LIST_REPLAY_CANDIDATES_CHANNEL,
   AUTOMATIONS_REPLAY_INBOUND_CHANNEL,
+  AUTOMATION_RUN_WINDOW_OPEN_CHANNEL,
   AUTOMATIONS_SEARCH_SENDERS_CHANNEL,
   AUTOMATIONS_PAUSE_CHANNEL,
   AUTOMATIONS_RESUME_CHANNEL,
@@ -911,6 +913,10 @@ const desktopApi = Object.freeze({
     request: ReplayAutomationInboundRequest,
   ): Promise<RunAutomationNowResponse> =>
     await ipcRenderer.invoke(AUTOMATIONS_REPLAY_INBOUND_CHANNEL, request),
+  openAutomationRunWindow: async (
+    request: OpenAutomationRunWindowRequest,
+  ): Promise<{ opened: true }> =>
+    await ipcRenderer.invoke(AUTOMATION_RUN_WINDOW_OPEN_CHANNEL, request),
   getAutomationRunArtifact: async (
     request: GetAutomationRunArtifactRequest,
   ): Promise<GetAutomationRunArtifactResponse> =>
