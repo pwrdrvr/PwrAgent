@@ -177,6 +177,7 @@ import {
 } from "./messaging-markdown-file-attachment-selector.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
+import { PerKeyAsyncLock } from "../../util/per-key-async-lock.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import { actionsForIntent } from "./deterministic-interaction-mapper.js";
 import { parseReviewCommand } from "../../../shared/review-command.js";
@@ -832,6 +833,7 @@ export type MessagingControllerOptions = {
 export class MessagingController {
   private readonly authorizedActorIds: Set<string>;
   private readonly capabilityProfile: MessagingCapabilityProfile;
+  private readonly statusRenderLock = new PerKeyAsyncLock();
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
   private readonly assistantStreamDeliveryQueues = new Map<
@@ -13814,6 +13816,24 @@ export class MessagingController {
   }
 
   private async renderBindingStatus(
+    binding: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+    navigation?: NavigationSnapshot,
+  ): Promise<MessagingBindingRecord> {
+    return await this.statusRenderLock.run(binding.id, async () => {
+      const latestBinding = await this.options.store.getBinding(binding.id);
+      if (latestBinding?.revokedAt) {
+        return latestBinding;
+      }
+      return await this.renderBindingStatusUnlocked(
+        latestBinding ?? binding,
+        event,
+        navigation,
+      );
+    });
+  }
+
+  private async renderBindingStatusUnlocked(
     binding: MessagingBindingRecord,
     event?: MessagingInboundEvent,
     navigation?: NavigationSnapshot,
