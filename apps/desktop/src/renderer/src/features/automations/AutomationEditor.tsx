@@ -45,6 +45,7 @@ import { HelpCircleIcon } from "../../icons";
 import { AutomationConditionEditor } from "./AutomationConditionEditor";
 import { AutomationMcpPicker } from "./AutomationMcpPicker";
 import { ProjectPicker } from "../composer/ProjectPicker";
+import { ComposerDropdown } from "../composer/ComposerDropdown";
 import { AutomationFlow, AutomationStage } from "./AutomationFunnel";
 
 type AutomationEditorMode =
@@ -1886,31 +1887,42 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 automation shouldn&rsquo;t touch a repo.
               </p>
             </div>
-            <div className="automation-inline-fields">
-              <label className="automation-field">
-                <span>Access mode</span>
-                <select
+            <div className="automation-field">
+              <span>Run settings</span>
+              <div className="automation-execution-chips">
+                <ComposerDropdown
+                  ariaLabel="Access mode"
+                  options={[
+                    { label: "Inherit Agent access", value: "" },
+                    ...ACCESS_MODE_OPTIONS,
+                  ]}
                   value={profileExecutionMode}
-                  onChange={(event) =>
-                    setProfileExecutionMode(event.currentTarget.value as OptionalExecutionMode)
+                  onChange={(value) =>
+                    setProfileExecutionMode(value as OptionalExecutionMode)
                   }
-                >
-                  <option value="">Inherit Agent access</option>
-                  {ACCESS_MODE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="automation-field">
-                <span>Model provider</span>
-                <select
+                />
+                <ComposerDropdown
+                  ariaLabel="Model provider"
+                  options={[
+                    {
+                      label: agentAssignment
+                        ? `Inherit Agent provider (${backendLabelFor(agentAssignment.backend)})`
+                        : "Inherit Agent provider",
+                      value: "",
+                    },
+                    ...(backendCatalog ?? [])
+                      .filter(
+                        (backend) =>
+                          backend.available || backend.kind === profileBackend,
+                      )
+                      .map((backend) => ({
+                        label: backend.label,
+                        value: backend.kind,
+                      })),
+                  ]}
                   value={profileBackend}
-                  onChange={(event) => {
-                    const next = event.currentTarget.value as
-                      | ""
-                      | AppServerBackendKind;
+                  onChange={(value) => {
+                    const next = value as "" | AppServerBackendKind;
                     setProfileBackend(next);
                     // A model belongs to one provider's catalog. Keep the
                     // selection only when the new catalog still lists it.
@@ -1926,37 +1938,38 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       setProfileReasoning("");
                     }
                   }}
-                >
-                  <option value="">
-                    {agentAssignment
-                      ? `Inherit Agent provider (${backendLabelFor(agentAssignment.backend)})`
-                      : "Inherit Agent provider"}
-                  </option>
-                  {(backendCatalog ?? [])
-                    .filter(
-                      (backend) => backend.available || backend.kind === profileBackend,
-                    )
-                    .map((backend) => (
-                      <option key={backend.kind} value={backend.kind}>
-                        {backend.label}
-                      </option>
-                    ))}
-                </select>
-              </label>
-            </div>
-            <div className="automation-inline-fields">
-              <label className="automation-field">
-                <span>Model</span>
-                <select
+                />
+                <ComposerDropdown
+                  ariaLabel="Model"
                   disabled={!effectiveBackendKind}
+                  options={[
+                    {
+                      label: agentThreadSummary?.model
+                        ? `Inherit Agent model (${agentThreadSummary.model})`
+                        : "Inherit Agent model",
+                      value: "",
+                    },
+                    ...(profileModel
+                    && !catalogModels.some((model) => model.id === profileModel)
+                      ? [
+                          {
+                            label: `${profileModel} (not in this provider's catalog)`,
+                            value: profileModel,
+                          },
+                        ]
+                      : []),
+                    ...catalogModels.map((model) => ({
+                      label: model.label ?? model.id,
+                      value: model.id,
+                    })),
+                  ]}
                   value={profileModel}
-                  onChange={(event) => {
-                    const next = event.currentTarget.value;
-                    setProfileModel(next);
+                  onChange={(value) => {
+                    setProfileModel(value);
                     // Reasoning choices are per-model; drop a value the new
                     // model does not offer rather than sending it anyway.
                     const nextModel = catalogModels.find(
-                      (model) => model.id === next,
+                      (model) => model.id === value,
                     );
                     const efforts =
                       nextModel?.reasoningEfforts
@@ -1966,47 +1979,29 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       setProfileReasoning("");
                     }
                   }}
-                >
-                  <option value="">
-                    {agentThreadSummary?.model
-                      ? `Inherit Agent model (${agentThreadSummary.model})`
-                      : "Inherit Agent model"}
-                  </option>
-                  {profileModel
-                  && !catalogModels.some((model) => model.id === profileModel) ? (
-                    <option value={profileModel}>
-                      {profileModel} (not in this provider's catalog)
-                    </option>
-                  ) : null}
-                  {catalogModels.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.label ?? model.id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="automation-field">
-                <span>Reasoning</span>
-                <select
+                />
+                <ComposerDropdown
+                  ariaLabel="Reasoning"
                   disabled={!effectiveBackendKind}
+                  options={[
+                    {
+                      label: agentThreadSummary?.reasoningEffort
+                        ? `Inherit Agent reasoning (${agentThreadSummary.reasoningEffort})`
+                        : "Inherit Agent reasoning",
+                      value: "",
+                    },
+                    ...(profileReasoning && !reasoningChoices.includes(profileReasoning)
+                      ? [{ label: profileReasoning, value: profileReasoning }]
+                      : []),
+                    ...reasoningChoices.map((reasoning) => ({
+                      label: reasoning,
+                      value: reasoning,
+                    })),
+                  ]}
                   value={profileReasoning}
-                  onChange={(event) => setProfileReasoning(event.currentTarget.value)}
-                >
-                  <option value="">
-                    {agentThreadSummary?.reasoningEffort
-                      ? `Inherit Agent reasoning (${agentThreadSummary.reasoningEffort})`
-                      : "Inherit Agent reasoning"}
-                  </option>
-                  {profileReasoning && !reasoningChoices.includes(profileReasoning) ? (
-                    <option value={profileReasoning}>{profileReasoning}</option>
-                  ) : null}
-                  {reasoningChoices.map((reasoning) => (
-                    <option key={reasoning} value={reasoning}>
-                      {reasoning}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  onChange={(value) => setProfileReasoning(value)}
+                />
+              </div>
             </div>
             {!effectiveBackendKind ? (
               <p className="automation-field__hint">

@@ -17856,6 +17856,16 @@ a.transcript-message__messaging-origin:focus-visible {
   max-width: 460px;
 }
 
+/* The four run settings render as the composer's chip dropdowns, in one
+   wrapping row — the same idiom the operator already uses under the reply
+   box to set access, model, and reasoning. */
+.automation-execution-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .automation-cwd-actions {
   display: flex;
   gap: 8px;

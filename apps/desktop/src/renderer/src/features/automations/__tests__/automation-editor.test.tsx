@@ -124,15 +124,17 @@ describe("AutomationEditor", () => {
     fireEvent.click(
       screen.getByLabelText("Also broadcast the reply to the channel"),
     );
-    fireEvent.change(screen.getByLabelText("Access mode"), {
-      target: { value: "full-access" },
-    });
-    fireEvent.change(screen.getByLabelText("Model"), {
-      target: { value: "gpt-5" },
-    });
-    fireEvent.change(screen.getByLabelText("Reasoning"), {
-      target: { value: "high" },
-    });
+    // Run settings are the composer's chip dropdowns: click the chip, then
+    // pick an option from its listbox.
+    fireEvent.click(screen.getByRole("button", { name: "Access mode" }));
+    fireEvent.click(screen.getByRole("option", { name: "Full Access" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "gpt-5" })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("option", { name: "gpt-5" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reasoning" }));
+    fireEvent.click(screen.getByRole("option", { name: "high" }));
     fireEvent.change(screen.getByLabelText("Max runs per hour"), {
       target: { value: "5" },
     });
