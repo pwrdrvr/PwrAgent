@@ -1020,7 +1020,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
         void submit();
       }}
     >
-      <label className="automation-field">
+      <label className="automation-field automation-field--wide">
         <span>Name</span>
         <input
           value={name}
@@ -1074,7 +1074,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
                 {scheduleKind === "interval" ? (
                   <div className="automation-inline-fields">
-                    <label className="automation-field">
+                    <label className="automation-field automation-field--narrow">
                       <span>Every</span>
                       <input
                         min={1}
@@ -1086,7 +1086,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                         }}
                       />
                     </label>
-                    <label className="automation-field">
+                    <label className="automation-field automation-field--compact">
                       <span>Unit</span>
                       <select
                         value={intervalUnit}
@@ -1101,7 +1101,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   </div>
                 ) : (
                   <>
-                    <label className="automation-field">
+                    <label className="automation-field automation-field--narrow">
                       <span>Time</span>
                       <input
                         type="time"
@@ -1138,7 +1138,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
                     ) : null}
                   </>
                 )}
-                <p className="automation-editor__summary">{selectedScheduleSummary}</p>
             </>
           ) : (
             <>
@@ -1489,7 +1488,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
             <AutomationStage verb="Group" title="Coalescing & rate limit">
                   <div className="automation-field-group">
-                    <label className="automation-field">
+                    <label className="automation-field automation-field--narrow">
                       <span>Coalesce window (seconds)</span>
                       <input
                         min={0}
@@ -1509,7 +1508,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                   </div>
 
                   <div className="automation-field-group">
-                    <label className="automation-field">
+                    <label className="automation-field automation-field--compact">
                       <span>Max runs per hour</span>
                       <select
                         value={maxRunsPerHour}

@@ -16899,6 +16899,24 @@ a.transcript-message__messaging-origin:focus-visible {
   align-items: center;
 }
 
+/* Controls are sized to the value they hold, not to the panel.
+   A seconds box and a two-option switch stretched to the full measure read as
+   unfinished, and a wide target for a two-character number is harder to scan,
+   not easier. Widths are max-widths so narrow windows still collapse. */
+.automation-field--narrow input,
+.automation-field--narrow select {
+  max-width: 116px;
+}
+
+.automation-field--compact input,
+.automation-field--compact select {
+  max-width: 196px;
+}
+
+.automation-field--wide input {
+  max-width: 380px;
+}
+
 .automation-field input,
 .automation-field select,
 .automation-field textarea {
@@ -17460,13 +17478,25 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 700;
 }
 
+/* A switch is sized by its options, not by the panel. Stretching two choices
+   across the full measure puts the labels an inch apart and reads as a layout
+   accident; `max-content` columns keep the group tight and left-aligned, and
+   the min keeps the targets comfortably clickable. */
 .automation-segmented {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(104px, max-content);
+  justify-self: start;
+  width: max-content;
+  max-width: 100%;
   padding: 3px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel);
+}
+
+.automation-segmented__button {
+  padding: 0 14px;
 }
 
 .automation-segmented__button,
@@ -17900,9 +17930,13 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.5;
 }
 
+/* Left column holds a short enum (Provider, Sender type); the right holds a
+   name that can actually be long (a channel title). Capping the left instead
+   of splitting the row in half stops a six-character value from claiming half
+   the panel. */
 .automation-inline-fields {
   display: grid;
-  grid-template-columns: minmax(72px, 0.8fr) minmax(120px, 1.2fr);
+  grid-template-columns: minmax(120px, 200px) minmax(0, 1fr);
   gap: 10px;
 }
 
