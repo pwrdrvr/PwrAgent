@@ -1,4 +1,4 @@
-name: Release Desktop (macOS universal + Linux DEB)
+name: Release Desktop (macOS universal + Windows + Linux DEB)
 
 on:
   push:
@@ -208,19 +208,16 @@ jobs:
           path: apps/desktop/release-stage/dist/*.deb
           retention-days: 7
 
-  windows-package:
-    name: Package Windows installer
-    # Signing config + service-principal credentials live in this environment,
-    # not at repo scope. Without this line `vars.WIN_AZURE_SIGN_*` and
-    # `secrets.AZURE_*` resolve to empty and the installer builds UNSIGNED with
-    # no error — see the failure-modes table in docs/desktop-windows-signing.md.
-    environment: windows-signing
+  windows-prepare:
+    name: Prepare Windows signing input
     # node-pty's Electron rebuild currently pulls node-gyp 11.x, which does
     # not recognize Visual Studio 2026 on windows-latest/windows-2025.
     # Keep installer packaging on VS 2022 until that toolchain catches up.
     runs-on: windows-2022
     needs: prepare
     timeout-minutes: 45
+    outputs:
+      signing-input-sha256: ${{ steps.archive.outputs.sha256 }}
     permissions:
       contents: read
       id-token: none
@@ -239,13 +236,93 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Signs via Azure Artifact Signing when the `windows-signing` environment
-      # provides the config (vars.WIN_AZURE_SIGN_*) and the Entra
-      # service-principal secrets (AZURE_*). With none of them set, release.mjs
-      # builds an UNSIGNED installer; with only some, it fails rather than
-      # silently shipping unsigned. See docs/desktop-windows-signing.md. Not
-      # published to the GitHub Release yet — uploaded as an artifact below.
-      - name: Package Windows installer
+      - name: Prepare Windows release stage
+        run: node apps/desktop/scripts/release.mjs --win --prepare-only
+
+      - name: Archive Windows signing input
+        id: archive
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "windows-release-signing-input.tgz"
+          $paths = @(
+            "package.json",
+            "pnpm-lock.yaml",
+            "pnpm-workspace.yaml",
+            "apps/desktop/release-stage",
+            "apps/desktop/scripts/release.mjs",
+            "apps/desktop/scripts/verify-asar-contents.mjs",
+            "apps/desktop/scripts/asar-entry-paths.mjs",
+            "apps/desktop/node_modules",
+            "scripts/release/install-trusted-signing.ps1",
+            "node_modules"
+          )
+          & tar.exe -czf $archive @paths
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to archive Windows signing input (exit code $LASTEXITCODE)."
+          }
+          $sha256 = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "$sha256  windows-release-signing-input.tgz" |
+            Set-Content -Path "$archive.sha256" -Encoding ascii
+
+      - name: Upload Windows signing input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-release-signing-input
+          path: |
+            ${{ runner.temp }}/windows-release-signing-input.tgz
+            ${{ runner.temp }}/windows-release-signing-input.tgz.sha256
+          retention-days: 7
+
+  windows-sign:
+    name: Sign and package Windows installer
+    # Only this job can access the Azure service-principal credentials. It does
+    # not check out source or install project dependencies/lifecycle scripts.
+    environment: windows-signing
+    runs-on: windows-2022
+    needs: windows-prepare
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: none
+    steps:
+      - name: Download Windows signing input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-release-signing-input
+          path: .release-input
+
+      - name: Verify Windows signing input
+        shell: pwsh
+        env:
+          EXPECTED_SHA256: ${{ needs.windows-prepare.outputs.signing-input-sha256 }}
+        run: |
+          $archive = ".release-input/windows-release-signing-input.tgz"
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $env:EXPECTED_SHA256) {
+            throw "Windows signing input digest mismatch: expected $env:EXPECTED_SHA256, got $actual."
+          }
+          $recorded = (Get-Content "$archive.sha256" -Raw).Trim()
+          if ($recorded -ne "$actual  windows-release-signing-input.tgz") {
+            throw "Windows signing input checksum file does not match the downloaded archive."
+          }
+
+      - name: Expand Windows signing input
+        shell: pwsh
+        run: |
+          & tar.exe -xzf .release-input/windows-release-signing-input.tgz
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to expand Windows signing input (exit code $LASTEXITCODE)."
+          }
+
+      - name: Install TrustedSigning
+        shell: pwsh -NoProfile -NonInteractive -File {0}
+        run: ./scripts/release/install-trusted-signing.ps1
+
+      # The credentials are injected only for the signing-aware packaging step.
+      # electron-builder signs the app executables, generated uninstaller, and
+      # final NSIS installer, so this step must package as well as sign.
+      - name: Sign and package Windows installer
         env:
           WIN_AZURE_SIGN_PUBLISHER_NAME: ${{ vars.WIN_AZURE_SIGN_PUBLISHER_NAME }}
           WIN_AZURE_SIGN_ENDPOINT: ${{ vars.WIN_AZURE_SIGN_ENDPOINT }}
@@ -254,7 +331,9 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-        run: node apps/desktop/scripts/release.mjs --win --no-publish --require-signing
+        run: >-
+          node apps/desktop/scripts/release.mjs
+          --win --sign-stage-only --no-publish --require-signing
 
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

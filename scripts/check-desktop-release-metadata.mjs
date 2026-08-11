@@ -10,6 +10,10 @@ const electronBuilderPath = resolve(repoRoot, "apps/desktop/electron-builder.yml
 const ciWorkflowPath = resolve(repoRoot, ".github/workflows/ci.yml");
 const releaseScriptPath = resolve(repoRoot, "apps/desktop/scripts/release.mjs");
 const releaseWorkflowPath = resolve(repoRoot, ".github/workflows/release.yml");
+const trustedSigningSetupPath = resolve(
+  repoRoot,
+  "scripts/release/install-trusted-signing.ps1",
+);
 const desktopReleaseRunbookPath = resolve(repoRoot, "docs/desktop-release-runbook.md");
 const changelogPath = resolve(repoRoot, "CHANGELOG.md");
 
@@ -39,25 +43,71 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function assertWorkflowJobRunner(workflow, workflowPath, jobName, expectedRunner) {
+function workflowJobBody(workflow, workflowPath, jobName) {
   const jobPattern = new RegExp(`^  ${escapeRegex(jobName)}:\\n`, "m");
   const match = workflow.match(jobPattern);
   if (!match) {
     fail(`${workflowPath} must contain a ${jobName} job`);
-    return;
+    return "";
   }
   const bodyStart = match.index + match[0].length;
   const remainder = workflow.slice(bodyStart);
   const nextJobOffset = remainder.search(/^  [A-Za-z0-9_-]+:/m);
-  const jobBody = nextJobOffset === -1
+  return nextJobOffset === -1
     ? remainder
     : remainder.slice(0, nextJobOffset);
+}
+
+function assertWorkflowJobRunner(workflow, workflowPath, jobName, expectedRunner) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
   const runnerPattern = new RegExp(
     `^    runs-on:\\s+${escapeRegex(expectedRunner)}\\s*$`,
     "m",
   );
   if (!runnerPattern.test(jobBody)) {
     fail(`${workflowPath} ${jobName} must run on ${expectedRunner}`);
+  }
+}
+
+function assertWorkflowJobOrdersText(
+  workflow,
+  workflowPath,
+  jobName,
+  first,
+  second,
+) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
+  const firstIndex = jobBody.indexOf(first);
+  const secondIndex = jobBody.indexOf(second);
+  if (firstIndex === -1 || secondIndex === -1 || firstIndex >= secondIndex) {
+    fail(
+      `${workflowPath} ${jobName} must place ${JSON.stringify(first)} before ${JSON.stringify(second)}`,
+    );
+  }
+}
+
+function assertWorkflowJobContainsText(workflow, workflowPath, jobName, expected) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
+  if (!jobBody.includes(expected)) {
+    fail(`${workflowPath} ${jobName} must contain ${JSON.stringify(expected)}`);
+  }
+}
+
+function assertWorkflowJobExcludesText(workflow, workflowPath, jobName, unexpected) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
+  if (jobBody.includes(unexpected)) {
+    fail(`${workflowPath} ${jobName} must not contain ${JSON.stringify(unexpected)}`);
+  }
+}
+
+function assertWorkflowTextOnlyInJob(workflow, workflowPath, jobName, expected) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
+  if (!jobBody.includes(expected)) {
+    fail(`${workflowPath} ${jobName} must contain ${JSON.stringify(expected)}`);
+    return;
+  }
+  if (workflow.replace(jobBody, "").includes(expected)) {
+    fail(`${workflowPath} must contain ${JSON.stringify(expected)} only in ${jobName}`);
   }
 }
 
@@ -121,6 +171,7 @@ const electronBuilderConfig = readFileSync(electronBuilderPath, "utf8");
 const ciWorkflow = readFileSync(ciWorkflowPath, "utf8");
 const releaseScript = readFileSync(releaseScriptPath, "utf8");
 const releaseWorkflow = readFileSync(releaseWorkflowPath, "utf8");
+const trustedSigningSetup = readFileSync(trustedSigningSetupPath, "utf8");
 const desktopReleaseRunbook = readFileSync(desktopReleaseRunbookPath, "utf8");
 
 const desktopScripts = desktopPackage.scripts || {};
@@ -172,9 +223,21 @@ for (const expected of [
 
 for (const expected of [
   "releases/**",
+  "ci:windows-package",
+  "--win --no-publish",
 ]) {
   if (!ciWorkflow.includes(expected)) {
     fail(`.github/workflows/ci.yml must contain ${JSON.stringify(expected)}`);
+  }
+}
+for (const unexpected of [
+  "ci:windows-signing",
+  "  windows-signing-preflight:",
+  "  windows-signing:",
+  "environment: windows-signing",
+]) {
+  if (ciWorkflow.includes(unexpected)) {
+    fail(`.github/workflows/ci.yml must not contain ${JSON.stringify(unexpected)}`);
   }
 }
 assertWorkflowJobRunner(
@@ -183,6 +246,19 @@ assertWorkflowJobRunner(
   "windows-package",
   "windows-2022",
 );
+for (const unexpected of [
+  "ci:windows-signing",
+  "environment: windows-signing",
+  "scripts/release/install-trusted-signing.ps1",
+  "--require-signing",
+]) {
+  assertWorkflowJobExcludesText(
+    ciWorkflow,
+    ".github/workflows/ci.yml",
+    "windows-package",
+    unexpected,
+  );
+}
 
 for (const expected of [
   "ubuntu-24.04-arm",
@@ -194,6 +270,10 @@ for (const expected of [
   ".body | length",
   "PWRAGENT_LINUX_ARCH",
   "SHA256SUMS",
+  "windows-release-signing-input",
+  "EXPECTED_SHA256",
+  "scripts/release/install-trusted-signing.ps1",
+  "--win --sign-stage-only --no-publish --require-signing",
 ]) {
   if (!releaseWorkflow.includes(expected)) {
     fail(`.github/workflows/release.yml must contain ${JSON.stringify(expected)}`);
@@ -202,9 +282,117 @@ for (const expected of [
 assertWorkflowJobRunner(
   releaseWorkflow,
   ".github/workflows/release.yml",
-  "windows-package",
+  "windows-prepare",
   "windows-2022",
 );
+assertWorkflowJobRunner(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "windows-sign",
+  "windows-2022",
+);
+for (const expected of [
+  "actions/checkout@",
+  "./.github/actions/configure-windows-nodejs",
+  "pnpm install --frozen-lockfile",
+  "--win --prepare-only",
+  "signing-input-sha256: ${{ steps.archive.outputs.sha256 }}",
+  "Archive Windows signing input",
+  "Upload Windows signing input",
+]) {
+  assertWorkflowJobContainsText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "windows-prepare",
+    expected,
+  );
+}
+for (const unexpected of [
+  "environment: windows-signing",
+  "secrets.",
+  "      - name: Install TrustedSigning",
+  "--require-signing",
+]) {
+  assertWorkflowJobExcludesText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "windows-prepare",
+    unexpected,
+  );
+}
+for (const expected of [
+  "environment: windows-signing",
+  "Download Windows signing input",
+  "Verify Windows signing input",
+  "Expand Windows signing input",
+  "scripts/release/install-trusted-signing.ps1",
+  "secrets.AZURE_CLIENT_SECRET",
+  "--win --sign-stage-only --no-publish --require-signing",
+]) {
+  assertWorkflowJobContainsText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "windows-sign",
+    expected,
+  );
+}
+for (const unexpected of [
+  "actions/checkout@",
+  "./.github/actions/configure-windows-nodejs",
+  "pnpm install",
+  "--prepare-only",
+]) {
+  assertWorkflowJobExcludesText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "windows-sign",
+    unexpected,
+  );
+}
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "windows-sign",
+  "Verify Windows signing input",
+  "scripts/release/install-trusted-signing.ps1",
+);
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "windows-sign",
+  "scripts/release/install-trusted-signing.ps1",
+  "--win --sign-stage-only --no-publish --require-signing",
+);
+if (releaseScript.includes("--win cannot be combined with --sign-stage-only")) {
+  fail("apps/desktop/scripts/release.mjs must allow --win with --sign-stage-only");
+}
+for (const credential of [
+  "vars.WIN_AZURE_SIGN_PUBLISHER_NAME",
+  "vars.WIN_AZURE_SIGN_ENDPOINT",
+  "vars.WIN_AZURE_SIGN_ACCOUNT",
+  "vars.WIN_AZURE_SIGN_PROFILE",
+  "secrets.AZURE_TENANT_ID",
+  "secrets.AZURE_CLIENT_ID",
+  "secrets.AZURE_CLIENT_SECRET",
+]) {
+  assertWorkflowTextOnlyInJob(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "windows-sign",
+    credential,
+  );
+}
+for (const expected of [
+  "Install-Module",
+  "-Name TrustedSigning",
+  "-MinimumVersion 0.5.0",
+  "Get-Command Invoke-TrustedSigning",
+  "-NoProfile -NonInteractive -Command",
+]) {
+  if (!trustedSigningSetup.includes(expected)) {
+    fail(`scripts/release/install-trusted-signing.ps1 must contain ${JSON.stringify(expected)}`);
+  }
+}
 for (const stepName of [
   "Upload release artifacts (debug retention)",
   "Upload Linux artifacts (debug retention)",
