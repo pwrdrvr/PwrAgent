@@ -1,8 +1,14 @@
-# Windows Code Signing (Azure Trusted Signing)
+# Windows Code Signing (Azure Artifact Signing)
 
-PwrAgent signs the Windows NSIS installer with **Azure Trusted Signing**
-(a.k.a. Azure Artifact Signing) — Microsoft's cloud signing service. It needs
-no hardware token, works on GitHub-hosted runners, removes SmartScreen
+PwrAgent signs the Windows NSIS installer with **Azure Artifact Signing** —
+Microsoft's cloud signing service, originally released as **Trusted Signing**.
+Both names refer to the same product, and the tooling has not caught up with the
+rename: the Azure portal now says "Artifact Signing Account" and the RBAC roles
+are named `Artifact Signing *`, while electron-builder's option is still
+`win.azureSignOptions` and the PowerShell module it installs is still
+`TrustedSigning`. Expect to search for **both** names in docs and the portal.
+
+It needs no hardware token, works on GitHub-hosted runners, removes SmartScreen
 "unknown publisher" warnings, and is the cheapest option (~$9.99/mo for up to
 5,000 signatures).
 
@@ -11,6 +17,25 @@ Signing is **opt-in and degrades gracefully**: the release job builds an
 then signs automatically. Label-gated PR installer builds (`ci:windows-package`)
 are intentionally left **unsigned** (secrets are not exposed to PR validation,
 and signatures count against quota).
+
+## Current configuration (PwrDrvr LLC)
+
+Provisioned in the `PwrDrvr Azure` subscription, resource group
+`rg-pwrdrvr-signing`, region **East US**. None of these are secret — the
+publisher name and certificate subject are embedded in every signed installer.
+
+| GitHub **variable** | Value |
+|---|---|
+| `WIN_AZURE_SIGN_ACCOUNT` | `pwrdrvrsigning` |
+| `WIN_AZURE_SIGN_ENDPOINT` | `https://eus.codesigning.azure.net/` |
+| `WIN_AZURE_SIGN_PUBLISHER_NAME` | `PwrDrvr LLC` |
+| `WIN_AZURE_SIGN_PROFILE` | `pwrdrvr-public-trust` |
+
+Certificate subject: `CN=PwrDrvr LLC, O=PwrDrvr LLC, L=Aberdeen, S=New Jersey, C=US`.
+`WIN_AZURE_SIGN_PUBLISHER_NAME` must equal the **CN** exactly.
+
+The three `AZURE_*` GitHub **secrets** come from the Entra app registration
+(`pwragent-release-signing`) — see step 3.
 
 ## How the pieces connect
 
@@ -27,46 +52,100 @@ and signatures count against quota).
 ## One-time setup
 
 ### 1. Eligibility + subscription
-Azure Trusted Signing requires a **paid** Azure subscription (no free/trial)
+Azure Artifact Signing requires a **paid** Azure subscription (no free/trial)
 and one of: a **US/Canada org with 3+ years** verifiable history, an
-**individual developer in the US/Canada**, or an **org in the EU/UK**. Confirm
-PwrDrvr LLC qualifies before procuring.
+**individual developer in the US/Canada**, or an **org in the EU/UK**.
+PwrDrvr LLC validated on the US org path.
 
-### 2. Create the Trusted Signing resources (Azure portal)
-1. Create a **Trusted Signing account**. Note its **region** → the **endpoint**
-   is `https://<region>.codesigning.azure.net` (shown on the account overview).
-2. Complete **Identity Validation** for the account. The approved
-   **CommonName** becomes the `publisherName` — it must match exactly.
-3. Create a **Public Trust Certificate Profile** under the account. Note its
-   **name**.
+### 2. Create the signing resources (Azure portal)
+1. Create an **Artifact Signing account**. Its region determines the
+   **endpoint** (`https://<region>.codesigning.azure.net/`), shown as
+   **Account URI** on the account overview — use it verbatim, trailing slash
+   included.
+2. Complete **Identity Validation** on the account. This is asynchronous (days,
+   possibly with document requests) and gates everything after it. The approved
+   **CommonName** becomes `publisherName` and is the publisher users see in the
+   SmartScreen prompt.
+3. Create a **Certificate profile** under the account, selecting the completed
+   identity validation.
+
+   > **Pick profile type `Public Trust`.** The adjacent `Public Trust Test`
+   > option signs successfully and `signtool` reports a valid signature, but it
+   > chains to a *test* root nobody trusts — so every user still gets the
+   > SmartScreen warning. Easy to select by accident and not notice until a user
+   > reports it.
+
+   Whatever you name the profile is `WIN_AZURE_SIGN_PROFILE` verbatim.
 
 ### 3. Create a service principal for CI
-1. In Microsoft Entra ID, create an **App registration**; add a **client
-   secret**. Record the **Directory (tenant) ID**, **Application (client) ID**,
-   and the **secret value**.
-2. On the Trusted Signing account (or the specific certificate profile), assign
-   the **"Trusted Signing Certificate Profile Signer"** role to that app
-   registration.
+1. Microsoft Entra ID → **App registrations** → New registration.
+   - **Name**: free-form, maps to no config (we use `pwragent-release-signing`).
+   - **Supported account types**: single tenant.
+   - **Redirect URI**: leave blank — this uses the non-interactive
+     client-credentials flow.
+   - **API permissions**: none. Access comes solely from the RBAC role in the
+     next step; the API permissions blade is a dead end here.
+2. **Certificates & secrets** → New client secret. Copy the **`Value`** column
+   (not `Secret ID`) — it is displayed **once**, and is unrecoverable after you
+   navigate away. Max expiry is 24 months; the dropdown often defaults to 180
+   days.
+3. On the signing account → **Access control (IAM)** → Add role assignment →
+   **`Artifact Signing Certificate Profile Signer`** (search `Artifact Signing`;
+   this role was `Trusted Signing Certificate Profile Signer` before the
+   rename) → assign to the app registration.
+   - On the **Members** step choose **User, group, or service principal**, not
+     Managed identity — app registrations surface as service principals.
+   - The `Artifact Signing Identity Verifier` role, which the account owner uses
+     to complete identity validation, does **not** grant signing. This is a
+     separate grant, and skipping it is the most common setup failure: every
+     value looks correct and signing fails with a 403.
 
-### 4. Add the repo configuration
-GitHub → repo **Settings → Secrets and variables → Actions**.
+### 4. Add the GitHub configuration
+These live in the **`windows-signing` environment** (GitHub → repo **Settings →
+Environments → `windows-signing`**), not at repo scope. The `windows-package`
+job declares `environment: windows-signing` to gain access — the two must stay
+in sync, and dropping that line silently disables signing.
 
-**Variables** (not secret — identifiers):
-| Variable | Value |
-|---|---|
-| `WIN_AZURE_SIGN_PUBLISHER_NAME` | Validated CommonName, e.g. `PwrDrvr LLC` |
-| `WIN_AZURE_SIGN_ENDPOINT` | `https://<region>.codesigning.azure.net` |
-| `WIN_AZURE_SIGN_ACCOUNT` | Trusted Signing account name |
-| `WIN_AZURE_SIGN_PROFILE` | Certificate profile name |
+Scoping to an environment (rather than repo-wide secrets) keeps the signing
+credentials out of every other workflow and job. Consider adding a deployment
+protection rule limiting the environment to the release tag pattern.
+
+**Variables** — the four `WIN_AZURE_SIGN_*` values in the table above.
 
 **Secrets** (service-principal credentials):
 | Secret | Value |
 |---|---|
 | `AZURE_TENANT_ID` | Directory (tenant) ID |
 | `AZURE_CLIENT_ID` | Application (client) ID |
-| `AZURE_CLIENT_SECRET` | Client secret value |
+| `AZURE_CLIENT_SECRET` | Client secret **Value** |
 
-Once all eight are set, the next release tag produces a **signed** installer.
+Once all seven are set, the next release tag produces a **signed** installer.
+
+## Failure modes
+
+`resolveWindowsAzureSigning()` checks only that the variables are *present*, not
+that they are valid, which splits behavior three ways:
+
+| Condition | Result |
+|---|---|
+| Any of the four `WIN_AZURE_SIGN_*` missing/misspelled | **Silently unsigned** — returns early with no warning |
+| `environment: windows-signing` missing from the job | **Silently unsigned** — every value resolves to empty |
+| All four set, any `AZURE_*` credential missing | **Unsigned**, with a warning in the build log |
+| All seven set, but credential expired/invalid or RBAC missing | **Release build fails** — signing is attempted and errors |
+
+The first two rows are the ones to watch: a typo'd variable name — or an
+environment the job never joined — yields a clean, successful, silently unsigned
+release. Expiry and RBAC gaps, by contrast, fail loudly.
+
+## Renewal
+
+Signing breaks when any of these lapse — put them on a calendar:
+
+| Item | Expires | Renew via |
+|---|---|---|
+| Certificate profile `pwrdrvr-public-trust` | 2026-08-13 | Azure portal → certificate profile |
+| Client secret (`AZURE_CLIENT_SECRET`) | ≤24 mo from creation | Entra app registration → Certificates & secrets, then update the GitHub secret |
+| Identity validation | 2028-09-29 | Azure portal → Identity validation → **Renew** |
 
 ## Verifying a signed build
 On Windows: right-click the `.exe` → **Properties → Digital Signatures**, or:
@@ -75,8 +154,9 @@ On Windows: right-click the `.exe` → **Properties → Digital Signatures**, or
 signtool verify /pa /v PwrAgent-<version>-windows-x64-setup.exe
 ```
 
-The signature should chain to a Microsoft Trusted Signing CA with the subject
-matching the validated publisher name.
+The signature should chain to a Microsoft public CA with the subject matching
+`CN=PwrDrvr LLC`. A signature that verifies locally but still triggers
+SmartScreen for users is the `Public Trust Test` profile-type mistake above.
 
 ## Notes
 - `publisherName` MUST equal the validated identity CommonName, or signing
