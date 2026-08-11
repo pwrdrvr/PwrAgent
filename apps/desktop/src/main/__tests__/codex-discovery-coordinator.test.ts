@@ -22,6 +22,22 @@ function notInstalledSnapshot(): CodexDiscoverySnapshot {
   return { candidates: [] };
 }
 
+function unvalidatedSnapshot(command: string): CodexDiscoverySnapshot {
+  return {
+    candidates: [
+      {
+        command,
+        executable: true,
+        selected: true,
+        source: "path",
+        versionFailureReason: "version_not_reported",
+      },
+    ],
+    selectedCommand: command,
+    selectedSource: "path",
+  };
+}
+
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -34,6 +50,104 @@ function deferred<T>(): {
 }
 
 describe("CodexDiscoveryCoordinator", () => {
+  it("prefers a Windows PATHEXT launcher over an extensionless npm shim", async () => {
+    const windowsCommand = "C:\\nvm4w\\nodejs\\codex.CMD";
+    const env = {
+      Path: "C:\\nvm4w\\nodejs;C:\\Windows\\System32",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    };
+    const discover = vi.fn(async () => selectedSnapshot(windowsCommand));
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover,
+      pathExists: async (candidate) => candidate === windowsCommand,
+      platform: "win32",
+      resolveEnv: async () => env,
+    });
+
+    await expect(coordinator.resolve()).resolves.toMatchObject({
+      command: windowsCommand,
+      version: "0.126.0",
+    });
+    expect(discover).toHaveBeenCalledWith({
+      configuredCommand: windowsCommand,
+      env,
+      platform: "win32",
+    });
+  });
+
+  it("rejects executable-looking candidates whose Codex version did not validate", async () => {
+    const command = "C:\\nvm4w\\nodejs\\codex";
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover: async () => unvalidatedSnapshot(command),
+      resolveEnv: async () => ({ PATH: "C:\\nvm4w\\nodejs" }),
+    });
+
+    await expect(coordinator.discover()).resolves.toEqual({
+      candidates: [
+        expect.objectContaining({
+          command,
+          executable: false,
+          failureReason: "version_not_reported",
+          selected: false,
+        }),
+      ],
+    });
+    await expect(coordinator.resolve()).rejects.toThrow(
+      "codex CLI not found",
+    );
+  });
+
+  it("selects a validated fallback after rejecting the discovered selection", async () => {
+    const invalidCommand = "C:\\nvm4w\\nodejs\\codex";
+    const validCommand = "C:\\nvm4w\\nodejs\\codex.cmd";
+    const snapshot: CodexDiscoverySnapshot = {
+      candidates: [
+        {
+          command: invalidCommand,
+          executable: true,
+          selected: true,
+          source: "path",
+          versionFailureReason: "version_not_reported",
+        },
+        {
+          command: validCommand,
+          executable: true,
+          selected: false,
+          source: "application",
+          version: "0.126.0",
+        },
+      ],
+      selectedCommand: invalidCommand,
+      selectedSource: "path",
+    };
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover: async () => snapshot,
+      resolveEnv: async () => ({ PATH: "C:\\nvm4w\\nodejs" }),
+    });
+
+    await expect(coordinator.discover()).resolves.toMatchObject({
+      candidates: [
+        expect.objectContaining({
+          command: invalidCommand,
+          executable: false,
+          selected: false,
+        }),
+        expect.objectContaining({
+          command: validCommand,
+          selected: true,
+          version: "0.126.0",
+        }),
+      ],
+      selectedCommand: validCommand,
+      selectedSource: "application",
+    });
+    await expect(coordinator.resolve()).resolves.toMatchObject({
+      command: validCommand,
+      source: "application",
+      version: "0.126.0",
+    });
+  });
+
   it("single-flights concurrent probes and waits for the hydrated environment", async () => {
     const hydratedEnv = deferred<NodeJS.ProcessEnv>();
     const discover = vi.fn(async () => selectedSnapshot("/nvm/bin/codex"));

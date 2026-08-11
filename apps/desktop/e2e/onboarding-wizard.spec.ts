@@ -16,17 +16,9 @@ import { launchElectronApp } from "./fixtures/electron-app";
  * a real browser flow; integration of the login button is left to
  * unit tests (see `apps/desktop/src/main/__tests__/`).
  *
- * Uses the test runner's executable as a deterministic discovery candidate.
- * Its version output satisfies the provider gate without depending on a real
- * Codex install or attempting an external login.
+ * Uses a deterministic fake Codex executable whose version output satisfies
+ * the provider gate without depending on a real install or external login.
  */
-
-const wizardLaunchOptions = {
-  // No `fixturePath`: thread replay isn't relevant for wizard-only specs.
-  suppressOnboarding: false,
-  requiresReplayDriver: false,
-  env: { PWRAGENT_CODEX_COMMAND: process.execPath },
-};
 
 const fakeProviderNames = [
   "codex",
@@ -47,7 +39,7 @@ const fakeProviderVersions: Record<FakeProviderName, string> = {
 function fakeProviderScript(): string {
   return `#!${process.execPath}
 const path = require("node:path");
-const name = path.basename(process.argv[1]);
+const name = path.basename(process.argv[1]).replace(/\\.(?:cmd|c?js)$/i, "");
 const args = process.argv.slice(2);
 
 if (args.includes("--version")) {
@@ -57,6 +49,11 @@ if (args.includes("--version")) {
   const version = ${JSON.stringify(fakeProviderVersions)}[name];
   console.log(name === "kimi" ? version : name + " " + version);
   process.exit(0);
+}
+
+if (name === "codex" && args[0] === "login" && args[1] === "status") {
+  console.error("Not logged in");
+  process.exit(1);
 }
 
 if (name === "qwen") {
@@ -71,6 +68,44 @@ if (name === "qwen") {
   console.log("Codex CLI");
 }
 `;
+}
+
+async function launchWizard(
+  env: Record<string, string | undefined> = {},
+) {
+  const homeRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pwragent-onboarding-wizard-e2e-"),
+  );
+  const codexCommand = path.join(
+    homeRoot,
+    ".local",
+    "bin",
+    process.platform === "win32" ? "codex.cmd" : "codex",
+  );
+  fs.mkdirSync(path.dirname(codexCommand), { recursive: true });
+  if (process.platform === "win32") {
+    const scriptPath = path.join(path.dirname(codexCommand), "codex.js");
+    fs.writeFileSync(scriptPath, fakeProviderScript(), "utf8");
+    fs.writeFileSync(
+      codexCommand,
+      `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`,
+      "utf8",
+    );
+  } else {
+    fs.writeFileSync(codexCommand, fakeProviderScript(), "utf8");
+    fs.chmodSync(codexCommand, 0o755);
+  }
+
+  return await launchElectronApp({
+    homeRoot,
+    // No `fixturePath`: thread replay isn't relevant for wizard-only specs.
+    suppressOnboarding: false,
+    requiresReplayDriver: false,
+    env: {
+      PWRAGENT_CODEX_COMMAND: codexCommand,
+      ...env,
+    },
+  });
 }
 
 function wellKnownFakeProviderCommands(
@@ -180,7 +215,7 @@ async function expectFakeProvidersFound(
 
 test.describe("Onboarding wizard", () => {
   test("fires on a fresh PWRAGENT_HOME and walks Welcome → Done in Shared mode", async () => {
-    const app = await launchElectronApp(wizardLaunchOptions);
+    const app = await launchWizard();
     try {
       // Welcome screen visible.
       await expect(
@@ -255,7 +290,7 @@ test.describe("Onboarding wizard", () => {
   });
 
   test("messaging-safety gate flashes once, resets on re-entry, and unlocks after acknowledgement", async () => {
-    const app = await launchElectronApp(wizardLaunchOptions);
+    const app = await launchWizard();
     try {
       // Walk to the messaging-safety step (same path as the Shared walk).
       await app.window.getByRole("button", { name: /Get started/i }).click();
@@ -329,7 +364,7 @@ test.describe("Onboarding wizard", () => {
   });
 
   test("back navigation preserves the Welcome round trip and density selection across Thread presentation ↔ Models", async () => {
-    const app = await launchElectronApp(wizardLaunchOptions);
+    const app = await launchWizard();
     try {
       // Welcome → Thread presentation.
       await app.window.getByRole("button", { name: /Get started/i }).click();
@@ -385,10 +420,7 @@ test.describe("Onboarding wizard", () => {
   });
 
   test("PWRAGENT_PROFILE=<missing> opens the slim 'Set up `foo`?' confirmation step", async () => {
-    const app = await launchElectronApp({
-      ...wizardLaunchOptions,
-      env: { PWRAGENT_PROFILE: "ghost-test" },
-    });
+    const app = await launchWizard({ PWRAGENT_PROFILE: "ghost-test" });
     try {
       // Bootstrap-confirm step renders with the requested name baked in.
       await expect(
@@ -418,7 +450,7 @@ test.describe("Onboarding wizard", () => {
   });
 
   test("dismiss-confirmation modal appears in bootstrap mode with three actions", async () => {
-    const app = await launchElectronApp(wizardLaunchOptions);
+    const app = await launchWizard();
     try {
       await expect(
         app.window.getByRole("heading", {
@@ -476,7 +508,7 @@ test.describe("Onboarding wizard", () => {
     // bootstrap-profile's empty codex.profile pairing), AND there
     // should be NO `default/` dir under `<HOME>/.pwragent/profiles/`
     // (only `personal/` and `work/`).
-    const app = await launchElectronApp(wizardLaunchOptions);
+    const app = await launchWizard();
     try {
       // Unsigned Electron must never reach macOS safeStorage during E2E.
       // This value is inherited by the detached `personal` process below;
@@ -576,7 +608,7 @@ test.describe("Onboarding wizard", () => {
   });
 
   test("provider tabs show CLI-specific install instructions", async () => {
-    const app = await launchElectronApp(wizardLaunchOptions);
+    const app = await launchWizard();
     try {
       // Welcome → Thread presentation → Models.
       await app.window.getByRole("button", { name: /Get started/i }).click();
@@ -587,7 +619,11 @@ test.describe("Onboarding wizard", () => {
         }),
       ).toBeVisible();
       await expect(
-        app.window.getByText(/brew update && brew install --cask codex/i),
+        app.window.getByText(
+          process.platform === "win32"
+            ? /chatgpt\.com\/codex\/install\.ps1/i
+            : /chatgpt\.com\/codex\/install\.sh/i,
+        ),
       ).toBeVisible();
       await app.window.getByRole("tab", { name: /Gemini CLI/i }).click();
       await expect(
@@ -595,12 +631,28 @@ test.describe("Onboarding wizard", () => {
       ).toBeVisible();
       await app.window.getByRole("tab", { name: /Kimi Code/i }).click();
       await expect(
-        app.window.getByText(/@moonshot-ai\/kimi-code/i),
+        app.window.getByText(
+          process.platform === "win32"
+            ? /kimi-code\/install\.ps1/i
+            : /kimi-code\/install\.sh/i,
+        ),
       ).toBeVisible();
       await app.window.getByRole("tab", { name: /Qwen Code/i }).click();
-      await expect(app.window.getByText(/brew install qwen-code/i)).toBeVisible();
+      await expect(
+        app.window.getByText(
+          process.platform === "win32"
+            ? /install-qwen-standalone\.ps1/i
+            : /install-qwen-standalone\.sh/i,
+        ),
+      ).toBeVisible();
       await app.window.getByRole("tab", { name: /Grok Build/i }).click();
-      await expect(app.window.getByText(/x\.ai\/cli\/install\.sh/i)).toBeVisible();
+      await expect(
+        app.window.getByText(
+          process.platform === "win32"
+            ? /x\.ai\/cli\/install\.ps1/i
+            : /x\.ai\/cli\/install\.sh/i,
+        ),
+      ).toBeVisible();
     } finally {
       await app.close();
     }

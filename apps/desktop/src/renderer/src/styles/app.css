@@ -25527,6 +25527,11 @@ a.transcript-message__messaging-origin:focus-visible {
   border: 1px solid var(--border-strong);
   border-radius: 3px;
   padding: 1px 5px;
+  overflow-wrap: anywhere;
+}
+.onboarding-wizard__prereq-install-note {
+  margin: 0 0 8px;
+  color: var(--text-muted);
 }
 .onboarding-wizard__prereq-install a {
   color: var(--accent);
