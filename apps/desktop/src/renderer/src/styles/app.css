@@ -25019,3 +25019,13 @@ a.transcript-message__messaging-origin:focus-visible {
   flex: 1;
   min-height: 0;
 }
+
+/* The rail's own max-width keeps a 32px peek margin in the thread view.
+   Inside a satellite card that margin is the bug: the card is sized to
+   panel + spine exactly, so the cap squeezed the rail 32px narrower than
+   its no-shrink children — a blank strip on the card's left, and the tab
+   spine shoved out past the card's clip on the right. The card IS the
+   rail's whole world here; it gets all of it. */
+.star-map-satellite-card__body .context-rail {
+  max-width: 100%;
+}
