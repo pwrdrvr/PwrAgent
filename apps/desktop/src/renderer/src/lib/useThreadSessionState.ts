@@ -3372,6 +3372,21 @@ function assistantMessageEntryFromCompletedItem(params: {
   };
 }
 
+function isTransientTaskMonitorItem(
+  item: Record<string, unknown> | undefined,
+): boolean {
+  if (!item) {
+    return false;
+  }
+
+  const data = readRecord(item.data);
+  return (
+    (data?.source === "pwragent_task_monitor"
+      || item.source === "pwragent_task_monitor")
+    && (data?.transient === true || item.transient === true)
+  );
+}
+
 function hasReviewEntryForTurn(
   response: AppServerReadThreadResponse | undefined,
   turnId: string | undefined
@@ -4817,12 +4832,15 @@ export function useThreadSessionState(params: {
             fallbackStartedAt: current.activeTurnStartedAt,
             fallbackStatus: "in_progress",
           });
-          const assistantMessageEntry = assistantMessageEntryFromCompletedItem({
-            itemParams: event.notification.params,
-            turn: assistantTurn,
-          });
           const item = getNotificationItem(event.notification.params);
-          const taskMonitorUsageEntry = item
+          const transientTaskMonitorItem = isTransientTaskMonitorItem(item);
+          const assistantMessageEntry = transientTaskMonitorItem
+            ? undefined
+            : assistantMessageEntryFromCompletedItem({
+                itemParams: event.notification.params,
+                turn: assistantTurn,
+              });
+          const taskMonitorUsageEntry = item && !transientTaskMonitorItem
             ? buildTaskMonitorUsageActivityEntry({
                 id: `${item.id ?? event.notification.params.turnId ?? "monitor"}:usage`,
                 item,

@@ -3123,7 +3123,7 @@ describe("useThreadSessionState", () => {
     expect(readThread).toHaveBeenCalledTimes(1);
   });
 
-  it("renders task monitor usage metadata as a sibling activity entry", async () => {
+  it("keeps transient task monitor progress out of the transcript", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex" | "acp:grok";
@@ -3199,6 +3199,36 @@ describe("useThreadSessionState", () => {
                     reasoningOutputTokens: 10,
                   },
                 },
+                transient: true,
+              },
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-progress-usage-1",
+              type: "taskMonitorUsage",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                monitorUsage: {
+                  phase: "progress",
+                  model: "gpt-5.4-mini",
+                  tokenUsage: {
+                    inputTokens: 2_000,
+                    cachedInputTokens: 400,
+                    outputTokens: 100,
+                    reasoningOutputTokens: 20,
+                  },
+                },
+                transient: true,
               },
             },
           },
@@ -3206,10 +3236,7 @@ describe("useThreadSessionState", () => {
       });
     });
 
-    expect(transcriptLabels(result.current.entries)).toEqual([
-      "message:Still running.",
-      "activity:Monitor usage so far: 800 uncached in · 200 cached · 50 out (10 reasoning) · <$0.001 list price",
-    ]);
+    expect(transcriptLabels(result.current.entries)).toEqual([]);
   });
 
   it("keeps completion monitor usage as top-level activity after hydration", async () => {
