@@ -1,4 +1,3 @@
-import { createCanvas } from "@napi-rs/canvas";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -268,6 +267,7 @@ export async function renderPdfPages(params: {
       }
     }
 
+    const { createCanvas } = await import("@napi-rs/canvas");
     const pages: RenderedPdfPage[] = [];
     let encodedBytes = 0;
     let wireBytes = 0;
