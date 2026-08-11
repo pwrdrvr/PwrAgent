@@ -16,6 +16,10 @@ import type {
   MessagingApprovalDecision,
   MessagingBindingRecord,
 } from "@pwragent/messaging-interface";
+import type {
+  CodexProtocolCaptureResult,
+  CodexProtocolCaptureStatus,
+} from "../../shared/codex-protocol-capture";
 import { formatReviewCommand } from "../../shared/review-command";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
@@ -384,6 +388,7 @@ import {
   type ResolvedAgentToolMcpCallContext,
 } from "../agent-tools/agent-tool-mcp-server";
 import { createScratchProjectDirectory } from "./scratch-projects";
+import { CodexProtocolCaptureSession } from "../diagnostics/codex-protocol-capture";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
@@ -6387,6 +6392,7 @@ export class DesktopBackendRegistry {
     PendingThreadWorkspaceMoveSummary
   >();
   private readonly pendingReviewStarts = new Map<string, PendingReviewStartRecord>();
+  private readonly codexProtocolCaptureSession?: CodexProtocolCaptureSession;
   private readonly captureStores: ProtocolCaptureStore[] = [];
   private readonly eventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
@@ -6780,6 +6786,11 @@ export class DesktopBackendRegistry {
         : options?.mcpConnectionService ??
           (isAppStateInitialized() ? getPwrSnapConnectionService() : undefined);
     const replayClients = createReplayClientsFromEnv();
+    const createsLiveCodexClient =
+      !options?.codexClient && !replayClients?.codexClient;
+    this.codexProtocolCaptureSession = createsLiveCodexClient
+      ? new CodexProtocolCaptureSession()
+      : undefined;
     const codexCapture = options?.codexClient
       || replayClients
       ? undefined
@@ -6792,12 +6803,11 @@ export class DesktopBackendRegistry {
     }
     const codexObserver = createCompositeJsonRpcObserver([
       codexCapture?.observer,
+      this.codexProtocolCaptureSession?.observer,
       createProtocolLogObserverFromEnv({
         backend: "codex",
       }),
     ]);
-    const createsLiveCodexClient =
-      !options?.codexClient && !replayClients?.codexClient;
     const settingsService = createsLiveCodexClient
       ? getDesktopSettingsService()
       : undefined;
@@ -7269,6 +7279,30 @@ export class DesktopBackendRegistry {
     return () => {
       this.eventListeners.delete(listener);
     };
+  }
+
+  getCodexProtocolCaptureStatus(): CodexProtocolCaptureStatus {
+    return (
+      this.codexProtocolCaptureSession?.getStatus() ?? {
+        active: false,
+        available: false,
+      }
+    );
+  }
+
+  async startCodexProtocolCapture(): Promise<CodexProtocolCaptureStatus> {
+    if (!this.codexProtocolCaptureSession) {
+      throw new Error(
+        "Codex protocol capture is unavailable for this runtime.",
+      );
+    }
+    return await this.codexProtocolCaptureSession.start();
+  }
+
+  async stopCodexProtocolCapture(): Promise<
+    CodexProtocolCaptureResult | undefined
+  > {
+    return await this.codexProtocolCaptureSession?.stop();
   }
 
   setMessagingArchiveCleaner(
@@ -16912,6 +16946,10 @@ export class DesktopBackendRegistry {
     const recoveryDrain = this.codexInvalidIdRecoveryDrain;
     const resources = [
       { name: "acp", close: () => this.acpBackend.close() },
+      {
+        name: "codex-protocol-capture",
+        close: () => this.codexProtocolCaptureSession?.close(),
+      },
       { name: "pdf-mcp", close: () => this.pdfToolMcpServer?.close() },
       {
         name: "codex",

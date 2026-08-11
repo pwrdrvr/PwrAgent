@@ -442,6 +442,12 @@ export const DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL =
   "diagnostics:capture-heap-snapshot";
 export const DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL =
   "diagnostics:heap-snapshot-captured";
+export const DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL =
+  "diagnostics:codex-protocol-capture-status";
+export const DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL =
+  "diagnostics:start-codex-protocol-capture";
+export const DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL =
+  "diagnostics:stop-codex-protocol-capture";
 export const INTEGRATED_TERMINAL_LIST_CHANNEL = "integrated-terminal:list";
 export const INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL =
   "integrated-terminal:set-panel-hidden";

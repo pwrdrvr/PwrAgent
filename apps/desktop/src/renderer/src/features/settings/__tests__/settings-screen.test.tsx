@@ -1215,6 +1215,119 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("starts and stops a Codex protocol capture with copyable handoff details", async () => {
+    const settings = createSettingsState();
+    const captureFilePath = "/diagnostics/protocol-captures/snippet.jsonl";
+    const getCodexProtocolCaptureStatus = vi.fn(async () => ({
+      active: false as const,
+      available: true,
+    }));
+    const startCodexProtocolCapture = vi.fn(async () => ({
+      active: true as const,
+      available: true as const,
+      captureFilePath,
+      startedAt: "2026-08-10T12:00:00.000Z",
+    }));
+    const stopCodexProtocolCapture = vi.fn(async () => ({
+      captureFilePath,
+      sizeBytes: 1536,
+      startedAt: "2026-08-10T12:00:00.000Z",
+      stoppedAt: "2026-08-10T12:00:05.000Z",
+    }));
+    const copyText = vi.fn(async () => undefined);
+    const onShowNotice = vi.fn();
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          copyText,
+          getCodexProtocolCaptureStatus,
+          startCodexProtocolCapture,
+          stopCodexProtocolCapture,
+        }}
+        initialSection="troubleshooting"
+        onShowNotice={onShowNotice}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const startButton = await screen.findByRole("button", {
+      name: "Start Protocol Capture",
+    });
+    expect(startButton).toBeEnabled();
+    fireEvent.click(startButton);
+    await waitFor(() => {
+      expect(startCodexProtocolCapture).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Stop Protocol Capture" }),
+    );
+    await waitFor(() => {
+      expect(stopCodexProtocolCapture).toHaveBeenCalledTimes(1);
+      expect(onShowNotice).toHaveBeenCalledTimes(1);
+    });
+
+    const notice = onShowNotice.mock.calls[0]?.[0];
+    expect(notice).toMatchObject({
+      detail: captureFilePath,
+      message: expect.stringContaining("Saved 1.5 KB"),
+      title: "Codex protocol capture saved",
+      tone: "success",
+    });
+    expect(screen.getByText(captureFilePath)).toBeInTheDocument();
+    notice.actions[0].onClick();
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(
+        expect.stringContaining(`Capture path: ${captureFilePath}`),
+      );
+    });
+  });
+
+  it("shows a copyable warning when protocol capture finalization is partial", async () => {
+    const captureFilePath = "/diagnostics/protocol-captures/partial.jsonl";
+    const onShowNotice = vi.fn();
+    render(
+      <SettingsScreen
+        desktopApi={{
+          getCodexProtocolCaptureStatus: vi.fn(async () => ({
+            active: true as const,
+            available: true as const,
+            captureFilePath,
+            startedAt: "2026-08-10T12:00:00.000Z",
+          })),
+          startCodexProtocolCapture: vi.fn(),
+          stopCodexProtocolCapture: vi.fn(async () => ({
+            captureFilePath,
+            finalizationError: "Capture size could not be read.",
+            startedAt: "2026-08-10T12:00:00.000Z",
+            stoppedAt: "2026-08-10T12:00:05.000Z",
+          })),
+        }}
+        initialSection="troubleshooting"
+        onShowNotice={onShowNotice}
+        settings={createSettingsState()}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Stop Protocol Capture" }),
+    );
+    await waitFor(() => {
+      expect(onShowNotice).toHaveBeenCalledTimes(1);
+    });
+    expect(onShowNotice.mock.calls[0]?.[0]).toMatchObject({
+      detail: captureFilePath,
+      message: expect.stringContaining("Size unavailable"),
+      title: "Codex protocol capture stopped with warning",
+      tone: "warning",
+    });
+    expect(
+      screen.getByText(/Finalization reported a warning/),
+    ).toBeInTheDocument();
+  });
+
   it("saves thread pricing display chips", async () => {
     const baseSnapshot = createSnapshot();
     const settings = createSettingsState(
