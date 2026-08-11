@@ -15,6 +15,9 @@ import type {
   MessagingAttachmentDownloadResult,
   MessagingCallbackHandleStore,
   MessagingCapabilityProfile,
+  MessagingDirectoryActor,
+  MessagingDirectorySearchRequest,
+  MessagingDirectorySearchResult,
   MessagingChannelRef,
   MessagingClientRateLimitStrategy,
   MessagingConversationKind,
@@ -77,6 +80,13 @@ const SLACK_CALLBACK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SLACK_SIGNED_VALUE_VERSION = 1;
 const SLACK_INBOUND_EVENT_DEDUPE_TTL_MS = 5 * 60 * 1000;
 const SLACK_INBOUND_EVENT_DEDUPE_MAX = 200;
+// `users.list` is Tier 2 (~20 req/min) and returns the whole workspace, so the
+// roster is cached and filtered locally instead of re-fetched per keystroke.
+const SLACK_DIRECTORY_CACHE_TTL_MS = 10 * 60 * 1000;
+const SLACK_DIRECTORY_PAGE_SIZE = 200;
+// Bounds a very large workspace: 10 pages x 200 = 2,000 people, past which a
+// name search is the wrong interaction anyway.
+const SLACK_DIRECTORY_MAX_PAGES = 10;
 
 export type SlackProviderLogger = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
@@ -125,6 +135,21 @@ export type SlackApi = {
     title?: string;
   }): Promise<void>;
   usersInfo?(params: { user: string }): Promise<SlackUserInfo | undefined>;
+  usersList?(params: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<SlackUserListPage>;
+};
+
+export type SlackUserListPage = {
+  members?: SlackUserListMember[];
+  responseMetadata?: { nextCursor?: string };
+};
+
+export type SlackUserListMember = SlackUserInfo & {
+  deleted?: boolean;
+  is_app_user?: boolean;
+  is_bot?: boolean;
 };
 
 export type SlackSocketClient = {
@@ -351,6 +376,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       supportsImageUpload: true,
       supportsRemoteImageUrl: true,
     },
+    directory: {
+      supportsActorSearch: true,
+      actorSearchLabel: "Slack directory",
+    },
   };
   private authorizedActorIdsValue: string[];
 
@@ -369,6 +398,12 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly recentInboundMessageEvents = new Map<string, number>();
   private readonly threadTitleCache = new Map<string, string | undefined>();
   private readonly userProfileCache = new Map<string, SlackUserProfile | undefined>();
+  // Workspace roster for directory search. Slack offers no user-search
+  // endpoint, so the list is fetched whole, cached, and filtered locally.
+  private directoryRoster: MessagingDirectoryActor[] | undefined;
+  private directoryRosterFetchedAt = 0;
+  private directoryRosterInFlight: Promise<MessagingDirectoryActor[]> | undefined;
+  private directoryLookupDisabled = false;
   // Per-stream posted surfaces, keyed by `intent.stream.key`. Slack has no
   // "create-or-edit" primitive, so the first chunk posts a new message and
   // records its `ts` here; later chunks (and the final) edit it in place — the
@@ -2062,6 +2097,92 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
+  /**
+   * Search the workspace directory.
+   *
+   * Slack has no server-side user search — `users.list` is the only listing
+   * endpoint, it is rate-limited (Tier 2), and it returns the whole workspace.
+   * So the roster is fetched once, cached for
+   * {@link SLACK_DIRECTORY_CACHE_TTL_MS}, and filtered locally. That keeps
+   * per-keystroke searching free after the first call instead of burning the
+   * rate limit on every character typed.
+   */
+  async searchDirectoryActors(
+    request: MessagingDirectorySearchRequest,
+  ): Promise<MessagingDirectorySearchResult> {
+    const limit = Math.max(1, Math.min(request.limit ?? 20, 100));
+    const roster = await this.loadDirectoryRoster();
+    if (roster.length === 0) return { actors: [] };
+
+    const query = request.query.trim().toLowerCase();
+    const matches = query.length === 0
+      ? roster
+      : roster.filter((actor) =>
+          actor.displayName?.toLowerCase().includes(query)
+          || actor.username?.toLowerCase().includes(query)
+          || actor.platformUserId.toLowerCase() === query,
+        );
+
+    return {
+      actors: matches.slice(0, limit),
+      ...(matches.length > limit ? { truncated: true } : {}),
+    };
+  }
+
+  private async loadDirectoryRoster(): Promise<MessagingDirectoryActor[]> {
+    const now = this.now();
+    if (this.directoryRoster && now - this.directoryRosterFetchedAt < SLACK_DIRECTORY_CACHE_TTL_MS) {
+      return this.directoryRoster;
+    }
+    if (this.directoryLookupDisabled || !this.api.usersList) return [];
+    // Concurrent keystrokes must not each start a roster fetch.
+    if (this.directoryRosterInFlight) return this.directoryRosterInFlight;
+
+    const fetchRoster = async (): Promise<MessagingDirectoryActor[]> => {
+      const actors: MessagingDirectoryActor[] = [];
+      let cursor: string | undefined;
+      try {
+        for (let page = 0; page < SLACK_DIRECTORY_MAX_PAGES; page += 1) {
+          const response = await this.api.usersList?.({
+            limit: SLACK_DIRECTORY_PAGE_SIZE,
+            ...(cursor ? { cursor } : {}),
+          });
+          for (const member of response?.members ?? []) {
+            const actor = toDirectoryActor(member);
+            if (actor) actors.push(actor);
+          }
+          cursor = response?.responseMetadata?.nextCursor?.trim() || undefined;
+          if (!cursor) break;
+        }
+        this.directoryRoster = actors;
+        this.directoryRosterFetchedAt = this.now();
+        return actors;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (reason.includes("missing_scope")) {
+          // Without the scope this will never succeed; stop asking and let the
+          // capability read false so the UI drops the directory section.
+          this.directoryLookupDisabled = true;
+          this.capabilityProfile.directory = { supportsActorSearch: false };
+          this.logger.warn?.("slack directory lookup unavailable", {
+            reason: "missing_scope",
+            requiredScope: "users:read",
+          });
+        } else {
+          this.logger.warn?.("slack directory lookup failed", { reason });
+        }
+        // Serve whatever roster we already had rather than emptying the picker
+        // on a transient failure.
+        return this.directoryRoster ?? [];
+      } finally {
+        this.directoryRosterInFlight = undefined;
+      }
+    };
+
+    this.directoryRosterInFlight = fetchRoster();
+    return this.directoryRosterInFlight;
+  }
+
   private async lookupSlackUserProfile(
     userId: string,
   ): Promise<SlackUserProfile | undefined> {
@@ -2556,6 +2677,20 @@ export function createSlackApi(botToken: string): SlackApi {
       const response = await client.users.info(params);
       return response.user as SlackUserInfo | undefined;
     },
+    async usersList(params) {
+      const response = await client.users.list({
+        ...(params.cursor ? { cursor: params.cursor } : {}),
+        ...(params.limit ? { limit: params.limit } : {}),
+      });
+      const metadata = (response as { response_metadata?: { next_cursor?: string } })
+        .response_metadata;
+      return {
+        members: response.members as SlackUserListMember[] | undefined,
+        ...(metadata?.next_cursor
+          ? { responseMetadata: { nextCursor: metadata.next_cursor } }
+          : {}),
+      };
+    },
     async uploadFile(params) {
       const files = client.files as unknown as {
         uploadV2(input: Record<string, unknown>): Promise<unknown>;
@@ -2582,6 +2717,35 @@ export function createSlackSocketClient(
     appToken,
     autoReconnectEnabled: true,
   }) as SlackSocketClient;
+}
+
+/**
+ * Project a `users.list` member onto the shared directory actor shape.
+ *
+ * Deactivated accounts and Slackbot are dropped: an automation filtered on
+ * someone who can no longer post would silently never fire. Bots and apps are
+ * kept — they are the senders most alert automations actually target.
+ */
+function toDirectoryActor(
+  member: SlackUserListMember,
+): MessagingDirectoryActor | undefined {
+  const platformUserId = member.id?.trim();
+  if (!platformUserId) return undefined;
+  if (member.deleted) return undefined;
+  if (platformUserId === "USLACKBOT") return undefined;
+
+  const displayName =
+    member.profile?.real_name?.trim()
+    || member.real_name?.trim()
+    || member.profile?.display_name?.trim()
+    || undefined;
+  const username = member.name?.trim().replace(/^@/, "") || undefined;
+  return {
+    platformUserId,
+    ...(displayName ? { displayName } : {}),
+    ...(username ? { username } : {}),
+    ...(member.is_bot || member.is_app_user ? { isBot: true } : {}),
+  };
 }
 
 function hostFromUrl(url: string | undefined): string | undefined {

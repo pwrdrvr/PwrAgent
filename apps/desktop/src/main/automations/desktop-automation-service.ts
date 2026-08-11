@@ -22,10 +22,17 @@ import type {
   ListAutomationRunsResponse,
   ListAutomationsRequest,
   ListAutomationsResponse,
+  MessagingChannelKind,
+  MessagingSenderSuggestion,
   RunAutomationNowResponse,
+  SearchMessagingSendersRequest,
+  SearchMessagingSendersResponse,
   UpdateAutomationRequest,
 } from "@pwragent/shared";
-import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
+import type {
+  MessagingDirectoryActor,
+  MessagingInboundEvent,
+} from "@pwragent/messaging-interface";
 import {
   automationSuppressesBindingBroadcast,
   validateAutomationScheduleDefinition,
@@ -194,6 +201,96 @@ export class DesktopAutomationService {
           this.options.store.getLatestRunForAutomation(automation.id),
         ),
       ),
+    };
+  }
+
+  /**
+   * Candidate senders for the inbound filter picker, merged from every source
+   * we have: actors seen in past runs of this automation, and the provider's
+   * own directory.
+   *
+   * Ordering is deliberate — observed senders first, directory last. Someone
+   * who has actually posted in the conversation is far more likely to be the
+   * intended target than a name that merely exists in the workspace, and the
+   * whole point of this control is that an operator should never have to go
+   * hunting for a platform id.
+   */
+  async searchSenders(
+    request: SearchMessagingSendersRequest,
+    deps: {
+      searchDirectory: (params: {
+        provider: MessagingChannelKind;
+        conversationId?: string;
+        query: string;
+        limit?: number;
+      }) => Promise<{
+        actors: MessagingDirectoryActor[];
+        label?: string;
+        supported: boolean;
+        truncated?: boolean;
+      }>;
+    },
+  ): Promise<SearchMessagingSendersResponse> {
+    const limit = Math.max(1, Math.min(request.limit ?? 20, 50));
+    const query = request.query.trim().toLowerCase();
+    const matches = (actor: {
+      platformUserId: string;
+      displayName?: string;
+      username?: string;
+    }): boolean =>
+      query.length === 0
+      || actor.displayName?.toLowerCase().includes(query) === true
+      || actor.username?.toLowerCase().includes(query) === true
+      || actor.platformUserId.toLowerCase() === query;
+
+    const suggestions: MessagingSenderSuggestion[] = [];
+    const seen = new Set<string>();
+    const add = (
+      actor: {
+        platformUserId: string;
+        displayName?: string;
+        username?: string;
+        isBot?: boolean;
+      },
+      source: MessagingSenderSuggestion["source"],
+    ): void => {
+      if (seen.has(actor.platformUserId)) return;
+      if (!matches(actor)) return;
+      seen.add(actor.platformUserId);
+      suggestions.push({
+        platformUserId: actor.platformUserId,
+        ...(actor.displayName ? { displayName: actor.displayName } : {}),
+        ...(actor.username ? { username: actor.username } : {}),
+        ...(actor.isBot ? { isBot: true } : {}),
+        source,
+      });
+    };
+
+    const runs = request.automationId
+      ? this.options.store.listRunsForAutomation(request.automationId, 200)
+      : [];
+    for (const run of runs) {
+      const actor = run.source?.actor;
+      if (!actor) continue;
+      if (run.source?.conversation.channel !== request.provider) continue;
+      add(actor, "automation_runs");
+    }
+
+    const directory = await deps.searchDirectory({
+      provider: request.provider,
+      query: request.query,
+      ...(request.conversationId ? { conversationId: request.conversationId } : {}),
+      limit,
+    });
+    for (const actor of directory.actors) {
+      add(actor, "directory");
+    }
+
+    return {
+      suggestions: suggestions.slice(0, limit),
+      directorySupported: directory.supported,
+      ...(directory.label ? { directoryLabel: directory.label } : {}),
+      ...(directory.truncated ? { directoryTruncated: true } : {}),
     };
   }
 

@@ -17487,6 +17487,261 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--accent-bright);
 }
 
+/* Compact ALL/ANY joiner inside the condition list: two options, sized to
+   content, rather than the three equal columns the trigger switch uses. */
+.automation-segmented--compact {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, auto));
+  padding: 2px;
+}
+
+.automation-segmented--compact .automation-segmented__button {
+  min-height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.automation-conditions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.automation-conditions__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.automation-conditions__lead {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.automation-conditions__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.automation-condition {
+  display: grid;
+  grid-template-columns: 34px minmax(96px, 132px) minmax(110px, 168px) minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.automation-condition__joiner {
+  padding-top: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.automation-condition__control {
+  display: contents;
+}
+
+/* The per-row field/operator labels exist for screen readers; the row reads as
+   a sentence visually, so the labels are removed from the visual flow only. */
+.automation-condition__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.automation-condition__value {
+  min-width: 0;
+}
+
+.automation-condition__value input,
+.automation-condition__value select {
+  width: 100%;
+}
+
+.automation-condition__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.automation-condition__icon:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.automation-condition__icon[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
+}
+
+.automation-condition__icon-spacer {
+  min-width: 30px;
+}
+
+.automation-conditions__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.automation-conditions__summary {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.automation-sender-picker {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.automation-sender-picker__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.automation-sender-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 2px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--bg-row-active);
+  font-size: 12px;
+}
+
+.automation-sender-chip__avatar,
+.automation-sender-picker__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 50%;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.automation-sender-chip__remove {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.automation-sender-chip__remove:hover {
+  color: var(--text-primary);
+}
+
+.automation-sender-picker__menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  z-index: 30;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.automation-sender-picker__section {
+  margin: 0;
+  padding: 8px 10px 4px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.automation-sender-picker__section:first-child {
+  border-top: 0;
+}
+
+.automation-sender-picker__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.automation-sender-picker__option:hover {
+  background: var(--bg-panel-hover);
+}
+
+.automation-sender-picker__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-sender-picker__badge {
+  padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.automation-sender-picker__id {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.automation-sender-picker__empty {
+  margin: 0;
+  padding: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .automation-inline-fields {
   display: grid;
   grid-template-columns: minmax(72px, 0.8fr) minmax(120px, 1.2fr);

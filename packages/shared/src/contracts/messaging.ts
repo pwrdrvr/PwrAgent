@@ -562,6 +562,44 @@ export type InboundPreviewMessage = {
   text: string;
 };
 
+/**
+ * One candidate sender for the Automations filter picker.
+ *
+ * `source` records where the suggestion came from, because that is what tells
+ * an operator whether an absent name means "hasn't posted here" or "isn't in
+ * this workspace" — the picker groups by it rather than showing one flat list.
+ */
+export type MessagingSenderSuggestion = {
+  platformUserId: string;
+  displayName?: string;
+  username?: string;
+  isBot?: boolean;
+  source: "conversation" | "automation_runs" | "directory";
+};
+
+export type SearchMessagingSendersRequest = {
+  provider: MessagingChannelKind;
+  conversationId?: string;
+  /** Restrict past-run suggestions to one automation's history. */
+  automationId?: string;
+  query: string;
+  limit?: number;
+};
+
+export type SearchMessagingSendersResponse = {
+  suggestions: MessagingSenderSuggestion[];
+  /**
+   * False when the provider has no searchable directory (or we lack the
+   * scope). The picker uses this to explain that results are limited to
+   * senders already observed, instead of implying nobody matched.
+   */
+  directorySupported: boolean;
+  /** Operator-facing name for the directory section, e.g. "Slack directory". */
+  directoryLabel?: string;
+  /** The provider had more directory matches than were returned. */
+  directoryTruncated?: boolean;
+};
+
 export type StartInboundPreviewRequest = {
   subscriptionId: string;
   provider: MessagingChannelKind;

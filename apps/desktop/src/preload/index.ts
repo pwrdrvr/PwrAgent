@@ -33,6 +33,8 @@ import type {
   StopSubAgentResponse,
   ListAutomationCardsRequest,
   ListAutomationCardsResponse,
+  SearchMessagingSendersRequest,
+  SearchMessagingSendersResponse,
   ListAutomationLoadIssuesResponse,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
@@ -446,6 +448,7 @@ import {
   AUTOMATIONS_LIST_CHANNEL,
   AUTOMATIONS_LIST_RUNS_CHANNEL,
   AUTOMATIONS_LOAD_ISSUES_CHANNEL,
+  AUTOMATIONS_SEARCH_SENDERS_CHANNEL,
   AUTOMATIONS_PAUSE_CHANNEL,
   AUTOMATIONS_RESUME_CHANNEL,
   AUTOMATIONS_RUN_NOW_CHANNEL,
@@ -888,6 +891,10 @@ const desktopApi = Object.freeze({
     request: ListAutomationCardsRequest,
   ): Promise<ListAutomationCardsResponse> =>
     await ipcRenderer.invoke(AUTOMATIONS_LIST_CARDS_CHANNEL, request),
+  searchAutomationSenders: async (
+    request: SearchMessagingSendersRequest,
+  ): Promise<SearchMessagingSendersResponse> =>
+    await ipcRenderer.invoke(AUTOMATIONS_SEARCH_SENDERS_CHANNEL, request),
   getAutomationRunArtifact: async (
     request: GetAutomationRunArtifactRequest,
   ): Promise<GetAutomationRunArtifactResponse> =>

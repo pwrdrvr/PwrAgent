@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type {
+  AutomationInboundCondition,
+  AutomationInboundConditionJoin,
+} from "@pwragent/shared";
 import type { MessagingInboundTextEvent } from "@pwragent/messaging-interface";
 import type { AutomationRecord } from "../automations/automation-store";
 import {
@@ -134,6 +138,284 @@ describe("automation trigger matcher", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("automation inbound conditions", () => {
+  it("requires every row to hold under an 'all' join", () => {
+    const trigger = conditionAutomation("all", [
+      condition({ field: "message_text", operator: "contains", values: ["ERROR"] }),
+      condition({
+        field: "message_text",
+        operator: "not_contains",
+        values: ["staging"],
+      }),
+    ]);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [trigger],
+        event: slackTextEvent({ text: "ERROR api latency high" }),
+      }),
+    ).toHaveLength(1);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [trigger],
+        event: slackTextEvent({ text: "ERROR in staging api" }),
+      }),
+    ).toEqual([]);
+  });
+
+  it("accepts a message when any row holds under an 'any' join", () => {
+    const trigger = conditionAutomation("any", [
+      condition({ field: "message_text", operator: "contains", values: ["ERROR"] }),
+      condition({ field: "message_text", operator: "contains", values: ["FATAL"] }),
+    ]);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [trigger],
+        event: slackTextEvent({ text: "FATAL disk full" }),
+      }),
+    ).toHaveLength(1);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [trigger],
+        event: slackTextEvent({ text: "deploy finished" }),
+      }),
+    ).toEqual([]);
+  });
+
+  it("treats is_one_of as membership across several senders", () => {
+    const trigger = conditionAutomation("all", [
+      condition({
+        field: "sender",
+        operator: "is_one_of",
+        values: ["B123", "B456"],
+      }),
+    ]);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [trigger],
+        event: slackTextEvent({ actor: { platformUserId: "B456", isBot: true } }),
+      }),
+    ).toHaveLength(1);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [trigger],
+        event: slackTextEvent({ actor: { platformUserId: "U999", isBot: false } }),
+      }),
+    ).toEqual([]);
+  });
+
+  it("excludes senders with is_not_one_of", () => {
+    const trigger = conditionAutomation("all", [
+      condition({ field: "sender", operator: "is_not_one_of", values: ["B123"] }),
+    ]);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [trigger],
+        event: slackTextEvent({ actor: { platformUserId: "B123", isBot: true } }),
+      }),
+    ).toEqual([]);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [trigger],
+        event: slackTextEvent({ actor: { platformUserId: "U999", isBot: false } }),
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("honors per-row case sensitivity", () => {
+    const sensitive = conditionAutomation("all", [
+      condition({
+        field: "message_text",
+        operator: "contains",
+        values: ["ERROR"],
+        caseSensitive: true,
+      }),
+    ]);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [sensitive],
+        event: slackTextEvent({ text: "error api latency" }),
+      }),
+    ).toEqual([]);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [
+          conditionAutomation("all", [
+            condition({
+              field: "message_text",
+              operator: "contains",
+              values: ["ERROR"],
+            }),
+          ]),
+        ],
+        event: slackTextEvent({ text: "error api latency" }),
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("matches and negates regular expressions", () => {
+    expect(
+      matchAutomationInboundEvent({
+        automations: [
+          conditionAutomation("all", [
+            condition({
+              field: "message_text",
+              operator: "matches_regex",
+              values: ["p99 .*above SLO"],
+            }),
+          ]),
+        ],
+        event: slackTextEvent({ text: "checkout p99 is above SLO" }),
+      }),
+    ).toHaveLength(1);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [
+          conditionAutomation("all", [
+            condition({
+              field: "message_text",
+              operator: "not_matches_regex",
+              values: ["p99 .*above SLO"],
+            }),
+          ]),
+        ],
+        event: slackTextEvent({ text: "checkout p99 is above SLO" }),
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not match on an unparseable regular expression", () => {
+    expect(
+      matchAutomationInboundEvent({
+        automations: [
+          conditionAutomation("all", [
+            condition({
+              field: "message_text",
+              operator: "matches_regex",
+              values: ["([unclosed"],
+            }),
+          ]),
+        ],
+        event: slackTextEvent({ text: "([unclosed" }),
+      }),
+    ).toEqual([]);
+  });
+
+  it("filters on sender type", () => {
+    const humansOnly = conditionAutomation("all", [
+      condition({ field: "sender_type", operator: "is_one_of", values: ["human"] }),
+    ]);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [humansOnly],
+        event: slackTextEvent({ actor: { platformUserId: "B123", isBot: true } }),
+      }),
+    ).toEqual([]);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [humansOnly],
+        event: slackTextEvent({ actor: { platformUserId: "U999", isBot: false } }),
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("accepts every message when the condition list is empty", () => {
+    for (const join of ["all", "any"] as const) {
+      expect(
+        matchAutomationInboundEvent({
+          automations: [conditionAutomation(join, [])],
+          event: slackTextEvent({ text: "anything at all" }),
+        }),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("does not match a half-written row, in either sense", () => {
+    expect(
+      matchAutomationInboundEvent({
+        automations: [
+          conditionAutomation("all", [
+            condition({ field: "message_text", operator: "contains", values: [""] }),
+          ]),
+        ],
+        event: slackTextEvent({ text: "ERROR api latency" }),
+      }),
+    ).toEqual([]);
+
+    // The negation of an unsatisfied empty row must not become "match all".
+    expect(
+      matchAutomationInboundEvent({
+        automations: [
+          conditionAutomation("all", [
+            condition({
+              field: "message_text",
+              operator: "not_contains",
+              values: [""],
+            }),
+          ]),
+        ],
+        event: slackTextEvent({ text: "ERROR api latency" }),
+      }),
+    ).toEqual([]);
+  });
+
+  it("ignores legacy sender and text filters once conditions are stored", () => {
+    const record = automation({
+      sender: { platformUserId: "B123", isBot: true },
+      textFilter: { mode: "contains", text: "ERROR" },
+      conditionGroup: {
+        join: "all",
+        conditions: [
+          condition({ field: "message_text", operator: "contains", values: ["FATAL"] }),
+        ],
+      },
+    });
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [record],
+        event: slackTextEvent({ text: "ERROR api latency" }),
+      }),
+    ).toEqual([]);
+
+    expect(
+      matchAutomationInboundEvent({
+        automations: [record],
+        event: slackTextEvent({ text: "FATAL disk full" }),
+      }),
+    ).toHaveLength(1);
+  });
+});
+
+function condition(
+  input: Omit<AutomationInboundCondition, "id"> & { id?: string },
+): AutomationInboundCondition {
+  return { id: input.id ?? `condition-${input.field}-${input.operator}`, ...input };
+}
+
+function conditionAutomation(
+  join: AutomationInboundConditionJoin,
+  conditions: AutomationInboundCondition[],
+): AutomationRecord {
+  return automation({
+    sender: undefined,
+    textFilter: undefined,
+    conditionGroup: { join, conditions },
+  });
+}
 
 function automation(
   overrides: Partial<

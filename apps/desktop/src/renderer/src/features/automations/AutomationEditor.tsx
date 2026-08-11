@@ -1,10 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
   AutomationBacklogPolicy,
   AutomationDetail,
+  AutomationInboundConditionGroup,
   AutomationInboundMessageTriggerDefinition,
-  AutomationInboundTextMatchMode,
   AutomationMessagingConversationSnapshot,
   AutomationScheduleDefinition,
   AutomationSourceMessageDestination,
@@ -15,6 +15,7 @@ import type {
   InboundTopicOption,
   MessagingChannelKind,
   MessagingConversationKind,
+  MessagingSenderSuggestion,
   NavigationThreadSummary,
   ThreadExecutionMode,
   ThreadIdentifier,
@@ -25,7 +26,10 @@ import {
   AUTOMATION_WEEKDAYS,
   DEFAULT_AUTOMATION_MAX_RUNS_PER_HOUR,
   buildThreadIdentityKey,
+  evaluateAutomationInboundConditions,
+  formatAutomationInboundConditionGroup,
   formatAutomationScheduleSummary,
+  normalizeInboundTriggerConditions,
   parseThreadIdentityKey,
   validateAutomationScheduleDefinition,
 } from "@pwragent/shared";
@@ -36,6 +40,7 @@ import {
 } from "../../lib/agent-thread";
 import { copyText } from "../../lib/copy-text";
 import { HelpCircleIcon } from "../../icons";
+import { AutomationConditionEditor } from "./AutomationConditionEditor";
 
 type AutomationEditorMode =
   | {
@@ -226,26 +231,26 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const [inboundTopicId, setInboundTopicId] = useState(
     initialIsTopic ? initialConversation?.conversationId ?? "" : "",
   );
-  const [inboundSenderId, setInboundSenderId] = useState(
-    initialInboundTrigger?.sender?.platformUserId ?? "",
-  );
-  const [inboundSenderScope, setInboundSenderScope] = useState<"" | "true" | "false">(
-    initialInboundTrigger?.sender?.isBot === undefined
-      ? ""
-      : initialInboundTrigger.sender.isBot
-        ? "true"
-        : "false",
-  );
-  const [inboundText, setInboundText] = useState(
-    initialInboundTrigger?.textFilter?.text ?? "",
-  );
-  const [inboundTextMode, setInboundTextMode] =
-    useState<AutomationInboundTextMatchMode>(
-      initialInboundTrigger?.textFilter?.mode ?? "contains",
+  // Editing an automation written before condition lists existed converts its
+  // legacy sender/text filters forward, so the operator sees the same filter
+  // they configured — just expressed as rows.
+  const [inboundConditions, setInboundConditions] =
+    useState<AutomationInboundConditionGroup>(() =>
+      initialInboundTrigger
+        ? normalizeInboundTriggerConditions(initialInboundTrigger)
+        : {
+            join: "all",
+            conditions: [
+              {
+                id: "condition-initial",
+                field: "message_text",
+                operator: "contains",
+                values: [""],
+              },
+            ],
+          },
     );
-  const [inboundCaseSensitive, setInboundCaseSensitive] = useState(
-    initialInboundTrigger?.textFilter?.caseSensitive ?? false,
-  );
+  const [senderLabels, setSenderLabels] = useState<Record<string, string>>({});
   const [inboundIncludeReplies, setInboundIncludeReplies] = useState(
     initialInboundTrigger?.includeThreadReplies ?? false,
   );
@@ -611,29 +616,94 @@ export function AutomationEditor(props: AutomationEditorProps) {
     props.desktopApi,
   ]);
 
-  const previewMessageMatches = (message: InboundPreviewMessage): boolean => {
-    const filterText = inboundText.trim();
-    if (filterText) {
-      const haystack = inboundCaseSensitive
-        ? message.text
-        : message.text.toLowerCase();
-      const needle = inboundCaseSensitive ? filterText : filterText.toLowerCase();
-      const textOk =
-        inboundTextMode === "equals"
-          ? haystack === needle
-          : haystack.includes(needle);
-      if (!textOk) return false;
+  // Shares one evaluator with the main-process matcher so the preview can
+  // never claim a match the trigger would reject (or vice versa).
+  const previewMessageMatches = (message: InboundPreviewMessage): boolean =>
+    evaluateAutomationInboundConditions(inboundConditions, {
+      text: message.text,
+      platformUserId: message.actor.platformUserId,
+      ...(message.actor.isBot === undefined ? {} : { isBot: message.actor.isBot }),
+    });
+
+  // Senders observed in the live preview stream feed the picker's
+  // "seen in this conversation" group with no extra round trip.
+  const observedSenders = useMemo(() => {
+    const byId = new Map<string, MessagingSenderSuggestion>();
+    for (const message of previewMessages) {
+      if (byId.has(message.actor.platformUserId)) continue;
+      byId.set(message.actor.platformUserId, {
+        platformUserId: message.actor.platformUserId,
+        ...(message.actor.displayName
+          ? { displayName: message.actor.displayName }
+          : {}),
+        ...(message.actor.isBot ? { isBot: true } : {}),
+        source: "conversation",
+      });
     }
-    if (
-      inboundSenderScope !== "" &&
-      Boolean(message.actor.isBot) !== (inboundSenderScope === "true")
-    ) {
-      return false;
-    }
-    const senderId = inboundSenderId.trim();
-    if (senderId && message.actor.platformUserId !== senderId) return false;
-    return true;
-  };
+    return [...byId.values()];
+  }, [previewMessages]);
+
+  /**
+   * "Use sender" on a previewed message. Folds into an existing `is one of`
+   * sender row when there is one, so clicking three messages builds a single
+   * "sender is A, B, or C" condition instead of three mutually exclusive rows
+   * that could never all be true at once.
+   */
+  const addSenderCondition = useCallback(
+    (actor: InboundPreviewMessage["actor"]) => {
+      const label = actor.displayName ?? actor.platformUserId;
+      setSenderLabels((current) => ({
+        ...current,
+        [actor.platformUserId]: label,
+      }));
+      setInboundConditions((current) => {
+        const existing = current.conditions.find(
+          (condition) =>
+            condition.field === "sender" && condition.operator === "is_one_of",
+        );
+        if (!existing) {
+          return {
+            ...current,
+            conditions: [
+              ...current.conditions,
+              {
+                id: `condition-${crypto.randomUUID()}`,
+                field: "sender",
+                operator: "is_one_of",
+                values: [actor.platformUserId],
+              },
+            ],
+          };
+        }
+        if (existing.values.includes(actor.platformUserId)) return current;
+        return {
+          ...current,
+          conditions: current.conditions.map((condition) =>
+            condition.id === existing.id
+              ? { ...condition, values: [...condition.values, actor.platformUserId] }
+              : condition,
+          ),
+        };
+      });
+    },
+    [],
+  );
+
+  const searchSenders = useCallback(
+    async (query: string) => {
+      const search = props.desktopApi?.searchAutomationSenders;
+      if (!search || !inboundProvider) {
+        return { suggestions: [], directorySupported: false };
+      }
+      return search({
+        provider: inboundProvider,
+        query,
+        ...(previewConversationId ? { conversationId: previewConversationId } : {}),
+        ...(initialAutomation?.id ? { automationId: initialAutomation.id } : {}),
+      });
+    },
+    [props.desktopApi, inboundProvider, previewConversationId, initialAutomation?.id],
+  );
 
   const agentOptions = useMemo(
     () => {
@@ -813,7 +883,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     }
     const triggerConfig = buildTriggerConfig({
       broadcast: sourceReplyBroadcast,
-      caseSensitive: inboundCaseSensitive,
+      conditionGroup: inboundConditions,
       groupId: inboundGroupId,
       groupTitle: selectedGroup?.title ?? capturedGroupTitle,
       includeThreadReplies: inboundIncludeReplies,
@@ -821,8 +891,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
       replyDestination,
       resultMode,
       schedule: selectedSchedule.ok ? selectedSchedule.schedule : undefined,
-      senderId: inboundSenderId,
-      senderScope: inboundSenderScope,
       target: buildDestinationSnapshot({
         groupId: destGroupId,
         groupTitle: selectedDestGroup?.title,
@@ -830,8 +898,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
         topicId: destTopicId,
       }),
       telegramScope,
-      text: inboundText,
-      textMode: inboundTextMode,
       topicId: inboundTopicId,
       topicTitle: selectedTopic?.title,
       triggerKind,
@@ -935,266 +1001,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
           }}
         />
       </label>
-
-      {shouldShowAgentPicker(props) ? (
-        <div className="automation-field automation-agent-field">
-          <div className="automation-agent-field__label-row">
-            <span id={agentLabelId}>Agent</span>
-            <button
-              aria-controls={agentHelpId}
-              aria-expanded={agentHelpOpen}
-              aria-label="What is an Agent?"
-              className="automation-agent-help"
-              type="button"
-              onClick={() => setAgentHelpOpen((open) => !open)}
-            >
-              <HelpCircleIcon size={14} aria-hidden="true" />
-            </button>
-          </div>
-          {agentHelpOpen ? (
-            <div className="automation-agent-help-popover" id={agentHelpId} role="note">
-              An Agent is a thread that is allowed to receive Automation responses.
-              Typically, you attach one to messaging as a bot's personality
-              thread, where it has context about what it has been doing lately so
-              it can answer questions quickly without too many tool invokes to
-              look up data.
-            </div>
-          ) : null}
-          <div className="automation-agent-picker">
-            <button
-              aria-expanded={agentPickerOpen}
-              aria-haspopup="listbox"
-              aria-labelledby={agentLabelId}
-              className="automation-agent-picker__trigger"
-              type="button"
-              onClick={() => {
-                setAgentPickerOpen((open) => !open);
-                setAgentPromotionError(undefined);
-              }}
-            >
-              <span>{agentPickerLabel}</span>
-              <span aria-hidden="true" className="automation-agent-picker__chevron">
-                v
-              </span>
-            </button>
-            {agentPickerOpen ? (
-              <div className="automation-agent-picker__menu">
-                <div
-                  className="automation-agent-picker__tabs"
-                  role="tablist"
-                  aria-label="Agent source"
-                >
-                  {(["agents", "threads"] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      aria-selected={agentPickerTab === tab}
-                      className={`automation-agent-picker__tab${
-                        agentPickerTab === tab ? " is-active" : ""
-                      }`}
-                      role="tab"
-                      type="button"
-                      onClick={() => {
-                        setAgentPickerTab(tab);
-                        setAgentPromotionError(undefined);
-                      }}
-                    >
-                      {tab === "agents" ? "Agents" : "Threads"}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  aria-label="Filter Agent picker"
-                  className="automation-agent-picker__search"
-                  placeholder={
-                    agentPickerTab === "agents" ? "Find an Agent" : "Find a thread"
-                  }
-                  value={agentQuery}
-                  onChange={(event) => setAgentQuery(event.currentTarget.value)}
-                />
-                {agentPickerTab === "agents" ? (
-                  <div role="listbox" aria-label="Agent threads">
-                    {canDeferAgent ? (
-                      <button
-                        className="automation-agent-picker__option automation-agent-picker__option--muted"
-                        role="option"
-                        type="button"
-                        aria-selected={threadKey === DEFER_AGENT_KEY}
-                        onClick={() => {
-                          setThreadKey(DEFER_AGENT_KEY);
-                          setAgentPickerOpen(false);
-                          setValidationError(undefined);
-                        }}
-                      >
-                        <span className="automation-agent-picker__option-main">
-                          <span>{DEFER_AGENT_LABEL}</span>
-                          <span className="automation-agent-picker__option-meta">
-                            Save the automation after choosing an Agent.
-                          </span>
-                        </span>
-                      </button>
-                    ) : null}
-                    {visibleAgentOptions.length > 0 ? (
-                      visibleAgentOptions.map((thread) => (
-                        <button
-                          key={thread.key}
-                          className="automation-agent-picker__option"
-                          role="option"
-                          title={thread.title}
-                          type="button"
-                          aria-selected={thread.key === threadKey}
-                          onClick={() => {
-                            setThreadKey(thread.key);
-                            setAgentPickerOpen(false);
-                            setValidationError(undefined);
-                          }}
-                        >
-                          <span className="automation-agent-picker__option-main">
-                            <span>{thread.label}</span>
-                            <span className="automation-agent-picker__option-meta">
-                              {thread.meta}
-                            </span>
-                          </span>
-                        </button>
-                      ))
-                    ) : (
-                      <p className="automation-agent-picker__empty">
-                        No Agent threads match.
-                      </p>
-                    )}
-                  </div>
-                ) : (
-                  <div role="listbox" aria-label="Threads to promote">
-                    {visibleThreadOptions.length > 0 ? (
-                      visibleThreadOptions.map((thread) => (
-                        <button
-                          key={thread.key}
-                          className="automation-agent-picker__option"
-                          disabled={Boolean(promotingThreadKey)}
-                          role="option"
-                          title={thread.title}
-                          type="button"
-                          aria-selected={false}
-                          onClick={() => {
-                            void promoteThread(thread);
-                          }}
-                        >
-                          <span className="automation-agent-picker__option-main">
-                            <span>{thread.label}</span>
-                            <span className="automation-agent-picker__option-meta">
-                              {promotingThreadKey === thread.key
-                                ? "Promoting..."
-                                : `${thread.meta} - promote to Agent`}
-                            </span>
-                          </span>
-                        </button>
-                      ))
-                    ) : (
-                      <p className="automation-agent-picker__empty">
-                        {threadOptions.length === 0 && hasUnpromotableCodexThreads
-                          ? CODEX_AGENT_THREAD_CREATION_NOTE
-                          : "No regular threads match."}
-                      </p>
-                    )}
-                  </div>
-                )}
-                {agentPromotionError ? (
-                  <p className="automation-editor__error" role="alert">
-                    {agentPromotionError}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      <div className="automation-field automation-prompt-field">
-        <div className="automation-prompt-field__label-row">
-          <span id={promptLabelId}>Task prompt</span>
-          <div className="automation-prompt-field__tools">
-            <button
-              aria-controls={promptHelpId}
-              aria-expanded={promptHelpOpen}
-              aria-label="Prompt examples"
-              className="automation-agent-help"
-              type="button"
-              onClick={() => setPromptHelpOpen((open) => !open)}
-            >
-              <HelpCircleIcon size={14} aria-hidden="true" />
-            </button>
-            {canDraftPrompt ? (
-              <button
-                className="automation-prompt-field__draft-toggle"
-                type="button"
-                onClick={() => {
-                  setPromptDraftOpen((open) => !open);
-                  setPromptDraftError(undefined);
-                }}
-              >
-                Help me write a prompt
-              </button>
-            ) : null}
-          </div>
-        </div>
-        {promptHelpOpen ? (
-          <div className="automation-agent-help-popover" id={promptHelpId} role="note">
-            Write what the agent should do each time it runs, addressed to the
-            agent. For example: "Investigate the Datadog alert in the incoming
-            message. Check recent error rates and deploys, then post a 3-bullet
-            summary of the likely cause and whether it is still firing."
-          </div>
-        ) : null}
-        {promptDraftOpen ? (
-          <div className="automation-prompt-draft">
-            <textarea
-              aria-label="Describe what you want the automation to do"
-              className="automation-prompt-draft__input"
-              placeholder="e.g. tell me what's wrong when Datadog alerts, and whether we've seen it before"
-              rows={2}
-              value={promptDescription}
-              onChange={(event) => {
-                setPromptDescription(event.currentTarget.value);
-                setPromptDraftError(undefined);
-              }}
-            />
-            <div className="automation-prompt-draft__actions">
-              <button
-                className="button button--primary"
-                disabled={promptDrafting}
-                type="button"
-                onClick={() => void draftPrompt()}
-              >
-                {promptDrafting ? "Drafting..." : "Draft prompt"}
-              </button>
-              <button
-                className="button button--ghost"
-                type="button"
-                onClick={() => {
-                  setPromptDraftOpen(false);
-                  setPromptDraftError(undefined);
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-            {promptDraftError ? (
-              <p className="automation-editor__error" role="alert">
-                {promptDraftError}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-        <textarea
-          aria-labelledby={promptLabelId}
-          placeholder="Investigate the alert in the incoming message and post a short summary of the likely cause."
-          rows={5}
-          value={taskPrompt}
-          onChange={(event) => {
-            setTaskPrompt(event.currentTarget.value);
-            setValidationError(undefined);
-          }}
-        />
-      </div>
 
       <fieldset className="automation-fieldset">
         <legend>Trigger</legend>
@@ -1539,72 +1345,21 @@ export function AutomationEditor(props: AutomationEditorProps) {
             </>
           ) : null}
 
-          <div className="automation-inline-fields">
-            <label className="automation-field">
-              <span>Sender type</span>
-              <select
-                value={inboundSenderScope}
-                onChange={(event) => {
-                  setInboundSenderScope(
-                    event.currentTarget.value as "" | "true" | "false",
-                  );
-                  setValidationError(undefined);
-                }}
-              >
-                <option value="">Any sender</option>
-                <option value="true">Bots only</option>
-                <option value="false">People only</option>
-              </select>
-            </label>
-            <label className="automation-field">
-              <span>Sender ID (optional)</span>
-              <input
-                placeholder={inboundProvider === "telegram" ? "e.g. 123456" : "e.g. U0123 / B0123"}
-                value={inboundSenderId}
-                onChange={(event) => {
-                  setInboundSenderId(event.currentTarget.value);
-                  setValidationError(undefined);
-                }}
-              />
-            </label>
-          </div>
+          <AutomationConditionEditor
+            group={inboundConditions}
+            conversationId={previewConversationId}
+            observedSenders={observedSenders}
+            provider={inboundProvider}
+            searchSenders={searchSenders}
+            senderLabels={senderLabels}
+            {...(initialAutomation?.id ? { automationId: initialAutomation.id } : {})}
+            onChange={(group) => {
+              setInboundConditions(group);
+              setValidationError(undefined);
+            }}
+            onSenderLabelsChange={setSenderLabels}
+          />
 
-          <div className="automation-inline-fields">
-            <label className="automation-field">
-              <span>Match mode</span>
-              <select
-                value={inboundTextMode}
-                onChange={(event) => {
-                  setInboundTextMode(
-                    event.currentTarget.value as AutomationInboundTextMatchMode,
-                  );
-                  setValidationError(undefined);
-                }}
-              >
-                <option value="contains">Text contains</option>
-                <option value="equals">Text equals</option>
-              </select>
-            </label>
-            <label className="automation-field">
-              <span>{inboundTextMode === "equals" ? "Text equals" : "Text contains"}</span>
-              <input
-                placeholder="ERROR"
-                value={inboundText}
-                onChange={(event) => {
-                  setInboundText(event.currentTarget.value);
-                  setValidationError(undefined);
-                }}
-              />
-            </label>
-          </div>
-          <label className="automation-checkbox">
-            <input
-              checked={inboundCaseSensitive}
-              type="checkbox"
-              onChange={(event) => setInboundCaseSensitive(event.currentTarget.checked)}
-            />
-            <span>Case sensitive</span>
-          </label>
           {inboundProvider !== "telegram" ? (
             <label className="automation-checkbox">
               <input
@@ -1617,6 +1372,52 @@ export function AutomationEditor(props: AutomationEditorProps) {
               <span>Include thread replies</span>
             </label>
           ) : null}
+
+          <div className="automation-field-group">
+            <label className="automation-field">
+              <span>Coalesce window (seconds)</span>
+              <input
+                min={0}
+                type="number"
+                value={coalesceWindowSeconds}
+                onChange={(event) => {
+                  setCoalesceWindowSeconds(event.currentTarget.value);
+                  setValidationError(undefined);
+                }}
+              />
+            </label>
+            <p className="automation-field__hint">
+              The first matching message runs immediately; more messages within
+              this window are batched into a single run. Protects against bursts
+              and loops. Set to 0 to run once per message.
+            </p>
+          </div>
+
+          <div className="automation-field-group">
+            <label className="automation-field">
+              <span>Max runs per hour</span>
+              <select
+                value={maxRunsPerHour}
+                onChange={(event) => {
+                  setMaxRunsPerHour(event.currentTarget.value);
+                  setValidationError(undefined);
+                }}
+              >
+                {runRateOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}/hr
+                  </option>
+                ))}
+                <option value="unlimited">Unlimited</option>
+              </select>
+            </label>
+            <p className="automation-field__hint">
+              Hard cap on how many inbound-triggered runs this automation starts
+              each hour, even if coalescing is off. A safety backstop against
+              runaway agent runs (and token spend) from a busy channel or a
+              message loop. Over-limit messages are dropped.
+            </p>
+          </div>
 
           <div className="automation-field-group">
             <label className="automation-field">
@@ -1768,51 +1569,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
             </div>
           ) : null}
 
-          <div className="automation-field-group">
-            <label className="automation-field">
-              <span>Coalesce window (seconds)</span>
-              <input
-                min={0}
-                type="number"
-                value={coalesceWindowSeconds}
-                onChange={(event) => {
-                  setCoalesceWindowSeconds(event.currentTarget.value);
-                  setValidationError(undefined);
-                }}
-              />
-            </label>
-            <p className="automation-field__hint">
-              The first matching message runs immediately; more messages within
-              this window are batched into a single run. Protects against bursts
-              and loops. Set to 0 to run once per message.
-            </p>
-          </div>
-
-          <div className="automation-field-group">
-            <label className="automation-field">
-              <span>Max runs per hour</span>
-              <select
-                value={maxRunsPerHour}
-                onChange={(event) => {
-                  setMaxRunsPerHour(event.currentTarget.value);
-                  setValidationError(undefined);
-                }}
-              >
-                {runRateOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}/hr
-                  </option>
-                ))}
-                <option value="unlimited">Unlimited</option>
-              </select>
-            </label>
-            <p className="automation-field__hint">
-              Hard cap on how many inbound-triggered runs this automation starts
-              each hour, even if coalescing is off. A safety backstop against
-              runaway agent runs (and token spend) from a busy channel or a
-              message loop. Over-limit messages are dropped.
-            </p>
-          </div>
 
           {canPreview ? (
             <div className="automation-preview">
@@ -1876,12 +1632,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                 title="Filter to this sender"
                                 type="button"
                                 onClick={() => {
-                                  setInboundSenderId(
-                                    message.actor.platformUserId,
-                                  );
-                                  setInboundSenderScope(
-                                    message.actor.isBot ? "true" : "false",
-                                  );
+                                  addSenderCondition(message.actor);
                                   setValidationError(undefined);
                                 }}
                               >
@@ -1899,6 +1650,94 @@ export function AutomationEditor(props: AutomationEditorProps) {
           ) : null}
         </fieldset>
       )}
+
+      <div className="automation-field automation-prompt-field">
+        <div className="automation-prompt-field__label-row">
+          <span id={promptLabelId}>Task prompt</span>
+          <div className="automation-prompt-field__tools">
+            <button
+              aria-controls={promptHelpId}
+              aria-expanded={promptHelpOpen}
+              aria-label="Prompt examples"
+              className="automation-agent-help"
+              type="button"
+              onClick={() => setPromptHelpOpen((open) => !open)}
+            >
+              <HelpCircleIcon size={14} aria-hidden="true" />
+            </button>
+            {canDraftPrompt ? (
+              <button
+                className="automation-prompt-field__draft-toggle"
+                type="button"
+                onClick={() => {
+                  setPromptDraftOpen((open) => !open);
+                  setPromptDraftError(undefined);
+                }}
+              >
+                Help me write a prompt
+              </button>
+            ) : null}
+          </div>
+        </div>
+        {promptHelpOpen ? (
+          <div className="automation-agent-help-popover" id={promptHelpId} role="note">
+            Write what the agent should do each time it runs, addressed to the
+            agent. For example: "Investigate the Datadog alert in the incoming
+            message. Check recent error rates and deploys, then post a 3-bullet
+            summary of the likely cause and whether it is still firing."
+          </div>
+        ) : null}
+        {promptDraftOpen ? (
+          <div className="automation-prompt-draft">
+            <textarea
+              aria-label="Describe what you want the automation to do"
+              className="automation-prompt-draft__input"
+              placeholder="e.g. tell me what's wrong when Datadog alerts, and whether we've seen it before"
+              rows={2}
+              value={promptDescription}
+              onChange={(event) => {
+                setPromptDescription(event.currentTarget.value);
+                setPromptDraftError(undefined);
+              }}
+            />
+            <div className="automation-prompt-draft__actions">
+              <button
+                className="button button--primary"
+                disabled={promptDrafting}
+                type="button"
+                onClick={() => void draftPrompt()}
+              >
+                {promptDrafting ? "Drafting..." : "Draft prompt"}
+              </button>
+              <button
+                className="button button--ghost"
+                type="button"
+                onClick={() => {
+                  setPromptDraftOpen(false);
+                  setPromptDraftError(undefined);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+            {promptDraftError ? (
+              <p className="automation-editor__error" role="alert">
+                {promptDraftError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        <textarea
+          aria-labelledby={promptLabelId}
+          placeholder="Investigate the alert in the incoming message and post a short summary of the likely cause."
+          rows={5}
+          value={taskPrompt}
+          onChange={(event) => {
+            setTaskPrompt(event.currentTarget.value);
+            setValidationError(undefined);
+          }}
+        />
+      </div>
 
       <details className="automation-advanced">
         <summary className="automation-advanced__summary">
@@ -2061,6 +1900,178 @@ export function AutomationEditor(props: AutomationEditorProps) {
         </select>
       </label>
       </details>
+
+      {shouldShowAgentPicker(props) ? (
+        <div className="automation-field automation-agent-field">
+          <div className="automation-agent-field__label-row">
+            <span id={agentLabelId}>Agent</span>
+            <button
+              aria-controls={agentHelpId}
+              aria-expanded={agentHelpOpen}
+              aria-label="What is an Agent?"
+              className="automation-agent-help"
+              type="button"
+              onClick={() => setAgentHelpOpen((open) => !open)}
+            >
+              <HelpCircleIcon size={14} aria-hidden="true" />
+            </button>
+          </div>
+          {agentHelpOpen ? (
+            <div className="automation-agent-help-popover" id={agentHelpId} role="note">
+              An Agent is a thread that is allowed to receive Automation responses.
+              Typically, you attach one to messaging as a bot's personality
+              thread, where it has context about what it has been doing lately so
+              it can answer questions quickly without too many tool invokes to
+              look up data.
+            </div>
+          ) : null}
+          <div className="automation-agent-picker">
+            <button
+              aria-expanded={agentPickerOpen}
+              aria-haspopup="listbox"
+              aria-labelledby={agentLabelId}
+              className="automation-agent-picker__trigger"
+              type="button"
+              onClick={() => {
+                setAgentPickerOpen((open) => !open);
+                setAgentPromotionError(undefined);
+              }}
+            >
+              <span>{agentPickerLabel}</span>
+              <span aria-hidden="true" className="automation-agent-picker__chevron">
+                v
+              </span>
+            </button>
+            {agentPickerOpen ? (
+              <div className="automation-agent-picker__menu">
+                <div
+                  className="automation-agent-picker__tabs"
+                  role="tablist"
+                  aria-label="Agent source"
+                >
+                  {(["agents", "threads"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      aria-selected={agentPickerTab === tab}
+                      className={`automation-agent-picker__tab${
+                        agentPickerTab === tab ? " is-active" : ""
+                      }`}
+                      role="tab"
+                      type="button"
+                      onClick={() => {
+                        setAgentPickerTab(tab);
+                        setAgentPromotionError(undefined);
+                      }}
+                    >
+                      {tab === "agents" ? "Agents" : "Threads"}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  aria-label="Filter Agent picker"
+                  className="automation-agent-picker__search"
+                  placeholder={
+                    agentPickerTab === "agents" ? "Find an Agent" : "Find a thread"
+                  }
+                  value={agentQuery}
+                  onChange={(event) => setAgentQuery(event.currentTarget.value)}
+                />
+                {agentPickerTab === "agents" ? (
+                  <div role="listbox" aria-label="Agent threads">
+                    {canDeferAgent ? (
+                      <button
+                        className="automation-agent-picker__option automation-agent-picker__option--muted"
+                        role="option"
+                        type="button"
+                        aria-selected={threadKey === DEFER_AGENT_KEY}
+                        onClick={() => {
+                          setThreadKey(DEFER_AGENT_KEY);
+                          setAgentPickerOpen(false);
+                          setValidationError(undefined);
+                        }}
+                      >
+                        <span className="automation-agent-picker__option-main">
+                          <span>{DEFER_AGENT_LABEL}</span>
+                          <span className="automation-agent-picker__option-meta">
+                            Save the automation after choosing an Agent.
+                          </span>
+                        </span>
+                      </button>
+                    ) : null}
+                    {visibleAgentOptions.length > 0 ? (
+                      visibleAgentOptions.map((thread) => (
+                        <button
+                          key={thread.key}
+                          className="automation-agent-picker__option"
+                          role="option"
+                          title={thread.title}
+                          type="button"
+                          aria-selected={thread.key === threadKey}
+                          onClick={() => {
+                            setThreadKey(thread.key);
+                            setAgentPickerOpen(false);
+                            setValidationError(undefined);
+                          }}
+                        >
+                          <span className="automation-agent-picker__option-main">
+                            <span>{thread.label}</span>
+                            <span className="automation-agent-picker__option-meta">
+                              {thread.meta}
+                            </span>
+                          </span>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="automation-agent-picker__empty">
+                        No Agent threads match.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div role="listbox" aria-label="Threads to promote">
+                    {visibleThreadOptions.length > 0 ? (
+                      visibleThreadOptions.map((thread) => (
+                        <button
+                          key={thread.key}
+                          className="automation-agent-picker__option"
+                          disabled={Boolean(promotingThreadKey)}
+                          role="option"
+                          title={thread.title}
+                          type="button"
+                          aria-selected={false}
+                          onClick={() => {
+                            void promoteThread(thread);
+                          }}
+                        >
+                          <span className="automation-agent-picker__option-main">
+                            <span>{thread.label}</span>
+                            <span className="automation-agent-picker__option-meta">
+                              {promotingThreadKey === thread.key
+                                ? "Promoting..."
+                                : `${thread.meta} - promote to Agent`}
+                            </span>
+                          </span>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="automation-agent-picker__empty">
+                        {threadOptions.length === 0 && hasUnpromotableCodexThreads
+                          ? CODEX_AGENT_THREAD_CREATION_NOTE
+                          : "No regular threads match."}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {agentPromotionError ? (
+                  <p className="automation-editor__error" role="alert">
+                    {agentPromotionError}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <label className="automation-checkbox">
         <input
@@ -2357,7 +2368,7 @@ function includeCurrentOption(
 
 function buildTriggerConfig(params: {
   broadcast: boolean;
-  caseSensitive: boolean;
+  conditionGroup: AutomationInboundConditionGroup;
   groupId: string;
   groupTitle?: string;
   includeThreadReplies: boolean;
@@ -2365,12 +2376,8 @@ function buildTriggerConfig(params: {
   replyDestination: AutomationSourceMessageDestination;
   resultMode: ResultMode;
   schedule?: AutomationScheduleDefinition;
-  senderId: string;
-  senderScope: "" | "true" | "false";
   target?: AutomationMessagingConversationSnapshot;
   telegramScope: TelegramScope;
-  text: string;
-  textMode: AutomationInboundTextMatchMode;
   topicId: string;
   topicTitle?: string;
   triggerKind: TriggerFormKind;
@@ -2402,8 +2409,6 @@ function buildTriggerConfig(params: {
 
   const groupId = params.groupId.trim();
   const topicId = params.topicId.trim();
-  const senderId = params.senderId.trim();
-  const text = params.text.trim();
   const isTopic =
     params.provider === "telegram" && params.telegramScope === "topic";
   if (!groupId) {
@@ -2418,9 +2423,21 @@ function buildTriggerConfig(params: {
   if (isTopic && !topicId) {
     return { error: "Enter a topic ID or switch to Whole group.", ok: false };
   }
-  if (!text) {
+  // A row whose value is blank cannot be evaluated, so it is rejected here
+  // rather than saved as an inert filter the operator believes is active.
+  const incomplete = params.conditionGroup.conditions.some(
+    (condition) => condition.values.every((value) => value.trim().length === 0),
+  );
+  if (incomplete) {
     return {
-      error: "A text filter keeps the trigger from matching every message.",
+      error: "Every condition needs a value, or remove the empty row.",
+      ok: false,
+    };
+  }
+  if (params.conditionGroup.conditions.length === 0) {
+    return {
+      error:
+        "Add at least one condition — without one this runs on every message in the conversation.",
       ok: false,
     };
   }
@@ -2447,15 +2464,7 @@ function buildTriggerConfig(params: {
         ...(params.groupTitle ? { title: params.groupTitle } : {}),
       };
 
-  const sender =
-    params.senderScope === "" && !senderId
-      ? undefined
-      : {
-          ...(params.senderScope !== ""
-            ? { isBot: params.senderScope === "true" }
-            : {}),
-          ...(senderId ? { platformUserId: senderId } : {}),
-        };
+  const conditionGroup = params.conditionGroup;
 
   const outputActions: NonNullable<CreateAutomationRequest["outputActions"]> = [
     { id: "agent-context", kind: "agent_context" },
@@ -2480,17 +2489,12 @@ function buildTriggerConfig(params: {
     outputActions,
     triggers: [
       {
+        conditionGroup,
         conversation,
         id: "inbound-message",
         includeThreadReplies: params.includeThreadReplies,
         kind: "inbound_message",
-        name: text,
-        ...(sender ? { sender } : {}),
-        textFilter: {
-          mode: params.textMode,
-          text,
-          ...(params.caseSensitive ? { caseSensitive: true } : {}),
-        },
+        name: formatAutomationInboundConditionGroup(conditionGroup),
       },
     ],
   };

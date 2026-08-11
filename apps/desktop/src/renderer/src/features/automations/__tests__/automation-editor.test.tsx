@@ -118,13 +118,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Channel ID"), {
       target: { value: "C123" },
     });
-    fireEvent.change(screen.getByLabelText("Sender type"), {
-      target: { value: "true" },
-    });
-    fireEvent.change(screen.getByLabelText("Sender ID (optional)"), {
-      target: { value: "B999" },
-    });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "Datadog monitor alert" },
     });
     fireEvent.click(
@@ -178,14 +172,17 @@ describe("AutomationEditor", () => {
             id: "inbound-message",
             includeThreadReplies: false,
             kind: "inbound_message",
-            name: "Datadog monitor alert",
-            sender: {
-              isBot: true,
-              platformUserId: "B999",
-            },
-            textFilter: {
-              mode: "contains",
-              text: "Datadog monitor alert",
+            name: 'text contains "Datadog monitor alert"',
+            conditionGroup: {
+              join: "all",
+              conditions: [
+                {
+                  id: expect.any(String),
+                  field: "message_text",
+                  operator: "contains",
+                  values: ["Datadog monitor alert"],
+                },
+              ],
             },
           },
         ],
@@ -233,7 +230,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Channel"), {
       target: { value: "C0ALERTS" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -296,13 +293,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Topic ID"), {
       target: { value: "42" },
     });
-    fireEvent.change(screen.getByLabelText("Sender type"), {
-      target: { value: "false" },
-    });
-    fireEvent.change(screen.getByLabelText("Sender ID (optional)"), {
-      target: { value: "123456" },
-    });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "automation alert" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -322,13 +313,16 @@ describe("AutomationEditor", () => {
               parentId: "-1001234567890",
               parentTitle: "Ops Room",
             },
-            sender: {
-              isBot: false,
-              platformUserId: "123456",
-            },
-            textFilter: {
-              mode: "contains",
-              text: "automation alert",
+            conditionGroup: {
+              join: "all",
+              conditions: [
+                {
+                  id: expect.any(String),
+                  field: "message_text",
+                  operator: "contains",
+                  values: ["automation alert"],
+                },
+              ],
             },
           }),
         ],
@@ -389,7 +383,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Group ID"), {
       target: { value: "-1001234567890" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.change(screen.getByLabelText("Allowed MCP servers"), {
@@ -557,7 +551,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Group ID"), {
       target: { value: "-100" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.click(
@@ -598,13 +592,20 @@ describe("AutomationEditor", () => {
     ).not.toHaveClass("is-match");
 
     // The sender ID is visible (not just the display name) and copyable, and
-    // "Use sender" drops it straight into the filter.
+    // "Use sender" adds that sender as a condition rather than making the
+    // operator copy an opaque platform id into a text box.
     expect(matchRow).toHaveTextContent("B1");
     fireEvent.click(
       matchRow!.querySelector(".automation-preview__use-sender") as Element,
     );
-    expect(screen.getByLabelText("Sender ID (optional)")).toHaveValue("B1");
-    expect(screen.getByLabelText("Sender type")).toHaveValue("true");
+    const senderChips = screen.getAllByRole("listitem").filter((item) =>
+      item.classList.contains("automation-sender-chip"),
+    );
+    expect(senderChips).toHaveLength(1);
+    expect(senderChips[0]).toHaveTextContent("Datadog");
+    expect(
+      screen.getByText(/sender is Datadog/i, { selector: ".automation-conditions__summary" }),
+    ).toBeInTheDocument();
   });
 
   it("offers a topic picker from known topics and submits its name", async () => {
@@ -652,7 +653,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Topic"), {
       target: { value: "42" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -708,7 +709,7 @@ describe("AutomationEditor", () => {
       expect(screen.getByRole("option", { name: "Ops Room" })).toBeInTheDocument(),
     );
     fireEvent.change(screen.getByLabelText("Group"), { target: { value: "-100" } });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.change(screen.getByLabelText("Where should the result go?"), {
@@ -773,7 +774,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Group ID"), {
       target: { value: "-200" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -818,7 +819,7 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Group"), {
       target: { value: "-100" },
     });
-    fireEvent.change(screen.getByLabelText("Text contains"), {
+    fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
     fireEvent.change(screen.getByLabelText("Where should the result go?"), {

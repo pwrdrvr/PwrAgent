@@ -29,6 +29,7 @@ import {
   DEFAULT_AUTOMATION_INBOUND_COALESCE_WINDOW_MS,
   buildThreadIdentityKey,
   formatAutomationScheduleSummary,
+  isSupportedAutomationInboundConditionGroup,
   resolveAutomationRunsPerHour,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log.js";
@@ -1308,11 +1309,23 @@ function isSupportedAutomationTrigger(
     return isUnderstoodSchedule(trigger.schedule);
   }
   if (trigger.kind === "inbound_message") {
-    return Boolean(
-      trigger.id &&
-        trigger.conversation?.channel &&
-        trigger.conversation.conversationId,
-    );
+    if (
+      !trigger.id ||
+      !trigger.conversation?.channel ||
+      !trigger.conversation.conversationId
+    ) {
+      return false;
+    }
+    // A malformed condition group is not persisted: the matcher could not
+    // honor it, and storing it would leave an automation whose displayed
+    // filter and actual behavior disagree.
+    if (
+      trigger.conditionGroup !== undefined &&
+      !isSupportedAutomationInboundConditionGroup(trigger.conditionGroup)
+    ) {
+      return false;
+    }
+    return true;
   }
   return false;
 }

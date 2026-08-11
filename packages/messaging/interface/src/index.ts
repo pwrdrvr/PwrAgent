@@ -1809,11 +1809,63 @@ export type MessagingConversationInputCapabilities = {
   sharedConversationStatusLine?: string;
 };
 
+/**
+ * One person, bot, or app as the platform's own directory describes them.
+ *
+ * Deliberately the same field set as `MessagingInboundEvent["actor"]` so a
+ * sender observed in a conversation and a sender found in the directory are
+ * interchangeable to callers — the automation editor merges both into one list.
+ */
+export type MessagingDirectoryActor = {
+  platformUserId: string;
+  displayName?: string;
+  username?: string;
+  isBot?: boolean;
+};
+
+/**
+ * Whether a provider can answer "who exists here?" beyond the actors we have
+ * already observed. Providers that cannot (no directory endpoint, or one whose
+ * scope we do not request) simply omit this, and callers fall back to the
+ * senders they have seen.
+ */
+export type MessagingDirectoryCapabilities = {
+  supportsActorSearch: boolean;
+  /**
+   * Operator-facing name for the source, e.g. "Slack directory". Shown as a
+   * section heading so people understand where a suggestion came from and why
+   * it might include someone who has never posted.
+   */
+  actorSearchLabel?: string;
+};
+
+export type MessagingDirectorySearchRequest = {
+  /** Free-text query. An empty query asks for a reasonable default page. */
+  query: string;
+  /** Bias results toward members of this conversation when supported. */
+  conversationId?: string;
+  limit?: number;
+};
+
+export type MessagingDirectorySearchResult = {
+  actors: MessagingDirectoryActor[];
+  /**
+   * True when the provider had more matches than `limit`. Callers surface this
+   * as "keep typing to narrow" rather than implying the list is exhaustive.
+   */
+  truncated?: boolean;
+};
+
 export type MessagingCapabilityProfile = {
   /** Action/button capabilities. Omit for text-only providers (e.g., Signal). */
   actions?: MessagingActionCapabilities;
   text: MessagingTextCapabilities;
   conversationInput?: MessagingConversationInputCapabilities;
+  /**
+   * Directory lookup. Omit for providers with no searchable directory; callers
+   * must degrade to observed senders rather than showing an empty search.
+   */
+  directory?: MessagingDirectoryCapabilities;
   /** Inbound attachment limits — read by the desktop attachment processor. */
   inboundAttachments?: MessagingAttachmentCapabilities;
   /**

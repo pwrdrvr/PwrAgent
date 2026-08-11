@@ -15,6 +15,8 @@ import type {
   ListAutomationsRequest,
   ListAutomationsResponse,
   RunAutomationNowResponse,
+  SearchMessagingSendersRequest,
+  SearchMessagingSendersResponse,
   UpdateAutomationRequest,
 } from "@pwragent/shared";
 import {
@@ -26,6 +28,7 @@ import {
   AUTOMATIONS_LIST_CHANNEL,
   AUTOMATIONS_LIST_RUNS_CHANNEL,
   AUTOMATIONS_LOAD_ISSUES_CHANNEL,
+  AUTOMATIONS_SEARCH_SENDERS_CHANNEL,
   AUTOMATIONS_PAUSE_CHANNEL,
   AUTOMATIONS_RESUME_CHANNEL,
   AUTOMATIONS_RUN_NOW_CHANNEL,
@@ -36,6 +39,7 @@ import {
   getDesktopAutomationService,
 } from "../automations/desktop-automation-service";
 import { generateAutomationPromptDraft } from "../app-server/automation-prompt-draft-service";
+import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 
 export function registerAutomationIpcHandlers(): void {
@@ -114,6 +118,19 @@ export function registerAutomationIpcHandlers(): void {
       request: AutomationIdRequest,
     ): Promise<RunAutomationNowResponse> =>
       await getDesktopAutomationService().runNow(request),
+  );
+
+  ipcMain.removeHandler(AUTOMATIONS_SEARCH_SENDERS_CHANNEL);
+  ipcMain.handle(
+    AUTOMATIONS_SEARCH_SENDERS_CHANNEL,
+    async (
+      _event,
+      request: SearchMessagingSendersRequest,
+    ): Promise<SearchMessagingSendersResponse> =>
+      getDesktopAutomationService().searchSenders(request, {
+        searchDirectory: (params) =>
+          getDesktopMessagingRuntime().searchDirectoryActors(params),
+      }),
   );
 
   ipcMain.removeHandler(AUTOMATIONS_LIST_RUNS_CHANNEL);

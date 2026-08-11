@@ -1,3 +1,7 @@
+import {
+  evaluateAutomationInboundConditions,
+  normalizeInboundTriggerConditions,
+} from "@pwragent/shared";
 import type {
   AutomationInboundMessageTriggerDefinition,
   AutomationRunSourceMetadata,
@@ -82,30 +86,21 @@ function matchesInboundTrigger(
     return false;
   }
 
-  if (trigger.sender?.platformUserId) {
-    if (event.actor.platformUserId !== trigger.sender.platformUserId) return false;
-  }
-  if (trigger.sender?.isBot !== undefined) {
-    if (Boolean(event.actor.isBot) !== trigger.sender.isBot) return false;
-  }
-
-  if (trigger.textFilter) {
-    const text = event.kind === "text" ? event.text : event.text ?? "";
-    if (!matchesTextFilter(text, trigger.textFilter)) return false;
-  }
-
-  return true;
+  return matchesConditionGroup(trigger, event);
 }
 
-function matchesTextFilter(
-  value: string,
-  filter: AutomationInboundMessageTriggerDefinition["textFilter"],
+function matchesConditionGroup(
+  trigger: AutomationInboundMessageTriggerDefinition,
+  event: Extract<MessagingInboundEvent, { kind: "text" | "media" }>,
 ): boolean {
-  if (!filter?.text) return false;
-  const left = filter.caseSensitive ? value : value.toLowerCase();
-  const right = filter.caseSensitive ? filter.text : filter.text.toLowerCase();
-  if (filter.mode === "equals") return left === right;
-  return left.includes(right);
+  return evaluateAutomationInboundConditions(
+    normalizeInboundTriggerConditions(trigger),
+    {
+      text: event.kind === "text" ? event.text : event.text ?? "",
+      platformUserId: event.actor.platformUserId,
+      ...(event.actor.isBot === undefined ? {} : { isBot: event.actor.isBot }),
+    },
+  );
 }
 
 function buildRunSourceMetadata(params: {
