@@ -15,8 +15,17 @@ It needs no hardware token, works on GitHub-hosted runners, removes SmartScreen
 Signing is **opt-in and degrades gracefully**: the release job builds an
 **unsigned** installer until the signing config + credentials below are present,
 then signs automatically. Label-gated PR installer builds (`ci:windows-package`)
-are intentionally left **unsigned** (secrets are not exposed to PR validation,
-and signatures count against quota).
+are intentionally left **unsigned** (secrets are not exposed to ordinary PR
+validation, and signatures count against quota).
+
+`ci:windows-signing` is the narrower signing-repair validation path. Every
+labeled PR may run its credential-free PowerShell preflight, while only a
+same-repository PR may request the protected `windows-signing` job. That job
+still requires the environment's reviewer approval and calls `release.mjs`
+with `--require-signing`. The environment's current deployment branch policy
+permits only `v*` tags, so GitHub rejects PR deployments before exposing its
+secrets. Validating a signed PR build therefore requires a deliberate
+environment-policy change; the workflow does not bypass that protection.
 
 ## Current configuration (PwrDrvr LLC)
 
@@ -50,7 +59,12 @@ The three `AZURE_*` GitHub **secrets** come from the Entra app registration
   then auto-installs the `TrustedSigning` PowerShell module on the runner and
   invokes `Invoke-TrustedSigning`.
 - `.github/workflows/release.yml` (`windows-package` job, release tags only) —
-  supplies the env from repo variables + secrets.
+  installs and probes `TrustedSigning`, then supplies the env from repo
+  variables + secrets.
+- `scripts/release/install-trusted-signing.ps1` — installs the same module
+  electron-builder expects in PowerShell 7 and verifies that
+  `Invoke-TrustedSigning` resolves in a fresh `pwsh -NoProfile -NonInteractive`
+  process before packaging starts.
 
 ## One-time setup
 

@@ -12,6 +12,8 @@ electronVersion: 41.10.3
 asar: true
 asarUnpack:
   - "**/*.node"
+  # @napi-rs/canvas loads its ICU data beside the Windows native binding.
+  - "node_modules/@napi-rs/canvas-win32-x64-msvc/**/*"
 compression: normal
 
 # Files included in the .app bundle. Run via apps/desktop/scripts/release.mjs

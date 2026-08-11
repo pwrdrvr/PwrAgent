@@ -9,7 +9,15 @@ const desktopPackagePath = resolve(repoRoot, "apps/desktop/package.json");
 const electronBuilderPath = resolve(repoRoot, "apps/desktop/electron-builder.yml");
 const ciWorkflowPath = resolve(repoRoot, ".github/workflows/ci.yml");
 const releaseScriptPath = resolve(repoRoot, "apps/desktop/scripts/release.mjs");
+const verifyAsarContentsPath = resolve(
+  repoRoot,
+  "apps/desktop/scripts/verify-asar-contents.mjs",
+);
 const releaseWorkflowPath = resolve(repoRoot, ".github/workflows/release.yml");
+const trustedSigningSetupPath = resolve(
+  repoRoot,
+  "scripts/release/install-trusted-signing.ps1",
+);
 const desktopReleaseRunbookPath = resolve(repoRoot, "docs/desktop-release-runbook.md");
 const changelogPath = resolve(repoRoot, "CHANGELOG.md");
 
@@ -39,25 +47,46 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function assertWorkflowJobRunner(workflow, workflowPath, jobName, expectedRunner) {
+function workflowJobBody(workflow, workflowPath, jobName) {
   const jobPattern = new RegExp(`^  ${escapeRegex(jobName)}:\\n`, "m");
   const match = workflow.match(jobPattern);
   if (!match) {
     fail(`${workflowPath} must contain a ${jobName} job`);
-    return;
+    return "";
   }
   const bodyStart = match.index + match[0].length;
   const remainder = workflow.slice(bodyStart);
   const nextJobOffset = remainder.search(/^  [A-Za-z0-9_-]+:/m);
-  const jobBody = nextJobOffset === -1
+  return nextJobOffset === -1
     ? remainder
     : remainder.slice(0, nextJobOffset);
+}
+
+function assertWorkflowJobRunner(workflow, workflowPath, jobName, expectedRunner) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
   const runnerPattern = new RegExp(
     `^    runs-on:\\s+${escapeRegex(expectedRunner)}\\s*$`,
     "m",
   );
   if (!runnerPattern.test(jobBody)) {
     fail(`${workflowPath} ${jobName} must run on ${expectedRunner}`);
+  }
+}
+
+function assertWorkflowJobOrdersText(
+  workflow,
+  workflowPath,
+  jobName,
+  first,
+  second,
+) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
+  const firstIndex = jobBody.indexOf(first);
+  const secondIndex = jobBody.indexOf(second);
+  if (firstIndex === -1 || secondIndex === -1 || firstIndex >= secondIndex) {
+    fail(
+      `${workflowPath} ${jobName} must place ${JSON.stringify(first)} before ${JSON.stringify(second)}`,
+    );
   }
 }
 
@@ -120,10 +149,20 @@ if (!headingPattern.test(changelog)) {
 const electronBuilderConfig = readFileSync(electronBuilderPath, "utf8");
 const ciWorkflow = readFileSync(ciWorkflowPath, "utf8");
 const releaseScript = readFileSync(releaseScriptPath, "utf8");
+const verifyAsarContents = readFileSync(verifyAsarContentsPath, "utf8");
 const releaseWorkflow = readFileSync(releaseWorkflowPath, "utf8");
+const trustedSigningSetup = readFileSync(trustedSigningSetupPath, "utf8");
 const desktopReleaseRunbook = readFileSync(desktopReleaseRunbookPath, "utf8");
 
 const desktopScripts = desktopPackage.scripts || {};
+if (
+  desktopPackage.optionalDependencies?.["@napi-rs/canvas-win32-x64-msvc"]
+  !== desktopPackage.dependencies?.["@napi-rs/canvas"]
+) {
+  fail(
+    "apps/desktop/package.json must keep matching @napi-rs/canvas and Windows x64 binding versions",
+  );
+}
 if (desktopScripts["package:linux"] !== "node ./scripts/release.mjs --linux --no-publish") {
   fail("apps/desktop/package.json must expose package:linux for local Linux package builds");
 }
@@ -141,6 +180,7 @@ for (const expected of [
   "entry:",
   "StartupWMClass: PwrAgent",
   "private: false",
+  "node_modules/@napi-rs/canvas-win32-x64-msvc/**/*",
 ]) {
   if (!electronBuilderConfig.includes(expected)) {
     fail(`apps/desktop/electron-builder.yml must contain ${JSON.stringify(expected)}`);
@@ -171,7 +211,24 @@ for (const expected of [
 }
 
 for (const expected of [
+  "requiredPackagedRuntimeFiles",
+  "unpackedPath",
+  "required packaged runtime files are missing",
+]) {
+  if (!verifyAsarContents.includes(expected)) {
+    fail(
+      `apps/desktop/scripts/verify-asar-contents.mjs must contain ${JSON.stringify(expected)}`,
+    );
+  }
+}
+
+for (const expected of [
   "releases/**",
+  "ci:windows-signing",
+  "github.event.pull_request.head.repo.full_name == github.repository",
+  "environment: windows-signing",
+  "scripts/release/install-trusted-signing.ps1",
+  "--win --no-publish --require-signing",
 ]) {
   if (!ciWorkflow.includes(expected)) {
     fail(`.github/workflows/ci.yml must contain ${JSON.stringify(expected)}`);
@@ -182,6 +239,25 @@ assertWorkflowJobRunner(
   ".github/workflows/ci.yml",
   "windows-package",
   "windows-2022",
+);
+assertWorkflowJobRunner(
+  ciWorkflow,
+  ".github/workflows/ci.yml",
+  "windows-signing-preflight",
+  "windows-2022",
+);
+assertWorkflowJobRunner(
+  ciWorkflow,
+  ".github/workflows/ci.yml",
+  "windows-signing",
+  "windows-2022",
+);
+assertWorkflowJobOrdersText(
+  ciWorkflow,
+  ".github/workflows/ci.yml",
+  "windows-signing",
+  "scripts/release/install-trusted-signing.ps1",
+  "--win --no-publish --require-signing",
 );
 
 for (const expected of [
@@ -194,6 +270,8 @@ for (const expected of [
   ".body | length",
   "PWRAGENT_LINUX_ARCH",
   "SHA256SUMS",
+  "scripts/release/install-trusted-signing.ps1",
+  "--win --no-publish --require-signing",
 ]) {
   if (!releaseWorkflow.includes(expected)) {
     fail(`.github/workflows/release.yml must contain ${JSON.stringify(expected)}`);
@@ -205,6 +283,24 @@ assertWorkflowJobRunner(
   "windows-package",
   "windows-2022",
 );
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "windows-package",
+  "scripts/release/install-trusted-signing.ps1",
+  "--win --no-publish --require-signing",
+);
+for (const expected of [
+  "Install-Module",
+  "-Name TrustedSigning",
+  "-MinimumVersion 0.5.0",
+  "Get-Command Invoke-TrustedSigning",
+  "-NoProfile -NonInteractive -Command",
+]) {
+  if (!trustedSigningSetup.includes(expected)) {
+    fail(`scripts/release/install-trusted-signing.ps1 must contain ${JSON.stringify(expected)}`);
+  }
+}
 for (const stepName of [
   "Upload release artifacts (debug retention)",
   "Upload Linux artifacts (debug retention)",
