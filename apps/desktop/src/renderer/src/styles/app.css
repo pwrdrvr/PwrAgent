@@ -6540,6 +6540,40 @@ textarea,
   outline: none;
 }
 
+/* Quiet create action in the Automations nav, under Exit. It sits where the
+   operator's eye already is when the screen opens (they arrived via the left
+   rail) — a full-accent button across the empty canvas made the create action
+   the farthest thing from the pointer. Only the plus carries accent. */
+.settings-nav__new {
+  display: inline-flex;
+  width: 100%;
+  align-items: center;
+  appearance: none;
+  cursor: pointer;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.settings-nav__new:hover,
+.settings-nav__new:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.settings-nav__new-plus {
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1;
+}
+
 .settings-nav__group-label {
   margin: 4px 12px 6px;
   color: var(--text-muted);
