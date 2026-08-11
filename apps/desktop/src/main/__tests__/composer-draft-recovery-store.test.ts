@@ -302,6 +302,131 @@ describe("journal prefix collapse", () => {
   });
 });
 
+// Fixed and recent, so the 30-day retention sweep running in the same
+// `cleanupExpired` pass never removes these fixtures out from under the
+// assertions.
+const NOW_FOR_COLLAPSE = 1_786_500_000_000;
+
+describe("journal prefix-chain collapse on the GC pass", () => {
+  /**
+   * Seeds rows in the shape the buggy runtime left behind — one per word —
+   * directly, since the point is what an EXISTING profile already carries.
+   */
+  const seedLegacyJournal = (
+    rows: Array<{ scopeKey?: string; status?: string; text: string }>,
+  ): void => {
+    const insert = stateDb.raw.prepare(
+      `INSERT INTO composer_draft_journal(
+         scope_key, scope_kind, status, content_hash, char_count,
+         created_at, updated_at, payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    rows.forEach((row, index) => {
+      const scopeKey = row.scopeKey ?? "thread:codex:t1";
+      const status = row.status ?? "unsent";
+      insert.run(
+        scopeKey,
+        "thread",
+        status,
+        `hash-${scopeKey}-${status}-${row.text}`,
+        row.text.length,
+        1,
+        NOW_FOR_COLLAPSE + index,
+        JSON.stringify({ scopeKey, status, text: row.text }),
+      );
+    });
+  };
+
+  const readJournal = (): Array<{ status: string; text: string }> =>
+    (
+      stateDb.raw
+        .prepare(
+          "SELECT status, payload FROM composer_draft_journal ORDER BY scope_key, updated_at, id",
+        )
+        .all() as { payload: string; status: string }[]
+    ).map((row) => ({
+      status: row.status,
+      text: (JSON.parse(row.payload) as { text: string }).text,
+    }));
+
+  it("collapses a chain left by the old per-word behaviour", () => {
+    seedLegacyJournal([
+      { text: "I" },
+      { text: "I like" },
+      { text: "I like dogs" },
+      { text: "I like dogs and" },
+      { text: "I like dogs and cats" },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    // The longest text survives — nothing an operator wrote is lost, only the
+    // redundant snapshots of the way there.
+    expect(readJournal()).toEqual([
+      { status: "unsent", text: "I like dogs and cats" },
+    ]);
+  });
+
+  it("keeps a genuine branch rather than collapsing everything", () => {
+    seedLegacyJournal([
+      { text: "I like dogs" },
+      { text: "I like cats" },
+      { text: "I like cats a lot" },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    expect(readJournal()).toEqual([
+      { status: "unsent", text: "I like dogs" },
+      { status: "unsent", text: "I like cats a lot" },
+    ]);
+  });
+
+  it("never reads or deletes sent rows", () => {
+    // `sent` entries record what was actually submitted. The runtime's
+    // previous-row query excludes them, so this must too.
+    seedLegacyJournal([
+      { status: "sent", text: "I like dogs" },
+      { text: "I like dogs" },
+      { text: "I like dogs and cats" },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    expect(readJournal()).toEqual([
+      { status: "sent", text: "I like dogs" },
+      { status: "unsent", text: "I like dogs and cats" },
+    ]);
+  });
+
+  it("does not let one scope absorb another", () => {
+    seedLegacyJournal([
+      { scopeKey: "thread:codex:a", text: "Shared" },
+      { scopeKey: "thread:codex:b", text: "Shared prefix continues" },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    expect(readJournal()).toEqual([
+      { status: "unsent", text: "Shared" },
+      { status: "unsent", text: "Shared prefix continues" },
+    ]);
+  });
+
+  it("deletes nothing on a second pass", () => {
+    // Idempotency is what makes running this every GC pass safe rather than
+    // needing a one-shot schema migration to gate it.
+    seedLegacyJournal([{ text: "I like" }, { text: "I like dogs" }]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+    const afterFirst = readJournal();
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    expect(readJournal()).toEqual(afterFirst);
+    expect(afterFirst).toEqual([{ status: "unsent", text: "I like dogs" }]);
+  });
+});
+
 function buildDraft(
   patch: Partial<ComposerDraftSnapshotRecord>,
 ): ComposerDraftSnapshotRecord {

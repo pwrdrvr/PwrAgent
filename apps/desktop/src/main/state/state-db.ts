@@ -1546,6 +1546,8 @@ LEFT JOIN federation_peers
            )`,
         )
         .run(FEDERATION_SESSION_AUDIT_CAP);
+      // Before the retention and cap sweeps, so both count post-collapse rows.
+      collapseComposerDraftJournalPrefixChains(this.db);
       this.db
         .prepare("DELETE FROM composer_draft_journal WHERE updated_at < ?")
         .run(now - COMPOSER_DRAFT_JOURNAL_RETENTION_MS);
@@ -1601,6 +1603,103 @@ LEFT JOIN federation_peers
 
   deleteSecret(key: string): void {
     this.db.prepare("DELETE FROM secrets WHERE key = ?").run(key);
+  }
+}
+
+/**
+ * Collapses prefix chains sitting in `composer_draft_journal`.
+ *
+ * Until the fix that ships alongside this, the runtime rule compared
+ * `trimEnd`ed texts with a strict "next must be longer" check, so every typed
+ * space inserted a fresh row instead of extending the previous one — roughly
+ * one row per WORD. Existing profiles carry long runs of near-identical rows,
+ * each a prefix of the next. The code fix only stops NEW ones; without this,
+ * what is already there drains only as the journal's 30-day retention and
+ * 300-row cap catch up.
+ *
+ * **Deliberately NOT a `user_version` migration.** Reserving a schema version
+ * for it would make this change unbackportable: a release branch that took the
+ * number would collide with whatever main assigns next. It needs no schema
+ * change, it is idempotent, and the journal is capped at 300 rows — so it runs
+ * from the hourly `cleanupExpired` pass instead, riding a transaction that is
+ * already open and therefore costing no additional commit. Existing profiles
+ * converge on their first launch after upgrading, and the sweep self-heals if
+ * anything ever reintroduces chains.
+ *
+ * **This deletes rows.** It is deliberately the same rule the runtime now
+ * applies, so it removes exactly what the fixed code would never have written
+ * and nothing else:
+ *
+ * - Only `unsent`/`abandoned` rows participate, matching the runtime's
+ *   previous-row query. `sent` rows are never read and never deleted.
+ * - Within a scope, rows are walked oldest-first and a row is dropped only
+ *   when the NEXT surviving row's trimmed text starts with it — i.e. the later
+ *   row already contains everything the earlier one held. The longest text in
+ *   each chain always survives, so no content is lost, only redundant
+ *   snapshots of the way there.
+ * - A row that is not an extension starts a new chain and both are kept.
+ *   Backspacing and retyping something different is a real branch, and keeping
+ *   it is what a recovery journal is for.
+ *
+ * Idempotent, which is what makes running it every pass safe: once collapsed
+ * there are no chains left, so every subsequent pass deletes nothing and costs
+ * one bounded scan.
+ */
+function collapseComposerDraftJournalPrefixChains(
+  db: BetterSqlite3.Database,
+): void {
+  if (!tableExists(db, "composer_draft_journal")) {
+    return;
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT id, scope_key, payload
+       FROM composer_draft_journal
+       WHERE status IN ('unsent', 'abandoned')
+       ORDER BY scope_key, updated_at, id`,
+    )
+    .all() as Array<{ id: number; payload: string; scope_key: string }>;
+
+  const deleteRow = db.prepare("DELETE FROM composer_draft_journal WHERE id = ?");
+  const superseded: number[] = [];
+  let chainScopeKey: string | undefined;
+  let keeper: { id: number; text: string } | undefined;
+
+  for (const row of rows) {
+    let text: string;
+    try {
+      text = ((JSON.parse(row.payload) as { text?: unknown }).text ?? "") as string;
+    } catch {
+      // An unparseable payload is left strictly alone: it cannot be compared,
+      // so it can neither absorb a neighbour nor be absorbed.
+      chainScopeKey = row.scope_key;
+      keeper = undefined;
+      continue;
+    }
+    if (typeof text !== "string") {
+      chainScopeKey = row.scope_key;
+      keeper = undefined;
+      continue;
+    }
+    const trimmed = text.trimEnd();
+
+    if (row.scope_key !== chainScopeKey) {
+      chainScopeKey = row.scope_key;
+      keeper = { id: row.id, text: trimmed };
+      continue;
+    }
+
+    if (keeper && keeper.text.length > 0 && trimmed.startsWith(keeper.text)) {
+      // This row already contains everything the keeper held, so the keeper is
+      // a redundant waypoint rather than a distinct draft.
+      superseded.push(keeper.id);
+    }
+    keeper = { id: row.id, text: trimmed };
+  }
+
+  for (const id of superseded) {
+    deleteRow.run(id);
   }
 }
 
