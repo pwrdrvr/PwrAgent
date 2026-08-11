@@ -1454,6 +1454,10 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside className="sidebar" aria-label="Threads">
+      {/* Mounted here because this is where the thread set and the jump
+          handlers already live, but it PORTALS onto document.body — the
+          sidebar is a container-query element (a containing block for fixed
+          descendants) and ⌘B hides it with `display: none`. */}
       {props.threadJumpOpen ? (
         <SidebarSearchPopup
           threads={props.threads}
@@ -1490,9 +1494,11 @@ export function Sidebar(props: SidebarProps) {
         <div className="sidebar__masthead-actions">
           <MastheadActionButton
             ariaLabel="Search threads"
+            // ⌘K leads: it's the one an operator reaches for by reflex, and
+            // the palette it opens is the surface this button most resembles.
             tooltipText={[
-              `Open Search All  (${formatPrimaryAccel("F", { shift: true })})`,
               `Quick Thread List Search  (${formatPrimaryAccel("K")})`,
+              `Open Search All  (${formatPrimaryAccel("F", { shift: true })})`,
               `Context Search  (${formatPrimaryAccel("F")}) — Thread List in sidebar, Thread Chat elsewhere`,
             ].join("\n")}
             ariaPressed={props.threadSearchActive}

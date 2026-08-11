@@ -739,14 +739,14 @@ function DesktopAppShell(props: {
   // writeConfig call is fire-and-forget; a failed write just means the
   // preference isn't remembered next launch.
   const writeConfig = settings.writeConfig;
-  // Thread-list quick search (⌘K anywhere, ⌘F while the sidebar is focused).
-  // Owns its own open state and the sidebar peek it needs to render.
+  // Thread-jump palette (⌘K anywhere, ⌘F while the sidebar is focused). Owns
+  // its own open state and the sidebar peek a jump's landing scroll needs.
   const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
   const endSidebarPeek = threadJump.endPeek;
   const setSidebarHiddenPersisted = useCallback(
     (next: boolean) => {
       // An explicit toggle (⌘B, the chips) is the operator stating a preference,
-      // so it ends any quick-search peek in flight.
+      // so it ends any jump-landing peek in flight.
       endSidebarPeek();
       setSidebarHidden(next);
       void writeConfig({ ui: { sidebarHidden: next } });
@@ -1819,8 +1819,8 @@ function DesktopAppShell(props: {
           }}
           threadJumpOpen={threadJump.open}
           onThreadJumpOpenChange={(open) => {
-            // Every close (Escape, outside click, picking a thread) goes through
-            // closeJump so a peeked-open sidebar goes back to hidden.
+            // Every close (Escape, scrim click, picking a thread) goes through
+            // closeJump, so the toggle state can't drift from what's on screen.
             if (open) {
               threadJump.openJump();
               return;
@@ -1831,16 +1831,13 @@ function DesktopAppShell(props: {
             setMainView("thread");
             navigation.selectThread(thread);
             // Reveal on the next frame, once the new selection has rendered.
-            // Do it even when the sidebar is only peeked open (⌘K over a hidden
-            // sidebar). Hidden rows reveal asynchronously as their collapsed
-            // containers reopen, so keep a peek laid out until ThreadRow reports
-            // that the selected row mounted and scrolled. The offset survives
-            // restoring the hidden preference, and an instant scroll avoids
-            // dismissing the peek partway through an animation.
-            const instant = threadJump.isPeeking();
-            if (instant) {
-              threadJump.deferPeekRestore();
-            }
+            // Do it even when the sidebar is hidden (⌘B): peek it open for the
+            // scroll, because hidden rows reveal asynchronously as their
+            // collapsed containers reopen, and hold that peek until ThreadRow
+            // reports the selected row mounted and scrolled. The offset
+            // survives restoring the hidden preference, and an instant scroll
+            // avoids dismissing the peek partway through an animation.
+            const instant = threadJump.beginRevealPeek();
             requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
           }}
           onJumpToRemoteThread={(thread) => {
@@ -1852,10 +1849,7 @@ function DesktopAppShell(props: {
             // merged snapshot carries the new row, then select it — the
             // selection scopes ThreadView's IPC to the owning instance via
             // selectedThreadFederationTarget.
-            const instant = threadJump.isPeeking();
-            if (instant) {
-              threadJump.deferPeekRestore();
-            }
+            const instant = threadJump.beginRevealPeek();
             void (async () => {
               try {
                 await desktopApi?.addRemoteThreadPin?.({

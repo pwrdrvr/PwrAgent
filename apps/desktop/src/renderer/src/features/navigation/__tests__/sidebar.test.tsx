@@ -780,7 +780,7 @@ describe("Sidebar", () => {
     const searchButton = screen.getByRole("button", { name: "Search threads" });
     fireEvent.mouseEnter(searchButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "Open Search All  (Ctrl+Shift+F)\nQuick Thread List Search  (Ctrl+K)\nContext Search  (Ctrl+F) — Thread List in sidebar, Thread Chat elsewhere",
+      "Quick Thread List Search  (Ctrl+K)\nOpen Search All  (Ctrl+Shift+F)\nContext Search  (Ctrl+F) — Thread List in sidebar, Thread Chat elsewhere",
     );
     fireEvent.mouseLeave(searchButton);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
