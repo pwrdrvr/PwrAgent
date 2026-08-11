@@ -474,6 +474,122 @@ describe("star map load card in overview", () => {
   });
 });
 
+describe("star map load card overview fixes", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+  });
+
+  const loadCardApi = {
+    readStarMapArrangement: vi.fn(async () => ({
+      entries: [
+        {
+          instanceId: "pwr_local",
+          threadKey: "system:load",
+          dx: 0,
+          dy: 60,
+          updatedAt: 10,
+          by: "pwr_local",
+        },
+      ],
+    })),
+    setStarMapCardPosition: vi.fn(async () => ({ entries: [] })),
+    readFederationInstanceLoad: vi.fn(async () => ({})),
+  };
+
+  function renderLanes(threads: NavigationThreadSummary[]) {
+    window.localStorage.setItem(
+      "pwragent.starMap.viewPreferences",
+      JSON.stringify({ layout: "lanes" }),
+    );
+    const desktopApi: DesktopApi = { ...buildDesktopApi(), ...loadCardApi };
+    return render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={threads}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+  }
+
+  it("never scales in the lanes lens, where nothing else does", async () => {
+    // `overview` is derived from view.scale alone and lanes zooms through
+    // the same clamp, so without the orbit gate a lane's load card
+    // ballooned over its own unscaled column.
+    const { container } = renderLanes([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+    ]);
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).not.toBeNull();
+    });
+
+    fireEvent.wheel(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { deltaY: 240, ctrlKey: true, clientX: 400, clientY: 300 },
+    );
+
+    await waitFor(() => {
+      const canvas = container.querySelector(
+        ".star-map__canvas",
+      ) as HTMLElement;
+      expect(canvas.style.transform).toContain("scale(0.");
+    });
+    const shell = container.querySelector(
+      ".star-map-load-shell",
+    ) as HTMLElement;
+    expect(shell.style.transform).not.toContain("scale(");
+  });
+
+  it("scales a hand-placed offset with the base, and refuses drags", async () => {
+    const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
+    const { container } = renderOrbit(
+      [projectThread("a1", "/repo/alpha", "AlphaDir")],
+      { ...loadCardApi, setStarMapCardPosition },
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).not.toBeNull();
+    });
+    const nearTop = Number.parseFloat(
+      (container.querySelector(".star-map-load-shell") as HTMLElement).style
+        .top,
+    );
+
+    fireEvent.wheel(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { deltaY: 240, ctrlKey: true, clientX: 400, clientY: 300 },
+    );
+    await waitFor(() => {
+      expect(
+        (container.querySelector(".star-map-load-shell") as HTMLElement).style
+          .transform,
+      ).toContain("scale(");
+    });
+
+    const shell = container.querySelector(
+      ".star-map-load-shell",
+    ) as HTMLElement;
+    const scale = Number(/scale\(([\d.]+)\)/.exec(shell.style.transform)![1]);
+    // The WHOLE position scales — base and stored offset together — so a
+    // hand-placed card keeps its place in the group that grew around it.
+    expect(Number.parseFloat(shell.style.top)).toBeCloseTo(
+      nearTop * scale,
+      5,
+    );
+
+    // And a drag in this state commits nothing: an offset measured against
+    // the scaled base would re-read as a different position at zoom 1.
+    setStarMapCardPosition.mockClear();
+    fireEvent.pointerDown(shell, { button: 0, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(window, { clientX: 420, clientY: 360 });
+    fireEvent.pointerUp(window, { clientX: 420, clientY: 360 });
+    expect(setStarMapCardPosition).not.toHaveBeenCalled();
+  });
+});
+
 describe("star map chat cards in map space", () => {
   afterEach(() => {
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");

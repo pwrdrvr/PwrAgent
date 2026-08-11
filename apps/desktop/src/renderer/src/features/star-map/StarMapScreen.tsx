@@ -2376,20 +2376,41 @@ export function StarMapScreen(props: StarMapScreenProps) {
             instanceLabel={instanceEntry(position.instanceId).label}
             load={instanceLoads.get(position.instanceId)}
             baseSlot={loadSlot}
-            offset={arrangement.offsetFor(
-              position.instanceId,
-              STAR_MAP_LOAD_CARD_POSITION_KEY,
-            )}
+            // In orbit's overview the whole position scales — offset
+            // included, or a hand-placed card would sit at
+            // scaledBase + rawOffset, drifting out of the group whose
+            // geometry just grew around it. Display-only: drags are
+            // disabled below, so a scaled offset is never committed.
+            offset={(() => {
+              const stored = arrangement.offsetFor(
+                position.instanceId,
+                STAR_MAP_LOAD_CARD_POSITION_KEY,
+              );
+              return stored && orbitMode && overview
+                ? {
+                    dx: stored.dx * chromeScale,
+                    dy: stored.dy * chromeScale,
+                  }
+                : stored;
+            })()}
             width={position.cardWidth}
             centered={orbitMode}
-            scale={overview ? chromeScale : 1}
+            // Orbit-gated: lanes shares this render path and zooms through
+            // the same clamp, but nothing else in a lane scales — a card
+            // counter-scaling alone there ballooned over its own column.
+            scale={orbitMode && overview ? chromeScale : 1}
             stackIndex={STAR_MAP_LOAD_CARD_Z}
             sharedWith={sharedMachineLabels.get(position.instanceId)}
             cardKey={loadCardKey}
             selected={selection.has(loadCardKey)}
             onToggleSelect={() => toggleSelected(loadCardKey)}
             drag={
-              health?.instanceId
+              // No dragging while the card is counter-scaled: a commit in
+              // that state stores an offset measured against the scaled
+              // base, which re-reads as a different position at zoom 1 —
+              // the card would jump when the operator came back in. The
+              // overview is for orientation, not arranging.
+              health?.instanceId && !(orbitMode && overview)
                 ? {
                     detentRadius,
                     scale: view.scale,
