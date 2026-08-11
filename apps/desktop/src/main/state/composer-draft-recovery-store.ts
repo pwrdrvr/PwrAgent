@@ -408,9 +408,16 @@ function shouldReplacePreviousUnsentDraft(
   }
   const previousText = previous.text.trimEnd();
   const nextText = next.text.trimEnd();
-  return (
-    previousText.length > 0 &&
-    nextText.length > previousText.length &&
-    nextText.startsWith(previousText)
-  );
+  // `startsWith` already implies next is at least as long, so no length
+  // comparison is needed — and a STRICT one was the bug this replaced. Both
+  // sides are `trimEnd`ed, so the moment an operator types a space the trimmed
+  // texts are equal, strict growth is false, and the entry gets inserted as a
+  // new row instead of collapsing. That made the journal grow by one row per
+  // WORD typed: a sentence with fourteen spaces left fifteen near-identical
+  // rows, each a prefix of the next.
+  //
+  // Equal trimmed text is deliberately replaced rather than skipped: it is the
+  // same content re-saved (trailing whitespace only), so updating the existing
+  // row in place is exactly right and keeps one row per continuous edit.
+  return previousText.length > 0 && nextText.startsWith(previousText);
 }

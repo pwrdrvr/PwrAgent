@@ -238,6 +238,70 @@ describe("ComposerDraftRecoveryStore", () => {
   });
 });
 
+describe("journal prefix collapse", () => {
+  const type = (text: string, index: number): void => {
+    store.save({
+      draft: buildDraft({
+        scopeKey: "thread:codex:typing",
+        threadId: "typing",
+        text,
+        updatedAt: 1000 + index,
+        // Hash the content, not its length. `composer_draft_journal` has a
+        // unique index on (scope_key, content_hash, status), so a
+        // length-derived hash makes two same-length drafts collide and the
+        // second silently replaces the first — which would quietly hide the
+        // very row this suite is counting.
+        contentHash: `hash-${text}`,
+        charCount: text.length,
+      }),
+      recordHistory: true,
+    });
+  };
+  const journalTexts = (): string[] =>
+    (
+      stateDb.raw
+        .prepare(
+          "SELECT payload FROM composer_draft_journal WHERE scope_key = ? ORDER BY id",
+        )
+        .all("thread:codex:typing") as { payload: string }[]
+    ).map((row) => (JSON.parse(row.payload) as { text: string }).text);
+
+  it("keeps one row while a message is extended", () => {
+    ["I like dogs", "I like dogs and cats", "I like dogs and cats and bears"]
+      .forEach(type);
+
+    expect(journalTexts()).toEqual(["I like dogs and cats and bears"]);
+  });
+
+  it("keeps one row across a space, which used to start a new one", () => {
+    // The regression this exists for. Both sides of the comparison are
+    // `trimEnd`ed, so the moment a space is typed the trimmed texts are equal
+    // — a strict "next must be longer" check then failed and inserted a fresh
+    // row. The journal grew by one row per WORD, so a sentence with fourteen
+    // spaces left fifteen near-identical rows.
+    ["I like", "I like ", "I like dogs"].forEach(type);
+
+    expect(journalTexts()).toEqual(["I like dogs"]);
+  });
+
+  it("keeps one row for a whole sentence typed character by character", () => {
+    const sentence = "I like dogs and cats and bears, and I have opinions.";
+    for (let index = 1; index <= sentence.length; index += 1) {
+      type(sentence.slice(0, index), index);
+    }
+
+    expect(journalTexts()).toEqual([sentence]);
+  });
+
+  it("starts a new row when the text stops being an extension", () => {
+    // Backspacing past what was already journalled is a real branch, not a
+    // continuation, and keeping it is the point of a recovery journal.
+    ["I like dogs", "I like cats"].forEach(type);
+
+    expect(journalTexts()).toEqual(["I like dogs", "I like cats"]);
+  });
+});
+
 function buildDraft(
   patch: Partial<ComposerDraftSnapshotRecord>,
 ): ComposerDraftSnapshotRecord {

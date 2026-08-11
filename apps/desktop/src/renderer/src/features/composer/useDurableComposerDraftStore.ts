@@ -22,7 +22,22 @@ import type {
   ComposerDraftStore,
 } from "./useComposerDraftStore";
 
-const DURABLE_SAVE_DEBOUNCE_MS = 200;
+/**
+ * How often an edited draft is written to sqlite, at most.
+ *
+ * This is an INTERVAL, not a debounce: the first edit after a quiet period
+ * schedules a write this far out, and every edit inside that window is
+ * coalesced into it. A trailing debounce would be wrong in the other
+ * direction — someone typing continuously would never reach the quiet gap and
+ * nothing would be persisted at all until they stopped.
+ *
+ * It was 200ms, which meant roughly five sqlite commits per second of typing
+ * (~18,000/hour) for a feature whose purpose is shell-style draft RECOVERY —
+ * getting back a message you walked away from. Recovery does not need
+ * per-keystroke granularity; losing the last few seconds of typing on a hard
+ * crash is not what this exists to prevent.
+ */
+const DURABLE_SAVE_INTERVAL_MS = 5_000;
 const HISTORY_TEXT_THRESHOLD = 120;
 
 type SaveComposerDraft = NonNullable<DesktopApi["saveComposerDraft"]>;
@@ -43,6 +58,10 @@ export function useDurableComposerDraftStore(
 ): ComposerDraftStore {
   const pendingSavesRef = useRef(new Map<string, PendingDraftSave>());
   const createdAtRef = useRef(new Map<string, number>());
+  // Content hash of what is actually in sqlite for each scope. Guards the
+  // "edited" half of the rule: opening a thread and leaving, or any other
+  // re-save of identical content, must not cost a write.
+  const persistedHashRef = useRef(new Map<string, string>());
   const localRecoveryCandidatesRef = useRef<LocalRecoveryCandidate[]>([]);
   const localRecoverySequenceRef = useRef(0);
   const [hydrationVersion, setHydrationVersion] = useState(0);
@@ -83,6 +102,7 @@ export function useDurableComposerDraftStore(
         "unsent",
         createdAtRef,
       );
+      persistedHashRef.current.set(scopeKey, record.contentHash);
       if (shouldRecordHistory(pending.snapshot, "unsent")) {
         rememberLocalRecoveryCandidate(record);
       }
@@ -136,6 +156,7 @@ export function useDurableComposerDraftStore(
           if (!baseStore.get(draft.scopeKey)) {
             baseStore.set(draft.scopeKey, snapshotFromDraftRecord(draft));
             createdAtRef.current.set(draft.scopeKey, draft.createdAt);
+            persistedHashRef.current.set(draft.scopeKey, draft.contentHash);
             hydratedAny = true;
           }
         }
@@ -168,6 +189,7 @@ export function useDurableComposerDraftStore(
       delete: (scopeKey) => {
         baseStore.delete(scopeKey);
         createdAtRef.current.delete(scopeKey);
+        persistedHashRef.current.delete(scopeKey);
         const pending = pendingSavesRef.current.get(scopeKey);
         if (pending) {
           window.clearTimeout(pending.timer);
@@ -211,7 +233,25 @@ export function useDurableComposerDraftStore(
 
         const existingPending = pendingSavesRef.current.get(scopeKey);
         if (existingPending) {
-          window.clearTimeout(existingPending.timer);
+          // A write is already scheduled. Take the newer snapshot but LEAVE
+          // the timer alone — resetting it here is what would turn this back
+          // into a debounce that never fires while someone keeps typing.
+          pendingSavesRef.current.set(scopeKey, {
+            ...existingPending,
+            snapshot,
+          });
+          return;
+        }
+
+        // Nothing scheduled, so this is the first edit of a new window — and
+        // only a real edit earns a write. An unchanged snapshot reaches here
+        // constantly: the composer re-saves on unmount without a dirty check,
+        // so merely opening a thread and navigating away would otherwise cost
+        // a write and restamp `updated_at`.
+        if (
+          hashDraftContent(snapshot) === persistedHashRef.current.get(scopeKey)
+        ) {
+          return;
         }
 
         const saveComposerDraft = desktopApi.saveComposerDraft;
@@ -220,7 +260,7 @@ export function useDurableComposerDraftStore(
           if (pending) {
             flushPendingSave(scopeKey, pending);
           }
-        }, DURABLE_SAVE_DEBOUNCE_MS);
+        }, DURABLE_SAVE_INTERVAL_MS);
         pendingSavesRef.current.set(scopeKey, {
           saveComposerDraft,
           snapshot,
@@ -433,11 +473,12 @@ function shouldReplacePreviousUnsentCandidate(
   }
   const previousText = previous.text.trimEnd();
   const nextText = next.text.trimEnd();
-  return (
-    previousText.length > 0 &&
-    nextText.length > previousText.length &&
-    nextText.startsWith(previousText)
-  );
+  // Must stay in step with `shouldReplacePreviousUnsentDraft` in
+  // composer-draft-recovery-store.ts — this is the in-memory half of the same
+  // rule, and it carried the same bug: both sides are `trimEnd`ed, so a
+  // strict length comparison failed on every typed space and left one
+  // candidate per word instead of one per edit.
+  return previousText.length > 0 && nextText.startsWith(previousText);
 }
 
 function hashDraftContent(snapshot: ComposerDraftSnapshot): string {
