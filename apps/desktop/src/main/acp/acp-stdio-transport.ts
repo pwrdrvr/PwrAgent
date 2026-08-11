@@ -8,6 +8,7 @@ import {
 } from "./acp-launch-descriptor.js";
 import type { AcpJsonRpcTransport } from "./acp-client.js";
 import {
+  createCommandInvocation,
   JsonRpcConnection,
   type JsonRpcId,
   type JsonRpcObserver,
@@ -217,11 +218,17 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       registryId: descriptor.registryId,
     });
 
-    const child = spawnProcess(descriptor.command, descriptor.args, {
+    const invocation = createCommandInvocation({
+      command: descriptor.command,
+      args: descriptor.args,
+      env,
+    });
+    const child = spawnProcess(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env,
       cwd: descriptor.cwd,
       detached: process.platform !== "win32",
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
 
     if (this.closed || generation !== this.lifecycleGeneration) {

@@ -17,6 +17,7 @@ import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummarie
 import type { DesktopSettingsState } from "../../settings/useDesktopSettings";
 import {
   BackendRequirementsStep,
+  codexProfileModelAfterProviderStep,
   isBackendRequirementSatisfied,
   SecretFieldRow,
   validateProfileNames,
@@ -108,6 +109,23 @@ function acpEntry(
 }
 
 describe("AI provider onboarding", () => {
+  it("preserves the Codex profile model for ACP-only replay", () => {
+    expect(
+      codexProfileModelAfterProviderStep({
+        codexBackendReady: false,
+        current: "multiple",
+        isReplay: true,
+      }),
+    ).toBe("multiple");
+    expect(
+      codexProfileModelAfterProviderStep({
+        codexBackendReady: false,
+        current: "isolated",
+        isReplay: false,
+      }),
+    ).toBe("shared");
+  });
+
   it("requires a version-validated Codex candidate before enabling Continue", () => {
     expect(
       isBackendRequirementSatisfied(

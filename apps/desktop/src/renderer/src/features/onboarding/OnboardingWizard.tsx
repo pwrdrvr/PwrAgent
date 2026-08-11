@@ -158,6 +158,16 @@ export function bootstrapProvisionProfileName(
   return requested || "default";
 }
 
+export function codexProfileModelAfterProviderStep(params: {
+  codexBackendReady: boolean;
+  current: DesktopCodexProfileModel;
+  isReplay: boolean;
+}): DesktopCodexProfileModel {
+  return !params.codexBackendReady && !params.isReplay
+    ? "shared"
+    : params.current;
+}
+
 export function OnboardingWizard(props: OnboardingWizardProps) {
   // Initial step:
   //   - bootstrap with a CLI/env-named missing profile →
@@ -487,11 +497,18 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     if (next !== null) setStep(next);
   }, [orderedProviders.length, prevStep, providerSetupIndex, step]);
   const goNext = useCallback(() => {
-    if (step === "models-providers" && !codexBackendReady) {
+    if (step === "models-providers") {
       // ACP-only operators do not need to configure or authenticate a Codex
       // profile. Shared still gives bootstrap graduation the single default
-      // PwrAgent profile it needs at Finish.
-      setCodexProfileModel("shared");
+      // PwrAgent profile it needs at Finish. Replay keeps the persisted model:
+      // it neither graduates bootstrap state nor shows the profile step.
+      setCodexProfileModel((current) =>
+        codexProfileModelAfterProviderStep({
+          codexBackendReady,
+          current,
+          isReplay: props.isReplay,
+        }),
+      );
     }
     if (
       step === "provider-setup" &&
@@ -509,6 +526,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     codexBackendReady,
     nextStep,
     orderedProviders.length,
+    props.isReplay,
     providerSetupIndex,
     step,
   ]);

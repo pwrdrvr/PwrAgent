@@ -3,7 +3,10 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import readline from "node:readline";
-import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
+import {
+  createCommandInvocation,
+  type JsonRpcTransport,
+} from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { terminateOwnedProcessTree } from "../process-tree";
@@ -130,10 +133,16 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       version: command.version ?? null,
     });
 
-    const child = spawn(command.command, ["app-server", ...args], {
+    const invocation = createCommandInvocation({
+      command: command.command,
+      args: ["app-server", ...args],
+      env: childEnv,
+    });
+    const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: childEnv,
       detached: process.platform !== "win32",
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
 
     this.childProcess = child;

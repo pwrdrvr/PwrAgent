@@ -44,6 +44,46 @@ function createDescriptor(overrides: Partial<AcpLaunchDescriptor> = {}): AcpLaun
 }
 
 describe("AcpStdioJsonRpcTransport", () => {
+  it("routes a Windows ACP batch shim through ComSpec", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.stubEnv("ComSpec", "C:\\Windows\\System32\\cmd.exe");
+    try {
+      const child = new MockAcpChildProcess();
+      const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];
+      const spawn: AcpStdioSpawn = (command, args, options) => {
+        spawnCalls.push([command, args, options]);
+        return child;
+      };
+      const transport = new AcpStdioJsonRpcTransport({
+        launchDescriptor: createDescriptor({
+          distributionKind: "local",
+          command:
+            "C:\\Users\\Ops & Dev\\AppData\\Roaming\\npm\\gemini.cmd",
+          args: ["--acp"],
+        }),
+        spawn,
+      });
+
+      await transport.connect();
+
+      expect(spawnCalls[0]?.[0]).toBe("C:\\Windows\\System32\\cmd.exe");
+      expect(spawnCalls[0]?.[1]).toEqual([
+        "/d",
+        "/s",
+        "/c",
+        expect.stringMatching(/gemini\.cmd.*--acp/i),
+      ]);
+      expect(spawnCalls[0]?.[2]).toMatchObject({
+        detached: false,
+        windowsVerbatimArguments: true,
+      });
+      await transport.close();
+    } finally {
+      platform.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("launches the descriptor command directly and writes newline JSON-RPC", async () => {
     const child = new MockAcpChildProcess();
     const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];

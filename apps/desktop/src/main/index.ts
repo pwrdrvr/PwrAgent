@@ -153,6 +153,7 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
 const mainProcessStartedAt = Date.now();
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
+const RENDERER_WINDOW_CLOSE_TIMEOUT_MS = 2_000;
 const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
 const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 7_500;
 let mainProcessResourcesDisposed = false;
@@ -441,10 +442,67 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
   ],
 });
 
+async function closeRendererWindowsBeforeShutdown(): Promise<void> {
+  const windows = BrowserWindow.getAllWindows().filter(
+    (window) => !window.isDestroyed(),
+  );
+  await Promise.all(
+    windows.map(
+      (window) =>
+        new Promise<void>((resolve) => {
+          let settled = false;
+          const finish = (): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve();
+          };
+          const timeout = setTimeout(() => {
+            mainLog.warn("renderer window close timed out; destroying", {
+              windowId: window.id,
+            });
+            try {
+              window.destroy();
+            } catch (error) {
+              mainLog.warn("failed to destroy renderer window during shutdown", {
+                windowId: window.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+            finish();
+          }, RENDERER_WINDOW_CLOSE_TIMEOUT_MS);
+          timeout.unref?.();
+          window.once("closed", finish);
+          try {
+            window.close();
+          } catch (error) {
+            mainLog.warn("failed to close renderer window during shutdown", {
+              windowId: window.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            try {
+              window.destroy();
+            } catch {
+              // The close error may already mean the native window is gone.
+            }
+            finish();
+          }
+          if (window.isDestroyed()) {
+            finish();
+          }
+        }),
+    ),
+  );
+}
+
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
-    disposeMainProcessResourcesSync();
+    // Renderer cleanup flushes debounced composer drafts over IPC. Keep every
+    // handler alive until all windows have closed, then tear down runtimes and
+    // finally remove the synchronous IPC surface.
+    await closeRendererWindowsBeforeShutdown();
     await runMainProcessShutdownBarrier(source);
+    disposeMainProcessResourcesSync();
     disposeAppState();
     mainProcessShutdownComplete = true;
   })();

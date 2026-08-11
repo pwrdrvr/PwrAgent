@@ -1153,6 +1153,49 @@ describe("bootstrapApp", () => {
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
   });
 
+  it("closes renderer windows before removing draft IPC handlers", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    let destroyed = false;
+    let closedHandler: (() => void) | undefined;
+    const rendererWindow = {
+      id: 42,
+      close: vi.fn(),
+      destroy: vi.fn(() => {
+        destroyed = true;
+        closedHandler?.();
+      }),
+      isDestroyed: vi.fn(() => destroyed),
+      once: vi.fn((event: string, handler: () => void) => {
+        if (event === "closed") {
+          closedHandler = handler;
+        }
+      }),
+    };
+    getAllWindowsMock.mockReturnValue([rendererWindow] as never[]);
+
+    const event = { preventDefault: vi.fn() };
+    appEventHandlers.get("before-quit")?.(event);
+    await flushMicrotasks();
+
+    expect(rendererWindow.close).toHaveBeenCalledOnce();
+    expect(disposeComposerDraftIpcHandlersMock).not.toHaveBeenCalled();
+    expect(disposeAppServerIpcHandlersMock).not.toHaveBeenCalled();
+
+    destroyed = true;
+    closedHandler?.();
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledOnce());
+
+    expect(
+      rendererWindow.close.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      disposeComposerDraftIpcHandlersMock.mock.invocationCallOrder[0],
+    );
+  });
+
   it("reuses one quit barrier while messaging and app-server teardown settle", async () => {
     let finishMessaging!: () => void;
     let finishAppServer!: () => void;
@@ -1339,8 +1382,9 @@ describe("bootstrapApp", () => {
     expect(registerRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
 
     appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
-    await flushMicrotasks();
-    expect(disposeApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(disposeApplicationIpcHandlersMock).toHaveBeenCalledTimes(1),
+    );
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
