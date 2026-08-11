@@ -52,6 +52,18 @@ const __dirname = dirname(__filename);
 const desktopRoot = resolve(__dirname, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 const stageDir = join(desktopRoot, "release-stage");
+const MAC_CANVAS_BINDINGS = [
+  {
+    binding: "skia.darwin-arm64.node",
+    lipoArch: "arm64",
+    packageName: "canvas-darwin-arm64",
+  },
+  {
+    binding: "skia.darwin-x64.node",
+    lipoArch: "x86_64",
+    packageName: "canvas-darwin-x64",
+  },
+];
 
 const args = process.argv.slice(2);
 const dryrun = args.includes("--dryrun");
@@ -361,6 +373,25 @@ function verifyWindowsCanvasBindingInStage() {
   console.log("  verified Windows x64 canvas native binding in release-stage");
 }
 
+function verifyMacCanvasBindingsInStage() {
+  for (const { binding, packageName } of MAC_CANVAS_BINDINGS) {
+    const bindingPath = join(
+      stageDir,
+      "node_modules",
+      "@napi-rs",
+      packageName,
+      binding,
+    );
+    if (!existsSync(bindingPath)) {
+      throw new Error(
+        `pnpm deploy omitted @napi-rs/${packageName} from the universal macOS release stage. `
+          + "Keep both Darwin bindings as explicit optional dependencies and deploy for both CPU architectures.",
+      );
+    }
+  }
+  console.log("  verified arm64 and x64 canvas native bindings in release-stage");
+}
+
 function stageDesktopVersion() {
   const manifestPath = join(stageDir, "package.json");
   if (!existsSync(manifestPath)) {
@@ -428,12 +459,24 @@ if (!signStageOnly) {
   mkdirSync(stageDir, { recursive: true });
   runChecked(
     "pnpm",
-    ["deploy", "--filter", "@pwragent/desktop", "--prod", "--legacy", stageDir],
+    [
+      ...(!linux && !win
+        ? ["--cpu=x64", "--cpu=arm64", "--os=darwin"]
+        : []),
+      "deploy",
+      "--filter",
+      "@pwragent/desktop",
+      "--prod",
+      "--legacy",
+      stageDir,
+    ],
     { cwd: repoRoot },
   );
   patchStageDependencyManifests();
   if (win) {
     verifyWindowsCanvasBindingInStage();
+  } else if (!linux) {
+    verifyMacCanvasBindingsInStage();
   }
 
   // 4. Copy the build output, notices, changelog, and electron-builder inputs into the stage so
@@ -596,6 +639,22 @@ runChecked("lipo", [
   "x86_64",
   "arm64",
 ]);
+for (const { binding, lipoArch, packageName } of MAC_CANVAS_BINDINGS) {
+  runChecked("lipo", [
+    join(
+      builtApp,
+      "Contents",
+      "Resources",
+      "app.asar.unpacked",
+      "node_modules",
+      "@napi-rs",
+      packageName,
+      binding,
+    ),
+    "-verify_arch",
+    lipoArch,
+  ]);
+}
 
 step("verify packaged asar contents");
 runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);

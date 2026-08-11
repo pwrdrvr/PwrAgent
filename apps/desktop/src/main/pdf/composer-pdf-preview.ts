@@ -1,4 +1,3 @@
-import { createCanvas } from "@napi-rs/canvas";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -52,6 +51,7 @@ export async function renderComposerPdfPreview(params: {
       const viewport = page.getViewport({
         scale: dimensions.width / sourceViewport.width,
       });
+      const { createCanvas } = await import("@napi-rs/canvas");
       const canvas = createCanvas(dimensions.width, dimensions.height);
       const canvasContext = canvas.getContext("2d");
 
