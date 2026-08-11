@@ -12,7 +12,7 @@ import {
 } from "./SettingsLayout";
 
 type ActionNotice = {
-  kind: "error" | "success" | "working";
+  kind: "error" | "info" | "success" | "working";
   text: string;
 };
 
@@ -27,12 +27,22 @@ type StartupResult = {
 };
 
 const LOGIN_STARTUP_WAIT_MS = 5_000;
+const OAUTH_LOGIN_WAIT_MS = 120_000;
+
+function normalizeCodexHome(value: string): string {
+  return value
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/\/$/, "")
+    .replace(/^([A-Z]):/, (_, drive: string) => `${drive.toLowerCase()}:`);
+}
 
 export function PluginsSettings(props: {
   desktopApi?: DesktopApi;
   snapshot: DesktopSettingsSnapshot;
 }) {
   const [servers, setServers] = useState<CodexMcpServerSummary[]>([]);
+  const [activeCodexHome, setActiveCodexHome] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [pendingAction, setPendingActionState] = useState<PendingAction>();
   const pendingActionRef = useRef<PendingAction | undefined>(undefined);
@@ -41,17 +51,59 @@ export function PluginsSettings(props: {
     resolve: (result: StartupResult | undefined) => void;
     timer: number;
   } | undefined>(undefined);
+  const oauthWaitTimerRef = useRef<number | undefined>(undefined);
   const [removeCandidate, setRemoveCandidate] =
     useState<CodexMcpServerSummary>();
   const [notice, setNotice] = useState<ActionNotice>();
   const selectedProfile = props.snapshot.models.codex.profiles.profiles.find(
     (profile) => profile.selected,
   );
+  const selectedCodexHome = selectedProfile?.codexHome
+    ?? props.snapshot.models.codex.profiles.effectiveCodexHome;
+  const activeProfile = activeCodexHome
+    ? props.snapshot.models.codex.profiles.profiles.find(
+        (profile) => normalizeCodexHome(profile.codexHome)
+          === normalizeCodexHome(activeCodexHome),
+      )
+    : undefined;
+  const profileChanged = Boolean(
+    activeCodexHome
+    && normalizeCodexHome(activeCodexHome)
+      !== normalizeCodexHome(selectedCodexHome),
+  );
 
   const setPendingAction = useCallback((action?: PendingAction) => {
     pendingActionRef.current = action;
     setPendingActionState(action);
   }, []);
+
+  const clearOAuthWaitTimer = useCallback(() => {
+    if (oauthWaitTimerRef.current === undefined) return;
+    window.clearTimeout(oauthWaitTimerRef.current);
+    oauthWaitTimerRef.current = undefined;
+  }, []);
+
+  const cancelLoginWait = useCallback((message?: string) => {
+    clearOAuthWaitTimer();
+    if (pendingActionRef.current?.kind !== "login") return;
+    setPendingAction(undefined);
+    setNotice({
+      kind: "info",
+      text: message ?? "Stopped waiting for login. You can try again.",
+    });
+  }, [clearOAuthWaitTimer, setPendingAction]);
+
+  const scheduleLoginTimeout = useCallback((name: string) => {
+    clearOAuthWaitTimer();
+    oauthWaitTimerRef.current = window.setTimeout(() => {
+      if (
+        pendingActionRef.current?.kind === "login"
+        && pendingActionRef.current.name === name
+      ) {
+        cancelLoginWait(`${name} login timed out. You can try again.`);
+      }
+    }, OAUTH_LOGIN_WAIT_MS);
+  }, [cancelLoginWait, clearOAuthWaitTimer]);
 
   const cancelStartupWait = useCallback(() => {
     const waiter = startupWaiterRef.current;
@@ -88,6 +140,7 @@ export function PluginsSettings(props: {
       const response = await props.desktopApi.listCodexMcpServers({
         detail: "toolsAndAuthOnly",
       });
+      setActiveCodexHome(response.codexHome);
       setServers(response.servers);
       return true;
     } catch (error) {
@@ -106,18 +159,26 @@ export function PluginsSettings(props: {
   }, [loadServers]);
 
   useEffect(() => () => {
+    clearOAuthWaitTimer();
     const waiter = startupWaiterRef.current;
     if (!waiter) return;
     window.clearTimeout(waiter.timer);
     startupWaiterRef.current = undefined;
-  }, []);
+  }, [clearOAuthWaitTimer]);
 
   const finishLogin = useCallback(async (name: string) => {
+    clearOAuthWaitTimer();
+    const codexHome = activeCodexHome;
     if (!props.desktopApi?.reloadCodexMcpServers) {
       setNotice({
         kind: "error",
         text: "MCP config reload is unavailable in this build.",
       });
+      setPendingAction(undefined);
+      return;
+    }
+    if (!codexHome) {
+      setNotice({ kind: "error", text: "Active Codex profile is unavailable." });
       setPendingAction(undefined);
       return;
     }
@@ -128,7 +189,7 @@ export function PluginsSettings(props: {
     });
     const startup = waitForGlobalStartup(name);
     try {
-      await props.desktopApi.reloadCodexMcpServers();
+      await props.desktopApi.reloadCodexMcpServers({ codexHome });
       const startupResult = await startup;
       const refreshed = await loadServers();
       if (!refreshed) return;
@@ -161,6 +222,8 @@ export function PluginsSettings(props: {
     }
   }, [
     cancelStartupWait,
+    clearOAuthWaitTimer,
+    activeCodexHome,
     loadServers,
     props.desktopApi,
     setPendingAction,
@@ -212,6 +275,7 @@ export function PluginsSettings(props: {
       void finishLogin(name);
       return;
     }
+    clearOAuthWaitTimer();
     setPendingAction(undefined);
     setNotice({
       kind: "error",
@@ -219,17 +283,26 @@ export function PluginsSettings(props: {
         ? params.error
         : `${name} login did not complete.`,
     });
-  }), [finishLogin, props.desktopApi, setPendingAction]);
+  }), [
+    clearOAuthWaitTimer,
+    finishLogin,
+    props.desktopApi,
+    setPendingAction,
+  ]);
 
   const reloadConfig = async () => {
     if (
       !props.desktopApi?.reloadCodexMcpServers
       || pendingActionRef.current
+      || profileChanged
+      || !activeCodexHome
     ) return;
     setPendingAction({ kind: "reload", name: "MCP configuration" });
     setNotice({ kind: "working", text: "Reloading MCP configuration..." });
     try {
-      await props.desktopApi.reloadCodexMcpServers();
+      await props.desktopApi.reloadCodexMcpServers({
+        codexHome: activeCodexHome,
+      });
       if (await loadServers()) {
         setNotice({
           kind: "success",
@@ -250,18 +323,32 @@ export function PluginsSettings(props: {
     if (
       !props.desktopApi?.startCodexMcpServerLogin
       || pendingActionRef.current
+      || profileChanged
+      || !activeCodexHome
     ) return;
     setPendingAction({ kind: "login", name: server.name });
     setNotice({
       kind: "working",
       text: `Waiting for ${server.name} login to complete...`,
     });
+    scheduleLoginTimeout(server.name);
     try {
       const result = await props.desktopApi.startCodexMcpServerLogin({
+        codexHome: activeCodexHome,
         name: server.name,
       });
+      const pendingAfterStart = pendingActionRef.current as
+        | PendingAction
+        | undefined;
+      if (
+        pendingAfterStart?.kind !== "login"
+        || pendingAfterStart.name !== server.name
+      ) {
+        return;
+      }
       window.open(result.authorizationUrl, "_blank", "noopener,noreferrer");
     } catch (error) {
+      clearOAuthWaitTimer();
       setPendingAction(undefined);
       setNotice({
         kind: "error",
@@ -276,11 +363,16 @@ export function PluginsSettings(props: {
       !server
       || !props.desktopApi?.removeCodexMcpServer
       || pendingActionRef.current
+      || profileChanged
+      || !activeCodexHome
     ) return;
     setPendingAction({ kind: "remove", name: server.name });
     setNotice({ kind: "working", text: `Removing ${server.name}...` });
     try {
-      await props.desktopApi.removeCodexMcpServer({ name: server.name });
+      await props.desktopApi.removeCodexMcpServer({
+        codexHome: activeCodexHome,
+        name: server.name,
+      });
       setRemoveCandidate(undefined);
       if (await loadServers()) {
         setNotice({
@@ -297,6 +389,9 @@ export function PluginsSettings(props: {
       setPendingAction(undefined);
     }
   };
+  const actionsDisabled = Boolean(pendingAction)
+    || profileChanged
+    || !activeCodexHome;
 
   return (
     <SettingsSectionStack paneId="plugins" aria-label="Plugin settings">
@@ -307,7 +402,7 @@ export function PluginsSettings(props: {
         action={
           <button
             className="button button--secondary"
-            disabled={loading || Boolean(pendingAction)}
+            disabled={loading || actionsDisabled}
             title="Re-read installed MCP configuration and expose it to loaded Codex threads on their next turn."
             type="button"
             onClick={() => void reloadConfig()}
@@ -325,20 +420,32 @@ export function PluginsSettings(props: {
         chip={`${servers.length} configured`}
       >
         <div className="settings-plugin-profile">
-          <span>Codex profile</span>
-          <strong>{selectedProfile?.displayName ?? "Default"}</strong>
-          <code>
-            {selectedProfile?.codexHome
-              ?? props.snapshot.models.codex.profiles.effectiveCodexHome}
-          </code>
+          <span>Active Codex profile</span>
+          <strong>{activeProfile?.displayName ?? "Default"}</strong>
+          <code>{activeCodexHome ?? "Loading..."}</code>
         </div>
+        {profileChanged ? (
+          <p className="settings-plugin-notice settings-plugin-notice--error" role="alert">
+            Codex profile selection changed to {selectedProfile?.displayName ?? "Default"}.
+            Restart PwrAgent before managing MCP servers for that profile.
+          </p>
+        ) : null}
         {notice ? (
-          <p
+          <div
             className={`settings-plugin-notice settings-plugin-notice--${notice.kind}`}
             role={notice.kind === "error" ? "alert" : "status"}
           >
-            {notice.text}
-          </p>
+            <span>{notice.text}</span>
+            {pendingAction?.kind === "login" ? (
+              <button
+                className="button button--ghost settings-plugin-notice__action"
+                type="button"
+                onClick={() => cancelLoginWait()}
+              >
+                Cancel login
+              </button>
+            ) : null}
+          </div>
         ) : null}
         {loading ? (
           <p className="settings-empty">Loading MCP servers...</p>
@@ -348,7 +455,7 @@ export function PluginsSettings(props: {
               <McpServerRow
                 key={server.name}
                 busy={pendingAction?.name === server.name}
-                disabled={Boolean(pendingAction)}
+                disabled={actionsDisabled}
                 server={server}
                 onRelogin={() => void relogin(server)}
                 onRemove={() => setRemoveCandidate(server)}
@@ -377,7 +484,7 @@ export function PluginsSettings(props: {
             <div className="settings-confirm-dialog__actions">
               <button
                 className="button button--secondary"
-                disabled={Boolean(pendingAction)}
+                disabled={actionsDisabled}
                 type="button"
                 onClick={() => setRemoveCandidate(undefined)}
               >
@@ -385,7 +492,7 @@ export function PluginsSettings(props: {
               </button>
               <button
                 className="button button--ghost settings-profile-row__button--danger"
-                disabled={Boolean(pendingAction)}
+                disabled={actionsDisabled}
                 type="button"
                 onClick={() => void removeServer()}
               >

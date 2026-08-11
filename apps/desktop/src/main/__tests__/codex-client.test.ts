@@ -6758,7 +6758,7 @@ describe("CodexAppServerClient", () => {
       (message) => JSON.parse(message),
     )).toContainEqual(expect.objectContaining({
       method: "mcpServer/oauth/login",
-      params: { name: "datadog" },
+      params: { name: "datadog", timeoutSecs: 120 },
     }));
 
     await client.close();

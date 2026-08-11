@@ -443,28 +443,38 @@ export type ListCodexMcpServersRequest = {
 };
 
 export type ListCodexMcpServersResponse = {
+  codexHome: string;
   detail: CodexMcpInventoryDetail;
   servers: CodexMcpServerSummary[];
 };
 
+export type ReloadCodexMcpServersRequest = {
+  codexHome: string;
+};
+
 export type ReloadCodexMcpServersResponse = {
+  codexHome: string;
   queued: true;
 };
 
 export type StartCodexMcpServerLoginRequest = {
+  codexHome: string;
   name: string;
 };
 
 export type StartCodexMcpServerLoginResponse = {
+  codexHome: string;
   name: string;
   authorizationUrl: string;
 };
 
 export type RemoveCodexMcpServerRequest = {
+  codexHome: string;
   name: string;
 };
 
 export type RemoveCodexMcpServerResponse = {
+  codexHome: string;
   name: string;
   removed: true;
 };

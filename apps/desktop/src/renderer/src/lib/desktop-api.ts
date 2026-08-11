@@ -101,6 +101,7 @@ import type {
   ListThreadMcpServersRequest,
   ListThreadMcpServersResponse,
   ReloadCodexMcpServersResponse,
+  ReloadCodexMcpServersRequest,
   RemoveCodexMcpServerRequest,
   RemoveCodexMcpServerResponse,
   StartCodexMcpServerLoginRequest,
@@ -635,7 +636,9 @@ export type DesktopApi = {
   listCodexMcpServers?: (
     request?: ListCodexMcpServersRequest,
   ) => Promise<ListCodexMcpServersResponse>;
-  reloadCodexMcpServers?: () => Promise<ReloadCodexMcpServersResponse>;
+  reloadCodexMcpServers?: (
+    request: ReloadCodexMcpServersRequest,
+  ) => Promise<ReloadCodexMcpServersResponse>;
   startCodexMcpServerLogin?: (
     request: StartCodexMcpServerLoginRequest,
   ) => Promise<StartCodexMcpServerLoginResponse>;

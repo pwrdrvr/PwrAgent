@@ -1415,10 +1415,12 @@ class MockBackendClient {
     threadId: string;
   };
   lastListMcpServersParams?: {
-    threadId: string;
+    threadId?: string;
     detail: "toolsAndAuthOnly" | "full";
   };
   reloadMcpConfigCallCount = 0;
+  lastMcpServerOAuthLoginParams?: { name: string };
+  lastRemoveMcpServerParams?: { name: string };
   lastArchiveThreadParams?: {
     threadId: string;
   };
@@ -1539,6 +1541,7 @@ class MockBackendClient {
       };
       startReviewDelay?: Promise<unknown>;
       startReviewError?: Error;
+      codexHome?: string;
     }
   ) {}
 
@@ -1552,6 +1555,10 @@ class MockBackendClient {
     }
 
     return this.options.initializeResult ?? {};
+  }
+
+  async readCodexHome(): Promise<string> {
+    return this.options.codexHome ?? "/home/example/.codex";
   }
 
   async listThreads(params?: {
@@ -1877,7 +1884,7 @@ class MockBackendClient {
   }
 
   async listMcpServers(params: {
-    threadId: string;
+    threadId?: string;
     detail: "toolsAndAuthOnly" | "full";
   }) {
     this.lastListMcpServersParams = params;
@@ -1892,6 +1899,17 @@ class MockBackendClient {
 
   async reloadMcpConfig(): Promise<void> {
     this.reloadMcpConfigCallCount += 1;
+  }
+
+  async startMcpServerOAuthLogin(params: {
+    name: string;
+  }): Promise<{ authorizationUrl: string }> {
+    this.lastMcpServerOAuthLoginParams = params;
+    return { authorizationUrl: "https://example.test/oauth" };
+  }
+
+  async removeMcpServer(params: { name: string }): Promise<void> {
+    this.lastRemoveMcpServerParams = params;
   }
 
   async trustProject(params: {
@@ -34901,6 +34919,53 @@ script = "printf setup"
       queued: true,
     });
     expect(codexClient.reloadMcpConfigCallCount).toBe(1);
+
+    await registry.close();
+  });
+
+  it("binds Settings MCP mutations to the active Codex profile", async () => {
+    const codexHome = "/home/example/.codex/profiles/work";
+    const codexClient = new MockBackendClient({ codexHome });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+
+    await expect(registry.listCodexMcpServers()).resolves.toEqual({
+      codexHome,
+      detail: "toolsAndAuthOnly",
+      servers: [{
+        name: "atlassian-rovo",
+        authStatus: "oAuth",
+        tools: ["fetch", "search"],
+      }],
+    });
+    await expect(registry.reloadCodexMcpServers({ codexHome }))
+      .resolves.toEqual({ codexHome, queued: true });
+    await expect(registry.startCodexMcpServerLogin({
+      codexHome,
+      name: "atlassian-rovo",
+    })).resolves.toEqual({
+      codexHome,
+      name: "atlassian-rovo",
+      authorizationUrl: "https://example.test/oauth",
+    });
+    await expect(registry.removeCodexMcpServer({
+      codexHome,
+      name: "atlassian-rovo",
+    })).resolves.toEqual({
+      codexHome,
+      name: "atlassian-rovo",
+      removed: true,
+    });
+
+    await expect(registry.removeCodexMcpServer({
+      codexHome: "/home/example/.codex/profiles/personal",
+      name: "atlassian-rovo",
+    })).rejects.toThrow("Codex profile changed after this app started");
+    expect(codexClient.lastRemoveMcpServerParams).toEqual({
+      name: "atlassian-rovo",
+    });
 
     await registry.close();
   });

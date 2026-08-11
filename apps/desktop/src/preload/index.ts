@@ -52,6 +52,7 @@ import type {
   ReloadCodexMcpConfigRequest,
   ReloadCodexMcpConfigResponse,
   ReloadCodexMcpServersResponse,
+  ReloadCodexMcpServersRequest,
   RemoveCodexMcpServerRequest,
   RemoveCodexMcpServerResponse,
   StartCodexMcpServerLoginRequest,
@@ -1369,8 +1370,10 @@ const desktopApi = Object.freeze({
     request: ListCodexMcpServersRequest = {},
   ): Promise<ListCodexMcpServersResponse> =>
     await ipcRenderer.invoke(CODEX_MCP_SERVERS_LIST_CHANNEL, request),
-  reloadCodexMcpServers: async (): Promise<ReloadCodexMcpServersResponse> =>
-    await ipcRenderer.invoke(CODEX_MCP_SERVERS_RELOAD_CHANNEL),
+  reloadCodexMcpServers: async (
+    request: ReloadCodexMcpServersRequest,
+  ): Promise<ReloadCodexMcpServersResponse> =>
+    await ipcRenderer.invoke(CODEX_MCP_SERVERS_RELOAD_CHANNEL, request),
   startCodexMcpServerLogin: async (
     request: StartCodexMcpServerLoginRequest,
   ): Promise<StartCodexMcpServerLoginResponse> =>

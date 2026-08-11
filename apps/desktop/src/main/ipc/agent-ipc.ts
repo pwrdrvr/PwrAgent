@@ -39,6 +39,7 @@ import {
   type ReloadCodexMcpConfigRequest,
   type ReloadCodexMcpConfigResponse,
   type ReloadCodexMcpServersResponse,
+  type ReloadCodexMcpServersRequest,
   type RemoveCodexMcpServerRequest,
   type RemoveCodexMcpServerResponse,
   type RunCodexEnvironmentActionRequest,
@@ -768,8 +769,11 @@ export function registerAgentIpcHandlers(): void {
   ipcMain.removeHandler(CODEX_MCP_SERVERS_RELOAD_CHANNEL);
   ipcMain.handle(
     CODEX_MCP_SERVERS_RELOAD_CHANNEL,
-    async (): Promise<ReloadCodexMcpServersResponse> =>
-      await registry.reloadCodexMcpServers(),
+    async (
+      _event,
+      request: ReloadCodexMcpServersRequest,
+    ): Promise<ReloadCodexMcpServersResponse> =>
+      await registry.reloadCodexMcpServers(request),
   );
 
   ipcMain.removeHandler(CODEX_MCP_SERVER_LOGIN_CHANNEL);

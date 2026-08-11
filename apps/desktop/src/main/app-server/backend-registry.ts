@@ -121,6 +121,7 @@ import {
   type ListThreadMcpServersRequest,
   type ListThreadMcpServersResponse,
   type ReloadCodexMcpServersResponse,
+  type ReloadCodexMcpServersRequest,
   type RemoveCodexMcpServerRequest,
   type RemoveCodexMcpServerResponse,
   type StartCodexMcpServerLoginRequest,
@@ -584,6 +585,7 @@ function assistantOutputForTurn(
 type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
+  readCodexHome?(): Promise<string>;
   readConfiguredMcpServerNames?(params?: {
     cwd?: string;
   }): Promise<string[]>;
@@ -13730,28 +13732,37 @@ export class DesktopBackendRegistry {
       throw new Error("Selected Codex version does not support MCP inventory");
     }
     const detail = params.detail ?? "toolsAndAuthOnly";
+    const codexHome = await this.readActiveCodexMcpHome();
     return {
+      codexHome,
       detail,
       servers: await this.codexClient.listMcpServers({ detail }),
     };
   }
 
-  async reloadCodexMcpServers(): Promise<ReloadCodexMcpServersResponse> {
+  async reloadCodexMcpServers(
+    params: ReloadCodexMcpServersRequest,
+  ): Promise<ReloadCodexMcpServersResponse> {
+    const codexHome = await this.requireActiveCodexMcpHome(params.codexHome);
     if (!this.codexClient.reloadMcpConfig) {
       throw new Error("Selected Codex version does not support MCP config reload");
     }
     await this.codexClient.reloadMcpConfig();
-    return { queued: true };
+    return { codexHome, queued: true };
   }
 
   async startCodexMcpServerLogin(
     params: StartCodexMcpServerLoginRequest,
   ): Promise<StartCodexMcpServerLoginResponse> {
+    const codexHome = await this.requireActiveCodexMcpHome(params.codexHome);
     if (!this.codexClient.startMcpServerOAuthLogin) {
       throw new Error("Selected Codex version does not support MCP login");
     }
-    const result = await this.codexClient.startMcpServerOAuthLogin(params);
+    const result = await this.codexClient.startMcpServerOAuthLogin({
+      name: params.name,
+    });
     return {
+      codexHome,
       name: params.name,
       authorizationUrl: result.authorizationUrl,
     };
@@ -13760,11 +13771,32 @@ export class DesktopBackendRegistry {
   async removeCodexMcpServer(
     params: RemoveCodexMcpServerRequest,
   ): Promise<RemoveCodexMcpServerResponse> {
+    const codexHome = await this.requireActiveCodexMcpHome(params.codexHome);
     if (!this.codexClient.removeMcpServer) {
       throw new Error("Selected Codex version does not support MCP removal");
     }
-    await this.codexClient.removeMcpServer(params);
-    return { name: params.name, removed: true };
+    await this.codexClient.removeMcpServer({ name: params.name });
+    return { codexHome, name: params.name, removed: true };
+  }
+
+  private async readActiveCodexMcpHome(): Promise<string> {
+    if (this.codexClient.readCodexHome) {
+      return await this.codexClient.readCodexHome();
+    }
+    return path.resolve(
+      this.codexEnvironmentCommandEnv?.CODEX_HOME?.trim()
+      || path.join(os.homedir(), ".codex"),
+    );
+  }
+
+  private async requireActiveCodexMcpHome(expectedCodexHome: string): Promise<string> {
+    const activeCodexHome = await this.readActiveCodexMcpHome();
+    if (path.resolve(expectedCodexHome) !== path.resolve(activeCodexHome)) {
+      throw new Error(
+        "Codex profile changed after this app started. Restart PwrAgent before managing MCP servers.",
+      );
+    }
+    return activeCodexHome;
   }
 
   async steerTurn(

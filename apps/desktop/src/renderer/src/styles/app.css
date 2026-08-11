@@ -8579,6 +8579,10 @@ textarea,
 }
 
 .settings-plugin-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin: 0 0 12px;
   padding: 8px 10px;
   border: 1px solid var(--accent-border);
@@ -8587,6 +8591,12 @@ textarea,
   color: var(--accent-bright);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.settings-plugin-notice__action {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 8px;
 }
 
 .settings-plugin-notice--success {

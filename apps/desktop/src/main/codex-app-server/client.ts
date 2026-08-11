@@ -7194,6 +7194,18 @@ export class CodexAppServerClient {
     return this.initializeResult ?? {};
   }
 
+  async readCodexHome(): Promise<string> {
+    await this.ensureInitialized();
+    const env = this.options.resolveEnv
+      ? await this.options.resolveEnv()
+      : this.options.env ?? process.env;
+    return path.resolve(
+      extractStringProperty(this.initializeResult, "codexHome", "codex_home")
+      || env.CODEX_HOME?.trim()
+      || path.join(homedir(), ".codex"),
+    );
+  }
+
   private getProtocolCompatibility(): CodexProtocolCompatibility {
     return resolveCodexProtocolCompatibility(
       this.initializeResult?.userAgent,
@@ -7810,7 +7822,7 @@ export class CodexAppServerClient {
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["mcpServer/oauth/login"],
-      payloads: [{ name: params.name }],
+      payloads: [{ name: params.name, timeoutSecs: 120 }],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
     const authorizationUrl = readStringFromRecord(result, "authorizationUrl");
