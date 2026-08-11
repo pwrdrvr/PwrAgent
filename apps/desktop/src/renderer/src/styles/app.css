@@ -5614,6 +5614,14 @@ textarea,
   -webkit-app-region: drag;
 }
 
+/* The connectivity notice and the thread surface are vertical regions of the
+   same pane. Without this explicit column, `.app-main`'s default flex row
+   turns the notice into a second full-height pane and squeezes the retained
+   stale thread off to the right. */
+.app-main--federation-disconnected {
+  flex-direction: column;
+}
+
 .app-shell__settings-layer {
   display: flex;
   position: absolute;
@@ -11889,6 +11897,7 @@ textarea,
    — the runtime is auto-reconnecting and the state is expected to heal. */
 .federation-disconnected-banner {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   margin: 10px 16px 0;
