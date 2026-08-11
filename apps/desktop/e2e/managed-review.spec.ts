@@ -132,7 +132,7 @@ test("managed review failure leaves one start marker and clears Stop state", asy
 
     const transcript = fixture.app.window.getByRole("region", { name: "Transcript" });
     await expect(transcript.getByText("Review changes against main")).toHaveCount(1);
-    await expect(fixture.app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(fixture.app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await expect.poll(async () => await fixture.app.getLastStartTurn()).toMatchObject({
       threadId: "managed-review-child",
       input: [{ type: "text", text: expect.stringContaining("Perform a code review") }],
@@ -141,7 +141,7 @@ test("managed review failure leaves one start marker and clears Stop state", asy
     await fixture.app.advance({ stepId: "managed-review-child-failed" });
 
     await expect(
-      fixture.app.window.getByRole("button", { name: "Stop" }),
+      fixture.app.window.getByTestId("composer-stop-turn"),
     ).toHaveCount(0);
     await expect(transcript).toContainText("Turn failed");
     await expect(transcript).not.toContainText("Code review completed");

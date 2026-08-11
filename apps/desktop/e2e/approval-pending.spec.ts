@@ -33,7 +33,7 @@ async function openApprovalPendingReplay() {
     .fill("Read /etc/hosts and tell me the first three lines.");
   await app.window.getByRole("button", { name: "Send" }).click();
 
-  await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
   await expect(
     app.window
       .getByRole("region", { name: "Transcript" })
@@ -115,7 +115,7 @@ test("dismisses the pending approval UI after approval", async () => {
       app.window.getByRole("button", { name: "Cancel turn" })
     ).toHaveCount(0);
     await expect(
-      app.window.getByRole("button", { name: "Stop" })
+      app.window.getByTestId("composer-stop-turn")
     ).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
   } finally {
@@ -152,7 +152,7 @@ test("stops the active turn after a queued access-mode change", async () => {
     // (and dropdown value) stays at "default" until the queue flushes.
     await expect(accessMode).toHaveAttribute("data-value", "default");
 
-    await app.window.getByRole("button", { name: "Stop" }).click();
+    await app.window.getByTestId("composer-stop-turn").click();
 
     await expect
       .poll(async () => await app.getInterruptTurnCalls())

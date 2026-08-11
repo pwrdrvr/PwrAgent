@@ -160,6 +160,7 @@ import {
   formatDurationMs,
   formatRunningDurationMs,
 } from "../thread-detail/EnvActionRunsView";
+import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
 import {
   buildThreadComposerScopeKey,
   getNextReleasableQueuedTurn,
@@ -10261,6 +10262,15 @@ export function Composer(props: ComposerProps) {
           above an input that already names itself was redundant
           chrome. */}
 
+      {/* Topmost in the band: ambient agent work the operator did not just
+          launch. Env action rows sit below it, nearer the input, because they
+          carry the Stop the operator is most likely to reach for. */}
+      <ActiveSubAgentsStrip
+        desktopApi={props.desktopApi}
+        onRefreshNavigation={props.onRefreshNavigation}
+        thread={props.thread}
+      />
+
       {props.showEnvActionAnchors === false ? null : (
         <EnvActionAnchorList
           runtime={props.thread?.codexEnvironmentRuntime}
@@ -12262,6 +12272,7 @@ export function Composer(props: ComposerProps) {
           {activeTurnId ? (
             <button
               className="button button--ghost"
+              data-testid="composer-stop-turn"
               disabled={props.disabled || interrupting}
               type="button"
               onClick={() => {

@@ -307,25 +307,25 @@ test("keeps transient turn UI through metadata and premature idle notifications"
       );
     await app.window.getByRole("button", { name: "Send" }).click();
 
-    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
 
     await app.advance({ stepId: "status-active-1" });
     await app.advance({ stepId: "turn-started-1" });
     await app.advance({ stepId: "token-usage-1" });
-    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
 
     await app.advance({ stepId: "rate-limits-1" });
-    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
 
     await app.advance({ stepId: "command-output-1" });
-    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
 
     await app.advance({ stepId: "status-idle-midturn" });
-    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
 
     await app.advance({ stepId: "assistant-delta-1" });
@@ -337,13 +337,13 @@ test("keeps transient turn UI through metadata and premature idle notifications"
 
     await app.advance({ stepId: "status-idle-1" });
 
-    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
 
     await app.advance({ stepId: "turn-completed-1" });
 
     await expect(
-      app.window.getByRole("button", { name: "Stop" })
+      app.window.getByTestId("composer-stop-turn")
     ).toHaveCount(0);
     await expect(
       app.window.getByText("Thinking")
@@ -488,7 +488,7 @@ test("keeps the in-thread thinking indicator visible for active turns without pe
 
     await app.advance({ stepId: "turn-started-1" });
 
-    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await expect(transcript.getByRole("status")).toContainText("Thinking");
     await expect(
       app.window

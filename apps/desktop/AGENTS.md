@@ -151,6 +151,21 @@ elements and fail Playwright strict mode. When writing specs:
 - Target the history buttons themselves via their test ids:
   `history-nav-back` / `history-nav-forward`.
 
+The composer's stop-the-turn button is the same story and has the test id
+`composer-stop-turn`. Use it rather than `getByRole("button", { name:
+"Stop" })`, which 21 call sites across 10 specs once relied on. Adding the
+active sub-agents strip broke every one of them, because a row control named
+"Stop sub-agent: <task>" still matches: **Playwright matches an accessible
+`name` as a normalized substring by default**, so qualifying the new button's
+label was not enough — only `exact: true` or a test id disambiguates. The
+`toHaveCount(0)` assertions were the sharpest edge, since they assert no Stop
+button exists anywhere in the window.
+
+Note the vitest/Playwright asymmetry when you write a unit test to guard one
+of these: Testing Library matches a string `name` **exactly**, so a unit
+assertion that "Stop" no longer resolves will pass while the Playwright
+locator it was meant to protect still breaks.
+
 The same trap runs in the other direction, and it bites the *renderer*
 rather than the spec: **`getByLabel` matches on substring**, and 31 call
 sites across 23 specs drive the composer with `getByLabel("Reply")`. A new
@@ -362,6 +377,18 @@ Things to know when extending the audit:
   hand-written fixture (same class as `readme-recents-hero/`) whose
   threads are `threadStatus: "active"` for exactly that reason. Check
   what your surface renders before trusting a green run.
+- **Some surfaces need seeded sqlite, not a richer fixture.** The active
+  sub-agents strip only renders when a thread has a non-terminal sub-agent or
+  an undismissed failure, and no replay fixture produces one — every producer
+  persists a `ThreadSubAgentSummary` through `upsertThreadSubAgent` into the
+  `threads` payload. `e2e/fixtures/sub-agent-state-seeding.ts` writes that row
+  directly (seed after launch, then `window.reload()` — the renderer does not
+  re-poll on a direct sqlite mutation), the same shape the README capture
+  spec's seeders use. A hand-written `threads` row encodes assumptions about
+  the storage key and payload that the app can change underneath it, and a
+  seeder writing a row nothing reads would leave the audit green while it
+  scanned an absent surface, so `src/main/__tests__/sub-agent-state-seeding.test.ts`
+  pins the round-trip in vitest.
 - **Every surface is audited in both themes.** The file wraps its
   `describe` in `for (const theme of AUDIT_THEMES)` and threads the theme
   into `launchAuditApp({ theme })`, so a new block is gated in light and

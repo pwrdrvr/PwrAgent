@@ -175,6 +175,82 @@ describe("Tangerine Terminal theme contract", () => {
     ).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("leaves finished env-action rows flat so the quiet base stays reachable", () => {
+    // Every run carries exactly one of three status modifiers, so while all
+    // three painted at-rest chrome the transparent base and its :hover rule
+    // could never match — a stack of finished actions still rendered as a
+    // stack of cards, which is the complaint the flat base exists to answer.
+    // Only a live run and a failure earn chrome without being pointed at.
+    const painted = ["running", "failed", "exited"].filter((status) =>
+      new RegExp(
+        `\\.composer__queued--env-action\\.composer__queued--env-action-${status}\\s*\\{[^}]*(background|border-color)`,
+      ).test(css),
+    );
+
+    expect(painted).toEqual(["running", "failed"]);
+  });
+
+  it("keeps compact row actions at the WCAG 2.2 target-size floor", () => {
+    // 2.5.8 AA is 24x24. Padding alone left these around 22px.
+    expect(extractRuleBody(css, ".live-strip__item-action")).toMatch(
+      /min-height:\s*24px;/,
+    );
+  });
+
+  it("keeps every border chevron on one size", () => {
+    // The band above the composer stacks two disclosure rows whose chevrons
+    // sit directly above one another. `.composer__queued-env-action-chevron`
+    // was 10px while everything else was 8px, and the mismatch was invisible
+    // until the sub-agents strip put the two side by side.
+    //
+    // `.directory-row__chevron` is deliberately excluded: it lives in the
+    // sidebar at a different type scale, not in this band.
+    const chevrons = [
+      ".live-work-rail__chevron",
+      ".live-strip__chevron",
+      ".transcript-activity__chevron",
+      ".transcript-work-phase-group__chevron",
+      ".composer__queued-env-action-chevron",
+    ];
+
+    const sizes = chevrons.map((selector) => {
+      const body = extractRuleBody(css, selector);
+      return {
+        selector,
+        width: body.match(/\bwidth:\s*([^;]+);/)?.[1]?.trim(),
+        height: body.match(/\bheight:\s*([^;]+);/)?.[1]?.trim(),
+      };
+    });
+
+    for (const size of sizes) {
+      expect(size, `${size.selector} geometry`).toMatchObject({
+        width: "8px",
+        height: "8px",
+      });
+    }
+  });
+
+  it("keeps the band above the composer on one uppercase-label idiom", () => {
+    // `.composer__queued-label` shipped without the 0.04em tracking its two
+    // neighbours use, so the same 11px/700 caps label rendered two ways
+    // depending on which row drew it.
+    for (const selector of [
+      ".live-work-rail__title",
+      ".live-strip__label",
+      ".composer__queued-label",
+    ]) {
+      const body = extractRuleBody(css, selector);
+      expect(body, `${selector} label idiom`).toMatch(/font-size:\s*11px;/);
+      expect(body, `${selector} label idiom`).toMatch(/font-weight:\s*700;/);
+      expect(body, `${selector} label idiom`).toMatch(
+        /letter-spacing:\s*0\.04em;/,
+      );
+      expect(body, `${selector} label idiom`).toMatch(
+        /text-transform:\s*uppercase;/,
+      );
+    }
+  });
+
   it("does not leave unresolved theme token references in app.css", () => {
     const localTokens = new Set([
       "thinking-scanner-beam-width",
@@ -183,6 +259,9 @@ describe("Tangerine Terminal theme contract", () => {
       "sidebar-rail-inset",
       "sidebar-lane-inset",
       "sidebar-masthead-pull",
+      // Live run strip row height — defined on `.live-strip`, not `:root`.
+      // The four-row scroll cap is derived from it, so the two cannot drift.
+      "live-strip-row-h",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

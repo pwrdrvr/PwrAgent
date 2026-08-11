@@ -36,10 +36,10 @@ function buildRun(
 
 describe("EnvActionAnchorEntry", () => {
   describe("status branches", () => {
-    it("renders the running label with Stop and Terminate while started", () => {
+    it("renders the running label with Stop in the summary while started", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date(1_700_000_000_750));
-      render(
+      const { container } = render(
         <EnvActionAnchorEntry
           run={buildRun({ status: "started", pid: 12345 })}
           environmentName="PwrAgnt"
@@ -53,14 +53,46 @@ describe("EnvActionAnchorEntry", () => {
       expect(
         screen.getByRole("button", { name: "Stop" }),
       ).toBeInTheDocument();
+      // Force-stop is the destructive escalation and now costs one deliberate
+      // expand: it exists, but never in the collapsed summary next to Stop.
+      const summary = container.querySelector(
+        ".composer__queued-env-action-summary",
+      );
       expect(
-        screen.getByRole("button", { name: "Terminate" }),
+        summary?.querySelector(".composer__queued-env-action-terminate-action"),
+      ).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Terminate now" }),
       ).toBeInTheDocument();
       // The pid meta and the command echo land in the same anchor.
       expect(screen.getByText(/pid 12345/)).toBeInTheDocument();
       expect(screen.getByText(/running for 0s/)).toBeInTheDocument();
       expect(screen.queryByText(/750ms/)).toBeNull();
       expect(screen.getByText(/\$ pnpm test/)).toBeInTheDocument();
+    });
+
+    it("marks a running row with the blinking liveness dot, and finished rows without one", () => {
+      const { container, rerender } = render(
+        <EnvActionAnchorEntry
+          run={buildRun({ status: "started" })}
+          environmentName={undefined}
+          onDismiss={() => {}}
+        />,
+      );
+      // Reuses the house `.status-dot--blink` pulse, which the existing
+      // prefers-reduced-motion rule in app.css already suppresses.
+      expect(
+        container.querySelector(".status-dot--active.status-dot--blink"),
+      ).not.toBeNull();
+
+      rerender(
+        <EnvActionAnchorEntry
+          run={buildRun({ status: "exited", exitCode: 0 })}
+          environmentName={undefined}
+          onDismiss={() => {}}
+        />,
+      );
+      expect(container.querySelector(".status-dot--blink")).toBeNull();
     });
 
     it("renders the exited label with exit code + duration meta and shows Dismiss", () => {
@@ -238,17 +270,12 @@ describe("EnvActionAnchorEntry", () => {
         expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
       });
 
-      const terminateButton = screen.getByRole("button", { name: "Terminate" });
-      expect(terminateButton).not.toHaveAttribute("title");
-      fireEvent.mouseEnter(terminateButton);
-      expect(await screen.findByRole("tooltip")).toHaveClass("viewport-tooltip");
-      expect(screen.getByRole("tooltip")).toHaveTextContent("Terminate now");
-      expect(screen.getByRole("tooltip")).toHaveTextContent("Force-kills");
-
-      fireEvent.mouseLeave(terminateButton);
-      await waitFor(() => {
-        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
-      });
+      // Terminate is no longer an icon control in the summary, so it carries
+      // no tooltip — the expanded body states the consequence in prose.
+      expect(screen.getByRole("button", { name: "Terminate now" })).toHaveClass(
+        "composer__queued-env-action-terminate-action",
+      );
+      expect(screen.getByText(/Force-kills the process tree/)).toBeInTheDocument();
 
       const sidebarButton = screen.getByRole("button", {
         name: "Move action to the sidebar Actions panel",
@@ -275,7 +302,7 @@ describe("EnvActionAnchorEntry", () => {
       expect(onStop).toHaveBeenCalledWith(run, "stop");
     });
 
-    it("invokes onStop with terminate when the user clicks Terminate", () => {
+    it("invokes onStop with terminate from the expanded body's Terminate now", () => {
       const onStop = vi.fn();
       const run = buildRun({ status: "started" });
       render(
@@ -286,8 +313,20 @@ describe("EnvActionAnchorEntry", () => {
           onStop={onStop}
         />,
       );
-      fireEvent.click(screen.getByRole("button", { name: "Terminate" }));
+      fireEvent.click(screen.getByRole("button", { name: "Terminate now" }));
       expect(onStop).toHaveBeenCalledWith(run, "terminate");
+    });
+
+    it("offers no force-stop control once the run is no longer started", () => {
+      render(
+        <EnvActionAnchorEntry
+          run={buildRun({ status: "exited", exitCode: 0 })}
+          environmentName={undefined}
+          onDismiss={() => {}}
+          onStop={() => {}}
+        />,
+      );
+      expect(screen.queryByRole("button", { name: "Terminate now" })).toBeNull();
     });
   });
 

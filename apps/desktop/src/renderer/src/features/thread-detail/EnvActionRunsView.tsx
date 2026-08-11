@@ -223,6 +223,16 @@ export function EnvActionRunEntry(props: {
           className="composer__queued-env-action-chevron"
           aria-hidden="true"
         />
+        {status === "started" ? (
+          // Liveness, paired with the once-a-second elapsed counter in `meta`.
+          // The dot answers "is it frozen?" at a glance; the counter answers it
+          // definitively and is the half that survives prefers-reduced-motion,
+          // which suppresses `.status-dot--blink`.
+          <span
+            className="status-dot status-dot--active status-dot--blink"
+            aria-hidden="true"
+          />
+        ) : null}
         <span className="composer__queued-env-action-summary-text">
           <span className="composer__queued-label">{label}</span>
           <span className="composer__queued-text">
@@ -243,40 +253,22 @@ export function EnvActionRunEntry(props: {
         </span>
         <span className="composer__queued-env-action-actions">
           {status === "started" ? (
-            <>
-              <EnvActionControlButton
-                ariaLabel="Stop"
-                className="composer__queued-env-action-stop"
-                disabled={stopping}
-                tooltip={[
-                  "Stop gracefully",
-                  "Sends SIGTERM first, then force terminates if the process tree does not exit.",
-                ].join("\n")}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  props.onStop?.(run, "stop");
-                }}
-              >
-                <EnvActionStopIcon />
-              </EnvActionControlButton>
-              <EnvActionControlButton
-                ariaLabel="Terminate"
-                className="composer__queued-env-action-terminate"
-                disabled={stopping && terminationMode === "terminate"}
-                tooltip={[
-                  "Terminate now",
-                  "Force-kills the process tree immediately.",
-                ].join("\n")}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  props.onStop?.(run, "terminate");
-                }}
-              >
-                <EnvActionTerminateIcon />
-              </EnvActionControlButton>
-            </>
+            <EnvActionControlButton
+              ariaLabel="Stop"
+              className="composer__queued-env-action-stop"
+              disabled={stopping}
+              tooltip={[
+                "Stop gracefully",
+                "Sends SIGTERM first, then force terminates if the process tree does not exit.",
+              ].join("\n")}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                props.onStop?.(run, "stop");
+              }}
+            >
+              <EnvActionStopIcon />
+            </EnvActionControlButton>
           ) : (
             <button
               className="composer__secondary-action composer__queued-env-action-dismiss"
@@ -331,6 +323,29 @@ export function EnvActionRunEntry(props: {
           </div>
           <EnvActionOutputBlock output={output} status={status} />
         </div>
+        {status === "started" ? (
+          <div className="composer__queued-env-action-section">
+            <div className="composer__queued-env-action-section-label">
+              Force stop
+            </div>
+            <button
+              className="composer__secondary-action composer__queued-env-action-terminate-action"
+              type="button"
+              disabled={stopping && terminationMode === "terminate"}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                props.onStop?.(run, "terminate");
+              }}
+            >
+              Terminate now
+            </button>
+            <p className="composer__queued-env-action-hint">
+              Force-kills the process tree immediately. Stop sends SIGTERM
+              first and only escalates if the tree does not exit.
+            </p>
+          </div>
+        ) : null}
       </div>
     </details>
   );
@@ -391,25 +406,6 @@ function EnvActionStopIcon(): ReactNode {
       aria-hidden="true"
     >
       <rect x="7" y="7" width="10" height="10" rx="2" />
-    </svg>
-  );
-}
-
-function EnvActionTerminateIcon(): ReactNode {
-  return (
-    <svg
-      className="composer__queued-env-action-icon"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="7" />
-      <line x1="7.05" y1="7.05" x2="16.95" y2="16.95" />
     </svg>
   );
 }

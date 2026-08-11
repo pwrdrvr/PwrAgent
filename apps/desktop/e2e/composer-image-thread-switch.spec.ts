@@ -321,7 +321,7 @@ test("keeps a pasted composer image after switching away from a newly created th
     await app.advance({ stepId: "assistant-message-2" });
     await expect(transcript).toContainText("Second response completed.");
     await app.advance({ stepId: "turn-completed-1" });
-    await expect(app.window.getByRole("button", { name: "Stop" })).toHaveCount(0);
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
 
     await pasteDelayedImage(app.window);
     await app.window

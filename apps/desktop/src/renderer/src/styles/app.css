@@ -63,7 +63,11 @@
   --accent-shadow: color-mix(in srgb, var(--accent) 34%, transparent);
   --focus-ring: var(--accent);
   --danger-soft: rgba(185, 66, 50, 0.24);
-  --danger-border: var(--danger-border);
+  /* Was `var(--danger-border)` — self-referential, so the property was invalid
+     at computed-value time and all 33 `var(--danger-border)` consumers fell
+     back to `currentColor` in the default (dark) theme. Alpha follows the
+     light theme's soft:border ratio against this theme's --danger-soft. */
+  --danger-border: rgba(185, 66, 50, 0.45);
   --danger-text: #ffb0a1;
   --success-soft: rgba(74, 148, 92, 0.18);
   --success-text: #9ce5b3;
@@ -19176,10 +19180,15 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 2px;
 }
 
+/* Same uppercase-label idiom as `.live-work-rail__title` and
+   `.live-strip__label`, tracking included — all three stack in the band above
+   the composer, so a label that tracks differently reads as a different kind
+   of thing. */
 .composer__queued-label {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
@@ -19241,14 +19250,38 @@ a.transcript-message__messaging-origin:focus-visible {
    meant for the steer/permissions/queued-turn pattern; for the
    env-action anchor we override to block so <details>/<summary> can
    own the layout. */
+/* Quiet at rest. An action row is a one-line status readout, not a unit of
+   interaction, so it does not earn card chrome just for existing — N parallel
+   runs used to stack N identical elevated cards above the reply box. Chrome
+   arrives when the row is running, hovered, focused, or open. See
+   docs/brainstorms/2026-08-10-live-run-strip-above-composer-requirements.md */
 .composer__queued--env-action {
   display: block;
   padding: 0;
+  background: transparent;
+  border-color: transparent;
+}
+
+.composer__queued--env-action:hover,
+.composer__queued--env-action:focus-within,
+.composer__queued--env-action[open] {
   background: var(--bg-panel-elevated);
   border-color: var(--border-subtle);
 }
 
-.composer__queued--env-action-failed {
+/* The one row in the stack whose state is still changing keeps its chrome
+   without being pointed at. (This modifier was applied by EnvActionRunsView
+   from the start but matched no rule at all, so a running action was
+   pixel-identical to a finished one.) */
+.composer__queued--env-action.composer__queued--env-action-running {
+  background: var(--bg-panel-elevated);
+  border-color: var(--border-subtle);
+}
+
+/* Terminal states stay tinted whether or not the pointer is over them, so
+   these carry both classes to outrank the :hover rule above rather than
+   relying on source order alone. */
+.composer__queued--env-action.composer__queued--env-action-failed {
   border-color: var(--danger-border);
   background: color-mix(in srgb, var(--danger-soft) 40%, var(--bg-panel-elevated));
 }
@@ -19257,15 +19290,23 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--danger-text);
 }
 
-.composer__queued--env-action-exited {
-  border-color: color-mix(in srgb, var(--status-warning) 36%, var(--border-subtle));
-}
+/* `exited` deliberately has NO at-rest chrome, which is what makes the
+   transparent base above reachable at all. Every run carries exactly one of
+   the three status modifiers, so while this one also painted a background and
+   a border, no row was ever quiet and a stack of finished actions still read
+   as a stack of cards — the exact complaint the flat base was added to fix.
+   A clean exit is also not a caution, so the old --status-warning border was
+   saying the wrong thing about `exit 0`. The label and `exit N · ran Xs` carry
+   the outcome; chrome arrives on hover, focus, or open like any other row. */
 
+/* padding-left matches `.live-strip__row`'s 8px so the two disclosure rows in
+   this band share a left edge — their chevrons stack directly above one
+   another and any mismatch is obvious at a glance. */
 .composer__queued-env-action-summary {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px 5px 10px;
+  padding: 5px 8px;
   cursor: pointer;
   list-style: none;
   user-select: none;
@@ -19281,10 +19322,13 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: -2px;
 }
 
+/* 8px, matching `.live-work-rail__chevron` and every other border chevron in
+   the app. This was the lone 10px one, which read as a mistake once the
+   sub-agents strip put an 8px chevron two rows above it. */
 .composer__queued-env-action-chevron {
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   flex: 0 0 auto;
   border-right: 1.5px solid var(--text-muted);
   border-bottom: 1.5px solid var(--text-muted);
@@ -19334,11 +19378,14 @@ a.transcript-message__messaging-origin:focus-visible {
   flex: 0 0 auto;
 }
 
+/* 22px rather than 26px: the control is what sets the collapsed row's height,
+   and Terminate moved into the expanded body, so the remaining controls no
+   longer need to carry the row. */
 .composer__queued-env-action-actions .composer__queued-env-action-control {
-  width: 26px;
-  min-width: 26px;
-  min-height: 26px;
-  height: 26px;
+  width: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  height: 22px;
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -19469,6 +19516,252 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: pre;
   user-select: text;
   -webkit-user-select: text;
+}
+
+/* Force-stop lives in the expanded body, not the collapsed summary: it is the
+   destructive escalation and should cost one deliberate expand rather than
+   sitting a pixel from Stop for the life of every run. */
+.composer__queued-env-action-terminate-action {
+  align-self: flex-start;
+  color: var(--danger-text);
+  border-color: var(--danger-border);
+}
+
+.composer__queued-env-action-terminate-action:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+.composer__queued-env-action-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* ============================================================
+   LIVE RUN STRIP
+   A compact disclosure row for transient run state above the composer, used
+   today by the active sub-agents group (ActiveSubAgentsStrip.tsx).
+
+   Deliberately NOT a card: the band above the reply box already stacks the
+   LiveWorkRail, the env-action rows, and the steer/permissions rows, and four
+   surfaces sharing one elevated-card treatment is what makes that band read as
+   a wall. Geometry, chevron, and label idiom are copied from the existing
+   primitives rather than re-picked — see
+   docs/brainstorms/2026-08-10-live-run-strip-above-composer-requirements.md
+   ============================================================ */
+.live-strip {
+  /* Row height is a variable because the list caps at exactly four of them. */
+  --live-strip-row-h: 28px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* The toggle and the bulk-dismiss action are siblings: a button cannot nest
+   inside the toggle button. */
+.live-strip__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.live-strip__header .live-strip__row {
+  flex: 1 1 auto;
+}
+
+.live-strip__dismiss-all {
+  margin-right: 8px;
+}
+
+/* Quiet at rest, chrome on hover/focus — same treatment as
+   `.transcript-work-phase-group__toggle`. */
+.live-strip__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--live-strip-row-h);
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.live-strip__row:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.live-strip__row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Canonical border chevron (`.live-work-rail__chevron`). `flex: 0 0 auto` is
+   mandatory — without it the 8px box collapses in a narrow column. */
+.live-strip__chevron {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.live-strip__row[aria-expanded="true"] .live-strip__chevron {
+  transform: rotate(45deg);
+}
+
+.live-strip__label {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Counts rank via neutrals, never the accent ramp (UI-THEME "Accent ramp"). */
+.live-strip__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Secondary tally next to the count, e.g. "12 failed" beside one live run.
+   Ranks below the count via neutrals, never the accent ramp. */
+.live-strip__note {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Pushes the liveness mark to the trailing edge. */
+.live-strip__row-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.live-strip__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0 0 0 16px;
+  list-style: none;
+  /* Exactly four rows, then scroll — an unbounded list would push the composer
+     down the window, which is the failure this strip exists to avoid. */
+  max-height: calc(4 * var(--live-strip-row-h));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.live-strip__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: var(--live-strip-row-h);
+  padding: 0 8px;
+}
+
+.live-strip__item-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A reserved, right-aligned column. Left to size themselves, "0m 12s" and
+   "Failed" ended 17px apart and the rail read as ragged across four rows. */
+.live-strip__item-time {
+  flex: 0 0 auto;
+  min-width: 56px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Holds the row's action, or holds its place when the row has none. */
+.live-strip__item-slot {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  min-width: 62px;
+}
+
+.live-strip__item--failed .live-strip__item-time {
+  color: var(--danger-text);
+}
+
+/* 24px min-height is the WCAG 2.2 AA target-size floor (2.5.8). The padding
+   alone left these around 22px, and the 28px row has the room. */
+.live-strip__item-action {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.live-strip__item-action:hover:not(:disabled) {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.live-strip__item-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.live-strip__item-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.live-strip__item-action--danger:hover:not(:disabled) {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
 }
 
 /* Pasted-image strip sits directly above the chat entry (see Composer.tsx).
@@ -22549,6 +22842,12 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .status-dot--error {
   background: var(--status-error);
+}
+
+/* "Running" in the dot vocabulary, matching `.rail-chip__dot--active`. Accent
+   rather than a --status-* token because a live process is not an outcome. */
+.status-dot--active {
+  background: var(--accent);
 }
 
 @keyframes status-blink {

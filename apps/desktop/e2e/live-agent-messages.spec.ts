@@ -61,7 +61,7 @@ test("preserves live assistant commentary messages, exploration activity, and fi
       .fill("What would it take to add Telegram support?");
     await app.window.getByRole("button", { name: "Send" }).click();
 
-    await expect(app.window.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await expect(app.window.getByRole("status")).toContainText("Thinking");
     await expectAtTranscriptBottom(list);
 
@@ -125,7 +125,7 @@ test("preserves live assistant commentary messages, exploration activity, and fi
 
     await app.advance({ stepId: "turn-completed-1" });
 
-    await expect(app.window.getByRole("button", { name: "Stop" })).toHaveCount(0);
+    await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
     await expect(app.window.getByText("Thinking")).toHaveCount(0);
     await expectAtTranscriptBottom(list);
     const workedForToggle = transcript.getByRole("button", {
