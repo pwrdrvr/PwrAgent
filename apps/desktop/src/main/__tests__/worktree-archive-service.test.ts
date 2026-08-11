@@ -9,8 +9,7 @@ import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 const execFileAsync = promisify(execFile);
 
 async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, {
-    cwd,
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 10,
   });

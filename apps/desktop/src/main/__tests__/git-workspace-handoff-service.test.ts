@@ -18,8 +18,7 @@ function toForwardSlashes(value: string): string {
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, {
-    cwd,
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 10,
   });
@@ -66,7 +65,7 @@ async function createRepo(): Promise<string> {
 afterEach(async () => {
   await Promise.all(
     cleanupPaths.splice(0).map((target) =>
-      rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+      rm(target, { recursive: true, force: true }),
     ),
   );
 });
