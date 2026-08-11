@@ -21,6 +21,7 @@ import type {
 } from "../../shared/integrated-terminal";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 18;
@@ -129,11 +130,10 @@ export class IntegratedTerminalService {
         cols: clampInteger(request.cols, DEFAULT_COLUMNS, 2, MAX_COLUMNS),
         rows: clampInteger(request.rows, DEFAULT_ROWS, 2, MAX_ROWS),
         cwd,
-        env: {
-          ...env,
+        env: buildPwrAgentChildProcessEnv(env, {
           TERM: "xterm-256color",
           COLORTERM: "truecolor",
-        },
+        }),
       });
     } catch (error) {
       const message = terminalStartErrorMessage(error);

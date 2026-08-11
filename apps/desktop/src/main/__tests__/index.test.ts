@@ -236,8 +236,13 @@ vi.mock("../auto-updater", () => ({
 }));
 
 const isUpdateInstallInProgressMock = vi.fn(() => false);
+const isUpdateInstallUpdaterQuitReadyMock = vi.fn(() => false);
+const setUpdateInstallPreparationHandlerMock = vi.fn();
 vi.mock("../update-install-state", () => ({
   isUpdateInstallInProgress: () => isUpdateInstallInProgressMock(),
+  isUpdateInstallUpdaterQuitReady: () =>
+    isUpdateInstallUpdaterQuitReadyMock(),
+  setUpdateInstallPreparationHandler: setUpdateInstallPreparationHandlerMock,
 }));
 
 vi.mock("../app-log-window", () => ({
@@ -496,6 +501,9 @@ describe("bootstrapApp", () => {
     isQuitAllowedMock.mockReturnValue(true);
     isUpdateInstallInProgressMock.mockReset();
     isUpdateInstallInProgressMock.mockReturnValue(false);
+    isUpdateInstallUpdaterQuitReadyMock.mockReset();
+    isUpdateInstallUpdaterQuitReadyMock.mockReturnValue(false);
+    setUpdateInstallPreparationHandlerMock.mockReset();
     mainLogInfoMock.mockReset();
     mainLogWarnMock.mockReset();
     mainLogErrorMock.mockReset();
@@ -764,12 +772,59 @@ describe("bootstrapApp", () => {
     // relaunch. If we answered that window-all-closed with our own app.quit()
     // we would race the native teardown and strand the app on the old version.
     isUpdateInstallInProgressMock.mockReturnValue(true);
+    isUpdateInstallUpdaterQuitReadyMock.mockReturnValue(true);
     requestQuitMock.mockClear();
 
     appEventHandlers.get("window-all-closed")?.();
     await flushMicrotasks();
 
     expect(requestQuitMock).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept the updater-owned before-quit event", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    isUpdateInstallInProgressMock.mockReturnValue(true);
+    isUpdateInstallUpdaterQuitReadyMock.mockReturnValue(true);
+    const event = { preventDefault: vi.fn() };
+    appEventHandlers.get("before-quit")?.(event);
+    await vi.waitFor(() =>
+      expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce(),
+    );
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(quitMock).not.toHaveBeenCalled();
+  });
+
+  it("holds before-quit while update shutdown preparation is pending", async () => {
+    let finishMessaging!: () => void;
+    startupProfilerInstance.start.mockResolvedValue();
+    disposeDesktopMessagingRuntimeMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishMessaging = resolve;
+      }),
+    );
+
+    await import("../index");
+    await flushMicrotasks();
+
+    isUpdateInstallInProgressMock.mockReturnValue(true);
+    isUpdateInstallUpdaterQuitReadyMock.mockReturnValue(false);
+    const event = { preventDefault: vi.fn() };
+    appEventHandlers.get("before-quit")?.(event);
+    await flushMicrotasks();
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(quitMock).not.toHaveBeenCalled();
+
+    finishMessaging();
+    await vi.waitFor(() =>
+      expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce(),
+    );
+    expect(quitMock).not.toHaveBeenCalled();
   });
 
   it("creates a main window when a profile focus request arrives without one", async () => {
@@ -1070,20 +1125,17 @@ describe("bootstrapApp", () => {
     expect(createMainWindowMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps ipc handlers registered until Electron reaches will-quit", async () => {
+  it("awaits async resource disposal before completing quit", async () => {
     startupProfilerInstance.start.mockResolvedValue();
 
     await import("../index");
     await flushMicrotasks();
 
-    appEventHandlers.get("before-quit")?.();
+    const event = { preventDefault: vi.fn() };
+    appEventHandlers.get("before-quit")?.(event);
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
 
-    expect(disposeComposerDraftIpcHandlersMock).not.toHaveBeenCalled();
-    expect(disposeIntegratedTerminalIpcHandlersMock).not.toHaveBeenCalled();
-    expect(disposeSettingsIpcHandlersMock).not.toHaveBeenCalled();
-
-    appEventHandlers.get("will-quit")?.();
-
+    expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -1092,6 +1144,95 @@ describe("bootstrapApp", () => {
       disposeAppStateMock.mock.invocationCallOrder[0],
     );
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(disposeAppStateMock).toHaveBeenCalledTimes(1);
+    expect(quitMock).toHaveBeenCalledTimes(1);
+
+    appEventHandlers.get("before-quit")?.(event);
+    await flushMicrotasks();
+    expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes renderer windows before removing draft IPC handlers", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    let destroyed = false;
+    let closedHandler: (() => void) | undefined;
+    const rendererWindow = {
+      id: 42,
+      close: vi.fn(),
+      destroy: vi.fn(() => {
+        destroyed = true;
+        closedHandler?.();
+      }),
+      isDestroyed: vi.fn(() => destroyed),
+      once: vi.fn((event: string, handler: () => void) => {
+        if (event === "closed") {
+          closedHandler = handler;
+        }
+      }),
+    };
+    getAllWindowsMock.mockReturnValue([rendererWindow] as never[]);
+
+    const event = { preventDefault: vi.fn() };
+    appEventHandlers.get("before-quit")?.(event);
+    await flushMicrotasks();
+
+    expect(rendererWindow.close).toHaveBeenCalledOnce();
+    expect(disposeComposerDraftIpcHandlersMock).not.toHaveBeenCalled();
+    expect(disposeAppServerIpcHandlersMock).not.toHaveBeenCalled();
+
+    destroyed = true;
+    closedHandler?.();
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledOnce());
+
+    expect(
+      rendererWindow.close.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      disposeComposerDraftIpcHandlersMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("reuses one quit barrier while messaging and app-server teardown settle", async () => {
+    let finishMessaging!: () => void;
+    let finishAppServer!: () => void;
+    disposeDesktopMessagingRuntimeMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishMessaging = resolve;
+      }),
+    );
+    disposeAppServerIpcHandlersMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishAppServer = resolve;
+      }),
+    );
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const event = { preventDefault: vi.fn() };
+    appEventHandlers.get("before-quit")?.(event);
+    appEventHandlers.get("before-quit")?.(event);
+    await flushMicrotasks();
+
+    expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledOnce();
+    expect(disposeAppServerIpcHandlersMock).not.toHaveBeenCalled();
+    expect(quitMock).not.toHaveBeenCalled();
+
+    finishMessaging();
+    await vi.waitFor(() =>
+      expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce(),
+    );
+    expect(quitMock).not.toHaveBeenCalled();
+
+    finishAppServer();
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledOnce());
+    expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledOnce();
+    expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce();
   });
 
   it("handles messaging runtime disposal failures during shutdown", async () => {
@@ -1103,13 +1244,17 @@ describe("bootstrapApp", () => {
     await import("../index");
     await flushMicrotasks();
 
-    appEventHandlers.get("will-quit")?.();
-    await flushMicrotasks();
+    appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledOnce());
 
     expect(mainLogWarnMock).toHaveBeenCalledWith(
-      "messaging runtime disposal failed during shutdown",
-      { error: "adapter stop failed" },
+      "shutdown phase failed",
+      expect.objectContaining({
+        error: "adapter stop failed",
+        phase: "messaging",
+      }),
     );
+    expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce();
   });
 
   it("routes closing the last window through the shared quit flow", async () => {
@@ -1119,6 +1264,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     appEventHandlers.get("window-all-closed")?.();
+    await flushMicrotasks();
 
     expect(requestQuitMock).toHaveBeenCalledWith({
       source: "window-all-closed",
@@ -1127,6 +1273,7 @@ describe("bootstrapApp", () => {
 
   it("does not re-enter quit when the confirmation window closes after cancellation", async () => {
     let resolveQuit!: (didQuit: boolean) => void;
+    isQuitAllowedMock.mockReturnValue(false);
     requestQuitMock.mockReturnValue(
       new Promise<boolean>((resolve) => {
         resolveQuit = resolve;
@@ -1146,7 +1293,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
     appEventHandlers.get("activate")?.();
 
-    expect(createMainWindowMock).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(createMainWindowMock).toHaveBeenCalledTimes(2));
   });
 
   it("completes quit when all windows close after before-quit approves shutdown", async () => {
@@ -1164,6 +1311,7 @@ describe("bootstrapApp", () => {
     appEventHandlers.get("before-quit")?.(event);
     await flushMicrotasks();
     appEventHandlers.get("window-all-closed")?.();
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
 
     expect(event.preventDefault).toHaveBeenCalledTimes(1);
     expect(requestQuitMock).toHaveBeenCalledWith({ source: "before-quit" });
@@ -1233,8 +1381,10 @@ describe("bootstrapApp", () => {
 
     expect(registerRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
 
-    appEventHandlers.get("will-quit")?.();
-    expect(disposeApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
+    appEventHandlers.get("before-quit")?.({ preventDefault: vi.fn() });
+    await vi.waitFor(() =>
+      expect(disposeApplicationIpcHandlersMock).toHaveBeenCalledTimes(1),
+    );
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -1257,6 +1407,7 @@ describe("bootstrapApp", () => {
     }
 
     expect(() => sigtermHandler("SIGTERM")).not.toThrow();
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
 
     expect(getRuntimeMessagingLeaseCoordinatorMock).not.toHaveBeenCalled();
     expect(messagingLeaseShutdownSyncMock).not.toHaveBeenCalled();
@@ -1277,6 +1428,7 @@ describe("bootstrapApp", () => {
     }
 
     sigtermHandler("SIGTERM");
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
 
     expect(messagingLeaseShutdownSyncMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);

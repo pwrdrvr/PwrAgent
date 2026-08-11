@@ -110,6 +110,35 @@ describe("GrokStdioJsonRpcTransport", () => {
     await closePromise;
   });
 
+  it("does not pass PwrAgent's renderer URL to the Grok app server", async () => {
+    const child = new MockGrokChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new GrokStdioJsonRpcTransport({
+      apiKey: "test-key",
+      command: "node",
+      entryPath: "grok-app-server.mjs",
+      env: {
+        ELECTRON_RENDERER_URL: "http://localhost:5175",
+        KEEP_GROK_ENV: "yes",
+      },
+    });
+
+    await transport.connect();
+
+    expect(spawnMock.mock.calls[0]?.[2]?.env).toMatchObject({
+      ELECTRON_RUN_AS_NODE: "1",
+      KEEP_GROK_ENV: "yes",
+    });
+    expect(spawnMock.mock.calls[0]?.[2]?.env).not.toHaveProperty(
+      "ELECTRON_RENDERER_URL",
+    );
+
+    const closePromise = transport.close();
+    child.exitCode = 0;
+    child.emit("close", 0, null);
+    await closePromise;
+  });
+
   it("waits for the child process to close before resolving close", async () => {
     const child = new MockGrokChildProcess();
     spawnMock.mockReturnValue(child);

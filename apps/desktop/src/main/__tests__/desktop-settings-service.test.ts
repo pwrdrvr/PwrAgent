@@ -24,6 +24,55 @@ function createTempRoot(): string {
 }
 
 describe("DesktopSettingsService", () => {
+  it("forces discovery refresh and invalidates command-setting writes", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const discover = vi.fn(async () => ({
+      candidates: [
+        {
+          command: "/opt/codex",
+          executable: true,
+          selected: true,
+          source: "config" as const,
+          version: "0.126.0",
+        },
+      ],
+      selectedCommand: "/opt/codex",
+      selectedSource: "config" as const,
+    }));
+    const invalidate = vi.fn();
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover,
+        invalidate,
+        resolve: vi.fn(async () => ({
+          command: "/opt/codex",
+          source: "config" as const,
+          version: "0.126.0",
+        })),
+      },
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.readSettings();
+    await service.refreshCodexDiscovery();
+    expect(discover).toHaveBeenNthCalledWith(2, undefined, {
+      allowStaleSuccess: true,
+      force: true,
+    });
+
+    await service.writeConfigPatch({
+      models: { codex: { path: "/opt/codex" } },
+    });
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(discover).toHaveBeenLastCalledWith("/opt/codex", {
+      allowStaleSuccess: true,
+      force: false,
+    });
+  });
+
   it("loads TOML values from the desktop config path", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
@@ -1158,6 +1207,35 @@ describe("DesktopSettingsService", () => {
       "/Users/alice/.sdkman/candidates/sbt/current/bin:/usr/bin",
     );
     expect(service.resolveCodexSpawnEnv().NVM_DIR).toBe("/Users/alice/.nvm");
+  });
+
+  it("keeps the PwrAgent renderer URL out of Codex and terminal child environments", async () => {
+    const service = new DesktopSettingsService({
+      env: {
+        ELECTRON_RENDERER_URL: "http://localhost:5173",
+        PATH: "/usr/bin:/bin",
+      } as NodeJS.ProcessEnv,
+      secretStore: new MemoryDesktopSecretStore(),
+      resolveCodexShellEnv: () => ({
+        ELECTRON_RENDERER_URL: "http://localhost:5175",
+        PATH: "/opt/homebrew/bin:/usr/bin",
+        NVM_DIR: "/Users/alice/.nvm",
+      }),
+    });
+
+    const codexEnv = service.resolveCodexSpawnEnv();
+    const terminalEnv = await service.resolveTerminalSpawnEnvAsync();
+
+    expect(codexEnv).not.toHaveProperty("ELECTRON_RENDERER_URL");
+    expect(terminalEnv).not.toHaveProperty("ELECTRON_RENDERER_URL");
+    expect(codexEnv).toMatchObject({
+      PATH: "/opt/homebrew/bin:/usr/bin",
+      NVM_DIR: "/Users/alice/.nvm",
+    });
+    expect(terminalEnv).toMatchObject({
+      PATH: "/opt/homebrew/bin:/usr/bin",
+      NVM_DIR: "/Users/alice/.nvm",
+    });
   });
 
   it("applies env overrides above TOML and keeps the Grok API key in keychain", async () => {

@@ -6,6 +6,7 @@ import type {
   SettingsCredentialTestResult,
   SettingsCredentialTestStatus,
 } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import type { CredentialValidationRequest } from "../messaging/messaging-runtime";
 import {
@@ -503,6 +504,7 @@ async function defaultRunCodexVersion(
   command: string,
 ): Promise<{ stdout: string; stderr: string }> {
   const { stdout, stderr } = await execFileAsync(command, ["--version"], {
+    env: buildPwrAgentChildProcessEnv(process.env),
     timeout: DEFAULT_PROBE_TIMEOUT_MS,
   });
   return {

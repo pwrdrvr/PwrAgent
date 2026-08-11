@@ -18,11 +18,15 @@ class MockAcpChildProcess extends EventEmitter {
   });
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
   killCalled = false;
 
-  kill(): void {
+  kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.killCalled = true;
+    this.signalCode = signal;
     this.emit("close");
+    return true;
   }
 }
 
@@ -40,6 +44,46 @@ function createDescriptor(overrides: Partial<AcpLaunchDescriptor> = {}): AcpLaun
 }
 
 describe("AcpStdioJsonRpcTransport", () => {
+  it("routes a Windows ACP batch shim through ComSpec", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.stubEnv("ComSpec", "C:\\Windows\\System32\\cmd.exe");
+    try {
+      const child = new MockAcpChildProcess();
+      const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];
+      const spawn: AcpStdioSpawn = (command, args, options) => {
+        spawnCalls.push([command, args, options]);
+        return child;
+      };
+      const transport = new AcpStdioJsonRpcTransport({
+        launchDescriptor: createDescriptor({
+          distributionKind: "local",
+          command:
+            "C:\\Users\\Ops & Dev\\AppData\\Roaming\\npm\\gemini.cmd",
+          args: ["--acp"],
+        }),
+        spawn,
+      });
+
+      await transport.connect();
+
+      expect(spawnCalls[0]?.[0]).toBe("C:\\Windows\\System32\\cmd.exe");
+      expect(spawnCalls[0]?.[1]).toEqual([
+        "/d",
+        "/s",
+        "/c",
+        expect.stringMatching(/gemini\.cmd.*--acp/i),
+      ]);
+      expect(spawnCalls[0]?.[2]).toMatchObject({
+        detached: false,
+        windowsVerbatimArguments: true,
+      });
+      await transport.close();
+    } finally {
+      platform.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("launches the descriptor command directly and writes newline JSON-RPC", async () => {
     const child = new MockAcpChildProcess();
     const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];
@@ -88,6 +132,30 @@ describe("AcpStdioJsonRpcTransport", () => {
       `${JSON.stringify({ jsonrpc: "2.0", id: envelope.id, result: { ok: true } })}\n`,
     );
     await expect(request).resolves.toEqual({ ok: true });
+  });
+
+  it("does not pass PwrAgent's renderer URL to ACP agent sessions", async () => {
+    const child = new MockAcpChildProcess();
+    const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];
+    const spawn: AcpStdioSpawn = (command, args, options) => {
+      spawnCalls.push([command, args, options]);
+      return child;
+    };
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor({
+        env: {
+          ACP_TEST: "1",
+          ELECTRON_RENDERER_URL: "http://localhost:5175",
+        },
+      }),
+      spawn,
+    });
+
+    await transport.connect();
+
+    expect(spawnCalls[0]?.[2].env).toMatchObject({ ACP_TEST: "1" });
+    expect(spawnCalls[0]?.[2].env).not.toHaveProperty("ELECTRON_RENDERER_URL");
+    await transport.close();
   });
 
   it("adds Gemini session trust when launching persisted local descriptors", async () => {
@@ -232,5 +300,63 @@ describe("AcpStdioJsonRpcTransport", () => {
       result: { ok: true },
     });
     await transport.close();
+  });
+
+  it("prevents reconnect and late requests after close", async () => {
+    const child = new MockAcpChildProcess();
+    const spawn = vi.fn(() => child);
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      spawn,
+    });
+
+    await transport.connect();
+    await transport.close();
+
+    await expect(transport.connect()).rejects.toThrow("transport is closed");
+    await expect(transport.request("session/new")).rejects.toThrow(
+      "transport is closed",
+    );
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it("cleans up a child whose stdio pipes are unavailable", async () => {
+    const child = new MockAcpChildProcess();
+    Object.defineProperty(child, "stderr", { value: null });
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      spawn: () => child,
+    });
+
+    await expect(transport.connect()).rejects.toThrow(
+      "ACP stdio pipes unavailable",
+    );
+    expect(child.killCalled).toBe(true);
+  });
+
+  it("waits for ACP exit and escalates when SIGTERM is resisted", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new MockAcpChildProcess();
+      child.kill = vi.fn(() => false);
+      const transport = new AcpStdioJsonRpcTransport({
+        launchDescriptor: createDescriptor(),
+        spawn: () => child,
+      });
+      await transport.connect();
+
+      const close = transport.close();
+      await Promise.resolve();
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+      child.signalCode = "SIGKILL";
+      child.emit("close");
+
+      await expect(close).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -43,11 +43,15 @@ class MockCodexChildProcess extends EventEmitter {
   });
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
   killCalled = false;
 
-  kill(): void {
+  kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.killCalled = true;
+    this.signalCode = signal;
     this.emit("close");
+    return true;
   }
 }
 
@@ -68,6 +72,77 @@ describe("stdio transport Codex CLI resolution", () => {
 });
 
 describe("StdioJsonRpcTransport", () => {
+  it("routes a Windows Codex batch shim through ComSpec", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.stubEnv("ComSpec", "C:\\Windows\\System32\\cmd.exe");
+    try {
+      const child = new MockCodexChildProcess();
+      spawnMock.mockReturnValue(child);
+      const transport = new StdioJsonRpcTransport({
+        command: "C:\\Users\\Ops & Dev\\AppData\\Roaming\\npm\\codex.cmd",
+        env: {
+          ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          PATH: "C:\\Windows\\System32",
+        },
+      });
+
+      await transport.connect();
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        "C:\\Windows\\System32\\cmd.exe",
+        [
+          "/d",
+          "/s",
+          "/c",
+          expect.stringMatching(/codex\.cmd.*app-server/i),
+        ],
+        expect.objectContaining({
+          detached: false,
+          windowsVerbatimArguments: true,
+        }),
+      );
+      await transport.close();
+    } finally {
+      platform.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not pass PwrAgent's renderer URL to the Codex app server", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: {
+        ELECTRON_RENDERER_URL: "http://localhost:5173",
+        PATH: "/usr/bin",
+      },
+      resolveEnv: async () => ({
+        ELECTRON_RENDERER_URL: "http://localhost:5175",
+        PATH: "/opt/homebrew/bin:/usr/bin",
+      }),
+      resolveArgs: async (env) => {
+        env.ELECTRON_RENDERER_URL = "http://localhost:5176";
+        return [];
+      },
+    });
+
+    await transport.connect();
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "codex",
+      ["app-server"],
+      expect.objectContaining({
+        env: expect.objectContaining({ PATH: "/opt/homebrew/bin:/usr/bin" }),
+      }),
+    );
+    expect(spawnMock.mock.calls[0]?.[2]?.env).not.toHaveProperty(
+      "ELECTRON_RENDERER_URL",
+    );
+
+    await transport.close();
+  });
+
   it("drops late sends after an intentional close", async () => {
     const child = new MockCodexChildProcess();
     spawnMock.mockReturnValue(child);
@@ -106,6 +181,54 @@ describe("StdioJsonRpcTransport", () => {
     expect(child.writes).toHaveLength(0);
   });
 
+  it("does not treat a child error as proof that the process exited", async () => {
+    const child = new MockCodexChildProcess();
+    child.kill = vi.fn(() => {
+      child.emit("error", Object.assign(new Error("kill EPERM"), { code: "EPERM" }));
+      return false;
+    });
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { PATH: process.env.PATH ?? "" },
+    });
+
+    await transport.connect();
+    let closeSettled = false;
+    const closePromise = transport.close().finally(() => {
+      closeSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(closeSettled).toBe(false);
+    child.exitCode = 1;
+    child.emit("close");
+    await closePromise;
+    expect(closeSettled).toBe(true);
+  });
+
+  it("rejects close when no process exit is observed after SIGKILL", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new MockCodexChildProcess();
+      child.kill = vi.fn(() => false);
+      spawnMock.mockReturnValue(child);
+      const transport = new StdioJsonRpcTransport({
+        command: "codex",
+        env: { PATH: process.env.PATH ?? "" },
+      });
+
+      await transport.connect();
+      const closeResult = expect(transport.close()).rejects.toThrow(
+        "child process tree did not accept SIGKILL",
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await closeResult;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("still throws when the app-server exits unexpectedly", async () => {
     const child = new MockCodexChildProcess();
     spawnMock.mockReturnValue(child);
@@ -120,5 +243,91 @@ describe("StdioJsonRpcTransport", () => {
     expect(() =>
       transport.send(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } })),
     ).toThrow("codex app server stdio not connected");
+  });
+
+  it("does not spawn after close cancels environment hydration", async () => {
+    let resolveEnv: ((env: NodeJS.ProcessEnv) => void) | undefined;
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      resolveEnv: () =>
+        new Promise((resolve) => {
+          resolveEnv = resolve;
+        }),
+    });
+
+    const connect = transport.connect();
+    await Promise.resolve();
+    await transport.close();
+    resolveEnv?.({ PATH: process.env.PATH ?? "" });
+
+    await expect(connect).rejects.toThrow("connection cancelled");
+    expect(resolveCodexCommandMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a spawned child whose stdio pipes are unavailable", async () => {
+    const child = new MockCodexChildProcess();
+    Object.defineProperty(child, "stdout", { value: null });
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { PATH: process.env.PATH ?? "" },
+    });
+
+    await expect(transport.connect()).rejects.toThrow(
+      "codex app server stdio pipes unavailable",
+    );
+    expect(child.killCalled).toBe(true);
+  });
+
+  it("supports an intentional reconnect after close completes", async () => {
+    const firstChild = new MockCodexChildProcess();
+    const secondChild = new MockCodexChildProcess();
+    spawnMock
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { PATH: process.env.PATH ?? "" },
+    });
+
+    await transport.connect();
+    await transport.close();
+    await transport.connect();
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    await transport.close();
+  });
+
+  it("uses the shared command resolver instead of probing discovery directly", async () => {
+    const firstChild = new MockCodexChildProcess();
+    const secondChild = new MockCodexChildProcess();
+    spawnMock
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild);
+    const sharedResolver = vi.fn(async () => ({
+      command: "/hydrated/bin/codex",
+      source: "path" as const,
+      version: "0.126.0",
+    }));
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { PATH: "/hydrated/bin:/usr/bin" },
+      resolveCommand: sharedResolver,
+    });
+
+    await transport.connect();
+    await transport.close();
+    await transport.connect();
+
+    expect(sharedResolver).toHaveBeenCalledTimes(2);
+    expect(resolveCodexCommandMock).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      1,
+      "/hydrated/bin/codex",
+      ["app-server"],
+      expect.any(Object),
+    );
+    await transport.close();
   });
 });

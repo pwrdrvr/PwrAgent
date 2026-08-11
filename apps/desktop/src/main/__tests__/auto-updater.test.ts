@@ -67,8 +67,15 @@ vi.mock("../log", () => ({
 }));
 
 const markUpdateInstallInProgressMock = vi.fn();
+const markUpdateInstallUpdaterQuitReadyMock = vi.fn();
+const prepareForUpdateInstallMock = vi.fn<() => Promise<void>>(
+  async () => undefined,
+);
 vi.mock("../update-install-state", () => ({
   markUpdateInstallInProgress: () => markUpdateInstallInProgressMock(),
+  markUpdateInstallUpdaterQuitReady: () =>
+    markUpdateInstallUpdaterQuitReadyMock(),
+  prepareForUpdateInstall: () => prepareForUpdateInstallMock(),
 }));
 
 async function importAutoUpdater() {
@@ -104,6 +111,17 @@ function mockGitHubReleases(releases = [githubRelease("v1.0.0-beta.8")]): void {
     ok: true,
     json: async () => releases,
   });
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
 }
 
 describe("auto updater", () => {
@@ -149,6 +167,9 @@ describe("auto updater", () => {
     autoUpdaterMock.on.mockClear();
     autoUpdaterMock.quitAndInstall.mockReset();
     markUpdateInstallInProgressMock.mockReset();
+    markUpdateInstallUpdaterQuitReadyMock.mockReset();
+    prepareForUpdateInstallMock.mockReset();
+    prepareForUpdateInstallMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -390,6 +411,9 @@ describe("auto updater", () => {
     autoUpdaterMock.quitAndInstall.mockImplementation(() => {
       callOrder.push("quitAndInstall");
     });
+    markUpdateInstallUpdaterQuitReadyMock.mockImplementation(() => {
+      callOrder.push("ready");
+    });
     const requestQuit = vi.fn(async (performQuit: () => void) => {
       performQuit();
       return true;
@@ -402,7 +426,36 @@ describe("auto updater", () => {
 
     await expect(install?.()).resolves.toEqual({ status: "restarting" });
     // The latch must be set before quitAndInstall so window-all-closed sees it.
-    expect(callOrder).toEqual(["mark", "quitAndInstall"]);
+    await vi.waitFor(() =>
+      expect(callOrder).toEqual(["mark", "ready", "quitAndInstall"]),
+    );
+  });
+
+  it("awaits shutdown preparation before handing quit ownership to the updater", async () => {
+    const preparation = createDeferred<void>();
+    prepareForUpdateInstallMock.mockReturnValueOnce(preparation.promise);
+    const updater = await importAutoUpdater();
+    const requestQuit = vi.fn(async (performQuit: () => void) => {
+      performQuit();
+      return true;
+    });
+
+    updater.initAutoUpdater();
+    updater.registerAppUpdateIpcHandlers({ requestQuit });
+    updateEventHandlers.get("update-downloaded")?.({ version: "1.0.0-beta.8" });
+    const install = ipcHandlers.get("app:install-update");
+
+    await expect(install?.()).resolves.toEqual({ status: "restarting" });
+    expect(markUpdateInstallInProgressMock).toHaveBeenCalledOnce();
+    expect(markUpdateInstallUpdaterQuitReadyMock).not.toHaveBeenCalled();
+    expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+
+    preparation.resolve();
+    await vi.waitFor(() =>
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledOnce(),
+    );
+    expect(markUpdateInstallInProgressMock).toHaveBeenCalledOnce();
+    expect(markUpdateInstallUpdaterQuitReadyMock).toHaveBeenCalledOnce();
   });
 
   it("does not latch update-install-in-progress when quit is cancelled", async () => {

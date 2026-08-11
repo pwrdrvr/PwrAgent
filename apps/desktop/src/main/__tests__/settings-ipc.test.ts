@@ -247,9 +247,11 @@ describe("settings ipc", () => {
     } = await import("../ipc/settings");
     const {
       SETTINGS_READ_CHANNEL,
+      SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
       SETTINGS_REPLACE_SECRET_CHANNEL,
       SETTINGS_WRITE_CONFIG_CHANNEL,
     } = await import("../../shared/ipc");
+    const refreshCodexDiscovery = vi.spyOn(service, "refreshCodexDiscovery");
 
     registerSettingsIpcHandlers(service);
 
@@ -268,6 +270,8 @@ describe("settings ipc", () => {
         },
       },
     });
+    await handlers.get(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL)?.({}, {});
+    expect(refreshCodexDiscovery).toHaveBeenCalledOnce();
 
     await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
       {},
@@ -401,6 +405,9 @@ describe("settings ipc", () => {
 
   it("does not run the saved Codex path when discovery rejected it", async () => {
     const service = {
+      resolveCodexCommand: vi.fn(async () => {
+        throw new Error("Codex CLI is older than the minimum supported version");
+      }),
       readSettings: vi.fn(async () => ({
         models: {
           codex: {
@@ -820,7 +827,7 @@ describe("settings ipc", () => {
       now: () => 20,
     });
 
-    initializeAppState();
+    initializeAppState("bootstrap");
     try {
       registerSettingsIpcHandlers(service);
       // Even before any discovery (cache-only read), all four supported
@@ -878,9 +885,17 @@ describe("settings ipc", () => {
       ).toHaveBeenCalledWith(
         expect.objectContaining({ backendId: "acp:gemini" }),
         expect.objectContaining({
-          cwd: expect.stringContaining("acp-discovery-workspace"),
+          cwd: path.join(
+            tempRoot,
+            ".bootstrap",
+            "state",
+            "acp-discovery-workspace",
+          ),
         }),
       );
+      expect(
+        fs.existsSync(path.join(tempRoot, "profiles", "default")),
+      ).toBe(false);
     } finally {
       disposeAppState();
     }

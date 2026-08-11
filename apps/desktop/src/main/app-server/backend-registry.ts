@@ -13,6 +13,7 @@ import type {
   MessagingApprovalDecision,
   MessagingBindingRecord,
 } from "@pwragent/messaging-interface";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { requestShowThread } from "../window-show-thread";
@@ -1134,7 +1135,7 @@ async function readCurrentGitBranch(sourcePath: string): Promise<string | undefi
   const result = await execFile(
     "git",
     ["-C", sourcePath, "rev-parse", "--abbrev-ref", "HEAD"],
-    { env: process.env },
+    { env: buildPwrAgentChildProcessEnv(process.env) },
   );
   const branch = result.stdout.trim();
   return branch || undefined;
@@ -5845,6 +5846,9 @@ export class DesktopBackendRegistry {
         env: codexEnv,
         resolveArgs: settingsService
           ? async (env) => buildCodexClientArgs(env)
+          : undefined,
+        resolveCommand: settingsService
+          ? async () => await settingsService.resolveCodexCommand()
           : undefined,
         resolveEnv: settingsService
           ? async () => await settingsService.resolveCodexSpawnEnvAsync()
@@ -13008,10 +13012,31 @@ export class DesktopBackendRegistry {
       this.pendingServerRequests.delete(key);
     }
 
-    await this.acpBackend.close();
-    await this.codexClient.close();
-    await this.grokClient.close();
-    await Promise.all(this.captureStores.splice(0).map(async (store) => await store.close()));
+    const resources = [
+      { name: "acp", close: () => this.acpBackend.close() },
+      { name: "codex", close: () => this.codexClient.close() },
+      { name: "grok", close: () => this.grokClient.close() },
+      ...this.captureStores.splice(0).map((store, index) => ({
+        name: `capture-${index}`,
+        close: () => store.close(),
+      })),
+    ];
+    const results = await Promise.allSettled(
+      resources.map((resource) => Promise.resolve().then(resource.close)),
+    );
+    const failures = results.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [{ name: resources[index].name, reason: result.reason }]
+        : [],
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        `Desktop backend registry close failed: ${failures
+          .map((failure) => failure.name)
+          .join(", ")}`,
+      );
+    }
   }
 
   private async resolveModelSettings(
@@ -21405,7 +21430,7 @@ export class DesktopBackendRegistry {
       const result = await execFile(
         "git",
         ["-C", cwd, "config", "--get", "remote.origin.url"],
-        { env: process.env, timeout: 2_000 },
+        { env: buildPwrAgentChildProcessEnv(process.env), timeout: 2_000 },
       );
       return parseGitRemoteRepositoryUrl(result.stdout);
     } catch {
@@ -23349,6 +23374,10 @@ function truncateThreadInspectionTextWithFlag(
 }
 
 let registry: DesktopBackendRegistry | null = null;
+
+export function getExistingDesktopBackendRegistry(): DesktopBackendRegistry | null {
+  return registry;
+}
 
 export function getDesktopBackendRegistry(): DesktopBackendRegistry {
   if (!registry) {

@@ -17,7 +17,11 @@ import type {
 } from "../shared/app-metadata";
 import { getMainLogger } from "./log";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
-import { markUpdateInstallInProgress } from "./update-install-state";
+import {
+  markUpdateInstallInProgress,
+  markUpdateInstallUpdaterQuitReady,
+  prepareForUpdateInstall,
+} from "./update-install-state";
 
 const log = getMainLogger("pwragent:updater");
 const GITHUB_RELEASES_URL =
@@ -560,12 +564,26 @@ export async function installDownloadedAppUpdate(options?: {
   }
   try {
     log.info("installing downloaded update", { version });
+    let updateHandoffPromise: Promise<void> | undefined;
     const performQuit = (): void => {
-      // Hand the quit + relaunch to the native Squirrel.Mac updater. Latch first
-      // so the app's own window-all-closed / before-quit handlers don't race it
-      // with a competing app.quit() that would strand us on the old version.
+      // The accepted update is now irreversible. Latch immediately so a user
+      // closing the last window while teardown runs cannot start another quit.
       markUpdateInstallInProgress();
-      autoUpdater.quitAndInstall();
+      updateHandoffPromise ??= prepareForUpdateInstall()
+        .catch((error: unknown) => {
+          // Teardown is bounded and normally resolves with phase outcomes, but
+          // never strand an accepted update if an unexpected synchronous
+          // cleanup error escapes. The updater still owns the eventual quit.
+          log.warn("update-install preparation failed", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .then(() => {
+          // From this point onward the updater owns before-quit. Set the ready
+          // latch immediately before the synchronous native handoff.
+          markUpdateInstallUpdaterQuitReady();
+          autoUpdater.quitAndInstall();
+        });
     };
     if (options?.requestQuit) {
       const quitAccepted = await options.requestQuit(performQuit);

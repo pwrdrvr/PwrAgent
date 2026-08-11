@@ -1965,6 +1965,70 @@ describe("AcpBackendAdapter", () => {
 
     await adapter.close();
   });
+
+  it("bounds close while ACP initialization is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const backendId = "acp:gemini" as AcpBackendId;
+      const agent = buildInstalledAgent();
+      const initialize = vi.fn(() => new Promise<void>(() => undefined));
+      const dispose = vi.fn(async () => undefined);
+      const adapter = new AcpBackendAdapter({
+        acpAgentStore: {
+          getInstalledAgent: () => agent,
+          listInstalledAgents: () => [agent],
+          upsertInstalledAgent: vi.fn(),
+        },
+        captureStores: [],
+        closeTimeoutMs: 25,
+        createAcpClient: () => ({ initialize, dispose }) as never,
+        discoverLocalAcpAgents: async () => [],
+        emit: vi.fn(async () => undefined),
+        handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+      });
+
+      void adapter.getClient(backendId).catch(() => undefined);
+      await vi.waitFor(() => expect(initialize).toHaveBeenCalledOnce());
+      const close = adapter.close();
+      await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(close).resolves.toBeUndefined();
+      await expect(adapter.getClient(backendId)).rejects.toThrow(
+        "ACP backend adapter is closed",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not create an ACP client when discovery finishes after close", async () => {
+    const backendId = "acp:gemini" as AcpBackendId;
+    const agent = buildInstalledAgent();
+    let finishDiscovery:
+      | ((agents: AcpInstalledAgentRecord[]) => void)
+      | undefined;
+    const createAcpClient = vi.fn();
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: null,
+      captureStores: [],
+      createAcpClient,
+      discoverLocalAcpAgents: () =>
+        new Promise((resolve) => {
+          finishDiscovery = resolve;
+        }),
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const pendingClient = adapter.getClient(backendId);
+    await Promise.resolve();
+    await adapter.close();
+    finishDiscovery?.([agent]);
+
+    await expect(pendingClient).rejects.toThrow("ACP backend adapter is closed");
+    expect(createAcpClient).not.toHaveBeenCalled();
+  });
 });
 
 function buildInstalledAgent(): AcpInstalledAgentRecord {

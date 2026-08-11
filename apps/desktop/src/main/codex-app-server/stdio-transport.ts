@@ -3,11 +3,17 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import readline from "node:readline";
-import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
+import {
+  createCommandInvocation,
+  type JsonRpcTransport,
+} from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { terminateOwnedProcessTree } from "../process-tree";
 import {
   compareCodexCliVersions,
   resolveCodexCommand,
+  type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
 
 const codexTransportLog = getMainLogger("pwragent:codex-transport");
@@ -20,12 +26,18 @@ const codexTransportLog = getMainLogger("pwragent:codex-transport");
 const STDERR_LOG_MAX_LINES_PER_WINDOW = 100;
 const STDERR_LOG_WINDOW_MS = 10_000;
 const STDERR_LOG_MAX_LINE_LENGTH = 4000;
+const PROCESS_CLOSE_TIMEOUT_MS = 5_000;
+const PROCESS_FORCE_CLOSE_TIMEOUT_MS = 5_000;
 
 export type StdioJsonRpcTransportOptions = {
   command: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
   resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
+  resolveCommand?: (params: {
+    command: string;
+    env: NodeJS.ProcessEnv;
+  }) => Promise<ResolvedCodexCommandCandidate>;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
 };
 
@@ -53,6 +65,9 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
   private closeRequested = false;
+  private closePromise?: Promise<void>;
+  private connectPromise?: Promise<void>;
+  private lifecycleGeneration = 0;
   private droppedSendAfterCloseLogged = false;
 
   constructor(private readonly options: StdioJsonRpcTransportOptions) {}
@@ -69,35 +84,79 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (this.childProcess) {
       return;
     }
+    if (this.connectPromise && !this.closeRequested) {
+      return await this.connectPromise;
+    }
+    const generation = ++this.lifecycleGeneration;
     this.closeRequested = false;
     this.droppedSendAfterCloseLogged = false;
 
-    const env = this.options.resolveEnv
+    const connectPromise = this.connectForGeneration(generation);
+    this.connectPromise = connectPromise;
+    try {
+      await connectPromise;
+    } finally {
+      if (this.connectPromise === connectPromise) {
+        this.connectPromise = undefined;
+      }
+    }
+  }
+
+  private assertCurrentGeneration(generation: number): void {
+    if (this.closeRequested || generation !== this.lifecycleGeneration) {
+      throw new Error("codex app server connection cancelled");
+    }
+  }
+
+  private async connectForGeneration(generation: number): Promise<void> {
+    const resolvedEnv = this.options.resolveEnv
       ? await this.options.resolveEnv()
       : this.options.env ?? process.env;
+    this.assertCurrentGeneration(generation);
+    const env = buildPwrAgentChildProcessEnv(resolvedEnv);
     const args = this.options.resolveArgs
       ? await this.options.resolveArgs(env)
       : this.options.args ?? [];
-    const command = await resolveCodexCommand({
+    this.assertCurrentGeneration(generation);
+    const commandEnv = buildPwrAgentChildProcessEnv(env);
+    const command = await (
+      this.options.resolveCommand ?? resolveCodexCommand
+    )({
       command: this.options.command,
-      env,
+      env: commandEnv,
     });
+    this.assertCurrentGeneration(generation);
+    const childEnv = buildPwrAgentChildProcessEnv(commandEnv);
     codexTransportLog.info("launch app-server", {
       command: command.command,
       source: command.source,
       version: command.version ?? null,
     });
 
-    const child = spawn(command.command, ["app-server", ...args], {
+    const invocation = createCommandInvocation({
+      command: command.command,
+      args: ["app-server", ...args],
+      env: childEnv,
+    });
+    const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env,
+      env: childEnv,
+      detached: process.platform !== "win32",
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
 
+    this.childProcess = child;
+
     if (!child.stdin || !child.stdout || !child.stderr) {
+      await terminateOwnedProcessTree(child, {
+        gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
+        forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
+      });
+      if (this.childProcess === child) {
+        this.childProcess = null;
+      }
       throw new Error("codex app server stdio pipes unavailable");
     }
-
-    this.childProcess = child;
 
     const stdoutReader = readline.createInterface({ input: child.stdout });
     stdoutReader.on("line", (line: string) => {
@@ -147,34 +206,55 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       });
     });
     child.on("error", (error: Error) => {
+      if (this.childProcess === child && child.pid === undefined) {
+        this.childProcess = null;
+      }
       this.closeHandler(error);
     });
     child.on("close", () => {
-      this.childProcess = null;
+      if (this.childProcess === child) {
+        this.childProcess = null;
+      }
       this.closeHandler();
     });
   }
 
   async close(): Promise<void> {
     this.closeRequested = true;
+    this.lifecycleGeneration += 1;
+    if (this.closePromise) {
+      return await this.closePromise;
+    }
     const child = this.childProcess;
-    this.childProcess = null;
     if (!child) {
       return;
     }
-    child.kill();
+    this.closePromise = terminateOwnedProcessTree(child, {
+      gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
+      forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
+    })
+      .finally(() => {
+        if (this.childProcess === child) {
+          this.childProcess = null;
+        }
+        this.closePromise = undefined;
+      });
+    return await this.closePromise;
   }
 
   send(message: string): void {
     const child = this.childProcess;
-    if (!child?.stdin) {
-      if (this.closeRequested && isJsonRpcResponseEnvelope(message)) {
+    if (this.closeRequested) {
+      if (isJsonRpcResponseEnvelope(message)) {
         if (!this.droppedSendAfterCloseLogged) {
           this.droppedSendAfterCloseLogged = true;
           codexTransportLog.info("dropped app-server send after close");
         }
         return;
       }
+      throw new Error("codex app server stdio not connected");
+    }
+    if (!child?.stdin) {
       throw new Error("codex app server stdio not connected");
     }
     child.stdin.write(`${message}\n`);

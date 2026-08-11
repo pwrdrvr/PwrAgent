@@ -14,6 +14,7 @@ import type {
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
 } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 
 const execFile = promisify(execFileCallback);
@@ -332,7 +333,7 @@ async function discoverApplication(
 export async function discoverDesktopApplications(params?: {
   env?: NodeJS.ProcessEnv;
 }): Promise<DesktopApplicationsSnapshot> {
-  const env = params?.env ?? process.env;
+  const env = buildPwrAgentChildProcessEnv(params?.env ?? process.env);
   const [editors, terminals] = await Promise.all([
     Promise.all(EDITORS.map((application) => discoverApplication(application, env))),
     Promise.all(TERMINALS.map((application) => discoverApplication(application, env))),
@@ -369,7 +370,7 @@ export async function openDesktopApplication(
     throw new Error(`Workspace path does not exist: ${targetPath}`);
   }
 
-  const env = params?.env ?? process.env;
+  const env = buildPwrAgentChildProcessEnv(params?.env ?? process.env);
   const snapshot = await discoverDesktopApplications({ env });
   const application = [...snapshot.editors, ...snapshot.terminals].find(
     (candidate) =>

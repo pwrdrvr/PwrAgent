@@ -100,8 +100,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@pwrdrvr/agent-acp':
-        specifier: ^0.12.0
-        version: 0.12.2
+        specifier: ^0.13.1
+        version: 0.13.1(zod@4.3.6)
       '@pwrdrvr/agent-client':
         specifier: ^0.6.1
         version: 0.6.1
@@ -109,14 +109,14 @@ importers:
         specifier: ^0.2.0
         version: 0.2.0
       '@pwrdrvr/agent-transport':
-        specifier: ^0.1.6
-        version: 0.1.6
+        specifier: ^0.1.7
+        version: 0.1.7
       '@pwrdrvr/codex-app-server-protocol':
         specifier: 0.144.0
         version: 0.144.0
       '@pwrdrvr/codex-discovery':
-        specifier: ^0.1.4
-        version: 0.1.4
+        specifier: ^0.1.6
+        version: 0.1.6
       '@shutterstock/p-map-iterable':
         specifier: ^1.1.2
         version: 1.1.2(aggregate-error@3.1.0)
@@ -338,6 +338,11 @@ packages:
 
   '@adobe/css-tools@4.4.4':
     resolution: {integrity: sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg==}
+
+  '@agentclientprotocol/sdk@1.3.0':
+    resolution: {integrity: sha512-i3h/efaeuMUFAO1HSfo97QZQnnvMd7wWBYtBsdL6UMZg3a78sk3Ffya5Xu7C7tYsXomXoDXJBAzQF2PcFKAhIQ==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
 
   '@ai-sdk/gateway@4.0.23':
     resolution: {integrity: sha512-f85diFdPMXYJpxCjOYZchMQkRH8h3r6lhK4Q2xmzJ7UA2OQ80L3W7tFu61742xGQK7zHWm5AhxYhNuc50H9SGQ==}
@@ -995,8 +1000,8 @@ packages:
   '@protobufjs/utf8@1.1.2':
     resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
 
-  '@pwrdrvr/agent-acp@0.12.2':
-    resolution: {integrity: sha512-SwBZfk98nStyoK8t2NTYF9d00+MqhemsP6pUDOkVMHXXNkAbiPn0a8VAuFU2GZxMrQf8QesGi6R8utvw1CULig==}
+  '@pwrdrvr/agent-acp@0.13.1':
+    resolution: {integrity: sha512-AUPX0/+cbLaIYR23i8Z37RmaOkZrjdyIA2wTWqvZSDcWQT1wLxyGKLtKuQAq3z2Ka5Dk/hmT/PCrDTNTcVmjxw==}
 
   '@pwrdrvr/agent-client@0.6.1':
     resolution: {integrity: sha512-Q8jyGN9c3BfGTW1ba3baFliaF0bWpabV2rYgKmgwZypB3BoPiraZ3qv4X4piHNKVHJ+XK8PdNtyGC78c6sLHNA==}
@@ -1004,8 +1009,8 @@ packages:
   '@pwrdrvr/agent-core@0.2.0':
     resolution: {integrity: sha512-zTo7vJGekyZX2h9xWYiZfQvt+qKTPhuciWyCouow1shaKgg0Bn6B8S5lTRvMzxvT7feKOZ7zy/To2Cu6+1i1+A==}
 
-  '@pwrdrvr/agent-transport@0.1.6':
-    resolution: {integrity: sha512-lkKHg4q/4+1XB+h8r8Vl7dq2LpV4uFG5XZ10t0MCIW19IW/DAWCm6w+etxcef5KkC9XUjDV2ZIGjWW91C5QomA==}
+  '@pwrdrvr/agent-transport@0.1.7':
+    resolution: {integrity: sha512-91LJLC+jdWO6v3WIqoWI/CLHkMJebF4hEqk0vOkgK6DlawrA926EP7kHQ1VOE/iQRo5LCRqFqxjtWn6mQcs/EQ==}
 
   '@pwrdrvr/codex-app-server-protocol@0.133.0':
     resolution: {integrity: sha512-mt+geA0RZEz5A3kEK8poDE3wYDrteWGb2syfXS4/kzzgWEe26DUbQlbdQyFYoa7Zs/Z6L64gNGIfFHgemfzj8g==}
@@ -1015,8 +1020,8 @@ packages:
     resolution: {integrity: sha512-WmURXzmmNEY8lmnNZunNQj/Bnn3yjzS6Rc0gzlDU7sBHMd0kvtskXE9BCMcR+E7sVJ53V/gwjfksRUli0xUgdA==}
     engines: {node: '>=20'}
 
-  '@pwrdrvr/codex-discovery@0.1.4':
-    resolution: {integrity: sha512-jCk4LtJJFret0o8Mlzb53X8zrllA6dX1XX0Gvut+05bYjKRzXF/x9Y7mV3yfO1B5xdyp7ftw6FN8+qzxb1vH0w==}
+  '@pwrdrvr/codex-discovery@0.1.6':
+    resolution: {integrity: sha512-iC5FGfY7x32xwgEhFuU0YqVspPOYy6s+rfWJOhy6tVJ1L9KmuTM+spl9PEVOK1DDhYRZdQr6u4xWvlHqBwXsSg==}
 
   '@rolldown/binding-android-arm64@1.0.3':
     resolution: {integrity: sha512-454rs7jHngixp/NMxd5srYD57OnzSlZ/eFTETjORQHLwJG1lRtmNOJcBerZlfu4GjKqeq8aCCIQrMdHyhI51Hw==}
@@ -1705,10 +1710,6 @@ packages:
 
   '@xterm/xterm@6.0.0':
     resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
-
-  '@zed-industries/agent-client-protocol@0.4.5':
-    resolution: {integrity: sha512-OwHKfu5AiKul/GSJilHg36+kOSV9eOl2eYnjR6tenAQDdraSnt22WFk0SDFTeuAANz1Gxkv+DTf7Hq32rvX7FQ==}
-    deprecated: This package has been renamed to @agentclientprotocol/sdk. Please migrate to continue receiving updates.
 
   abbrev@4.0.0:
     resolution: {integrity: sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA==}
@@ -4321,9 +4322,6 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
-
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
@@ -4333,6 +4331,10 @@ packages:
 snapshots:
 
   '@adobe/css-tools@4.4.4': {}
+
+  '@agentclientprotocol/sdk@1.3.0(zod@4.3.6)':
+    dependencies:
+      zod: 4.3.6
 
   '@ai-sdk/gateway@4.0.23(zod@4.3.6)':
     dependencies:
@@ -5030,23 +5032,25 @@ snapshots:
 
   '@protobufjs/utf8@1.1.2': {}
 
-  '@pwrdrvr/agent-acp@0.12.2':
+  '@pwrdrvr/agent-acp@0.13.1(zod@4.3.6)':
     dependencies:
+      '@agentclientprotocol/sdk': 1.3.0(zod@4.3.6)
       '@pwrdrvr/agent-core': 0.2.0
-      '@pwrdrvr/agent-transport': 0.1.6
-      '@zed-industries/agent-client-protocol': 0.4.5
+      '@pwrdrvr/agent-transport': 0.1.7
+    transitivePeerDependencies:
+      - zod
 
   '@pwrdrvr/agent-client@0.6.1':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
-      '@pwrdrvr/agent-transport': 0.1.6
+      '@pwrdrvr/agent-transport': 0.1.7
       '@pwrdrvr/codex-app-server-protocol': 0.133.0
-      '@pwrdrvr/codex-discovery': 0.1.4
+      '@pwrdrvr/codex-discovery': 0.1.6
       zod: 4.3.6
 
   '@pwrdrvr/agent-core@0.2.0': {}
 
-  '@pwrdrvr/agent-transport@0.1.6':
+  '@pwrdrvr/agent-transport@0.1.7':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
 
@@ -5054,9 +5058,10 @@ snapshots:
 
   '@pwrdrvr/codex-app-server-protocol@0.144.0': {}
 
-  '@pwrdrvr/codex-discovery@0.1.4':
+  '@pwrdrvr/codex-discovery@0.1.6':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
+      '@pwrdrvr/agent-transport': 0.1.7
 
   '@rolldown/binding-android-arm64@1.0.3':
     optional: true
@@ -5732,10 +5737,6 @@ snapshots:
   '@xterm/addon-fit@0.11.0': {}
 
   '@xterm/xterm@6.0.0': {}
-
-  '@zed-industries/agent-client-protocol@0.4.5':
-    dependencies:
-      zod: 3.25.76
 
   abbrev@4.0.0: {}
 
@@ -8748,8 +8749,6 @@ snapshots:
   zod-validation-error@4.0.2(zod@4.3.6):
     dependencies:
       zod: 4.3.6
-
-  zod@3.25.76: {}
 
   zod@4.3.6: {}
 

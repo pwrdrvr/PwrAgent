@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 
 const execFile = promisify(execFileCallback);
 
@@ -173,7 +174,7 @@ async function readCommandVersion(params: {
 }> {
   try {
     const result = await execFile(params.command, params.versionArgs, {
-      env: params.env,
+      env: buildPwrAgentChildProcessEnv(params.env),
       timeout: 2_000,
     });
     const output = `${result.stdout}\n${result.stderr ?? ""}`;
