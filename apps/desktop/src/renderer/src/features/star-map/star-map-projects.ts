@@ -1,5 +1,6 @@
 import {
   buildThreadIdentityKey,
+  classifyDirectory,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 
@@ -53,26 +54,31 @@ export const STAR_MAP_NO_PROJECT_KEY = "__no-project__";
 const NO_PROJECT_LABEL = "No project";
 
 /**
- * A thread's project is the repo its primary linked directory belongs to.
- *
- * `path` is the repo root even for worktree entries (which carry the
- * worktree separately in `worktreePath`), so grouping on it collapses
- * every worktree of a repo onto one body. Grouping on the label instead
- * would scatter a repo across a body per worktree, since worktree labels
- * are generated per-workspace.
+ * A thread's project is whatever directory row the Directories lens would
+ * file its primary linked directory under, via the shared classifier:
+ * worktrees collapse onto their repo root, and every scratch checkout
+ * collapses into ONE "Workspaces" project. Grouping on the raw path
+ * instead gave each hash-named scratch dir its own one-thread body.
  */
 export function threadProjectKey(thread: NavigationThreadSummary): string {
   const primary = thread.linkedDirectories[0];
-  return primary?.path ?? STAR_MAP_NO_PROJECT_KEY;
+  return primary ? classifyDirectory(primary).key : STAR_MAP_NO_PROJECT_KEY;
 }
 
 /** Display label for a thread's project; shared with the cluster layout. */
 export function threadProjectLabel(thread: NavigationThreadSummary): string {
   const primary = thread.linkedDirectories[0];
   if (!primary) return NO_PROJECT_LABEL;
-  // Prefer the repo folder name over a worktree-generated label.
-  const segments = primary.path.split("/").filter(Boolean);
-  return segments[segments.length - 1] ?? primary.label;
+  const descriptor = classifyDirectory(primary);
+  // A label the classifier computed itself ("Workspaces", "Codex Chats",
+  // a worktree collapsed onto its repo) is canonical — keep it. When it
+  // just echoed the directory's own label, prefer the repo folder name:
+  // worktree labels are generated per-workspace, and a cloud named
+  // "2026-07-31-b3ba9c" is the spreadsheet this lens is escaping.
+  if (descriptor.label !== primary.label) return descriptor.label;
+  const path = descriptor.path ?? primary.path;
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? descriptor.label;
 }
 
 /**

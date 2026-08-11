@@ -72,36 +72,37 @@ describe("star map project cloud chrome", () => {
     window.localStorage.removeItem("pwragent.starMap.filterSelection");
   });
 
-  it("labels each project cloud with a pill carrying its total", async () => {
+  it("labels each project cloud with its name and total", async () => {
     renderOrbit([
       projectThread("a1", "/repo/alpha", "AlphaDir"),
       projectThread("a2", "/repo/alpha", "AlphaDir"),
       projectThread("b1", "/repo/beta", "BetaDir"),
+      projectThread("b2", "/repo/beta", "BetaDir"),
     ]);
-    const alphaPill = await screen.findByRole("button", {
+    const alphaLabel = await screen.findByRole("button", {
       name: /Select the alpha cards \(2 threads\)/,
     });
-    expect(alphaPill.textContent).toContain("alpha");
-    expect(alphaPill.textContent).toContain("2");
+    expect(alphaLabel.textContent).toContain("alpha");
+    expect(alphaLabel.textContent).toContain("2");
     expect(
       screen.getByRole("button", {
-        name: /Select the beta cards \(1 threads\)/,
+        name: /Select the beta cards \(2 threads\)/,
       }),
     ).toBeTruthy();
   });
 
-  it("hides the redundant directory chip inside a labeled cloud", async () => {
+  it("keeps every card chip inside a labeled cloud", async () => {
     renderOrbit([
       projectThread("a1", "/repo/alpha", "AlphaDir"),
       projectThread("a2", "/repo/alpha", "AlphaDir"),
     ]);
     await screen.findByRole("button", { name: /Select the alpha cards/ });
-    // The cloud's pill says "alpha"; the per-card chip would repeat it as
-    // the directory label, which is exactly the chip hygiene rule.
-    expect(screen.queryByText("AlphaDir")).toBeNull();
+    // The cloud groups cards; it must not strip their anatomy — the
+    // directory chips render exactly as they would anywhere else.
+    expect(screen.getAllByText("AlphaDir").length).toBeGreaterThan(0);
   });
 
-  it("keeps directory chips on cards outside a project cloud", async () => {
+  it("floats a lone card chromeless — no label, no chip", async () => {
     renderOrbit([
       {
         ...projectThread("x", "/repo/gamma", "GammaDir"),
@@ -109,8 +110,8 @@ describe("star map project cloud chrome", () => {
       } as unknown as NavigationThreadSummary,
     ]);
     await screen.findByRole("button", { name: /Open thread: Thread x/ });
-    // A lone no-project cloud is chromeless: no pill, no outline.
     expect(screen.queryByRole("button", { name: /Select the/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /more .* threads/ })).toBeNull();
   });
 
   it("truncates a big cloud at the group cap and expands on the chip", async () => {

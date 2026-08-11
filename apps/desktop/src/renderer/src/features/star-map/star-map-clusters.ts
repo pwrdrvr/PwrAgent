@@ -2,7 +2,7 @@ import {
   buildThreadIdentityKey,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
-import { STAR_MAP_CARD_GAP, type StarMapCardSlot } from "./star-map-layout";
+import { type StarMapCardSlot } from "./star-map-layout";
 import { STAR_MAP_INSTANCE_KEEPOUT } from "./star-map-orbit";
 import {
   projectMass,
@@ -15,62 +15,74 @@ import {
  * Project clouds for the orbit lens.
  *
  * A flat ring seats cards purely by sort index, so two projects with
- * interleaved activity times provably alternate around the ring — the
- * "intermingled mess" this module exists to fix. Instead, an instance's
- * cards group by project into labeled clouds seated around the body, each
- * capped per group with an honest overflow chip rather than one silent
- * instance-wide truncation.
+ * interleaved activity times provably alternate around the ring. Instead,
+ * an instance's cards group into clouds — a nebula smudge under a loose
+ * ring scatter of cards, not an outlined grid:
+ *
+ * - each parent thread with children present becomes its own cloud, the
+ *   parent in the middle and its children orbiting it;
+ * - the rest of a project pools into that project's catch-all cloud;
+ * - every scratch checkout collapses into ONE "Workspaces" cloud via the
+ *   shared directory classifier, instead of a hash-named body per chat.
+ *
+ * Each cloud caps what it shows by default and carries a working "+N
+ * more" chip. There is deliberately NO cross-cloud budget: allocating a
+ * fixed instance-wide card budget in mass order starved every later
+ * cloud to zero cards and made expansion a no-op — the exact failure an
+ * honest overflow chip exists to prevent.
  */
 
 /**
- * Default visible cards per project cloud. Small enough that four projects
- * still fit around one body; the per-cloud "+N more" chip expands past it.
+ * Default visible cards per cloud. Small enough that several clouds fit
+ * around one body; the per-cloud "+N more" chip expands past it.
  */
 export const ORBIT_MAX_CARDS_PER_GROUP = 8;
-/**
- * DOM-size backstop across an instance's clouds, matching the lane cap: a
- * fleet of five instances at this ceiling is already 200 mounted cards.
- * Never silent — a cloud clipped by the backstop reports the clipped cards
- * in its own overflow chip.
- */
-export const ORBIT_MAX_CARDS_PER_CLOUD = 40;
 
-/** Clouds of up to this many cards stack one column; larger use two. */
-const SINGLE_COLUMN_MAX = 4;
-const CLUSTER_COLUMN_GAP = 14;
-const CLUSTER_PAD_X = 16;
-/** Room inside the outline's top edge for the label pill row. */
-const CLUSTER_PAD_TOP = 44;
-const CLUSTER_PAD_BOTTOM = 14;
-/** Height reserved for the overflow chip row, gap included. */
-const CLUSTER_OVERFLOW_HEIGHT = 24;
-const CLUSTER_OVERFLOW_GAP = 10;
-/** Clearance between two clouds' outlines. */
-const CLUSTER_GAP = 44;
+/** Cards may shingle slightly on a ring; hover raises the one under the
+ * pointer, and the overlap is what makes the scatter read as a cloud
+ * rather than a grid. */
+const RING_PACKING = 0.82;
+/** Extra x-radius on ring 1 so it clears the centre card. */
+const RING_BASE_RX_FACTOR = 1.05;
+const RING_STEP_RX_FACTOR = 1.0;
+const RING_BASE_RY_PAD = 26;
+const RING_STEP_RY_PAD = 20;
+/** Max angular jitter as a share of a slot's angular pitch. */
+const JITTER_ANGLE_SHARE = 0.35;
+/** Max outward-only radial jitter. */
+const JITTER_RADIUS_SHARE = 0.12;
+/** Breathing room the cloud claims past its outermost card. */
+const CLOUD_EXTENT_PAD = 26;
+/** Vertical room above/below the cards for the label and the chip. */
+const CLOUD_LABEL_ROOM = 30;
+const CLOUD_CHIP_ROOM = 30;
+
+/** Clearance between two clouds' extents when seating. */
+const CLUSTER_GAP = 56;
 /** Clearance between a cloud and the instance's own chrome. */
-const KEEPOUT_GAP = 14;
+const KEEPOUT_GAP = 18;
 /** First radius probed when seating a cloud around the body. */
-const SEAT_BASE_RADIUS = 150;
+const SEAT_BASE_RADIUS = 170;
 const SEAT_RADIUS_STEP = 26;
 const SEAT_MAX_PROBES = 240;
-/**
- * Same base rotation as the galaxy scatter in star-map-orbit: clouds leave
- * the cardinal axes so two of them never sit at exactly N/S.
- */
+/** Same base rotation as the galaxy scatter: clouds leave the cardinal
+ * axes so two of them never sit at exactly N/S. */
 const SEAT_BASE_ROTATION = 0.22;
 /** Clouds are wide and short-ish, so seating stretches horizontally. */
 const SEAT_ASPECT_X = 1.3;
 
 export type StarMapClusterSpec = {
-  /** Stable identity: the repo root path, or the no-project sentinel. */
+  /** Stable identity: project key, or `${projectKey}::pc:${parentKey}`. */
   key: string;
+  /** Project name for catch-all clouds; the parent's title otherwise. */
   label: string;
   /** False only for the pooled no-project cloud. */
   isProject: boolean;
+  /** Set when this cloud is one parent thread and its descendants. */
+  isParentGroup: boolean;
   /** Full ordered membership; the first `visibleCount` render. */
   threads: NavigationThreadSummary[];
   visibleCount: number;
-  /** Hidden members — per-cloud cap plus any backstop clipping. */
   overflow: number;
   expanded: boolean;
   /** Whether the expand chip has anything to do. */
@@ -78,16 +90,20 @@ export type StarMapClusterSpec = {
 };
 
 export type StarMapClusterPlacement = StarMapClusterSpec & {
-  /** Outline box, body-relative top-left. */
-  rect: { x: number; y: number; width: number; height: number };
+  /** Cloud centre, body-relative. */
+  center: { x: number; y: number };
+  /** Half-extent of the drawn cards around the centre. */
+  extent: { rx: number; ry: number };
   /** Per visible card: dx = centre x, dy = top y, body-relative. */
   slots: StarMapCardSlot[];
-  /** Centre of the overflow chip row, when the cloud shows one. */
+  /** Centre of the floating label, body-relative. */
+  labelSlot: StarMapCardSlot;
+  /** Centre of the overflow chip, when the cloud shows one. */
   overflowSlot?: StarMapCardSlot;
   /**
-   * A lone no-project cloud renders without outline or pill — there is
-   * nothing to distinguish it from, and a "No project" frame around the
-   * whole map would be chrome about nothing.
+   * A lone card needs no nebula, no label, no chip — it just floats.
+   * Twenty one-thread clouds wearing full chrome is how the map turned
+   * into a spreadsheet.
    */
   chromeless: boolean;
 };
@@ -99,9 +115,9 @@ export type StarMapClusterCloud = {
   /** Flat slots aligned with `threads`. */
   slots: StarMapCardSlot[];
   heights: number[];
-  /** Cluster index per flat card, for per-cloud chip hygiene. */
+  /** Cluster index per flat card. */
   clusterIndexByCard: number[];
-  /** Half-extent of the drawn cloud set, for inter-instance spacing. */
+  /** Half-extent of the whole drawn cloud set, for instance spacing. */
   extent: { rx: number; ry: number };
 };
 
@@ -117,15 +133,20 @@ function parentKeyOf(thread: NavigationThreadSummary): string | undefined {
   );
 }
 
+/** Stable [0,1) from a string, for deterministic willy-nilly. */
+function noise(value: string, salt: number): number {
+  let hash = 0x811c9dc5 ^ salt;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return ((hash >>> 0) % 10_000) / 10_000;
+}
+
 /**
- * Reorder a cloud so children sit directly under their parent.
- *
- * Eight stacked-PR children sorted by recency scatter through the stack in
- * whatever order their turns last ran; adjacency is what makes them read
- * as one piece of work. Threads whose parent is not in this cloud keep
- * their place, and a parent's children keep their relative order. Cycle
- * members (a thread that is its own ancestor) fall back to their original
- * position rather than vanishing.
+ * Reorder a cloud so children sit directly after their parent (DFS), for
+ * the clouds that still mix relationships (a catch-all holding an orphan
+ * chain). Cycle members fall back to their original position.
  */
 export function orderParentAdjacent(
   threads: readonly NavigationThreadSummary[],
@@ -157,7 +178,6 @@ export function orderParentAdjacent(
     for (const child of childrenOf.get(key) ?? []) visit(child);
   };
   for (const root of roots) visit(root);
-  // Anything not reached hangs off a cycle; keep it rather than lose it.
   for (const thread of threads) {
     if (!emitted.has(threadKeyOf(thread))) {
       emitted.add(threadKeyOf(thread));
@@ -168,12 +188,15 @@ export function orderParentAdjacent(
 }
 
 /**
- * Group one instance's filtered threads into capped project clouds.
+ * Group one instance's filtered threads into capped clouds.
  *
- * Threads arrive already sorted (pins first, then recency) and keep that
- * order inside their cloud, apart from the parent-adjacency pass. Clouds
- * order by the same mass the projects lens uses, heaviest first, so the
- * busiest project seats nearest the body.
+ * Buckets come from the shared directory classifier (via
+ * `threadProjectKey`), so every scratch checkout pools into one
+ * "Workspaces" cloud. Within a bucket, each root parent that has
+ * children present splits out into its own parent/child cloud (parent
+ * first, descendants in DFS order); the remainder stays in the bucket's
+ * catch-all. Clouds order by the same mass the projects lens uses,
+ * heaviest first, so the busiest work seats nearest the body.
  */
 export function buildInstanceClusters(params: {
   threads: readonly NavigationThreadSummary[];
@@ -181,125 +204,207 @@ export function buildInstanceClusters(params: {
   expandedKeys?: ReadonlySet<string>;
   now?: number;
 }): StarMapClusterSpec[] {
-  const groups = new Map<string, NavigationThreadSummary[]>();
+  const buckets = new Map<string, NavigationThreadSummary[]>();
   for (const thread of params.threads) {
     const key = threadProjectKey(thread);
-    const members = groups.get(key);
+    const members = buckets.get(key);
     if (members) members.push(thread);
-    else groups.set(key, [thread]);
+    else buckets.set(key, [thread]);
   }
+
+  type Draft = {
+    key: string;
+    label: string;
+    isProject: boolean;
+    isParentGroup: boolean;
+    threads: NavigationThreadSummary[];
+    mass: number;
+  };
   const now = params.now ?? Date.now();
-  const massed = [...groups.entries()].map(([key, members]) => {
-    const lastActivityAt = members.reduce(
-      (latest, thread) => Math.max(latest, thread.updatedAt ?? 0),
-      0,
-    );
-    return {
-      key,
-      label: threadProjectLabel(members[0]),
-      isProject: key !== STAR_MAP_NO_PROJECT_KEY,
-      threads: orderParentAdjacent(members),
-      mass: projectMass({ cardCount: members.length, lastActivityAt, now }),
-      expanded: params.expandedKeys?.has(key) ?? false,
+  const drafts: Draft[] = [];
+
+  for (const [bucketKey, members] of buckets) {
+    const ordered = orderParentAdjacent(members);
+    const present = new Set(members.map(threadKeyOf));
+    const isProject = bucketKey !== STAR_MAP_NO_PROJECT_KEY;
+    const bucketLabel = threadProjectLabel(members[0]);
+
+    // Root parents: threads with children in this bucket whose own
+    // parent is absent (or self/cyclic). `ordered` is DFS, so a root's
+    // descendants follow it contiguously — collect until the next root.
+    const hasChildren = new Set<string>();
+    for (const thread of members) {
+      const parentKey = parentKeyOf(thread);
+      if (
+        parentKey !== undefined
+        && parentKey !== threadKeyOf(thread)
+        && present.has(parentKey)
+      ) {
+        hasChildren.add(parentKey);
+      }
+    }
+    const isRoot = (thread: NavigationThreadSummary) => {
+      const parentKey = parentKeyOf(thread);
+      return (
+        parentKey === undefined
+        || parentKey === threadKeyOf(thread)
+        || !present.has(parentKey)
+      );
     };
-  });
-  massed.sort(
+
+    const rest: NavigationThreadSummary[] = [];
+    let index = 0;
+    while (index < ordered.length) {
+      const thread = ordered[index];
+      if (isRoot(thread) && hasChildren.has(threadKeyOf(thread))) {
+        const group: NavigationThreadSummary[] = [thread];
+        index += 1;
+        while (index < ordered.length && !isRoot(ordered[index])) {
+          group.push(ordered[index]);
+          index += 1;
+        }
+        drafts.push({
+          key: `${bucketKey}::pc:${threadKeyOf(thread)}`,
+          label: thread.title,
+          isProject,
+          isParentGroup: true,
+          threads: group,
+          mass: massOf(group, now),
+        });
+        continue;
+      }
+      rest.push(thread);
+      index += 1;
+    }
+    if (rest.length > 0) {
+      drafts.push({
+        key: bucketKey,
+        label: bucketLabel,
+        isProject,
+        isParentGroup: false,
+        threads: rest,
+        mass: massOf(rest, now),
+      });
+    }
+  }
+
+  drafts.sort(
     (left, right) =>
       right.mass - left.mass || left.label.localeCompare(right.label),
   );
 
-  let budget = ORBIT_MAX_CARDS_PER_CLOUD;
-  return massed.map((cluster) => {
-    const desired = cluster.expanded
-      ? cluster.threads.length
-      : Math.min(cluster.threads.length, ORBIT_MAX_CARDS_PER_GROUP);
-    const visibleCount = Math.max(0, Math.min(desired, budget));
-    budget -= visibleCount;
+  return drafts.map((draft) => {
+    const expanded = params.expandedKeys?.has(draft.key) ?? false;
+    const visibleCount = expanded
+      ? draft.threads.length
+      : Math.min(draft.threads.length, ORBIT_MAX_CARDS_PER_GROUP);
     return {
-      key: cluster.key,
-      label: cluster.label,
-      isProject: cluster.isProject,
-      threads: cluster.threads,
+      key: draft.key,
+      label: draft.label,
+      isProject: draft.isProject,
+      isParentGroup: draft.isParentGroup,
+      threads: draft.threads,
       visibleCount,
-      overflow: cluster.threads.length - visibleCount,
-      expanded: cluster.expanded,
-      expandable: cluster.threads.length > ORBIT_MAX_CARDS_PER_GROUP,
+      overflow: draft.threads.length - visibleCount,
+      expanded,
+      expandable: draft.threads.length > ORBIT_MAX_CARDS_PER_GROUP,
     };
   });
 }
 
-type SizedCluster = {
+function massOf(threads: readonly NavigationThreadSummary[], now: number): number {
+  const lastActivityAt = threads.reduce(
+    (latest, thread) => Math.max(latest, thread.updatedAt ?? 0),
+    0,
+  );
+  return projectMass({ cardCount: threads.length, lastActivityAt, now });
+}
+
+type ScatteredCluster = {
   spec: StarMapClusterSpec;
-  width: number;
-  height: number;
-  /** Cluster-local card slots, from the outline's top-left corner. */
+  /** Cloud-local card slots (dx from centre, dy = card TOP from centre). */
   slots: StarMapCardSlot[];
-  overflowSlot?: StarMapCardSlot;
+  extent: { rx: number; ry: number };
 };
 
 /**
- * Stack a cloud's visible cards into one or two columns, row-major so the
- * pins-then-recency order reads left-right, top-down. Rows step by the
- * tallest card in the row — heights vary with chip rows, and a fixed pitch
- * either clips or wastes.
+ * Scatter a cloud's visible cards: the first card in the middle (for a
+ * parent/child cloud that IS the parent), the rest walking elliptical
+ * rings with deterministic per-thread jitter — willy-nilly like the
+ * original orbit, never a grid. Cards may shingle slightly on purpose;
+ * they are opaque and hover raises the one under the pointer.
  */
-function sizeCluster(params: {
+function scatterCluster(params: {
   spec: StarMapClusterSpec;
   cardWidth: number;
   heightForThread: (threadKey: string) => number;
-}): SizedCluster {
+}): ScatteredCluster {
   const visible = params.spec.threads.slice(0, params.spec.visibleCount);
-  const columns = visible.length > SINGLE_COLUMN_MAX ? 2 : 1;
-  const contentWidth =
-    columns * params.cardWidth + (columns - 1) * CLUSTER_COLUMN_GAP;
-  const width = contentWidth + CLUSTER_PAD_X * 2;
+  const heights = visible.map((thread) =>
+    params.heightForThread(threadKeyOf(thread)),
+  );
+  const maxHeight = heights.reduce((top, height) => Math.max(top, height), 1);
   const slots: StarMapCardSlot[] = [];
-  let y = CLUSTER_PAD_TOP;
-  for (let start = 0; start < visible.length; start += columns) {
-    const row = visible.slice(start, start + columns);
-    for (let column = 0; column < row.length; column += 1) {
+  if (visible.length > 0) {
+    slots.push({ dx: 0, dy: -heights[0] / 2 });
+  }
+
+  // The whole cloud leans a little, per cloud, so no two clouds start
+  // their rings at the same bearing.
+  const baseAngle = Math.PI / 2 + (noise(params.spec.key, 3) * 2 - 1) * 0.7;
+  let ringIndex = 0;
+  let seated = 1;
+  while (seated < visible.length) {
+    ringIndex += 1;
+    const rx =
+      params.cardWidth
+      * (RING_BASE_RX_FACTOR + (ringIndex - 1) * RING_STEP_RX_FACTOR);
+    const ry =
+      (maxHeight + RING_BASE_RY_PAD)
+      + (ringIndex - 1) * (maxHeight + RING_STEP_RY_PAD);
+    const capacity = Math.max(
+      4,
+      Math.floor((2 * Math.PI * rx) / (params.cardWidth * RING_PACKING)),
+    );
+    const onThisRing = Math.min(visible.length - seated, capacity);
+    const pitch = (2 * Math.PI) / onThisRing;
+    for (let position = 0; position < onThisRing; position += 1) {
+      const thread = visible[seated + position];
+      const key = threadKeyOf(thread);
+      const angle =
+        baseAngle
+        + position * pitch
+        + (ringIndex % 2 === 1 ? 0 : pitch / 2)
+        + (noise(key, 5) * 2 - 1) * pitch * JITTER_ANGLE_SHARE;
+      const reach = 1 + noise(key, 7) * JITTER_RADIUS_SHARE;
+      const height = heights[seated + position];
       slots.push({
-        dx:
-          CLUSTER_PAD_X
-          + column * (params.cardWidth + CLUSTER_COLUMN_GAP)
-          + params.cardWidth / 2,
-        dy: y,
+        dx: Math.cos(angle) * rx * reach,
+        dy: Math.sin(angle) * ry * reach - height / 2,
       });
     }
-    const rowHeight = Math.max(
-      ...row.map((thread) => params.heightForThread(threadKeyOf(thread))),
-    );
-    y += rowHeight + STAR_MAP_CARD_GAP;
+    seated += onThisRing;
   }
-  let bottom = visible.length > 0 ? y - STAR_MAP_CARD_GAP : CLUSTER_PAD_TOP;
-  // The chip appears for hidden cards, and stays while expanded so the
-  // cloud can be re-collapsed.
-  const showChip =
-    params.spec.overflow > 0
-    || (params.spec.expanded && params.spec.expandable);
-  let overflowSlot: StarMapCardSlot | undefined;
-  if (showChip) {
-    overflowSlot = {
-      dx: width / 2,
-      dy:
-        bottom
-        + (visible.length > 0 ? CLUSTER_OVERFLOW_GAP : 0)
-        + CLUSTER_OVERFLOW_HEIGHT / 2,
-    };
-    bottom = overflowSlot.dy + CLUSTER_OVERFLOW_HEIGHT / 2;
-  }
+
+  let rx = 0;
+  let ry = 0;
+  slots.forEach((slot, index) => {
+    rx = Math.max(rx, Math.abs(slot.dx) + params.cardWidth / 2);
+    ry = Math.max(ry, Math.abs(slot.dy), Math.abs(slot.dy + heights[index]));
+  });
   return {
     spec: params.spec,
-    width,
-    height: bottom + CLUSTER_PAD_BOTTOM,
     slots,
-    overflowSlot,
+    extent: {
+      rx: rx + CLOUD_EXTENT_PAD,
+      ry: ry + CLOUD_EXTENT_PAD,
+    },
   };
 }
 
-type Rect = { x: number; y: number; width: number; height: number };
+type Box = { x: number; y: number; width: number; height: number };
 
-function rectsOverlap(a: Rect, b: Rect, gap: number): boolean {
+function boxesOverlap(a: Box, b: Box, gap: number): boolean {
   return (
     a.x < b.x + b.width + gap
     && b.x < a.x + a.width + gap
@@ -308,64 +413,82 @@ function rectsOverlap(a: Rect, b: Rect, gap: number): boolean {
   );
 }
 
-const KEEPOUT_RECT: Rect = {
+const KEEPOUT_BOX: Box = {
   x: -STAR_MAP_INSTANCE_KEEPOUT.halfWidth,
   y: -STAR_MAP_INSTANCE_KEEPOUT.above,
   width: STAR_MAP_INSTANCE_KEEPOUT.halfWidth * 2,
   height: STAR_MAP_INSTANCE_KEEPOUT.above + STAR_MAP_INSTANCE_KEEPOUT.below,
 };
 
+function boxFor(
+  center: { x: number; y: number },
+  scattered: ScatteredCluster,
+): Box {
+  return {
+    x: center.x - scattered.extent.rx,
+    y: center.y - scattered.extent.ry - CLOUD_LABEL_ROOM,
+    width: scattered.extent.rx * 2,
+    height: scattered.extent.ry * 2 + CLOUD_LABEL_ROOM + CLOUD_CHIP_ROOM,
+  };
+}
+
 /**
- * Seat sized clouds around the body: a lone cloud hangs centred below it
- * (the lane shape), several distribute by angle — heaviest first, just off
+ * Seat scattered clouds around the body: a lone cloud hangs centred
+ * below it, several distribute by angle — heaviest first, just off
  * vertical — each walking outward along its own bearing until it clears
- * the chrome and every cloud already seated. Deterministic: same clouds,
- * same sky.
+ * the chrome and every cloud already seated. Deterministic.
  */
-function seatClusters(sized: readonly SizedCluster[]): Rect[] {
-  if (sized.length === 1) {
-    const only = sized[0];
+function seatClusters(
+  scattered: readonly ScatteredCluster[],
+): { x: number; y: number }[] {
+  if (scattered.length === 1) {
+    const only = scattered[0];
     return [
       {
-        x: -only.width / 2,
-        y: STAR_MAP_INSTANCE_KEEPOUT.below + KEEPOUT_GAP,
-        width: only.width,
-        height: only.height,
+        x: 0,
+        y:
+          STAR_MAP_INSTANCE_KEEPOUT.below
+          + KEEPOUT_GAP
+          + CLOUD_LABEL_ROOM
+          + only.extent.ry,
       },
     ];
   }
-  const placed: Rect[] = [];
-  sized.forEach((cluster, index) => {
+  const placedBoxes: Box[] = [];
+  const centers: { x: number; y: number }[] = [];
+  scattered.forEach((cluster, index) => {
     const angle =
-      Math.PI / 2 + SEAT_BASE_ROTATION + (index * 2 * Math.PI) / sized.length;
+      Math.PI / 2
+      + SEAT_BASE_ROTATION
+      + (index * 2 * Math.PI) / scattered.length;
     let radius = SEAT_BASE_RADIUS;
-    let candidate: Rect = { x: 0, y: 0, width: cluster.width, height: cluster.height };
+    let center = { x: 0, y: 0 };
     for (let probe = 0; probe < SEAT_MAX_PROBES; probe += 1) {
-      candidate = {
-        x: Math.cos(angle) * radius * SEAT_ASPECT_X - cluster.width / 2,
-        y: Math.sin(angle) * radius - cluster.height / 2,
-        width: cluster.width,
-        height: cluster.height,
+      center = {
+        x: Math.cos(angle) * radius * SEAT_ASPECT_X,
+        y: Math.sin(angle) * radius,
       };
+      const box = boxFor(center, cluster);
       const clear =
-        !rectsOverlap(candidate, KEEPOUT_RECT, KEEPOUT_GAP)
-        && placed.every((other) => !rectsOverlap(candidate, other, CLUSTER_GAP));
+        !boxesOverlap(box, KEEPOUT_BOX, KEEPOUT_GAP)
+        && placedBoxes.every((other) => !boxesOverlap(box, other, CLUSTER_GAP));
       if (clear) break;
       radius += SEAT_RADIUS_STEP;
     }
-    placed.push(candidate);
+    placedBoxes.push(boxFor(center, cluster));
+    centers.push(center);
   });
-  return placed;
+  return centers;
 }
 
 /** Extent an instance claims when its clouds are empty — its own body. */
 const EMPTY_CLOUD_EXTENT = 70;
 
 /**
- * Lay out one instance's project clouds and flatten them for rendering.
+ * Lay out one instance's clouds and flatten them for rendering.
  *
  * The flat `threads`/`slots`/`heights` triple is what the screen's lane
- * plumbing already speaks (index-aligned, slot dy = card top), so cluster
+ * plumbing already speaks (index-aligned, slot dy = card top), so cloud
  * membership rides alongside instead of reshaping every consumer.
  */
 export function computeClusterCloud(params: {
@@ -373,14 +496,14 @@ export function computeClusterCloud(params: {
   cardWidth: number;
   heightForThread: (threadKey: string) => number;
 }): StarMapClusterCloud {
-  const sized = params.clusters.map((spec) =>
-    sizeCluster({
+  const scattered = params.clusters.map((spec) =>
+    scatterCluster({
       spec,
       cardWidth: params.cardWidth,
       heightForThread: params.heightForThread,
     }),
   );
-  const rects = seatClusters(sized);
+  const centers = seatClusters(scattered);
 
   const clusters: StarMapClusterPlacement[] = [];
   const threads: NavigationThreadSummary[] = [];
@@ -390,11 +513,11 @@ export function computeClusterCloud(params: {
   let rx = EMPTY_CLOUD_EXTENT;
   let ry = EMPTY_CLOUD_EXTENT;
 
-  sized.forEach((cluster, index) => {
-    const rect = rects[index];
+  scattered.forEach((cluster, index) => {
+    const center = centers[index];
     const bodySlots = cluster.slots.map((slot) => ({
-      dx: rect.x + slot.dx,
-      dy: rect.y + slot.dy,
+      dx: center.x + slot.dx,
+      dy: center.y + slot.dy,
     }));
     const visible = cluster.spec.threads.slice(0, cluster.spec.visibleCount);
     visible.forEach((thread, cardIndex) => {
@@ -403,20 +526,34 @@ export function computeClusterCloud(params: {
       heights.push(params.heightForThread(threadKeyOf(thread)));
       clusterIndexByCard.push(index);
     });
+    const chromeless =
+      cluster.spec.threads.length === 1
+      || (scattered.length === 1 && !cluster.spec.isProject);
+    const showChip =
+      cluster.spec.overflow > 0
+      || (cluster.spec.expanded && cluster.spec.expandable);
     clusters.push({
       ...cluster.spec,
-      rect,
+      center,
+      extent: cluster.extent,
       slots: bodySlots,
-      overflowSlot: cluster.overflowSlot
+      labelSlot: {
+        dx: center.x,
+        dy: center.y - cluster.extent.ry - CLOUD_LABEL_ROOM / 2,
+      },
+      overflowSlot: showChip
         ? {
-            dx: rect.x + cluster.overflowSlot.dx,
-            dy: rect.y + cluster.overflowSlot.dy,
+            dx: center.x,
+            dy: center.y + cluster.extent.ry + CLOUD_CHIP_ROOM / 2,
           }
         : undefined,
-      chromeless: sized.length === 1 && !cluster.spec.isProject,
+      chromeless,
     });
-    rx = Math.max(rx, Math.abs(rect.x), Math.abs(rect.x + rect.width));
-    ry = Math.max(ry, Math.abs(rect.y), Math.abs(rect.y + rect.height));
+    rx = Math.max(rx, Math.abs(center.x) + cluster.extent.rx);
+    ry = Math.max(
+      ry,
+      Math.abs(center.y) + cluster.extent.ry + CLOUD_LABEL_ROOM + CLOUD_CHIP_ROOM,
+    );
   });
 
   return { clusters, threads, slots, heights, clusterIndexByCard, extent: { rx, ry } };

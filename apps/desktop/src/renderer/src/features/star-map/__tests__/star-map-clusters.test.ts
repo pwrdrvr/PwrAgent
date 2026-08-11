@@ -4,7 +4,6 @@ import {
   buildInstanceClusters,
   computeClusterCloud,
   orderParentAdjacent,
-  ORBIT_MAX_CARDS_PER_CLOUD,
   ORBIT_MAX_CARDS_PER_GROUP,
 } from "../star-map-clusters";
 
@@ -14,19 +13,20 @@ function thread(
   id: string,
   options?: {
     path?: string;
+    title?: string;
     updatedAt?: number;
     parentId?: string;
   },
 ): NavigationThreadSummary {
   return {
     id,
-    title: `Thread ${id}`,
+    title: options?.title ?? `Thread ${id}`,
     source: "codex",
     linkedDirectories: options?.path
       ? [
           {
             id: `dir-${options.path}`,
-            label: options.path,
+            label: options.path.split("/").filter(Boolean).pop(),
             path: options.path,
             kind: "local",
           },
@@ -55,6 +55,7 @@ describe("buildInstanceClusters", () => {
     const alpha = clusters.find((cluster) => cluster.label === "alpha")!;
     expect(alpha.threads.map((entry) => entry.id)).toEqual(["a1", "a2"]);
     expect(alpha.isProject).toBe(true);
+    expect(alpha.isParentGroup).toBe(false);
   });
 
   it("pools directory-less threads into a no-project cluster", () => {
@@ -67,17 +68,89 @@ describe("buildInstanceClusters", () => {
     expect(clusters[0].label).toBe("No project");
   });
 
-  it("orders clusters heaviest first, like the projects lens", () => {
+  it("pools every scratch checkout into one Workspaces cluster", () => {
+    // The classifier collapses anything under a .pwragent projects root;
+    // twenty hash-named chats must not become twenty one-thread clouds.
     const clusters = buildInstanceClusters({
       threads: [
-        thread("solo", { path: "/repo/sleepy", updatedAt: NOW - 10_000_000 }),
-        ...Array.from({ length: 5 }, (unused, index) =>
-          thread(`busy${index}`, { path: "/repo/busy", updatedAt: NOW }),
-        ),
+        thread("w1", { path: "/Users/op/.pwragent/projects/2026-08-02-04db3f" }),
+        thread("w2", { path: "/Users/op/.pwragent/projects/2026-08-02-4e433f" }),
+        thread("w3", { path: "/Users/op/.pwragent/projects/2026-05-23-885b8f" }),
       ],
       now: NOW,
     });
-    expect(clusters[0].label).toBe("busy");
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].label).toBe("Workspaces");
+    expect(clusters[0].threads).toHaveLength(3);
+  });
+
+  it("splits a parent and its children into their own cloud", () => {
+    const clusters = buildInstanceClusters({
+      threads: [
+        thread("solo", { path: "/repo/alpha" }),
+        thread("parent", { path: "/repo/alpha", title: "MCP foundation" }),
+        thread("c1", { path: "/repo/alpha", parentId: "parent" }),
+        thread("c2", { path: "/repo/alpha", parentId: "parent" }),
+      ],
+      now: NOW,
+    });
+    expect(clusters).toHaveLength(2);
+    const parentCloud = clusters.find((cluster) => cluster.isParentGroup)!;
+    expect(parentCloud.label).toBe("MCP foundation");
+    expect(parentCloud.threads.map((entry) => entry.id)).toEqual([
+      "parent",
+      "c1",
+      "c2",
+    ]);
+    const catchAll = clusters.find((cluster) => !cluster.isParentGroup)!;
+    expect(catchAll.label).toBe("alpha");
+    expect(catchAll.threads.map((entry) => entry.id)).toEqual(["solo"]);
+  });
+
+  it("keeps grandchildren inside their root parent's cloud", () => {
+    const clusters = buildInstanceClusters({
+      threads: [
+        thread("root", { path: "/repo/alpha" }),
+        thread("child", { path: "/repo/alpha", parentId: "root" }),
+        thread("grandchild", { path: "/repo/alpha", parentId: "child" }),
+      ],
+      now: NOW,
+    });
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].isParentGroup).toBe(true);
+    expect(clusters[0].threads.map((entry) => entry.id)).toEqual([
+      "root",
+      "child",
+      "grandchild",
+    ]);
+  });
+
+  it("supports several parent clouds plus a catch-all for one project", () => {
+    const clusters = buildInstanceClusters({
+      threads: [
+        thread("p1", { path: "/repo/alpha", title: "Effort one" }),
+        thread("p1c", { path: "/repo/alpha", parentId: "p1" }),
+        thread("p2", { path: "/repo/alpha", title: "Effort two" }),
+        thread("p2c", { path: "/repo/alpha", parentId: "p2" }),
+        thread("stray", { path: "/repo/alpha" }),
+      ],
+      now: NOW,
+    });
+    expect(clusters.filter((cluster) => cluster.isParentGroup)).toHaveLength(2);
+    const catchAll = clusters.find((cluster) => !cluster.isParentGroup)!;
+    expect(catchAll.threads.map((entry) => entry.id)).toEqual(["stray"]);
+  });
+
+  it("leaves an orphan whose parent is elsewhere in the catch-all", () => {
+    const clusters = buildInstanceClusters({
+      threads: [
+        thread("orphan", { path: "/repo/alpha", parentId: "not-here" }),
+        thread("plain", { path: "/repo/alpha" }),
+      ],
+      now: NOW,
+    });
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].isParentGroup).toBe(false);
   });
 
   it("caps each cluster at the group limit and reports overflow", () => {
@@ -97,7 +170,7 @@ describe("buildInstanceClusters", () => {
       threads: Array.from({ length: 12 }, (unused, index) =>
         thread(`t${index}`, { path: "/repo/alpha" }),
       ),
-      expandedKeys: new Set(["/repo/alpha"]),
+      expandedKeys: new Set(["directory:/repo/alpha"]),
       now: NOW,
     });
     expect(clusters[0].visibleCount).toBe(12);
@@ -105,44 +178,51 @@ describe("buildInstanceClusters", () => {
     expect(clusters[0].expanded).toBe(true);
   });
 
-  it("clips at the cloud backstop and accrues the loss as overflow", () => {
-    const threads = Array.from({ length: 8 }, (unused, project) =>
+  it("never starves a cloud: every cloud shows cards regardless of fleet size", () => {
+    // The old instance-wide budget allocated 40 cards in mass order, so a
+    // big fleet's later clouds rendered zero cards and their expand chips
+    // did nothing. Every cloud must always seat its own visible set.
+    const threads = Array.from({ length: 10 }, (unused, project) =>
       Array.from({ length: 8 }, (unusedInner, index) =>
         thread(`p${project}-t${index}`, { path: `/repo/p${project}` }),
       ),
     ).flat();
     const clusters = buildInstanceClusters({ threads, now: NOW });
-    const visibleTotal = clusters.reduce(
-      (total, cluster) => total + cluster.visibleCount,
-      0,
-    );
-    expect(visibleTotal).toBe(ORBIT_MAX_CARDS_PER_CLOUD);
-    const overflowTotal = clusters.reduce(
-      (total, cluster) => total + cluster.overflow,
-      0,
-    );
-    expect(overflowTotal).toBe(threads.length - ORBIT_MAX_CARDS_PER_CLOUD);
+    expect(clusters).toHaveLength(10);
+    for (const cluster of clusters) {
+      expect(cluster.visibleCount).toBe(8);
+      expect(cluster.overflow).toBe(0);
+    }
+  });
+
+  it("expansion always works, even on the last cloud", () => {
+    const threads = [
+      ...Array.from({ length: 30 }, (unused, index) =>
+        thread(`big-${index}`, { path: "/repo/big" }),
+      ),
+      ...Array.from({ length: 12 }, (unused, index) =>
+        thread(`small-${index}`, {
+          path: "/repo/small",
+          updatedAt: NOW - 1_000_000,
+        }),
+      ),
+    ];
+    const collapsed = buildInstanceClusters({ threads, now: NOW });
+    const small = collapsed.find((cluster) => cluster.label === "small")!;
+    expect(small.visibleCount).toBe(ORBIT_MAX_CARDS_PER_GROUP);
+
+    const expanded = buildInstanceClusters({
+      threads,
+      expandedKeys: new Set(["directory:/repo/small"]),
+      now: NOW,
+    });
+    const expandedSmall = expanded.find((cluster) => cluster.label === "small")!;
+    expect(expandedSmall.visibleCount).toBe(12);
+    expect(expandedSmall.overflow).toBe(0);
   });
 });
 
 describe("orderParentAdjacent", () => {
-  it("moves children to sit directly after their parent", () => {
-    const ordered = orderParentAdjacent([
-      thread("child2", { parentId: "parent" }),
-      thread("other"),
-      thread("parent"),
-      thread("child1", { parentId: "parent" }),
-    ]);
-    // child2 sorted ahead of its parent (fresher activity) but still pulls
-    // down under it; children keep their relative order.
-    expect(ordered.map((entry) => entry.id)).toEqual([
-      "other",
-      "parent",
-      "child2",
-      "child1",
-    ]);
-  });
-
   it("keeps children adjacent under a parent that sorts first", () => {
     const ordered = orderParentAdjacent([
       thread("parent"),
@@ -158,15 +238,6 @@ describe("orderParentAdjacent", () => {
     ]);
   });
 
-  it("leaves a thread alone when its parent is not in the cloud", () => {
-    const ordered = orderParentAdjacent([
-      thread("a"),
-      thread("orphan", { parentId: "elsewhere" }),
-      thread("b"),
-    ]);
-    expect(ordered.map((entry) => entry.id)).toEqual(["a", "orphan", "b"]);
-  });
-
   it("never drops members of a parent cycle", () => {
     const ordered = orderParentAdjacent([
       thread("x", { parentId: "y" }),
@@ -174,19 +245,6 @@ describe("orderParentAdjacent", () => {
       thread("z"),
     ]);
     expect(ordered.map((entry) => entry.id).sort()).toEqual(["x", "y", "z"]);
-  });
-
-  it("nests grandchildren under their whole chain", () => {
-    const ordered = orderParentAdjacent([
-      thread("grandchild", { parentId: "child" }),
-      thread("root"),
-      thread("child", { parentId: "root" }),
-    ]);
-    expect(ordered.map((entry) => entry.id)).toEqual([
-      "root",
-      "child",
-      "grandchild",
-    ]);
   });
 });
 
@@ -216,29 +274,63 @@ describe("computeClusterCloud", () => {
     expect(cloud.clusterIndexByCard).toHaveLength(5);
   });
 
-  it("keeps every card inside its own cluster outline", () => {
-    const cloud = cloudFor([6, 3, 2]);
+  it("seats the first card at its cloud's centre", () => {
+    const cloud = cloudFor([5, 3]);
+    for (const cluster of cloud.clusters) {
+      const first = cluster.slots[0];
+      expect(first.dx).toBeCloseTo(cluster.center.x, 5);
+      expect(first.dy + height() / 2).toBeCloseTo(cluster.center.y, 5);
+    }
+  });
+
+  it("scatters the rest instead of gridding them", () => {
+    // Rings with per-thread jitter: no three cards may share an x or y
+    // coordinate, which is exactly what a column grid produced.
+    const cloud = cloudFor([8]);
+    const xs = new Map<number, number>();
+    const ys = new Map<number, number>();
+    for (const slot of cloud.slots) {
+      const x = Math.round(slot.dx);
+      const y = Math.round(slot.dy);
+      xs.set(x, (xs.get(x) ?? 0) + 1);
+      ys.set(y, (ys.get(y) ?? 0) + 1);
+    }
+    expect(Math.max(...xs.values())).toBeLessThan(3);
+    expect(Math.max(...ys.values())).toBeLessThan(3);
+  });
+
+  it("gives every card a distinct slot", () => {
+    const cloud = cloudFor([8, 8]);
+    const unique = new Set(
+      cloud.slots.map((slot) => `${Math.round(slot.dx)}:${Math.round(slot.dy)}`),
+    );
+    expect(unique.size).toBe(cloud.slots.length);
+  });
+
+  it("keeps every card inside its cloud's extent", () => {
+    const cloud = cloudFor([8, 5, 2]);
     cloud.threads.forEach((entry, index) => {
       const cluster = cloud.clusters[cloud.clusterIndexByCard[index]];
       const slot = cloud.slots[index];
-      expect(slot.dx - 100).toBeGreaterThanOrEqual(cluster.rect.x);
-      expect(slot.dx + 100).toBeLessThanOrEqual(
-        cluster.rect.x + cluster.rect.width,
+      expect(Math.abs(slot.dx - cluster.center.x) + 100).toBeLessThanOrEqual(
+        cluster.extent.rx,
       );
-      expect(slot.dy).toBeGreaterThanOrEqual(cluster.rect.y);
+      expect(slot.dy).toBeGreaterThanOrEqual(
+        cluster.center.y - cluster.extent.ry,
+      );
       expect(slot.dy + height()).toBeLessThanOrEqual(
-        cluster.rect.y + cluster.rect.height,
+        cluster.center.y + cluster.extent.ry,
       );
     });
   });
 
-  it("gives no two cards in a cluster overlapping boxes", () => {
-    const cloud = cloudFor([8]);
-    const boxes = cloud.slots.map((slot) => ({
-      left: slot.dx - 100,
-      right: slot.dx + 100,
-      top: slot.dy,
-      bottom: slot.dy + height(),
+  it("separates cloud extents from each other", () => {
+    const cloud = cloudFor([8, 8, 4, 2]);
+    const boxes = cloud.clusters.map((cluster) => ({
+      left: cluster.center.x - cluster.extent.rx,
+      right: cluster.center.x + cluster.extent.rx,
+      top: cluster.center.y - cluster.extent.ry,
+      bottom: cluster.center.y + cluster.extent.ry,
     }));
     for (let i = 0; i < boxes.length; i += 1) {
       for (let j = i + 1; j < boxes.length; j += 1) {
@@ -252,32 +344,22 @@ describe("computeClusterCloud", () => {
     }
   });
 
-  it("separates cluster outlines from each other", () => {
-    const cloud = cloudFor([8, 8, 4, 2]);
-    const rects = cloud.clusters.map((cluster) => cluster.rect);
-    for (let i = 0; i < rects.length; i += 1) {
-      for (let j = i + 1; j < rects.length; j += 1) {
-        const apart =
-          rects[i].x + rects[i].width <= rects[j].x
-          || rects[j].x + rects[j].width <= rects[i].x
-          || rects[i].y + rects[i].height <= rects[j].y
-          || rects[j].y + rects[j].height <= rects[i].y;
-        expect(apart).toBe(true);
-      }
-    }
-  });
-
-  it("keeps clusters clear of the instance's own chrome", () => {
+  it("keeps clouds clear of the instance's own chrome", () => {
     // Mirrors STAR_MAP_INSTANCE_KEEPOUT in star-map-orbit.
     const keepout = { left: -92, right: 92, top: -58, bottom: 100 };
     const cloud = cloudFor([8, 8, 4]);
     for (const cluster of cloud.clusters) {
-      const rect = cluster.rect;
+      const box = {
+        left: cluster.center.x - cluster.extent.rx,
+        right: cluster.center.x + cluster.extent.rx,
+        top: cluster.center.y - cluster.extent.ry,
+        bottom: cluster.center.y + cluster.extent.ry,
+      };
       const apart =
-        rect.x + rect.width <= keepout.left
-        || rect.x >= keepout.right
-        || rect.y + rect.height <= keepout.top
-        || rect.y >= keepout.bottom;
+        box.right <= keepout.left
+        || box.left >= keepout.right
+        || box.bottom <= keepout.top
+        || box.top >= keepout.bottom;
       expect(apart).toBe(true);
     }
   });
@@ -285,12 +367,24 @@ describe("computeClusterCloud", () => {
   it("hangs a lone cloud below the body", () => {
     const cloud = cloudFor([4]);
     expect(cloud.clusters).toHaveLength(1);
-    const rect = cloud.clusters[0].rect;
-    expect(rect.y).toBeGreaterThan(0);
-    expect(rect.x + rect.width / 2).toBeCloseTo(0, 5);
+    const cluster = cloud.clusters[0];
+    expect(cluster.center.x).toBeCloseTo(0, 5);
+    expect(cluster.center.y - cluster.extent.ry).toBeGreaterThan(0);
   });
 
-  it("is chromeless only for a lone no-project cloud", () => {
+  it("floats a single-thread cloud chromeless", () => {
+    const cloud = cloudFor([1, 5]);
+    const lone = cloud.clusters.find(
+      (cluster) => cluster.threads.length === 1,
+    )!;
+    expect(lone.chromeless).toBe(true);
+    const full = cloud.clusters.find(
+      (cluster) => cluster.threads.length === 5,
+    )!;
+    expect(full.chromeless).toBe(false);
+  });
+
+  it("is chromeless for a lone no-project cloud", () => {
     const bare = computeClusterCloud({
       clusters: buildInstanceClusters({
         threads: [thread("x"), thread("y")],
@@ -300,40 +394,35 @@ describe("computeClusterCloud", () => {
       heightForThread: height,
     });
     expect(bare.clusters[0].chromeless).toBe(true);
-
-    const project = cloudFor([2]);
-    expect(project.clusters[0].chromeless).toBe(false);
   });
 
-  it("places an overflow chip inside a capped cluster's outline", () => {
+  it("places label above and chip below a capped cloud", () => {
     const cloud = cloudFor([12]);
     const cluster = cloud.clusters[0];
     expect(cluster.overflow).toBeGreaterThan(0);
-    expect(cluster.overflowSlot).toBeDefined();
-    expect(cluster.overflowSlot!.dy).toBeLessThan(
-      cluster.rect.y + cluster.rect.height,
+    expect(cluster.labelSlot.dy).toBeLessThan(
+      cluster.center.y - cluster.extent.ry,
     );
+    expect(cluster.overflowSlot).toBeDefined();
     expect(cluster.overflowSlot!.dy).toBeGreaterThan(
-      cloud.slots[cloud.slots.length - 1].dy + height(),
+      cluster.center.y + cluster.extent.ry,
     );
   });
 
   it("keeps the chip on an expanded cluster so it can collapse", () => {
-    const cloud = cloudFor([12], ["/repo/p0"]);
+    const cloud = cloudFor([12], ["directory:/repo/p0"]);
     expect(cloud.clusters[0].overflow).toBe(0);
     expect(cloud.clusters[0].overflowSlot).toBeDefined();
   });
 
-  it("reports an extent that covers every outline", () => {
+  it("reports an extent that covers every cloud", () => {
     const cloud = cloudFor([8, 6, 3]);
     for (const cluster of cloud.clusters) {
-      expect(Math.abs(cluster.rect.x)).toBeLessThanOrEqual(cloud.extent.rx);
-      expect(Math.abs(cluster.rect.x + cluster.rect.width)).toBeLessThanOrEqual(
-        cloud.extent.rx,
-      );
-      expect(Math.abs(cluster.rect.y)).toBeLessThanOrEqual(cloud.extent.ry);
       expect(
-        Math.abs(cluster.rect.y + cluster.rect.height),
+        Math.abs(cluster.center.x) + cluster.extent.rx,
+      ).toBeLessThanOrEqual(cloud.extent.rx);
+      expect(
+        Math.abs(cluster.center.y) + cluster.extent.ry,
       ).toBeLessThanOrEqual(cloud.extent.ry);
     }
   });

@@ -72,27 +72,52 @@ describe("groupThreadsByProject", () => {
     ["peer", [remote, orphan]],
   ]);
 
+  // Project keys carry the shared directory classifier's prefix, so the
+  // Star Map and the Directories lens file threads under the same rows.
   it("pools threads for one project across instances", () => {
     const projects = groupThreadsByProject(byInstance);
-    const pwragent = projects.find((p) => p.key === "/repos/PwrAgnt");
+    const pwragent = projects.find(
+      (p) => p.key === "directory:/repos/PwrAgnt",
+    );
     expect(pwragent?.threads.map((t) => t.id)).toEqual(["r1", "l1"]);
   });
 
   it("names a project after its repo folder", () => {
     const projects = groupThreadsByProject(byInstance);
-    expect(projects.find((p) => p.key === "/repos/PwrSnap")?.label).toBe(
-      "PwrSnap",
-    );
+    expect(
+      projects.find((p) => p.key === "directory:/repos/PwrSnap")?.label,
+    ).toBe("PwrSnap");
   });
 
   it("orders threads within a project by recent activity", () => {
     const projects = groupThreadsByProject(byInstance);
-    const ids = projects.find((p) => p.key === "/repos/PwrAgnt")!.threads;
+    const ids = projects.find(
+      (p) => p.key === "directory:/repos/PwrAgnt",
+    )!.threads;
     expect(ids[0].updatedAt).toBeGreaterThan(ids[1].updatedAt!);
   });
 
   it("puts the busiest project first", () => {
-    expect(groupThreadsByProject(byInstance)[0].key).toBe("/repos/PwrAgnt");
+    expect(groupThreadsByProject(byInstance)[0].key).toBe(
+      "directory:/repos/PwrAgnt",
+    );
+  });
+
+  it("pools scratch checkouts into one Workspaces project", () => {
+    const w1 = thread({
+      id: "w1",
+      repoPath: "/Users/op/.pwragent/projects/2026-08-02-04db3f",
+      label: "2026-08-02-04db3f",
+    });
+    const w2 = thread({
+      id: "w2",
+      repoPath: "/Users/op/.pwragent/projects/2026-05-23-885b8f",
+      label: "2026-05-23-885b8f",
+    });
+    const projects = groupThreadsByProject(new Map([["local", [w1, w2]]]));
+    expect(projects).toHaveLength(1);
+    expect(projects[0].label).toBe("Workspaces");
+    expect(projects[0].threads).toHaveLength(2);
   });
 
   it("gives directory-less threads a home", () => {

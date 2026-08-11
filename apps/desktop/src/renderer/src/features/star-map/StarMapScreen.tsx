@@ -1662,18 +1662,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
             }}
           />
         ) : null}
-        {/* Outlines paint under the cards: same layer, earlier in DOM. */}
+        {/* Nebula smudges paint under the cards: same layer, earlier in
+            DOM. Sized past the card extent so the glow falls off around
+            the cloud instead of stopping at it. */}
         {position.clusters?.map((cluster) =>
           cluster.chromeless ? null : (
-            <div
-              key={`cluster:${cluster.key}`}
-              className="star-map__cluster"
+            <span
+              key={`cluster-halo:${cluster.key}`}
+              className="star-map__cluster-halo"
               aria-hidden="true"
               style={{
-                left: cluster.rect.x,
-                top: cluster.rect.y,
-                width: cluster.rect.width,
-                height: cluster.rect.height,
+                left: cluster.center.x,
+                top: cluster.center.y,
+                width: cluster.extent.rx * 2.6,
+                height: cluster.extent.ry * 2.7,
               }}
             />
           ),
@@ -1729,11 +1731,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
         {visible.map((thread, index) => {
           const slot = slots[index];
           const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-          const clusterIndex = position.clusterIndexByCard?.[index];
-          const cardCluster =
-            clusterIndex !== undefined
-              ? position.clusters?.[clusterIndex]
-              : undefined;
           return (
             <StarMapThreadCard
               key={threadKey}
@@ -1762,18 +1759,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
               onToggleSelect={() =>
                 toggleSelected(`${position.instanceId}::${threadKey}`)
               }
-              // Inside a labeled project cloud the directory chips repeat
-              // the pill; the projects lens sets the same precedent ("the
-              // project IS the sun").
-              cardFields={
-                cardCluster?.isProject
-                  ? {
-                      ...preferences.cardFields,
-                      primaryDirectory: false,
-                      secondaryDirectories: false,
-                    }
-                  : preferences.cardFields
-              }
+              // Cards keep their full chip anatomy inside a cloud — the
+              // cloud label groups them, it does not replace what they say.
+              cardFields={preferences.cardFields}
               menuActions={cardMenuActions(thread, position.instanceId)}
               drag={
                 // Drags persist + sync only once the durable instance id is
@@ -1843,17 +1831,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
             && clusterCardKeys.every((key) => selection.has(key));
           return (
             <button
-              key={`cluster-pill:${cluster.key}`}
+              key={`cluster-label:${cluster.key}`}
               type="button"
-              className="star-map__cluster-pill"
-              style={{ left: cluster.rect.x + 12, top: cluster.rect.y + 10 }}
+              className="star-map__cluster-label"
+              style={{ left: cluster.labelSlot.dx, top: cluster.labelSlot.dy }}
               aria-pressed={allSelected}
               aria-label={`Select the ${cluster.label} cards (${cluster.threads.length} threads)`}
               onClick={() =>
                 toggleClusterSelection(position.instanceId, cluster)
               }
             >
-              <span className="star-map__cluster-label">{cluster.label}</span>
+              <span className="star-map__cluster-name">{cluster.label}</span>
               <span className="star-map__cluster-count">
                 {cluster.threads.length}
               </span>
