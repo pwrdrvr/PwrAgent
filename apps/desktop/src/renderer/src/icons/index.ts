@@ -16,6 +16,7 @@ export { ChevronUpIcon } from "./ChevronUpIcon";
 export { CloseIcon } from "./CloseIcon";
 export { CopyIcon } from "./CopyIcon";
 export { DiscordIcon } from "./DiscordIcon";
+export { DraftIcon } from "./DraftIcon";
 export { EditorIcon } from "./EditorIcon";
 export { EditsIcon } from "./EditsIcon";
 export { FeishuIcon } from "./FeishuIcon";

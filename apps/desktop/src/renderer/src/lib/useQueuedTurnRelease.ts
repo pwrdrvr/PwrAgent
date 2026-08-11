@@ -6,6 +6,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
+  buildThreadComposerScopeKey,
   getNextReleasableQueuedTurn,
   type ComposerDraftStore,
   type ComposerQueuedTurnSnapshot,
@@ -119,7 +120,7 @@ function isIdleStatusNotification(event: AgentEvent): boolean {
 }
 
 function getThreadScopeKey(thread: Pick<NavigationThreadSummary, "id" | "source">): string {
-  return `thread:${thread.source}:${thread.id}`;
+  return buildThreadComposerScopeKey(thread.source, thread.id);
 }
 
 function isThreadSelected(

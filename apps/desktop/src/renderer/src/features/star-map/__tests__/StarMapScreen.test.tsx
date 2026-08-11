@@ -73,6 +73,41 @@ function seedLayout(layout: "lanes" | "orbit" | "projects") {
 }
 
 describe("StarMapScreen", () => {
+  it("marks a card whose thread holds an unsent draft", async () => {
+    // Drafts ride a prop of their own rather than `sessionKeys`, which the
+    // screen only trusts for local cards — a draft is this window's own
+    // composer state, so no peer has to confirm it.
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[unreadThread("t1"), unreadThread("t2")]}
+        sessionKeys={{}}
+        draftThreadKeys={{ "codex:t1": true }}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-card")).not.toBeNull();
+    });
+
+    const drafted = starMapCard(
+      screen.getByRole("button", { name: "Open thread: Thread t1" }),
+    );
+    expect(
+      drafted.querySelector('[data-thread-draft="unsent"]'),
+    ).not.toBeNull();
+
+    const undrafted = starMapCard(
+      screen.getByRole("button", { name: "Open thread: Thread t2" }),
+    );
+    expect(undrafted.querySelector('[data-thread-draft="unsent"]')).toBeNull();
+  });
+
   // Filter selection and view preferences both persist to localStorage,
   // so without this a test that clicks a chip silently changes the
   // starting state of every test after it.

@@ -40,6 +40,13 @@ import type { StarMapSessionKeys } from "./attention";
 export function StarMapThreadCard(props: {
   thread: NavigationThreadSummary;
   sessionKeys?: StarMapSessionKeys;
+  /**
+   * Separate from `sessionKeys` on purpose: the caller withholds those from
+   * remote cards because thinking/approval keys come from an unscoped event
+   * stream. A draft is this window's own composer state, so it is just as
+   * true of a peer's thread as of a local one.
+   */
+  hasUnsentDraft?: boolean;
   entering?: boolean;
   /** Staggered rise-in offset so a cloud settles like a constellation. */
   riseDelayMs?: number;
@@ -182,6 +189,7 @@ export function StarMapThreadCard(props: {
             hasInputRequest={
               props.sessionKeys?.inputRequestThreadKeys?.[threadKey] === true
             }
+            hasUnsentDraft={props.hasUnsentDraft}
             includeLinkedDirectories={props.cardFields.primaryDirectory}
             linkedDirectoryMode="label"
             // In the instance lenses the lane and the watermark already say

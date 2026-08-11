@@ -204,6 +204,12 @@ type StarMapScreenProps = {
   /** Local navigation snapshot threads (already live in the App shell). */
   localThreads: readonly NavigationThreadSummary[];
   sessionKeys: StarMapSessionKeys;
+  /**
+   * Threads with unsent composer text in THIS window, keyed by
+   * `buildThreadIdentityKey`. Applies to remote cards too — unlike
+   * `sessionKeys`, a draft is local state and needs no peer to confirm it.
+   */
+  draftThreadKeys?: Record<string, boolean>;
   /** Fallback label for the local instance card (instanceLabel setting). */
   localInstanceLabel?: string;
   /** A thread is floating over the map; the map shoves left behind it. */
@@ -1906,6 +1912,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   ? props.sessionKeys
                   : undefined
               }
+              hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
               riseDelayMs={index * 45}
               entering={enteringThreadKeys.has(threadKey)}
               instanceIcon={celestialIcons.iconFor(
@@ -2259,6 +2266,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
                           owner === localInstanceId
                             ? props.sessionKeys
                             : undefined
+                        }
+                        hasUnsentDraft={
+                          props.draftThreadKeys?.[threadKey] === true
                         }
                         instanceIcon={celestialIcons.iconFor(
                           owner === localInstanceId ? undefined : owner,

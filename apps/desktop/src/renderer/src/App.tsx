@@ -86,6 +86,7 @@ import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { useScheduledThreadActionProjection } from "./lib/useScheduledThreadActionProjection";
 import { useQueuedTurnProjection } from "./lib/useQueuedTurnProjection";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
+import { useThreadDraftIndicators } from "./lib/useThreadDraftIndicators";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
@@ -1141,6 +1142,12 @@ function DesktopAppShell(props: {
     composerDraftStore,
     threads: navigation.threads,
   });
+  // Per-thread "Draft" chip state and the Drafts lens's population, from the
+  // same store. Local to this window by design — see useThreadDraftIndicators.
+  const draftThreadKeys = useThreadDraftIndicators({
+    composerDraftStore,
+    threads: navigation.threads,
+  });
   // Fetch the boot info once at mount. Stable for the renderer's
   // lifetime — the main process records the decision before this
   // window opens, and graduating the bootstrap profile spawns a
@@ -1758,6 +1765,7 @@ function DesktopAppShell(props: {
           inputRequestThreadKeys={session.inputRequestThreadKeys}
           terminalThreadKeys={terminalThreadKeys}
           queuedMessageThreadKeys={queuedMessageThreadKeys}
+          draftThreadKeys={draftThreadKeys}
           composerSourceThreadKey={navigation.composerSourceThreadKey}
           revealSelectedThreadRequest={revealSelectedThreadRequest}
           onRevealSelectedThreadComplete={threadJump.completePeekRestore}
@@ -2144,6 +2152,12 @@ function DesktopAppShell(props: {
               <LazyStarMapScreen
                 desktopApi={desktopApi}
                 localThreads={navigation.threads}
+                // Not part of `sessionKeys`: those are only trusted for the
+                // local instance's cards, because thinking/approval keys are
+                // inferred from an unscoped event stream. A draft is this
+                // window's own composer state, so it is authoritative for
+                // every card it matches, local or remote.
+                draftThreadKeys={draftThreadKeys}
                 sessionKeys={{
                   approvalRequestThreadKeys: session.approvalRequestThreadKeys,
                   inputRequestThreadKeys: session.inputRequestThreadKeys,

@@ -38,8 +38,11 @@ summary.
 
 ## Non-Negotiables
 
-- Attention, Inbox, Recents, and Directories live in one icon-only thread lens
-  switch; Inbox is the default browsing lens.
+- Attention, Drafts, Inbox, Recents, and Directories live in one icon-only
+  thread lens switch; Inbox is the default browsing lens.
+- A thread's unsent composer draft is window-local state, never federated.
+  Derive it from the composer draft store (`useThreadDraftIndicators`), not
+  from `NavigationThreadSummary`.
 - Attention is a work queue: focusing a thread there must not clear its unread
   cookie, only replying does. See "Current Product Direction" in the
   [repo-root `AGENTS.md`](../../AGENTS.md) for why that rule is lens-scoped
@@ -147,6 +150,16 @@ elements and fail Playwright strict mode. When writing specs:
   the full label (e.g. the wizard's `/^← Back/i`).
 - Target the history buttons themselves via their test ids:
   `history-nav-back` / `history-nav-forward`.
+
+The same trap runs in the other direction, and it bites the *renderer*
+rather than the spec: **`getByLabel` matches on substring**, and 31 call
+sites across 23 specs drive the composer with `getByLabel("Reply")`. A new
+`aria-label` anywhere in the app that merely *contains* "reply" turns every
+one of them into a strict-mode violation as soon as the labelled element
+renders. The unsent-draft chip was originally labelled "Unsent draft reply"
+and did exactly that — the unit suite was green and only Desktop E2E caught
+it. When you add an `aria-label`, grep the specs for the words in it before
+you settle on the wording.
 
 ## Inspecting Branch Drift Dialog E2E
 

@@ -282,6 +282,23 @@ for (const theme of AUDIT_THEMES) {
           ).toHaveCount(1);
           await runAxe(app.window, "open thread view");
         });
+
+        // The unsent-draft chip is the one row chip that paints no
+        // background of its own — it is `background: transparent` with a
+        // dashed border, so unlike every other chip its contrast pair is
+        // whatever surface happens to sit behind the row (default, hover,
+        // selected). Nothing else in this gate renders it, because a draft
+        // only exists once something has been typed. Keep this step last:
+        // it deliberately leaves composer text behind.
+        await test.step("thread row carrying an unsent draft", async () => {
+          await app.window
+            .getByRole("textbox", { name: "Reply" })
+            .fill("Half-written reply the operator has not sent.");
+          await expect(
+            app.window.getByRole("img", { name: "Unsent draft" }).first(),
+          ).toBeVisible();
+          await runAxe(app.window, "thread row carrying an unsent draft");
+        });
       } finally {
         await app.close();
       }

@@ -41,6 +41,8 @@ type ThreadRowProps = {
    * "Scheduled"/"Queued" chip. Absent key = no pending send.
    */
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
+  /** Threads with unsent composer text, keyed like the maps above. */
+  draftThreadKeys?: Record<string, boolean>;
   /**
    * Identity key of the card the open composer was spawned from. When it
    * matches this row, the row renders as the orange "composing" source.
@@ -360,6 +362,7 @@ export function ThreadRow(props: ThreadRowProps) {
                 : undefined
             }
             queuedMessageState={props.queuedMessageThreadKeys?.[threadKey]}
+            hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
             thread={props.thread}

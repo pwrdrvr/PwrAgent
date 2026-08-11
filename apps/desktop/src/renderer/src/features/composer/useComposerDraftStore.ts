@@ -1,6 +1,7 @@
 import { useMemo, useRef } from "react";
 import type { JSONContent } from "@tiptap/react";
 import type {
+  AppServerBackendKind,
   AppServerReviewTarget,
   AppServerTurnInputItem,
   ComposerDraftLifecycle,
@@ -9,6 +10,7 @@ import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
   ModelSettingsRecent,
+  ThreadIdentifier,
 } from "@pwragent/shared";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
 
@@ -63,9 +65,58 @@ export type ComposerPendingSteerSnapshot = {
   fileAttachments: NavigationLaunchpadFileAttachment[];
 };
 
+/**
+ * The one definition of a thread composer's draft scope key. Everything that
+ * reads or writes the store — the composer, the queued-turn release loop, the
+ * sidebar's draft and queued indicators — has to agree on this string, and
+ * before this existed four hand-rolled copies of the template literal did.
+ */
+export function buildThreadComposerScopeKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+): string {
+  return `thread:${backend}:${threadId}`;
+}
+
+/**
+ * Whether a snapshot holds anything an operator would be sorry to lose. The
+ * same test the durable store uses to decide a draft is worth journalling, so
+ * "this thread has an unsent draft" and "this draft is recoverable" can never
+ * disagree. Whitespace-only text is not content: the composer leaves a
+ * trailing newline behind constantly and a chip that lit up for it would be
+ * noise.
+ */
+export function hasComposerDraftContent(
+  snapshot: ComposerDraftSnapshot | undefined,
+): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  return (
+    snapshot.draft.trim().length > 0
+    || snapshot.imageAttachments.length > 0
+    || (snapshot.fileAttachments?.length ?? 0) > 0
+    || snapshot.skillTokens.length > 0
+  );
+}
+
 export type ComposerDraftStore = {
   delete(scopeKey: string): void;
   get(scopeKey: string): ComposerDraftSnapshot | undefined;
+  /**
+   * Whether this scope currently holds unsent content — its active draft or
+   * anything parked beneath it. Pairs with `subscribeDraftPresence` so
+   * surfaces outside the composer can mark a thread as having a draft.
+   */
+  hasDraftContent(scopeKey: string): boolean;
+  /**
+   * Monotonic counter bumped when a scope *gains or loses* draft content.
+   * Deliberately not bumped on every edit: the sidebar only cares whether a
+   * draft exists, and a per-keystroke notification would re-render every
+   * thread row for the whole time an operator is typing.
+   */
+  getDraftPresenceVersion(): number;
+  subscribeDraftPresence(listener: () => void): () => void;
   /** Remove and return the most recently parked draft beneath this scope. */
   popDraft(scopeKey: string): ComposerDraftSnapshot | undefined;
   /** Park a draft beneath this scope's active draft. */
@@ -150,6 +201,12 @@ export function useComposerDraftStore(): ComposerDraftStore {
   // fans out to listeners registered via `subscribeQueuedTurns`.
   const queuedTurnVersionRef = useRef(0);
   const queuedTurnListenersRef = useRef(new Set<() => void>());
+  // Same reactivity bridge, one level coarser: presence, not content. The
+  // set holds every scope key that currently has unsent content, and the
+  // version only moves when membership does.
+  const draftPresenceRef = useRef(new Set<string>());
+  const draftPresenceVersionRef = useRef(0);
+  const draftPresenceListenersRef = useRef(new Set<() => void>());
 
   return useMemo(() => {
     const notifyQueuedTurnChange = (): void => {
@@ -159,11 +216,48 @@ export function useComposerDraftStore(): ComposerDraftStore {
       }
     };
 
+    // Re-reads both the active draft and the parked stack for one scope and
+    // notifies only on a transition. Every mutation path below calls it; the
+    // early return is what keeps typing free of re-renders.
+    const syncDraftPresence = (scopeKey: string): void => {
+      const present =
+        hasComposerDraftContent(storeRef.current.get(scopeKey))
+        || (draftStackStoreRef.current.get(scopeKey) ?? []).some(
+          hasComposerDraftContent,
+        );
+      if (present === draftPresenceRef.current.has(scopeKey)) {
+        return;
+      }
+      if (present) {
+        draftPresenceRef.current.add(scopeKey);
+      } else {
+        draftPresenceRef.current.delete(scopeKey);
+      }
+      draftPresenceVersionRef.current += 1;
+      for (const listener of draftPresenceListenersRef.current) {
+        listener();
+      }
+    };
+
     return {
       delete: (scopeKey) => {
         storeRef.current.delete(scopeKey);
+        syncDraftPresence(scopeKey);
       },
       get: (scopeKey) => storeRef.current.get(scopeKey),
+      hasDraftContent: (scopeKey) => draftPresenceRef.current.has(scopeKey),
+      getDraftPresenceVersion: () => draftPresenceVersionRef.current,
+      subscribeDraftPresence: (listener) => {
+        draftPresenceListenersRef.current.add(listener);
+        return () => {
+          draftPresenceListenersRef.current.delete(listener);
+        };
+      },
+      // Presence is synced after the pop, so a scope whose only content was
+      // the parked draft reads as absent until the composer `set`s the
+      // returned snapshot back as the active one. Both happen inside the same
+      // React event, so the two notifications batch into one render and the
+      // chip does not visibly blink.
       popDraft: (scopeKey) => {
         const current = draftStackStoreRef.current.get(scopeKey) ?? [];
         const restored = current.at(-1);
@@ -176,11 +270,13 @@ export function useComposerDraftStore(): ComposerDraftStore {
         } else {
           draftStackStoreRef.current.set(scopeKey, next);
         }
+        syncDraftPresence(scopeKey);
         return restored;
       },
       pushDraft: (scopeKey, snapshot) => {
         const current = draftStackStoreRef.current.get(scopeKey) ?? [];
         draftStackStoreRef.current.set(scopeKey, [...current, snapshot]);
+        syncDraftPresence(scopeKey);
       },
       deletePendingSteer: (scopeKey) => {
         pendingSteerStoreRef.current.delete(scopeKey);
@@ -262,6 +358,7 @@ export function useComposerDraftStore(): ComposerDraftStore {
       },
       set: (scopeKey, snapshot) => {
         storeRef.current.set(scopeKey, snapshot);
+        syncDraftPresence(scopeKey);
       },
     };
   }, []);
