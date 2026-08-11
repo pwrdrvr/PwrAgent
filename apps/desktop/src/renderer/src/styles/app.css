@@ -6592,6 +6592,12 @@ textarea,
 .automations-table {
   display: flex;
   min-width: 760px;
+  /* Keep the natural height. As a shrinkable child of the scrolling
+     `.automations-content` column, the table was compressed to fit instead of
+     overflowing — and `overflow: hidden` (which clips row corners to the
+     radius) then hid everything past the fold with nothing anywhere left to
+     scroll. Measured at 179px tall holding 1309px of content. */
+  flex: 0 0 auto;
   flex-direction: column;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
