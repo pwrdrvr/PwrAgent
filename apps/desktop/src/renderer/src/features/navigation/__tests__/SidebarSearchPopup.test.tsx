@@ -374,6 +374,84 @@ describe("SidebarSearchPopup", () => {
     await settleRemoteSearch();
   });
 
+  it("closes on Escape", async () => {
+    const onClose = vi.fn();
+    render(
+      <SidebarSearchPopup
+        threads={[localThread({})]}
+        onJumpToThread={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Jump to thread" }), {
+      key: "Escape",
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await settleRemoteSearch();
+  });
+
+  it("still steers from the keyboard after a press on the panel's chrome", async () => {
+    // Pressing non-focusable chrome (the footer legend, the padding around the
+    // field) moves focus to <body> in Chromium. A handler bound to the input
+    // alone would leave Escape, ↑↓, and typing all dead from here.
+    const onJumpToThread = vi.fn();
+    render(
+      <SidebarSearchPopup
+        threads={[
+          localThread({ id: "one", title: "First fix" }),
+          localThread({ id: "two", title: "Second fix" }),
+        ]}
+        onJumpToThread={onJumpToThread}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Jump to thread" });
+    fireEvent.change(input, { target: { value: "fix" } });
+
+    const dialog = screen.getByRole("dialog", { name: "Jump to thread" });
+    // jsdom doesn't implement the focus-move-on-mousedown default, so assert
+    // the suppression itself rather than an activeElement it hands us free.
+    // fireEvent returns false once a handler called preventDefault.
+    expect(fireEvent.mouseDown(screen.getByText("↑↓ navigate"))).toBe(false);
+
+    // Dispatched on the dialog, not the field: a handler bound to the input
+    // would never see these.
+    fireEvent.keyDown(dialog, { key: "ArrowDown" });
+    fireEvent.keyDown(dialog, { key: "Enter" });
+
+    expect(onJumpToThread).toHaveBeenCalledTimes(1);
+    expect(onJumpToThread.mock.calls[0][0].id).toBe("two");
+    await settleRemoteSearch();
+  });
+
+  it("moves one row per arrow press, not two", async () => {
+    // The handler moved from the field to the panel; leaving a copy on both
+    // would double-count every keystroke as it bubbled.
+    const onJumpToThread = vi.fn();
+    render(
+      <SidebarSearchPopup
+        threads={[
+          localThread({ id: "one", title: "First fix" }),
+          localThread({ id: "two", title: "Second fix" }),
+          localThread({ id: "three", title: "Third fix" }),
+        ]}
+        onJumpToThread={onJumpToThread}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Jump to thread" });
+    fireEvent.change(input, { target: { value: "fix" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onJumpToThread.mock.calls[0][0].id).toBe("two");
+    await settleRemoteSearch();
+  });
+
   it("keeps Tab inside the modal instead of walking into the dimmed app", async () => {
     render(
       <SidebarSearchPopup

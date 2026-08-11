@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
 } from "react";
@@ -145,13 +146,13 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     props.onClose();
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key === "Escape") {
       event.preventDefault();
       props.onClose();
       return;
     }
-    // The palette is modal: the only tab stop inside it is this field (rows are
+    // The palette is modal: the only tab stop inside it is the field (rows are
     // driven by aria-activedescendant, not focus), so Tab must not walk out
     // into the dimmed app behind the scrim.
     if (event.key === "Tab") {
@@ -236,9 +237,12 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   // peer latency is the footer's job now, so a loading state no longer leaves
   // a section header standing over nothing.
   const showRemoteSection =
-    trimmed && remoteSearchAvailable && remoteRows.length > 0;
+    Boolean(trimmed) && remoteSearchAvailable && remoteRows.length > 0;
   const showEmpty =
-    trimmed && results.length === 0 && remoteRows.length === 0 && !remoteLoading;
+    Boolean(trimmed)
+    && results.length === 0
+    && remoteRows.length === 0
+    && !remoteLoading;
   // The listbox is only in the DOM once it has rows, so `aria-controls` has to
   // come and go with it — a dangling idref is an invalid attribute value, not
   // a harmless one.
@@ -260,6 +264,23 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
         role="dialog"
         aria-modal="true"
         aria-label="Jump to thread"
+        // Bound on the panel, not the field: pressing any non-focusable chrome
+        // in here (the footer legend, the padding around the input) moves focus
+        // to <body> in Chromium, and a handler on the input alone would leave
+        // the palette in a dead state where Escape, ↑↓, and typing all do
+        // nothing. Keydown bubbles from the field either way.
+        onKeyDown={handleKeyDown}
+        // And keep the caret there in the first place. Suppressing the default
+        // focus move on every press but the field's own costs nothing — click
+        // still fires, so rows activate normally — and means no press inside
+        // the palette can strand the keyboard.
+        onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+          if (event.target === inputRef.current) {
+            return;
+          }
+          event.preventDefault();
+          inputRef.current?.focus();
+        }}
       >
         <div className="jump-palette__field">
           <span className="jump-palette__icon" aria-hidden>
@@ -278,7 +299,6 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
             placeholder="Jump to thread, PR #, branch, repo…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={handleKeyDown}
           />
           <span className="jump-palette__esc" aria-hidden>
             esc
