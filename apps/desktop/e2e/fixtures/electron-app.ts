@@ -9,6 +9,7 @@ import type {
 } from "@pwragent/shared";
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
+import { SECRET_STORAGE_DISABLED_ENV } from "../../src/main/settings/desktop-secret-store";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -171,6 +172,14 @@ export async function launchElectronApp(params: {
       env[key] = value;
     }
   }
+  // Every desktop E2E runs an unsigned development Electron binary. On
+  // macOS, allowing that binary to reach safeStorage can open a native
+  // "Keychain Not Found" modal that Playwright cannot observe or dismiss.
+  // Apply the documented dev-only escape hatch after per-spec overrides so
+  // no E2E can accidentally re-enable OS keychain UI. Profile instances
+  // spawned during onboarding graduation inherit this environment through
+  // openDesktopPwrAgentProfile(), covering both Electron processes.
+  env[SECRET_STORAGE_DISABLED_ENV] = "1";
 
   const electronApp = await electron.launch({
     args: [path.resolve(fixtureDir, "../../out/main/index.js")],
