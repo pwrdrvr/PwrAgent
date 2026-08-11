@@ -115,8 +115,8 @@ git tag -s v1.0.0-alpha.7 -m "v1.0.0-alpha.7"
 git push origin v1.0.0-alpha.7
 ```
 
-The `Release Desktop (macOS universal + Linux DEB)` workflow triggers as four
-release jobs:
+The `Release Desktop (macOS universal + Windows + Linux DEB)` workflow contains
+seven job definitions (the Linux package job fans out across two architectures):
 
 1. `Test and prepare signing input`, with `contents: read`, explicit
    `id-token: none`, no Apple secrets, and checkout credentials disabled. It
@@ -132,16 +132,26 @@ release jobs:
    runners. Each job runs `apps/desktop/scripts/release.mjs --linux
    --no-publish`, verifies the packaged ASAR, writes a stable download alias,
    and uploads the `.deb` files as short-retention workflow artifacts.
-4. `Publish Linux DEB artifacts`, which waits for the macOS publish job so the
+4. `Prepare Windows signing input`, running on Windows without an environment
+   or signing credentials. It builds and deploys the Windows release stage,
+   archives that stage plus the already-resolved electron-builder toolchain,
+   records the archive SHA-256 as a job output, and uploads the archive.
+5. `Sign and package Windows installer`, gated by the protected
+   `windows-signing` environment. It does not check out source or install
+   project dependencies/lifecycle scripts. It verifies and expands the exact
+   prepared archive, installs `TrustedSigning`, and runs `release.mjs --win
+   --sign-stage-only --no-publish --require-signing`. The Azure service-principal
+   secrets are injected only into this signing-aware packaging step.
+6. `Publish Linux DEB artifacts`, which waits for the macOS publish job so the
    GitHub Release exists, combines both Linux architecture artifacts, generates
    `SHA256SUMS`, and uploads the `.deb` files plus checksums to the same
    release.
-5. `Publish release notes`, which waits for successful macOS and Linux release
+7. `Publish release notes`, which waits for successful macOS and Linux release
    asset publishing, extracts the matching `CHANGELOG.md` section, updates the
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
 
-The no-secret prepare job:
+The macOS no-secret prepare job:
 
 1. Verifies `THIRD_PARTY_LICENSES` matches a fresh deterministic generation.
 2. Builds main/preload/renderer with electron-vite.
@@ -152,7 +162,7 @@ The no-secret prepare job:
 5. Archives the prepared stage plus the already-resolved `electron-builder`
    toolchain into the `desktop-release-signing-input` workflow artifact.
 
-The environment-gated signing job:
+The macOS environment-gated signing job:
 
 1. Verifies the prepared artifact SHA-256 from the build job output.
 2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
@@ -169,6 +179,17 @@ The environment-gated signing job:
    everything to a GitHub Release on `pwrdrvr/PwrAgent`.
 5. Uploads the stable-name `PwrAgent.dmg` alias for landing-page download
    links.
+
+The Windows jobs use the same trust boundary with a platform-specific final
+step. The no-secret job prepares the stage on Windows, because its native
+dependencies cannot be prepared on macOS. The protected job verifies the
+archive before expanding it and does no source checkout, package-manager
+install, or dependency lifecycle execution. It installs only the
+`TrustedSigning` PowerShell module required by electron-builder. Windows NSIS
+packaging remains inside this job because electron-builder signs the staged app
+executables, generated uninstaller, and final installer during packaging; a
+post-build signature on only the outer installer would not provide the same
+coverage.
 
 Cycle time target: ≤ 12 minutes.
 
