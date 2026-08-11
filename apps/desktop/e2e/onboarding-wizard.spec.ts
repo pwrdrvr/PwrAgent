@@ -51,6 +51,11 @@ if (args.includes("--version")) {
   process.exit(0);
 }
 
+if (name === "codex" && args[0] === "login" && args[1] === "status") {
+  console.error("Not logged in");
+  process.exit(1);
+}
+
 if (name === "qwen") {
   console.log("Qwen Code");
 } else if (name === "grok") {
