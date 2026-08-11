@@ -587,7 +587,11 @@ test.describe("Onboarding wizard", () => {
         }),
       ).toBeVisible();
       await expect(
-        app.window.getByText(/brew update && brew install --cask codex/i),
+        app.window.getByText(
+          process.platform === "win32"
+            ? /chatgpt\.com\/codex\/install\.ps1/i
+            : /chatgpt\.com\/codex\/install\.sh/i,
+        ),
       ).toBeVisible();
       await app.window.getByRole("tab", { name: /Gemini CLI/i }).click();
       await expect(
@@ -595,12 +599,28 @@ test.describe("Onboarding wizard", () => {
       ).toBeVisible();
       await app.window.getByRole("tab", { name: /Kimi Code/i }).click();
       await expect(
-        app.window.getByText(/@moonshot-ai\/kimi-code/i),
+        app.window.getByText(
+          process.platform === "win32"
+            ? /kimi-code\/install\.ps1/i
+            : /kimi-code\/install\.sh/i,
+        ),
       ).toBeVisible();
       await app.window.getByRole("tab", { name: /Qwen Code/i }).click();
-      await expect(app.window.getByText(/brew install qwen-code/i)).toBeVisible();
+      await expect(
+        app.window.getByText(
+          process.platform === "win32"
+            ? /install-qwen-standalone\.ps1/i
+            : /install-qwen-standalone\.sh/i,
+        ),
+      ).toBeVisible();
       await app.window.getByRole("tab", { name: /Grok Build/i }).click();
-      await expect(app.window.getByText(/x\.ai\/cli\/install\.sh/i)).toBeVisible();
+      await expect(
+        app.window.getByText(
+          process.platform === "win32"
+            ? /x\.ai\/cli\/install\.ps1/i
+            : /x\.ai\/cli\/install\.sh/i,
+        ),
+      ).toBeVisible();
     } finally {
       await app.close();
     }
