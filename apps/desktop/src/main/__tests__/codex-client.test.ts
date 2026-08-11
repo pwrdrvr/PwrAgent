@@ -145,6 +145,10 @@ class MockTransport implements JsonRpcTransport {
   static rateLimitsResult: unknown = {
     rateLimitsByLimitId: {}
   };
+  static accountUsageResult: unknown = {
+    summary: {},
+    dailyUsageBuckets: [],
+  };
   static unfilteredThreadListResult: unknown[] | undefined;
   static threadListResultBySearchTerm = new Map<string, unknown[]>();
   static turnInterruptResponseMode: "success" | "timeout" = "success";
@@ -710,6 +714,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "account/usage/read") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.accountUsageResult,
+        }),
+      );
+      return;
+    }
+
     if (payload.method === "thread/read") {
       const threadId = (JSON.parse(message) as { params?: { threadId?: string } }).params?.threadId;
       const readThreadError = threadId
@@ -1176,6 +1191,10 @@ describe("CodexAppServerClient", () => {
     MockTransport.lastConfigValueWritePayload = undefined;
     MockTransport.rateLimitsResult = {
       rateLimitsByLimitId: {}
+    };
+    MockTransport.accountUsageResult = {
+      summary: {},
+      dailyUsageBuckets: [],
     };
     MockTransport.unfilteredThreadListResult = undefined;
     MockTransport.threadListResultBySearchTerm.clear();
@@ -2136,6 +2155,49 @@ describe("CodexAppServerClient", () => {
         windowMinutes: 10_080,
       },
     ]);
+  });
+
+  it("normalizes an individual account limit with numeric string totals", async () => {
+    MockTransport.rateLimitsResult = {
+      rateLimits: {
+        limitId: "codex",
+        primary: null,
+        secondary: null,
+        individualLimit: {
+          limit: "100000",
+          used: "3500.4",
+          remainingPercent: 96,
+          resetsAt: 1_800_000_000,
+        },
+      },
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await expect(client.readRateLimits()).resolves.toEqual([
+      {
+        name: "Individual limit",
+        limitId: "codex",
+        limit: 100000,
+        used: 3500.4,
+        remaining: 96499.6,
+        usedPercent: 4,
+        resetAt: 1_800_000_000_000,
+      },
+    ]);
+  });
+
+  it("reads account-wide token usage through the app-server protocol", async () => {
+    MockTransport.accountUsageResult = {
+      summary: { lifetimeTokens: 1234 },
+      dailyUsageBuckets: [{ startDate: "2026-08-01", tokens: 1234 }],
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await expect(client.readAccountUsage()).resolves.toEqual(
+      MockTransport.accountUsageResult,
+    );
   });
 
   it("uses query payloads when filtering the codex thread list", async () => {
@@ -7934,7 +7996,36 @@ describe("CodexAppServerClient", () => {
         method: "thread/start",
         params: expect.objectContaining({
           baseInstructions: "Keep behavioral and uncertain changes visible.",
+          environments: [],
           model: "gpt-5.6-luna",
+          runtimeWorkspaceRoots: [
+            path.join(os.tmpdir(), "pwragent", "codex-title-helper"),
+          ],
+          config: expect.objectContaining({
+            include_apps_instructions: false,
+            include_environment_context: false,
+            project_doc_max_bytes: 0,
+            features: expect.objectContaining({
+              apps: false,
+              hooks: false,
+              plugins: false,
+              tool_suggest: false,
+            }),
+            hooks: expect.objectContaining({
+              PreToolUse: [],
+              SessionStart: [],
+              Stop: [],
+              UserPromptSubmit: [],
+            }),
+            mcp_servers: {
+              context7: { enabled: false },
+              github: { enabled: false },
+            },
+            orchestrator: {
+              mcp: { enabled: false },
+              skills: { enabled: false },
+            },
+          }),
         }),
       }),
     );
@@ -7953,6 +8044,55 @@ describe("CodexAppServerClient", () => {
         }),
       }),
     );
+
+    await client.close();
+  });
+
+  it("returns a structured helper failure as soon as Codex reports it", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: { id: "structured-helper" },
+      instructionSources: [],
+    };
+    MockTransport.turnStartResult = {
+      turn: { id: "structured-turn" },
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    const probePromise = client.generateStructuredObject({
+      prompt: "Return the requested status object.",
+      schema: {
+        type: "object",
+        required: ["status"],
+        properties: { status: { type: "string" } },
+      },
+      isMatch: (record) => record.status === "complete",
+      timeoutMs: 5_000,
+    });
+    const transport = await waitForLatestTransportRequest("turn/start");
+
+    transport.emitInbound({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "structured-helper",
+        turn: {
+          id: "structured-turn",
+          status: "failed",
+          error: { message: "probe failed" },
+        },
+      },
+    });
+
+    await expect(probePromise).resolves.toEqual({
+      status: "failed",
+      reason: "codex_title_turn_failed",
+    });
+    expect(transport.sentMessages.map(
+      (message) => (JSON.parse(message) as { method?: string }).method,
+    )).toContain("thread/unsubscribe");
 
     await client.close();
   });

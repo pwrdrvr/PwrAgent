@@ -18,6 +18,7 @@ describe("backend status formatting", () => {
         { name: "Weekly limit", usedPercent: 39 },
         { name: "GPT-5.3-Codex-Spark 5h limit", usedPercent: 2 },
         { name: "5h limit", usedPercent: 26 },
+        { name: "Individual limit", usedPercent: 4 },
         { name: "other limit", usedPercent: 50 },
       ],
     };
@@ -25,6 +26,7 @@ describe("backend status formatting", () => {
     expect(selectVisibleRateLimits(backend).map((limit) => limit.name)).toEqual([
       "5h limit",
       "Weekly limit",
+      "Individual limit",
       "GPT-5.3-Codex-Spark 5h limit",
       "GPT-5.3-Codex-Spark Weekly limit",
     ]);
@@ -69,5 +71,16 @@ describe("backend status formatting", () => {
         resetAt: new Date(2026, 4, 18, 0, 0, 0).getTime(),
       }),
     ).toContain("resets May 18");
+  });
+
+  it("formats individual usage with totals and remaining percentage", () => {
+    expect(
+      formatRateLimitLine({
+        name: "Individual limit",
+        limit: 100000,
+        used: 3500.4,
+        usedPercent: 4,
+      }),
+    ).toBe("Individual limit: 3,500/100,000 used, 96% left");
   });
 });

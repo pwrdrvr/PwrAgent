@@ -906,6 +906,25 @@ function pickFiniteNumber(
   return undefined;
 }
 
+function pickFiniteNumericValue(
+  record: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
 function pickBoolean(
   record: Record<string, unknown>,
   keys: string[]
@@ -1313,6 +1332,45 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
       windowMinutes,
     });
   };
+  const addIndividualLimit = (
+    limitValue: unknown,
+    params: { limitId?: string; limitName?: string },
+  ): void => {
+    const individualLimit = asRecord(limitValue);
+    if (!individualLimit) {
+      return;
+    }
+    const limit = pickFiniteNumericValue(individualLimit, ["limit", "max", "capacity"]);
+    const used = pickFiniteNumericValue(individualLimit, ["used", "consumed"]);
+    const remainingPercent = pickFiniteNumericValue(individualLimit, [
+      "remainingPercent",
+      "remaining_percent",
+    ]);
+    const usedPercent = typeof remainingPercent === "number"
+      ? Math.max(0, Math.min(100, 100 - remainingPercent))
+      : typeof used === "number" && typeof limit === "number" && limit > 0
+        ? Math.max(0, Math.min(100, (used / limit) * 100))
+        : undefined;
+    const rawId = params.limitId?.trim();
+    const rawName = params.limitName?.trim();
+    const name = !rawId || rawId.toLowerCase() === "codex"
+      ? "Individual limit"
+      : `${rawName ?? rawId} Individual limit`;
+    out.set(name, {
+      name,
+      limitId: params.limitId,
+      limit,
+      used,
+      remaining:
+        typeof limit === "number" && typeof used === "number"
+          ? Math.max(0, limit - used)
+          : undefined,
+      usedPercent,
+      resetAt: normalizeEpochTimestamp(
+        pickNumber(individualLimit, ["resetsAt", "resets_at", "resetAt", "reset_at"]),
+      ),
+    });
+  };
   const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
       node.forEach((entry) => visit(entry));
@@ -1327,6 +1385,10 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
       const limitName = pickString(record, ["limitName", "limit_name", "name", "label"]);
       addWindow(record.primary, { limitId, limitName, windowKey: "primary" });
       addWindow(record.secondary, { limitId, limitName, windowKey: "secondary" });
+      addIndividualLimit(record.individualLimit ?? record.individual_limit, {
+        limitId,
+        limitName,
+      });
     }
     const byLimitId = asRecord(record.rateLimitsByLimitId ?? record.rate_limits_by_limit_id);
     if (byLimitId) {
@@ -1338,6 +1400,10 @@ function extractRateLimitSummaries(value: unknown): BackendRateLimitSummary[] {
         const limitName = pickString(snapshotRecord, ["limitName", "limit_name", "name", "label"]);
         addWindow(snapshotRecord.primary, { limitId, limitName, windowKey: "primary" });
         addWindow(snapshotRecord.secondary, { limitId, limitName, windowKey: "secondary" });
+        addIndividualLimit(
+          snapshotRecord.individualLimit ?? snapshotRecord.individual_limit,
+          { limitId, limitName },
+        );
       }
     }
     const remaining = pickFiniteNumber(record, [
@@ -7586,6 +7652,17 @@ export class CodexAppServerClient {
     });
 
     return extractRateLimitSummaries(result);
+  }
+
+  async readAccountUsage(): Promise<unknown> {
+    await this.ensureInitialized();
+
+    return await requestWithFallbacks({
+      client: this.connection,
+      methods: ["account/usage/read"],
+      payloads: [{}],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
   }
 
   async readThread(params: {
