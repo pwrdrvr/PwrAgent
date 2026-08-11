@@ -12,20 +12,12 @@ It needs no hardware token, works on GitHub-hosted runners, removes SmartScreen
 "unknown publisher" warnings, and is the cheapest option (~$9.99/mo for up to
 5,000 signatures).
 
-Signing is **opt-in and degrades gracefully**: the release job builds an
-**unsigned** installer until the signing config + credentials below are present,
-then signs automatically. Label-gated PR installer builds (`ci:windows-package`)
-are intentionally left **unsigned** (secrets are not exposed to ordinary PR
-validation, and signatures count against quota).
-
-`ci:windows-signing` is the narrower signing-repair validation path. Every
-labeled PR may run its credential-free PowerShell preflight, while only a
-same-repository PR may request the protected `windows-signing` job. That job
-still requires the environment's reviewer approval and calls `release.mjs`
-with `--require-signing`. The environment's current deployment branch policy
-permits only `v*` tags, so GitHub rejects PR deployments before exposing its
-secrets. Validating a signed PR build therefore requires a deliberate
-environment-policy change; the workflow does not bypass that protection.
+Release signing is **fail closed**: the protected release job passes
+`--require-signing`, so missing or partial configuration stops the release
+instead of producing an unsigned installer. Label-gated PR installer builds
+(`ci:windows-package`) are intentionally left **unsigned**. They exercise the
+same build and NSIS packaging path without exposing credentials or consuming
+signature quota. There is no PR label that requests signing credentials.
 
 ## Current configuration (PwrDrvr LLC)
 
@@ -58,13 +50,24 @@ The three `AZURE_*` GitHub **secrets** come from the Entra app registration
   `--config.win.azureSignOptions.*` to electron-builder. electron-builder 26
   then auto-installs the `TrustedSigning` PowerShell module on the runner and
   invokes `Invoke-TrustedSigning`.
-- `.github/workflows/release.yml` (`windows-package` job, release tags only) —
-  installs and probes `TrustedSigning`, then supplies the env from repo
-  variables + secrets.
+- `.github/workflows/release.yml` (`windows-prepare` and `windows-sign` jobs,
+  release tags only) — prepares the complete Windows stage and resolved
+  electron-builder toolchain without credentials, records its SHA-256 digest,
+  and uploads it as an artifact. The protected job downloads and verifies that
+  exact artifact, installs `TrustedSigning`, and performs signing-aware NSIS
+  packaging without checking out source or installing project dependencies.
 - `scripts/release/install-trusted-signing.ps1` — installs the same module
   electron-builder expects in PowerShell 7 and verifies that
   `Invoke-TrustedSigning` resolves in a fresh `pwsh -NoProfile -NonInteractive`
-  process before packaging starts.
+  process before signing starts. This is a post-install assertion inside the
+  protected release job, not a separate PR preflight.
+
+Windows cannot safely defer only the final `.exe` signature: electron-builder
+signs the application executables, generated uninstaller, and final installer
+during NSIS packaging. The prepared-stage boundary therefore keeps compilation,
+dependency resolution, and lifecycle scripts outside the protected environment,
+while the protected job retains only the irreducible packaging work that invokes
+the signing service.
 
 ## One-time setup
 
@@ -119,9 +122,10 @@ PwrDrvr LLC validated on the US org path.
 
 ### 4. Add the GitHub configuration
 These live in the **`windows-signing` environment** (GitHub → repo **Settings →
-Environments → `windows-signing`**), not at repo scope. The `windows-package`
-job declares `environment: windows-signing` to gain access — the two must stay
-in sync, and dropping that line silently disables signing.
+Environments → `windows-signing`**), not at repo scope. Only the `windows-sign`
+job declares `environment: windows-signing`, and it injects the credential
+values only into the signing-aware packaging step. Dropping the environment or
+any value fails because that step uses `--require-signing`.
 
 Scoping to an environment (rather than repo-wide secrets) keeps the signing
 credentials out of every other workflow and job. Consider adding a deployment
@@ -149,10 +153,10 @@ can never quietly ship unsigned:
 
 | Condition | Result |
 |---|---|
-| None of the seven set | **Unsigned** — intended for local, sandbox, and label-gated PR builds |
+| None of the seven set | **Unsigned** — intended for local, sandbox, and label-gated PR builds that omit `--require-signing` |
 | Some but not all `WIN_AZURE_SIGN_*` set | **Build fails** — a subset is always a typo, never intent |
 | All four config vars set, any `AZURE_*` missing | **Build fails** — signing was requested, credentials absent |
-| Release build where nothing resolved (job missing `environment: windows-signing`) | **Build fails** — `--require-signing` |
+| Protected release build where nothing resolved (job missing `environment: windows-signing`) | **Build fails** — `--require-signing` |
 | All seven set, credential expired/invalid or RBAC role missing | **Build fails** at the signing call |
 
 The fourth row is why the release workflow passes `--require-signing`: a job

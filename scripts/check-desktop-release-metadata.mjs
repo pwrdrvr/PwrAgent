@@ -86,6 +86,31 @@ function assertWorkflowJobOrdersText(
   }
 }
 
+function assertWorkflowJobContainsText(workflow, workflowPath, jobName, expected) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
+  if (!jobBody.includes(expected)) {
+    fail(`${workflowPath} ${jobName} must contain ${JSON.stringify(expected)}`);
+  }
+}
+
+function assertWorkflowJobExcludesText(workflow, workflowPath, jobName, unexpected) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
+  if (jobBody.includes(unexpected)) {
+    fail(`${workflowPath} ${jobName} must not contain ${JSON.stringify(unexpected)}`);
+  }
+}
+
+function assertWorkflowTextOnlyInJob(workflow, workflowPath, jobName, expected) {
+  const jobBody = workflowJobBody(workflow, workflowPath, jobName);
+  if (!jobBody.includes(expected)) {
+    fail(`${workflowPath} ${jobName} must contain ${JSON.stringify(expected)}`);
+    return;
+  }
+  if (workflow.replace(jobBody, "").includes(expected)) {
+    fail(`${workflowPath} must contain ${JSON.stringify(expected)} only in ${jobName}`);
+  }
+}
+
 function assertWorkflowStepContinuesOnError(workflow, workflowPath, stepName) {
   const stepPattern = new RegExp(`^      - name: ${escapeRegex(stepName)}\\n`, "m");
   const match = workflow.match(stepPattern);
@@ -198,14 +223,21 @@ for (const expected of [
 
 for (const expected of [
   "releases/**",
-  "ci:windows-signing",
-  "github.event.pull_request.head.repo.full_name == github.repository",
-  "environment: windows-signing",
-  "scripts/release/install-trusted-signing.ps1",
-  "--win --no-publish --require-signing",
+  "ci:windows-package",
+  "--win --no-publish",
 ]) {
   if (!ciWorkflow.includes(expected)) {
     fail(`.github/workflows/ci.yml must contain ${JSON.stringify(expected)}`);
+  }
+}
+for (const unexpected of [
+  "ci:windows-signing",
+  "  windows-signing-preflight:",
+  "  windows-signing:",
+  "environment: windows-signing",
+]) {
+  if (ciWorkflow.includes(unexpected)) {
+    fail(`.github/workflows/ci.yml must not contain ${JSON.stringify(unexpected)}`);
   }
 }
 assertWorkflowJobRunner(
@@ -214,25 +246,19 @@ assertWorkflowJobRunner(
   "windows-package",
   "windows-2022",
 );
-assertWorkflowJobRunner(
-  ciWorkflow,
-  ".github/workflows/ci.yml",
-  "windows-signing-preflight",
-  "windows-2022",
-);
-assertWorkflowJobRunner(
-  ciWorkflow,
-  ".github/workflows/ci.yml",
-  "windows-signing",
-  "windows-2022",
-);
-assertWorkflowJobOrdersText(
-  ciWorkflow,
-  ".github/workflows/ci.yml",
-  "windows-signing",
+for (const unexpected of [
+  "ci:windows-signing",
+  "environment: windows-signing",
   "scripts/release/install-trusted-signing.ps1",
-  "--win --no-publish --require-signing",
-);
+  "--require-signing",
+]) {
+  assertWorkflowJobExcludesText(
+    ciWorkflow,
+    ".github/workflows/ci.yml",
+    "windows-package",
+    unexpected,
+  );
+}
 
 for (const expected of [
   "ubuntu-24.04-arm",
@@ -244,8 +270,10 @@ for (const expected of [
   ".body | length",
   "PWRAGENT_LINUX_ARCH",
   "SHA256SUMS",
+  "windows-release-signing-input",
+  "EXPECTED_SHA256",
   "scripts/release/install-trusted-signing.ps1",
-  "--win --no-publish --require-signing",
+  "--win --sign-stage-only --no-publish --require-signing",
 ]) {
   if (!releaseWorkflow.includes(expected)) {
     fail(`.github/workflows/release.yml must contain ${JSON.stringify(expected)}`);
@@ -254,16 +282,106 @@ for (const expected of [
 assertWorkflowJobRunner(
   releaseWorkflow,
   ".github/workflows/release.yml",
-  "windows-package",
+  "windows-prepare",
   "windows-2022",
+);
+assertWorkflowJobRunner(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "windows-sign",
+  "windows-2022",
+);
+for (const expected of [
+  "actions/checkout@",
+  "./.github/actions/configure-windows-nodejs",
+  "pnpm install --frozen-lockfile",
+  "--win --prepare-only",
+  "signing-input-sha256: ${{ steps.archive.outputs.sha256 }}",
+  "Archive Windows signing input",
+  "Upload Windows signing input",
+]) {
+  assertWorkflowJobContainsText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "windows-prepare",
+    expected,
+  );
+}
+for (const unexpected of [
+  "environment: windows-signing",
+  "secrets.",
+  "      - name: Install TrustedSigning",
+  "--require-signing",
+]) {
+  assertWorkflowJobExcludesText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "windows-prepare",
+    unexpected,
+  );
+}
+for (const expected of [
+  "environment: windows-signing",
+  "Download Windows signing input",
+  "Verify Windows signing input",
+  "Expand Windows signing input",
+  "scripts/release/install-trusted-signing.ps1",
+  "secrets.AZURE_CLIENT_SECRET",
+  "--win --sign-stage-only --no-publish --require-signing",
+]) {
+  assertWorkflowJobContainsText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "windows-sign",
+    expected,
+  );
+}
+for (const unexpected of [
+  "actions/checkout@",
+  "./.github/actions/configure-windows-nodejs",
+  "pnpm install",
+  "--prepare-only",
+]) {
+  assertWorkflowJobExcludesText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "windows-sign",
+    unexpected,
+  );
+}
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "windows-sign",
+  "Verify Windows signing input",
+  "scripts/release/install-trusted-signing.ps1",
 );
 assertWorkflowJobOrdersText(
   releaseWorkflow,
   ".github/workflows/release.yml",
-  "windows-package",
+  "windows-sign",
   "scripts/release/install-trusted-signing.ps1",
-  "--win --no-publish --require-signing",
+  "--win --sign-stage-only --no-publish --require-signing",
 );
+if (releaseScript.includes("--win cannot be combined with --sign-stage-only")) {
+  fail("apps/desktop/scripts/release.mjs must allow --win with --sign-stage-only");
+}
+for (const credential of [
+  "vars.WIN_AZURE_SIGN_PUBLISHER_NAME",
+  "vars.WIN_AZURE_SIGN_ENDPOINT",
+  "vars.WIN_AZURE_SIGN_ACCOUNT",
+  "vars.WIN_AZURE_SIGN_PROFILE",
+  "secrets.AZURE_TENANT_ID",
+  "secrets.AZURE_CLIENT_ID",
+  "secrets.AZURE_CLIENT_SECRET",
+]) {
+  assertWorkflowTextOnlyInJob(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "windows-sign",
+    credential,
+  );
+}
 for (const expected of [
   "Install-Module",
   "-Name TrustedSigning",
