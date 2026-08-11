@@ -119,7 +119,7 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "get_current_messaging_surface":
       return "Inspect the current messaging surface, actor, conversation, binding, bound thread, and native child-topic support.";
     case "send_private_response":
-      return "Send the final response privately to the user who started this messaging turn. Use this only after an explicit request or to protect secrets. After success, end the turn without a public copy. Set awaitReply and replyInstructions to route one private reply back to the source surface. This tool works only in an active messaging turn and cannot target another user.";
+      return "Send the final response privately to the user who started this messaging turn. Use this only after an explicit request or to protect secrets. After success, end the turn without a public copy. Set awaitReply and replyInstructions to start a continuation from one private reply. Only the continuation's final response returns to the source surface. This tool works only in an active messaging turn and cannot target another user.";
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface. Use new_child for a native child topic when supported. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename the PwrAgent thread.";
     case "inspect_messaging_pdfs":
@@ -151,7 +151,7 @@ function inputSchemaForOperation(
           awaitReply: {
             type: "boolean",
             description:
-              "Set true to route the first private reply back to the source surface. This requires replyInstructions.",
+              "Set true to start a continuation from the first private reply. Only its final response returns to the source surface. This requires replyInstructions.",
           },
           replyInstructions: {
             type: "string",

@@ -68,6 +68,23 @@ describe("PwrAgent messaging agent tools", () => {
       "send_private_response",
       "attach_thread_here",
     ]);
+    const privateResponseTool = specs[0]?.type === "namespace"
+      ? specs[0].tools.find((tool) => tool.name === "send_private_response")
+      : undefined;
+    expect(privateResponseTool).toMatchObject({
+      description: expect.stringContaining(
+        "Only the continuation's final response returns to the source surface",
+      ),
+      inputSchema: expect.objectContaining({
+        properties: expect.objectContaining({
+          awaitReply: expect.objectContaining({
+            description: expect.stringContaining(
+              "start a continuation from the first private reply",
+            ),
+          }),
+        }),
+      }),
+    });
     const attachTool = specs[0]?.type === "namespace"
       ? specs[0].tools.find((tool) => tool.name === "attach_thread_here")
       : undefined;
