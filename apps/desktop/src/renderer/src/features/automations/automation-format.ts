@@ -92,6 +92,32 @@ export function formatAutomationRunUsage(
   return parts.length > 0 ? parts.join(" \u00b7 ") : undefined;
 }
 
+/**
+ * "gpt-5.6-sol · high" for a run's runtime line, mirroring the sub-agent
+ * card's model line. Undefined when the run recorded neither, so the caller
+ * omits the element instead of rendering an empty separator.
+ */
+export function formatAutomationRunRuntime(
+  usage: { model?: string; reasoningEffort?: string } | undefined,
+): string | undefined {
+  const parts = [usage?.model, usage?.reasoningEffort].filter(
+    (part): part is string => Boolean(part),
+  );
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+/**
+ * Working directory shortened to its last two segments ("…/pwrdrvr/search").
+ * A table cell can only show so much, and CSS truncation would drop the tail
+ * — which is the half that says which repo this is. Callers keep the full
+ * path in a title attribute.
+ */
+export function formatWorkspacePathLabel(cwd: string): string {
+  const segments = cwd.split("/").filter((segment) => segment.length > 0);
+  if (segments.length <= 2) return cwd;
+  return `…/${segments.slice(-2).join("/")}`;
+}
+
 function formatTokenCount(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;

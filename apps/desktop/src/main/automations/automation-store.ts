@@ -1216,6 +1216,7 @@ export class AutomationStore {
     return {
       id: row.run_id,
       automationId: row.automation_id,
+      backend: row.backend,
       trigger: row.trigger,
       status: row.status,
       scheduledFor: row.scheduled_for ?? undefined,

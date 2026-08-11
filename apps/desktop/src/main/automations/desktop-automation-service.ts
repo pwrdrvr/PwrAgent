@@ -832,6 +832,9 @@ export class DesktopAutomationService {
       if (!run) continue;
       const usage: AutomationRunUsage = {
         ...(typeof line.model === "string" ? { model: line.model } : {}),
+        ...(typeof line.reasoningEffort === "string"
+          ? { reasoningEffort: line.reasoningEffort }
+          : {}),
         ...(typeof line.uncachedInputTokens === "number"
           ? { uncachedInputTokens: line.uncachedInputTokens }
           : {}),
@@ -1709,6 +1712,7 @@ function automationRunUsageEquals(
 ): boolean {
   return (
     a.model === b.model
+    && a.reasoningEffort === b.reasoningEffort
     && a.uncachedInputTokens === b.uncachedInputTokens
     && a.cachedInputTokens === b.cachedInputTokens
     && a.outputTokens === b.outputTokens

@@ -320,7 +320,13 @@ describe("AutomationsScreen", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "History" }));
+    // Run history hangs off the row's disclosure chevron rather than a
+    // fifth action button competing with Run/Edit.
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
     fireEvent.click(await screen.findByRole("button", { name: "Details" }));
 
     expect(await screen.findByText("Bring an umbrella.")).toBeInTheDocument();
@@ -329,6 +335,129 @@ describe("AutomationsScreen", () => {
     expect(screen.getByText("Scheduled windows covered")).toBeInTheDocument();
     expect(screen.getByText("Ephemeral rollout")).toBeInTheDocument();
     expect(screen.getByText("It will rain at 4 PM.")).toBeInTheDocument();
+  });
+});
+
+describe("row runtime and actions", () => {
+  it("states the execution profile so a risky automation is spottable", async () => {
+    const risky: AutomationDetail = {
+      ...automation,
+      executionProfile: {
+        backend: "codex",
+        cwd: "/Users/dev/work/payments-api",
+        executionMode: "full-access",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+      },
+    };
+    render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [risky] })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    // Backend, model, effort, access, and directory all readable without
+    // opening the editor — that is the point of the column.
+    expect(await screen.findByText("OpenAI")).toBeInTheDocument();
+    expect(screen.getByText("gpt-5.6-sol · high")).toBeInTheDocument();
+    expect(screen.getByText("Full Access")).toBeInTheDocument();
+    // Shortened head-first so the repo name survives the cell width; the
+    // full path stays reachable as the title.
+    const cwd = screen.getByText("…/work/payments-api");
+    expect(cwd).toHaveAttribute("title", "/Users/dev/work/payments-api");
+  });
+
+  it("says the runtime is inherited rather than inventing an access mode", async () => {
+    render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [automation] })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Agent default")).toBeInTheDocument();
+    // An automation that overrides nothing holds no access mode, so claiming
+    // "Default Access" here would state a setting it does not have.
+    expect(screen.queryByText("Default Access")).not.toBeInTheDocument();
+  });
+
+  it("names the backend, model, and effort each run actually used", async () => {
+    render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [automation] })),
+            listAutomationRuns: vi.fn(async () => ({
+              runs: [
+                {
+                  ...automationRun,
+                  backend: "acp:gemini",
+                  usage: {
+                    model: "gemini-3-pro",
+                    reasoningEffort: "medium",
+                    totalCostMicros: 52_000,
+                  },
+                },
+              ],
+            })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
+
+    // Read off the run's own record, so editing the automation later cannot
+    // rewrite what its history claims to have run.
+    expect(await screen.findByText("Gemini")).toBeInTheDocument();
+    expect(screen.getByText("gemini-3-pro · medium")).toBeInTheDocument();
+    expect(screen.getByText(/\$0\.052/)).toBeInTheDocument();
+  });
+
+  it("keeps Pause and Delete behind the row overflow menu", async () => {
+    render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [automation] })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    const menuButton = await screen.findByRole("button", {
+      name: "More actions for Check email",
+    });
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    fireEvent.click(menuButton);
+    expect(screen.getByRole("menuitem", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
   });
 });
 

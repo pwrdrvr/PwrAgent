@@ -8,9 +8,11 @@ import type {
   AutomationRunWindow,
   NavigationThreadSummary,
 } from "@pwragent/shared";
+import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   formatAutomationRunUsage,
+  formatAutomationRunRuntime,
   formatAutomationRelative,
   formatAutomationStatus,
   formatAutomationTimestamp,
@@ -298,54 +300,70 @@ export function AutomationRunHistoryItem(props: {
     props.desktopApi,
     props.expanded ? props.run.id : undefined,
   );
+  const runAt =
+    props.run.completedAt ?? props.run.startedAt ?? props.run.queuedAt;
+  const usageLine = formatAutomationRunUsage(props.run.usage);
+  const runtimeLine = formatAutomationRunRuntime(props.run.usage);
   return (
     <li className="automation-run-history__item">
-      <span className={`automation-run-status automation-run-status--${props.run.status}`}>
-        {formatRunStatus(props.run.status)}
-      </span>
-      <span>
-        {props.run.trigger}
-        {props.run.scheduledFor
-          ? ` for ${formatAutomationTimestamp(props.run.scheduledFor)}`
-          : ""}
-      </span>
-      <span className="automation-run-history__time">
-        {formatAutomationTimestamp(
-          props.run.completedAt ?? props.run.startedAt ?? props.run.queuedAt,
-        )}
-      </span>
-      {props.run.scheduledWindows.length > 1 ? (
-        <span className="automation-run-history__time">
-          {props.run.scheduledWindows.length} windows
+      {/* One wrapping line, actions pushed to the trailing edge. This was a
+          two-column grid, which turned every control after the second cell
+          into a full-width row of its own once the list rendered wide. */}
+      <div className="automation-run-history__line">
+        <span className={`automation-run-status automation-run-status--${props.run.status}`}>
+          {formatRunStatus(props.run.status)}
         </span>
-      ) : null}
+        <span>
+          {props.run.trigger}
+          {props.run.scheduledFor
+            ? ` for ${formatAutomationTimestamp(props.run.scheduledFor)}`
+            : ""}
+        </span>
+        <span className="automation-run-history__time">
+          {formatAutomationTimestamp(runAt)}
+        </span>
+        {props.run.scheduledWindows.length > 1 ? (
+          <span className="automation-run-history__time">
+            {props.run.scheduledWindows.length} windows
+          </span>
+        ) : null}
+        {/* What actually ran, in the sub-agent card's vocabulary: backend
+            pill, then model · effort. Read off the run's own usage line, so
+            editing the automation never rewrites its history. */}
+        {props.run.backend ? (
+          <span className="automation-runtime__provider">
+            {formatBackendLabel(props.run.backend)}
+          </span>
+        ) : null}
+        {runtimeLine ? (
+          <span className="automation-runtime__model">{runtimeLine}</span>
+        ) : null}
+        {usageLine ? (
+          <span className="automation-run-history__time">{usageLine}</span>
+        ) : null}
+        <span className="automation-run-history__actions">
+          <button className="context-list__action" type="button" onClick={props.onToggle}>
+            {props.expanded ? "Hide details" : "Details"}
+          </button>
+          {props.desktopApi?.openAutomationRunWindow ? (
+            <button
+              className="context-list__action"
+              type="button"
+              onClick={() =>
+                void props.desktopApi?.openAutomationRunWindow?.({
+                  automationId: props.run.automationId,
+                  runId: props.run.id,
+                  title: formatAutomationTimestamp(runAt),
+                })
+              }
+            >
+              Open ↗
+            </button>
+          ) : null}
+        </span>
+      </div>
       {props.run.errorMessage ? (
-        <span className="automation-run-history__error">{props.run.errorMessage}</span>
-      ) : null}
-      {formatAutomationRunUsage(props.run.usage) ? (
-        <span className="automation-run-history__time">
-          {formatAutomationRunUsage(props.run.usage)}
-        </span>
-      ) : null}
-      <button className="context-list__action" type="button" onClick={props.onToggle}>
-        {props.expanded ? "Hide details" : "Details"}
-      </button>
-      {props.desktopApi?.openAutomationRunWindow ? (
-        <button
-          className="context-list__action"
-          type="button"
-          onClick={() =>
-            void props.desktopApi?.openAutomationRunWindow?.({
-              automationId: props.run.automationId,
-              runId: props.run.id,
-              title: formatAutomationTimestamp(
-                props.run.completedAt ?? props.run.startedAt ?? props.run.queuedAt,
-              ),
-            })
-          }
-        >
-          Open ↗
-        </button>
+        <p className="automation-run-history__error">{props.run.errorMessage}</p>
       ) : null}
       {props.expanded ? (
         <AutomationRunArtifactDetails

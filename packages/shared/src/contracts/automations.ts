@@ -929,6 +929,11 @@ export type AutomationRunSkipReason = "lane_busy" | "rate_limited";
  */
 export type AutomationRunUsage = {
   model?: string;
+  /**
+   * The effort the turn actually ran with, not the automation's current
+   * setting — history has to stay honest after the config is edited.
+   */
+  reasoningEffort?: string;
   uncachedInputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
@@ -941,6 +946,8 @@ export type AutomationRunUsage = {
 export type AutomationRunSummary = {
   id: string;
   automationId: string;
+  /** Backend that served this run, so history can name it without the parent. */
+  backend?: AppServerBackendKind;
   trigger: AutomationRunTrigger;
   status: AutomationRunStatus;
   scheduledFor?: number;

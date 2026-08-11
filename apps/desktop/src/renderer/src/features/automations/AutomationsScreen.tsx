@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import type {
   AutomationDetail,
   AutomationReplayCandidate,
@@ -12,13 +12,18 @@ import {
   CODEX_AGENT_THREAD_CREATION_NOTE,
   canChangeExistingThreadAgentDesignation,
 } from "../../lib/agent-thread";
+import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { ChevronRightIcon, MoreVerticalIcon } from "../../icons";
+import { useDismissableMenu } from "../composer/ComposerDropdown";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import {
   formatCostTodayMicros,
   formatAutomationRelative,
   formatAutomationStatus,
   formatBacklogPolicy,
+  formatWorkspacePathLabel,
 } from "./automation-format";
 import {
   AutomationEditor,
@@ -180,8 +185,8 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
             <div className="automations-table" role="table" aria-label="Automations">
               <div className="automations-table__header" role="row">
                 <span role="columnheader">Automation</span>
-                <span role="columnheader">Agent</span>
-                <span role="columnheader">Schedule</span>
+                <span role="columnheader">Runs as</span>
+                <span role="columnheader">Trigger</span>
                 <span role="columnheader">Status</span>
                 <span role="columnheader">Actions</span>
               </div>
@@ -312,30 +317,57 @@ function AutomationTableRow(props: {
     }
   };
 
+  const agentLabel = formatAutomationAgentLabel(props);
+  const threadSubtitle = props.thread?.agent
+    ? props.thread.title === agentLabel
+      ? undefined
+      : props.thread.title
+    : "legacy thread";
+  const scheduleTriggered = props.automation.triggers.some(
+    (trigger) => trigger.kind === "schedule",
+  );
+
   return (
     <>
       <article className="automations-table__row" role="row">
-        <div role="cell">
-          <h3>{props.automation.name}</h3>
-          <p>{formatBacklogPolicy(props.automation.backlogPolicy)}</p>
+        <div className="automations-table__identity" role="cell">
+          <button
+            aria-expanded={props.expanded}
+            aria-label={`${props.expanded ? "Hide" : "Show"} run history for ${props.automation.name}`}
+            className="automations-table__disclosure"
+            type="button"
+            onClick={props.onExpand}
+          >
+            <ChevronRightIcon aria-hidden="true" size={14} />
+          </button>
+          <div className="automations-table__identity-text">
+            <h3>{props.automation.name}</h3>
+            {props.onSelectThread ? (
+              <button
+                className="automations-table__thread-link"
+                type="button"
+                onClick={props.onSelectThread}
+              >
+                {agentLabel}
+              </button>
+            ) : (
+              <span>{agentLabel}</span>
+            )}
+            {threadSubtitle ? <p>{threadSubtitle}</p> : null}
+          </div>
         </div>
-        <div role="cell">
-          {props.onSelectThread ? (
-            <button
-              className="automations-table__thread-link"
-              type="button"
-              onClick={props.onSelectThread}
-            >
-              {formatAutomationAgentLabel(props)}
-            </button>
-          ) : (
-            <span>{formatAutomationAgentLabel(props)}</span>
-          )}
-          <p>{props.thread?.agent ? props.thread.title : "legacy thread"}</p>
-        </div>
+        <AutomationRuntimeCell automation={props.automation} />
         <div role="cell">
           <span>{props.automation.scheduleSummary}</span>
-          <p>Next {formatAutomationRelative(props.automation.nextRunAt)}</p>
+          {props.automation.nextRunAt ? (
+            <p>Next {formatAutomationRelative(props.automation.nextRunAt)}</p>
+          ) : null}
+          {/* Backlog policy only decides what happens to *missed scheduled*
+              runs, so it belongs with the schedule rather than under the
+              automation's name where it outranked everything else. */}
+          {scheduleTriggered ? (
+            <p>{formatBacklogPolicy(props.automation.backlogPolicy)}</p>
+          ) : null}
         </div>
         <div role="cell">
           <span className={`automation-status automation-status--${props.automation.status}`}>
@@ -369,25 +401,16 @@ function AutomationTableRow(props: {
           <button className="context-list__action" type="button" onClick={props.onEdit}>
             Edit
           </button>
-          <button
-            className="context-list__action"
-            disabled={Boolean(busy)}
-            type="button"
-            onClick={() => void runAction("pause", props.onPauseResume)}
-          >
-            {props.automation.status === "paused" ? "Resume" : "Pause"}
-          </button>
-          <button className="context-list__action" type="button" onClick={props.onExpand}>
-            {props.expanded ? "Hide" : "History"}
-          </button>
-          <button
-            className="context-list__action context-list__action--danger"
-            disabled={Boolean(busy)}
-            type="button"
-            onClick={() => void runAction("delete", props.onDelete)}
-          >
-            Delete
-          </button>
+          {/* Pause and Delete are rarer and one of them is destructive, so
+              they sit behind an overflow rather than competing with Run and
+              Edit for the same visual weight in every row. */}
+          <AutomationRowMenu
+            busy={Boolean(busy)}
+            name={props.automation.name}
+            paused={props.automation.status === "paused"}
+            onDelete={() => void runAction("delete", props.onDelete)}
+            onPauseResume={() => void runAction("pause", props.onPauseResume)}
+          />
         </div>
       </article>
       {replayOpen ? (
@@ -461,6 +484,110 @@ function AutomationTableRow(props: {
         />
       ) : null}
     </>
+  );
+}
+
+/**
+ * "What will this thing run as" — the answer an operator needs before they
+ * decide whether an automation deserves watching. Backend pill and model line
+ * reuse the sub-agent card's vocabulary; access mode and working directory are
+ * here because a Full Access automation loose in a real repo is the case worth
+ * spotting from across the table.
+ */
+function AutomationRuntimeCell(props: { automation: AutomationDetail }) {
+  const profile = props.automation.executionProfile;
+  const runtimeDetails = [
+    profile?.model,
+    profile?.reasoningEffort,
+    profile?.fastMode ? "Fast" : undefined,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+  const fullAccess = profile?.executionMode === "full-access";
+  return (
+    <div className="automations-table__runtime" role="cell">
+      <p className="automations-table__runtime-line">
+        <span className="automation-runtime__provider">
+          {formatBackendLabel(profile?.backend ?? props.automation.backend)}
+        </span>
+        <span className="automation-runtime__model">
+          {runtimeDetails || "Agent default"}
+        </span>
+      </p>
+      {/* Only stated when the automation actually overrides it. Printing
+          "Default Access" for an inheriting automation would claim a setting
+          it does not hold. */}
+      {profile?.executionMode ? (
+        <p className="automations-table__runtime-line">
+          <span
+            className={`automation-runtime__access${
+              fullAccess ? " automation-runtime__access--elevated" : ""
+            }`}
+          >
+            {formatExecutionModeLabel(profile.executionMode)}
+          </span>
+        </p>
+      ) : null}
+      {profile?.cwd ? (
+        <p className="automations-table__cwd" title={profile.cwd}>
+          {formatWorkspacePathLabel(profile.cwd)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function AutomationRowMenu(props: {
+  busy: boolean;
+  name: string;
+  paused: boolean;
+  onDelete: () => void;
+  onPauseResume: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuId = useId();
+  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  return (
+    <div className="automations-table__menu" ref={ref}>
+      <button
+        aria-controls={open ? menuId : undefined}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={`More actions for ${props.name}`}
+        className="context-list__action automations-table__menu-button"
+        disabled={props.busy}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <MoreVerticalIcon aria-hidden="true" size={14} />
+      </button>
+      {open ? (
+        <div className="automations-table__menu-list" id={menuId} role="menu">
+          <button
+            className="automations-table__menu-item"
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              props.onPauseResume();
+            }}
+          >
+            {props.paused ? "Resume" : "Pause"}
+          </button>
+          <button
+            className="automations-table__menu-item automations-table__menu-item--danger"
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              props.onDelete();
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
