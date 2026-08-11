@@ -1,4 +1,11 @@
-import { useId, useMemo, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import type {
   AutomationDetail,
   AutomationReplayCandidate,
@@ -270,6 +277,23 @@ function AutomationTableRow(props: {
   thread?: NavigationThreadSummary;
 }) {
   const [busy, setBusy] = useState<string>();
+  // The run lines stick below this row, and its height depends on how much of
+  // the execution profile the automation overrides — so it is measured rather
+  // than assumed. Only while expanded: a collapsed row has nothing under it.
+  const rowRef = useRef<HTMLElement>(null);
+  const [rowHeight, setRowHeight] = useState(0);
+  useEffect(() => {
+    const element = rowRef.current;
+    if (!props.expanded || !element || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      setRowHeight(element.offsetHeight);
+    });
+    observer.observe(element);
+    setRowHeight(element.offsetHeight);
+    return () => observer.disconnect();
+  }, [props.expanded]);
   const [replayOpen, setReplayOpen] = useState(false);
   const [replayCandidates, setReplayCandidates] =
     useState<ListAutomationReplayCandidatesResponse>();
@@ -331,8 +355,16 @@ function AutomationTableRow(props: {
   );
 
   return (
-    <>
-      <article className="automations-table__row" role="row">
+    <div
+      className="automations-table__group"
+      role="rowgroup"
+      style={
+        rowHeight > 0
+          ? ({ "--automation-row-h": `${rowHeight}px` } as CSSProperties)
+          : undefined
+      }
+    >
+      <article className="automations-table__row" ref={rowRef} role="row">
         <div className="automations-table__identity" role="cell">
           <button
             aria-expanded={props.expanded}
@@ -487,7 +519,7 @@ function AutomationTableRow(props: {
           desktopApi={props.desktopApi}
         />
       ) : null}
-    </>
+    </div>
   );
 }
 

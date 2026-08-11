@@ -6456,7 +6456,10 @@ textarea,
   flex: 1;
   flex-direction: column;
   gap: 14px;
-  padding: 20px;
+  /* No top padding: it is inside the scrollport, so rows would slide through
+     it and show above the sticky column header. The toolbar carries that
+     space instead, and scrolls away with the rest of the page. */
+  padding: 0 20px 20px;
   overflow: auto;
 }
 
@@ -6465,6 +6468,7 @@ textarea,
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  padding-top: 20px;
 }
 
 .automations-toolbar h2 {
@@ -6590,19 +6594,36 @@ textarea,
 }
 
 .automations-table {
+  /* Fixed so the sticky layers below can stack against it with plain CSS
+     arithmetic instead of measuring it. One line of small caps; the table's
+     760px floor keeps the labels from ever wrapping. */
+  --automations-header-h: 34px;
   display: flex;
   min-width: 760px;
   /* Keep the natural height. As a shrinkable child of the scrolling
      `.automations-content` column, the table was compressed to fit instead of
-     overflowing — and `overflow: hidden` (which clips row corners to the
-     radius) then hid everything past the fold with nothing anywhere left to
-     scroll. Measured at 179px tall holding 1309px of content. */
+     overflowing — and clipping then hid everything past the fold with nothing
+     anywhere left to scroll. Measured at 179px tall holding 1309px. */
   flex: 0 0 auto;
   flex-direction: column;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel);
-  overflow: hidden;
+  /* `clip`, not `hidden`: both clip rows to the border radius, but `hidden`
+     makes this a scroll container, and every `position: sticky` descendant
+     would then resolve against THIS box — which never scrolls — instead of
+     `.automations-content`. The headers below would silently stop sticking. */
+  overflow: clip;
+}
+
+/* One automation and everything it owns. Exists to be the sticky containing
+   block for its row: constrained to the group, the row is pushed out by the
+   group's own bottom edge, so it holds the top only while its runs are still
+   on screen rather than lingering over the next automation. */
+.automations-table__group {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
 }
 
 .automations-table__header,
@@ -6620,9 +6641,18 @@ textarea,
   align-items: start;
 }
 
+/* Column labels hold the top of the scroll: they are what makes the rows
+   below them readable, and a table you have scrolled into is exactly where
+   they stop being memorable. */
 .automations-table__header {
-  padding: 10px 12px;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: var(--automations-header-h);
+  align-items: center;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
@@ -6630,8 +6660,14 @@ textarea,
 }
 
 .automations-table__row {
+  /* Holds the top under the column labels while its own runs scroll past, so
+     an open run is never orphaned from the automation it belongs to. */
+  position: sticky;
+  top: var(--automations-header-h);
+  z-index: 2;
   padding: 12px;
   border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
   /* Supporting copy, not the panel default. A bare cell span was inheriting
      body size, so a trigger summary rendered larger than the automation's
      own name. Only the name opts back up, below. */
@@ -18932,6 +18968,20 @@ a.transcript-message__messaging-origin:focus-visible {
    just follows the facts inline. */
 .automations-table__history .automation-run-history__actions {
   margin-left: auto;
+}
+
+/* Third sticky layer, under the automation row. Each run's summary line is
+   constrained to its own <li>, so it holds the top while that run's captured
+   events scroll by and is then pushed out by the next run — which is what
+   makes a long transcript readable without losing which run produced it.
+   `--automation-row-h` is measured, because the row's height depends on how
+   much of the execution profile the automation overrides. */
+.automations-table__history .automation-run-history__line {
+  position: sticky;
+  top: calc(var(--automations-header-h) + var(--automation-row-h, 0px));
+  z-index: 1;
+  padding: 2px 0;
+  background: var(--bg-panel-elevated);
 }
 
 .automation-run-history__time {

@@ -6,15 +6,27 @@ import { describe, expect, it } from "vitest";
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
 
-function ruleBody(selector: string): string {
+/**
+ * Every top-level rule whose selector line is exactly `selector`. Plural
+ * because several of these selectors also appear inside a grouped rule (the
+ * header and the row share one grid definition), and the assertion below
+ * wants the standalone block, not whichever came first.
+ */
+function ruleBodies(selector: string): string[] {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = css.match(
-    new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`),
-  );
-  if (!match?.groups?.body) {
+  const bodies = [
+    ...css.matchAll(
+      new RegExp(`(?:^|\\n)${escaped}\\s*\\{(?<body>[\\s\\S]*?)\\n\\}`, "g"),
+    ),
+  ].map((match) => match.groups?.body ?? "");
+  if (bodies.length === 0) {
     throw new Error(`Expected app.css to define ${selector}`);
   }
-  return match.groups.body;
+  return bodies;
+}
+
+function ruleBody(selector: string): string {
+  return ruleBodies(selector).join("\n");
 }
 
 /**
@@ -36,6 +48,28 @@ describe("automations screen scrolling", () => {
     const body = ruleBody(".automations-table");
     expect(body).toMatch(/flex:\s*0\s+0\s+auto;/);
     // The pairing is the trap: shrinkable + clipped = unreachable content.
-    expect(body).toMatch(/overflow:\s*hidden;/);
+    expect(body).toMatch(/overflow:\s*clip;/);
+  });
+
+  it("clips with `clip` so sticky descendants still see the scroll container", () => {
+    // `overflow: hidden` would make the table a scroll container of its own,
+    // and every sticky header inside it would resolve against a box that
+    // never scrolls — silently doing nothing.
+    expect(ruleBody(".automations-table")).not.toMatch(/overflow:\s*hidden;/);
+  });
+
+  it("stacks the three sticky layers against the header height", () => {
+    expect(ruleBody(".automations-table")).toMatch(
+      /--automations-header-h:\s*\d+px;/,
+    );
+    expect(ruleBody(".automations-table__header")).toMatch(/top:\s*0;/);
+    expect(ruleBody(".automations-table__row")).toMatch(
+      /top:\s*var\(--automations-header-h\);/,
+    );
+    expect(
+      ruleBody(".automations-table__history .automation-run-history__line"),
+    ).toMatch(
+      /top:\s*calc\(var\(--automations-header-h\)\s*\+\s*var\(--automation-row-h,\s*0px\)\);/,
+    );
   });
 });
