@@ -9,6 +9,10 @@ const desktopPackagePath = resolve(repoRoot, "apps/desktop/package.json");
 const electronBuilderPath = resolve(repoRoot, "apps/desktop/electron-builder.yml");
 const ciWorkflowPath = resolve(repoRoot, ".github/workflows/ci.yml");
 const releaseScriptPath = resolve(repoRoot, "apps/desktop/scripts/release.mjs");
+const verifyAsarContentsPath = resolve(
+  repoRoot,
+  "apps/desktop/scripts/verify-asar-contents.mjs",
+);
 const releaseWorkflowPath = resolve(repoRoot, ".github/workflows/release.yml");
 const trustedSigningSetupPath = resolve(
   repoRoot,
@@ -145,11 +149,20 @@ if (!headingPattern.test(changelog)) {
 const electronBuilderConfig = readFileSync(electronBuilderPath, "utf8");
 const ciWorkflow = readFileSync(ciWorkflowPath, "utf8");
 const releaseScript = readFileSync(releaseScriptPath, "utf8");
+const verifyAsarContents = readFileSync(verifyAsarContentsPath, "utf8");
 const releaseWorkflow = readFileSync(releaseWorkflowPath, "utf8");
 const trustedSigningSetup = readFileSync(trustedSigningSetupPath, "utf8");
 const desktopReleaseRunbook = readFileSync(desktopReleaseRunbookPath, "utf8");
 
 const desktopScripts = desktopPackage.scripts || {};
+if (
+  desktopPackage.optionalDependencies?.["@napi-rs/canvas-win32-x64-msvc"]
+  !== desktopPackage.dependencies?.["@napi-rs/canvas"]
+) {
+  fail(
+    "apps/desktop/package.json must keep matching @napi-rs/canvas and Windows x64 binding versions",
+  );
+}
 if (desktopScripts["package:linux"] !== "node ./scripts/release.mjs --linux --no-publish") {
   fail("apps/desktop/package.json must expose package:linux for local Linux package builds");
 }
@@ -167,6 +180,7 @@ for (const expected of [
   "entry:",
   "StartupWMClass: PwrAgent",
   "private: false",
+  "node_modules/@napi-rs/canvas-win32-x64-msvc/**/*",
 ]) {
   if (!electronBuilderConfig.includes(expected)) {
     fail(`apps/desktop/electron-builder.yml must contain ${JSON.stringify(expected)}`);
@@ -193,6 +207,18 @@ for (const expected of [
 ]) {
   if (!releaseScript.includes(expected)) {
     fail(`apps/desktop/scripts/release.mjs must contain ${JSON.stringify(expected)}`);
+  }
+}
+
+for (const expected of [
+  "requiredPackagedRuntimeFiles",
+  "unpackedPath",
+  "required packaged runtime files are missing",
+]) {
+  if (!verifyAsarContents.includes(expected)) {
+    fail(
+      `apps/desktop/scripts/verify-asar-contents.mjs must contain ${JSON.stringify(expected)}`,
+    );
   }
 }
 

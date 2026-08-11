@@ -344,6 +344,23 @@ function patchStageDependencyManifests() {
   }
 }
 
+function verifyWindowsCanvasBindingInStage() {
+  const bindingPath = join(
+    stageDir,
+    "node_modules",
+    "@napi-rs",
+    "canvas-win32-x64-msvc",
+    "skia.win32-x64-msvc.node",
+  );
+  if (!existsSync(bindingPath)) {
+    throw new Error(
+      "pnpm deploy omitted @napi-rs/canvas-win32-x64-msvc from the Windows release stage. "
+        + "Keep the platform binding as an explicit optional dependency of @pwragent/desktop.",
+    );
+  }
+  console.log("  verified Windows x64 canvas native binding in release-stage");
+}
+
 function stageDesktopVersion() {
   const manifestPath = join(stageDir, "package.json");
   if (!existsSync(manifestPath)) {
@@ -415,6 +432,9 @@ if (!signStageOnly) {
     { cwd: repoRoot },
   );
   patchStageDependencyManifests();
+  if (win) {
+    verifyWindowsCanvasBindingInStage();
+  }
 
   // 4. Copy the build output, notices, changelog, and electron-builder inputs into the stage so
   //    electron-builder finds them at well-known paths.

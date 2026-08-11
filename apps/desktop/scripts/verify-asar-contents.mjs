@@ -6,8 +6,12 @@
 
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
-import { normalizeAsarListing } from "./asar-entry-paths.mjs";
+import { join, resolve } from "node:path";
+import {
+  missingPackagedRuntimeFiles,
+  normalizeAsarListing,
+  requiredPackagedRuntimeFiles,
+} from "./asar-entry-paths.mjs";
 
 const args = process.argv.slice(2);
 const appPath = args[0]
@@ -45,6 +49,46 @@ const asar = require("@electron/asar");
 const listing = normalizeAsarListing(
   asar.listPackage(asarPath, { isPack: false }),
 );
+const missingRuntimeFiles = missingPackagedRuntimeFiles(
+  listing,
+  process.platform,
+  process.arch,
+);
+for (const runtimeFile of requiredPackagedRuntimeFiles(
+  process.platform,
+  process.arch,
+)) {
+  if (
+    !runtimeFile.unpacked
+    || missingRuntimeFiles.some(({ entry }) => entry === runtimeFile.entry)
+  ) {
+    continue;
+  }
+  const unpackedPath = join(
+    `${asarPath}.unpacked`,
+    ...runtimeFile.entry.slice(1).split("/"),
+  );
+  if (!existsSync(unpackedPath)) {
+    missingRuntimeFiles.push({
+      ...runtimeFile,
+      unpackedPath,
+    });
+  }
+}
+
+if (missingRuntimeFiles.length > 0) {
+  console.error("\nverify-asar-contents: required packaged runtime files are missing\n");
+  for (const runtimeFile of missingRuntimeFiles) {
+    console.error(`  ${runtimeFile.entry}`);
+    if (runtimeFile.unpackedPath) {
+      console.error(`    expected unpacked file at ${runtimeFile.unpackedPath}`);
+    }
+  }
+  console.error(
+    "\nKeep platform-native optional dependencies explicit in apps/desktop/package.json.",
+  );
+  process.exit(1);
+}
 // Each rule: [label, regex]. Anything matching → fail.
 const forbidden = [
   ["TypeScript source", /\.tsx?$/],
@@ -94,5 +138,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `verify-asar-contents: OK (${listing.length} entries, no forbidden patterns)`,
+  `verify-asar-contents: OK (${listing.length} entries, required runtime files present, no forbidden patterns)`,
 );
