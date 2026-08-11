@@ -99,6 +99,10 @@ export function StarMapThreadCard(props: {
   const titleTooltip = useViewportTooltip({
     className: "viewport-tooltip star-map-card__tooltip",
   });
+  // Thread keys carry a `backend:id` colon, which is legal in an id
+  // attribute but parses as a pseudo-class in a CSS selector — anything
+  // resolving this id via querySelector would silently find nothing.
+  const chatStateId = `star-map-chat-open-${threadKey.replace(/[^\w-]/g, "-")}`;
   const left = props.baseSlot.dx + (props.offset?.dx ?? 0);
   const top = props.baseSlot.dy + (props.offset?.dy ?? 0);
   const style: CSSProperties = {
@@ -161,11 +165,22 @@ export function StarMapThreadCard(props: {
           // become its accessible name; the chips stay readable as content,
           // and the kebab beside it gets a distinct name of its own.
           aria-label={`Open thread: ${thread.title}`}
+          // The accent ring says "a chat card for this thread is open on
+          // the map", which is otherwise sighted-only. It rides
+          // `aria-describedby` rather than the label because it describes
+          // the thread's state, not what the button does — the same rule
+          // the hover cards follow (see AGENTS.md).
+          aria-describedby={props.chatting ? chatStateId : undefined}
           onClick={() => {
             if (consumeSuppressedClick()) return;
             props.onOpen(thread);
           }}
         >
+          {props.chatting ? (
+            <span className="star-map-card__state" id={chatStateId}>
+              Chat card open on the map
+            </span>
+          ) : null}
           <ThreadRowStatus status={status} />
           <span
             className="star-map-card__title"

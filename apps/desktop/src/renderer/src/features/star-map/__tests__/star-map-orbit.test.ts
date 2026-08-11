@@ -221,6 +221,22 @@ describe("shouldStartCanvasPan", () => {
       false,
     );
 
+    // Chat cards live inside the canvas, so a press on one bubbles to the
+    // viewport. Without this the card dragged AND the galaxy panned.
+    const chat = element(
+      '<section class="star-map-chat-card">'
+      + '<header class="star-map-chat-card__bar"><span>Title</span></header>'
+      + '<div class="star-map-chat-card__body">transcript</div>'
+      + "</section>",
+    );
+    expect(shouldStartCanvasPan(chat)).toBe(false);
+    expect(
+      shouldStartCanvasPan(chat.querySelector(".star-map-chat-card__bar")),
+    ).toBe(false);
+    expect(
+      shouldStartCanvasPan(chat.querySelector(".star-map-chat-card__body")),
+    ).toBe(false);
+
     const chrome = element(
       '<div class="star-map__chrome"><p>PwrAgent</p></div>',
     );

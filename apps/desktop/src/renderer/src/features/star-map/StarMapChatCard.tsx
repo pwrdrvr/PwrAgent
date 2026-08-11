@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -163,6 +164,29 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // No window-resize clamp: the card is anchored in the map, not in the
   // window. Resizing the window changes what part of the galaxy is on
   // screen, which is a pan, not a reason to move a card off its spot.
+  //
+  // The CANVAS shrinking is a different matter. Archiving no longer
+  // shrinks it (cloud extents are carried forward), but switching lens or
+  // hiding offline instances still can, and the view clamps to the canvas
+  // — so a card left outside the new bounds would be unreachable. Read
+  // through a ref so this fires on a bounds change and not on every frame
+  // of a drag.
+  const rectRef = useRef(rect);
+  rectRef.current = rect;
+  useEffect(() => {
+    const clamped = clampChatCardRect(rectRef.current, {
+      width: bounds.width,
+      height: bounds.height,
+    });
+    if (
+      clamped.left !== rectRef.current.left
+      || clamped.top !== rectRef.current.top
+      || clamped.width !== rectRef.current.width
+      || clamped.height !== rectRef.current.height
+    ) {
+      onRectChange(cardKey, clamped);
+    }
+  }, [bounds.width, bounds.height, cardKey, onRectChange]);
 
   /**
    * Returns whether the turn actually reached the backend. A peer can drop

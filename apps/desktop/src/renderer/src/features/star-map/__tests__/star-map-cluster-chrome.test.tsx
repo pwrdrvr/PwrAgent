@@ -357,8 +357,17 @@ describe("star map chat cards in map space", () => {
     expect(
       Math.abs(Number.parseFloat(chat.style.left) - cardLeft),
     ).toBeLessThan(800);
-    // The card end of the pairing says so too.
+    // The card end of the pairing says so too — and says it to a screen
+    // reader, not only to the eye.
     expect(shell.className).toContain("star-map-card-shell--chatting");
+    const open = shell.querySelector(".star-map-card__open")!;
+    const described = open.getAttribute("aria-describedby");
+    expect(described).toBeTruthy();
+    expect(shell.querySelector(`#${described}`)?.textContent).toContain(
+      "Chat card open",
+    );
+    // The button still NAMES its action; the state is a description.
+    expect(open.getAttribute("aria-label")).toBe("Open thread: Thread a1");
   });
 
   it("draws no tether when the thread has no card on the map", async () => {

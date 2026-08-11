@@ -147,7 +147,7 @@ const ORBIT_LOAD_CARD_DY = -150;
  * `.star-map-card-shell:hover` live in app.css and are pinned to these
  * numbers by star-map-z-layers.test.ts.
  */
-const STAR_MAP_CARD_MAX_Z = 4000;
+export const STAR_MAP_CARD_MAX_Z = 4000;
 export const STAR_MAP_CLOUD_CHROME_Z = 5000;
 export const STAR_MAP_CARD_HOVER_Z = 6000;
 const STAR_MAP_LOAD_CARD_Z = 7000;
@@ -692,6 +692,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       const kept = [...current].filter((key) => present.has(key));
       return kept.length === current.size ? current : new Set(kept);
     });
+    // Keyed on `.size` rather than the set: the guard above returns the
+    // same reference when nothing is released, so identity would be a
+    // stable dep too — but size makes the "runs when the set grows or
+    // shrinks" intent explicit and cannot loop through its own setState.
   }, [archivedThreadKeys.size, props.localThreads, remote]);
 
   /**
@@ -1266,10 +1270,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // callback only ever runs after a render has computed it.
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       let anchor: SnapRect | undefined;
-      for (const [key, rect] of cardRectsRef.current) {
-        if (key.endsWith(`::${threadKey}`)) {
-          anchor = rect;
-          break;
+      // `cardRects` is built from the lane/orbit bodies, which is NOT where
+      // the projects lens draws its cards — anchoring to it there would
+      // open the chat at a position unrelated to anything on screen. That
+      // lens falls back to the cascade until it publishes its own rects.
+      if (!projectsModeRef.current) {
+        for (const [key, rect] of cardRectsRef.current) {
+          if (key.endsWith(`::${threadKey}`)) {
+            anchor = rect;
+            break;
+          }
         }
       }
       chatCards.open(
@@ -1511,6 +1521,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const cardRectsRef = useRef(cardRects);
   cardRectsRef.current = cardRects;
+  const projectsModeRef = useRef(projectsMode);
+  projectsModeRef.current = projectsMode;
 
   /**
    * Build the snap for one card. Threshold is screen-space so the pull
@@ -1740,34 +1752,44 @@ export function StarMapScreen(props: StarMapScreenProps) {
       override?: { baseSlot: StarMapCardSlot; height: number },
     ) => {
       const selfKey = `${instanceId}::${threadKey}`;
-      if (!cardRects.has(selfKey)) return undefined;
-      // A card carrying a selection must not snap to the rest of it. Those
-      // cards travel rigidly with this one, so their relative offset never
-      // changes and every "alignment" against them is a false latch at
-      // whatever spacing the group already had.
-      const passengers = selection.has(selfKey) ? selection : undefined;
-      const others = [...cardRects.entries()]
-        .filter(([key]) => key !== selfKey && !passengers?.has(key))
-        .map(([, rect]) => rect);
-      if (others.length === 0) return undefined;
-
-      const body = bodies.find((entry) => entry.instanceId === instanceId);
-      const lane = lanes.get(instanceId);
-      const index =
-        lane?.threads.findIndex(
-          (thread) =>
-            buildThreadIdentityKey(thread.source, thread.id) === threadKey,
-        ) ?? -1;
-      const baseSlot =
-        override?.baseSlot ?? (index >= 0 ? body?.slots[index] : undefined);
-      if (!body || !baseSlot) return undefined;
-
-      // See the note in `cardRects`: unmeasured cards report 0, not undefined.
-      const height =
-        override?.height ?? (lane?.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT);
-      const scale = view.scale > 0 ? view.scale : 1;
-
+      // Everything below runs INSIDE the returned closure, which only runs
+      // while a card is actually being dragged. Doing it here instead cost
+      // a full pass over every card's rect — plus a thread-key rebuild per
+      // lane entry — once per card per render, so a map of n cards paid
+      // O(n^2) on every snapshot while nothing was being dragged at all.
       return (offset: { dx: number; dy: number }) => {
+        const unchanged = { dx: offset.dx, dy: offset.dy, guides: [] };
+        const selfRect = cardRects.get(selfKey);
+        if (!selfRect) return unchanged;
+        // A card carrying a selection must not snap to the rest of it.
+        // Those cards travel rigidly with this one, so their relative
+        // offset never changes and every "alignment" against them is a
+        // false latch at whatever spacing the group already had.
+        const passengers = selection.has(selfKey) ? selection : undefined;
+        const others: SnapRect[] = [];
+        for (const [key, rect] of cardRects) {
+          if (key === selfKey || passengers?.has(key)) continue;
+          others.push(rect);
+        }
+        if (others.length === 0) return unchanged;
+
+        const body = bodies.find((entry) => entry.instanceId === instanceId);
+        const lane = lanes.get(instanceId);
+        const index =
+          lane?.threads.findIndex(
+            (thread) =>
+              buildThreadIdentityKey(thread.source, thread.id) === threadKey,
+          ) ?? -1;
+        const baseSlot =
+          override?.baseSlot ?? (index >= 0 ? body?.slots[index] : undefined);
+        if (!body || !baseSlot) return unchanged;
+
+        // See the note in `cardRects`: unmeasured cards report 0, not
+        // undefined.
+        const height =
+          override?.height
+          ?? (lane?.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT);
+        const scale = view.scale > 0 ? view.scale : 1;
         const snap = resolveSnap({
           defaultGap: STAR_MAP_CARD_GAP,
           moving: {

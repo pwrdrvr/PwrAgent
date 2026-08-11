@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   STAR_MAP_CARD_HOVER_Z,
+  STAR_MAP_CARD_MAX_Z,
   STAR_MAP_CLOUD_CHROME_Z,
 } from "../StarMapScreen";
 
@@ -38,8 +39,7 @@ function zIndexIn(selector: string): number {
 }
 
 describe("star map cloud paint layers", () => {
-  /** Matches the clamp in StarMapScreen's card render. */
-  const CARD_MAX_Z = 4000;
+  const CARD_MAX_Z = STAR_MAP_CARD_MAX_Z;
 
   it("raises a hovered card above every card the stack can produce", () => {
     expect(zIndexIn(".star-map-card-shell:hover")).toBe(STAR_MAP_CARD_HOVER_Z);

@@ -412,10 +412,18 @@ export function computeOrbitPlacement(params: {
  * to match nothing here and so started a pan. It is the card's own mark
  * and overhangs the card's top-right corner, so dragging the card from it
  * is the right behaviour — but it is a change, not just a port.
+ *
+ * `.star-map-chat-card` is listed for the same reason, and it became load
+ * bearing the moment chat cards moved INSIDE the canvas: a press on a
+ * chat card bubbles to the viewport, so without it the card dragged and
+ * the whole galaxy panned underneath it at the same time. Its transcript,
+ * title bar and resize corner are all plain containers, so only naming
+ * the card itself covers them.
  */
 export function shouldStartCanvasPan(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return !target.closest(
-    "button, a, input, label, .star-map-card-shell, .star-map__chrome, .star-map__filters",
+    "button, a, input, label, .star-map-card-shell, .star-map-chat-card,"
+      + " .star-map__chrome, .star-map__filters",
   );
 }

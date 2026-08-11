@@ -200,19 +200,31 @@ describe("placeChatCardBesideAnchor", () => {
     expect(rect.left + rect.width).toBeLessThanOrEqual(bounds.width);
   });
 
-  it("steps aside rather than opening on top of another chat card", () => {
+  it("stays beside its thread even when that overlaps other cards", () => {
+    // Being next to the thread it belongs to beats being tidy. An overlap
+    // is the operator's to resolve by dragging, so placement must not go
+    // hunting for free space and land the card somewhere unrelated.
+    const crowd = Array.from({ length: 4 }, (unused, index) => ({
+      left: anchor.x + 200 + index * 40,
+      top: anchor.y + index * 40,
+      width: 420,
+      height: 520,
+    }));
+    const rect = placeChatCardBesideAnchor({ anchor, bounds, occupied: crowd });
+    expect(rect.left).toBeLessThan(anchor.x + 900);
+    expect(Math.abs(rect.top - anchor.y)).toBeLessThan(600);
+  });
+
+  it("offsets a card opened at the exact same spot as another", () => {
+    // Perfectly stacked cards hide the older one completely, which reads
+    // as the click having done nothing.
     const first = placeChatCardBesideAnchor({ anchor, bounds, occupied: [] });
     const second = placeChatCardBesideAnchor({
       anchor,
       bounds,
       occupied: [first],
     });
-    const overlaps =
-      first.left < second.left + second.width
-      && second.left < first.left + first.width
-      && first.top < second.top + second.height
-      && second.top < first.top + first.height;
-    expect(overlaps).toBe(false);
+    expect(second.left === first.left && second.top === first.top).toBe(false);
   });
 
   it("keeps the card inside the canvas", () => {

@@ -24789,6 +24789,22 @@ a.transcript-message__messaging-origin:focus-visible {
   fill: color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
+/* Names the accent ring for a screen reader without painting anything.
+   Scoped to the map rather than added as a global utility: this PR is the
+   only caller, and a repo-wide visually-hidden primitive deserves its own
+   decision. */
+.star-map-card__state {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 /* The card end of that tether: the thread whose chat is open. */
 .star-map-card-shell--chatting .star-map-card {
   border-color: var(--accent-border);

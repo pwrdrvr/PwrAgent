@@ -132,17 +132,8 @@ export function raiseChatCard(
 
 /** Gap between a chat card and the thread card it belongs to. */
 const CHAT_CARD_ANCHOR_GAP = 28;
-/** How many times a card steps aside before it accepts an overlap. */
+/** How many times a card steps off an exact stack before giving up. */
 const CHAT_CARD_NUDGE_LIMIT = 8;
-
-function rectsOverlap(a: ChatCardRect, b: ChatCardRect): boolean {
-  return (
-    a.left < b.left + b.width
-    && b.left < a.left + a.width
-    && a.top < b.top + b.height
-    && b.top < a.top + a.height
-  );
-}
 
 /**
  * Where a chat card opens: beside the card it belongs to.
@@ -153,9 +144,12 @@ function rectsOverlap(a: ChatCardRect, b: ChatCardRect): boolean {
  * most of what makes the pairing legible; the tether drawn between them
  * says the rest.
  *
- * Prefers the right of the anchor, falls back to its left when that would
- * leave the canvas, then steps diagonally clear of chat cards that are
- * already open.
+ * Prefers the right of the anchor and falls back to its left when that
+ * would leave the canvas. It deliberately does NOT hunt for free space:
+ * being next to its thread beats being tidy, and an overlap is the
+ * operator's to resolve by dragging the card wherever they want it. The
+ * only avoidance left is against a card opened at the very same spot,
+ * which would hide the older one completely.
  */
 export function placeChatCardBesideAnchor(params: {
   /** The thread card, in canvas pixels. */
@@ -179,23 +173,19 @@ export function placeChatCardBesideAnchor(params: {
 
   let candidate = clampChatCardRect({ left, top, width, height }, params.bounds);
   for (let nudge = 0; nudge < CHAT_CARD_NUDGE_LIMIT; nudge += 1) {
-    const blocker = params.occupied.find((other) =>
-      rectsOverlap(candidate, other),
+    const stacked = params.occupied.some(
+      (other) =>
+        Math.abs(other.left - candidate.left) < CHAT_CARD_CASCADE_STEP
+        && Math.abs(other.top - candidate.top) < CHAT_CARD_CASCADE_STEP,
     );
-    if (!blocker) break;
-    // Step clear of the whole blocker, not by a token offset: a cascade
-    // step is a fraction of a card, so nudging by one leaves the new card
-    // still on top of the old one.
-    const below = blocker.top + blocker.height + CHAT_CARD_ANCHOR_GAP;
+    if (!stacked) break;
     candidate = clampChatCardRect(
-      below + height <= params.bounds.height
-        ? { left: candidate.left, top: below, width, height }
-        : {
-            left: blocker.left + blocker.width + CHAT_CARD_ANCHOR_GAP,
-            top,
-            width,
-            height,
-          },
+      {
+        left: candidate.left + CHAT_CARD_CASCADE_STEP,
+        top: candidate.top + CHAT_CARD_CASCADE_STEP,
+        width,
+        height,
+      },
       params.bounds,
     );
   }
