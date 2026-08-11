@@ -53,6 +53,13 @@ export function StarMapLoadCard(props: {
   width: number;
   centered?: boolean;
   stackIndex: number;
+  /**
+   * Counter-scale for the overview zoom. The load readout is one of the
+   * few things worth reading from far out — it says whether the machine
+   * is busy — so it grows with the instance instead of shrinking into a
+   * speck underneath it.
+   */
+  scale?: number;
   drag?: StarMapCardDrag;
   /**
    * `instanceId::system:load:position` — the card's key in the arrangement
@@ -87,12 +94,23 @@ export function StarMapLoadCard(props: {
 
   const left = props.baseSlot.dx + (props.offset?.dx ?? 0);
   const top = props.baseSlot.dy + (props.offset?.dy ?? 0);
+  // Counter-scale, so the readout stays readable while the canvas shrinks
+  // under it. Applied about the card's own centre, which `marginLeft` and
+  // the `translateY` have already put on the slot — so the card grows in
+  // place rather than sliding off its anchor.
+  const scale = props.scale && props.scale > 0 ? props.scale : 1;
+  const transform = [
+    props.centered ? "translateY(-50%)" : "",
+    scale === 1 ? "" : `scale(${scale})`,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const style: CSSProperties = {
     width: props.width,
     left,
     top,
     marginLeft: -props.width / 2,
-    ...(props.centered ? { transform: "translateY(-50%)" } : {}),
+    ...(transform ? { transform } : {}),
     zIndex: props.stackIndex,
   };
 

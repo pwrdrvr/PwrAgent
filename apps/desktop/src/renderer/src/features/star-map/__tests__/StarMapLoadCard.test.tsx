@@ -181,3 +181,47 @@ describe("StarMapLoadCard", () => {
     expect(shell?.style.top).toBe("125px");
   });
 });
+
+describe("overview counter-scale", () => {
+  it("grows with the instance instead of shrinking into a speck", () => {
+    // The load readout says whether the machine is busy, which is one of
+    // the few things worth reading from far out. Zoomed out, the instance
+    // counter-scales and a card left at true canvas size disappears
+    // underneath it.
+    const { container } = render(
+      <StarMapLoadCard
+        instanceId="pwr_local"
+        instanceLabel="Mac-Mini-M4"
+        baseSlot={{ dx: 0, dy: -150 }}
+        width={200}
+        centered
+        scale={4}
+        stackIndex={7000}
+        cardKey="pwr_local::system:load"
+        onDismiss={() => undefined}
+      />,
+    );
+    const shell = container.firstElementChild as HTMLElement;
+    expect(shell.style.transform).toContain("scale(4)");
+    // Still centred on its slot: the scale is about the card's own centre,
+    // which the translate has already put there.
+    expect(shell.style.transform).toContain("translateY(-50%)");
+  });
+
+  it("carries no scale at reading zoom", () => {
+    const { container } = render(
+      <StarMapLoadCard
+        instanceId="pwr_local"
+        instanceLabel="Mac-Mini-M4"
+        baseSlot={{ dx: 0, dy: -150 }}
+        width={200}
+        centered
+        stackIndex={7000}
+        cardKey="pwr_local::system:load"
+        onDismiss={() => undefined}
+      />,
+    );
+    const shell = container.firstElementChild as HTMLElement;
+    expect(shell.style.transform).toBe("translateY(-50%)");
+  });
+});

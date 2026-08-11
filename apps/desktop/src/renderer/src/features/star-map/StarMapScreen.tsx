@@ -1039,7 +1039,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
           // rendered forever in this lens, and dismissing it only flipped
           // the toggle that reads the same membership.
           loadSlot: loadCardInstances.has(instance.instanceId)
-            ? { dx: 0, dy: ORBIT_LOAD_CARD_DY }
+            ? {
+                dx: 0,
+                // In overview the body counter-scales, and a fixed offset
+                // would leave the readout buried under it. Scaling the
+                // offset by the same factor reproduces the zoom-1 layout
+                // in SCREEN pixels: offset * chromeScale * view.scale is
+                // the offset itself, so the pair reads exactly as it does
+                // close up.
+                dy: overview ? ORBIT_LOAD_CARD_DY * chromeScale : ORBIT_LOAD_CARD_DY,
+              }
             : undefined,
           // Clouds grow their extent, so orbit's canvas is already sized by
           // `computeOrbitPlacement`; only lanes derive theirs from content.
@@ -1081,7 +1090,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
             : 0,
       };
     });
-  }, [clusterClouds, laneLayout, lanes, loadCardInstances, orbit, orbitMode]);
+  }, [
+    chromeScale,
+    clusterClouds,
+    laneLayout,
+    lanes,
+    loadCardInstances,
+    orbit,
+    orbitMode,
+    overview,
+  ]);
 
   /**
    * Lanes canvas: as wide as the instance row and as tall as the longest
@@ -2364,6 +2382,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             )}
             width={position.cardWidth}
             centered={orbitMode}
+            scale={overview ? chromeScale : 1}
             stackIndex={STAR_MAP_LOAD_CARD_Z}
             sharedWith={sharedMachineLabels.get(position.instanceId)}
             cardKey={loadCardKey}

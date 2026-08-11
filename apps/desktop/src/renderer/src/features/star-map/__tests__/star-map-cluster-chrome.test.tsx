@@ -409,6 +409,71 @@ describe("star map overview zoom", () => {
   });
 });
 
+describe("star map load card in overview", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+  });
+
+  it("scales and parks clear of the counter-scaled instance", async () => {
+    const { container } = renderOrbit(
+      [
+        projectThread("a1", "/repo/alpha", "AlphaDir"),
+        projectThread("a2", "/repo/alpha", "AlphaDir"),
+      ],
+      {
+        readStarMapArrangement: vi.fn(async () => ({
+          entries: [
+            {
+              instanceId: "pwr_local",
+              threadKey: "system:load",
+              dx: 0,
+              dy: 0,
+              updatedAt: 10,
+              by: "pwr_local",
+            },
+          ],
+        })),
+        setStarMapCardPosition: vi.fn(async () => ({ entries: [] })),
+        readFederationInstanceLoad: vi.fn(async () => ({})),
+      },
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).not.toBeNull();
+    });
+    const shell = container.querySelector(
+      ".star-map-load-shell",
+    ) as HTMLElement;
+    const nearTop = Number.parseFloat(shell.style.top);
+
+    fireEvent.wheel(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { deltaY: 240, ctrlKey: true, clientX: 400, clientY: 300 },
+    );
+
+    await waitFor(() => {
+      expect(
+        (container.querySelector(".star-map-load-shell") as HTMLElement).style
+          .transform,
+      ).toContain("scale(");
+    });
+    const far = container.querySelector(".star-map-load-shell") as HTMLElement;
+    const scale = Number(
+      /scale\(([\d.]+)\)/.exec(far.style.transform)![1],
+    );
+    expect(scale).toBeGreaterThan(1);
+    // Parked further out by the same factor, so the readout clears the
+    // instance that just grew underneath it instead of being buried.
+    expect(Number.parseFloat(far.style.top)).toBeCloseTo(nearTop * scale, 5);
+    // Same factor as the instance, so the two stay one readable group.
+    const anchor = container.querySelector(
+      ".star-map__anchor",
+    ) as HTMLElement;
+    expect(/scale\(([\d.]+)\)/.exec(anchor.style.transform)![1]).toBe(
+      String(scale),
+    );
+  });
+});
+
 describe("star map chat cards in map space", () => {
   afterEach(() => {
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");
