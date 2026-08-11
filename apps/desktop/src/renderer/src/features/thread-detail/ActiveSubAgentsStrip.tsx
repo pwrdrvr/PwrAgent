@@ -73,6 +73,21 @@ export function ActiveSubAgentsStrip(props: {
     setDismissedFailures((current) => new Set(current).add(monitorId));
   };
 
+  const dismissAllFailures = (): void => {
+    setDismissedFailures((current) => {
+      const next = new Set(current);
+      for (const subAgent of failed) {
+        next.add(subAgent.monitorId);
+      }
+      return next;
+    });
+  };
+
+  // A thread that accumulated a dozen failures reads as "13 active sub-agents"
+  // under an Active heading with nothing running, which is simply false. The
+  // heading follows what is actually in the list.
+  const heading = running.length > 0 ? "Active sub-agents" : "Failed sub-agents";
+
   const stopSubAgent = async (
     subAgent: ThreadSubAgentSummary,
   ): Promise<void> => {
@@ -103,20 +118,35 @@ export function ActiveSubAgentsStrip(props: {
   };
 
   return (
-    <section className="live-strip" aria-label="Active sub-agents">
-      <button
-        aria-expanded={expanded}
-        aria-label={`Active sub-agents (${visible.length})`}
-        className="live-strip__row"
-        type="button"
-        onClick={() => setExpanded((current) => !current)}
-      >
-        <span className="live-strip__chevron" aria-hidden="true" />
-        <span className="live-strip__label">Active sub-agents</span>
-        <span className="live-strip__count">{visible.length}</span>
-        <span className="live-strip__row-spacer" />
-        {running.length > 0 ? <ThinkingScanner compact /> : null}
-      </button>
+    <section className="live-strip" aria-label={heading}>
+      <div className="live-strip__header">
+        <button
+          aria-expanded={expanded}
+          aria-label={`${heading} (${visible.length})`}
+          className="live-strip__row"
+          type="button"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <span className="live-strip__chevron" aria-hidden="true" />
+          <span className="live-strip__label">{heading}</span>
+          <span className="live-strip__count">{visible.length}</span>
+          <span className="live-strip__row-spacer" />
+          {running.length > 0 ? <ThinkingScanner compact /> : null}
+        </button>
+        {/* Clearing failures one at a time is fine for one or two and a chore
+            at a dozen. Only ever clears failures — a running sub-agent is
+            never swept up by it. */}
+        {failed.length > 1 ? (
+          <button
+            aria-label={`Dismiss all ${failed.length} failed sub-agents`}
+            className="live-strip__item-action live-strip__dismiss-all"
+            type="button"
+            onClick={dismissAllFailures}
+          >
+            Dismiss all
+          </button>
+        ) : null}
+      </div>
       {expanded ? (
         <ul className="live-strip__list">
           {visible.map((subAgent) => {

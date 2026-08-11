@@ -181,6 +181,33 @@ describe("ActiveSubAgentsStrip", () => {
   });
 
   describe("failed sub-agents", () => {
+    it("does not call itself Active when nothing is running", () => {
+      // Regression: a thread with 13 failures and nothing running rendered
+      // "ACTIVE SUB-AGENTS 13", which is just false.
+      render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([
+            buildSubAgent({ monitorId: "a", status: "failed" }),
+            buildSubAgent({ monitorId: "b", status: "failed" }),
+          ])}
+        />,
+      );
+      expect(screen.getByText("Failed sub-agents")).toBeInTheDocument();
+      expect(screen.queryByText("Active sub-agents")).toBeNull();
+    });
+
+    it("calls itself Active again as soon as anything is running", () => {
+      render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([
+            buildSubAgent({ monitorId: "a", status: "failed" }),
+            buildSubAgent({ monitorId: "b" }),
+          ])}
+        />,
+      );
+      expect(screen.getByText("Active sub-agents")).toBeInTheDocument();
+    });
+
     it("keeps a failed sub-agent visible and states the outcome in words", () => {
       render(
         <ActiveSubAgentsStrip
@@ -225,6 +252,55 @@ describe("ActiveSubAgentsStrip", () => {
       expect(container.querySelector(".status-dot--blink")).toBeNull();
       expect(container.querySelector(".thinking-scanner")).toBeNull();
       expect(screen.queryByRole("button", { name: /^Stop sub-agent:/ })).toBeNull();
+    });
+
+    it("offers a bulk dismiss once more than one failure is showing", () => {
+      const { container, rerender } = render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([
+            buildSubAgent({ monitorId: "a", status: "failed" }),
+          ])}
+        />,
+      );
+      // One failure is not a chore; the control would just be noise.
+      expect(screen.queryByRole("button", { name: /^Dismiss all/ })).toBeNull();
+
+      rerender(
+        <ActiveSubAgentsStrip
+          thread={buildThread(
+            Array.from({ length: 13 }, (_unused, index) =>
+              buildSubAgent({
+                monitorId: `monitor-${index}`,
+                status: "failed",
+                task: `Failed task ${index}`,
+              }),
+            ),
+          )}
+        />,
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Dismiss all 13 failed sub-agents" }),
+      );
+      expect(container).toBeEmptyDOMElement();
+    });
+
+    it("never sweeps up a running sub-agent in the bulk dismiss", () => {
+      render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([
+            buildSubAgent({ monitorId: "run", task: "Still going" }),
+            buildSubAgent({ monitorId: "x", status: "failed" }),
+            buildSubAgent({ monitorId: "y", status: "failed" }),
+          ])}
+        />,
+      );
+      // Three rows seeds collapsed, so expand before reading the list.
+      fireEvent.click(screen.getByRole("button", { name: /sub-agents \(3\)/ }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Dismiss all 2 failed sub-agents" }),
+      );
+      expect(screen.getByText("Still going")).toBeInTheDocument();
+      expect(screen.queryByText("Failed")).toBeNull();
     });
 
     it("removes a failed row once dismissed, and the strip with it", () => {

@@ -175,6 +175,60 @@ describe("Tangerine Terminal theme contract", () => {
     ).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("keeps every border chevron on one size", () => {
+    // The band above the composer stacks two disclosure rows whose chevrons
+    // sit directly above one another. `.composer__queued-env-action-chevron`
+    // was 10px while everything else was 8px, and the mismatch was invisible
+    // until the sub-agents strip put the two side by side.
+    //
+    // `.directory-row__chevron` is deliberately excluded: it lives in the
+    // sidebar at a different type scale, not in this band.
+    const chevrons = [
+      ".live-work-rail__chevron",
+      ".live-strip__chevron",
+      ".transcript-activity__chevron",
+      ".transcript-work-phase-group__chevron",
+      ".composer__queued-env-action-chevron",
+    ];
+
+    const sizes = chevrons.map((selector) => {
+      const body = extractRuleBody(css, selector);
+      return {
+        selector,
+        width: body.match(/\bwidth:\s*([^;]+);/)?.[1]?.trim(),
+        height: body.match(/\bheight:\s*([^;]+);/)?.[1]?.trim(),
+      };
+    });
+
+    for (const size of sizes) {
+      expect(size, `${size.selector} geometry`).toMatchObject({
+        width: "8px",
+        height: "8px",
+      });
+    }
+  });
+
+  it("keeps the band above the composer on one uppercase-label idiom", () => {
+    // `.composer__queued-label` shipped without the 0.04em tracking its two
+    // neighbours use, so the same 11px/700 caps label rendered two ways
+    // depending on which row drew it.
+    for (const selector of [
+      ".live-work-rail__title",
+      ".live-strip__label",
+      ".composer__queued-label",
+    ]) {
+      const body = extractRuleBody(css, selector);
+      expect(body, `${selector} label idiom`).toMatch(/font-size:\s*11px;/);
+      expect(body, `${selector} label idiom`).toMatch(/font-weight:\s*700;/);
+      expect(body, `${selector} label idiom`).toMatch(
+        /letter-spacing:\s*0\.04em;/,
+      );
+      expect(body, `${selector} label idiom`).toMatch(
+        /text-transform:\s*uppercase;/,
+      );
+    }
+  });
+
   it("does not leave unresolved theme token references in app.css", () => {
     const localTokens = new Set([
       "thinking-scanner-beam-width",

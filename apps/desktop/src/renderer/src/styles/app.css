@@ -18890,10 +18890,15 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 2px;
 }
 
+/* Same uppercase-label idiom as `.live-work-rail__title` and
+   `.live-strip__label`, tracking included — all three stack in the band above
+   the composer, so a label that tracks differently reads as a different kind
+   of thing. */
 .composer__queued-label {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
@@ -19000,11 +19005,14 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--bg-panel-elevated);
 }
 
+/* padding-left matches `.live-strip__row`'s 8px so the two disclosure rows in
+   this band share a left edge — their chevrons stack directly above one
+   another and any mismatch is obvious at a glance. */
 .composer__queued-env-action-summary {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px 5px 10px;
+  padding: 5px 8px;
   cursor: pointer;
   list-style: none;
   user-select: none;
@@ -19020,10 +19028,13 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: -2px;
 }
 
+/* 8px, matching `.live-work-rail__chevron` and every other border chevron in
+   the app. This was the lone 10px one, which read as a mistake once the
+   sub-agents strip put an 8px chevron two rows above it. */
 .composer__queued-env-action-chevron {
   display: inline-block;
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   flex: 0 0 auto;
   border-right: 1.5px solid var(--text-muted);
   border-bottom: 1.5px solid var(--text-muted);
@@ -19252,6 +19263,23 @@ a.transcript-message__messaging-origin:focus-visible {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+/* The toggle and the bulk-dismiss action are siblings: a button cannot nest
+   inside the toggle button. */
+.live-strip__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.live-strip__header .live-strip__row {
+  flex: 1 1 auto;
+}
+
+.live-strip__dismiss-all {
+  margin-right: 8px;
 }
 
 /* Quiet at rest, chrome on hover/focus — same treatment as
