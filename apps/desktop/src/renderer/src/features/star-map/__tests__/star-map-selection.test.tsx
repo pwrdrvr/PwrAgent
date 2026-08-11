@@ -29,6 +29,22 @@ function buildDesktopApi(): DesktopApi {
   } as unknown as DesktopApi;
 }
 
+/**
+ * A bridge whose per-thread mutations resolve, so a menu action can be
+ * followed all the way to what it asked the main process to do.
+ */
+function buildMutatingDesktopApi(overrides?: Partial<DesktopApi>): DesktopApi {
+  return {
+    ...buildDesktopApi(),
+    archiveThread: vi.fn(async (request: { threadId: string }) => ({
+      backend: "codex" as const,
+      threadId: request.threadId,
+    })),
+    markThreadSeen: vi.fn(async () => undefined),
+    ...overrides,
+  } as unknown as DesktopApi;
+}
+
 function thread(id: string): NavigationThreadSummary {
   return {
     id,
@@ -43,7 +59,11 @@ function thread(id: string): NavigationThreadSummary {
 
 function renderMap(
   count: number,
-  overrides?: { desktopApi?: DesktopApi; onClose?: () => void },
+  overrides?: {
+    desktopApi?: DesktopApi;
+    onClose?: () => void;
+    onRefreshLocalThreads?: () => void;
+  },
 ) {
   const desktopApi = overrides?.desktopApi ?? buildDesktopApi();
   const screenFor = (threadCount: number) => (
@@ -58,6 +78,7 @@ function renderMap(
       onClose={overrides?.onClose ?? (() => undefined)}
       onOpenLocalThread={() => undefined}
       onFocusLocalInstance={() => undefined}
+      onRefreshLocalThreads={overrides?.onRefreshLocalThreads}
     />
   );
   const result = render(screenFor(count));
@@ -102,6 +123,21 @@ function viewport(): HTMLElement {
 function shells(): HTMLElement[] {
   return [...document.querySelectorAll(".star-map-card-shell[data-thread-key]")]
     .filter((node): node is HTMLElement => node instanceof HTMLElement);
+}
+
+/** Thread ids a mocked per-thread mutation was actually asked about. */
+function requestedThreadIds(request: unknown): string[] {
+  const mocked = request as {
+    mock?: { calls: [{ threadId: string }][] };
+  };
+  if (!mocked?.mock) throw new Error("request is not a mock");
+  return mocked.mock.calls.map(([input]) => input.threadId).sort();
+}
+
+function openCardMenu(threadId: string) {
+  fireEvent.click(
+    screen.getByRole("button", { name: `Actions for Thread ${threadId}` }),
+  );
 }
 
 async function ready() {
@@ -359,5 +395,133 @@ describe("star map selection is amendable", () => {
     for (const call of moved) {
       expect(JSON.stringify(call)).not.toMatch(/t2|t3/);
     }
+  });
+});
+
+/**
+ * A selection that survives the kebab opening, then acts on one card, is
+ * the worst of both worlds: the operator watched five cards stay lit,
+ * chose a destructive action, and got one card archived and a re-laid-out
+ * cloud that reads as "they all went". The map follows the thread list —
+ * a menu opened on a selected row is about the selection.
+ */
+describe("star map card menu acts on the selection", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+    window.localStorage.removeItem("pwragent.starMap.filterSelection");
+  });
+
+  it("archives every selected card, not only the one whose kebab was used", async () => {
+    const desktopApi = buildMutatingDesktopApi();
+    renderMap(4, { desktopApi });
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(selectedShells()).toHaveLength(4));
+
+    openCardMenu("t0");
+    // The count is the operator's confirmation, before committing, that the
+    // menu is about the cards they gathered.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 4 threads" }));
+
+    await waitFor(() => {
+      expect(requestedThreadIds(desktopApi.archiveThread)).toEqual([
+        "t0",
+        "t1",
+        "t2",
+        "t3",
+      ]);
+    });
+  });
+
+  it("marks the whole selection seen from one card's kebab", async () => {
+    const desktopApi = buildMutatingDesktopApi();
+    renderMap(3, { desktopApi });
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(selectedShells()).toHaveLength(3));
+
+    openCardMenu("t1");
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Mark 3 threads as seen" }),
+    );
+
+    await waitFor(() => {
+      expect(requestedThreadIds(desktopApi.markThreadSeen)).toEqual([
+        "t0",
+        "t1",
+        "t2",
+      ]);
+    });
+  });
+
+  it("acts on one card when its kebab is opened outside the selection", async () => {
+    const desktopApi = buildMutatingDesktopApi();
+    renderMap(4, { desktopApi });
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(selectedShells()).toHaveLength(4));
+
+    // Take one card back out, then use its kebab: the menu is about the
+    // card it hangs off, not the selection beside it.
+    fireEvent.pointerDown(shells()[3], {
+      button: 0,
+      shiftKey: true,
+      clientX: 500,
+      clientY: 400,
+    });
+    await waitFor(() => expect(selectedShells()).toHaveLength(3));
+
+    openCardMenu("t3");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive thread" }));
+
+    await waitFor(() => {
+      expect(requestedThreadIds(desktopApi.archiveThread)).toEqual(["t3"]);
+    });
+    // ...and the selection it was never part of is left alone.
+    expect(selectedShells()).toHaveLength(3);
+  });
+
+  it("archives the rest of the selection when one card fails, and says which", async () => {
+    const desktopApi = buildMutatingDesktopApi({
+      archiveThread: vi.fn(async (request: { threadId: string }) => {
+        if (request.threadId === "t1") throw new Error("peer is offline");
+        return { backend: "codex" as const, threadId: request.threadId };
+      }),
+    } as unknown as Partial<DesktopApi>);
+    const onRefreshLocalThreads = vi.fn();
+    renderMap(3, { desktopApi, onRefreshLocalThreads });
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(selectedShells()).toHaveLength(3));
+
+    openCardMenu("t0");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 3 threads" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/peer is offline/);
+    // One card refusing must not cancel the two that would have gone.
+    expect(requestedThreadIds(desktopApi.archiveThread)).toEqual([
+      "t0",
+      "t1",
+      "t2",
+    ]);
+    // The cloud is out of date for whichever cards did land, so it still
+    // has to re-fetch.
+    expect(onRefreshLocalThreads).toHaveBeenCalled();
+  });
+
+  it("stops counting cards it archived, unlike cards a filter took away", async () => {
+    const desktopApi = buildMutatingDesktopApi();
+    renderMap(4, { desktopApi });
+    await ready();
+    sweepEverything();
+    await waitFor(() => expect(screen.getByText("4 cards selected")).toBeTruthy());
+
+    openCardMenu("t0");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 4 threads" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/cards selected/)).toBeNull();
+    });
   });
 });
