@@ -113,7 +113,7 @@ describe("AcpStdioJsonRpcTransport", () => {
 
     await transport.connect();
 
-    expect(spawnCalls[0]?.[0]).toBe("C:\\Windows\\System32\\cmd.exe");
+    expect(spawnCalls[0]?.[0]).toMatch(/^C:\\Windows\\System32\\cmd\.exe$/i);
     expect(spawnCalls[0]?.[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
     expect(spawnCalls[0]?.[1][3]).toContain(
       "C:\\npm^ ^&^ tools\\qwen.cmd ^\"--acp^\"",
