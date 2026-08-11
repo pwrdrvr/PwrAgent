@@ -362,6 +362,28 @@ describe("star map overview zoom", () => {
       container.querySelectorAll(".star-map__cluster-label--overview").length,
     ).toBe(2);
 
+    // The instance has to come with them. Its cards are gone at this
+    // zoom, so the body and its name are the only things saying which
+    // machine you are looking at — and a 13px pill at 0.12 scale paints
+    // at a pixel and a half.
+    const anchor = container.querySelector(
+      ".star-map__anchor",
+    ) as HTMLElement;
+    expect(anchor.className).toContain("star-map__anchor--overview");
+    const instanceScale = /scale\(([\d.]+)\)/.exec(anchor.style.transform);
+    expect(instanceScale).not.toBeNull();
+    expect(Number(instanceScale![1])).toBeGreaterThan(1);
+    // Counter-scaled by the SAME factor as the cloud names, or the two
+    // would drift apart as the operator kept pulling out.
+    const label = container.querySelector(
+      ".star-map__cluster-label--overview",
+    ) as HTMLElement;
+    expect(/scale\(([\d.]+)\)/.exec(label.style.transform)?.[1]).toBe(
+      instanceScale![1],
+    );
+    // And it still names the machine.
+    expect(anchor.textContent).toContain("Harold-MBP-M5-Max");
+
     // Coming back in restores the cards rather than stranding the map in
     // an overview it cannot leave. Each pinch step doubles the scale, so
     // climbing back from the floor past the threshold takes a few.
@@ -378,6 +400,12 @@ describe("star map overview zoom", () => {
         container.querySelectorAll(".star-map-card-shell").length,
       ).toBeGreaterThan(0);
     });
+    // Back at reading zoom the instance drops its counter-scale rather
+    // than staying blown up over the cards.
+    expect(
+      (container.querySelector(".star-map__anchor") as HTMLElement).style
+        .transform,
+    ).not.toContain("scale(");
   });
 });
 

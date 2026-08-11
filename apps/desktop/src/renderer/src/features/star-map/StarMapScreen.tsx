@@ -2647,8 +2647,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
           return (
             <div
               key={position.instanceId}
-              className="star-map__anchor"
-              style={{ left: position.x, top: position.y }}
+              className={`star-map__anchor${
+                overview ? " star-map__anchor--overview" : ""
+              }`}
+              style={{
+                left: position.x,
+                top: position.y,
+                // In overview the body is the only thing naming the
+                // machine — its cards are gone — so it counter-scales with
+                // the cloud labels rather than shrinking into the sky. The
+                // translate keeps it centred on its anchor point; the
+                // scale is applied about that same centre.
+                ...(overview
+                  ? {
+                      transform: `translate(-50%, -50%) scale(${chromeScale})`,
+                    }
+                  : {}),
+              }}
             >
               <StarMapInstanceCard
                 instanceId={position.instanceId}
