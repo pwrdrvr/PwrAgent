@@ -41,6 +41,7 @@ import {
   cardRingSlots,
   computeOrbitPlacement,
   galaxyArmPath,
+  shouldPanOnWheel,
   shouldStartCanvasPan,
 } from "./star-map-orbit";
 import {
@@ -1037,6 +1038,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       viewport: { width: viewportSize.width, height: viewportSize.height },
     };
     const onWheel = (event: WheelEvent) => {
+      // Pinch (ctrl+wheel) is a map gesture wherever the pointer is; a
+      // plain scroll over a chat card belongs to that card's transcript.
+      if (!event.ctrlKey && !shouldPanOnWheel(event.target)) return;
       event.preventDefault();
       if (event.ctrlKey) {
         operatorMovedViewRef.current = true;

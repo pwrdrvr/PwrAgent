@@ -6,6 +6,7 @@ import {
   cardRingSlots,
   computeOrbitPlacement,
   galaxyArmPath,
+  shouldPanOnWheel,
   shouldStartCanvasPan,
 } from "../star-map-orbit";
 import {
@@ -456,5 +457,46 @@ describe("empty instances do not reserve a phantom ring", () => {
       return Math.hypot(a.x - hub.x, a.y - hub.y);
     };
     expect(spread(0)).toBeLessThan(spread(6));
+  });
+});
+
+describe("shouldPanOnWheel", () => {
+  function element(html: string): Element {
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    return host.firstElementChild!;
+  }
+
+  it("pans on bare sky", () => {
+    expect(shouldPanOnWheel(element('<div class="star-map__sky" />'))).toBe(
+      true,
+    );
+  });
+
+  it("pans over a thread card, which scrolls nothing of its own", () => {
+    const shell = element(
+      '<div class="star-map-card-shell"><div class="star-map-card">x</div></div>',
+    );
+    expect(shouldPanOnWheel(shell.firstElementChild)).toBe(true);
+  });
+
+  it("leaves the wheel to a chat card's transcript", () => {
+    // Chat cards live inside the canvas now, so their wheel events reach
+    // the viewport listener — which preventDefaulted every one of them and
+    // panned the galaxy instead of scrolling the transcript.
+    const chat = element(
+      '<section class="star-map-chat-card">'
+      + '<div class="star-map-chat-card__transcript"><p>line</p></div>'
+      + "</section>",
+    );
+    expect(shouldPanOnWheel(chat)).toBe(false);
+    expect(
+      shouldPanOnWheel(chat.querySelector(".star-map-chat-card__transcript")),
+    ).toBe(false);
+    expect(shouldPanOnWheel(chat.querySelector("p"))).toBe(false);
+  });
+
+  it("pans for a non-element target", () => {
+    expect(shouldPanOnWheel(null)).toBe(true);
   });
 });

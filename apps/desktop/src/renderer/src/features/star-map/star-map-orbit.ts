@@ -420,6 +420,21 @@ export function computeOrbitPlacement(params: {
  * title bar and resize corner are all plain containers, so only naming
  * the card itself covers them.
  */
+/**
+ * Whether a wheel event over the map should pan the canvas.
+ *
+ * A chat card is a scrollable window that now lives INSIDE the canvas, so
+ * its wheel events reach the viewport listener — which preventDefaults
+ * every one of them and turns it into a pan. That silently took scrolling
+ * away from every open transcript. Pinch-zoom (ctrl+wheel) is deliberately
+ * NOT routed through here: it is unambiguously a map gesture, and a
+ * transcript cannot consume it.
+ */
+export function shouldPanOnWheel(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true;
+  return !target.closest(".star-map-chat-card");
+}
+
 export function shouldStartCanvasPan(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return !target.closest(

@@ -370,6 +370,38 @@ describe("star map chat cards in map space", () => {
     expect(open.getAttribute("aria-label")).toBe("Open thread: Thread a1");
   });
 
+  it("scrolls the transcript instead of panning the galaxy", async () => {
+    const { container } = renderOrbit([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+      projectThread("a2", "/repo/alpha", "AlphaDir"),
+    ]);
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread a1/ }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-chat-card")).not.toBeNull();
+    });
+
+    const canvas = container.querySelector(".star-map__canvas") as HTMLElement;
+    const chat = container.querySelector(".star-map-chat-card") as HTMLElement;
+    const before = canvas.style.transform;
+
+    // The card is inside the canvas, so its wheel events reach the
+    // viewport's listener; the map must leave them alone.
+    fireEvent.wheel(chat, { deltaY: 240 });
+    expect(canvas.style.transform).toBe(before);
+
+    // Bare sky still pans, so the exception is scoped to the card.
+    fireEvent.wheel(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { deltaY: 240 },
+    );
+    await waitFor(() => {
+      expect(canvas.style.transform).not.toBe(before);
+    });
+  });
+
   it("draws no tether when the thread has no card on the map", async () => {
     const { container, rerenderThreads } = renderOrbit([
       projectThread("a1", "/repo/alpha", "AlphaDir"),
