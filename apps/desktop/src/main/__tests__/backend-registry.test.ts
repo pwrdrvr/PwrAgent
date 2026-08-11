@@ -29743,20 +29743,12 @@ script = "printf setup"
       });
 
       try {
-        await registry.publishLocalEvent({
+        const startedTurn = await registry.startTurn({
           backend: acpBackendId,
-          notification: {
-            method: "turn/started",
-            params: {
-              threadId: "thread-branch",
-              turnId: "pending:started-turn",
-              turn: {
-                id: "pending:started-turn",
-                status: "in_progress",
-              },
-            },
-          },
+          threadId: "thread-branch",
+          input: [{ type: "text", text: "Switch to a named branch" }],
         });
+        expect(startedTurn.turnId).toBe("turn-1");
         await git(repo, ["switch", "-c", "fix/acp-branch-adoption"]);
 
         if (boundary === "terminal") {
@@ -29766,9 +29758,9 @@ script = "printf setup"
               method: "turn/completed",
               params: {
                 threadId: "thread-branch",
-                turnId: "pending:terminal-turn",
+                turnId: startedTurn.turnId,
                 turn: {
-                  id: "pending:terminal-turn",
+                  id: startedTurn.turnId,
                   status: "completed",
                   output: [],
                 },
@@ -29810,6 +29802,61 @@ script = "printf setup"
       }
     },
   );
+
+  it("keeps a newer ACP turn active when an older terminal event arrives", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const { registry } = createKimiAcpRegistry({ acpBackendId });
+
+    try {
+      for (const turnId of ["turn-old", "turn-new"]) {
+        await registry.publishLocalEvent({
+          backend: acpBackendId,
+          notification: {
+            method: "turn/started",
+            params: {
+              threadId: "thread-race",
+              turnId,
+              turn: {
+                id: turnId,
+                status: "in_progress",
+              },
+            },
+          },
+        });
+      }
+
+      for (let duplicate = 0; duplicate < 2; duplicate += 1) {
+        await registry.publishLocalEvent({
+          backend: acpBackendId,
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-race",
+              turnId: "turn-old",
+              turn: {
+                id: "turn-old",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+
+        expect(
+          registry.getActiveTurnForThread({
+            backend: acpBackendId,
+            threadId: "thread-race",
+          }),
+        ).toEqual({
+          backend: acpBackendId,
+          threadId: "thread-race",
+          turnId: "turn-new",
+        });
+      }
+    } finally {
+      await registry.close();
+    }
+  });
 
   it("notifies listeners when the renderer adopts a new expected branch", async () => {
     const overlayStore = createOverlayStoreMock();

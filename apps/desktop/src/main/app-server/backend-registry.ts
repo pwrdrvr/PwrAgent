@@ -7162,6 +7162,22 @@ export class DesktopBackendRegistry {
         parts: promptPayload.parts,
         turnId: syntheticStartedTurnId,
       });
+      const syntheticActiveTurnKey = buildActiveTurnKey(
+        params.backend,
+        params.threadId,
+        syntheticStartedTurnId,
+      );
+      const resolvedActiveTurnKey = buildActiveTurnKey(
+        params.backend,
+        result.sessionId,
+        result.turnId,
+      );
+      if (
+        syntheticActiveTurnKey !== resolvedActiveTurnKey
+        && this.activeTurnKeys.delete(syntheticActiveTurnKey)
+      ) {
+        this.activeTurnKeys.add(resolvedActiveTurnKey);
+      }
       this.invalidateThreadListCache(params.backend);
       return {
         backend: params.backend,
@@ -22330,24 +22346,11 @@ export class DesktopBackendRegistry {
           turnId,
         });
       }
-      const genericActiveTurnKeyPrefix =
-        `${event.backend}:${notification.params.threadId}:`;
-      const hadGenericActiveTurn = Array.from(this.activeTurnKeys).some((key) =>
-        key.startsWith(genericActiveTurnKeyPrefix),
-      );
-      if (turnId) {
-        if (isAcpBackendId(event.backend)) {
-          for (const key of Array.from(this.activeTurnKeys)) {
-            if (key.startsWith(genericActiveTurnKeyPrefix)) {
-              this.activeTurnKeys.delete(key);
-            }
-          }
-        } else {
-          this.activeTurnKeys.delete(
+      const hadGenericActiveTurn = turnId
+        ? this.activeTurnKeys.delete(
             buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
-          );
-        }
-      }
+          )
+        : false;
       if (isAcpBackendId(event.backend) && hadGenericActiveTurn) {
         await this.adoptThreadBranchChangeFromActiveTurn({
           backend: event.backend,
