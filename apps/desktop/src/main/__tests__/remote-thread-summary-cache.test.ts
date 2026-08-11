@@ -383,6 +383,76 @@ describe("RemoteThreadSummaryCache — threadFromPeer", () => {
   });
 });
 
+describe("RemoteThreadSummaryCache — cachedThreadFromPeer", () => {
+  it("answers from the cache without ever contacting the peer", async () => {
+    const fetchSnapshot = vi.fn(async () =>
+      snapshotOf([
+        stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
+      ]),
+    );
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    // Cold: nothing cached yet, and asking must not go fetch it.
+    expect(
+      cache.cachedThreadFromPeer({
+        target: remoteTarget("peer-a"),
+        backend: "codex",
+        threadId: "t1",
+      }),
+    ).toBeUndefined();
+    expect(fetchSnapshot).not.toHaveBeenCalled();
+
+    // Warm it the way ordinary navigation does.
+    await cache.searchForJump({ query: "Parent" });
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+
+    expect(
+      cache.cachedThreadFromPeer({
+        target: remoteTarget("peer-a"),
+        backend: "codex",
+        threadId: "t1",
+      })?.title,
+    ).toBe("Parent");
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  // A name that is one navigation refresh out of date still beats the raw
+  // thread id, and the alternative costs the round trip this tier avoids.
+  it("serves a lapsed entry rather than refetching", async () => {
+    let now = 1_000;
+    const fetchSnapshot = vi.fn(async () =>
+      snapshotOf([
+        stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
+      ]),
+    );
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+      ttlMs: 10,
+      now: () => now,
+    });
+
+    await cache.searchForJump({ query: "Parent" });
+    now += 10_000;
+
+    expect(
+      cache.cachedThreadFromPeer({
+        target: remoteTarget("peer-a"),
+        backend: "codex",
+        threadId: "t1",
+      })?.title,
+    ).toBe("Parent");
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
 /** Let a kicked-off background refresh chain settle. */
 async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));

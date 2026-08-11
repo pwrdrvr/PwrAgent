@@ -19,9 +19,9 @@ vi.mock("../ipc/integrated-terminal", () => ({
   getIntegratedTerminalQuitSnapshot: vi.fn(() => ({
     count: 0,
     sessionIds: [],
-    threadKeys: [],
+    threads: [],
   })),
-  revealIntegratedTerminal: vi.fn(() => false),
+  revealIntegratedTerminal: vi.fn(() => ({ revealed: false })),
 }));
 
 vi.mock("../window-show-thread", () => ({ requestShowThread: vi.fn() }));
@@ -577,22 +577,23 @@ describe("resolveQuitBlockerThreadTitles", () => {
     const listLocalThreads = vi.fn(async () => [
       { source: "codex" as const, id: "local-thread", title: "Local Work" },
     ]);
-    const remoteThreadSummary = vi.fn(async () => ({
+    const cachedRemoteThreadSummary = vi.fn(() => ({
       title: "Reap Windows Worktrees",
       titleSource: "derived" as const,
     }));
+    const listRemoteThreadPins = vi.fn(async () => []);
 
     const titles = await resolveQuitBlockerThreadTitles([localItem, remoteItem], {
       listLocalThreads,
-      remoteThreadSummary,
-      listRemoteThreadPins: async () => [],
+      cachedRemoteThreadSummary,
+      listRemoteThreadPins,
     });
 
     expect(titles.get(quitBlockerTitleKey(remoteItem))).toBe(
       "Reap Windows Worktrees",
     );
     expect(titles.get(quitBlockerTitleKey(localItem))).toBe("Local Work");
-    expect(remoteThreadSummary).toHaveBeenCalledWith({
+    expect(cachedRemoteThreadSummary).toHaveBeenCalledWith({
       target: { scope: "remote", instanceId: "peer-a" },
       backend: "codex",
       threadId: "0f9c2b7a-remote",
@@ -600,16 +601,18 @@ describe("resolveQuitBlockerThreadTitles", () => {
     // The local list is a peer-blind lookup; asking it about a remote thread
     // is what produced the uuid in the first place.
     expect(listLocalThreads).toHaveBeenCalledTimes(1);
+    // The memory cache answered, so the store is never read.
+    expect(listRemoteThreadPins).not.toHaveBeenCalled();
   });
 
-  it("falls back to the pinned row's cached title when the peer is unreachable", async () => {
+  it("falls back to the pinned row's cached title when nothing is cached in memory", async () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
       "../quit-manager"
     );
 
     const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
       listLocalThreads: async () => [],
-      remoteThreadSummary: async () => undefined,
+      cachedRemoteThreadSummary: () => undefined,
       listRemoteThreadPins: async () => [
         {
           ref: {
@@ -636,39 +639,31 @@ describe("resolveQuitBlockerThreadTitles", () => {
     );
   });
 
-  it("uses the cached pin rather than waiting out a slow peer", async () => {
+  // A thread can only be a quit blocker because it is mounted in a window on
+  // this machine, so its name is already cached. Reaching for the peer here
+  // could only re-answer a question we can answer, while making shutdown wait
+  // on a machine that may be asleep.
+  it("never waits on a peer", async () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
       "../quit-manager"
     );
+    let settled = false;
 
-    const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
+    const pending = resolveQuitBlockerThreadTitles([remoteItem], {
       listLocalThreads: async () => [],
-      // A peer whose navigation snapshot has gone stale has to refetch, which
-      // can outlast the whole quit-title budget. Blocking on it would take the
-      // locally cached name down with it.
-      remoteThreadSummary: () => new Promise(() => undefined),
-      listRemoteThreadPins: async () => [
-        {
-          ref: {
-            backend: "codex" as const,
-            threadId: "0f9c2b7a-remote",
-            target: { scope: "remote" as const, instanceId: "peer-a" },
-          },
-          addedAt: 1,
-          instanceLabel: "Studio Mac",
-          summary: {
-            source: "codex" as const,
-            id: "0f9c2b7a-remote",
-            title: "Reap Windows Worktrees",
-            titleSource: "derived" as const,
-            linkedDirectories: [],
-            inbox: { inInbox: false },
-          },
-        },
-      ],
-      peerTimeoutMs: 5,
+      cachedRemoteThreadSummary: () => ({
+        title: "Reap Windows Worktrees",
+        titleSource: "derived" as const,
+      }),
+      // A peer round trip would park here forever. Nothing may await it.
+      listRemoteThreadPins: () => new Promise(() => undefined),
+    }).then((titles) => {
+      settled = true;
+      return titles;
     });
 
+    const titles = await pending;
+    expect(settled).toBe(true);
     expect(titles.get(quitBlockerTitleKey(remoteItem))).toBe(
       "Reap Windows Worktrees",
     );
@@ -679,7 +674,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
 
     const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
       listLocalThreads: async () => [],
-      remoteThreadSummary: async () => ({
+      cachedRemoteThreadSummary: () => ({
         title: "0f9c2b7a-remote",
         titleSource: "fallback" as const,
       }),
@@ -704,7 +699,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
       [collidingLocal, remoteItem],
       {
         listLocalThreads: async () => [],
-        remoteThreadSummary: async () => ({
+        cachedRemoteThreadSummary: () => ({
           title: "Reap Windows Worktrees",
           titleSource: "derived" as const,
         }),
@@ -718,7 +713,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
     expect(titles.get(quitBlockerTitleKey(collidingLocal))).toBeUndefined();
   });
 
-  it("still names local rows when the peer lookup throws", async () => {
+  it("still names local rows when the remote lookups throw", async () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
       "../quit-manager"
     );
@@ -727,8 +722,8 @@ describe("resolveQuitBlockerThreadTitles", () => {
       listLocalThreads: async () => [
         { source: "codex" as const, id: "local-thread", title: "Local Work" },
       ],
-      remoteThreadSummary: async () => {
-        throw new Error("peer unreachable");
+      cachedRemoteThreadSummary: () => {
+        throw new Error("federation runtime unavailable");
       },
       listRemoteThreadPins: async () => {
         throw new Error("overlay store unavailable");

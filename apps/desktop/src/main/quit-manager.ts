@@ -344,35 +344,38 @@ export type QuitBlockerTitleResolverDependencies = {
       titleSource?: AppServerThreadTitleSource;
     }>
   >;
-  /** A peer's own summary of one of its threads, when it is reachable. */
-  remoteThreadSummary: (params: {
+  /**
+   * A peer's summary of one of its threads out of data ALREADY held locally.
+   * Synchronous by contract: this must not become a peer round trip.
+   */
+  cachedRemoteThreadSummary: (params: {
     target: FederationRemoteTarget;
     backend: AppServerBackendKind;
     threadId: string;
-  }) => Promise<QuitBlockerThreadTitle | undefined>;
-  /** Locally cached rows for pinned remote threads, for offline naming. */
+  }) => QuitBlockerThreadTitle | undefined;
+  /** Locally persisted rows for pinned remote threads (a sqlite read). */
   listRemoteThreadPins: () => Promise<ReadonlyArray<RemoteThreadPin>>;
-  /** Overrides `QUIT_PEER_TITLE_TIMEOUT_MS`. */
-  peerTimeoutMs?: number;
 };
 
 /**
- * How long the peer lookups get before the cached pin rows answer instead.
- * Deliberately well inside `QUIT_TITLE_RESOLVE_TIMEOUT_MS`: that outer race
- * discards the WHOLE map when it fires, so a peer that has to refetch its
- * navigation snapshot would otherwise take the locally-cached names down with
- * it and put the operator back in front of a uuid.
- */
-const QUIT_PEER_TITLE_TIMEOUT_MS = 750;
-
-/**
- * Name every blocker row, asking each thread's OWNER what it is called.
+ * Name every blocker row from what this machine already knows, including what
+ * it knows about its peers.
  *
- * The local thread list cannot answer for a peer's thread — it returns
- * nothing, the row falls back to the thread id, and the operator is asked to
- * decide about a uuid while their sidebar shows that same thread by name. So
- * remote rows are resolved from the peer's own navigation summary, and from
- * the pinned row's cached summary when the peer is unreachable.
+ * This is tier-2 resolution — local plus *cached* remote. The old lookup was
+ * tier 1: it asked this instance's thread list, which cannot answer for a
+ * peer's thread, so the row fell back to the thread id and the operator was
+ * asked to decide about a uuid while their sidebar showed that same thread by
+ * name.
+ *
+ * Reaching the peer (tier 3) is deliberately NOT done here. A thread can only
+ * be a quit blocker because it is mounted in a window on this machine, which
+ * means its summary was already fetched and cached — the name is in hand. A
+ * round trip could only re-answer a question we can already answer, while
+ * making shutdown wait on a machine that may be asleep.
+ *
+ * Two cached sources, both local reads: the peer navigation-summary cache in
+ * memory, and the pinned rows' persisted summaries (which survive a restart,
+ * so a freshly launched app can still name a pinned remote thread).
  *
  * Every lookup degrades to "no title" rather than throwing: a row that reads
  * as a thread id still links correctly, and nothing here is worth delaying a
@@ -404,29 +407,26 @@ export async function resolveQuitBlockerThreadTitles(
 
   const resolveRemote = async (): Promise<void> => {
     if (remoteItems.length === 0) return;
-    // One store read for the whole batch; the per-item peer lookups run
-    // concurrently because each is its own round trip.
-    const pinsPromise = dependencies
-      .listRemoteThreadPins()
-      .catch(() => [] as ReadonlyArray<RemoteThreadPin>);
-    const summaries = await settleWithin(
-      Promise.all(
-        remoteItems.map(async ({ item, target }) => {
-          try {
-            return await dependencies.remoteThreadSummary({
-              target,
-              backend: item.backend as AppServerBackendKind,
-              threadId: item.threadId,
-            });
-          } catch {
-            return undefined;
-          }
-        }),
-      ),
-      dependencies.peerTimeoutMs ?? QUIT_PEER_TITLE_TIMEOUT_MS,
-      [] as Array<QuitBlockerThreadTitle | undefined>,
-    );
-    const pins = await pinsPromise;
+    const summaries = remoteItems.map(({ item, target }) => {
+      try {
+        return dependencies.cachedRemoteThreadSummary({
+          target,
+          backend: item.backend as AppServerBackendKind,
+          threadId: item.threadId,
+        });
+      } catch {
+        return undefined;
+      }
+    });
+    // One store read for the whole batch, and only when the in-memory cache
+    // left something unnamed — a fresh launch, typically, where nothing has
+    // fetched from the peer yet.
+    const needsPins = remoteItems.some((_, index) => !summaries[index]);
+    const pins = needsPins
+      ? await dependencies
+          .listRemoteThreadPins()
+          .catch(() => [] as ReadonlyArray<RemoteThreadPin>)
+      : [];
     const pinnedByTitleKey = new Map<string, NavigationThreadSummary>();
     for (const pin of pins) {
       if (pin.ref.target.scope !== "remote" || !pin.summary) continue;
@@ -452,21 +452,6 @@ export async function resolveQuitBlockerThreadTitles(
     resolveRemote().catch(() => undefined),
   ]);
   return titles;
-}
-
-/** Resolve to `fallback` if `promise` has not settled in time. Never rejects
- *  and never cancels: the abandoned work just stops being waited on. */
-async function settleWithin<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  fallback: T,
-): Promise<T> {
-  return await Promise.race([
-    promise,
-    new Promise<T>((resolve) => {
-      setTimeout(() => resolve(fallback), timeoutMs).unref?.();
-    }),
-  ]);
 }
 
 /** A "fallback" title IS the thread id, so recording it changes nothing but
@@ -513,13 +498,13 @@ export const appQuitManager = createQuitManager({
         await getDesktopBackendRegistry().listThreads({
           callerReason: "quit-confirmation",
         }),
-      // Reads the peer's cached navigation snapshot, and only refetches when
-      // that has gone stale — the same source the sidebar renders these
-      // threads from, which is why it already knows the name.
-      remoteThreadSummary: async (params) =>
-        await getDesktopFederationRuntime()
+      // Cache read, no peer round trip: the same in-memory snapshot the
+      // sidebar renders these threads from, which is why it already holds
+      // the name for anything that could be blocking the quit.
+      cachedRemoteThreadSummary: (params) =>
+        getDesktopFederationRuntime()
           .remoteThreadSummaries()
-          .threadFromPeer(params),
+          .cachedThreadFromPeer(params),
       listRemoteThreadPins: async () =>
         await getDesktopOverlayStore().listRemoteThreadPins(),
     }),

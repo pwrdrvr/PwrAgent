@@ -193,9 +193,42 @@ export class RemoteThreadSummaryCache {
   }
 
   /**
-   * A single thread from a connected peer's cached snapshot, or undefined
-   * when the peer is unreachable or the thread is absent (e.g. archived).
-   * Used for best-effort lookups like companion parent-pinning.
+   * A single thread out of what is ALREADY cached for a peer. Never contacts
+   * the peer, never refetches on a lapsed TTL, never registers peer interest
+   * — it is a map read, and it is safe on any path that must not wait.
+   *
+   * This is the middle tier of thread-name resolution:
+   *
+   * 1. Local only — this instance's thread list. Correct only when the caller
+   *    knows every thread it can see is its own.
+   * 2. Local + cached remote (this method) — the right default. A mounted
+   *    remote thread is on screen because something already fetched it, so
+   *    its name is in hand; asking the peer again buys nothing.
+   * 3. Local + live remote (`threadFromPeer`) — for callers that genuinely
+   *    need current data and can afford to wait on a peer.
+   *
+   * Deliberately ignores the TTL and the peer's connection state: a slightly
+   * stale name beats the raw thread id, and both alternatives here cost a
+   * round trip that tier 2 exists to avoid.
+   */
+  cachedThreadFromPeer(params: {
+    target: FederationRemoteTarget;
+    backend: NavigationThreadSummary["source"];
+    threadId: string;
+  }): NavigationThreadSummary | undefined {
+    return this.cache
+      .get(params.target.instanceId)
+      ?.threads.find(
+        (thread) =>
+          thread.source === params.backend && thread.id === params.threadId,
+      );
+  }
+
+  /**
+   * A single thread from a connected peer's snapshot, fetching when the cache
+   * has lapsed; undefined when the peer is unreachable or the thread is absent
+   * (e.g. archived). Tier 3 — it can wait on the peer. Callers that only need
+   * a name should use `cachedThreadFromPeer`.
    */
   async threadFromPeer(params: {
     target: FederationRemoteTarget;
