@@ -1941,6 +1941,10 @@ function DesktopAppShell(props: {
           className={`app-main${
             threadDetailPending ? " app-main--thread-detail-pending" : ""
           }${
+            !peerConnectivity.connected
+              ? " app-main--federation-disconnected"
+              : ""
+          }${
             mainView === "star-map" && starMapFloatOpen
               ? " app-main--star-map-float"
               : ""
@@ -2031,7 +2035,7 @@ function DesktopAppShell(props: {
             // surface that fails silently.
             <div className="federation-disconnected-banner" role="alert">
               <span className="federation-disconnected-banner__dot" aria-hidden="true" />
-              {`${readRendererFederationLabel() ?? "Remote instance"} is unreachable — reconnecting. Threads shown may be stale.`}
+              {`${activeFederationOwnerLabel ?? "Remote instance"} is unreachable — reconnecting. Threads shown may be stale.`}
             </div>
           ) : null}
           {mainView === "search" ? (

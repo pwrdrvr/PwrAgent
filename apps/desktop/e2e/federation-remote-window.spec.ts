@@ -451,6 +451,10 @@ test.describe("federation remote window", () => {
       });
       await expect(locallyMountedRemoteRow).toBeVisible({ timeout: 30_000 });
       await expect(locallyMountedRemoteCard).not.toHaveClass(/is-remote-offline/);
+      await locallyMountedRemoteRow.click();
+      await expect(
+        window.getByText(/Remote transcript for Remote gateway thread one/),
+      ).toBeVisible({ timeout: 30_000 });
 
       // Local-only chrome stays hidden in the remote window.
       await expect(
@@ -729,6 +733,18 @@ test.describe("federation remote window", () => {
       await expect(
         remote.locator(".federation-disconnected-banner"),
       ).toBeVisible({ timeout: 30_000 });
+      await expect(remote.locator(".app-main")).toHaveClass(
+        /app-main--federation-disconnected/,
+      );
+      await expect(
+        remote.locator(".federation-disconnected-banner"),
+      ).toContainText("Gateway is unreachable");
+      await expect(
+        window.locator(".federation-disconnected-banner"),
+      ).toContainText("Gateway is unreachable");
+      await expect(window.locator(".app-main")).toHaveClass(
+        /app-main--federation-disconnected/,
+      );
       await expect(
         remote.locator(".composer-tiptap-input__editor"),
       ).toHaveAttribute("contenteditable", "true", { timeout: 15_000 });
@@ -747,6 +763,15 @@ test.describe("federation remote window", () => {
       await expect(
         remote.locator(".federation-disconnected-banner"),
       ).toHaveCount(0, { timeout: 60_000 });
+      await expect(remote.locator(".app-main")).not.toHaveClass(
+        /app-main--federation-disconnected/,
+      );
+      await expect(
+        window.locator(".federation-disconnected-banner"),
+      ).toHaveCount(0);
+      await expect(window.locator(".app-main")).not.toHaveClass(
+        /app-main--federation-disconnected/,
+      );
       await expect(
         remote.locator(".thread-row__title", {
           hasText: "Remote gateway thread one",
