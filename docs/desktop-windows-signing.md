@@ -24,6 +24,9 @@ Provisioned in the `PwrDrvr Azure` subscription, resource group
 `rg-pwrdrvr-signing`, region **East US**. None of these are secret — the
 publisher name and certificate subject are embedded in every signed installer.
 
+> Transcribed 2026-08; the Azure portal is the source of truth. Re-check here
+> after any renewal, since a renewed profile can change the values below.
+
 | GitHub **variable** | Value |
 |---|---|
 | `WIN_AZURE_SIGN_ACCOUNT` | `pwrdrvrsigning` |
@@ -126,16 +129,22 @@ Once all seven are set, the next release tag produces a **signed** installer.
 `resolveWindowsAzureSigning()` checks only that the variables are *present*, not
 that they are valid, which splits behavior three ways:
 
+`resolveWindowsAzureSigning()` treats "none configured" as an intentional
+unsigned build and anything short of fully configured as an error, so a release
+can never quietly ship unsigned:
+
 | Condition | Result |
 |---|---|
-| Any of the four `WIN_AZURE_SIGN_*` missing/misspelled | **Silently unsigned** — returns early with no warning |
-| `environment: windows-signing` missing from the job | **Silently unsigned** — every value resolves to empty |
-| All four set, any `AZURE_*` credential missing | **Unsigned**, with a warning in the build log |
-| All seven set, but credential expired/invalid or RBAC missing | **Release build fails** — signing is attempted and errors |
+| None of the seven set | **Unsigned** — intended for local, sandbox, and label-gated PR builds |
+| Some but not all `WIN_AZURE_SIGN_*` set | **Build fails** — a subset is always a typo, never intent |
+| All four config vars set, any `AZURE_*` missing | **Build fails** — signing was requested, credentials absent |
+| Release build where nothing resolved (job missing `environment: windows-signing`) | **Build fails** — `--require-signing` |
+| All seven set, credential expired/invalid or RBAC role missing | **Build fails** at the signing call |
 
-The first two rows are the ones to watch: a typo'd variable name — or an
-environment the job never joined — yields a clean, successful, silently unsigned
-release. Expiry and RBAC gaps, by contrast, fail loudly.
+The fourth row is why the release workflow passes `--require-signing`: a job
+outside the environment reads every value as empty, which is otherwise
+indistinguishable from an intentional unsigned build. Local and PR builds omit
+the flag and stay unsigned.
 
 ## Renewal
 

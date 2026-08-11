@@ -237,11 +237,12 @@ jobs:
           node-version: 24.14.1
           working-directory: .
 
-      # Signs via Azure Trusted Signing when the repo provides the signing
-      # config (vars.WIN_AZURE_SIGN_*) and the Entra service-principal secrets
-      # (AZURE_*). Until those are set, release.mjs builds an UNSIGNED installer.
-      # See docs/desktop-windows-signing.md. Not published to the GitHub Release
-      # yet — uploaded as a workflow artifact below.
+      # Signs via Azure Artifact Signing when the `windows-signing` environment
+      # provides the config (vars.WIN_AZURE_SIGN_*) and the Entra
+      # service-principal secrets (AZURE_*). With none of them set, release.mjs
+      # builds an UNSIGNED installer; with only some, it fails rather than
+      # silently shipping unsigned. See docs/desktop-windows-signing.md. Not
+      # published to the GitHub Release yet — uploaded as an artifact below.
       - name: Package Windows installer
         env:
           WIN_AZURE_SIGN_PUBLISHER_NAME: ${{ vars.WIN_AZURE_SIGN_PUBLISHER_NAME }}
@@ -251,7 +252,7 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-        run: node apps/desktop/scripts/release.mjs --win --no-publish
+        run: node apps/desktop/scripts/release.mjs --win --no-publish --require-signing
 
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

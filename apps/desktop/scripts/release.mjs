@@ -60,6 +60,10 @@ const prepareOnly = args.includes("--prepare-only");
 const signStageOnly = args.includes("--sign-stage-only");
 const linux = args.includes("--linux");
 const win = args.includes("--win");
+// Release builds pass this so an unsigned Windows installer can never ship
+// unnoticed; local/sandbox/PR builds omit it and stay unsigned. See the `win`
+// branch below and docs/desktop-windows-signing.md.
+const requireSigning = args.includes("--require-signing");
 
 if (prepareOnly && signStageOnly) {
   throw new Error("--prepare-only and --sign-stage-only cannot be combined");
@@ -105,32 +109,69 @@ function runChecked(file, args, opts = {}) {
   }
 }
 
-// Windows Authenticode signing via Azure Trusted Signing. Active only when the
-// account config (WIN_AZURE_SIGN_*) AND the Microsoft Entra service-principal
-// credentials (AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET, which
-// electron-builder's bundled TrustedSigning module reads from the environment)
-// are all present. Otherwise we build an UNSIGNED installer so local, sandbox,
-// and label-gated PR builds still work without secrets.
+// Windows Authenticode signing via Azure Artifact Signing (the service formerly
+// and still widely called Trusted Signing). Requires the account config
+// (WIN_AZURE_SIGN_*) AND the Microsoft Entra service-principal credentials
+// (AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET, which electron-builder's
+// bundled TrustedSigning module reads from the environment).
+//
+// Three outcomes, deliberately: all set -> signed; none set -> UNSIGNED, so
+// local, sandbox, and label-gated PR builds still work without secrets; a
+// partial set -> throw, because that is always a misconfiguration and silently
+// publishing an unsigned installer is the worst of the three.
 function resolveWindowsAzureSigning() {
-  const publisherName = process.env.WIN_AZURE_SIGN_PUBLISHER_NAME?.trim();
-  const endpoint = process.env.WIN_AZURE_SIGN_ENDPOINT?.trim();
-  const accountName = process.env.WIN_AZURE_SIGN_ACCOUNT?.trim();
-  const profileName = process.env.WIN_AZURE_SIGN_PROFILE?.trim();
-  if (!publisherName || !endpoint || !accountName || !profileName) {
+  const config = {
+    WIN_AZURE_SIGN_PUBLISHER_NAME:
+      process.env.WIN_AZURE_SIGN_PUBLISHER_NAME?.trim(),
+    WIN_AZURE_SIGN_ENDPOINT: process.env.WIN_AZURE_SIGN_ENDPOINT?.trim(),
+    WIN_AZURE_SIGN_ACCOUNT: process.env.WIN_AZURE_SIGN_ACCOUNT?.trim(),
+    WIN_AZURE_SIGN_PROFILE: process.env.WIN_AZURE_SIGN_PROFILE?.trim(),
+  };
+  const missingConfig = Object.entries(config)
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+
+  // None set: an intentional unsigned build — local dev, the sandbox, or the
+  // label-gated PR installer job, none of which are given signing config.
+  if (missingConfig.length === Object.keys(config).length) {
     return undefined;
   }
-  const credentialsPresent = Boolean(
-    process.env.AZURE_TENANT_ID &&
-      process.env.AZURE_CLIENT_ID &&
-      process.env.AZURE_CLIENT_SECRET,
-  );
-  if (!credentialsPresent) {
-    console.warn(
-      "  Windows signing config is set but AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET are missing — building UNSIGNED",
+  // Some but not all: nobody sets a subset of these on purpose. It means a
+  // typo'd variable name, or a job that never joined the `windows-signing`
+  // environment (where these live) and so read them as empty. Fail here —
+  // the alternative is a green release that silently shipped an UNSIGNED
+  // installer, which nobody notices until a user reports SmartScreen.
+  if (missingConfig.length > 0) {
+    throw new Error(
+      `Windows signing is partially configured — missing: ${missingConfig.join(", ")}. `
+        + "Set all of them (see docs/desktop-windows-signing.md) or none to build unsigned.",
     );
-    return undefined;
   }
-  return { publisherName, endpoint, accountName, profileName };
+
+  // Config present means signing was requested, so absent credentials are a
+  // misconfiguration too, not a cue to quietly downgrade. Checked separately
+  // from the block above because AZURE_* are generic Azure SDK names that may
+  // legitimately be set in a developer's shell for unrelated work.
+  const missingCredentials = Object.entries({
+    AZURE_TENANT_ID: process.env.AZURE_TENANT_ID?.trim(),
+    AZURE_CLIENT_ID: process.env.AZURE_CLIENT_ID?.trim(),
+    AZURE_CLIENT_SECRET: process.env.AZURE_CLIENT_SECRET?.trim(),
+  })
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+  if (missingCredentials.length > 0) {
+    throw new Error(
+      `Windows signing is configured but its service-principal credentials are missing: ${missingCredentials.join(", ")}. `
+        + "Unset the WIN_AZURE_SIGN_* variables to build unsigned instead.",
+    );
+  }
+
+  return {
+    publisherName: config.WIN_AZURE_SIGN_PUBLISHER_NAME,
+    endpoint: config.WIN_AZURE_SIGN_ENDPOINT,
+    accountName: config.WIN_AZURE_SIGN_ACCOUNT,
+    profileName: config.WIN_AZURE_SIGN_PROFILE,
+  };
 }
 
 function electronBuilderCli() {
@@ -412,8 +453,19 @@ if (!signStageOnly) {
 const builderArgs = [];
 if (win) {
   const azureSign = resolveWindowsAzureSigning();
+  // The partial-config guard inside resolveWindowsAzureSigning() cannot catch a
+  // job that never joined the `windows-signing` environment: there every value
+  // reads as empty, which is indistinguishable from an intentional unsigned
+  // build. The release workflow passes --require-signing so that case fails
+  // instead of quietly publishing an unsigned installer.
+  if (requireSigning && !azureSign) {
+    throw new Error(
+      "--require-signing was passed but no Windows signing configuration is present. "
+        + "Check that the job declares `environment: windows-signing` — see docs/desktop-windows-signing.md.",
+    );
+  }
   step(
-    `electron-builder --win nsis --x64 (${azureSign ? "Azure Trusted Signing" : "UNSIGNED"}, no builder publish)`,
+    `electron-builder --win nsis --x64 (${azureSign ? "Azure Artifact Signing" : "UNSIGNED"}, no builder publish)`,
   );
   builderArgs.push("--win", "nsis", "--x64", "--publish=never");
   if (azureSign) {
