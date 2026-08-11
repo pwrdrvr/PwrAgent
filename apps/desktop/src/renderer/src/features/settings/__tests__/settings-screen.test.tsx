@@ -11,6 +11,7 @@ import {
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  AgentEvent,
   AppServerListThreadsResponse,
   AppServerThreadSummary,
   BackendSummary,
@@ -4275,6 +4276,8 @@ describe("SettingsScreen", () => {
       "← Exit Settings",
       "General",
       "Applications",
+      "Plugins",
+      "MCPs",
       "Profiles",
       "AI Providers",
       "Usage & Pricing",
@@ -4292,6 +4295,191 @@ describe("SettingsScreen", () => {
     expect(within(nav).getByRole("separator")).toHaveClass(
       "settings-nav__divider",
     );
+  });
+
+  it("relogs and removes MCP servers from the Plugins settings pane", async () => {
+    const codexHome = "/home/example/.codex";
+    const listCodexMcpServers = vi.fn(async () => ({
+      codexHome,
+      detail: "toolsAndAuthOnly" as const,
+      servers: [{
+        name: "datadog",
+        authStatus: "oAuth" as const,
+        startupStatus: "failed" as const,
+        startupError: "invalid_grant",
+        tools: [],
+      }, {
+        name: "atlassian",
+        authStatus: "oAuth" as const,
+        tools: ["search"],
+      }],
+    }));
+    const reloadCodexMcpServers = vi.fn(async () => ({
+      codexHome,
+      queued: true as const,
+    }));
+    const startCodexMcpServerLogin = vi.fn(async (request: {
+      codexHome: string;
+      name: string;
+    }) => ({
+      codexHome,
+      name: request.name,
+      authorizationUrl: "https://example.test/datadog-login",
+    }));
+    const removeCodexMcpServer = vi.fn(async () => ({
+      codexHome,
+      name: "datadog",
+      removed: true as const,
+    }));
+    let agentEventListener: ((event: AgentEvent) => void) | undefined;
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          listCodexMcpServers,
+          onAgentEvent: (listener) => {
+            agentEventListener = listener;
+            return () => undefined;
+          },
+          reloadCodexMcpServers,
+          removeCodexMcpServer,
+          startCodexMcpServerLogin,
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("invalid_grant")).toBeInTheDocument();
+    const datadogRow = screen.getByText("datadog")
+      .closest<HTMLElement>(".settings-mcp-row");
+    const atlassianRow = screen.getByText("atlassian")
+      .closest<HTMLElement>(".settings-mcp-row");
+    expect(datadogRow).not.toBeNull();
+    expect(atlassianRow).not.toBeNull();
+    fireEvent.click(within(datadogRow!).getByRole("button", { name: "Relogin" }));
+    expect(
+      within(atlassianRow!).getByRole("button", { name: "Relogin" }),
+    ).toBeDisabled();
+    expect(
+      within(atlassianRow!).getByRole("button", { name: "Remove" }),
+    ).toBeDisabled();
+    await waitFor(() => {
+      expect(startCodexMcpServerLogin).toHaveBeenCalledWith({
+        codexHome,
+        name: "datadog",
+      });
+      expect(openSpy).toHaveBeenCalledWith(
+        "https://example.test/datadog-login",
+        "_blank",
+        "noopener,noreferrer",
+      );
+    });
+
+    await act(async () => {
+      agentEventListener?.({
+        backend: "codex",
+        notification: {
+          method: "mcpServer/oauthLogin/completed",
+          params: { name: "datadog", success: true },
+        },
+      });
+    });
+    expect(
+      within(atlassianRow!).getByRole("button", { name: "Relogin" }),
+    ).toBeDisabled();
+    await act(async () => {
+      agentEventListener?.({
+        backend: "codex",
+        notification: {
+          method: "mcpServer/startupStatus/updated",
+          params: { name: "datadog", status: "ready" },
+        },
+      });
+    });
+    expect(await screen.findByText(
+      "datadog login completed and its row was refreshed.",
+    )).toBeInTheDocument();
+    expect(reloadCodexMcpServers).toHaveBeenCalledWith({ codexHome });
+
+    fireEvent.click(within(datadogRow!).getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove server" }));
+    await waitFor(() => {
+      expect(removeCodexMcpServer).toHaveBeenCalledWith({
+        codexHome,
+        name: "datadog",
+      });
+      expect(screen.getByText(
+        "datadog was removed from this Codex profile.",
+      )).toBeInTheDocument();
+    });
+
+    fireEvent.click(
+      within(atlassianRow!).getByRole("button", { name: "Relogin" }),
+    );
+    expect(await screen.findByRole("button", { name: "Cancel login" }))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel login" }));
+    expect(await screen.findByText(
+      "Stopped waiting for login. You can try again.",
+    )).toBeInTheDocument();
+    expect(
+      within(datadogRow!).getByRole("button", { name: "Relogin" }),
+    ).toBeEnabled();
+  });
+
+  it("disables MCP mutations when the selected Codex profile changed after startup", async () => {
+    const base = createSnapshot();
+    const workCodexHome = "/home/example/.codex/profiles/work";
+    const snapshot = createSnapshot({
+      models: {
+        ...base.models,
+        codex: {
+          ...base.models.codex,
+          profile: { value: "work", source: "config" },
+          profiles: {
+            ...base.models.codex.profiles,
+            effectiveCodexHome: workCodexHome,
+            profiles: base.models.codex.profiles.profiles.map((profile) => ({
+              ...profile,
+              selected: profile.name === "work",
+            })),
+          },
+        },
+      },
+    });
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [{
+              name: "atlassian",
+              authStatus: "oAuth" as const,
+              tools: ["search"],
+            }],
+          })),
+          reloadCodexMcpServers: vi.fn(),
+          removeCodexMcpServer: vi.fn(),
+          startCodexMcpServerLogin: vi.fn(),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText(
+      "Codex profile selection changed to work. Restart PwrAgent before managing MCP servers for that profile.",
+    )).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload config" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Relogin" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
+    expect(screen.getByText("/home/example/.codex")).toBeInTheDocument();
   });
 
   it("shows when messaging is disabled by a runtime override", () => {

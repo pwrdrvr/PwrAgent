@@ -28,6 +28,8 @@ import {
   type LatestCodexConfigWarningResponse,
   type ListBackendsRequest,
   type ListBackendsResponse,
+  type ListCodexMcpServersRequest,
+  type ListCodexMcpServersResponse,
   type ListThreadMcpServersRequest,
   type ListThreadMcpServersResponse,
   type QueueThreadExecutionModeRequest,
@@ -36,6 +38,10 @@ import {
   type RetainThreadBranchDriftResponse,
   type ReloadCodexMcpConfigRequest,
   type ReloadCodexMcpConfigResponse,
+  type ReloadCodexMcpServersResponse,
+  type ReloadCodexMcpServersRequest,
+  type RemoveCodexMcpServerRequest,
+  type RemoveCodexMcpServerResponse,
   type RunCodexEnvironmentActionRequest,
   type RunCodexEnvironmentActionResponse,
   type StopCodexEnvironmentActionRequest,
@@ -59,6 +65,8 @@ import {
   type SteerTurnResponse,
   type StartReviewRequest,
   type StartReviewResponse,
+  type StartCodexMcpServerLoginRequest,
+  type StartCodexMcpServerLoginResponse,
   type StartThreadRequest,
   type StartThreadResponse,
   type StartTurnRequest,
@@ -89,6 +97,10 @@ import {
   AGENT_COMPACT_THREAD_CHANNEL,
   AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
   AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
+  CODEX_MCP_SERVERS_LIST_CHANNEL,
+  CODEX_MCP_SERVERS_RELOAD_CHANNEL,
+  CODEX_MCP_SERVER_LOGIN_CHANNEL,
+  CODEX_MCP_SERVER_REMOVE_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -744,6 +756,46 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(CODEX_MCP_SERVERS_LIST_CHANNEL);
+  ipcMain.handle(
+    CODEX_MCP_SERVERS_LIST_CHANNEL,
+    async (
+      _event,
+      request: ListCodexMcpServersRequest = {},
+    ): Promise<ListCodexMcpServersResponse> =>
+      await registry.listCodexMcpServers(request),
+  );
+
+  ipcMain.removeHandler(CODEX_MCP_SERVERS_RELOAD_CHANNEL);
+  ipcMain.handle(
+    CODEX_MCP_SERVERS_RELOAD_CHANNEL,
+    async (
+      _event,
+      request: ReloadCodexMcpServersRequest,
+    ): Promise<ReloadCodexMcpServersResponse> =>
+      await registry.reloadCodexMcpServers(request),
+  );
+
+  ipcMain.removeHandler(CODEX_MCP_SERVER_LOGIN_CHANNEL);
+  ipcMain.handle(
+    CODEX_MCP_SERVER_LOGIN_CHANNEL,
+    async (
+      _event,
+      request: StartCodexMcpServerLoginRequest,
+    ): Promise<StartCodexMcpServerLoginResponse> =>
+      await registry.startCodexMcpServerLogin(request),
+  );
+
+  ipcMain.removeHandler(CODEX_MCP_SERVER_REMOVE_CHANNEL);
+  ipcMain.handle(
+    CODEX_MCP_SERVER_REMOVE_CHANNEL,
+    async (
+      _event,
+      request: RemoveCodexMcpServerRequest,
+    ): Promise<RemoveCodexMcpServerResponse> =>
+      await registry.removeCodexMcpServer(request),
+  );
+
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_INTERRUPT_TURN_CHANNEL,
@@ -1205,6 +1257,10 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_COMPACT_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL);
   ipcMain.removeHandler(AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL);
+  ipcMain.removeHandler(CODEX_MCP_SERVERS_LIST_CHANNEL);
+  ipcMain.removeHandler(CODEX_MCP_SERVERS_RELOAD_CHANNEL);
+  ipcMain.removeHandler(CODEX_MCP_SERVER_LOGIN_CHANNEL);
+  ipcMain.removeHandler(CODEX_MCP_SERVER_REMOVE_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);

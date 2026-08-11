@@ -24,6 +24,7 @@ import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { PricingSettings } from "./PricingSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
+import { PluginsSettings } from "./PluginsSettings";
 import { ArchivedThreadsSettings } from "./ArchivedThreadsSettings";
 import { ThreadManagementSettings } from "./ThreadManagementSettings";
 import { TroubleshootingSettings } from "./TroubleshootingSettings";
@@ -51,6 +52,7 @@ export type SettingsSection =
   | "profiles"
   | "pricing"
   | "applications"
+  | "plugins"
   | "worktrees"
   | "thread-management"
   | "archived"
@@ -60,6 +62,7 @@ export type SettingsSection =
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "general", label: "General" },
   { id: "applications", label: "Applications" },
+  { id: "plugins", label: "Plugins" },
   { id: "profiles", label: "Profiles" },
   { id: "models", label: "AI Providers" },
   { id: "pricing", label: "Usage & Pricing" },
@@ -78,6 +81,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 const PRIMARY_SECTIONS: SettingsSection[] = [
   "general",
   "applications",
+  "plugins",
   "profiles",
   "models",
   "pricing",
@@ -225,13 +229,29 @@ export function SettingsScreen(props: {
         {ORDERED_SECTIONS.map((item) => (
           <Fragment key={item.id}>
             <button
-              aria-current={section === item.id ? "page" : undefined}
+              aria-current={
+                section === item.id && item.id !== "plugins"
+                  ? "page"
+                  : undefined
+              }
               className={`settings-nav__button${section === item.id ? " is-active" : ""}`}
               type="button"
               onClick={() => setSection(item.id)}
             >
               {item.label}
             </button>
+            {item.id === "plugins" ? (
+              <button
+                aria-current={section === "plugins" ? "page" : undefined}
+                className={`settings-nav__subbutton${
+                  section === "plugins" ? " is-active" : ""
+                }`}
+                type="button"
+                onClick={() => setSection("plugins")}
+              >
+                MCPs
+              </button>
+            ) : null}
             {item.id === SETTINGS_NAV_DIVIDER_AFTER ? (
               <hr className="settings-nav__divider" />
             ) : null}
@@ -706,6 +726,15 @@ function SettingsSectionBody(props: {
                 : { terminal: { preferredId } },
           });
         }}
+      />
+    );
+  }
+
+  if (props.section === "plugins") {
+    return (
+      <PluginsSettings
+        desktopApi={props.desktopApi}
+        snapshot={props.snapshot}
       />
     );
   }

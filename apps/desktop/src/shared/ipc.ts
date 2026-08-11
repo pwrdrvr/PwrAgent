@@ -70,6 +70,10 @@ export const AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL =
   "agent:list-thread-mcp-servers";
 export const AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL =
   "agent:reload-codex-mcp-config";
+export const CODEX_MCP_SERVERS_LIST_CHANNEL = "codex-mcp-servers:list";
+export const CODEX_MCP_SERVERS_RELOAD_CHANNEL = "codex-mcp-servers:reload";
+export const CODEX_MCP_SERVER_LOGIN_CHANNEL = "codex-mcp-server:login";
+export const CODEX_MCP_SERVER_REMOVE_CHANNEL = "codex-mcp-server:remove";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
 export const AGENT_STOP_SUB_AGENT_CHANNEL = "agent:stop-sub-agent";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";

@@ -431,9 +431,52 @@ export type CodexMcpResourceTemplateSummary = {
 export type CodexMcpServerSummary = {
   name: string;
   authStatus: CodexMcpAuthStatus;
+  startupStatus?: "starting" | "ready" | "failed" | "cancelled";
+  startupError?: string;
   tools: string[];
   resources?: CodexMcpResourceSummary[];
   resourceTemplates?: CodexMcpResourceTemplateSummary[];
+};
+
+export type ListCodexMcpServersRequest = {
+  detail?: CodexMcpInventoryDetail;
+};
+
+export type ListCodexMcpServersResponse = {
+  codexHome: string;
+  detail: CodexMcpInventoryDetail;
+  servers: CodexMcpServerSummary[];
+};
+
+export type ReloadCodexMcpServersRequest = {
+  codexHome: string;
+};
+
+export type ReloadCodexMcpServersResponse = {
+  codexHome: string;
+  queued: true;
+};
+
+export type StartCodexMcpServerLoginRequest = {
+  codexHome: string;
+  name: string;
+};
+
+export type StartCodexMcpServerLoginResponse = {
+  codexHome: string;
+  name: string;
+  authorizationUrl: string;
+};
+
+export type RemoveCodexMcpServerRequest = {
+  codexHome: string;
+  name: string;
+};
+
+export type RemoveCodexMcpServerResponse = {
+  codexHome: string;
+  name: string;
+  removed: true;
 };
 
 export type ListThreadMcpServersRequest = {
