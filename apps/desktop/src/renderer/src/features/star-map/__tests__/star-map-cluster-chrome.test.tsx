@@ -190,6 +190,10 @@ describe("star map project cloud chrome", () => {
       projectThread("a2", "/repo/alpha", "AlphaDir"),
       projectThread("b1", "/repo/beta", "BetaDir"),
     ]);
+    // Wait for federation health before selecting anything: card keys name
+    // their instance, and the map drops a selection swept against the
+    // placeholder id the moment the durable one lands.
+    await screen.findByText(/Harold-MBP-M5-Max/);
     const pill = await screen.findByRole("button", {
       name: /Select the alpha cards/,
     });
