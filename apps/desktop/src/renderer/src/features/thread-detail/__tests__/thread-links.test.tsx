@@ -31,13 +31,20 @@ function threadSummary(
 function renderWithLinks(
   text: string,
   options: {
+    onOpenRemoteViewer?: (request: {
+      backend: AppServerBackendKind;
+      instanceId: string;
+      threadId: string;
+    }) => void;
     onShowThread?: (request: { backend: AppServerBackendKind; threadId: string }) => void;
     threads?: NavigationThreadSummary[];
   } = {},
 ) {
+  const onOpenRemoteViewer = options.onOpenRemoteViewer ?? vi.fn();
   const onShowThread = options.onShowThread ?? vi.fn();
   return render(
     <ThreadLinkProvider
+      onOpenRemoteViewer={onOpenRemoteViewer}
       onShowThread={onShowThread}
       threads={options.threads ?? [threadSummary()]}
     >
@@ -243,9 +250,11 @@ describe("thread links in transcript markdown", () => {
 
   it("keeps an arbitrary remote thread actionable with its owning instance", () => {
     const onShowThread = vi.fn();
+    const onOpenRemoteViewer = vi.fn();
     renderWithLinks(
       `See [Remote handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex&instanceId=pwr_harold)`,
       {
+        onOpenRemoteViewer,
         onShowThread,
         threads: [],
       },
@@ -260,6 +269,48 @@ describe("thread links in transcript markdown", () => {
       instanceId: "pwr_harold",
       threadId: CHILD_THREAD_ID,
     });
+    expect(onOpenRemoteViewer).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Open remote viewer for pwr_harold",
+    }));
+
+    expect(onOpenRemoteViewer).toHaveBeenCalledWith({
+      backend: "codex",
+      instanceId: "pwr_harold",
+      threadId: CHILD_THREAD_ID,
+    });
+    expect(onShowThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("labels a remote thread's pop-out action with its instance name", () => {
+    const onOpenRemoteViewer = vi.fn();
+    renderWithLinks(
+      `See [Remote handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex&instanceId=pwr_harold)`,
+      {
+        onOpenRemoteViewer,
+        threads: [threadSummary({
+          federation: {
+            ref: {
+              backend: "codex",
+              target: { scope: "remote", instanceId: "pwr_harold" },
+              threadId: CHILD_THREAD_ID,
+            },
+            instanceLabel: "Studio Mac",
+            peerStatus: "connected",
+          },
+        })],
+      },
+    );
+
+    const popout = screen.getByRole("button", {
+      name: "Open remote viewer for Studio Mac",
+    });
+    fireEvent.mouseEnter(popout);
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "Open this thread in the remote viewer window for Studio Mac",
+    );
   });
 
   it("drops live metadata when a federated thread leaves the snapshot", () => {

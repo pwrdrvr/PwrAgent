@@ -928,30 +928,70 @@ function DesktopAppShell(props: {
   }, [mainView, navigation.selectedLaunchpad, navigation.selectedThreadKey]);
   const showThread = navigation.showThread;
   const selectDirectoryLaunchpad = navigation.selectDirectoryLaunchpad;
-  // Target of `pwragent://thread/…` chips in the transcript. Navigation-only:
-  // the scheme never carries an action, so this is the entire surface it can
-  // reach. Mirrors the tray/notification `onShowThreadRequested` path below.
+  // A remote thread link joins the main window's local list before opening,
+  // matching Cmd+K federated results. A separate chip action owns the
+  // instance-wide remote viewer window, so an ordinary click stays here.
   const showThreadFromLink = useCallback(
     (request: {
       backend: AppServerBackendKind;
       instanceId?: FederationInstanceId;
+      instanceLabel?: string;
+      inThreadList?: boolean;
       threadId: string;
     }): void => {
       if (request.instanceId) {
         const windowTarget = readRendererFederationTarget();
         if (windowTarget?.instanceId !== request.instanceId) {
+          // A remote viewer is already scoped to another owner. Keep its
+          // cross-instance navigation window-scoped; viewer-owned local pins
+          // belong to the unscoped main window only.
+          if (windowTarget) {
+            const target = {
+              scope: "remote" as const,
+              instanceId: request.instanceId,
+            };
+            void desktopApi?.openFederationWindow?.({
+              target,
+              initialThread: {
+                backend: request.backend,
+                target,
+                threadId: request.threadId,
+              },
+            });
+            return;
+          }
+          if (request.inThreadList) {
+            setMainView("thread");
+            void showThread({
+              backend: request.backend,
+              threadId: request.threadId,
+            });
+            return;
+          }
           const target = {
             scope: "remote" as const,
             instanceId: request.instanceId,
           };
-          void desktopApi?.openFederationWindow?.({
-            target,
-            initialThread: {
+          void (async () => {
+            try {
+              await desktopApi?.addRemoteThreadPin?.({
+                ref: {
+                  backend: request.backend,
+                  target,
+                  threadId: request.threadId,
+                },
+                instanceLabel: request.instanceLabel,
+              });
+            } catch (error) {
+              console.warn("Adding the remote thread to this PwrAgent failed.", error);
+              return;
+            }
+            setMainView("thread");
+            await showThread({
               backend: request.backend,
-              target,
               threadId: request.threadId,
-            },
-          });
+            });
+          })();
           return;
         }
       }
@@ -959,6 +999,27 @@ function DesktopAppShell(props: {
       void showThread({ backend: request.backend, threadId: request.threadId });
     },
     [desktopApi, showThread],
+  );
+  const openRemoteViewerFromLink = useCallback(
+    (request: {
+      backend: AppServerBackendKind;
+      instanceId: FederationInstanceId;
+      threadId: string;
+    }): void => {
+      const target = {
+        scope: "remote" as const,
+        instanceId: request.instanceId,
+      };
+      void desktopApi?.openFederationWindow?.({
+        target,
+        initialThread: {
+          backend: request.backend,
+          target,
+          threadId: request.threadId,
+        },
+      });
+    },
+    [desktopApi],
   );
   const restoreHistoryLocation = useCallback(
     (location: NavigationHistoryLocation): void => {
@@ -1720,6 +1781,7 @@ function DesktopAppShell(props: {
   return (
     <TranscriptLinkProvider
       activeThread={navigation.selectedThread}
+      onOpenRemoteViewer={openRemoteViewerFromLink}
       onShowThread={showThreadFromLink}
       threads={navigation.threads}
     >

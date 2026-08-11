@@ -22,7 +22,9 @@ import {
 
 export type ResolvedThreadLink = {
   backend: AppServerBackendKind;
+  inThreadList?: boolean;
   instanceId?: FederationInstanceId;
+  instanceLabel?: string;
   threadId: string;
   title: string;
   titleSource?: AppServerThreadTitleSource;
@@ -37,6 +39,7 @@ export type ThreadLinkContextValue = {
    * rather than a chip that goes nowhere.
    */
   resolve: (ref: ThreadLinkRef) => ResolvedThreadLink | undefined;
+  openRemoteViewer: (link: ResolvedThreadLink) => void;
   show: (link: ResolvedThreadLink) => void;
   getSnapshot: (link: ResolvedThreadLink) => ResolvedThreadLink;
   subscribe: (link: ResolvedThreadLink, listener: () => void) => () => void;
@@ -55,7 +58,11 @@ function threadSummaryLink(thread: NavigationThreadSummary): ResolvedThreadLink 
   const target = thread.federation?.ref.target;
   return {
     backend: thread.source,
+    inThreadList: true,
     ...(target?.scope === "remote" ? { instanceId: target.instanceId } : {}),
+    ...(thread.federation?.instanceLabel
+      ? { instanceLabel: thread.federation.instanceLabel }
+      : {}),
     threadId: thread.id,
     title: thread.title,
     titleSource: thread.titleSource,
@@ -72,6 +79,7 @@ function sameThreadLink(
     left
     && left.title === right.title
     && left.titleSource === right.titleSource
+    && left.instanceLabel === right.instanceLabel
     && left.gitBranch === right.gitBranch
     && linkedDirectoryMetadata(left.linkedDirectories)
       === linkedDirectoryMetadata(right.linkedDirectories)
@@ -102,6 +110,7 @@ function threadLinkMetadataKey(threads: NavigationThreadSummary[]): string {
       thread.id,
       thread.title,
       thread.titleSource,
+      thread.federation?.instanceLabel ?? null,
       thread.gitBranch ?? null,
       linkedDirectoryMetadata(thread.linkedDirectories),
     ]),
@@ -207,9 +216,17 @@ export function useLiveThreadLink(link: ResolvedThreadLink): ResolvedThreadLink 
 
 export function ThreadLinkProvider(props: {
   children: ReactNode;
+  onOpenRemoteViewer?: (request: {
+    backend: AppServerBackendKind;
+    instanceId: FederationInstanceId;
+    instanceLabel?: string;
+    threadId: string;
+  }) => void;
   onShowThread: (request: {
     backend: AppServerBackendKind;
     instanceId?: FederationInstanceId;
+    instanceLabel?: string;
+    inThreadList?: boolean;
     threadId: string;
   }) => void;
   threads: NavigationThreadSummary[];
@@ -248,6 +265,8 @@ export function ThreadLinkProvider(props: {
   // current data at each membership change without listing them as deps.
   const onShowThreadRef = useRef(onShowThread);
   onShowThreadRef.current = onShowThread;
+  const onOpenRemoteViewerRef = useRef(props.onOpenRemoteViewer);
+  onOpenRemoteViewerRef.current = props.onOpenRemoteViewer;
 
   const value = useMemo<ThreadLinkContextValue>(() => {
     const byThreadId = new Map<string, ResolvedThreadLink>();
@@ -269,6 +288,17 @@ export function ThreadLinkProvider(props: {
     }
 
     return {
+      openRemoteViewer(link) {
+        if (!link.instanceId) {
+          return;
+        }
+        onOpenRemoteViewerRef.current?.({
+          backend: link.backend,
+          instanceId: link.instanceId,
+          ...(link.instanceLabel ? { instanceLabel: link.instanceLabel } : {}),
+          threadId: link.threadId,
+        });
+      },
       resolve(ref) {
         let resolved: ResolvedThreadLink | undefined;
         if (ref.instanceId) {
@@ -308,6 +338,8 @@ export function ThreadLinkProvider(props: {
         onShowThreadRef.current({
           backend: link.backend,
           ...(link.instanceId ? { instanceId: link.instanceId } : {}),
+          ...(link.instanceLabel ? { instanceLabel: link.instanceLabel } : {}),
+          ...(link.instanceId && link.inThreadList ? { inThreadList: true } : {}),
           threadId: link.threadId,
         });
       },
