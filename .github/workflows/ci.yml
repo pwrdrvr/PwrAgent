@@ -205,6 +205,88 @@ jobs:
             apps/desktop/release-stage/dist/SHA256SUMS
           retention-days: 7
 
+  windows-signing-preflight:
+    name: Windows signing preflight (label-gated)
+    # The preflight is intentionally credential-free so forks can prove that
+    # a fresh PowerShell 7 process resolves Invoke-TrustedSigning. The actual
+    # signing job below remains limited to same-repository PRs and protected by
+    # the windows-signing environment.
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:windows-signing') }}
+    runs-on: windows-2022
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+        with:
+          persist-credentials: false
+
+      - name: Install and verify TrustedSigning
+        shell: pwsh -NoProfile -NonInteractive -File {0}
+        run: ./scripts/release/install-trusted-signing.ps1
+
+  windows-signing:
+    name: Windows signed installer (protected, label-gated)
+    needs: [changes, windows-signing-preflight]
+    if: >-
+      ${{
+        github.event_name == 'pull_request'
+        && contains(github.event.pull_request.labels.*.name, 'ci:windows-signing')
+        && github.event.pull_request.head.repo.full_name == github.repository
+      }}
+    environment: windows-signing
+    # Match the release job's supported Visual Studio toolchain.
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@e19a1a140ed1851a536fcc2cc116e9d3df6b0ce9 # v1.2.0
+        timeout-minutes: 15
+        with:
+          node-version: 24.14.1
+          working-directory: .
+
+      - name: Install and verify TrustedSigning
+        shell: pwsh -NoProfile -NonInteractive -File {0}
+        run: ./scripts/release/install-trusted-signing.ps1
+
+      - name: Package signed Windows installer
+        timeout-minutes: 25
+        env:
+          WIN_AZURE_SIGN_PUBLISHER_NAME: ${{ vars.WIN_AZURE_SIGN_PUBLISHER_NAME }}
+          WIN_AZURE_SIGN_ENDPOINT: ${{ vars.WIN_AZURE_SIGN_ENDPOINT }}
+          WIN_AZURE_SIGN_ACCOUNT: ${{ vars.WIN_AZURE_SIGN_ACCOUNT }}
+          WIN_AZURE_SIGN_PROFILE: ${{ vars.WIN_AZURE_SIGN_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: node apps/desktop/scripts/release.mjs --win --no-publish --require-signing
+
+      - name: Upload signed Windows installer artifact
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          name: windows-signed-installer-pr
+          path: |
+            apps/desktop/release-stage/dist/*.exe
+            apps/desktop/release-stage/dist/*.exe.blockmap
+            apps/desktop/release-stage/dist/SHA256SUMS
+          retention-days: 7
+
   desktop-e2e:
     name: Desktop E2E
     runs-on: ubuntu-latest
