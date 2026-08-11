@@ -1672,26 +1672,62 @@ type OnboardingBackendId =
   | "qwen"
   | "grok";
 
+type OnboardingDesktopPlatform = "darwin" | "win32" | "linux";
+type OnboardingInstallCommand = { label: string; command: string };
+
+function onboardingDesktopPlatform(platform?: string): OnboardingDesktopPlatform {
+  if (platform === "win32" || platform === "linux") return platform;
+  return "darwin";
+}
+
+function onboardingPlatformLabel(platform: OnboardingDesktopPlatform): string {
+  if (platform === "win32") return "Windows";
+  if (platform === "linux") return "Linux";
+  return "macOS";
+}
+
 const ONBOARDING_BACKENDS: ReadonlyArray<{
   id: OnboardingBackendId;
   name: string;
   description: string;
   docsUrl: string;
-  installCommands: ReadonlyArray<{ label: string; command: string }>;
+  installCommands: Record<
+    OnboardingDesktopPlatform,
+    ReadonlyArray<OnboardingInstallCommand>
+  >;
+  platformNotes?: Partial<Record<OnboardingDesktopPlatform, string>>;
 }> = [
   {
     id: "codex",
     name: "Codex CLI",
     description:
       "OpenAI's coding agent. Sign in with your ChatGPT account after install.",
-    docsUrl: "https://github.com/openai/codex",
-    installCommands: [
-      {
-        label: "Homebrew (refresh first)",
-        command: "brew update && brew install --cask codex",
-      },
-      { label: "npm", command: "npm install -g @openai/codex" },
-    ],
+    docsUrl: "https://learn.chatgpt.com/docs/codex/cli",
+    installCommands: {
+      darwin: [
+        {
+          label: "Recommended",
+          command: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        },
+        { label: "Homebrew", command: "brew install --cask codex" },
+        { label: "npm", command: "npm install -g @openai/codex" },
+      ],
+      linux: [
+        {
+          label: "Recommended",
+          command: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        },
+        { label: "npm", command: "npm install -g @openai/codex" },
+      ],
+      win32: [
+        {
+          label: "PowerShell (recommended)",
+          command:
+            'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
+        },
+        { label: "npm", command: "npm install -g @openai/codex" },
+      ],
+    },
   },
   {
     id: "gemini",
@@ -1699,35 +1735,111 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
     description:
       "Google's terminal coding agent with Google-account and API-key login options.",
     docsUrl: "https://geminicli.com/docs/get-started/installation/",
-    installCommands: [
-      { label: "Homebrew", command: "brew install gemini-cli" },
-      { label: "npm", command: "npm install -g @google/gemini-cli" },
-    ],
+    installCommands: {
+      darwin: [
+        { label: "Homebrew", command: "brew install gemini-cli" },
+        { label: "npm", command: "npm install -g @google/gemini-cli" },
+      ],
+      linux: [
+        { label: "npm", command: "npm install -g @google/gemini-cli" },
+      ],
+      win32: [
+        { label: "npm", command: "npm install -g @google/gemini-cli" },
+      ],
+    },
   },
   {
     id: "kimi",
     name: "Kimi Code",
     description:
-      "Moonshot AI's terminal coding agent with account or API-key login.",
-    docsUrl: "https://www.kimi.com/help/kimi-code/cli-getting-started",
-    installCommands: [
-      {
-        label: "macOS / Linux",
-        command: "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
-      },
-      { label: "npm", command: "npm install -g @moonshot-ai/kimi-code" },
-    ],
+      "Moonshot AI's Node.js coding agent. Run /login for OAuth or an API key.",
+    docsUrl: "https://moonshotai.github.io/kimi-code/en/guides/getting-started",
+    installCommands: {
+      darwin: [
+        {
+          label: "Recommended",
+          command: "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
+        },
+        {
+          label: "npm (Node.js 22.19+)",
+          command: "npm install -g @moonshot-ai/kimi-code",
+        },
+      ],
+      linux: [
+        {
+          label: "Recommended",
+          command: "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
+        },
+        {
+          label: "npm (Node.js 22.19+)",
+          command: "npm install -g @moonshot-ai/kimi-code",
+        },
+      ],
+      win32: [
+        {
+          label: "PowerShell (recommended)",
+          command: "irm https://code.kimi.com/kimi-code/install.ps1 | iex",
+        },
+        {
+          label: "npm (Node.js 22.19+)",
+          command: "npm install -g @moonshot-ai/kimi-code",
+        },
+      ],
+    },
+    platformNotes: {
+      win32:
+        "Install Git for Windows before first launch; Kimi uses its bundled Git Bash.",
+    },
   },
   {
     id: "qwen",
     name: "Qwen Code",
     description:
-      "Qwen's agentic coding CLI with account and API-provider options.",
+      "Qwen's coding agent. Run /auth for ModelStudio, third-party, or custom providers.",
     docsUrl: "https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/",
-    installCommands: [
-      { label: "Homebrew", command: "brew install qwen-code" },
-      { label: "npm", command: "npm install -g @qwen-code/qwen-code@latest" },
-    ],
+    installCommands: {
+      darwin: [
+        {
+          label: "Recommended",
+          command:
+            "curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh | bash",
+        },
+        { label: "Homebrew", command: "brew install qwen-code" },
+        {
+          label: "npm (Node.js 22+)",
+          command: "npm install -g @qwen-code/qwen-code@latest",
+        },
+      ],
+      linux: [
+        {
+          label: "Recommended",
+          command:
+            "curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh | bash",
+        },
+        { label: "Homebrew", command: "brew install qwen-code" },
+        {
+          label: "npm (Node.js 22+)",
+          command: "npm install -g @qwen-code/qwen-code@latest",
+        },
+      ],
+      win32: [
+        {
+          label: "PowerShell (recommended)",
+          command:
+            "irm https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1 | iex",
+        },
+        {
+          label: "npm (Node.js 22+)",
+          command: "npm install -g @qwen-code/qwen-code@latest",
+        },
+      ],
+    },
+    platformNotes: {
+      darwin: "Qwen OAuth has ended; choose a provider from /auth after launch.",
+      linux: "Qwen OAuth has ended; choose a provider from /auth after launch.",
+      win32:
+        "Restart the terminal after install. Qwen OAuth has ended; use /auth after launch.",
+    },
   },
   {
     id: "grok",
@@ -1735,12 +1847,26 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
     description:
       "xAI's coding agent. The CLI opens browser sign-in on first launch.",
     docsUrl: "https://docs.x.ai/build/overview",
-    installCommands: [
-      {
-        label: "macOS / Linux",
-        command: "curl -fsSL https://x.ai/cli/install.sh | bash",
-      },
-    ],
+    installCommands: {
+      darwin: [
+        {
+          label: "Recommended",
+          command: "curl -fsSL https://x.ai/cli/install.sh | bash",
+        },
+      ],
+      linux: [
+        {
+          label: "Recommended",
+          command: "curl -fsSL https://x.ai/cli/install.sh | bash",
+        },
+      ],
+      win32: [
+        {
+          label: "PowerShell",
+          command: "irm https://x.ai/cli/install.ps1 | iex",
+        },
+      ],
+    },
   },
 ];
 
@@ -1759,7 +1885,12 @@ function installedOnboardingBackendNames(
 
 function selectedCodexCandidate(snapshot: DesktopSettingsSnapshot | undefined) {
   return snapshot?.models.codex.discovery.candidates.find(
-    (candidate) => candidate.selected && candidate.executable,
+    (candidate) =>
+      candidate.selected
+      && candidate.executable
+      && Boolean(candidate.version)
+      && !candidate.failureReason
+      && !candidate.versionFailureReason,
   );
 }
 
@@ -1790,6 +1921,7 @@ export function BackendRequirementsStep(props: {
   const snapshot = props.settings.snapshot;
   const discovery = snapshot?.models.codex.discovery;
   const codexCandidate = selectedCodexCandidate(snapshot);
+  const platform = onboardingDesktopPlatform(props.desktopApi?.platform);
   const onAcpEntriesChange = props.onAcpEntriesChange;
 
   const updateAcpEntries = useCallback(
@@ -1860,6 +1992,8 @@ export function BackendRequirementsStep(props: {
   const activeDefinition =
     ONBOARDING_BACKENDS.find((backend) => backend.id === activeBackend)
     ?? ONBOARDING_BACKENDS[0];
+  const activeInstallCommands = activeDefinition.installCommands[platform];
+  const activePlatformNote = activeDefinition.platformNotes?.[platform];
   const activeAcpEntry =
     activeBackend === "codex"
       ? undefined
@@ -1880,7 +2014,7 @@ export function BackendRequirementsStep(props: {
           Install at least one AI provider
         </h1>
         <p className="onboarding-wizard__sub">
-          PwrAgent connects to provider CLIs already installed on this Mac.
+          PwrAgent connects to provider CLIs already installed on this computer.
           Pick a tab for setup instructions, then refresh discovery.
         </p>
       </header>
@@ -1962,17 +2096,19 @@ export function BackendRequirementsStep(props: {
                     <li key={candidate.command}>
                       <code>{candidate.command}</code>
                       <span className="onboarding-wizard__prereq-paths-reason">
-                        {candidate.failureReason ?? "not executable"}
+                        {candidate.failureReason
+                          ?? candidate.versionFailureReason
+                          ?? "not executable"}
                       </span>
                     </li>
                   ))}
                 </ul>
               ) : (
                 <p>
-                  Homebrew installs are checked directly at both{" "}
-                  <code>/usr/local/bin/codex</code> (Intel) and{" "}
-                  <code>/opt/homebrew/bin/codex</code> (Apple silicon), even
-                  when the app&rsquo;s PATH does not include them.
+                  PwrAgent checks PATH and common{" "}
+                  {onboardingPlatformLabel(platform)} install locations. If
+                  you just installed Codex, refresh discovery after the
+                  installer finishes.
                 </p>
               )}
             </details>
@@ -1980,14 +2116,22 @@ export function BackendRequirementsStep(props: {
         ) : null}
 
         <div className="onboarding-wizard__prereq-install">
-          <strong>Install or update {activeDefinition.name}:</strong>
+          <strong>
+            Install or update {activeDefinition.name} on{" "}
+            {onboardingPlatformLabel(platform)}:
+          </strong>
           <ul>
-            {activeDefinition.installCommands.map((install) => (
+            {activeInstallCommands.map((install) => (
               <li key={install.command}>
                 {install.label}: <code>{install.command}</code>
               </li>
             ))}
           </ul>
+          {activePlatformNote ? (
+            <p className="onboarding-wizard__prereq-install-note">
+              {activePlatformNote}
+            </p>
+          ) : null}
           <a href={activeDefinition.docsUrl} target="_blank" rel="noreferrer">
             Open official setup guide ↗
           </a>
