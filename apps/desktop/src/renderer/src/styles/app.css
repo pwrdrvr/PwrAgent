@@ -913,67 +913,122 @@ textarea,
   container: sidebar / inline-size;
 }
 
-/* Thread-list quick-jump popup (⌘F while the sidebar is focused). Floats below
-   the masthead, over the thread list. */
-.sidebar-search {
-  position: absolute;
-  z-index: 40;
-  top: 52px;
-  left: 10px;
-  right: 10px;
+/* Thread-jump palette (⌘K, or ⌘F while the sidebar is focused). A centered
+   modal over a scrim, portalled onto document.body — see the component's
+   comment for why it cannot live inside `.sidebar`.
+
+   Layer 140, not the 120 the Settings and Star Map layers use: ⌘K is a
+   window-global chord that stays live inside text fields, so the palette has
+   to clear whichever full-window layer is up. Same reasoning as
+   `.pr-status-card` and `.messaging-status-tooltip`. */
+.jump-palette {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 11vh 16px 16px;
+  background: var(--scrim-strong);
+  animation: jump-palette-fade 110ms ease both;
+}
+
+.jump-palette__panel {
   display: flex;
   flex-direction: column;
-  max-height: calc(100% - 64px);
+  width: min(640px, 100%);
+  max-height: 66vh;
   overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
+  animation: jump-palette-rise 130ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
 }
 
-.sidebar-search__field {
+@keyframes jump-palette-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes jump-palette-rise {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jump-palette,
+  .jump-palette__panel {
+    animation: none;
+  }
+}
+
+.jump-palette__field {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 13px 15px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.sidebar-search__icon {
+.jump-palette__icon {
   display: inline-flex;
   color: var(--text-muted);
 }
 
-.sidebar-search__input {
+.jump-palette__input {
   flex: 1;
   min-width: 0;
   border: none;
   background: transparent;
   color: var(--text-primary);
-  font: inherit;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 500;
   outline: none;
 }
 
-.sidebar-search__input::placeholder {
+.jump-palette__input::placeholder {
   color: var(--text-muted);
 }
 
-.sidebar-search__results {
+.jump-palette__esc {
+  flex: none;
+  padding: 3px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.jump-palette__results {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
   margin: 0;
-  padding: 4px;
+  padding: 6px;
   overflow-y: auto;
   list-style: none;
 }
 
-.sidebar-search__result {
+/* One line per thread: the title flexes and everything that disambiguates it
+   rides the right edge in fixed columns. Two-line rows inside a ~300px rail
+   were what truncated branch names mid-word. */
+.jump-palette__row {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -982,72 +1037,119 @@ textarea,
   cursor: pointer;
 }
 
-.sidebar-search__result.is-active {
+/* The tint alone is a near-invisible delta against the elevated panel in dark
+   theme, and this is the one surface steered entirely by that cue. */
+.jump-palette__row.is-active {
   background: var(--bg-row-active);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 
-.sidebar-search__result-title {
+.jump-palette__row-title {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
   color: var(--text-primary);
+  font-size: 13.5px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sidebar-search__result-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  overflow: hidden;
+.jump-palette__row-pr {
+  flex: none;
+  color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-muted);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* `direction: rtl` puts the ellipsis at the START, so a long `agent/…` prefix
+   gives way before the branch leaf does. The content is neutral-punctuated
+   ASCII, so no glyph reordering occurs. */
+.jump-palette__row-branch {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sidebar-search__result-meta .chip--agent {
+.jump-palette__row-repo {
   flex: none;
-  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.jump-palette__row .chip--agent,
+.jump-palette__row .chip--instance {
+  flex: none;
+  height: 19px;
   padding: 0 6px;
   font-family: var(--font-sans, sans-serif);
   font-size: 10px;
 }
 
-.sidebar-search__empty {
+.jump-palette__empty {
   margin: 0;
-  padding: 12px;
-  color: var(--text-muted);
-  font-size: 12px;
+  padding: 34px 20px;
+  color: var(--text-subtle);
+  font-size: 13px;
   text-align: center;
 }
 
 /* ⌘K federated section: remote hits append below the instant local rows. */
-.sidebar-search__section-divider {
-  margin: 2px 0 0;
-  padding: 6px 8px 2px;
+.jump-palette__section-divider {
+  margin: 4px 0 0;
+  padding: 10px 10px 5px;
   border-top: 1px solid var(--border-subtle);
   color: var(--text-muted);
-  font-size: 10px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-.sidebar-search__loading {
-  padding: 6px 8px 8px;
+.jump-palette__foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 9px 15px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.jump-palette__foot-spacer {
+  flex: 1;
+}
+
+.jump-palette__foot-remote {
   color: var(--text-muted);
-  font-size: 11px;
   font-style: italic;
 }
 
-.sidebar-search__result-meta .chip--instance {
-  flex: none;
-  height: 18px;
-  padding: 0 6px;
-  font-family: var(--font-sans, sans-serif);
-  font-size: 10px;
+.jump-palette__foot-count {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Instance chip: peer celestial icon (placeholder glyph when unassigned)

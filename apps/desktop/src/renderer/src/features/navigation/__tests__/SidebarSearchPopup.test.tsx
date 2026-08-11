@@ -308,4 +308,125 @@ describe("SidebarSearchPopup", () => {
       screen.queryByText("Searching other instances…"),
     ).not.toBeInTheDocument();
   });
+
+  it("portals a modal dialog out of whatever mounted it", async () => {
+    // The sidebar is a container-query element — a containing block for fixed
+    // descendants — and ⌘B hides it with `display: none`. A palette left
+    // inside it would center on the rail and vanish with it.
+    render(
+      <aside className="sidebar">
+        <SidebarSearchPopup
+          threads={[localThread({})]}
+          onJumpToThread={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </aside>,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Jump to thread" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog.closest(".sidebar")).toBeNull();
+    await settleRemoteSearch();
+  });
+
+  it("closes on a scrim press but not on a press inside the panel", async () => {
+    const onClose = vi.fn();
+    render(
+      <SidebarSearchPopup
+        threads={[localThread({})]}
+        onJumpToThread={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Jump to thread" });
+    fireEvent.pointerDown(dialog);
+    expect(onClose).not.toHaveBeenCalled();
+
+    const scrim = dialog.parentElement;
+    expect(scrim).not.toBeNull();
+    fireEvent.pointerDown(scrim as HTMLElement);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await settleRemoteSearch();
+  });
+
+  it("publishes the arrowed-to row through aria-activedescendant", async () => {
+    render(
+      <SidebarSearchPopup
+        threads={[
+          localThread({ id: "one", title: "First fix" }),
+          localThread({ id: "two", title: "Second fix" }),
+        ]}
+        onJumpToThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Jump to thread" });
+    fireEvent.change(input, { target: { value: "fix" } });
+
+    const rows = screen.getAllByRole("option");
+    expect(input).toHaveAttribute("aria-activedescendant", rows[0]?.id);
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    expect(input).toHaveAttribute("aria-activedescendant", rows[1]?.id);
+    await settleRemoteSearch();
+  });
+
+  it("keeps Tab inside the modal instead of walking into the dimmed app", async () => {
+    render(
+      <SidebarSearchPopup
+        threads={[localThread({})]}
+        onJumpToThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Jump to thread" });
+    const tab = fireEvent.keyDown(input, { key: "Tab" });
+
+    // fireEvent returns false once a handler called preventDefault.
+    expect(tab).toBe(false);
+    await settleRemoteSearch();
+  });
+
+  it("counts local and remote hits together in the footer", async () => {
+    jumpSearchRemoteThreads.mockResolvedValue({
+      results: [remoteThread({ threadId: "r1", title: "Remote fix" })],
+    });
+
+    render(
+      <SidebarSearchPopup
+        threads={[localThread({ title: "Local fix" })]}
+        onJumpToThread={vi.fn()}
+        onJumpToRemoteThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Jump to thread" }), {
+      target: { value: "fix" },
+    });
+    await settleRemoteSearch();
+
+    expect(screen.getByText("2 results")).toBeInTheDocument();
+  });
+
+  it("counts a lone hit in the singular", async () => {
+    render(
+      <SidebarSearchPopup
+        threads={[localThread({ title: "Local fix" })]}
+        onJumpToThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Jump to thread" }), {
+      target: { value: "fix" },
+    });
+
+    expect(screen.getByText("1 result")).toBeInTheDocument();
+    await settleRemoteSearch();
+  });
 });

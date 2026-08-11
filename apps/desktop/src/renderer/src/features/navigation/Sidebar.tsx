@@ -1454,6 +1454,10 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside className="sidebar" aria-label="Threads">
+      {/* Mounted here because this is where the thread set and the jump
+          handlers already live, but it PORTALS onto document.body — the
+          sidebar is a container-query element (a containing block for fixed
+          descendants) and ⌘B hides it with `display: none`. */}
       {props.threadJumpOpen ? (
         <SidebarSearchPopup
           threads={props.threads}
