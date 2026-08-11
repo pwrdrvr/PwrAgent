@@ -58,6 +58,8 @@ type CaptureIndexEntry = {
 
 const indexWriteQueues = new Map<string, Promise<void>>();
 const protocolCaptureLog = getMainLogger("pwragent:protocol-capture");
+const CAPTURE_DIRECTORY_MODE = 0o700;
+const CAPTURE_FILE_MODE = 0o600;
 
 export async function readProtocolCaptureFile(
   filePath: string,
@@ -124,7 +126,6 @@ export class ProtocolCaptureStore {
   async open(): Promise<void> {
     const nextWrite = this.writeQueue.then(async () => {
       await this.ensureInitialized();
-      await fs.appendFile(this.captureFilePath, "", "utf8");
     });
     this.writeQueue = nextWrite;
     await nextWrite;
@@ -184,7 +185,16 @@ export class ProtocolCaptureStore {
       return;
     }
 
-    await fs.mkdir(this.params.rootDir, { recursive: true });
+    await fs.mkdir(this.params.rootDir, {
+      mode: CAPTURE_DIRECTORY_MODE,
+      recursive: true,
+    });
+    await fs.chmod(this.params.rootDir, CAPTURE_DIRECTORY_MODE);
+    await fs.appendFile(this.captureFilePath, "", {
+      encoding: "utf8",
+      mode: CAPTURE_FILE_MODE,
+    });
+    await fs.chmod(this.captureFilePath, CAPTURE_FILE_MODE);
     await this.writeIndexQueued();
     this.initialized = true;
   }
@@ -265,7 +275,10 @@ async function writeJsonFileAtomically(
   value: Record<string, CaptureIndexEntry>,
 ): Promise<void> {
   const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  await fs.writeFile(tempPath, JSON.stringify(value, null, 2), "utf8");
+  await fs.writeFile(tempPath, JSON.stringify(value, null, 2), {
+    encoding: "utf8",
+    mode: CAPTURE_FILE_MODE,
+  });
   await fs.rename(tempPath, filePath);
 }
 

@@ -99,6 +99,37 @@ describe("ProtocolCaptureStore", () => {
     expect(index["capture-1"]?.threadIds).toEqual(["thread-1"]);
   });
 
+  it("restricts the capture directory and files to the current user", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const containerDir = await createTempDir();
+    cleanupPaths.push(containerDir);
+    const rootDir = path.join(containerDir, "captures");
+    await fs.mkdir(rootDir, { mode: 0o755 });
+    await fs.chmod(rootDir, 0o755);
+    const store = new ProtocolCaptureStore({
+      backend: "codex",
+      captureId: "private-capture",
+      rootDir,
+    });
+
+    await store.append({
+      direction: "outbound",
+      raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"thread/list","params":{}}',
+      envelope: {
+        id: "rpc-1",
+        method: "thread/list",
+        params: {},
+      },
+    });
+    await store.close();
+
+    expect((await fs.stat(rootDir)).mode & 0o777).toBe(0o700);
+    expect((await fs.stat(store.captureFilePath)).mode & 0o777).toBe(0o600);
+    expect((await fs.stat(store.indexFilePath)).mode & 0o777).toBe(0o600);
+  });
+
   it("captures optional diagnostics without changing the raw JSON-RPC envelope", async () => {
     const rootDir = await createTempDir();
     cleanupPaths.push(rootDir);
@@ -197,6 +228,47 @@ describe("ProtocolCaptureStore", () => {
     await expect(
       fs.readFile(path.join(rootDir, "diagnostic-snippet.jsonl"), "utf8"),
     ).resolves.toBe(captureContents);
+  });
+
+  it("returns a partial handoff when capture finalization fails", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    let now = Date.parse("2026-08-10T12:00:00.000Z");
+    const captureFilePath = path.join(rootDir, "partial-snippet.jsonl");
+    const session = new CodexProtocolCaptureSession({
+      createCaptureId: () => "partial-snippet",
+      now: () => now,
+      rootDir,
+    });
+    await session.start();
+    await fs.rm(rootDir, { recursive: true, force: true });
+    await expect(
+      session.observer.onMessage({
+        direction: "outbound",
+        raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"thread/read","params":{"threadId":"thread-1"}}',
+        envelope: {
+          id: "rpc-1",
+          method: "thread/read",
+          params: { threadId: "thread-1" },
+        },
+      }),
+    ).rejects.toThrow();
+
+    now += 5_000;
+    const result = await session.stop();
+    expect(result).toMatchObject({
+      captureFilePath,
+      finalizationError: expect.stringContaining(
+        "Capture writes did not finish",
+      ),
+      startedAt: "2026-08-10T12:00:00.000Z",
+      stoppedAt: "2026-08-10T12:00:05.000Z",
+    });
+    expect(result?.finalizationError).toContain(
+      "Capture size could not be read",
+    );
+    expect(result?.sizeBytes).toBeUndefined();
+    expect(session.getStatus()).toEqual({ active: false, available: true });
   });
 
   it("creates an env-backed capture session only when recording is enabled", async () => {

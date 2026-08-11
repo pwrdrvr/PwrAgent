@@ -279,6 +279,9 @@ export function TroubleshootingSettings(props: {
       }
       setLastProtocolCapture(result);
       const handoff = buildCodexProtocolCaptureHandoffMessage(result);
+      const captureSize = result.sizeBytes === undefined
+        ? "Size unavailable"
+        : `Saved ${formatCodexProtocolCaptureSize(result.sizeBytes)}`;
       props.onShowNotice?.({
         actions: [
           {
@@ -292,9 +295,13 @@ export function TroubleshootingSettings(props: {
         copyText: handoff,
         detail: result.captureFilePath,
         id: `codex-protocol-capture:${result.stoppedAt}`,
-        message: `Saved ${formatCodexProtocolCaptureSize(result.sizeBytes)}. Review the capture before sharing it; raw protocol traffic can contain conversation or workspace content.`,
-        title: "Codex protocol capture saved",
-        tone: "success",
+        message: result.finalizationError
+          ? `${captureSize}. Finalization reported a warning, so the capture may be partial. Copy the details for the diagnostic path and warning.`
+          : `${captureSize}. Review the capture before sharing it; raw protocol traffic can contain conversation or workspace content.`,
+        title: result.finalizationError
+          ? "Codex protocol capture stopped with warning"
+          : "Codex protocol capture saved",
+        tone: result.finalizationError ? "warning" : "success",
       });
     } catch (error) {
       setProtocolCaptureError(
@@ -422,7 +429,15 @@ export function TroubleshootingSettings(props: {
           {lastProtocolCapture ? (
             <SettingsField
               label="Last capture"
-              sub={`${formatCodexProtocolCaptureSize(lastProtocolCapture.sizeBytes)} saved. Copy the details to hand the diagnostic path to another agent.`}
+              sub={[
+                lastProtocolCapture.sizeBytes === undefined
+                  ? "Size unavailable."
+                  : `${formatCodexProtocolCaptureSize(lastProtocolCapture.sizeBytes)} saved.`,
+                lastProtocolCapture.finalizationError
+                  ? "Finalization reported a warning; the capture may be partial."
+                  : "",
+                "Copy the details to hand the diagnostic path to another agent.",
+              ].filter(Boolean).join(" ")}
               control={
                 <SettingsCopyValue
                   copyValue={buildCodexProtocolCaptureHandoffMessage(

@@ -1285,6 +1285,49 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("shows a copyable warning when protocol capture finalization is partial", async () => {
+    const captureFilePath = "/diagnostics/protocol-captures/partial.jsonl";
+    const onShowNotice = vi.fn();
+    render(
+      <SettingsScreen
+        desktopApi={{
+          getCodexProtocolCaptureStatus: vi.fn(async () => ({
+            active: true as const,
+            available: true as const,
+            captureFilePath,
+            startedAt: "2026-08-10T12:00:00.000Z",
+          })),
+          startCodexProtocolCapture: vi.fn(),
+          stopCodexProtocolCapture: vi.fn(async () => ({
+            captureFilePath,
+            finalizationError: "Capture size could not be read.",
+            startedAt: "2026-08-10T12:00:00.000Z",
+            stoppedAt: "2026-08-10T12:00:05.000Z",
+          })),
+        }}
+        initialSection="troubleshooting"
+        onShowNotice={onShowNotice}
+        settings={createSettingsState()}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Stop Protocol Capture" }),
+    );
+    await waitFor(() => {
+      expect(onShowNotice).toHaveBeenCalledTimes(1);
+    });
+    expect(onShowNotice.mock.calls[0]?.[0]).toMatchObject({
+      detail: captureFilePath,
+      message: expect.stringContaining("Size unavailable"),
+      title: "Codex protocol capture stopped with warning",
+      tone: "warning",
+    });
+    expect(
+      screen.getByText(/Finalization reported a warning/),
+    ).toBeInTheDocument();
+  });
+
   it("saves thread pricing display chips", async () => {
     const baseSnapshot = createSnapshot();
     const settings = createSettingsState(

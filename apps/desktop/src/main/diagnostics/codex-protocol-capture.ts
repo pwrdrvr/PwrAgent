@@ -107,18 +107,43 @@ export class CodexProtocolCaptureSession {
       }
 
       this.activeCapture = undefined;
-      await capture.store.close();
-      const file = await fs.stat(capture.store.captureFilePath);
+      const finalizationErrors: string[] = [];
+      try {
+        await capture.store.close();
+      } catch (error) {
+        finalizationErrors.push(
+          `Capture writes did not finish: ${errorMessage(error)}`,
+        );
+      }
+      let sizeBytes: number | undefined;
+      try {
+        sizeBytes = (await fs.stat(capture.store.captureFilePath)).size;
+      } catch (error) {
+        finalizationErrors.push(
+          `Capture size could not be read: ${errorMessage(error)}`,
+        );
+      }
       const result: CodexProtocolCaptureResult = {
         captureFilePath: capture.store.captureFilePath,
-        sizeBytes: file.size,
+        ...(finalizationErrors.length > 0
+          ? { finalizationError: finalizationErrors.join(" ") }
+          : {}),
+        ...(sizeBytes === undefined ? {} : { sizeBytes }),
         startedAt: new Date(capture.startedAt).toISOString(),
         stoppedAt: new Date(this.now()).toISOString(),
       };
-      protocolCaptureLog.info("diagnostic capture stopped", {
-        path: result.captureFilePath,
-        sizeBytes: result.sizeBytes,
-      });
+      if (result.finalizationError) {
+        protocolCaptureLog.warn("diagnostic capture stopped with warning", {
+          error: result.finalizationError,
+          path: result.captureFilePath,
+          sizeBytes: result.sizeBytes,
+        });
+      } else {
+        protocolCaptureLog.info("diagnostic capture stopped", {
+          path: result.captureFilePath,
+          sizeBytes: result.sizeBytes,
+        });
+      }
       return result;
     });
   }
@@ -135,4 +160,8 @@ export class CodexProtocolCaptureSession {
     );
     return await result;
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

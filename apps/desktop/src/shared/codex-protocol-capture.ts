@@ -12,7 +12,8 @@ export type CodexProtocolCaptureStatus =
 
 export type CodexProtocolCaptureResult = {
   captureFilePath: string;
-  sizeBytes: number;
+  finalizationError?: string;
+  sizeBytes?: number;
   startedAt: string;
   stoppedAt: string;
 };
@@ -28,13 +29,19 @@ export function formatCodexProtocolCaptureSize(sizeBytes: number): string {
 export function buildCodexProtocolCaptureHandoffMessage(
   result: CodexProtocolCaptureResult,
 ): string {
+  const sizeLine = result.sizeBytes === undefined
+    ? "Capture size: unavailable"
+    : [
+        `Capture size: ${formatCodexProtocolCaptureSize(result.sizeBytes)}`,
+        `(${result.sizeBytes} bytes)`,
+      ].join(" ");
   return [
     "PwrAgent recorded a Codex App Server protocol capture.",
     `Capture path: ${result.captureFilePath}`,
-    [
-      `Capture size: ${formatCodexProtocolCaptureSize(result.sizeBytes)}`,
-      `(${result.sizeBytes} bytes)`,
-    ].join(" "),
+    sizeLine,
+    ...(result.finalizationError
+      ? [`Capture finalization warning: ${result.finalizationError}`]
+      : []),
     "Privacy note: Raw protocol traffic can contain conversation content, file paths, and tool output. Review the file before sharing it.",
   ].join("\n");
 }

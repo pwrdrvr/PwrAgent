@@ -25,4 +25,21 @@ describe("Codex protocol capture details", () => {
     expect(message).toContain("Capture size: 1.5 KB (1536 bytes)");
     expect(message).toContain("Review the file before sharing it.");
   });
+
+  it("preserves the path and warning when size finalization fails", () => {
+    const message = buildCodexProtocolCaptureHandoffMessage({
+      captureFilePath: "/diagnostics/protocol-captures/partial.jsonl",
+      finalizationError: "Capture size could not be read.",
+      startedAt: "2026-08-10T12:00:00.000Z",
+      stoppedAt: "2026-08-10T12:00:05.000Z",
+    });
+
+    expect(message).toContain(
+      "Capture path: /diagnostics/protocol-captures/partial.jsonl",
+    );
+    expect(message).toContain("Capture size: unavailable");
+    expect(message).toContain(
+      "Capture finalization warning: Capture size could not be read.",
+    );
+  });
 });
