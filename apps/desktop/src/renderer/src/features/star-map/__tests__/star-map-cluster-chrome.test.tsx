@@ -409,6 +409,224 @@ describe("star map overview zoom", () => {
   });
 });
 
+describe("star map load card in overview", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+  });
+
+  it("scales and parks clear of the counter-scaled instance", async () => {
+    const { container } = renderOrbit(
+      [
+        projectThread("a1", "/repo/alpha", "AlphaDir"),
+        projectThread("a2", "/repo/alpha", "AlphaDir"),
+      ],
+      {
+        readStarMapArrangement: vi.fn(async () => ({
+          entries: [
+            {
+              instanceId: "pwr_local",
+              threadKey: "system:load",
+              dx: 0,
+              dy: 0,
+              updatedAt: 10,
+              by: "pwr_local",
+            },
+          ],
+        })),
+        setStarMapCardPosition: vi.fn(async () => ({ entries: [] })),
+        readFederationInstanceLoad: vi.fn(async () => ({})),
+      },
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).not.toBeNull();
+    });
+    const shell = container.querySelector(
+      ".star-map-load-shell",
+    ) as HTMLElement;
+    const nearTop = Number.parseFloat(shell.style.top);
+
+    fireEvent.wheel(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { deltaY: 240, ctrlKey: true, clientX: 400, clientY: 300 },
+    );
+
+    await waitFor(() => {
+      expect(
+        (container.querySelector(".star-map-load-shell") as HTMLElement).style
+          .transform,
+      ).toContain("scale(");
+    });
+    const far = container.querySelector(".star-map-load-shell") as HTMLElement;
+    const scale = Number(
+      /scale\(([\d.]+)\)/.exec(far.style.transform)![1],
+    );
+    expect(scale).toBeGreaterThan(1);
+    // Parked further out by the same factor, so the readout clears the
+    // instance that just grew underneath it instead of being buried.
+    expect(Number.parseFloat(far.style.top)).toBeCloseTo(nearTop * scale, 5);
+    // Same factor as the instance, so the two stay one readable group.
+    const anchor = container.querySelector(
+      ".star-map__anchor",
+    ) as HTMLElement;
+    expect(/scale\(([\d.]+)\)/.exec(anchor.style.transform)![1]).toBe(
+      String(scale),
+    );
+  });
+});
+
+describe("clicking the sky releases focus back to the map", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+  });
+
+  it("takes focus off a chat composer so the flight keys work again", async () => {
+    // The pan's preventDefault suppresses the browser's default focus
+    // change, so a press on bare sky never blurred the composer (or a
+    // terminal) — the WASD guard kept seeing keys aimed at text, and the
+    // only way out was closing the map.
+    const { container } = renderOrbit([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+      projectThread("a2", "/repo/alpha", "AlphaDir"),
+    ]);
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread a1/ }),
+    );
+    const composer = (await screen.findByRole("textbox", {
+      name: /Message Thread a1/,
+    })) as HTMLTextAreaElement;
+    composer.focus();
+    expect(document.activeElement).toBe(composer);
+
+    fireEvent.pointerDown(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { button: 0, clientX: 40, clientY: 600 },
+    );
+
+    // Focus lands on the map layer — where Escape and the flight keys
+    // already listen — not merely off the composer.
+    expect(document.activeElement).toBe(
+      container.querySelector(".star-map"),
+    );
+  });
+});
+
+describe("star map load card overview fixes", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+  });
+
+  const loadCardApi = {
+    readStarMapArrangement: vi.fn(async () => ({
+      entries: [
+        {
+          instanceId: "pwr_local",
+          threadKey: "system:load",
+          dx: 0,
+          dy: 60,
+          updatedAt: 10,
+          by: "pwr_local",
+        },
+      ],
+    })),
+    setStarMapCardPosition: vi.fn(async () => ({ entries: [] })),
+    readFederationInstanceLoad: vi.fn(async () => ({})),
+  };
+
+  function renderLanes(threads: NavigationThreadSummary[]) {
+    window.localStorage.setItem(
+      "pwragent.starMap.viewPreferences",
+      JSON.stringify({ layout: "lanes" }),
+    );
+    const desktopApi: DesktopApi = { ...buildDesktopApi(), ...loadCardApi };
+    return render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={threads}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+  }
+
+  it("never scales in the lanes lens, where nothing else does", async () => {
+    // `overview` is derived from view.scale alone and lanes zooms through
+    // the same clamp, so without the orbit gate a lane's load card
+    // ballooned over its own unscaled column.
+    const { container } = renderLanes([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+    ]);
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).not.toBeNull();
+    });
+
+    fireEvent.wheel(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { deltaY: 240, ctrlKey: true, clientX: 400, clientY: 300 },
+    );
+
+    await waitFor(() => {
+      const canvas = container.querySelector(
+        ".star-map__canvas",
+      ) as HTMLElement;
+      expect(canvas.style.transform).toContain("scale(0.");
+    });
+    const shell = container.querySelector(
+      ".star-map-load-shell",
+    ) as HTMLElement;
+    expect(shell.style.transform).not.toContain("scale(");
+  });
+
+  it("scales a hand-placed offset with the base, and refuses drags", async () => {
+    const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
+    const { container } = renderOrbit(
+      [projectThread("a1", "/repo/alpha", "AlphaDir")],
+      { ...loadCardApi, setStarMapCardPosition },
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-load-card")).not.toBeNull();
+    });
+    const nearTop = Number.parseFloat(
+      (container.querySelector(".star-map-load-shell") as HTMLElement).style
+        .top,
+    );
+
+    fireEvent.wheel(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { deltaY: 240, ctrlKey: true, clientX: 400, clientY: 300 },
+    );
+    await waitFor(() => {
+      expect(
+        (container.querySelector(".star-map-load-shell") as HTMLElement).style
+          .transform,
+      ).toContain("scale(");
+    });
+
+    const shell = container.querySelector(
+      ".star-map-load-shell",
+    ) as HTMLElement;
+    const scale = Number(/scale\(([\d.]+)\)/.exec(shell.style.transform)![1]);
+    // The WHOLE position scales — base and stored offset together — so a
+    // hand-placed card keeps its place in the group that grew around it.
+    expect(Number.parseFloat(shell.style.top)).toBeCloseTo(
+      nearTop * scale,
+      5,
+    );
+
+    // And a drag in this state commits nothing: an offset measured against
+    // the scaled base would re-read as a different position at zoom 1.
+    setStarMapCardPosition.mockClear();
+    fireEvent.pointerDown(shell, { button: 0, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(window, { clientX: 420, clientY: 360 });
+    fireEvent.pointerUp(window, { clientX: 420, clientY: 360 });
+    expect(setStarMapCardPosition).not.toHaveBeenCalled();
+  });
+});
+
 describe("star map chat cards in map space", () => {
   afterEach(() => {
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");
