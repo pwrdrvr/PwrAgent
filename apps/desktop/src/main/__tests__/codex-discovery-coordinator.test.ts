@@ -97,6 +97,57 @@ describe("CodexDiscoveryCoordinator", () => {
     );
   });
 
+  it("selects a validated fallback after rejecting the discovered selection", async () => {
+    const invalidCommand = "C:\\nvm4w\\nodejs\\codex";
+    const validCommand = "C:\\nvm4w\\nodejs\\codex.cmd";
+    const snapshot: CodexDiscoverySnapshot = {
+      candidates: [
+        {
+          command: invalidCommand,
+          executable: true,
+          selected: true,
+          source: "path",
+          versionFailureReason: "version_not_reported",
+        },
+        {
+          command: validCommand,
+          executable: true,
+          selected: false,
+          source: "application",
+          version: "0.126.0",
+        },
+      ],
+      selectedCommand: invalidCommand,
+      selectedSource: "path",
+    };
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover: async () => snapshot,
+      resolveEnv: async () => ({ PATH: "C:\\nvm4w\\nodejs" }),
+    });
+
+    await expect(coordinator.discover()).resolves.toMatchObject({
+      candidates: [
+        expect.objectContaining({
+          command: invalidCommand,
+          executable: false,
+          selected: false,
+        }),
+        expect.objectContaining({
+          command: validCommand,
+          selected: true,
+          version: "0.126.0",
+        }),
+      ],
+      selectedCommand: validCommand,
+      selectedSource: "application",
+    });
+    await expect(coordinator.resolve()).resolves.toMatchObject({
+      command: validCommand,
+      source: "application",
+      version: "0.126.0",
+    });
+  });
+
   it("single-flights concurrent probes and waits for the hydrated environment", async () => {
     const hydratedEnv = deferred<NodeJS.ProcessEnv>();
     const discover = vi.fn(async () => selectedSnapshot("/nvm/bin/codex"));

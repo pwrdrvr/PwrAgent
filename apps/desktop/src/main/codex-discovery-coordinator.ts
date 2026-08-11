@@ -302,7 +302,7 @@ function normalizeCodexDiscoverySnapshot(
   snapshot: CodexDiscoverySnapshot,
   windowsPathCommand?: string,
 ): CodexDiscoverySnapshot {
-  const candidates = snapshot.candidates.map((candidate) => {
+  const normalizedCandidates = snapshot.candidates.map((candidate) => {
     const source =
       windowsPathCommand
       && candidate.command.toLowerCase() === windowsPathCommand.toLowerCase()
@@ -330,7 +330,27 @@ function normalizeCodexDiscoverySnapshot(
     }
     return source === candidate.source ? candidate : { ...candidate, source };
   });
-  const selected = candidates.find((candidate) => candidate.selected);
+  const isValidated = (
+    candidate: (typeof normalizedCandidates)[number],
+  ): boolean =>
+    candidate.executable
+    && Boolean(candidate.version)
+    && !candidate.failureReason
+    && !candidate.versionFailureReason;
+  const selectedIndex = normalizedCandidates.findIndex(
+    (candidate) => candidate.selected && isValidated(candidate),
+  );
+  const fallbackIndex =
+    selectedIndex >= 0
+      ? selectedIndex
+      : normalizedCandidates.findIndex(isValidated);
+  const candidates = normalizedCandidates.map((candidate, index) => {
+    const selected = index === fallbackIndex;
+    return candidate.selected === selected
+      ? candidate
+      : { ...candidate, selected };
+  });
+  const selected = fallbackIndex >= 0 ? candidates[fallbackIndex] : undefined;
   const {
     selectedCommand: _selectedCommand,
     selectedSource: _selectedSource,
