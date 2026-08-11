@@ -109,13 +109,17 @@ function boundPriorText(text: string | undefined): string | undefined {
 }
 
 function formatInboundSource(run: AutomationRunSummary): string[] {
-  if (run.trigger !== "inbound_message" || !run.source) {
+  // Keyed on the source's presence, not the trigger: an operator replay is a
+  // manual run that still carries the message it is testing.
+  if (!run.source) {
     return [];
   }
   const source = run.source;
   return [
     "",
-    "Inbound source message:",
+    run.trigger === "manual"
+      ? "Source message (replayed by the operator for testing):"
+      : "Inbound source message:",
     `Matched trigger: ${source.matchedTriggerName ?? source.matchedTriggerId}`,
     `Received at: ${new Date(source.receivedAt).toISOString()}`,
     `Provider: ${source.conversation.channel}`,

@@ -6376,6 +6376,29 @@ textarea,
   background: var(--bg-panel);
 }
 
+/* Replay panel under an inbound automation's row: recent conversation
+   messages with the filter's live verdict, reusing the editor preview's
+   row/badge styling so match state reads identically in both places. */
+.automations-table__replay {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.automations-table__replay-lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.automation-preview__badge--muted {
+  color: var(--text-muted);
+}
+
 .automations-error {
   margin: 0;
   color: var(--danger-text);
@@ -18222,9 +18245,14 @@ a.transcript-message__messaging-origin:focus-visible {
 .automation-sender-picker__menu {
   position: absolute;
   top: 100%;
-  right: 0;
   left: 0;
   z-index: 30;
+  /* Grow to the widest suggestion rather than clipping "spinnaker-…" at the
+     input's width — the anchor column can be much narrower than the names in
+     it. Bounded so a pathological display name can't span the window. */
+  min-width: 100%;
+  width: max-content;
+  max-width: min(560px, 80vw);
   max-height: 280px;
   overflow-y: auto;
   border: 1px solid var(--border-strong);
@@ -18267,6 +18295,14 @@ a.transcript-message__messaging-origin:focus-visible {
 .automation-sender-picker__name {
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-sender-picker__username {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

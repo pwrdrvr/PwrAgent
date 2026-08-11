@@ -5,6 +5,7 @@ import type {
   ThreadExecutionMode,
 } from "./normalized-app-server";
 import type {
+  InboundPreviewMessage,
   MessagingChannelKind,
   MessagingConversationKind,
 } from "./messaging";
@@ -245,6 +246,15 @@ export type AutomationInboundCondition = {
   operator: AutomationInboundConditionOperator;
   values: string[];
   caseSensitive?: boolean;
+  /**
+   * Display names for opaque platform values, keyed by value — "U041ZGYG07Q"
+   * → "datadog". Pure presentation metadata captured at selection time (the
+   * same snapshot-at-selection pattern conversation titles use): the matcher
+   * never reads it, and a missing entry just renders the raw id. Without it,
+   * reopening the editor or reading the list screen shows ids nobody can
+   * recognize.
+   */
+  valueLabels?: Record<string, string>;
 };
 
 /** How the condition rows combine. Flat by design — there is no nesting. */
@@ -469,7 +479,13 @@ export function isSupportedAutomationInboundConditionGroup(
       && AUTOMATION_INBOUND_CONDITION_FIELDS.includes(condition.field)
       && AUTOMATION_INBOUND_CONDITION_OPERATORS.includes(condition.operator)
       && Array.isArray(condition.values)
-      && condition.values.every((value) => typeof value === "string"),
+      && condition.values.every((value) => typeof value === "string")
+      && (condition.valueLabels === undefined
+        || (typeof condition.valueLabels === "object"
+          && condition.valueLabels !== null
+          && Object.values(condition.valueLabels).every(
+            (label) => typeof label === "string",
+          ))),
   );
 }
 
@@ -525,9 +541,16 @@ export function formatAutomationInboundConditionGroup(
     .map((condition) => {
       const values = condition.values.filter((value) => value.length > 0);
       if (values.length === 0) return undefined;
-      const rendered = values.map((value) =>
-        options.resolveLabel ? options.resolveLabel(value, condition) : `"${value}"`,
-      );
+      const rendered = values.map((value) => {
+        if (options.resolveLabel) return options.resolveLabel(value, condition);
+        // Sender values are opaque platform ids; the stored display name (or
+        // the raw id, unquoted) reads better than a quoted id. Text values
+        // keep their quotes so literal match strings stay visually distinct.
+        if (condition.field === "sender" || condition.field === "sender_type") {
+          return condition.valueLabels?.[value] ?? value;
+        }
+        return `"${value}"`;
+      });
       const joined =
         rendered.length === 1
           ? rendered[0]
@@ -969,6 +992,31 @@ export type AutomationTimelineCard = AutomationAgentAssignment & {
   summary: string;
   details?: string;
   occurredAt: number;
+};
+
+export type ListAutomationReplayCandidatesRequest = {
+  automationId: string;
+};
+
+/** One recent conversation message, pre-judged against the trigger's filter. */
+export type AutomationReplayCandidate = {
+  message: InboundPreviewMessage;
+  matches: boolean;
+};
+
+export type ListAutomationReplayCandidatesResponse = {
+  candidates: AutomationReplayCandidate[];
+  /**
+   * False when the provider cannot serve conversation history (only Slack can
+   * today) — the UI says so instead of rendering an empty list that reads as
+   * "the channel is silent".
+   */
+  supported: boolean;
+};
+
+export type ReplayAutomationInboundRequest = {
+  automationId: string;
+  message: InboundPreviewMessage;
 };
 
 export type CreateAutomationRequest = AutomationAgentAssignment & {

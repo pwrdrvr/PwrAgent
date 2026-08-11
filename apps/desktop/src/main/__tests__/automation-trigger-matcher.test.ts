@@ -6,6 +6,8 @@ import type {
 import type { MessagingInboundTextEvent } from "@pwragent/messaging-interface";
 import type { AutomationRecord } from "../automations/automation-store";
 import {
+  buildAutomationReplayCandidates,
+  buildReplayRunSourceMetadata,
   buildSourceEventKey,
   matchAutomationInboundEvent,
 } from "../automations/automation-trigger-matcher";
@@ -494,3 +496,58 @@ function slackTextEvent(
     text: overrides.text ?? "ERROR api latency high",
   };
 }
+
+describe("automation replay helpers", () => {
+  const trigger = {
+    id: "datadog-error",
+    kind: "inbound_message" as const,
+    conversation: {
+      channel: "slack" as const,
+      conversationId: "C123",
+      conversationKind: "channel" as const,
+      title: "#alerts-prod",
+    },
+    conditionGroup: {
+      join: "all" as const,
+      conditions: [
+        {
+          id: "text",
+          field: "message_text" as const,
+          operator: "contains" as const,
+          values: ["ERROR"],
+        },
+      ],
+    },
+  };
+
+  const message = (id: string, text: string) => ({
+    id,
+    provider: "slack" as const,
+    conversationId: "C123",
+    receivedAt: 5_000,
+    actor: { platformUserId: "B123", displayName: "Datadog", isBot: true },
+    text,
+  });
+
+  it("judges candidates with the same evaluator as live matching", () => {
+    const candidates = buildAutomationReplayCandidates(trigger, [
+      message("m1", "ERROR rate spike"),
+      message("m2", "deploy finished"),
+    ]);
+    expect(candidates.map((candidate) => candidate.matches)).toEqual([true, false]);
+  });
+
+  it("namespaces the replay source key away from the original event", () => {
+    const source = buildReplayRunSourceMetadata({
+      trigger,
+      message: message("m1", "ERROR rate spike"),
+      now: 9_000,
+    });
+    // The real event's dedupe key must never collide with a replay: inbound
+    // dispatch would otherwise treat a later genuine delivery as handled.
+    expect(source.sourceEventKey).toBe("replay:m1:9000");
+    expect(source.matchedTriggerId).toBe("datadog-error");
+    expect(source.conversation.title).toBe("#alerts-prod");
+    expect(source.message?.text).toBe("ERROR rate spike");
+  });
+});

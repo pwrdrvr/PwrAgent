@@ -256,7 +256,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
             ],
           },
     );
-  const [senderLabels, setSenderLabels] = useState<Record<string, string>>({});
+  // Seeded from the persisted valueLabels so reopening the editor shows
+  // "datadog", not the opaque platform id captured at selection time.
+  const [senderLabels, setSenderLabels] = useState<Record<string, string>>(() => {
+    if (!initialInboundTrigger) return {};
+    const labels: Record<string, string> = {};
+    for (const condition of normalizeInboundTriggerConditions(initialInboundTrigger)
+      .conditions) {
+      for (const [value, label] of Object.entries(condition.valueLabels ?? {})) {
+        labels[value] = label;
+      }
+    }
+    return labels;
+  });
   const [inboundIncludeReplies, setInboundIncludeReplies] = useState(
     initialInboundTrigger?.includeThreadReplies ?? false,
   );
@@ -1038,7 +1050,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     }
     const triggerConfig = buildTriggerConfig({
       broadcast: sourceReplyBroadcast,
-      conditionGroup: inboundConditions,
+      conditionGroup: stampConditionLabels(inboundConditions, senderLabels),
       groupId: inboundGroupId,
       groupTitle: selectedGroup?.title ?? capturedGroupTitle,
       includeThreadReplies: inboundIncludeReplies,
@@ -2739,6 +2751,32 @@ function includeCurrentOption(
   return trimmed && !options.includes(trimmed)
     ? [trimmed, ...options]
     : [...options];
+}
+
+/**
+ * Persist the display names the picker resolved onto the conditions
+ * themselves. Without this the labels die with the editor session, and every
+ * later surface — reopening the editor, the list screen's trigger summary —
+ * falls back to raw platform ids.
+ */
+function stampConditionLabels(
+  group: AutomationInboundConditionGroup,
+  senderLabels: Record<string, string>,
+): AutomationInboundConditionGroup {
+  return {
+    ...group,
+    conditions: group.conditions.map((condition) => {
+      if (condition.field !== "sender") return condition;
+      const valueLabels: Record<string, string> = {};
+      for (const value of condition.values) {
+        const label = senderLabels[value] ?? condition.valueLabels?.[value];
+        if (label && label !== value) valueLabels[value] = label;
+      }
+      return Object.keys(valueLabels).length > 0
+        ? { ...condition, valueLabels }
+        : condition;
+    }),
+  };
 }
 
 function buildTriggerConfig(params: {

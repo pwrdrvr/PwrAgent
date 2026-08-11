@@ -769,6 +769,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
    * compact preview shape, and filters to the requested conversation scope.
    * Returns `[]` when the provider has no history support or the call fails.
    */
+  /**
+   * Whether a provider's adapter can read recent conversation history (Slack
+   * today). Callers use this to tell "no history support" apart from "the
+   * conversation is simply empty", which fetchRecentPreviewMessages cannot.
+   */
+  supportsPreviewHistory(provider: MessagingChannelKind): boolean {
+    const adapter = this.adapters.find((entry) => entry.channel === provider);
+    return Boolean(adapter?.fetchRecentMessages);
+  }
+
   async fetchRecentPreviewMessages(params: {
     provider: MessagingChannelKind;
     conversationId: string;

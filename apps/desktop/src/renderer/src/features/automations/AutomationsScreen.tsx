@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import type {
   AutomationDetail,
+  AutomationReplayCandidate,
+  ListAutomationReplayCandidatesResponse,
   MessagingChannelKind,
   NavigationDirectorySummary,
   NavigationThreadSummary,
@@ -224,6 +226,11 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                       setExpandedAutomationId(automation.id);
                       await props.onRefreshNavigation?.();
                     }}
+                    onReplayed={async () => {
+                      await automations.refresh();
+                      setExpandedAutomationId(automation.id);
+                      await props.onRefreshNavigation?.();
+                    }}
                     onSelectThread={
                       thread && props.onSelectThread
                         ? () => props.onSelectThread?.(thread)
@@ -248,11 +255,50 @@ function AutomationTableRow(props: {
   onEdit: () => void;
   onExpand: () => void;
   onPauseResume: () => Promise<void>;
+  onReplayed?: () => Promise<void>;
   onRunNow: () => Promise<void>;
   onSelectThread?: () => void;
   thread?: NavigationThreadSummary;
 }) {
   const [busy, setBusy] = useState<string>();
+  const [replayOpen, setReplayOpen] = useState(false);
+  const [replayCandidates, setReplayCandidates] =
+    useState<ListAutomationReplayCandidatesResponse>();
+  const [replayError, setReplayError] = useState<string>();
+  const inboundTriggered = props.automation.triggers.some(
+    (trigger) => trigger.kind === "inbound_message",
+  );
+
+  const toggleReplay = async (): Promise<void> => {
+    if (replayOpen) {
+      setReplayOpen(false);
+      return;
+    }
+    setReplayOpen(true);
+    setReplayError(undefined);
+    setReplayCandidates(undefined);
+    try {
+      const response = await props.desktopApi?.listAutomationReplayCandidates?.({
+        automationId: props.automation.id,
+      });
+      setReplayCandidates(
+        response ?? { candidates: [], supported: false },
+      );
+    } catch (caught) {
+      setReplayError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const replayMessage = async (
+    candidate: AutomationReplayCandidate,
+  ): Promise<void> => {
+    await props.desktopApi?.replayAutomationInbound?.({
+      automationId: props.automation.id,
+      message: candidate.message,
+    });
+    setReplayOpen(false);
+    await props.onReplayed?.();
+  };
   const runAction = async (
     action: string,
     callback: () => Promise<void>,
@@ -297,14 +343,25 @@ function AutomationTableRow(props: {
           <p>{formatAutomationLatestRun(props.automation)}</p>
         </div>
         <div className="automations-table__actions" role="cell">
-          <button
-            className="context-list__action"
-            disabled={Boolean(busy)}
-            type="button"
-            onClick={() => void runAction("run", props.onRunNow)}
-          >
-            Run
-          </button>
+          {inboundTriggered ? (
+            <button
+              className="context-list__action"
+              disabled={Boolean(busy)}
+              type="button"
+              onClick={() => void toggleReplay()}
+            >
+              Replay
+            </button>
+          ) : (
+            <button
+              className="context-list__action"
+              disabled={Boolean(busy)}
+              type="button"
+              onClick={() => void runAction("run", props.onRunNow)}
+            >
+              Run
+            </button>
+          )}
           <button className="context-list__action" type="button" onClick={props.onEdit}>
             Edit
           </button>
@@ -329,6 +386,70 @@ function AutomationTableRow(props: {
           </button>
         </div>
       </article>
+      {replayOpen ? (
+        <div className="automations-table__replay">
+          <p className="automations-table__replay-lead">
+            Replay a recent message from the trigger conversation. The badge is
+            the filter&rsquo;s live verdict — replaying a non-matching message
+            is a way to test what the automation would do if the filter let it
+            through.
+          </p>
+          {replayError ? (
+            <p className="automations-error" role="alert">
+              {replayError}
+            </p>
+          ) : replayCandidates === undefined ? (
+            <p className="automation-field__hint">Loading recent messages…</p>
+          ) : !replayCandidates.supported ? (
+            <p className="automation-field__hint">
+              This provider can&rsquo;t serve conversation history, so there is
+              nothing to replay. Use &ldquo;Preview live messages&rdquo; in the
+              editor to test against new traffic instead.
+            </p>
+          ) : replayCandidates.candidates.length === 0 ? (
+            <p className="automation-field__hint">
+              No recent messages in the trigger conversation.
+            </p>
+          ) : (
+            <ul className="automation-preview__list">
+              {replayCandidates.candidates.map((candidate) => (
+                <li
+                  className={`automation-preview__item${candidate.matches ? " is-match" : ""}`}
+                  key={candidate.message.id}
+                >
+                  <span className="automation-preview__meta">
+                    {new Date(candidate.message.receivedAt).toLocaleTimeString()}{" "}
+                    · {candidate.message.actor.displayName
+                      ?? candidate.message.actor.platformUserId}
+                  </span>
+                  <span className="automation-preview__row-text">
+                    {candidate.message.text || "(no text)"}
+                  </span>
+                  <span className="automation-preview__row-actions">
+                    {candidate.matches ? (
+                      <span className="automation-preview__badge">matches</span>
+                    ) : (
+                      <span className="automation-preview__badge automation-preview__badge--muted">
+                        no match
+                      </span>
+                    )}
+                    <button
+                      className="automation-preview__use-sender"
+                      disabled={Boolean(busy)}
+                      type="button"
+                      onClick={() =>
+                        void runAction("replay", () => replayMessage(candidate))
+                      }
+                    >
+                      {candidate.matches ? "Replay" : "Replay anyway"}
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
       {props.expanded ? (
         <AutomationTableHistory
           automationId={props.automation.id}

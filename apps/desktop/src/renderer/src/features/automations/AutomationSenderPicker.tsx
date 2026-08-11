@@ -212,6 +212,13 @@ export function AutomationSenderPicker(
                     type="button"
                     className="automation-sender-picker__option"
                     key={actor.platformUserId}
+                    title={[
+                      actor.displayName ?? actor.username ?? actor.platformUserId,
+                      actor.username ? `@${actor.username}` : undefined,
+                      actor.platformUserId,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
                     onClick={() => select(actor)}
                   >
                     <span
@@ -225,6 +232,11 @@ export function AutomationSenderPicker(
                     <span className="automation-sender-picker__name">
                       {actor.displayName ?? actor.username ?? actor.platformUserId}
                     </span>
+                    {actor.username && actor.username !== actor.displayName ? (
+                      <span className="automation-sender-picker__username">
+                        @{actor.username}
+                      </span>
+                    ) : undefined}
                     {actor.isBot ? (
                       <span className="automation-sender-picker__badge">BOT</span>
                     ) : undefined}

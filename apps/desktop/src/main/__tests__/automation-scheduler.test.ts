@@ -107,6 +107,49 @@ function buildSchedulerWithGate(gateRunner: AutomationGateRunner): AutomationSch
 }
 
 describe("AutomationScheduler", () => {
+  it("replays a captured message as a manual run carrying the source", async () => {
+    const automation = createIntervalAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Search bots",
+      taskPrompt: "Investigate.",
+      triggers: [
+        {
+          id: "inbound-message",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+        },
+      ],
+    });
+    const scheduler = buildScheduler();
+    const source = {
+      kind: "messaging" as const,
+      sourceEventKey: "replay:m1:9000",
+      receivedAt: 5_000,
+      matchedTriggerId: "inbound-message",
+      actor: { platformUserId: "B123", displayName: "Datadog", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR rate spike" },
+    };
+
+    const result = await scheduler.replayInboundRun({ automation, source });
+    expect(result?.status).toBe("started");
+    const [run] = store.listRunsForAutomation(automation.id, 1);
+    expect(run?.trigger).toBe("manual");
+    expect(run?.source?.message?.text).toBe("ERROR rate spike");
+
+    // A second replay of the same message must create another run — the
+    // source-event dedupe polices unattended inbound traffic, not an operator
+    // pressing the button twice on purpose. It queues rather than starts
+    // because the first replay still holds the serial lane.
+    const again = await scheduler.replayInboundRun({
+      automation,
+      source: { ...source, sourceEventKey: "replay:m1:9500" },
+    });
+    expect(again?.status).toBe("queued");
+    expect(store.listRunsForAutomation(automation.id, 10)).toHaveLength(2);
+  });
+
   it("reschedules timers when start is called after an automation is added", () => {
     const timerDelays: number[] = [];
     const scheduler = new AutomationScheduler({

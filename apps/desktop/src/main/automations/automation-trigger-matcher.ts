@@ -4,7 +4,9 @@ import {
 } from "@pwragent/shared";
 import type {
   AutomationInboundMessageTriggerDefinition,
+  AutomationReplayCandidate,
   AutomationRunSourceMetadata,
+  InboundPreviewMessage,
 } from "@pwragent/shared";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 import type { AutomationRecord } from "./automation-store.js";
@@ -153,6 +155,71 @@ function boundSourceText(
   return {
     text: `${text.slice(0, MAX_SOURCE_TEXT_CHARS)}\n[truncated]`,
     truncated: true,
+  };
+}
+
+/**
+ * Judge recent conversation messages against a trigger's filter for the
+ * Replay picker. Uses the same shared evaluator as live matching and the
+ * editor preview, so a "matches" badge here is a promise about what the
+ * trigger would actually have done.
+ */
+export function buildAutomationReplayCandidates(
+  trigger: AutomationInboundMessageTriggerDefinition,
+  messages: InboundPreviewMessage[],
+): AutomationReplayCandidate[] {
+  const group = normalizeInboundTriggerConditions(trigger);
+  return messages.map((message) => ({
+    message,
+    matches: evaluateAutomationInboundConditions(group, {
+      text: message.text,
+      platformUserId: message.actor.platformUserId,
+      ...(message.actor.isBot === undefined ? {} : { isBot: message.actor.isBot }),
+    }),
+  }));
+}
+
+/**
+ * Source metadata for an operator-initiated replay of a captured message.
+ *
+ * The event key is namespaced with `replay:` plus a timestamp — never the
+ * original key — because inbound dispatch dedupes on `sourceEventKey`, and a
+ * replay run carrying the real key would make the scheduler treat a later
+ * genuine delivery of that message as already handled.
+ */
+export function buildReplayRunSourceMetadata(params: {
+  trigger: AutomationInboundMessageTriggerDefinition;
+  message: InboundPreviewMessage;
+  now?: number;
+}): AutomationRunSourceMetadata {
+  const { message, trigger } = params;
+  const bounded = boundSourceText(message.text);
+  return {
+    kind: "messaging",
+    eventId: message.id,
+    sourceEventKey: `replay:${message.id}:${params.now ?? Date.now()}`,
+    receivedAt: message.receivedAt,
+    matchedTriggerId: trigger.id,
+    matchedTriggerName: trigger.name,
+    actor: {
+      platformUserId: message.actor.platformUserId,
+      ...(message.actor.displayName
+        ? { displayName: message.actor.displayName }
+        : {}),
+      ...(message.actor.isBot ? { isBot: true } : {}),
+    },
+    conversation: {
+      channel: message.provider,
+      conversationId: message.conversationId,
+      ...(message.parentId ? { parentId: message.parentId } : {}),
+      ...(trigger.conversation.conversationId === message.conversationId
+        && trigger.conversation.title
+        ? { title: trigger.conversation.title }
+        : {}),
+    },
+    ...(bounded
+      ? { message: { text: bounded.text, textTruncated: bounded.truncated } }
+      : {}),
   };
 }
 

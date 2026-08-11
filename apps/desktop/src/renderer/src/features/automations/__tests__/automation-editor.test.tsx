@@ -638,6 +638,7 @@ describe("AutomationEditor", () => {
         return () => undefined;
       },
     } as unknown as DesktopApi;
+    const onSubmit = vi.fn(async () => undefined);
 
     render(
       <AutomationEditor
@@ -647,7 +648,7 @@ describe("AutomationEditor", () => {
           kind: "create",
         }}
         onCancel={() => undefined}
-        onSubmit={vi.fn(async () => undefined)}
+        onSubmit={onSubmit}
       />,
     );
 
@@ -707,6 +708,34 @@ describe("AutomationEditor", () => {
     );
     expect(senderChips).toHaveLength(1);
     expect(senderChips[0]).toHaveTextContent("Datadog");
+
+    // The resolved display name must survive the round trip: it is stamped
+    // onto the condition at submit so reopening the editor (and the list
+    // screen's trigger summary) shows "Datadog", not the raw platform id.
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Label persistence" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "Investigate." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const submitted = (onSubmit.mock.calls[0] as unknown[])[0] as {
+      request: {
+        triggers: Array<{
+          name?: string;
+          conditionGroup?: {
+            conditions: Array<{ field: string; valueLabels?: Record<string, string> }>;
+          };
+        }>;
+      };
+    };
+    const senderCondition =
+      submitted.request.triggers[0]?.conditionGroup?.conditions.find(
+        (entry) => entry.field === "sender",
+      );
+    expect(senderCondition?.valueLabels).toEqual({ B1: "Datadog" });
+    expect(submitted.request.triggers[0]?.name).toContain("Datadog");
     // The plain-language summary lives on the funnel connector below the
     // Filters stage, so it states what survives into the next stage.
     expect(

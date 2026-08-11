@@ -20,10 +20,14 @@ import type {
   ListAutomationCardsResponse,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
+  ListAutomationReplayCandidatesRequest,
+  ListAutomationReplayCandidatesResponse,
   ListAutomationsRequest,
   ListAutomationsResponse,
+  InboundPreviewMessage,
   MessagingChannelKind,
   MessagingSenderSuggestion,
+  ReplayAutomationInboundRequest,
   RunAutomationNowResponse,
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
@@ -55,6 +59,8 @@ import { AutomationScheduler } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
 import {
   anyAutomationInboundMatch,
+  buildAutomationReplayCandidates,
+  buildReplayRunSourceMetadata,
   matchAutomationInboundEvent,
 } from "./automation-trigger-matcher.js";
 import { mergeTranscriptEvents } from "./transcript-merge.js";
@@ -565,6 +571,85 @@ export class DesktopAutomationService {
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
     return { automation: toAutomationDetail(automation) };
+  }
+
+  /**
+   * Recent messages from an inbound automation's trigger conversation, each
+   * pre-judged against the trigger's filter so the Replay picker can offer
+   * both positive tests (replay a matching message) and negative ones (see
+   * that a message would NOT have fired the automation).
+   */
+  async listReplayCandidates(
+    request: ListAutomationReplayCandidatesRequest,
+    deps: {
+      fetchRecent: (params: {
+        provider: MessagingChannelKind;
+        conversationId: string;
+        parentId?: string;
+        limit?: number;
+      }) => Promise<InboundPreviewMessage[]>;
+      supportsHistory: (provider: MessagingChannelKind) => boolean;
+    },
+  ): Promise<ListAutomationReplayCandidatesResponse> {
+    const automation = this.options.store.getAutomation(request.automationId);
+    if (!automation) {
+      throw new Error("Automation not found.");
+    }
+    const trigger = automation.triggers.find(
+      (candidate) => candidate.kind === "inbound_message",
+    );
+    if (trigger?.kind !== "inbound_message") {
+      return { candidates: [], supported: false };
+    }
+    if (!deps.supportsHistory(trigger.conversation.channel)) {
+      return { candidates: [], supported: false };
+    }
+    const messages = await deps.fetchRecent({
+      provider: trigger.conversation.channel,
+      conversationId: trigger.conversation.conversationId,
+      ...(trigger.conversation.parentId
+        ? { parentId: trigger.conversation.parentId }
+        : {}),
+      limit: 15,
+    });
+    return {
+      candidates: buildAutomationReplayCandidates(trigger, messages),
+      supported: true,
+    };
+  }
+
+  async replayInbound(
+    request: ReplayAutomationInboundRequest,
+  ): Promise<RunAutomationNowResponse> {
+    this.assertAutomationsEnabled();
+    const automation = this.options.store.getAutomation(request.automationId);
+    if (!automation) {
+      throw new Error("Automation not found.");
+    }
+    const trigger = automation.triggers.find(
+      (candidate) => candidate.kind === "inbound_message",
+    );
+    if (trigger?.kind !== "inbound_message") {
+      throw new Error("This automation has no inbound trigger to replay.");
+    }
+    const result = await this.scheduler.replayInboundRun({
+      automation,
+      source: buildReplayRunSourceMetadata({
+        trigger,
+        message: request.message,
+      }),
+    });
+    const [run] = this.options.store.listRunsForAutomation(request.automationId, 1);
+    if (!run) {
+      throw new Error("Automation not found.");
+    }
+    await this.notifyThreadAutomationsUpdated(automation);
+    return {
+      run,
+      queueStatus: result?.status ?? "failed",
+      queueEntryId: result?.entry.id,
+      turnId: result?.status === "started" ? result.turnId : undefined,
+    };
   }
 
   async runNow(request: AutomationIdRequest): Promise<RunAutomationNowResponse> {
