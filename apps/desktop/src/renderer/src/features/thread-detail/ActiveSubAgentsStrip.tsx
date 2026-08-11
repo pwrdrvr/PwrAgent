@@ -19,8 +19,21 @@ function isFailedSubAgent(subAgent: ThreadSubAgentSummary): boolean {
   return subAgent.status === "failed" || subAgent.status === "failure";
 }
 
+/**
+ * Waiting on input, not working. It belongs in the strip — arguably more than
+ * a healthy run does — but it must not blink an accent dot and count up an
+ * elapsed timer as though something were happening.
+ */
+function isBlockedSubAgent(subAgent: ThreadSubAgentSummary): boolean {
+  return subAgent.status === "blocked" && !isTerminalSubAgent(subAgent);
+}
+
 function isRunningSubAgent(subAgent: ThreadSubAgentSummary): boolean {
-  return !isTerminalSubAgent(subAgent) && !isFailedSubAgent(subAgent);
+  return (
+    !isTerminalSubAgent(subAgent)
+    && !isFailedSubAgent(subAgent)
+    && !isBlockedSubAgent(subAgent)
+  );
 }
 
 /**
@@ -47,6 +60,7 @@ export function ActiveSubAgentsStrip(props: {
 
   const subAgents = props.thread?.subAgents ?? [];
   const running = subAgents.filter(isRunningSubAgent);
+  const blocked = subAgents.filter(isBlockedSubAgent);
   // Successful and cancelled sub-agents leave immediately — the sidebar and the
   // rail panel already hold them. Failures linger until dismissed: the strip
   // vanishing is how an operator misses one, and neither of those surfaces is
@@ -55,13 +69,32 @@ export function ActiveSubAgentsStrip(props: {
     (subAgent) =>
       isFailedSubAgent(subAgent) && !dismissedFailures.has(subAgent.monitorId),
   );
-  const visible = [...running, ...failed];
+  const visible = [...running, ...blocked, ...failed];
 
-  // Seeded once, on mount: one or two rows cost almost nothing and saying what
-  // is running is the point, while three or more is the wall this strip exists
-  // to avoid. A later count change must not yank the disclosure out from under
-  // an operator who already made a choice, so this never re-evaluates.
-  const [expanded, setExpanded] = useState(() => visible.length <= 2);
+  // One or two rows cost almost nothing and saying what is running is the
+  // point; three or more is the wall this strip exists to avoid. A later count
+  // change must not yank the disclosure out from under an operator who already
+  // made a choice, so this is evaluated exactly once and never again.
+  //
+  // It has to be seeded on the first render that has ROWS, not on mount. The
+  // Composer mounts this component unconditionally and it returns null while
+  // empty, so a mount-time seed always read a count of zero and pinned
+  // `expanded` to true for the life of the window — the collapse-at-3+ rule
+  // never fired in the app, only in tests that rendered straight into a
+  // populated state.
+  //
+  // "Once" means once per appearance, not once per window. The strip emptying
+  // is a natural boundary: the next batch is new work and deserves to be sized
+  // to itself rather than governed by whatever the session's first batch
+  // happened to be.
+  const [expanded, setExpanded] = useState(true);
+  const [seeded, setSeeded] = useState(false);
+  if (!seeded && visible.length > 0) {
+    setSeeded(true);
+    setExpanded(visible.length <= 2);
+  } else if (seeded && visible.length === 0) {
+    setSeeded(false);
+  }
 
   const now = useNowWhileActive(running.length > 0);
 
@@ -83,10 +116,15 @@ export function ActiveSubAgentsStrip(props: {
     });
   };
 
-  // A thread that accumulated a dozen failures reads as "13 active sub-agents"
-  // under an Active heading with nothing running, which is simply false. The
-  // heading follows what is actually in the list.
-  const heading = running.length > 0 ? "Active sub-agents" : "Failed sub-agents";
+  // The heading and the count must agree, and both must describe what is
+  // actually in the list. A thread carrying one live monitor and a dozen old
+  // failures is not "13 active sub-agents"; neither is a thread of pure
+  // failures "active" at all.
+  const activeCount = running.length + blocked.length;
+  const heading = activeCount > 0 ? "Active sub-agents" : "Failed sub-agents";
+  const headingCount = activeCount > 0 ? activeCount : failed.length;
+  const failedNote =
+    activeCount > 0 && failed.length > 0 ? `${failed.length} failed` : undefined;
 
   const stopSubAgent = async (
     subAgent: ThreadSubAgentSummary,
@@ -122,15 +160,22 @@ export function ActiveSubAgentsStrip(props: {
       <div className="live-strip__header">
         <button
           aria-expanded={expanded}
-          aria-label={`${heading} (${visible.length})`}
+          aria-label={`${heading} (${headingCount})${
+            failedNote ? `, ${failedNote}` : ""
+          }`}
           className="live-strip__row"
           type="button"
           onClick={() => setExpanded((current) => !current)}
         >
           <span className="live-strip__chevron" aria-hidden="true" />
           <span className="live-strip__label">{heading}</span>
-          <span className="live-strip__count">{visible.length}</span>
+          <span className="live-strip__count">{headingCount}</span>
+          {failedNote ? (
+            <span className="live-strip__note">{failedNote}</span>
+          ) : null}
           <span className="live-strip__row-spacer" />
+          {/* Only genuine work sweeps. A strip holding nothing but blocked or
+              failed rows must not imply something is progressing. */}
           {running.length > 0 ? <ThinkingScanner compact /> : null}
         </button>
         {/* Clearing failures one at a time is fine for one or two and a chore
@@ -151,6 +196,7 @@ export function ActiveSubAgentsStrip(props: {
         <ul className="live-strip__list">
           {visible.map((subAgent) => {
             const failedRow = isFailedSubAgent(subAgent);
+            const blockedRow = isBlockedSubAgent(subAgent);
             const stopping = stoppingIds.has(subAgent.monitorId);
             const canStop =
               subAgent.status === "running"
@@ -169,19 +215,25 @@ export function ActiveSubAgentsStrip(props: {
                   className={
                     failedRow
                       ? "status-dot status-dot--error"
-                      : "status-dot status-dot--active status-dot--blink"
+                      : blockedRow
+                        ? "status-dot status-dot--warning"
+                        : "status-dot status-dot--active status-dot--blink"
                   }
                 />
                 <span className="live-strip__item-text" title={subAgent.task}>
                   {subAgent.task}
                 </span>
-                {/* Never color alone: the row states its outcome in words. */}
+                {/* Never color alone: the row states its state in words, and a
+                    blocked row shows no elapsed time because nothing is
+                    elapsing — it is waiting on input. */}
                 <span className="live-strip__item-time">
                   {failedRow
                     ? "Failed"
-                    : formatRunningDurationMs(
-                        Math.max(0, now - subAgent.createdAt),
-                      )}
+                    : blockedRow
+                      ? "Blocked"
+                      : formatRunningDurationMs(
+                          Math.max(0, now - subAgent.createdAt),
+                        )}
                 </span>
                 {/* Both controls name their target. The visible text stays a
                     single word so the row does not grow, but an unqualified

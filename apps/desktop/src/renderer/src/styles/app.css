@@ -19357,6 +19357,18 @@ a.transcript-message__messaging-origin:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* Secondary tally next to the count, e.g. "12 failed" beside one live run.
+   Ranks below the count via neutrals, never the accent ramp. */
+.live-strip__note {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Pushes the liveness mark to the trailing edge. */
 .live-strip__row-spacer {
   flex: 1 1 auto;

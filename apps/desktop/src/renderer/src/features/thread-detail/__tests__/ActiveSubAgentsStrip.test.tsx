@@ -78,6 +78,29 @@ describe("ActiveSubAgentsStrip", () => {
       expect(container).toBeEmptyDOMElement();
     });
 
+    it("counts what the heading claims, not the row total", () => {
+      // Regression: the count was `visible.length` while the heading only
+      // flipped when nothing ran, so one live monitor beside a dozen old
+      // failures read "Active sub-agents 13".
+      render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([
+            buildSubAgent({ monitorId: "live" }),
+            ...Array.from({ length: 12 }, (_unused, index) =>
+              buildSubAgent({ monitorId: `dead-${index}`, status: "failed" }),
+            ),
+          ])}
+        />,
+      );
+      expect(
+        screen.getByRole("button", {
+          name: "Active sub-agents (1), 12 failed",
+        }),
+      ).toBeInTheDocument();
+      expect(screen.getByText("12 failed")).toBeInTheDocument();
+      expect(screen.queryByText("13")).toBeNull();
+    });
+
     it("counts only the rows it shows, ignoring finished sub-agents", () => {
       render(
         <ActiveSubAgentsStrip
@@ -128,6 +151,55 @@ describe("ActiveSubAgentsStrip", () => {
       expect(screen.queryByText("First task")).toBeNull();
       // The count still reports what is running while collapsed.
       expect(screen.getByText("3")).toBeInTheDocument();
+    });
+
+    it("seeds from the first render that has rows, not from an empty mount", () => {
+      // Regression: the Composer mounts this component unconditionally and it
+      // returns null while empty, so a mount-time seed always measured zero
+      // rows and pinned expanded=true forever. Every earlier test rendered
+      // straight into a populated state, which the app never does — so the
+      // collapse-at-3+ rule passed its tests and never once fired in the app.
+      const { rerender } = render(<ActiveSubAgentsStrip thread={buildThread([])} />);
+      rerender(
+        <ActiveSubAgentsStrip
+          thread={buildThread(
+            Array.from({ length: 5 }, (_unused, index) =>
+              buildSubAgent({ monitorId: `monitor-${index}` }),
+            ),
+          )}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: /Active sub-agents/ }),
+      ).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("re-seeds for the next batch after the strip empties", () => {
+      // Seeding once per window would let a session's first batch govern every
+      // later one — a single early sub-agent would leave the strip expanded for
+      // a batch of nine hours later.
+      const { rerender } = render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([buildSubAgent({ monitorId: "solo" })])}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: /Active sub-agents/ }),
+      ).toHaveAttribute("aria-expanded", "true");
+
+      rerender(<ActiveSubAgentsStrip thread={buildThread([])} />);
+      rerender(
+        <ActiveSubAgentsStrip
+          thread={buildThread(
+            Array.from({ length: 4 }, (_unused, index) =>
+              buildSubAgent({ monitorId: `next-${index}` }),
+            ),
+          )}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: /Active sub-agents/ }),
+      ).toHaveAttribute("aria-expanded", "false");
     });
 
     it("keeps a manual collapse when the active count later changes", () => {
@@ -295,7 +367,7 @@ describe("ActiveSubAgentsStrip", () => {
         />,
       );
       // Three rows seeds collapsed, so expand before reading the list.
-      fireEvent.click(screen.getByRole("button", { name: /sub-agents \(3\)/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Active sub-agents/ }));
       fireEvent.click(
         screen.getByRole("button", { name: "Dismiss all 2 failed sub-agents" }),
       );
@@ -313,6 +385,38 @@ describe("ActiveSubAgentsStrip", () => {
       );
       fireEvent.click(screen.getByRole("button", { name: /^Dismiss failed sub-agent:/ }));
       expect(container).toBeEmptyDOMElement();
+    });
+  });
+
+  describe("blocked sub-agents", () => {
+    it("shows a blocked row without a blinking dot or a running clock", () => {
+      // A blocked sub-agent is waiting on input, not working. Blinking an
+      // accent dot and counting up an elapsed timer says the opposite.
+      const { container } = render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([
+            buildSubAgent({ monitorId: "a", status: "blocked" }),
+          ])}
+        />,
+      );
+      expect(screen.getByText("Blocked")).toBeInTheDocument();
+      expect(container.querySelector(".status-dot--warning")).not.toBeNull();
+      expect(container.querySelector(".status-dot--blink")).toBeNull();
+      // Nothing is progressing, so nothing sweeps.
+      expect(container.querySelector(".thinking-scanner")).toBeNull();
+    });
+
+    it("still counts blocked sub-agents as active", () => {
+      render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([
+            buildSubAgent({ monitorId: "a", status: "blocked" }),
+          ])}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: "Active sub-agents (1)" }),
+      ).toBeInTheDocument();
     });
   });
 
