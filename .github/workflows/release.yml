@@ -237,6 +237,10 @@ jobs:
           node-version: 24.14.1
           working-directory: .
 
+      - name: Install and verify TrustedSigning
+        shell: pwsh -NoProfile -NonInteractive -File {0}
+        run: ./scripts/release/install-trusted-signing.ps1
+
       # Signs via Azure Artifact Signing when the `windows-signing` environment
       # provides the config (vars.WIN_AZURE_SIGN_*) and the Entra
       # service-principal secrets (AZURE_*). With none of them set, release.mjs
