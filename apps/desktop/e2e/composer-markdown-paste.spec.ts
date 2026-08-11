@@ -5,6 +5,15 @@ import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
+const TABLE_MARKDOWN = [
+  "## Quick matrix",
+  "",
+  "| Harness | Exe | Auth |",
+  "|-|--|---|",
+  "| Alpha | `alpha` | Browser sign-in |",
+  "| Beta | `beta` | API key |",
+].join("\n");
+
 // Regression coverage for composer markdown paste. The bug these guard against:
 // a code fence used to flip paste off Tiptap's HTML-aware default path onto a
 // plain-text-only markdown reparse. When a clipboard's text/plain flattens
@@ -56,9 +65,22 @@ async function createPasteFixture(): Promise<{
   const threadReadResult = {
     entries: [
       { type: "message", id: "existing-message-1", role: "assistant", text: "Ready." },
+      {
+        type: "message",
+        id: "existing-message-2",
+        role: "assistant",
+        text: TABLE_MARKDOWN,
+      },
     ],
-    messages: [{ id: "existing-message-1", role: "assistant", text: "Ready." }],
-    lastAssistantMessage: "Ready.",
+    messages: [
+      { id: "existing-message-1", role: "assistant", text: "Ready." },
+      {
+        id: "existing-message-2",
+        role: "assistant",
+        text: TABLE_MARKDOWN,
+      },
+    ],
+    lastAssistantMessage: TABLE_MARKDOWN,
     pagination: { supportsPagination: false, hasPreviousPage: false },
   };
 
@@ -80,6 +102,15 @@ async function createPasteFixture(): Promise<{
           { id: "thread-list-1", kind: "response", method: "thread/list", result: [existingThread] },
           { id: "thread-read-1", kind: "response", method: "thread/read", result: threadReadResult },
           { id: "thread-read-2", kind: "response", method: "thread/read", result: threadReadResult },
+          {
+            id: "turn-start-1",
+            kind: "response",
+            method: "turn/start",
+            result: {
+              threadId: "thread-existing",
+              turnId: "turn-table-paste",
+            },
+          },
         ],
       },
       null,
@@ -241,6 +272,77 @@ test("a code fence is upgraded from text/plain even when HTML is present but has
     await expect(
       tiptapInput.locator(".composer-tiptap-input__editor > pre"),
     ).toHaveCount(1);
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("a copied transcript table pastes and sends as Markdown source", async () => {
+  const fixture = await createPasteFixture();
+  const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
+
+  try {
+    await openExistingThread(app);
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    const sourceMessage = transcript
+      .locator(".transcript-message--assistant")
+      .filter({ hasText: "Quick matrix" })
+      .first();
+    await expect(sourceMessage.locator("table")).toBeVisible();
+    await expect(
+      sourceMessage.getByRole("columnheader", { name: "Harness" }),
+    ).toBeVisible();
+
+    const reply = app.window.getByRole("textbox", { name: "Reply" });
+    const composerInput = app.window.getByTestId("composer-tiptap-input");
+    await app.electronApp.evaluate(({ clipboard }, markdown) => {
+      clipboard.writeText(markdown);
+    }, TABLE_MARKDOWN);
+    await reply.focus();
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+V" : "Control+V",
+    );
+    await expect(composerInput).toHaveAttribute("data-value", TABLE_MARKDOWN);
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await app.window.keyboard.press("Delete");
+    await expect(composerInput).toHaveAttribute("data-value", "");
+
+    await sourceMessage.getByRole("button", { name: "Copy message" }).click();
+    await expect
+      .poll(async () =>
+        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
+      )
+      .toBe(TABLE_MARKDOWN);
+    const clipboardSnapshot = await app.electronApp.evaluate(({ clipboard }) => ({
+      formats: clipboard.availableFormats(),
+      html: clipboard.readHTML(),
+    }));
+    expect(clipboardSnapshot.formats).toContain("text/plain");
+    expect(clipboardSnapshot.formats).toContain("text/html");
+    expect(clipboardSnapshot.html).toContain("<table>");
+
+    await reply.focus();
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+V" : "Control+V",
+    );
+
+    await expect(composerInput).toHaveAttribute("data-value", TABLE_MARKDOWN);
+    await expect(
+      composerInput.locator(".composer-tiptap-input__editor table"),
+    ).toHaveCount(0);
+
+    await app.window.getByRole("button", { name: "Send", exact: true }).click();
+    const sentMessage = transcript
+      .locator(".transcript-message--user")
+      .filter({ hasText: "Quick matrix" })
+      .first();
+    await expect(sentMessage.locator("table")).toBeVisible();
+    await expect(
+      sentMessage.getByRole("columnheader", { name: "Harness" }),
+    ).toBeVisible();
   } finally {
     await app.close();
     await fixture.cleanup();
