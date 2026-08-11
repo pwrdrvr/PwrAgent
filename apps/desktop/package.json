@@ -113,6 +113,8 @@
     "vite": "^7.3.2"
   },
   "optionalDependencies": {
+    "@napi-rs/canvas-darwin-arm64": "1.0.3",
+    "@napi-rs/canvas-darwin-x64": "1.0.3",
     "@napi-rs/canvas-win32-x64-msvc": "1.0.3"
   }
 }

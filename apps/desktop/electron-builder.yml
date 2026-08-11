@@ -90,6 +90,11 @@ electronFuses:
   grantFileProtocolExtraPrivileges: true
 
 mac:
+  # Both prebuilt canvas bindings are intentionally present in both temporary
+  # per-arch apps. They have distinct package paths and runtime selects the
+  # matching one, so keep the identical single-arch files side-by-side when
+  # electron-builder merges the universal app.
+  x64ArchFiles: "Contents/Resources/app.asar.unpacked/node_modules/@napi-rs/canvas-darwin-*/**"
   category: public.app-category.developer-tools
   icon: build/icon.icns
   hardenedRuntime: true
