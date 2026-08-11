@@ -5,6 +5,9 @@ import {
   type CodexDiscoverySnapshot,
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
+import { constants as fsConstants } from "node:fs";
+import { access } from "node:fs/promises";
+import path from "node:path";
 
 export const CODEX_DISCOVERY_SUCCESS_TTL_MS = 5 * 60_000;
 export const CODEX_DISCOVERY_NOT_INSTALLED_TTL_MS = 15_000;
@@ -36,6 +39,8 @@ export type CodexDiscoveryCoordinatorOptions = {
   failureTtlMs?: number;
   notInstalledTtlMs?: number;
   now?: () => number;
+  pathExists?: (candidate: string) => Promise<boolean>;
+  platform?: NodeJS.Platform;
   resolveEnv: () => Promise<NodeJS.ProcessEnv>;
   staleSuccessTtlMs?: number;
   successTtlMs?: number;
@@ -61,6 +66,8 @@ export class CodexDiscoveryCoordinator {
   private readonly inFlight = new Map<string, InFlightDiscovery>();
   private readonly notInstalledTtlMs: number;
   private readonly now: () => number;
+  private readonly pathExists: (candidate: string) => Promise<boolean>;
+  private readonly platform: NodeJS.Platform;
   private readonly staleSuccessTtlMs: number;
   private readonly successTtlMs: number;
   private generation = 0;
@@ -72,6 +79,8 @@ export class CodexDiscoveryCoordinator {
     this.notInstalledTtlMs =
       options.notInstalledTtlMs ?? CODEX_DISCOVERY_NOT_INSTALLED_TTL_MS;
     this.now = options.now ?? Date.now;
+    this.pathExists = options.pathExists ?? defaultPathExists;
+    this.platform = options.platform ?? process.platform;
     this.staleSuccessTtlMs =
       options.staleSuccessTtlMs ?? CODEX_DISCOVERY_STALE_SUCCESS_TTL_MS;
     this.successTtlMs =
@@ -212,7 +221,19 @@ export class CodexDiscoveryCoordinator {
   ): Promise<CodexDiscoverySnapshot> {
     try {
       const env = await this.options.resolveEnv();
-      const snapshot = await this.discoverFn({ configuredCommand, env });
+      const windowsPathCommand =
+        !configuredCommand && this.platform === "win32"
+          ? await findWindowsCodexPathCommand(env, this.pathExists)
+          : undefined;
+      const discovered = await this.discoverFn({
+        configuredCommand: configuredCommand ?? windowsPathCommand,
+        env,
+        ...(this.options.platform ? { platform: this.options.platform } : {}),
+      });
+      const snapshot = normalizeCodexDiscoverySnapshot(
+        discovered,
+        windowsPathCommand,
+      );
       if (generation === this.generation) {
         this.cache.set(configuredCommand?.trim() ?? "", {
           cachedAt: this.now(),
@@ -230,4 +251,97 @@ export class CodexDiscoveryCoordinator {
       throw error;
     }
   }
+}
+
+async function defaultPathExists(candidate: string): Promise<boolean> {
+  try {
+    await access(candidate, fsConstants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function windowsEnvValue(
+  env: NodeJS.ProcessEnv,
+  name: string,
+): string | undefined {
+  const key = Object.keys(env).find(
+    (candidate) => candidate.toLowerCase() === name.toLowerCase(),
+  );
+  return key ? env[key] : undefined;
+}
+
+async function findWindowsCodexPathCommand(
+  env: NodeJS.ProcessEnv,
+  pathExists: (candidate: string) => Promise<boolean>,
+): Promise<string | undefined> {
+  const pathValue = windowsEnvValue(env, "PATH");
+  if (!pathValue?.trim()) return undefined;
+
+  const rawExtensions = windowsEnvValue(env, "PATHEXT")?.trim()
+    || ".COM;.EXE;.BAT;.CMD";
+  const extensions = rawExtensions
+    .split(";")
+    .map((extension) => extension.trim())
+    .filter(Boolean)
+    .map((extension) => (extension.startsWith(".") ? extension : `.${extension}`));
+
+  for (const rawDirectory of pathValue.split(";")) {
+    const directory = rawDirectory.trim().replace(/^"(.+)"$/, "$1");
+    if (!directory) continue;
+    for (const extension of extensions) {
+      const candidate = path.win32.join(directory, `codex${extension}`);
+      if (await pathExists(candidate)) return candidate;
+    }
+  }
+  return undefined;
+}
+
+function normalizeCodexDiscoverySnapshot(
+  snapshot: CodexDiscoverySnapshot,
+  windowsPathCommand?: string,
+): CodexDiscoverySnapshot {
+  const candidates = snapshot.candidates.map((candidate) => {
+    const source =
+      windowsPathCommand
+      && candidate.command.toLowerCase() === windowsPathCommand.toLowerCase()
+      && candidate.source === "config"
+        ? "path"
+        : candidate.source;
+    if (
+      candidate.selected
+      && (
+        !candidate.version
+        || Boolean(candidate.failureReason)
+        || Boolean(candidate.versionFailureReason)
+      )
+    ) {
+      return {
+        ...candidate,
+        source,
+        executable: false,
+        selected: false,
+        failureReason:
+          candidate.failureReason
+          ?? candidate.versionFailureReason
+          ?? "version_not_reported",
+      };
+    }
+    return source === candidate.source ? candidate : { ...candidate, source };
+  });
+  const selected = candidates.find((candidate) => candidate.selected);
+  const {
+    selectedCommand: _selectedCommand,
+    selectedSource: _selectedSource,
+    ...rest
+  } = snapshot;
+  return selected
+    ? {
+        ...rest,
+        candidates,
+        selectedCommand: selected.command,
+        selectedSource: selected.source,
+      }
+    : { ...rest, candidates };
 }
