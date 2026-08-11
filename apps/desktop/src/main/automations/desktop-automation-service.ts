@@ -119,6 +119,7 @@ export class DesktopAutomationService {
     string,
     { actors: MessagingDirectoryActor[]; readAt: number }
   >();
+  private readonly automationsChangedListeners = new Set<() => void>();
 
   constructor(
     private readonly options: {
@@ -198,6 +199,28 @@ export class DesktopAutomationService {
    * or a schedule/trigger shape this build predates). Surfaced to the renderer
    * so the user sees a warning instead of silently missing automations.
    */
+  /**
+   * Fires after any mutation that can change which conversations inbound
+   * automations watch (create/update/pause/resume/delete). The messaging
+   * runtime subscribes to keep adapters' observed-conversation sets current.
+   */
+  onAutomationsChanged(listener: () => void): () => void {
+    this.automationsChangedListeners.add(listener);
+    return () => {
+      this.automationsChangedListeners.delete(listener);
+    };
+  }
+
+  private notifyAutomationsChanged(): void {
+    for (const listener of [...this.automationsChangedListeners]) {
+      try {
+        listener();
+      } catch {
+        // A broken listener must not break the mutation that fired it.
+      }
+    }
+  }
+
   getLoadIssues(): AutomationLoadIssue[] {
     return this.options.store.getAutomationLoadIssues();
   }
@@ -467,6 +490,7 @@ export class DesktopAutomationService {
     });
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
+    this.notifyAutomationsChanged();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -551,6 +575,7 @@ export class DesktopAutomationService {
     }
     await this.notifyThreadAutomationsUpdated(updated);
     this.startSchedulerIfEnabled();
+    this.notifyAutomationsChanged();
     return { automation: toAutomationDetail(updated) };
   }
 
@@ -569,6 +594,7 @@ export class DesktopAutomationService {
     );
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
+    this.notifyAutomationsChanged();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -583,6 +609,7 @@ export class DesktopAutomationService {
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
+    this.notifyAutomationsChanged();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -595,6 +622,7 @@ export class DesktopAutomationService {
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
+    this.notifyAutomationsChanged();
     return { automation: toAutomationDetail(automation) };
   }
 

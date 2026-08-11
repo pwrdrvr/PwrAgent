@@ -32,6 +32,7 @@ import type {
 } from "../messaging/messaging-runtime";
 
 const messagingLog = {
+  debug: vi.fn(),
   error: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),

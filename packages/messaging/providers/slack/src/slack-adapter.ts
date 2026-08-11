@@ -150,6 +150,7 @@ export type SlackUserListMember = SlackUserInfo & {
   deleted?: boolean;
   is_app_user?: boolean;
   is_bot?: boolean;
+  profile?: SlackUserInfo["profile"] & { bot_id?: string };
 };
 
 export type SlackSocketClient = {
@@ -282,6 +283,7 @@ type SlackEventsApiBody = {
 };
 
 type SlackMessageEvent = {
+  attachments?: SlackMessageAttachment[];
   bot_id?: string;
   channel?: string;
   channel_type?: string;
@@ -294,6 +296,12 @@ type SlackMessageEvent = {
   ts?: string;
   type: "app_mention" | "message";
   user?: string;
+};
+
+type SlackMessageAttachment = {
+  fallback?: string;
+  text?: string;
+  title?: string;
 };
 
 type SlackAppHomeOpenedEvent = {
@@ -404,6 +412,10 @@ export class SlackAdapter implements SlackProviderAdapter {
   private directoryRosterFetchedAt = 0;
   private directoryRosterInFlight: Promise<MessagingDirectoryActor[]> | undefined;
   private directoryLookupDisabled = false;
+  // Conversations with an enabled inbound automation: all senders' messages
+  // there are forwarded flagged observedOnly instead of being dropped by the
+  // per-user access gate. Pushed by the desktop runtime; empty by default.
+  private observedConversationIds = new Set<string>();
   // Per-stream posted surfaces, keyed by `intent.stream.key`. Slack has no
   // "create-or-edit" primitive, so the first chunk posts a new message and
   // records its `ts` here; later chunks (and the final) edit it in place — the
@@ -464,6 +476,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       ...(this.botAccount ? { account: this.botAccount } : {}),
       ...(this.botAccountDetail ? { detail: this.botAccountDetail } : {}),
     };
+  }
+
+  updateObservedConversations(conversationIds: readonly string[]): void {
+    this.observedConversationIds = new Set(conversationIds);
   }
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
@@ -1006,7 +1022,18 @@ export class SlackAdapter implements SlackProviderAdapter {
     ) {
       return;
     }
-    if (event.subtype && event.subtype !== "file_share") return;
+    // "bot_message" is the subtype classic app integrations (Spinnaker,
+    // Datadog, PagerDuty) post with — exactly the senders inbound automations
+    // exist to watch. The subtype gate is for channel noise (joins, edits,
+    // deletes), not for authored messages. Our own bot is already excluded by
+    // the identity check above, so loops stay impossible.
+    if (
+      event.subtype
+      && event.subtype !== "file_share"
+      && event.subtype !== "bot_message"
+    ) {
+      return;
+    }
 
     const ids = this.validateInboundMessageIds({
       botId: event.bot_id,
@@ -1034,7 +1061,13 @@ export class SlackAdapter implements SlackProviderAdapter {
       teamId: ids.teamId,
       ts: ids.ts,
     });
-    const rawText = event.text ?? "";
+    // Classic app messages carry their content in attachments (title/text)
+    // with an empty top-level text — "Pipeline failed for SEARCHGRPC" lives
+    // there. Fold it in so text filters and automation prompts see what the
+    // operator sees in Slack.
+    const rawText = [event.text ?? "", slackAttachmentText(event.attachments)]
+      .filter((part) => part.length > 0)
+      .join("\n");
     const strippedText = stripBotMention(rawText, this.botUserId);
     // Slack's app_mention event is the authoritative addressed-to-us signal.
     // Also inspect message text because Slack can deliver the same post as both
@@ -1060,7 +1093,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     // are explicit invocations and are exempt.
     if (isGroupDm && !isMention && !command && !isPairingMessage) return;
 
-    if (!this.authorizeInbound({
+    const authorization = this.authorizeInbound({
       actor,
       botMention: isMention,
       channel,
@@ -1074,7 +1107,12 @@ export class SlackAdapter implements SlackProviderAdapter {
         || channel.conversation.isDirectMessage === true,
       routingState,
       teamId: ids.teamId,
-    })) return;
+    });
+    if (authorization === false) return;
+    const observedOnly = authorization === "observed";
+    // Observation is not authorization: a command from a sender who only
+    // passed the observed-conversation gate must not execute.
+    if (observedOnly && command) return;
 
     const sourceUrl = await this.sourceUrlForSlackMessage(ids);
 
@@ -1088,6 +1126,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         routingState,
         sourceUrl,
         ...(isMention ? { botMention: true } : {}),
+        ...(observedOnly ? { observedOnly: true } : {}),
         text: text || undefined,
         disposition: "available",
         attachments: event.files.flatMap((file) => this.describeFile(file)),
@@ -1122,6 +1161,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       routingState,
       sourceUrl,
       ...(isMention ? { botMention: true } : {}),
+      ...(observedOnly ? { observedOnly: true } : {}),
       text,
     });
   }
@@ -1187,7 +1227,8 @@ export class SlackAdapter implements SlackProviderAdapter {
       teamId: ids.teamId,
       ts: ids.ts,
     });
-    if (!this.authorizeInbound({
+    // Observation is not authorization: only strict `true` may run a callback.
+    if (this.authorizeInbound({
       actor,
       channel,
       kind: "callback",
@@ -1196,7 +1237,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       }),
       routingState,
       teamId: ids.teamId,
-    })) {
+    }) !== true) {
       return;
     }
 
@@ -1261,7 +1302,8 @@ export class SlackAdapter implements SlackProviderAdapter {
       teamId: ids.teamId,
       ...(body.thread_ts ? { ts: ids.ts } : {}),
     });
-    if (!this.authorizeInbound({
+    // Observation is not authorization: only strict `true` may run a command.
+    if (this.authorizeInbound({
       actor,
       channel,
       kind: "command",
@@ -1270,7 +1312,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       }),
       routingState,
       teamId: ids.teamId,
-    })) {
+    }) !== true) {
       return;
     }
     const command = normalizeSlackSlashCommand(
@@ -1933,7 +1975,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     reportRejection?: boolean;
     routingState?: MessagingAdapterState;
     teamId?: string;
-  }): boolean {
+  }): boolean | "observed" {
     if (params.pairing) return true;
 
     const actorAuthorized = this.authorizedActorIds.includes(
@@ -1999,9 +2041,19 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
 
     const channelUserMode = slackChannelUserAccessMode(this.config);
-    if (channelUserMode === "none") return reject("unauthorized-conversation");
+    const observed =
+      this.observedConversationIds.has(params.channel.conversation.id)
+      || (params.channel.conversation.parentId !== undefined
+        && this.observedConversationIds.has(params.channel.conversation.parentId));
+    if (channelUserMode === "none") {
+      return observed ? "observed" : reject("unauthorized-conversation");
+    }
     if (channelUserMode === "authorized_users" && !actorAuthorized) {
-      return reject("unauthorized-actor");
+      // The sender may not command the bot, but an enabled automation watches
+      // this conversation — forward for observation only. This is what lets a
+      // sender filter match Spinnaker/Datadog alerts without granting every
+      // channel member the right to steer Agents.
+      return observed ? "observed" : reject("unauthorized-actor");
     }
     return true;
   }
@@ -2383,7 +2435,13 @@ export class SlackAdapter implements SlackProviderAdapter {
       ) {
         continue;
       }
-      if (message.subtype && message.subtype !== "file_share") continue;
+      if (
+        message.subtype
+        && message.subtype !== "file_share"
+        && message.subtype !== "bot_message"
+      ) {
+        continue;
+      }
       const actor = message.bot_id
         ? this.actorForSlackBot(message.bot_id)
         : message.user
@@ -2740,12 +2798,37 @@ function toDirectoryActor(
     || member.profile?.display_name?.trim()
     || undefined;
   const username = member.name?.trim().replace(/^@/, "") || undefined;
+  const isBot = Boolean(member.is_bot || member.is_app_user);
+  // Inbound bot messages carry the app's BOT id (B…) as the actor, not the
+  // bot's user id (U…) — so a sender filter built from the user id would never
+  // match a single event. Suggest the id events actually carry.
+  const botId = member.profile?.bot_id?.trim();
   return {
-    platformUserId,
+    platformUserId: isBot && botId ? botId : platformUserId,
     ...(displayName ? { displayName } : {}),
     ...(username ? { username } : {}),
-    ...(member.is_bot || member.is_app_user ? { isBot: true } : {}),
+    ...(isBot ? { isBot: true } : {}),
   };
+}
+
+/** Attachment content, bounded — a runaway integration can attach a lot. */
+const MAX_ATTACHMENT_TEXT_CHARS = 4_000;
+
+function slackAttachmentText(
+  attachments: SlackMessageAttachment[] | undefined,
+): string {
+  if (!attachments || attachments.length === 0) return "";
+  const parts: string[] = [];
+  for (const attachment of attachments) {
+    const title = attachment.title?.trim();
+    const body = (attachment.text ?? attachment.fallback ?? "").trim();
+    if (title) parts.push(title);
+    if (body && body !== title) parts.push(body);
+  }
+  const joined = parts.join("\n");
+  return joined.length > MAX_ATTACHMENT_TEXT_CHARS
+    ? joined.slice(0, MAX_ATTACHMENT_TEXT_CHARS)
+    : joined;
 }
 
 function hostFromUrl(url: string | undefined): string | undefined {

@@ -1261,7 +1261,7 @@ describe("SlackAdapter", () => {
     ).toEqual([]);
   });
 
-  it("preview mirrors the live message filter (skips own posts, keeps file_share, drops bot_message)", async () => {
+  it("preview mirrors the live message filter (skips own posts, keeps file_share and bot_message)", async () => {
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
@@ -1296,11 +1296,103 @@ describe("SlackAdapter", () => {
       conversationId: "C012ABCDEF0",
     });
 
-    // Own posts and bot_message subtypes are filtered (the live tap skips them);
-    // file_share and plain user messages survive, oldest-first.
+    // Own posts stay filtered. Other bots' bot_message posts survive — they
+    // are the alert senders inbound automations exist to watch — alongside
+    // file_share and plain user messages, oldest-first.
     expect(
       events.map((event) => (event.kind === "text" ? event.text : undefined)),
-    ).toEqual(["normal message", "shared a file"]);
+    ).toEqual([
+      "normal message",
+      "shared a file",
+      "other bot via bot_message",
+    ]);
+  });
+
+  it("delivers classic bot_message posts with attachment text folded in", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    // The channel-user gate defaults to authorized_users, and the bot isn't an
+    // authorized actor — the desktop runtime marks the conversation observed
+    // because an enabled automation watches it, which is what lets the alert
+    // through (flagged observedOnly).
+    adapter.updateObservedConversations(["C012ABCDEF0"]);
+
+    // A classic integration alert: subtype bot_message, empty top-level text,
+    // content entirely in attachments — the exact shape Spinnaker and Datadog
+    // post. The actor must be the B… bot id, because that is what the event
+    // carries (sender filters must be able to match it).
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        subtype: "bot_message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        bot_id: "B012SPINNKR",
+        ts: "1712023032.000600",
+        text: "",
+        attachments: [
+          {
+            title: "Pipeline failed for SEARCHGRPC",
+            text: "Searchgrpc's searchgrpc-prod pipeline has failed",
+          },
+        ],
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    expect(event?.kind).toBe("text");
+    expect(event?.actor.platformUserId).toBe("B012SPINNKR");
+    expect(event?.actor.isBot).toBe(true);
+    expect(event?.observedOnly).toBe(true);
+    if (event?.kind === "text") {
+      expect(event.text).toContain("Pipeline failed for SEARCHGRPC");
+      expect(event.text).toContain("searchgrpc-prod pipeline has failed");
+    }
+  });
+
+  it("drops unauthorized-sender messages in conversations nothing observes", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        subtype: "bot_message",
+        channel: "C012ABCDEF0",
+        channel_type: "channel",
+        team: "T012ABCDEF0",
+        bot_id: "B012SPINNKR",
+        ts: "1712023032.000700",
+        text: "unwatched alert",
+      },
+    });
+
+    // Fail-closed stands: no observation grant means no forwarding.
+    expect(events).toEqual([]);
   });
 
   it("keeps fan-out callback records scoped per routed binding", async () => {
