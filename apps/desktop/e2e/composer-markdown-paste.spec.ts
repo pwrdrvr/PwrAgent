@@ -9,7 +9,7 @@ const TABLE_MARKDOWN = [
   "## Quick matrix",
   "",
   "| Harness | Exe | Auth |",
-  "|---|---|---|",
+  "|-|--|---|",
   "| Alpha | `alpha` | Browser sign-in |",
   "| Beta | `beta` | API key |",
 ].join("\n");

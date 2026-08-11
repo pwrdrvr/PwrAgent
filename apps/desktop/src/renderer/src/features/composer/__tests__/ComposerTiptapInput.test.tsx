@@ -283,7 +283,7 @@ describe("ComposerTiptapInput", () => {
       "## Quick matrix",
       "",
       "| Harness | Exe | Auth |",
-      "|---|---|---|",
+      "|-|--|---|",
       "| Alpha | `alpha` | Browser sign-in |",
       "| Beta | `beta` | API key |",
     ].join("\n");
@@ -319,7 +319,64 @@ describe("ComposerTiptapInput", () => {
     });
     expect(container.querySelector("table")).not.toBeInTheDocument();
     expect(container.querySelector(".composer-tiptap-input__editor"))
-      .toHaveTextContent("|---|---|---|");
+      .toHaveTextContent("|-|--|---|");
+  });
+
+  it("keeps a one-column rendered table as Markdown source", async () => {
+    const markdown = [
+      "| Harness |",
+      "| - |",
+      "| Alpha |",
+    ].join("\n");
+    const { container, onChange } = renderTiptapInput();
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return [
+              "<table>",
+              "<thead><tr><th>Harness</th></tr></thead>",
+              "<tbody><tr><td>Alpha</td></tr></tbody>",
+              "</table>",
+            ].join("");
+          }
+          return type === "text/plain" ? markdown : "";
+        },
+        items: [],
+        types: ["text/html", "text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(markdown, []);
+    });
+    expect(container.querySelector("table")).not.toBeInTheDocument();
+  });
+
+  it("does not treat a setext heading as a one-column table", async () => {
+    const { container } = renderTiptapInput();
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return "<h2>Quick matrix</h2>";
+          }
+          return type === "text/plain" ? "Quick matrix\n-" : "";
+        },
+        items: [],
+        types: ["text/html", "text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector("h2")).toHaveTextContent("Quick matrix");
+    });
   });
 
   it("keeps HTML-only double-blank-line SQL paste inside an active code block", async () => {

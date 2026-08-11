@@ -455,27 +455,65 @@ function containsBlockMarkdown(text: string): boolean {
   return text.split("\n").some((line) => isMarkdownBlockStart(line));
 }
 
-function isMarkdownTableDelimiterRow(line: string): boolean {
+function splitMarkdownTableCells(line: string): string[] {
   const trimmed = line.trim();
-  if (!trimmed.includes("|")) {
-    return false;
+  let content = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
+  let trailingBackslashes = 0;
+  for (
+    let index = content.length - 2;
+    index >= 0 && content[index] === "\\";
+    index -= 1
+  ) {
+    trailingBackslashes += 1;
+  }
+  if (content.endsWith("|") && trailingBackslashes % 2 === 0) {
+    content = content.slice(0, -1);
   }
 
-  const cells = trimmed
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim());
-  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  const cells: string[] = [];
+  let cell = "";
+  let escaped = false;
+  for (const character of content) {
+    if (escaped) {
+      cell += character;
+      escaped = false;
+    } else if (character === "\\") {
+      cell += character;
+      escaped = true;
+    } else if (character === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+// Mirrors micromark-extension-gfm-table's delimiter grammar: each cell is an
+// optional colon, one or more hyphens, and an optional colon. The header and
+// delimiter must have the same cell count, while a pipe or colon distinguishes
+// a one-column table from a setext heading.
+function parseMarkdownTableDelimiterRow(line: string): string[] | undefined {
+  const cells = splitMarkdownTableCells(line);
+  const hasTableMarker =
+    line.includes("|")
+    || cells.some((cell) => cell.includes(":"));
+  return hasTableMarker && cells.every((cell) => /^:?-+:?$/.test(cell))
+    ? cells
+    : undefined;
 }
 
 function containsMarkdownTable(text: string): boolean {
   const lines = text.split("\n");
-  return lines.some(
-    (line, index) =>
-      line.includes("|")
-      && isMarkdownTableDelimiterRow(lines[index + 1] ?? ""),
-  );
+  return lines.some((line, index) => {
+    if (!line.trim()) {
+      return false;
+    }
+    const delimiterCells = parseMarkdownTableDelimiterRow(lines[index + 1] ?? "");
+    return delimiterCells?.length === splitMarkdownTableCells(line).length;
+  });
 }
 
 function isMarkdownSectionLabelLine(line: string): boolean {
