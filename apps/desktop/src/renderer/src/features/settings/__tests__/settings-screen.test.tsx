@@ -11,6 +11,7 @@ import {
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  AgentEvent,
   AppServerListThreadsResponse,
   AppServerThreadSummary,
   BackendSummary,
@@ -4275,6 +4276,8 @@ describe("SettingsScreen", () => {
       "← Exit Settings",
       "General",
       "Applications",
+      "Plugins",
+      "MCPs",
       "Profiles",
       "AI Providers",
       "Usage & Pricing",
@@ -4292,6 +4295,80 @@ describe("SettingsScreen", () => {
     expect(within(nav).getByRole("separator")).toHaveClass(
       "settings-nav__divider",
     );
+  });
+
+  it("relogs and removes MCP servers from the Plugins settings pane", async () => {
+    const listCodexMcpServers = vi.fn(async () => ({
+      detail: "toolsAndAuthOnly" as const,
+      servers: [{
+        name: "datadog",
+        authStatus: "oAuth" as const,
+        startupStatus: "failed" as const,
+        startupError: "invalid_grant",
+        tools: [],
+      }],
+    }));
+    const reloadCodexMcpServers = vi.fn(async () => ({ queued: true as const }));
+    const startCodexMcpServerLogin = vi.fn(async () => ({
+      name: "datadog",
+      authorizationUrl: "https://example.test/datadog-login",
+    }));
+    const removeCodexMcpServer = vi.fn(async () => ({
+      name: "datadog",
+      removed: true as const,
+    }));
+    let agentEventListener: ((event: AgentEvent) => void) | undefined;
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          listCodexMcpServers,
+          onAgentEvent: (listener) => {
+            agentEventListener = listener;
+            return () => undefined;
+          },
+          reloadCodexMcpServers,
+          removeCodexMcpServer,
+          startCodexMcpServerLogin,
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("invalid_grant")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Relogin" }));
+    await waitFor(() => {
+      expect(startCodexMcpServerLogin).toHaveBeenCalledWith({ name: "datadog" });
+      expect(openSpy).toHaveBeenCalledWith(
+        "https://example.test/datadog-login",
+        "_blank",
+        "noopener,noreferrer",
+      );
+    });
+
+    await act(async () => {
+      agentEventListener?.({
+        backend: "codex",
+        notification: {
+          method: "mcpServer/oauthLogin/completed",
+          params: { name: "datadog", success: true },
+        },
+      });
+    });
+    expect(await screen.findByText("datadog login completed.")).toBeInTheDocument();
+    expect(reloadCodexMcpServers).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove server" }));
+    await waitFor(() => {
+      expect(removeCodexMcpServer).toHaveBeenCalledWith({ name: "datadog" });
+      expect(screen.getByText(
+        "datadog was removed from this Codex profile.",
+      )).toBeInTheDocument();
+    });
   });
 
   it("shows when messaging is disabled by a runtime override", () => {

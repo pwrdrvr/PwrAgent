@@ -40,6 +40,8 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListCodexMcpServersRequest,
+  ListCodexMcpServersResponse,
   ListThreadMcpServersRequest,
   ListThreadMcpServersResponse,
   ListDesktopPwrAgentProfilesResponse,
@@ -49,6 +51,11 @@ import type {
   QueueThreadExecutionModeResponse,
   ReloadCodexMcpConfigRequest,
   ReloadCodexMcpConfigResponse,
+  ReloadCodexMcpServersResponse,
+  RemoveCodexMcpServerRequest,
+  RemoveCodexMcpServerResponse,
+  StartCodexMcpServerLoginRequest,
+  StartCodexMcpServerLoginResponse,
   LatestCodexConfigWarningResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
@@ -414,6 +421,10 @@ import {
   AGENT_COMPACT_THREAD_CHANNEL,
   AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
   AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
+  CODEX_MCP_SERVERS_LIST_CHANNEL,
+  CODEX_MCP_SERVERS_RELOAD_CHANNEL,
+  CODEX_MCP_SERVER_LOGIN_CHANNEL,
+  CODEX_MCP_SERVER_REMOVE_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
   AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -1354,6 +1365,20 @@ const desktopApi = Object.freeze({
     request: ReloadCodexMcpConfigRequest,
   ): Promise<ReloadCodexMcpConfigResponse> =>
     await ipcRenderer.invoke(AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL, request),
+  listCodexMcpServers: async (
+    request: ListCodexMcpServersRequest = {},
+  ): Promise<ListCodexMcpServersResponse> =>
+    await ipcRenderer.invoke(CODEX_MCP_SERVERS_LIST_CHANNEL, request),
+  reloadCodexMcpServers: async (): Promise<ReloadCodexMcpServersResponse> =>
+    await ipcRenderer.invoke(CODEX_MCP_SERVERS_RELOAD_CHANNEL),
+  startCodexMcpServerLogin: async (
+    request: StartCodexMcpServerLoginRequest,
+  ): Promise<StartCodexMcpServerLoginResponse> =>
+    await ipcRenderer.invoke(CODEX_MCP_SERVER_LOGIN_CHANNEL, request),
+  removeCodexMcpServer: async (
+    request: RemoveCodexMcpServerRequest,
+  ): Promise<RemoveCodexMcpServerResponse> =>
+    await ipcRenderer.invoke(CODEX_MCP_SERVER_REMOVE_CHANNEL, request),
   startTurn: async (
     request: StartTurnRequest
   ): Promise<StartTurnResponse> =>

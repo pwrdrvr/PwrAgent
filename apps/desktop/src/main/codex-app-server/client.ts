@@ -377,6 +377,7 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "item/commandExecution/outputDelta",
   "item/commandExecution/terminalInteraction",
   "item/fileChange/outputDelta",
+  "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
 ]);
 const GENERATED_CODEX_SERVER_REQUEST_METHODS = new Set<CodexServerRequestMethod>([
@@ -6910,6 +6911,13 @@ export class CodexAppServerClient {
   private readonly notificationListeners = new Set<
     (notification: AppServerNotification) => void | Promise<void>
   >();
+  private readonly mcpStartupStatusByName = new Map<
+    string,
+    {
+      status: NonNullable<CodexMcpServerSummary["startupStatus"]>;
+      error?: string;
+    }
+  >();
   private readonly recordedThreadNames = new Map<string, string>();
   private readonly requestListeners = new Set<
     (
@@ -6972,6 +6980,23 @@ export class CodexAppServerClient {
           listenerCount: this.notificationListeners.size,
           initialized: this.initialized,
         });
+      }
+      if (method === "mcpServer/startupStatus/updated") {
+        const name = readStringFromRecord(params, "name");
+        const status = readStringFromRecord(params, "status");
+        const error = readStringFromRecord(params, "error");
+        if (
+          name
+          && (status === "starting"
+            || status === "ready"
+            || status === "failed"
+            || status === "cancelled")
+        ) {
+          this.mcpStartupStatusByName.set(name, {
+            status,
+            ...(error ? { error } : {}),
+          });
+        }
       }
 
       const normalized = normalizeServerNotification(
@@ -7041,6 +7066,7 @@ export class CodexAppServerClient {
     this.recordedThreadNames.clear();
     this.helperThreadIds.clear();
     this.completedHelperTurnResults.clear();
+    this.mcpStartupStatusByName.clear();
     this.helperTurnTitleObjects.clear();
     this.helperTurnTokenUsage.clear();
     this.helperThreadPredicates.clear();
@@ -7691,7 +7717,7 @@ export class CodexAppServerClient {
   }
 
   async listMcpServers(params: {
-    threadId: string;
+    threadId?: string;
     detail: CodexMcpInventoryDetail;
   }): Promise<CodexMcpServerSummary[]> {
     await this.ensureInitialized();
@@ -7723,9 +7749,23 @@ export class CodexAppServerClient {
         }
       } while (cursor);
 
-      return servers.sort((left, right) => left.name.localeCompare(right.name));
+      return servers
+        .map((server) => {
+          const startup = this.mcpStartupStatusByName.get(server.name);
+          return startup
+            ? {
+                ...server,
+                startupStatus: startup.status,
+                ...(startup.error ? { startupError: startup.error } : {}),
+              }
+            : server;
+        })
+        .sort((left, right) => left.name.localeCompare(right.name));
     };
 
+    if (!params.threadId) {
+      return await listPages();
+    }
     try {
       return await listPages(params.threadId);
     } catch (error) {
@@ -7744,6 +7784,57 @@ export class CodexAppServerClient {
       payloads: [undefined],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
+  }
+
+  async startMcpServerOAuthLogin(params: {
+    name: string;
+  }): Promise<{ authorizationUrl: string }> {
+    if (!params.name.trim()) {
+      throw new Error("MCP server name is required");
+    }
+    await this.ensureInitialized();
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["mcpServer/oauth/login"],
+      payloads: [{ name: params.name }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    const authorizationUrl = readStringFromRecord(result, "authorizationUrl");
+    if (!authorizationUrl) {
+      throw new Error("codex_mcp_oauth_login_missing_authorization_url");
+    }
+    return { authorizationUrl };
+  }
+
+  async removeMcpServer(params: { name: string }): Promise<void> {
+    if (!params.name.trim()) {
+      throw new Error("MCP server name is required");
+    }
+    await this.ensureInitialized();
+    const quotedName = `"${params.name
+      .replaceAll("\\", "\\\\")
+      .replaceAll("\"", "\\\"")}"`;
+    const payload: CodexConfigValueWriteParams = {
+      keyPath: `mcp_servers.${quotedName}`,
+      value: null,
+      mergeStrategy: "replace",
+    };
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["config/value/write"],
+      payloads: [payload],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    this.mcpStartupStatusByName.delete(params.name);
+    await this.reloadMcpConfig();
+    const remaining = await this.listMcpServers({
+      detail: "toolsAndAuthOnly",
+    });
+    if (remaining.some((server) => server.name === params.name)) {
+      throw new Error(
+        `${params.name} is managed by another Codex config layer and could not be removed`,
+      );
+    }
   }
 
   async listModels(

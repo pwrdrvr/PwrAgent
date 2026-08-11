@@ -96,8 +96,15 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListCodexMcpServersRequest,
+  ListCodexMcpServersResponse,
   ListThreadMcpServersRequest,
   ListThreadMcpServersResponse,
+  ReloadCodexMcpServersResponse,
+  RemoveCodexMcpServerRequest,
+  RemoveCodexMcpServerResponse,
+  StartCodexMcpServerLoginRequest,
+  StartCodexMcpServerLoginResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
   AcknowledgeAcpAgentUpdateRequest,
@@ -625,6 +632,16 @@ export type DesktopApi = {
   reloadCodexMcpConfig?: (
     request: ReloadCodexMcpConfigRequest,
   ) => Promise<ReloadCodexMcpConfigResponse>;
+  listCodexMcpServers?: (
+    request?: ListCodexMcpServersRequest,
+  ) => Promise<ListCodexMcpServersResponse>;
+  reloadCodexMcpServers?: () => Promise<ReloadCodexMcpServersResponse>;
+  startCodexMcpServerLogin?: (
+    request: StartCodexMcpServerLoginRequest,
+  ) => Promise<StartCodexMcpServerLoginResponse>;
+  removeCodexMcpServer?: (
+    request: RemoveCodexMcpServerRequest,
+  ) => Promise<RemoveCodexMcpServerResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
   cancelQueuedTurn?: (
     request: CancelQueuedTurnRequest,
