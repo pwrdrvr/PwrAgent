@@ -176,6 +176,29 @@ const StarMapSky = memo(function StarMapSky() {
   );
 });
 
+/**
+ * One card a menu action is about. The thread alone is not enough: the
+ * same thread can be shown under more than one instance's cloud, and the
+ * owning instance is what says which cloud has to refresh afterwards.
+ */
+type StarMapCardTarget = {
+  instanceId: string;
+  thread: NavigationThreadSummary;
+};
+
+/**
+ * What one card's menu acts on: every target, and the subset an unread
+ * action applies to. Resolved together because both are answers to the
+ * same question — which cards is this menu about — and splitting them
+ * put a per-card `filter` back in the render path.
+ */
+type StarMapCardTargets = {
+  all: readonly StarMapCardTarget[];
+  unseen: readonly StarMapCardTarget[];
+};
+
+const NO_CARD_TARGETS: readonly StarMapCardTarget[] = [];
+
 type StarMapScreenProps = {
   desktopApi?: DesktopApi;
   /** Local navigation snapshot threads (already live in the App shell). */
@@ -1176,6 +1199,24 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const [cardError, setCardError] = useState<string | undefined>(undefined);
 
+  /** Cards the operator has gathered, by card key. */
+  const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
+  /** The live sweep rect, while a marquee drag is in flight. */
+  const [marquee, setMarquee] = useState<SnapRect | undefined>(undefined);
+
+  /**
+   * A card key names its owning instance, and the local instance's durable
+   * id only arrives with federation health — until then the local cloud is
+   * keyed "local". A selection swept in that window points at a cloud that
+   * no longer exists the moment health lands: the counter keeps counting,
+   * no card paints as selected, and the kebab finds nothing of it to act
+   * on. Drop it, the same way a card withholds dragging until the durable
+   * id is known rather than persisting against the placeholder.
+   */
+  useEffect(() => {
+    setSelection((current) => (current.size > 0 ? new Set() : current));
+  }, [localInstanceId]);
+
   /**
    * Refresh whichever cloud owns a thread. Archive removes it from the
    * owning instance, so the map has to re-fetch rather than guess.
@@ -1191,39 +1232,181 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [localInstanceId, props],
   );
 
+  /**
+   * Every card on the map by selection key, so a set of keys can be turned
+   * back into the threads it stands for. Built from the slice each lane
+   * actually renders, which is the same slice a marquee can sweep.
+   */
+  const targetsByCardKey = useMemo(() => {
+    const result = new Map<string, StarMapCardTarget>();
+    for (const [instanceId, lane] of lanes) {
+      for (const thread of lane.threads.slice(0, lane.count)) {
+        result.set(
+          `${instanceId}::${buildThreadIdentityKey(thread.source, thread.id)}`,
+          { instanceId, thread },
+        );
+      }
+    }
+    return result;
+  }, [lanes]);
+
+  /**
+   * The selection resolved to cards, once per render rather than once per
+   * card. Every card's kebab asks this same question, so resolving it in
+   * `cardMenuTargets` made the render quadratic in a selection an operator
+   * can sweep to forty cards a cloud.
+   */
+  const selectedTargets = useMemo((): StarMapCardTargets => {
+    const all: StarMapCardTarget[] = [];
+    for (const key of selection) {
+      // Keys that resolve to nothing are the load card, which is not a
+      // thread, and cards no longer on the map — filtered out, or on an
+      // instance that dropped. Both fall out of the action rather than
+      // failing it; the same reasoning as `commitSelectionMove`.
+      const target = targetsByCardKey.get(key);
+      if (target) all.push(target);
+    }
+    return {
+      all,
+      unseen: all.filter((target) => target.thread.inbox.inInbox),
+    };
+  }, [selection, targetsByCardKey]);
+
+  /**
+   * The cards a kebab action applies to. A menu opened on a card that is
+   * part of the selection acts on the whole selection — the same rule the
+   * thread list's context menu follows — because the gesture that visibly
+   * gathered five cards must not be silently discarded by the menu that
+   * comes next. A menu opened on a card outside the selection acts on that
+   * card alone, and leaves the selection where it was.
+   */
+  const cardMenuTargets = useCallback(
+    (
+      thread: NavigationThreadSummary,
+      instanceId: string,
+    ): StarMapCardTargets => {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      if (
+        selection.has(`${instanceId}::${threadKey}`)
+        && selectedTargets.all.length > 0
+      ) {
+        return selectedTargets;
+      }
+      const self = [{ instanceId, thread }];
+      return {
+        all: self,
+        unseen: thread.inbox.inInbox ? self : NO_CARD_TARGETS,
+      };
+    },
+    [selectedTargets, selection],
+  );
+
+  /** Take one card out of the selection, for when it leaves for good. */
+  const dropFromSelection = useCallback((target: StarMapCardTarget) => {
+    const key = `${target.instanceId}::${buildThreadIdentityKey(
+      target.thread.source,
+      target.thread.id,
+    )}`;
+    setSelection((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }, []);
+
+  /**
+   * Run one per-thread mutation across a menu's targets. Settles as a
+   * group so a single failing card cannot cancel the rest, reports what
+   * failed rather than swallowing it, and refreshes each owning cloud
+   * once — including after a partial failure, where the map is now out of
+   * date for whichever cards did land.
+   */
+  const runOnCardTargets = useCallback(
+    (options: {
+      /**
+       * The sentence before the reason, unpunctuated. It takes the counts
+       * because "could not archive" across four cards has to say how many
+       * of them are still sitting there.
+       */
+      describeFailure: (failed: number, total: number) => string;
+      run: (target: StarMapCardTarget) => Promise<unknown> | undefined;
+      targets: readonly StarMapCardTarget[];
+    }) => {
+      const targets = [...options.targets];
+      void Promise.allSettled(
+        targets.map((target) => options.run(target) ?? Promise.resolve()),
+      ).then((results) => {
+        const failures = results.filter(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        );
+        if (failures.length > 0) {
+          const summary = options.describeFailure(
+            failures.length,
+            targets.length,
+          );
+          // Only the first reason: several cards failing the same way is
+          // the common case, and a stack of near-identical sentences buries
+          // the count that says how much of the action survived.
+          const detail =
+            failures[0].reason instanceof Error
+              ? failures[0].reason.message
+              : undefined;
+          setCardError(detail ? `${summary}: ${detail}` : `${summary}.`);
+        }
+        for (const instanceId of new Set(
+          targets.map((target) => target.instanceId),
+        )) {
+          refreshOwner(instanceId);
+        }
+      });
+    },
+    [refreshOwner],
+  );
+
   const cardMenuActions = useCallback(
     (
       thread: NavigationThreadSummary,
       instanceId: string,
     ): StarMapCardMenuAction[] => {
-      const federationTarget =
-        thread.federation?.ref.target ?? readRendererFederationTarget();
+      const targets = cardMenuTargets(thread, instanceId);
       const actions: StarMapCardMenuAction[] = [
         {
           key: "open-full",
+          // Single-target on purpose: a selection is a set of things to act
+          // on, not a set of windows to open.
           label: "Open in full view",
           onSelect: () => openThreadFully(thread),
         },
       ];
-      if (desktopApi?.markThreadSeen && thread.inbox.inInbox) {
+      // The unread subset, not the whole selection: an already-seen card
+      // has nothing to mark, and the count says so. Same shape as the
+      // thread list's `bulkArchivableThreads`.
+      const unseenTargets = targets.unseen;
+      if (desktopApi?.markThreadSeen && unseenTargets.length > 0) {
         actions.push({
           key: "mark-seen",
-          label: "Mark as seen",
+          label:
+            unseenTargets.length > 1
+              ? `Mark ${unseenTargets.length} threads as seen`
+              : "Mark as seen",
           onSelect: () => {
-            void desktopApi
-              .markThreadSeen?.({
-                backend: thread.source,
-                federationTarget,
-                threadId: thread.id,
-              })
-              .then(() => refreshOwner(instanceId))
-              .catch((error: unknown) => {
-                setCardError(
-                  error instanceof Error
-                    ? error.message
-                    : "Could not mark that thread seen.",
-                );
-              });
+            runOnCardTargets({
+              describeFailure: (failed, total) =>
+                total === 1
+                  ? "Could not mark that thread seen"
+                  : `Could not mark ${failed} of ${total} threads seen`,
+              run: (target) =>
+                desktopApi.markThreadSeen?.({
+                  backend: target.thread.source,
+                  federationTarget:
+                    target.thread.federation?.ref.target
+                    ?? readRendererFederationTarget(),
+                  threadId: target.thread.id,
+                }),
+              targets: unseenTargets,
+            });
           },
         });
       }
@@ -1252,33 +1435,59 @@ export function StarMapScreen(props: StarMapScreenProps) {
         actions.push({
           danger: true,
           key: "archive",
-          label: "Archive thread",
+          // The count is the operator's confirmation that the menu is about
+          // the cards they gathered, before they commit to the one action
+          // here they cannot undo from this surface.
+          label:
+            targets.all.length > 1
+              ? `Archive ${targets.all.length} threads`
+              : "Archive thread",
           onSelect: () => {
-            void desktopApi
-              .archiveThread?.({
-                backend: thread.source,
-                federationTarget,
-                threadId: thread.id,
-              })
-              .then(() => {
-                chatCards.close(
-                  buildThreadIdentityKey(thread.source, thread.id),
-                );
-                refreshOwner(instanceId);
-              })
-              .catch((error: unknown) => {
-                setCardError(
-                  error instanceof Error
-                    ? error.message
-                    : "Could not archive that thread.",
-                );
-              });
+            runOnCardTargets({
+              describeFailure: (failed, total) =>
+                total === 1
+                  ? "Could not archive that thread"
+                  : `Could not archive ${failed} of ${total} threads`,
+              run: (target) =>
+                desktopApi
+                  .archiveThread?.({
+                    backend: target.thread.source,
+                    federationTarget:
+                      target.thread.federation?.ref.target
+                      ?? readRendererFederationTarget(),
+                    threadId: target.thread.id,
+                  })
+                  .then(() => {
+                    chatCards.close(
+                      buildThreadIdentityKey(
+                        target.thread.source,
+                        target.thread.id,
+                      ),
+                    );
+                    // An archived card is gone for good, unlike one a
+                    // filter or a flapping instance takes off the map, so
+                    // the selection drops it rather than counting it
+                    // forever. Per card and on success only: a card whose
+                    // archive was refused is still sitting there, and
+                    // still selected.
+                    dropFromSelection(target);
+                  }),
+              targets: targets.all,
+            });
           },
         });
       }
       return actions;
     },
-    [arrangement, chatCards, desktopApi, openThreadFully, refreshOwner],
+    [
+      arrangement,
+      cardMenuTargets,
+      chatCards,
+      desktopApi,
+      dropFromSelection,
+      openThreadFully,
+      runOnCardTargets,
+    ],
   );
 
   const linkState = (peerId: string) => {
@@ -1294,10 +1503,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * card can exclude itself. Absolute rather than cloud-local so cards
    * belonging to different instances can still align with each other —
    * the operator sees one map, not several coordinate systems.
+   *
+   * Empty under the projects lens, which draws none of these bodies: its
+   * cards sit on project arms instead, and `bodies` still reports the lane
+   * geometry they are NOT at. Measuring a sweep against rects nothing is
+   * painted at selects cards the operator cannot see — harmless while the
+   * selection only moved cards (the lens has no drag), and not harmless at
+   * all now that the kebab acts on it.
    */
   const cardRects = useMemo(() => {
     const rects = new Map<string, SnapRect>();
-    for (const position of bodies) {
+    for (const position of projectsMode ? [] : bodies) {
       // The load card is placed by hand like any other, so it belongs in the
       // same geometry: cards align to it, guides draw against it, and a
       // marquee sweeps it up. Keyed by its POSITION entry so the shared
@@ -1343,15 +1559,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
       });
     }
     return rects;
-  }, [arrangement, bodies, lanes]);
+  }, [arrangement, bodies, lanes, projectsMode]);
 
-  /**
-   * Build the snap for one card. Threshold is screen-space so the pull
-   * feels the same at every zoom, then converted into the canvas units the
-   * geometry works in — the same reasoning as the drag threshold.
-   */
-  const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
-  const [marquee, setMarquee] = useState<SnapRect | undefined>(undefined);
   /**
    * Canvas scale for the overlays drawn inside the transform. Every lens
    * scales now, lanes included, so the live value always applies.
@@ -1523,6 +1732,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [arrangement, selection, shellsByKey],
   );
 
+  /**
+   * Build the snap for one card. Threshold is screen-space so the pull
+   * feels the same at every zoom, then converted into the canvas units the
+   * geometry works in — the same reasoning as the drag threshold.
+   */
   const snapFor = useCallback(
     (
       instanceId: string,
@@ -2172,6 +2386,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
         <StarMapViewOptions
           preferences={preferences}
           onChange={(next) => {
+            // A lens change re-places every card, and one lens (projects)
+            // paints no selected state at all. Carrying a selection across
+            // that boundary leaves the operator holding cards they can no
+            // longer point at — which the kebab would then act on.
+            if (next.layout !== preferences.layout) setSelection(new Set());
             setPreferences(next);
             writeStoredPreferences(next);
           }}

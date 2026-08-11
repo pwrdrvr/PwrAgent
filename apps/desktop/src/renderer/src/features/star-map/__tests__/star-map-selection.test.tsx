@@ -9,23 +9,40 @@ import { StarMapScreen } from "../StarMapScreen";
  * empty space, so the modifier is what keeps them apart.
  */
 
+/** What the map learns about itself once federation health lands. */
+const LOCAL_HEALTH = {
+  enabled: false,
+  role: "client" as const,
+  status: "disabled" as const,
+  instanceId: "pwr_local",
+  localCelestialIcon: "sun" as const,
+  localLabel: "Harold-MBP-M5-Max",
+  localProfileName: "default",
+  peers: [],
+};
+
 function buildDesktopApi(): DesktopApi {
   return {
-    readFederationHealth: vi.fn(async () => ({
-      health: {
-        enabled: false,
-        role: "client" as const,
-        status: "disabled" as const,
-        instanceId: "pwr_local",
-        localCelestialIcon: "sun" as const,
-        localLabel: "Harold-MBP-M5-Max",
-        localProfileName: "default",
-        peers: [],
-      },
-    })),
+    readFederationHealth: vi.fn(async () => ({ health: LOCAL_HEALTH })),
     onAgentEvent: vi.fn(() => () => undefined),
     readStarMapArrangement: vi.fn(async () => ({ entries: [] })),
     setStarMapCardPosition: vi.fn(async () => undefined),
+  } as unknown as DesktopApi;
+}
+
+/**
+ * A bridge whose per-thread mutations resolve, so a menu action can be
+ * followed all the way to what it asked the main process to do.
+ */
+function buildMutatingDesktopApi(overrides?: Partial<DesktopApi>): DesktopApi {
+  return {
+    ...buildDesktopApi(),
+    archiveThread: vi.fn(async (request: { threadId: string }) => ({
+      backend: "codex" as const,
+      threadId: request.threadId,
+    })),
+    markThreadSeen: vi.fn(async () => undefined),
+    ...overrides,
   } as unknown as DesktopApi;
 }
 
@@ -43,7 +60,11 @@ function thread(id: string): NavigationThreadSummary {
 
 function renderMap(
   count: number,
-  overrides?: { desktopApi?: DesktopApi; onClose?: () => void },
+  overrides?: {
+    desktopApi?: DesktopApi;
+    onClose?: () => void;
+    onRefreshLocalThreads?: () => void;
+  },
 ) {
   const desktopApi = overrides?.desktopApi ?? buildDesktopApi();
   const screenFor = (threadCount: number) => (
@@ -58,6 +79,7 @@ function renderMap(
       onClose={overrides?.onClose ?? (() => undefined)}
       onOpenLocalThread={() => undefined}
       onFocusLocalInstance={() => undefined}
+      onRefreshLocalThreads={overrides?.onRefreshLocalThreads}
     />
   );
   const result = render(screenFor(count));
@@ -68,8 +90,24 @@ function renderMap(
   };
 }
 
-/** Sweep the whole cloud, so every card lands in the selection. */
-function sweepEverything(modifier: "shiftKey" | "metaKey" = "shiftKey") {
+/**
+ * Sweep the whole cloud, so every card lands in the selection.
+ *
+ * Waits for the cards to carry their owning instance's DURABLE id first.
+ * `ready()` only proves the instance body rendered; the local cloud is
+ * keyed "local" until `readFederationHealth` resolves, and a sweep in that
+ * window builds a selection of keys that name a cloud about to disappear.
+ * Nothing retries it, so the assertion that follows measures a race rather
+ * than the selection. This is a precondition, not a timeout — a slower
+ * machine widens the window, which is why CI hit it and this laptop rarely
+ * did.
+ */
+async function sweepEverything(modifier: "shiftKey" | "metaKey" = "shiftKey") {
+  await waitFor(() => {
+    const keys = shells().map((shell) => shell.dataset.cardKey ?? "");
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every((key) => key.startsWith("pwr_local::"))).toBe(true);
+  });
   fireEvent.pointerDown(viewport(), {
     button: 0,
     [modifier]: true,
@@ -104,6 +142,21 @@ function shells(): HTMLElement[] {
     .filter((node): node is HTMLElement => node instanceof HTMLElement);
 }
 
+/** Thread ids a mocked per-thread mutation was actually asked about. */
+function requestedThreadIds(request: unknown): string[] {
+  const mocked = request as {
+    mock?: { calls: [{ threadId: string }][] };
+  };
+  if (!mocked?.mock) throw new Error("request is not a mock");
+  return mocked.mock.calls.map(([input]) => input.threadId).sort();
+}
+
+function openCardMenu(threadId: string) {
+  fireEvent.click(
+    screen.getByRole("button", { name: `Actions for Thread ${threadId}` }),
+  );
+}
+
 async function ready() {
   await waitFor(() => {
     expect(
@@ -124,14 +177,7 @@ describe("star map marquee selection", () => {
     expect(document.querySelector(".star-map-card-shell--selected")).toBeNull();
 
     // A sweep large enough to cover the whole cloud.
-    fireEvent.pointerDown(viewport(), {
-      button: 0,
-      shiftKey: true,
-      clientX: -4000,
-      clientY: -4000,
-    });
-    fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
-    fireEvent.pointerUp(window, { clientX: 4000, clientY: 4000 });
+    await sweepEverything();
 
     await waitFor(() => {
       expect(
@@ -177,14 +223,7 @@ describe("star map marquee selection", () => {
     renderMap(4);
     await ready();
 
-    fireEvent.pointerDown(viewport(), {
-      button: 0,
-      shiftKey: true,
-      clientX: -4000,
-      clientY: -4000,
-    });
-    fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
-    fireEvent.pointerUp(window, { clientX: 4000, clientY: 4000 });
+    await sweepEverything();
 
     await waitFor(() => {
       expect(
@@ -227,7 +266,7 @@ describe("star map selection is amendable", () => {
     await ready();
     expect(screen.queryByText(/cards selected/)).toBeNull();
 
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => {
       expect(screen.getByText(/\d+ cards selected/)).toBeTruthy();
     });
@@ -237,7 +276,7 @@ describe("star map selection is amendable", () => {
   it("clears the selection on a click on empty canvas", async () => {
     renderMap(4);
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
 
     // Press and release in the same spot: a click, not an abandoned pan.
@@ -250,7 +289,7 @@ describe("star map selection is amendable", () => {
   it("keeps the selection when a pan is released somewhere else", async () => {
     renderMap(4);
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
     const before = selectedShells().length;
 
@@ -265,7 +304,7 @@ describe("star map selection is amendable", () => {
     const onClose = vi.fn();
     renderMap(4, { onClose });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
 
     const layer = document.querySelector(".star-map");
@@ -283,7 +322,7 @@ describe("star map selection is amendable", () => {
   it("takes a card back out of the selection on a modifier-click", async () => {
     renderMap(4);
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
     const before = selectedShells().length;
 
@@ -300,7 +339,7 @@ describe("star map selection is amendable", () => {
   it("extends the selection on a Cmd-sweep and replaces it on a Shift-sweep", async () => {
     renderMap(4);
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
     const before = selectedShells().length;
 
@@ -331,7 +370,7 @@ describe("star map selection is amendable", () => {
     const desktopApi = buildDesktopApi();
     const { showThreads } = renderMap(4, { desktopApi });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBe(4));
 
     // Two cards leave — a filter change, or the instance that owns them
@@ -359,5 +398,283 @@ describe("star map selection is amendable", () => {
     for (const call of moved) {
       expect(JSON.stringify(call)).not.toMatch(/t2|t3/);
     }
+  });
+});
+
+/**
+ * A selection that survives the kebab opening, then acts on one card, is
+ * the worst of both worlds: the operator watched five cards stay lit,
+ * chose a destructive action, and got one card archived and a re-laid-out
+ * cloud that reads as "they all went". The map follows the thread list —
+ * a menu opened on a selected row is about the selection.
+ */
+describe("star map card menu acts on the selection", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+    window.localStorage.removeItem("pwragent.starMap.filterSelection");
+  });
+
+  it("archives every selected card, not only the one whose kebab was used", async () => {
+    const desktopApi = buildMutatingDesktopApi();
+    renderMap(4, { desktopApi });
+    await ready();
+    await sweepEverything();
+    await waitFor(() => expect(selectedShells()).toHaveLength(4));
+
+    openCardMenu("t0");
+    // The count is the operator's confirmation, before committing, that the
+    // menu is about the cards they gathered.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 4 threads" }));
+
+    await waitFor(() => {
+      expect(requestedThreadIds(desktopApi.archiveThread)).toEqual([
+        "t0",
+        "t1",
+        "t2",
+        "t3",
+      ]);
+    });
+  });
+
+  it("marks the whole selection seen from one card's kebab", async () => {
+    const desktopApi = buildMutatingDesktopApi();
+    renderMap(3, { desktopApi });
+    await ready();
+    await sweepEverything();
+    await waitFor(() => expect(selectedShells()).toHaveLength(3));
+
+    openCardMenu("t1");
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Mark 3 threads as seen" }),
+    );
+
+    await waitFor(() => {
+      expect(requestedThreadIds(desktopApi.markThreadSeen)).toEqual([
+        "t0",
+        "t1",
+        "t2",
+      ]);
+    });
+  });
+
+  it("acts on one card when its kebab is opened outside the selection", async () => {
+    const desktopApi = buildMutatingDesktopApi();
+    renderMap(4, { desktopApi });
+    await ready();
+    await sweepEverything();
+    await waitFor(() => expect(selectedShells()).toHaveLength(4));
+
+    // Take one card back out, then use its kebab: the menu is about the
+    // card it hangs off, not the selection beside it.
+    fireEvent.pointerDown(shells()[3], {
+      button: 0,
+      shiftKey: true,
+      clientX: 500,
+      clientY: 400,
+    });
+    await waitFor(() => expect(selectedShells()).toHaveLength(3));
+
+    openCardMenu("t3");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive thread" }));
+
+    await waitFor(() => {
+      expect(requestedThreadIds(desktopApi.archiveThread)).toEqual(["t3"]);
+    });
+    // ...and the selection it was never part of is left alone.
+    expect(selectedShells()).toHaveLength(3);
+  });
+
+  it("archives the rest of the selection when one card fails, and says which", async () => {
+    const desktopApi = buildMutatingDesktopApi({
+      archiveThread: vi.fn(async (request: { threadId: string }) => {
+        if (request.threadId === "t1") throw new Error("peer is offline");
+        return { backend: "codex" as const, threadId: request.threadId };
+      }),
+    } as unknown as Partial<DesktopApi>);
+    const onRefreshLocalThreads = vi.fn();
+    renderMap(3, { desktopApi, onRefreshLocalThreads });
+    await ready();
+    await sweepEverything();
+    await waitFor(() => expect(selectedShells()).toHaveLength(3));
+
+    openCardMenu("t0");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 3 threads" }));
+
+    const alert = await screen.findByRole("alert");
+    // How much of the action survived is the operator's next question, and
+    // the reason alone cannot answer it.
+    expect(alert.textContent).toContain(
+      "Could not archive 1 of 3 threads: peer is offline",
+    );
+    // One card refusing must not cancel the two that would have gone.
+    expect(requestedThreadIds(desktopApi.archiveThread)).toEqual([
+      "t0",
+      "t1",
+      "t2",
+    ]);
+    // The cloud is out of date for whichever cards did land, so it still
+    // has to re-fetch.
+    expect(onRefreshLocalThreads).toHaveBeenCalled();
+    // The refused card is still sitting there, so it is still selected —
+    // only the two that actually left drop out of the count.
+    await waitFor(() => {
+      expect(screen.getByText("1 card selected")).toBeTruthy();
+    });
+  });
+
+  it("refreshes an owning cloud once, not once per archived card", async () => {
+    const desktopApi = buildMutatingDesktopApi();
+    const onRefreshLocalThreads = vi.fn();
+    renderMap(4, { desktopApi, onRefreshLocalThreads });
+    await ready();
+    await sweepEverything();
+    await waitFor(() => expect(selectedShells()).toHaveLength(4));
+
+    openCardMenu("t0");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 4 threads" }));
+
+    await waitFor(() => {
+      expect(onRefreshLocalThreads).toHaveBeenCalledTimes(1);
+    });
+    // Let any straggling settle land before claiming it stayed at one.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onRefreshLocalThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips selected cards that are no longer on the map", async () => {
+    const desktopApi = buildMutatingDesktopApi();
+    const { showThreads } = renderMap(4, { desktopApi });
+    await ready();
+    await sweepEverything();
+    await waitFor(() => expect(selectedShells()).toHaveLength(4));
+
+    // Two cards leave — a filter change, or their instance dropping. They
+    // stay in the selection on purpose (see above), but an action cannot
+    // reach a card the map can no longer resolve.
+    showThreads(2);
+    await waitFor(() => expect(shells()).toHaveLength(2));
+    expect(screen.getByText("4 cards selected")).toBeTruthy();
+
+    openCardMenu("t0");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 2 threads" }));
+
+    await waitFor(() => {
+      expect(requestedThreadIds(desktopApi.archiveThread)).toEqual(["t0", "t1"]);
+    });
+  });
+
+  it("stops counting cards it archived, unlike cards a filter took away", async () => {
+    const desktopApi = buildMutatingDesktopApi();
+    renderMap(4, { desktopApi });
+    await ready();
+    await sweepEverything();
+    await waitFor(() => expect(screen.getByText("4 cards selected")).toBeTruthy());
+
+    openCardMenu("t0");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 4 threads" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/cards selected/)).toBeNull();
+    });
+  });
+});
+
+/**
+ * The projects lens paints no selected state on its cards, and its cards
+ * are not where the lane geometry says they are. A selection there is one
+ * the operator can neither see nor point at — which is exactly what a
+ * destructive menu action must not be about.
+ */
+describe("star map selection stops at the projects lens", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+    window.localStorage.removeItem("pwragent.starMap.filterSelection");
+  });
+
+  it("selects nothing when a sweep runs under the projects lens", async () => {
+    window.localStorage.setItem(
+      "pwragent.starMap.viewPreferences",
+      JSON.stringify({ layout: "projects" }),
+    );
+    const desktopApi = buildMutatingDesktopApi();
+    renderMap(4, { desktopApi });
+    // The cards are on screen, so the sweep has something to miss.
+    await waitFor(() => expect(shells()).toHaveLength(4));
+
+    await sweepEverything();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText(/cards? selected/)).toBeNull();
+    // And the kebab is about the card it hangs off, singular.
+    openCardMenu("t0");
+    expect(screen.getByRole("menuitem", { name: "Archive thread" })).toBeTruthy();
+  });
+
+  it("drops a selection swept before the durable instance id arrived", async () => {
+    // Every pending read, not just the last one: `useCelestialIcons` reads
+    // federation health too, so holding a single resolver lands the wrong
+    // caller's promise and leaves the one that owns `instanceId` hanging.
+    const pendingHealthReads: ((value: unknown) => void)[] = [];
+    const desktopApi = {
+      ...buildDesktopApi(),
+      readFederationHealth: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            pendingHealthReads.push(resolve);
+          }),
+      ),
+    } as unknown as DesktopApi;
+    renderMap(4, { desktopApi });
+
+    // Cards render under the placeholder id while health is still in
+    // flight — this is the window a real operator can sweep in.
+    await waitFor(() => expect(shells()).toHaveLength(4));
+    expect(shells()[0].dataset.cardKey?.startsWith("local::")).toBe(true);
+
+    fireEvent.pointerDown(viewport(), {
+      button: 0,
+      shiftKey: true,
+      clientX: -4000,
+      clientY: -4000,
+    });
+    fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
+    fireEvent.pointerUp(window, { clientX: 4000, clientY: 4000 });
+    await waitFor(() => {
+      expect(screen.getByText("4 cards selected")).toBeTruthy();
+    });
+
+    await act(async () => {
+      for (const resolve of pendingHealthReads) {
+        resolve({ health: LOCAL_HEALTH });
+      }
+    });
+
+    // Every card is now keyed to the durable id, so the swept keys point at
+    // nothing. A counter still claiming four cards — none of them painted
+    // selected, none of them reachable from the kebab — is worse than an
+    // empty selection.
+    await waitFor(() => {
+      expect(shells()[0]?.dataset.cardKey?.startsWith("pwr_local::")).toBe(true);
+    });
+    expect(screen.queryByText(/cards selected/)).toBeNull();
+    expect(selectedShells()).toHaveLength(0);
+  });
+
+  it("drops the selection when the operator switches lens", async () => {
+    renderMap(4);
+    await ready();
+    await sweepEverything();
+    await waitFor(() => expect(screen.getByText("4 cards selected")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(screen.getByRole("button", { name: "Projects" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/cards? selected/)).toBeNull();
+    });
   });
 });
