@@ -190,7 +190,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                 <span role="columnheader">Status</span>
                 <span role="columnheader">Actions</span>
               </div>
-              {automations.automations.map((automation) => {
+              {automations.automations.map((automation, index) => {
                 const thread = threadsByKey.get(
                   buildThreadIdentityKey(automation.backend, automation.threadId),
                 );
@@ -200,6 +200,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                     automation={automation}
                     desktopApi={props.desktopApi}
                     expanded={expandedAutomationId === automation.id}
+                    hasRowsBelow={index < automations.automations.length - 1}
                     thread={thread}
                     onDelete={async () => {
                       await automations.deleteAutomation({
@@ -257,6 +258,8 @@ function AutomationTableRow(props: {
   automation: AutomationDetail;
   desktopApi?: DesktopApi;
   expanded: boolean;
+  /** Whether another automation follows this one in the list. */
+  hasRowsBelow: boolean;
   onDelete: () => Promise<void>;
   onEdit: () => void;
   onExpand: () => void;
@@ -480,6 +483,7 @@ function AutomationTableRow(props: {
       {props.expanded ? (
         <AutomationTableHistory
           automationId={props.automation.id}
+          capHeight={props.hasRowsBelow}
           desktopApi={props.desktopApi}
         />
       ) : null}
@@ -625,13 +629,24 @@ function formatAutomationLatestRun(automation: AutomationDetail): string {
 
 function AutomationTableHistory(props: {
   automationId: string;
+  /**
+   * Scroll the run list inside its own box instead of letting it grow. The
+   * cap exists to keep the *next* automation reachable, so it is applied only
+   * when there is a next automation — otherwise it reserves screen space for
+   * nobody and squeezes an open run's details into a sliver.
+   */
+  capHeight: boolean;
   desktopApi?: DesktopApi;
 }) {
   const runs = useAutomationRuns(props.desktopApi, props.automationId);
   const [expandedRunId, setExpandedRunId] = useState<string>();
 
   return (
-    <div className="automations-table__history">
+    <div
+      className={`automations-table__history${
+        props.capHeight ? " automations-table__history--capped" : ""
+      }`}
+    >
       {runs.loading ? (
         <p>Loading run history...</p>
       ) : runs.error ? (

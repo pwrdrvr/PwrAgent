@@ -327,7 +327,11 @@ describe("AutomationsScreen", () => {
         name: "Show run history for Check email",
       }),
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    // Runs disclose the same way their automation does — a chevron, not a
+    // button that reads like an action.
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Show run details from/ }),
+    );
 
     expect(await screen.findByText("Bring an umbrella.")).toBeInTheDocument();
     expect(screen.getByText("Captured automation events")).toBeInTheDocument();
@@ -434,6 +438,44 @@ describe("row runtime and actions", () => {
     expect(await screen.findByText("Gemini")).toBeInTheDocument();
     expect(screen.getByText("gemini-3-pro · medium")).toBeInTheDocument();
     expect(screen.getByText(/\$0\.052/)).toBeInTheDocument();
+  });
+
+  it("only caps run-history height when an automation follows it", async () => {
+    const second: AutomationDetail = { ...automation, id: "a2", name: "Second" };
+    const desktopApi = {
+      listAutomations: vi.fn(async () => ({ automations: [automation, second] })),
+      listAutomationRuns: vi.fn(async () => ({ runs: [automationRun] })),
+      onAgentEvent: () => () => undefined,
+    } as unknown as DesktopApi;
+
+    const view = render(
+      <AutomationsScreen
+        desktopApi={desktopApi}
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    // First of two: capped, so a long history cannot bury the second row.
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        view.container.querySelector(".automations-table__history--capped"),
+      ).not.toBeNull(),
+    );
+
+    // Last row: nothing below it, so nothing to reserve space for.
+    fireEvent.click(screen.getByRole("button", { name: "Show run history for Second" }));
+    await waitFor(() =>
+      expect(view.container.querySelector(".automations-table__history")).not.toBeNull(),
+    );
+    expect(
+      view.container.querySelector(".automations-table__history--capped"),
+    ).toBeNull();
   });
 
   it("keeps Pause and Delete behind the row overflow menu", async () => {

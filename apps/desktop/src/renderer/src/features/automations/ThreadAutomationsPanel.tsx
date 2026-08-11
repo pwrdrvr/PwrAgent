@@ -8,6 +8,7 @@ import type {
   AutomationRunWindow,
   NavigationThreadSummary,
 } from "@pwragent/shared";
+import { ChevronRightIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
@@ -310,6 +311,17 @@ export function AutomationRunHistoryItem(props: {
           two-column grid, which turned every control after the second cell
           into a full-width row of its own once the list rendered wide. */}
       <div className="automation-run-history__line">
+        {/* Same disclosure affordance as the automation row above, so the
+            nesting reads as one control repeated at two depths. */}
+        <button
+          aria-expanded={props.expanded}
+          aria-label={`${props.expanded ? "Hide" : "Show"} run details from ${formatAutomationTimestamp(runAt)}`}
+          className="automation-run-history__disclosure"
+          type="button"
+          onClick={props.onToggle}
+        >
+          <ChevronRightIcon aria-hidden="true" size={13} />
+        </button>
         <span className={`automation-run-status automation-run-status--${props.run.status}`}>
           {formatRunStatus(props.run.status)}
         </span>
@@ -342,9 +354,6 @@ export function AutomationRunHistoryItem(props: {
           <span className="automation-run-history__time">{usageLine}</span>
         ) : null}
         <span className="automation-run-history__actions">
-          <button className="context-list__action" type="button" onClick={props.onToggle}>
-            {props.expanded ? "Hide details" : "Details"}
-          </button>
           {props.desktopApi?.openAutomationRunWindow ? (
             <button
               className="context-list__action"

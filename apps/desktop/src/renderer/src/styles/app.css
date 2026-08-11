@@ -6682,7 +6682,10 @@ textarea,
   min-width: 0;
 }
 
-.automations-table__disclosure {
+/* One disclosure control at two depths: the automation row and each of its
+   runs. Shared block so the nesting reads as the same affordance repeated. */
+.automations-table__disclosure,
+.automation-run-history__disclosure {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6700,18 +6703,28 @@ textarea,
 }
 
 .automations-table__disclosure:hover,
-.automations-table__disclosure:focus-visible {
+.automations-table__disclosure:focus-visible,
+.automation-run-history__disclosure:hover,
+.automation-run-history__disclosure:focus-visible {
   color: var(--text-primary);
 }
 
-.automations-table__disclosure[aria-expanded="true"] {
+.automations-table__disclosure[aria-expanded="true"],
+.automation-run-history__disclosure[aria-expanded="true"] {
   transform: rotate(90deg);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .automations-table__disclosure {
+  .automations-table__disclosure,
+  .automation-run-history__disclosure {
     transition: none;
   }
+}
+
+.automation-run-history__disclosure {
+  width: 16px;
+  height: 16px;
+  margin-top: 0;
 }
 
 /* Runs-as cell: backend pill + model line, then access and directory. */
@@ -6813,11 +6826,17 @@ textarea,
 /* Runs read as belonging to the row above them: inset to clear the
    disclosure chevron, with a rail tying them back to their automation. */
 .automations-table__history {
-  max-height: clamp(280px, 56vh, 640px);
   padding: 12px 12px 12px 20px;
   border-bottom: 1px solid var(--border-subtle);
   border-left: 2px solid var(--accent-border);
   background: var(--bg-panel-elevated);
+}
+
+/* Only capped when an automation follows this one, so a long history cannot
+   push the rest of the list off-screen. The last row is free to use the space
+   nothing else is waiting for. */
+.automations-table__history--capped {
+  max-height: clamp(280px, 56vh, 640px);
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
