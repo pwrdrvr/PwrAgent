@@ -39,42 +39,69 @@ function fly(params: {
 }
 
 describe("resolveStarMapCameraKey", () => {
-  it("maps WASD and the arrows to the same four directions", () => {
-    expect(resolveStarMapCameraKey("w")).toBe("up");
-    expect(resolveStarMapCameraKey("ArrowUp")).toBe("up");
-    expect(resolveStarMapCameraKey("a")).toBe("left");
-    expect(resolveStarMapCameraKey("ArrowLeft")).toBe("left");
-    expect(resolveStarMapCameraKey("s")).toBe("down");
-    expect(resolveStarMapCameraKey("ArrowDown")).toBe("down");
-    expect(resolveStarMapCameraKey("d")).toBe("right");
-    expect(resolveStarMapCameraKey("ArrowRight")).toBe("right");
+  it("binds movement to physical key POSITION, not the character", () => {
+    // The whole point of `code`: these are the WASD positions regardless of
+    // what the layout prints on them.
+    expect(resolveStarMapCameraKey({ key: "w", code: "KeyW" })).toBe("up");
+    expect(resolveStarMapCameraKey({ key: "s", code: "KeyS" })).toBe("down");
+    expect(resolveStarMapCameraKey({ key: "a", code: "KeyA" })).toBe("left");
+    expect(resolveStarMapCameraKey({ key: "d", code: "KeyD" })).toBe("right");
   });
 
-  it("accepts capitals, because Shift is the sprint key", () => {
-    // Holding Shift to sprint changes what the letter keys report, so a
-    // case-sensitive map would make the camera stop the moment it sprints.
-    expect(resolveStarMapCameraKey("W")).toBe("up");
-    expect(resolveStarMapCameraKey("D")).toBe("right");
+  it("flies the same physical keys on AZERTY, where they report z/q/s/d", () => {
+    // The regression this exists for: binding on `event.key` left every
+    // AZERTY operator unable to pan at all, while the hint drew an
+    // inverted-T claiming those exact positions.
+    expect(resolveStarMapCameraKey({ key: "z", code: "KeyW" })).toBe("up");
+    expect(resolveStarMapCameraKey({ key: "q", code: "KeyA" })).toBe("left");
+    expect(resolveStarMapCameraKey({ key: "s", code: "KeyS" })).toBe("down");
+    expect(resolveStarMapCameraKey({ key: "d", code: "KeyD" })).toBe("right");
   });
 
-  it("zooms on both faces of the minus and equals keys", () => {
-    expect(resolveStarMapCameraKey("=")).toBe("zoomIn");
-    // Shifted `=` and the numpad both report "+".
-    expect(resolveStarMapCameraKey("+")).toBe("zoomIn");
-    expect(resolveStarMapCameraKey("-")).toBe("zoomOut");
-    expect(resolveStarMapCameraKey("_")).toBe("zoomOut");
+  it("flies the same physical keys on Dvorak, where they report ,aoe", () => {
+    expect(resolveStarMapCameraKey({ key: ",", code: "KeyW" })).toBe("up");
+    expect(resolveStarMapCameraKey({ key: "a", code: "KeyA" })).toBe("left");
+    expect(resolveStarMapCameraKey({ key: "o", code: "KeyS" })).toBe("down");
+    expect(resolveStarMapCameraKey({ key: "e", code: "KeyD" })).toBe("right");
+  });
+
+  it("does NOT fly a letter that merely spells w/a/s/d on another layout", () => {
+    // AZERTY's physical Z reports key "w". Panning for it would put "up" on
+    // two keys and undo the position binding.
+    expect(resolveStarMapCameraKey({ key: "w", code: "KeyZ" })).toBeUndefined();
+    expect(resolveStarMapCameraKey({ key: "a", code: "KeyQ" })).toBeUndefined();
+  });
+
+  it("maps the arrows and the zoom pair by position too", () => {
+    expect(resolveStarMapCameraKey({ key: "ArrowUp", code: "ArrowUp" })).toBe("up");
+    expect(resolveStarMapCameraKey({ key: "ArrowLeft", code: "ArrowLeft" })).toBe("left");
+    expect(resolveStarMapCameraKey({ key: "=", code: "Equal" })).toBe("zoomIn");
+    expect(resolveStarMapCameraKey({ key: "-", code: "Minus" })).toBe("zoomOut");
+    expect(resolveStarMapCameraKey({ key: "+", code: "NumpadAdd" })).toBe("zoomIn");
+    expect(resolveStarMapCameraKey({ key: "-", code: "NumpadSubtract" })).toBe("zoomOut");
+  });
+
+  it("falls back to the character only when an event carries no code", () => {
+    // Synthetic events often set `key` alone; the map should still fly.
+    expect(resolveStarMapCameraKey({ key: "w" })).toBe("up");
+    expect(resolveStarMapCameraKey({ key: "W" })).toBe("up");
+    expect(resolveStarMapCameraKey({ key: "ArrowDown" })).toBe("down");
+    expect(resolveStarMapCameraKey({ key: "=" })).toBe("zoomIn");
   });
 
   it("leaves every other key alone", () => {
-    for (const key of ["q", "e", "Escape", "Enter", " ", "PageUp", "Tab"]) {
-      expect(resolveStarMapCameraKey(key)).toBeUndefined();
+    for (const code of ["KeyQ", "KeyE", "Escape", "Enter", "Space", "PageUp", "Tab"]) {
+      expect(resolveStarMapCameraKey({ key: "x", code })).toBeUndefined();
     }
   });
 
-  it("resets on zero only", () => {
-    expect(isStarMapResetViewKey("0")).toBe(true);
-    expect(isStarMapResetViewKey("1")).toBe(false);
-    expect(isStarMapResetViewKey("o")).toBe(false);
+  it("resets on zero, digit row or numpad", () => {
+    expect(isStarMapResetViewKey({ key: "0", code: "Digit0" })).toBe(true);
+    expect(isStarMapResetViewKey({ key: "0", code: "Numpad0" })).toBe(true);
+    expect(isStarMapResetViewKey({ key: "0" })).toBe(true);
+    expect(isStarMapResetViewKey({ key: ")", code: "Digit0" })).toBe(true);
+    expect(isStarMapResetViewKey({ key: "1", code: "Digit1" })).toBe(false);
+    expect(isStarMapResetViewKey({ key: "o", code: "KeyO" })).toBe(false);
   });
 });
 

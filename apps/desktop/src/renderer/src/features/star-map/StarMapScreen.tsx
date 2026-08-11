@@ -83,6 +83,7 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
   placeStarMapView,
+  type StarMapView,
 } from "./star-map-view-geometry";
 import { StarMapViewOptions } from "./StarMapViewOptions";
 import { StarMapKeyHint } from "./StarMapKeyHint";
@@ -237,10 +238,60 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // pans and zooms rather than compressing the map to fit.
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
   /**
+   * Where the view is *right now*, which is not always what React state
+   * says.
+   *
+   * Both direct-manipulation gestures — the pointer drag and the keyboard
+   * camera — write the canvas transform by hand on an animation frame and
+   * only commit to state when the gesture ends, because a `setView` per
+   * frame re-renders every card on the map to move one transform. That
+   * leaves a window where `view` is stale, and every writer has to agree on
+   * a single live value or they fight: the keyboard camera used to keep a
+   * private copy, so a pinch mid-flight was computed from the pre-flight
+   * base and then thrown away on landing, and `0` (reset view) mid-flight
+   * did nothing at all.
+   *
+   * So this ref is the one source of truth for "where is the view", and
+   * `paintView` / `commitView` below are the only ways to move it.
+   */
+  const viewRef = useRef(view);
+  /**
    * Set once the operator pans or zooms. From then on the view is theirs:
    * nothing that merely changes the map's contents may move it.
    */
   const operatorMovedViewRef = useRef(false);
+
+  /**
+   * Move the view without telling React. For gesture frames: writes the
+   * live ref and the transform, so the next frame of any writer composes
+   * on top of it rather than on a stale base.
+   */
+  const paintView = useCallback((next: StarMapView) => {
+    viewRef.current = next;
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.style.transform =
+        `translate(${next.x}px, ${next.y}px) scale(${next.scale})`;
+    }
+  }, []);
+
+  /**
+   * Move the view and tell React. For anything that ends a gesture or
+   * happens outside one — `view.scale` feeds the card-drag detent and the
+   * overlay stroke widths, so it cannot stay stale indefinitely.
+   *
+   * Paints as well as commits: React skips the style write when its own
+   * last-rendered transform already equals the new one, which is exactly
+   * the case after a run of hand-written frames. Committing alone would
+   * leave the DOM showing the gesture's last frame.
+   */
+  const commitView = useCallback(
+    (next: StarMapView) => {
+      paintView(next);
+      setView(next);
+    },
+    [paintView],
+  );
   const orbitMode = preferences.layout === "orbit";
   /** Projects as suns: threads pooled across instances, one body per repo. */
   const projectsMode = preferences.layout === "projects";
@@ -389,7 +440,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // Scale is captured for the whole gesture. A pinch mid-drag moves the
     // live transform out of step with it until pointerup re-reads the real
     // scale from state; the drag has always worked this way.
-    const base = view;
+    // Read from the live ref, not React state: a keyboard flight may have
+    // moved the view since the last commit.
+    const base = viewRef.current;
     /** Latest raw pointer position, unclamped. Both writers clamp it. */
     let pointerX = base.x;
     let pointerY = base.y;
@@ -405,12 +458,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
           // transform straight onto the canvas, so an unclamped live path
           // would let the map leave the window and then jump back on
           // pointerup when the clamped state landed.
-          const clamped = clampStarMapView({
-            view: { x: pointerX, y: pointerY, scale: base.scale },
-            ...bounds,
-          });
-          canvas.style.transform =
-            `translate(${clamped.x}px, ${clamped.y}px) scale(${base.scale})`;
+          paintView(
+            clampStarMapView({
+              view: { x: pointerX, y: pointerY, scale: base.scale },
+              ...bounds,
+            }),
+          );
         });
       }
     };
@@ -430,9 +483,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // has to be in bounds on its own account — and a flick released
       // before any frame ran still commits where the pointer actually
       // ended up.
-      setView((current) =>
+      commitView(
         clampStarMapView({
-          view: { ...current, x: pointerX, y: pointerY },
+          view: { ...viewRef.current, x: pointerX, y: pointerY },
           ...bounds,
         }),
       );
@@ -834,18 +887,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
     };
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
+      // Both branches read the LIVE view rather than a `setView` updater's
+      // `current`. During a keyboard flight the committed state is frozen at
+      // the last landing, so an updater would compute this pinch from a base
+      // several hundred pixels stale and then have it overwritten on the next
+      // animation frame. Reading and writing the same ref lets the two
+      // gestures compose: fly with WASD and pinch to zoom at the same time.
+      operatorMovedViewRef.current = true;
+      const current = viewRef.current;
       if (event.ctrlKey) {
-        operatorMovedViewRef.current = true;
         const rect = element.getBoundingClientRect();
         const pointerX = event.clientX - rect.left;
         const pointerY = event.clientY - rect.top;
-        setView((current) => {
-          const scale = Math.min(
-            MAX_ZOOM,
-            Math.max(MIN_ZOOM, current.scale * (1 - event.deltaY / 240)),
-          );
-          const ratio = scale / current.scale;
-          return clampStarMapView({
+        const scale = Math.min(
+          MAX_ZOOM,
+          Math.max(MIN_ZOOM, current.scale * (1 - event.deltaY / 240)),
+        );
+        const ratio = scale / current.scale;
+        commitView(
+          clampStarMapView({
             view: {
               scale,
               // Keep the point under the cursor pinned while scaling.
@@ -853,12 +913,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
               y: pointerY - (pointerY - current.y) * ratio,
             },
             ...bounds,
-          });
-        });
+          }),
+        );
         return;
       }
-      operatorMovedViewRef.current = true;
-      setView((current) =>
+      commitView(
         clampStarMapView({
           view: {
             ...current,
@@ -872,6 +931,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => element.removeEventListener("wheel", onWheel);
   }, [
+    commitView,
     topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
@@ -897,7 +957,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   useEffect(() => {
     if (operatorMovedViewRef.current) return;
-    setView(
+    commitView(
       placeStarMapView({
         canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
         viewport: { width: viewportSize.width, height: viewportSize.height },
@@ -905,6 +965,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       }),
     );
   }, [
+    commitView,
     topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
@@ -925,7 +986,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const resetView = useCallback(() => {
     operatorMovedViewRef.current = false;
-    setView(
+    // commitView, not setView: `0` can be pressed mid-flight, and the
+    // keyboard camera's next frame reads the live ref. Committing to state
+    // alone would be silently overwritten by that frame — and, because
+    // React's last-rendered transform still matched, would not even repaint.
+    commitView(
       placeStarMapView({
         canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
         viewport: { width: viewportSize.width, height: viewportSize.height },
@@ -933,6 +998,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       }),
     );
   }, [
+    commitView,
     topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
@@ -955,11 +1021,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const heldCameraKeys = useStarMapCameraKeys({
     enabled: !props.floating,
     layerRef,
-    canvasRef,
-    view,
+    liveViewRef: viewRef,
     canvas: panZoomCanvas,
     viewport: viewportSize,
-    onChange: setView,
+    onPaint: paintView,
+    onCommit: commitView,
     onMoveStart: claimView,
     onResetView: resetView,
   });

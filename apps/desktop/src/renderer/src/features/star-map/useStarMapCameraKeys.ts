@@ -32,13 +32,20 @@ export function useStarMapCameraKeys(params: {
   /** Keydown is scoped here, so the map only flies while it has focus. */
   layerRef: RefObject<HTMLElement | null>;
   /** The transformed canvas, written directly during flight. */
-  canvasRef: RefObject<HTMLElement | null>;
-  view: StarMapView;
+  /**
+   * Where the view is right now, shared with every other writer. The
+   * keyboard camera does NOT keep a private copy: a pinch or a `0` landing
+   * mid-flight has to compose with the flight rather than be discarded by
+   * it.
+   */
+  liveViewRef: RefObject<StarMapView>;
   /** Untransformed canvas size for the current lens. */
   canvas: StarMapViewBox;
   viewport: StarMapViewBox;
+  /** Move the view for one frame, without telling React. */
+  onPaint: (next: StarMapView) => void;
   /** Commit the flown-to view once the keys are released. */
-  onChange: (next: StarMapView) => void;
+  onCommit: (next: StarMapView) => void;
   /** First press claims the view for the operator, as a drag does. */
   onMoveStart: () => void;
   /** `0`: back to where the map opens. */
@@ -47,8 +54,6 @@ export function useStarMapCameraKeys(params: {
   const [held, setHeld] = useState<ReadonlySet<StarMapCameraKey>>(NO_KEYS);
   const heldRef = useRef<ReadonlySet<StarMapCameraKey>>(NO_KEYS);
   const sprintRef = useRef(false);
-  /** Live view during flight; the loop owns it, React state follows. */
-  const viewRef = useRef(params.view);
   const flyingRef = useRef(false);
 
   /**
@@ -63,27 +68,22 @@ export function useStarMapCameraKeys(params: {
     viewport: params.viewport,
   });
   const callbacksRef = useRef({
-    onChange: params.onChange,
+    onPaint: params.onPaint,
+    onCommit: params.onCommit,
     onMoveStart: params.onMoveStart,
     onResetView: params.onResetView,
   });
   useEffect(() => {
     boundsRef.current = { canvas: params.canvas, viewport: params.viewport };
     callbacksRef.current = {
-      onChange: params.onChange,
+      onPaint: params.onPaint,
+      onCommit: params.onCommit,
       onMoveStart: params.onMoveStart,
       onResetView: params.onResetView,
     };
   });
 
-  // Adopt outside writes to the view (wheel, reset, lens switch) only when
-  // the keyboard is not flying; mid-flight the loop holds the newer value.
-  useEffect(() => {
-    if (flyingRef.current) return;
-    viewRef.current = params.view;
-  }, [params.view]);
-
-  const { enabled, layerRef, canvasRef } = params;
+  const { enabled, layerRef, liveViewRef } = params;
 
   useEffect(() => {
     const layer = layerRef.current;
@@ -101,7 +101,7 @@ export function useStarMapCameraKeys(params: {
     const land = () => {
       flyingRef.current = false;
       last = 0;
-      callbacksRef.current.onChange(viewRef.current);
+      callbacksRef.current.onCommit(liveViewRef.current);
     };
 
     const runFrame = (now: number) => {
@@ -115,20 +115,17 @@ export function useStarMapCameraKeys(params: {
       // tap released before the second frame still moves the map.
       const elapsed = last === 0 ? 1000 / 60 : now - last;
       last = now;
+      // Reads the SHARED live view every frame, so a pinch or a reset that
+      // landed since the last frame is the base this one builds on.
       const next = stepStarMapCamera({
-        view: viewRef.current,
+        view: liveViewRef.current,
         held: heldRef.current,
         elapsedMs: elapsed,
         sprint: sprintRef.current,
         canvas: boundsRef.current.canvas,
         viewport: boundsRef.current.viewport,
       });
-      viewRef.current = next;
-      const canvas = canvasRef.current;
-      if (canvas) {
-        canvas.style.transform =
-          `translate(${next.x}px, ${next.y}px) scale(${next.scale})`;
-      }
+      callbacksRef.current.onPaint(next);
       frame = requestAnimationFrame(runFrame);
     };
 
@@ -138,18 +135,35 @@ export function useStarMapCameraKeys(params: {
       frame = requestAnimationFrame(runFrame);
     };
 
+    /**
+     * Whether the map should answer the keyboard at all right now.
+     *
+     * Bound on `window` rather than the layer, because the layer only sees
+     * keys while focus is inside it — and focus escapes routinely (closing
+     * the portaled intake dialog drops it on `document.body`), which left
+     * the always-visible hint advertising keys that did nothing. Focus on
+     * NOTHING means the map, since the map is the surface; focus on
+     * something outside the layer belongs to that something.
+     */
+    const mapHasKeyboard = () => {
+      const active = document.activeElement;
+      if (!active || active === document.body) return true;
+      return layer.contains(active);
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
       // Cmd/Ctrl/Alt combinations belong to the app and the OS: Cmd-W is
       // "close window", not "fly up".
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!mapHasKeyboard()) return;
       if (isStarMapTypingTarget(event.target)) return;
       sprintRef.current = event.shiftKey;
-      if (isStarMapResetViewKey(event.key)) {
+      if (isStarMapResetViewKey(event)) {
         event.preventDefault();
         callbacksRef.current.onResetView();
         return;
       }
-      const camera = resolveStarMapCameraKey(event.key);
+      const camera = resolveStarMapCameraKey(event);
       if (!camera) return;
       // Arrows would otherwise scroll whatever is under focus as well.
       event.preventDefault();
@@ -168,7 +182,7 @@ export function useStarMapCameraKeys(params: {
      */
     const onKeyUp = (event: KeyboardEvent) => {
       sprintRef.current = event.shiftKey;
-      const camera = resolveStarMapCameraKey(event.key);
+      const camera = resolveStarMapCameraKey(event);
       if (!camera || !heldRef.current.has(camera)) return;
       const next = new Set(heldRef.current);
       next.delete(camera);
@@ -189,12 +203,12 @@ export function useStarMapCameraKeys(params: {
       if (!frame) land();
     };
 
-    layer.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", releaseAll);
     document.addEventListener("visibilitychange", releaseAll);
     return () => {
-      layer.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", releaseAll);
       document.removeEventListener("visibilitychange", releaseAll);
@@ -207,7 +221,7 @@ export function useStarMapCameraKeys(params: {
       heldRef.current = NO_KEYS;
       setHeld(NO_KEYS);
     };
-  }, [enabled, layerRef, canvasRef]);
+  }, [enabled, layerRef, liveViewRef]);
 
   return held;
 }

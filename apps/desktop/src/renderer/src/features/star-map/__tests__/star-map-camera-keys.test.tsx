@@ -105,19 +105,19 @@ describe("star map keyboard camera", () => {
     await openMap();
     const before = readTransform();
 
-    fireEvent.keyDown(layer(), { key: "d" });
+    fireEvent.keyDown(layer(), { key: "d", code: "KeyD" });
     await flushFrame();
 
     // D flies the camera right, so the canvas beneath travels left.
     expect(readTransform().x).toBeLessThan(before.x);
     expect(readTransform().y).toBe(before.y);
 
-    fireEvent.keyDown(layer(), { key: "w" });
+    fireEvent.keyDown(layer(), { key: "w", code: "KeyW" });
     await flushFrame();
     expect(readTransform().y).toBeGreaterThan(before.y);
 
-    fireEvent.keyUp(window, { key: "d" });
-    fireEvent.keyUp(window, { key: "w" });
+    fireEvent.keyUp(window, { key: "d", code: "KeyD" });
+    fireEvent.keyUp(window, { key: "w", code: "KeyW" });
     await flushFrame();
   });
 
@@ -125,9 +125,9 @@ describe("star map keyboard camera", () => {
     await openMap();
     const before = readTransform();
 
-    fireEvent.keyDown(layer(), { key: "a" });
+    fireEvent.keyDown(layer(), { key: "a", code: "KeyA" });
     await flushFrame();
-    fireEvent.keyUp(window, { key: "a" });
+    fireEvent.keyUp(window, { key: "a", code: "KeyA" });
     // The frame after the release lands the flight and hands the view back
     // to React.
     await flushFrame();
@@ -153,20 +153,20 @@ describe("star map keyboard camera", () => {
     await openMap();
     const before = readTransform();
 
-    fireEvent.keyDown(layer(), { key: "=" });
+    fireEvent.keyDown(layer(), { key: "=", code: "Equal" });
     await flushFrame();
     const zoomed = readTransform();
     expect(zoomed.scale).toBeGreaterThan(before.scale);
     // Same canvas point stays under the middle of the window.
     expect((640 - zoomed.x) / zoomed.scale).toBeCloseTo((640 - before.x) / before.scale, 4);
 
-    fireEvent.keyUp(window, { key: "=" });
+    fireEvent.keyUp(window, { key: "=", code: "Equal" });
     await flushFrame();
 
-    fireEvent.keyDown(layer(), { key: "-" });
+    fireEvent.keyDown(layer(), { key: "-", code: "Minus" });
     await flushFrame();
     expect(readTransform().scale).toBeLessThan(zoomed.scale);
-    fireEvent.keyUp(window, { key: "-" });
+    fireEvent.keyUp(window, { key: "-", code: "Minus" });
     await flushFrame();
   });
 
@@ -174,14 +174,83 @@ describe("star map keyboard camera", () => {
     await openMap();
     const opened = readTransform();
 
-    fireEvent.keyDown(layer(), { key: "d" });
+    fireEvent.keyDown(layer(), { key: "d", code: "KeyD" });
     await flushFrame();
-    fireEvent.keyUp(window, { key: "d" });
+    fireEvent.keyUp(window, { key: "d", code: "KeyD" });
     await flushFrame();
     expect(readTransform().x).not.toBe(opened.x);
 
-    fireEvent.keyDown(layer(), { key: "0" });
+    fireEvent.keyDown(layer(), { key: "0", code: "Digit0" });
     expect(readTransform()).toEqual(opened);
+  });
+
+  it("resets the view on 0 even while a direction key is held", async () => {
+    // Regression: the camera used to keep a private copy of the view, so a
+    // reset mid-flight was overwritten by the next animation frame — and,
+    // because React's last-rendered transform still matched, it did not even
+    // repaint. Pressing 0 did nothing at all.
+    await openMap();
+    const opened = readTransform();
+
+    fireEvent.keyDown(layer(), { key: "d", code: "KeyD" });
+    await flushFrame();
+    await flushFrame();
+    expect(readTransform().x).toBeLessThan(opened.x);
+
+    fireEvent.keyDown(layer(), { key: "0", code: "Digit0" });
+    expect(readTransform()).toEqual(opened);
+
+    // Still flying, so the NEXT frame continues from the reset position
+    // rather than teleporting back to where the flight had reached.
+    await flushFrame();
+    const afterReset = readTransform();
+    expect(afterReset.x).toBeLessThan(opened.x);
+    expect(afterReset.x).toBeGreaterThan(opened.x - 100);
+
+    fireEvent.keyUp(window, { key: "d", code: "KeyD" });
+    await flushFrame();
+  });
+
+  it("composes a trackpad pinch with an in-flight keyboard pan", async () => {
+    // Regression: the wheel handler read React state, which is frozen at the
+    // last landing while the keyboard is flying, so a pinch was computed
+    // from a stale base and then discarded by the next frame.
+    await openMap();
+    const viewport = document.querySelector(".star-map__viewport")!;
+
+    fireEvent.keyDown(layer(), { key: "d", code: "KeyD" });
+    await flushFrame();
+    const flying = readTransform();
+
+    fireEvent.wheel(viewport, { deltaY: -120, ctrlKey: true, clientX: 640, clientY: 400 });
+    const pinched = readTransform();
+    expect(pinched.scale).toBeGreaterThan(flying.scale);
+
+    // The flight carries on from the zoomed view: scale is kept, and the pan
+    // keeps going in the same direction.
+    await flushFrame();
+    const after = readTransform();
+    expect(after.scale).toBe(pinched.scale);
+    expect(after.x).toBeLessThan(pinched.x);
+
+    fireEvent.keyUp(window, { key: "d", code: "KeyD" });
+    await flushFrame();
+    expect(readTransform().scale).toBe(pinched.scale);
+  });
+
+  it("keeps flying when focus is on nothing, not just on the layer", async () => {
+    // Closing the portaled intake dialog drops focus on document.body, and
+    // the hint stays on screen advertising keys that then did nothing.
+    await openMap();
+    (document.activeElement as HTMLElement | null)?.blur();
+    const before = readTransform();
+
+    fireEvent.keyDown(document.body, { key: "d", code: "KeyD" });
+    await flushFrame();
+
+    expect(readTransform().x).toBeLessThan(before.x);
+    fireEvent.keyUp(window, { key: "d", code: "KeyD" });
+    await flushFrame();
   });
 
   it("leaves modified keystrokes to the app and the OS", async () => {
@@ -189,8 +258,8 @@ describe("star map keyboard camera", () => {
     await openMap();
     const before = readTransform();
 
-    fireEvent.keyDown(layer(), { key: "w", metaKey: true });
-    fireEvent.keyDown(layer(), { key: "d", ctrlKey: true });
+    fireEvent.keyDown(layer(), { key: "w", code: "KeyW", metaKey: true });
+    fireEvent.keyDown(layer(), { key: "d", code: "KeyD", ctrlKey: true });
     await flushFrame();
 
     expect(readTransform()).toEqual(before);
@@ -201,7 +270,7 @@ describe("star map keyboard camera", () => {
     // camera flies on with nothing holding it.
     await openMap();
 
-    fireEvent.keyDown(layer(), { key: "d" });
+    fireEvent.keyDown(layer(), { key: "d", code: "KeyD" });
     await flushFrame();
     const flying = readTransform();
 
@@ -218,16 +287,16 @@ describe("star map keyboard camera", () => {
     await openMap();
     const hint = document.querySelector(".star-map__key-hint");
     expect(hint).toBeTruthy();
-    expect(hint?.querySelectorAll(".star-map__key").length).toBe(6);
+    expect(hint?.querySelectorAll(".star-map__key").length).toBe(8);
     expect(document.querySelectorAll(".star-map__key.is-held").length).toBe(0);
 
     // Asserted synchronously, not through `waitFor`: the held set is React
     // state written straight from the key handler, so if it needed waiting
     // for, that would itself be the bug.
-    fireEvent.keyDown(layer(), { key: "a" });
+    fireEvent.keyDown(layer(), { key: "a", code: "KeyA" });
     expect(document.querySelector(".star-map__key--left.is-held")).toBeTruthy();
 
-    fireEvent.keyUp(window, { key: "a" });
+    fireEvent.keyUp(window, { key: "a", code: "KeyA" });
     expect(document.querySelectorAll(".star-map__key.is-held").length).toBe(0);
     await flushFrame();
   });
@@ -239,7 +308,7 @@ describe("star map keyboard camera", () => {
     expect(document.querySelector(".star-map__key-hint")).toBeNull();
     const before = readTransform();
 
-    fireEvent.keyDown(layer(), { key: "d" });
+    fireEvent.keyDown(layer(), { key: "d", code: "KeyD" });
     await flushFrame();
 
     expect(readTransform()).toEqual(before);

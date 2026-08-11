@@ -63,49 +63,83 @@ export const STAR_MAP_ZOOM_OCTAVES_PER_SEC = 1.4;
 export const STAR_MAP_MAX_FRAME_MS = 100;
 
 /**
- * Which camera direction a key drives, or `undefined` for a key the map
- * does not fly with.
+ * Physical key positions, by `KeyboardEvent.code`.
  *
- * Zoom sits on `-` and `=` because that is the near-universal keyboard
- * zoom pair — main row and numpad both, and `+` arrives for free since
- * shifted `=` reports as `+`. Deliberately not Page Up / Page Down: those
- * read as "pan by a page" at least as often as they read as zoom, and a
- * wrong guess on a movement key is worse than an absent one.
+ * `code` names the key's POSITION on the board, not the character it
+ * produces, and that distinction is the whole point here. `event.key` for
+ * the physical W is "w" on QWERTY but "z" on AZERTY and "," on Dvorak, so a
+ * key-based binding silently locks every non-QWERTY operator out of the
+ * headline control — and the on-screen hint draws an inverted-T, which is a
+ * claim about position that only `code` can honour. Games bind movement by
+ * position for exactly this reason.
+ *
+ * Zoom sits on `-` and `=` because that is the near-universal keyboard zoom
+ * pair, numpad included. Deliberately not Page Up / Page Down: those read
+ * as "pan by a page" at least as often as they read as zoom, and a wrong
+ * guess on a movement key is worse than an absent one.
+ */
+const CAMERA_BY_CODE: Readonly<Record<string, StarMapCameraKey>> = {
+  KeyW: "up",
+  KeyS: "down",
+  KeyA: "left",
+  KeyD: "right",
+  ArrowUp: "up",
+  ArrowDown: "down",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  Equal: "zoomIn",
+  NumpadAdd: "zoomIn",
+  Minus: "zoomOut",
+  NumpadSubtract: "zoomOut",
+};
+
+/**
+ * Character fallback, used ONLY when an event carries no `code`.
+ *
+ * Synthetic events (including a good deal of test tooling) often set `key`
+ * alone. Falling back on an event that HAS a `code` we do not recognise
+ * would undo the layout fix — on AZERTY the physical Z reports `key: "w"`,
+ * and we must not pan for it.
+ */
+const CAMERA_BY_KEY: Readonly<Record<string, StarMapCameraKey>> = {
+  w: "up",
+  s: "down",
+  a: "left",
+  d: "right",
+  ArrowUp: "up",
+  ArrowDown: "down",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  "=": "zoomIn",
+  "+": "zoomIn",
+  "-": "zoomOut",
+  _: "zoomOut",
+};
+
+/** The shape this module needs from a keyboard event. */
+export type StarMapKeyStroke = { key: string; code?: string };
+
+/**
+ * Which camera direction a keystroke drives, or `undefined` for a key the
+ * map does not fly with.
  */
 export function resolveStarMapCameraKey(
-  key: string,
+  stroke: StarMapKeyStroke,
 ): StarMapCameraKey | undefined {
-  switch (key.length === 1 ? key.toLowerCase() : key) {
-    case "w":
-    case "ArrowUp":
-      return "up";
-    case "s":
-    case "ArrowDown":
-      return "down";
-    case "a":
-    case "ArrowLeft":
-      return "left";
-    case "d":
-    case "ArrowRight":
-      return "right";
-    case "=":
-    case "+":
-      return "zoomIn";
-    case "-":
-    case "_":
-      return "zoomOut";
-    default:
-      return undefined;
-  }
+  if (stroke.code) return CAMERA_BY_CODE[stroke.code];
+  const key = stroke.key.length === 1 ? stroke.key.toLowerCase() : stroke.key;
+  return CAMERA_BY_KEY[key];
 }
 
 /**
- * `0` puts the map back where it opens — the same key every design tool
- * and browser uses for "back to 100%", and the keyboard's way in to the
- * "Reset view" action already in the View popover.
+ * `0` puts the map back where it opens — the same key every design tool and
+ * browser uses for "back to 100%", and the keyboard's way in to the "Reset
+ * view" action already in the View popover. Digit row and numpad both; `0`
+ * is unshifted on every layout we bind, so the character fallback is safe.
  */
-export function isStarMapResetViewKey(key: string): boolean {
-  return key === "0";
+export function isStarMapResetViewKey(stroke: StarMapKeyStroke): boolean {
+  if (stroke.code) return stroke.code === "Digit0" || stroke.code === "Numpad0";
+  return stroke.key === "0";
 }
 
 /**

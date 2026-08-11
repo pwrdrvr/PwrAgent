@@ -10189,6 +10189,12 @@ textarea,
   transition: background 90ms ease, border-color 90ms ease, color 90ms ease;
 }
 
+/* Modifier caps carry a glyph rather than a letter and read cramped at the
+   square letter width. */
+.star-map__key--wide {
+  min-width: 24px;
+}
+
 .star-map__key.is-held {
   border-color: var(--accent-border);
   background: var(--accent-soft);
