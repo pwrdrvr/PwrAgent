@@ -231,6 +231,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const [enteringThreadKeys, setEnteringThreadKeys] = useState<Set<string>>(
     new Set(),
   );
+  /**
+   * Threads the operator archived from a card whose snapshot has not
+   * caught up yet. Hidden immediately — a remote instance's feed refreshes
+   * on its own cadence, and an Archive click that visibly does nothing for
+   * ten seconds reads as broken. Restored on failure; released once the
+   * thread leaves its source feed for real.
+   */
+  const [archivedThreadKeys, setArchivedThreadKeys] = useState<Set<string>>(
+    new Set(),
+  );
   const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
   // Cards vary in height with their chip rows, so lanes stack from real
   // measurements - a fixed pitch clipped tall cards mid-glyph.
@@ -595,6 +605,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   const attentionByInstance = useMemo(() => {
+    const withoutArchived = (threads: NavigationThreadSummary[]) =>
+      archivedThreadKeys.size === 0
+        ? threads
+        : threads.filter(
+            (thread) =>
+              !archivedThreadKeys.has(
+                buildThreadIdentityKey(thread.source, thread.id),
+              ),
+          );
     const result = new Map<string, NavigationThreadSummary[]>();
     // The main-window snapshot also carries viewer-side pinned REMOTE
     // threads (Cmd+K unification). Those render under their owning
@@ -602,30 +621,54 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // locally-owned threads only, or pinned remote cards would double up.
     result.set(
       localInstanceId,
-      selectFilteredThreads({
-        threads: props.localThreads.filter(
-          (thread) =>
-            !thread.federation
-            || !isRemoteFederationTarget(thread.federation.ref.target),
-        ),
-        selection: filterSelection,
-        sessionKeys: props.sessionKeys,
-      }),
+      withoutArchived(
+        selectFilteredThreads({
+          threads: props.localThreads.filter(
+            (thread) =>
+              !thread.federation
+              || !isRemoteFederationTarget(thread.federation.ref.target),
+          ),
+          selection: filterSelection,
+          sessionKeys: props.sessionKeys,
+        }),
+      ),
     );
     for (const [instanceId, threads] of remote.threadsByInstance) {
       result.set(
         instanceId,
-        selectFilteredThreads({ threads, selection: filterSelection }),
+        withoutArchived(
+          selectFilteredThreads({ threads, selection: filterSelection }),
+        ),
       );
     }
     return result;
   }, [
+    archivedThreadKeys,
     filterSelection,
     localInstanceId,
     props.localThreads,
     props.sessionKeys,
     remote,
   ]);
+
+  // Release optimistic hides once the thread has left its feed for real,
+  // so a future thread reusing the key is not silently invisible.
+  useEffect(() => {
+    if (archivedThreadKeys.size === 0) return;
+    const present = new Set<string>();
+    for (const thread of props.localThreads) {
+      present.add(buildThreadIdentityKey(thread.source, thread.id));
+    }
+    for (const threads of remote.threadsByInstance.values()) {
+      for (const thread of threads) {
+        present.add(buildThreadIdentityKey(thread.source, thread.id));
+      }
+    }
+    setArchivedThreadKeys((current) => {
+      const kept = [...current].filter((key) => present.has(key));
+      return kept.length === current.size ? current : new Set(kept);
+    });
+  }, [archivedThreadKeys.size, props.localThreads, remote]);
 
   /**
    * Orbit-lens project clouds: each instance's threads grouped by project,
@@ -658,6 +701,29 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     return clouds;
   }, [attentionByInstance, cardHeights, expandedClusters, orbitMode]);
+
+  /**
+   * The anchor a hand-placed card's stored offset is measured from in the
+   * cluster lens: its cloud's centre. A placed card therefore rides with
+   * its cloud when the cloud re-seats, and holds its spot in the cloud
+   * when cloudmates come and go — the scatter slots reflow around it
+   * without touching it. Undefined outside orbit (lanes keep slot-relative
+   * offsets) and for non-thread cards like the load card.
+   */
+  const clusterAnchorFor = useCallback(
+    (instanceId: string, threadKey: string) => {
+      const cloud = clusterClouds?.get(instanceId);
+      if (!cloud) return undefined;
+      const index = cloud.threads.findIndex(
+        (thread) =>
+          buildThreadIdentityKey(thread.source, thread.id) === threadKey,
+      );
+      if (index < 0) return undefined;
+      const cluster = cloud.clusters[cloud.clusterIndexByCard[index]];
+      return { slot: cloud.slots[index], center: cluster.center };
+    },
+    [clusterClouds],
+  );
 
   const toggleClusterExpanded = useCallback(
     (instanceId: string, clusterKey: string) => {
@@ -871,6 +937,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         x: position.x,
         y: position.y,
         slots,
+        // Lanes have no clouds; present for a uniform body shape so the
+        // shared consumers (cardRects, renderCloud) can branch on them.
+        clusters: undefined,
+        clusterIndexByCard: undefined,
         cardWidth: laneLayout.cardWidth,
         loadSlot: hasLoad ? { dx: 0, dy: STAR_MAP_CLOUD_TOP } : undefined,
         contentBottom: lastSlot
@@ -1252,6 +1322,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
           key: "archive",
           label: "Archive thread",
           onSelect: () => {
+            const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+            // Hide the card NOW. A remote feed refreshes on its own
+            // cadence, and an Archive that visibly does nothing until the
+            // next tick reads as a broken button.
+            setArchivedThreadKeys((current) => new Set(current).add(threadKey));
             void desktopApi
               .archiveThread?.({
                 backend: thread.source,
@@ -1259,12 +1334,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 threadId: thread.id,
               })
               .then(() => {
-                chatCards.close(
-                  buildThreadIdentityKey(thread.source, thread.id),
-                );
+                chatCards.close(threadKey);
                 refreshOwner(instanceId);
               })
               .catch((error: unknown) => {
+                // The archive did not happen; the card comes back.
+                setArchivedThreadKeys((current) => {
+                  const next = new Set(current);
+                  next.delete(threadKey);
+                  return next;
+                });
                 setCardError(
                   error instanceof Error
                     ? error.message
@@ -1327,14 +1406,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
         if (!slot) return;
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
         const offset = arrangement.offsetFor(position.instanceId, threadKey);
+        // Placed cards anchor to their cloud centre in the cluster lens —
+        // the same rule the render path applies — so their rects land
+        // where the cards actually paint.
+        const cardCluster =
+          offset !== undefined && position.clusterIndexByCard !== undefined
+            ? position.clusters?.[position.clusterIndexByCard[index]]
+            : undefined;
+        const anchor = cardCluster
+          ? { dx: cardCluster.center.x, dy: cardCluster.center.y }
+          : slot;
         // `||`, not `??`: an unmeasured card reports 0, and a zero-height
         // rect is invisible to both snapping and selection.
         const height = lane.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT;
         rects.set(`${position.instanceId}::${threadKey}`, {
           // Cards are centred on their slot horizontally (marginLeft is
           // -width/2), so the rect's left edge is half a card back.
-          x: position.x + slot.dx + (offset?.dx ?? 0) - position.cardWidth / 2,
-          y: position.y + slot.dy + (offset?.dy ?? 0),
+          x:
+            position.x + anchor.dx + (offset?.dx ?? 0) - position.cardWidth / 2,
+          y: position.y + anchor.dy + (offset?.dy ?? 0),
           width: position.cardWidth,
           height,
         });
@@ -1536,17 +1626,29 @@ export function StarMapScreen(props: StarMapScreenProps) {
         if (separator < 0) continue;
         const instanceId = key.slice(0, separator);
         const threadKey = key.slice(separator + 2);
-        const current = arrangement.offsetFor(instanceId, threadKey) ?? {
-          dx: 0,
-          dy: 0,
-        };
+        const current = arrangement.offsetFor(instanceId, threadKey);
+        // A passenger placed for the first time by this group move needs
+        // the same cloud-centre anchoring a directly-dragged card gets:
+        // its stored offset will be read against the cloud centre, so its
+        // scatter position has to be folded in before the delta.
+        const anchor =
+          current === undefined
+            ? clusterAnchorFor(instanceId, threadKey)
+            : undefined;
+        const base = current
+          ?? (anchor
+            ? {
+                dx: anchor.slot.dx - anchor.center.x,
+                dy: anchor.slot.dy - anchor.center.y,
+              }
+            : { dx: 0, dy: 0 });
         arrangement.setCardPosition(instanceId, threadKey, {
-          dx: current.dx + delta.dx,
-          dy: current.dy + delta.dy,
+          dx: base.dx + delta.dx,
+          dy: base.dy + delta.dy,
         });
       }
     },
-    [arrangement, selection, shellsByKey],
+    [arrangement, clusterAnchorFor, selection, shellsByKey],
   );
 
   const snapFor = useCallback(
@@ -1731,6 +1833,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
         {visible.map((thread, index) => {
           const slot = slots[index];
           const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+          const storedOffset = arrangement.offsetFor(
+            position.instanceId,
+            threadKey,
+          );
+          const cardCluster =
+            position.clusterIndexByCard !== undefined
+              ? position.clusters?.[position.clusterIndexByCard[index]]
+              : undefined;
+          // A placed card anchors to its cloud's centre instead of its
+          // scatter slot: cloudmates arriving or archiving away reflow the
+          // scatter, and an offset over a moving slot made every arranged
+          // card jump. See `clusterAnchorFor`.
+          const anchored =
+            cardCluster !== undefined && storedOffset !== undefined;
+          const anchorSlot = anchored
+            ? { dx: cardCluster.center.x, dy: cardCluster.center.y }
+            : slot;
           return (
             <StarMapThreadCard
               key={threadKey}
@@ -1747,8 +1866,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   ? undefined
                   : position.instanceId,
               )}
-              baseSlot={slot}
-              offset={arrangement.offsetFor(position.instanceId, threadKey)}
+              baseSlot={anchorSlot}
+              offset={storedOffset}
               width={position.cardWidth}
               // Cloud slots hang cards from the top like lanes; only the
               // ring fallback (which renders no cards) centred on its slot.
@@ -1776,6 +1895,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         position.instanceId,
                         threadKey,
                         position.cardWidth,
+                        // Anchored cards drag from the cloud centre, which
+                        // the lane-slot lookup inside snapFor cannot know.
+                        anchored
+                          ? {
+                              baseSlot: anchorSlot,
+                              height:
+                                heights[index]
+                                ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+                            }
+                          : undefined,
                       ),
                       onGuidesChange: setActiveGuides,
                       onGroupDelta: (delta) =>
@@ -1792,7 +1921,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         arrangement.setCardPosition(
                           position.instanceId,
                           threadKey,
-                          offset,
+                          // First placement: the drag ran against the
+                          // scatter slot, so re-express the result from
+                          // the cloud centre before it persists.
+                          cardCluster && !anchored
+                            ? {
+                                dx:
+                                  slot.dx + offset.dx - cardCluster.center.x,
+                                dy:
+                                  slot.dy + offset.dy - cardCluster.center.y,
+                              }
+                            : offset,
                         ),
                     }
                   : undefined

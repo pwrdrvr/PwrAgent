@@ -5,7 +5,6 @@ import {
 import { type StarMapCardSlot } from "./star-map-layout";
 import { STAR_MAP_INSTANCE_KEEPOUT } from "./star-map-orbit";
 import {
-  projectMass,
   STAR_MAP_NO_PROJECT_KEY,
   threadProjectKey,
   threadProjectLabel,
@@ -195,14 +194,15 @@ export function orderParentAdjacent(
  * "Workspaces" cloud. Within a bucket, each root parent that has
  * children present splits out into its own parent/child cloud (parent
  * first, descendants in DFS order); the remainder stays in the bucket's
- * catch-all. Clouds order by the same mass the projects lens uses,
- * heaviest first, so the busiest work seats nearest the body.
+ * catch-all. Clouds order by their stable key, NOT by activity: seat
+ * angles derive from this order, and a mass ordering re-seated every
+ * cloud whenever recency shifted — hand-arranged cards teleporting
+ * because some other project got busier.
  */
 export function buildInstanceClusters(params: {
   threads: readonly NavigationThreadSummary[];
   /** Cluster keys the operator expanded past the per-group cap. */
   expandedKeys?: ReadonlySet<string>;
-  now?: number;
 }): StarMapClusterSpec[] {
   const buckets = new Map<string, NavigationThreadSummary[]>();
   for (const thread of params.threads) {
@@ -218,9 +218,7 @@ export function buildInstanceClusters(params: {
     isProject: boolean;
     isParentGroup: boolean;
     threads: NavigationThreadSummary[];
-    mass: number;
   };
-  const now = params.now ?? Date.now();
   const drafts: Draft[] = [];
 
   for (const [bucketKey, members] of buckets) {
@@ -269,7 +267,6 @@ export function buildInstanceClusters(params: {
           isProject,
           isParentGroup: true,
           threads: group,
-          mass: massOf(group, now),
         });
         continue;
       }
@@ -283,15 +280,11 @@ export function buildInstanceClusters(params: {
         isProject,
         isParentGroup: false,
         threads: rest,
-        mass: massOf(rest, now),
       });
     }
   }
 
-  drafts.sort(
-    (left, right) =>
-      right.mass - left.mass || left.label.localeCompare(right.label),
-  );
+  drafts.sort((left, right) => left.key.localeCompare(right.key));
 
   return drafts.map((draft) => {
     const expanded = params.expandedKeys?.has(draft.key) ?? false;
@@ -310,14 +303,6 @@ export function buildInstanceClusters(params: {
       expandable: draft.threads.length > ORBIT_MAX_CARDS_PER_GROUP,
     };
   });
-}
-
-function massOf(threads: readonly NavigationThreadSummary[], now: number): number {
-  const lastActivityAt = threads.reduce(
-    (latest, thread) => Math.max(latest, thread.updatedAt ?? 0),
-    0,
-  );
-  return projectMass({ cardCount: threads.length, lastActivityAt, now });
 }
 
 type ScatteredCluster = {

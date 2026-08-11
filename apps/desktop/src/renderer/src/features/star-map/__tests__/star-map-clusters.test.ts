@@ -49,7 +49,6 @@ describe("buildInstanceClusters", () => {
         thread("a2", { path: "/repo/alpha" }),
         thread("b2", { path: "/repo/beta" }),
       ],
-      now: NOW,
     });
     expect(clusters).toHaveLength(2);
     const alpha = clusters.find((cluster) => cluster.label === "alpha")!;
@@ -61,7 +60,6 @@ describe("buildInstanceClusters", () => {
   it("pools directory-less threads into a no-project cluster", () => {
     const clusters = buildInstanceClusters({
       threads: [thread("x"), thread("y")],
-      now: NOW,
     });
     expect(clusters).toHaveLength(1);
     expect(clusters[0].isProject).toBe(false);
@@ -77,7 +75,6 @@ describe("buildInstanceClusters", () => {
         thread("w2", { path: "/Users/op/.pwragent/projects/2026-08-02-4e433f" }),
         thread("w3", { path: "/Users/op/.pwragent/projects/2026-05-23-885b8f" }),
       ],
-      now: NOW,
     });
     expect(clusters).toHaveLength(1);
     expect(clusters[0].label).toBe("Workspaces");
@@ -92,7 +89,6 @@ describe("buildInstanceClusters", () => {
         thread("c1", { path: "/repo/alpha", parentId: "parent" }),
         thread("c2", { path: "/repo/alpha", parentId: "parent" }),
       ],
-      now: NOW,
     });
     expect(clusters).toHaveLength(2);
     const parentCloud = clusters.find((cluster) => cluster.isParentGroup)!;
@@ -114,7 +110,6 @@ describe("buildInstanceClusters", () => {
         thread("child", { path: "/repo/alpha", parentId: "root" }),
         thread("grandchild", { path: "/repo/alpha", parentId: "child" }),
       ],
-      now: NOW,
     });
     expect(clusters).toHaveLength(1);
     expect(clusters[0].isParentGroup).toBe(true);
@@ -134,7 +129,6 @@ describe("buildInstanceClusters", () => {
         thread("p2c", { path: "/repo/alpha", parentId: "p2" }),
         thread("stray", { path: "/repo/alpha" }),
       ],
-      now: NOW,
     });
     expect(clusters.filter((cluster) => cluster.isParentGroup)).toHaveLength(2);
     const catchAll = clusters.find((cluster) => !cluster.isParentGroup)!;
@@ -147,7 +141,6 @@ describe("buildInstanceClusters", () => {
         thread("orphan", { path: "/repo/alpha", parentId: "not-here" }),
         thread("plain", { path: "/repo/alpha" }),
       ],
-      now: NOW,
     });
     expect(clusters).toHaveLength(1);
     expect(clusters[0].isParentGroup).toBe(false);
@@ -158,7 +151,6 @@ describe("buildInstanceClusters", () => {
       threads: Array.from({ length: 12 }, (unused, index) =>
         thread(`t${index}`, { path: "/repo/alpha" }),
       ),
-      now: NOW,
     });
     expect(clusters[0].visibleCount).toBe(ORBIT_MAX_CARDS_PER_GROUP);
     expect(clusters[0].overflow).toBe(12 - ORBIT_MAX_CARDS_PER_GROUP);
@@ -171,11 +163,32 @@ describe("buildInstanceClusters", () => {
         thread(`t${index}`, { path: "/repo/alpha" }),
       ),
       expandedKeys: new Set(["directory:/repo/alpha"]),
-      now: NOW,
     });
     expect(clusters[0].visibleCount).toBe(12);
     expect(clusters[0].overflow).toBe(0);
     expect(clusters[0].expanded).toBe(true);
+  });
+
+  it("orders clouds by stable key, not by activity", () => {
+    // Seat angles derive from cluster order, so activity-driven ordering
+    // re-seated every cloud whenever recency shifted — placed cards
+    // teleporting because some other project got busier.
+    const keysWhen = (hot: "alpha" | "beta") =>
+      buildInstanceClusters({
+        threads: [
+          thread("a1", {
+            path: "/repo/alpha",
+            updatedAt: hot === "alpha" ? NOW : NOW - 900_000,
+          }),
+          thread("a2", { path: "/repo/alpha", updatedAt: NOW - 500_000 }),
+          thread("b1", {
+            path: "/repo/beta",
+            updatedAt: hot === "beta" ? NOW : NOW - 900_000,
+          }),
+          thread("b2", { path: "/repo/beta", updatedAt: NOW - 500_000 }),
+        ],
+      }).map((cluster) => cluster.key);
+    expect(keysWhen("alpha")).toEqual(keysWhen("beta"));
   });
 
   it("never starves a cloud: every cloud shows cards regardless of fleet size", () => {
@@ -187,7 +200,7 @@ describe("buildInstanceClusters", () => {
         thread(`p${project}-t${index}`, { path: `/repo/p${project}` }),
       ),
     ).flat();
-    const clusters = buildInstanceClusters({ threads, now: NOW });
+    const clusters = buildInstanceClusters({ threads });
     expect(clusters).toHaveLength(10);
     for (const cluster of clusters) {
       expect(cluster.visibleCount).toBe(8);
@@ -207,14 +220,13 @@ describe("buildInstanceClusters", () => {
         }),
       ),
     ];
-    const collapsed = buildInstanceClusters({ threads, now: NOW });
+    const collapsed = buildInstanceClusters({ threads });
     const small = collapsed.find((cluster) => cluster.label === "small")!;
     expect(small.visibleCount).toBe(ORBIT_MAX_CARDS_PER_GROUP);
 
     const expanded = buildInstanceClusters({
       threads,
       expandedKeys: new Set(["directory:/repo/small"]),
-      now: NOW,
     });
     const expandedSmall = expanded.find((cluster) => cluster.label === "small")!;
     expect(expandedSmall.visibleCount).toBe(12);
@@ -259,7 +271,6 @@ describe("computeClusterCloud", () => {
       clusters: buildInstanceClusters({
         threads,
         expandedKeys: new Set(expanded ?? []),
-        now: NOW,
       }),
       cardWidth: 200,
       heightForThread: height,
@@ -388,7 +399,6 @@ describe("computeClusterCloud", () => {
     const bare = computeClusterCloud({
       clusters: buildInstanceClusters({
         threads: [thread("x"), thread("y")],
-        now: NOW,
       }),
       cardWidth: 200,
       heightForThread: height,

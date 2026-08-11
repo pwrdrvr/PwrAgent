@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
+import {
+  buildInstanceClusters,
+  computeClusterCloud,
+} from "../star-map-clusters";
 
 /**
  * Orbit-lens project cloud chrome: the label pills, the per-cloud "+N
@@ -47,14 +51,18 @@ function projectThread(
   } as unknown as NavigationThreadSummary;
 }
 
-function renderOrbit(threads: NavigationThreadSummary[]) {
+function renderOrbit(
+  threads: NavigationThreadSummary[],
+  api?: Partial<DesktopApi>,
+) {
   window.localStorage.setItem(
     "pwragent.starMap.viewPreferences",
     JSON.stringify({ layout: "orbit" }),
   );
-  return render(
+  const desktopApi: DesktopApi = { ...buildDesktopApi(), ...api };
+  const view = render(
     <StarMapScreen
-      desktopApi={buildDesktopApi()}
+      desktopApi={desktopApi}
       localThreads={threads}
       sessionKeys={{}}
       localInstanceLabel="Mac-Mini-M4"
@@ -64,6 +72,28 @@ function renderOrbit(threads: NavigationThreadSummary[]) {
       onFocusLocalInstance={() => undefined}
     />,
   );
+  const rerenderThreads = (next: NavigationThreadSummary[]) =>
+    view.rerender(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={next}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+  return { ...view, rerenderThreads };
+}
+
+function cardShell(container: HTMLElement, threadKey: string): HTMLElement {
+  const shell = container.querySelector(`[data-thread-key="${threadKey}"]`);
+  if (!(shell instanceof HTMLElement)) {
+    throw new Error(`No card shell for ${threadKey}`);
+  }
+  return shell;
 }
 
 describe("star map project cloud chrome", () => {
@@ -189,5 +219,89 @@ describe("star map project cloud chrome", () => {
         container.querySelectorAll(".star-map-card-shell--selected"),
       ).toHaveLength(0);
     });
+  });
+
+  it("anchors a placed card to its cloud when a cloudmate archives away", async () => {
+    const threads = [
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+      projectThread("a2", "/repo/alpha", "AlphaDir"),
+      projectThread("a3", "/repo/alpha", "AlphaDir"),
+    ];
+    const stored = { dx: 140, dy: 90 };
+    const { container, rerenderThreads } = renderOrbit(threads, {
+      readStarMapArrangement: vi.fn(async () => ({
+        entries: [
+          {
+            instanceId: "pwr_local",
+            threadKey: "codex:a1",
+            dx: stored.dx,
+            dy: stored.dy,
+            updatedAt: 10,
+            by: "pwr_local",
+          },
+        ],
+      })),
+      setStarMapCardPosition: vi.fn(async () => ({ entries: [] })),
+    });
+
+    // jsdom has no ResizeObserver, so every card keeps the estimated
+    // height — the same inputs the screen feeds the pure layout, which
+    // makes the expected anchor computable here.
+    const centerFor = (list: NavigationThreadSummary[]) =>
+      computeClusterCloud({
+        clusters: buildInstanceClusters({ threads: list }),
+        cardWidth: 200,
+        heightForThread: () => 112,
+      }).clusters[0].center;
+
+    const before = centerFor(threads);
+    await waitFor(() => {
+      const shell = cardShell(container, "codex:a1");
+      expect(shell.style.left).toBe(`${before.x + stored.dx}px`);
+      expect(shell.style.top).toBe(`${before.y + stored.dy}px`);
+    });
+
+    // A cloudmate archives away: the scatter reflows, the cloud origin
+    // shifts a little — and the placed card keeps EXACTLY its stored
+    // offset from that origin instead of resetting.
+    rerenderThreads(threads.slice(0, 2));
+    const after = centerFor(threads.slice(0, 2));
+    await waitFor(() => {
+      const shell = cardShell(container, "codex:a1");
+      expect(shell.style.left).toBe(`${after.x + stored.dx}px`);
+      expect(shell.style.top).toBe(`${after.y + stored.dy}px`);
+    });
+  });
+
+  it("hides a card the moment Archive is chosen", async () => {
+    // Never resolves: the point is what happens BEFORE the backend and
+    // the next snapshot catch up.
+    const archiveThread = vi.fn(
+      () => new Promise(() => undefined),
+    ) as unknown as DesktopApi["archiveThread"];
+    renderOrbit(
+      [
+        projectThread("a1", "/repo/alpha", "AlphaDir"),
+        projectThread("a2", "/repo/alpha", "AlphaDir"),
+      ],
+      { archiveThread },
+    );
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread a1" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive thread" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: /Open thread: Thread a1/ }),
+      ).toBeNull();
+    });
+    expect(archiveThread).toHaveBeenCalledTimes(1);
+    // The rest of the cloud is untouched.
+    expect(
+      screen.getByRole("button", { name: /Open thread: Thread a2/ }),
+    ).toBeTruthy();
   });
 });
