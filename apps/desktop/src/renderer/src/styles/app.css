@@ -10110,6 +10110,108 @@ textarea,
   outline-offset: 1px;
 }
 
+/* Keyboard camera hint. Bottom-LEFT: the selection readout owns the middle
+   and the close button owns the top-right, so this is the one corner where
+   a permanent affordance costs nothing.
+
+   Same surface and text tokens as `.star-map__filter-chip`, deliberately.
+   The obvious way to make a permanent hint recede is a blanket `opacity`,
+   but that composites the LABEL down too — `--text-muted` is already the
+   quietest text token the theme has, and knocking it back another 28%
+   walks it off the AA contrast the a11y gate holds this surface to. Size
+   and corner do the receding instead. */
+.star-map__key-hint {
+  display: flex;
+  position: absolute;
+  bottom: 18px;
+  left: 16px;
+  z-index: 8;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 75%, transparent);
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+/* Bottom-aligned, not centred: the pan group is two rows tall, and a
+   centred label lands in the gap between W and A S D reading as though it
+   belongs to neither. Sitting it on the A S D row puts it level with the
+   zoom group's label too. */
+.star-map__key-group {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+/* The classic inverted-T: W over A S D, so the cluster is recognisable as
+   a keyboard rather than read as four separate keys. Every cap is placed
+   by name — leaving A/S/D to auto-flow puts them in the gaps beside W. */
+.star-map__key-pad {
+  display: grid;
+  grid-template-areas:
+    ". up ."
+    "left down right";
+  gap: 3px;
+}
+
+.star-map__key--up {
+  grid-area: up;
+}
+
+.star-map__key--left {
+  grid-area: left;
+}
+
+.star-map__key--down {
+  grid-area: down;
+}
+
+.star-map__key--right {
+  grid-area: right;
+}
+
+.star-map__key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  transition: background 90ms ease, border-color 90ms ease, color 90ms ease;
+}
+
+/* Modifier caps carry a glyph rather than a letter and read cramped at the
+   square letter width. */
+.star-map__key--wide {
+  min-width: 24px;
+}
+
+.star-map__key.is-held {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+/* Line box matched to a cap so bottom-aligning the group centres the word
+   against the caps beside it rather than hanging it off their baseline. */
+.star-map__key-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 18px;
+  letter-spacing: 0.04em;
+}
+
 /* Alignment guides, drawn only while a card is being dragged. They exist
    so a snap is explainable: without the line, a card latching reads as the
    drag sticking for no reason. */
