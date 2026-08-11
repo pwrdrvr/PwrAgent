@@ -39,6 +39,7 @@ export const WINDOW_KIND_LICENSE_DOCUMENT = "license-document" as const;
 export const WINDOW_KIND_APP_LOGS = "app-logs" as const;
 export const WINDOW_KIND_MARKDOWN_FILES = "markdown-files" as const;
 export const WINDOW_KIND_SUB_AGENT_TRANSCRIPT = "sub-agent-transcript" as const;
+export const WINDOW_KIND_AUTOMATION_RUN = "automation-run" as const;
 export type WindowKind =
   | typeof WINDOW_KIND_MAIN
   | typeof WINDOW_KIND_MESSAGING_ACTIVITY
@@ -46,6 +47,7 @@ export type WindowKind =
   | typeof WINDOW_KIND_LICENSE_DOCUMENT
   | typeof WINDOW_KIND_APP_LOGS
   | typeof WINDOW_KIND_MARKDOWN_FILES
+  | typeof WINDOW_KIND_AUTOMATION_RUN
   | typeof WINDOW_KIND_SUB_AGENT_TRANSCRIPT;
 
 interface Entry {

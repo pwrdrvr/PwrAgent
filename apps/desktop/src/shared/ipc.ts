@@ -230,6 +230,10 @@ export const AUTOMATIONS_LIST_RUNS_CHANNEL = "automations:list-runs";
 export const AUTOMATIONS_SEARCH_SENDERS_CHANNEL = "automations:search-senders";
 export const AUTOMATIONS_ALLOCATE_WORKSPACE_CHANNEL =
   "automations:allocate-workspace";
+export const AUTOMATIONS_LIST_REPLAY_CANDIDATES_CHANNEL =
+  "automations:list-replay-candidates";
+export const AUTOMATIONS_REPLAY_INBOUND_CHANNEL = "automations:replay-inbound";
+export const AUTOMATION_RUN_WINDOW_OPEN_CHANNEL = "automation-run:open-window";
 export const AUTOMATIONS_LIST_CARDS_CHANNEL = "automations:list-cards";
 export const AUTOMATIONS_GET_RUN_ARTIFACT_CHANNEL =
   "automations:get-run-artifact";

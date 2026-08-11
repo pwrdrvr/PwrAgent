@@ -331,3 +331,38 @@ describe("AutomationsScreen", () => {
     expect(screen.getByText("It will rain at 4 PM.")).toBeInTheDocument();
   });
 });
+
+describe("run vs replay actions", () => {
+  it("offers Replay instead of Run for inbound-triggered automations", async () => {
+    const inbound = {
+      ...automation,
+      id: "automation-2",
+      triggers: [
+        {
+          id: "inbound-message",
+          kind: "inbound_message" as const,
+          conversation: { channel: "slack" as const, conversationId: "C123" },
+        },
+      ],
+    };
+    render(
+      <AutomationsScreen
+        desktopApi={{
+          listAutomations: vi.fn(async () => ({
+            automations: [automation, inbound],
+          })),
+          listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+        } as unknown as DesktopApi}
+        threads={[]}
+        onClose={() => undefined}
+      />,
+    );
+
+    // The scheduled automation runs on demand; the inbound one has no
+    // triggering message to fabricate, so it replays a captured one instead.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Replay" })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
+  });
+});

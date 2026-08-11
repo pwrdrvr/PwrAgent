@@ -5,6 +5,7 @@ import type {
   ThreadExecutionMode,
 } from "./normalized-app-server";
 import type {
+  InboundPreviewMessage,
   MessagingChannelKind,
   MessagingConversationKind,
 } from "./messaging";
@@ -245,6 +246,15 @@ export type AutomationInboundCondition = {
   operator: AutomationInboundConditionOperator;
   values: string[];
   caseSensitive?: boolean;
+  /**
+   * Display names for opaque platform values, keyed by value — "U041ZGYG07Q"
+   * → "datadog". Pure presentation metadata captured at selection time (the
+   * same snapshot-at-selection pattern conversation titles use): the matcher
+   * never reads it, and a missing entry just renders the raw id. Without it,
+   * reopening the editor or reading the list screen shows ids nobody can
+   * recognize.
+   */
+  valueLabels?: Record<string, string>;
 };
 
 /** How the condition rows combine. Flat by design — there is no nesting. */
@@ -469,7 +479,13 @@ export function isSupportedAutomationInboundConditionGroup(
       && AUTOMATION_INBOUND_CONDITION_FIELDS.includes(condition.field)
       && AUTOMATION_INBOUND_CONDITION_OPERATORS.includes(condition.operator)
       && Array.isArray(condition.values)
-      && condition.values.every((value) => typeof value === "string"),
+      && condition.values.every((value) => typeof value === "string")
+      && (condition.valueLabels === undefined
+        || (typeof condition.valueLabels === "object"
+          && condition.valueLabels !== null
+          && Object.values(condition.valueLabels).every(
+            (label) => typeof label === "string",
+          ))),
   );
 }
 
@@ -525,9 +541,16 @@ export function formatAutomationInboundConditionGroup(
     .map((condition) => {
       const values = condition.values.filter((value) => value.length > 0);
       if (values.length === 0) return undefined;
-      const rendered = values.map((value) =>
-        options.resolveLabel ? options.resolveLabel(value, condition) : `"${value}"`,
-      );
+      const rendered = values.map((value) => {
+        if (options.resolveLabel) return options.resolveLabel(value, condition);
+        // Sender values are opaque platform ids; the stored display name (or
+        // the raw id, unquoted) reads better than a quoted id. Text values
+        // keep their quotes so literal match strings stay visually distinct.
+        if (condition.field === "sender" || condition.field === "sender_type") {
+          return condition.valueLabels?.[value] ?? value;
+        }
+        return `"${value}"`;
+      });
       const joined =
         rendered.length === 1
           ? rendered[0]
@@ -852,6 +875,12 @@ export type AutomationDetail = AutomationListItemSummary & {
   gate?: AutomationGateConfig;
   executionProfile?: AutomationExecutionProfile;
   priorRunLookback?: AutomationPriorRunLookback;
+  /**
+   * Summed run cost since local midnight, computed from retained runs at read
+   * time. A durable lifetime total needs a denormalized counter (schema
+   * migration) and is deliberately not attempted here.
+   */
+  costTodayMicros?: number;
   outputActions: AutomationOutputActionDefinition[];
   /**
    * Inbound coalescing window in milliseconds. 0 disables coalescing (one run
@@ -891,6 +920,24 @@ export type AutomationRunWindow = {
  */
 export type AutomationRunSkipReason = "lane_busy" | "rate_limited";
 
+/**
+ * Token/cost accounting for one run's headless turn, distilled from the
+ * turn-scope ThreadUsageLineRecord the pricing pipeline computes. Cost is the
+ * list price at the time the run happened (micros, USD) — deliberately frozen
+ * rather than recomputed, so later pricing-table changes don't rewrite the
+ * history an operator already read.
+ */
+export type AutomationRunUsage = {
+  model?: string;
+  uncachedInputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+  totalCostMicros?: number;
+  currency?: string;
+};
+
 export type AutomationRunSummary = {
   id: string;
   automationId: string;
@@ -914,6 +961,7 @@ export type AutomationRunSummary = {
    */
   coalescedCount?: number;
   source?: AutomationRunSourceMetadata;
+  usage?: AutomationRunUsage;
 };
 
 export type AutomationRunOutputDecision =
@@ -969,6 +1017,38 @@ export type AutomationTimelineCard = AutomationAgentAssignment & {
   summary: string;
   details?: string;
   occurredAt: number;
+};
+
+export type OpenAutomationRunWindowRequest = {
+  automationId: string;
+  runId: string;
+  /** Window-title hint; the window fetches authoritative data itself. */
+  title?: string;
+};
+
+export type ListAutomationReplayCandidatesRequest = {
+  automationId: string;
+};
+
+/** One recent conversation message, pre-judged against the trigger's filter. */
+export type AutomationReplayCandidate = {
+  message: InboundPreviewMessage;
+  matches: boolean;
+};
+
+export type ListAutomationReplayCandidatesResponse = {
+  candidates: AutomationReplayCandidate[];
+  /**
+   * False when the provider cannot serve conversation history (only Slack can
+   * today) — the UI says so instead of rendering an empty list that reads as
+   * "the channel is silent".
+   */
+  supported: boolean;
+};
+
+export type ReplayAutomationInboundRequest = {
+  automationId: string;
+  message: InboundPreviewMessage;
 };
 
 export type CreateAutomationRequest = AutomationAgentAssignment & {

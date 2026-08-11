@@ -10,6 +10,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
+  formatAutomationRunUsage,
   formatAutomationRelative,
   formatAutomationStatus,
   formatAutomationTimestamp,
@@ -321,9 +322,31 @@ export function AutomationRunHistoryItem(props: {
       {props.run.errorMessage ? (
         <span className="automation-run-history__error">{props.run.errorMessage}</span>
       ) : null}
+      {formatAutomationRunUsage(props.run.usage) ? (
+        <span className="automation-run-history__time">
+          {formatAutomationRunUsage(props.run.usage)}
+        </span>
+      ) : null}
       <button className="context-list__action" type="button" onClick={props.onToggle}>
         {props.expanded ? "Hide details" : "Details"}
       </button>
+      {props.desktopApi?.openAutomationRunWindow ? (
+        <button
+          className="context-list__action"
+          type="button"
+          onClick={() =>
+            void props.desktopApi?.openAutomationRunWindow?.({
+              automationId: props.run.automationId,
+              runId: props.run.id,
+              title: formatAutomationTimestamp(
+                props.run.completedAt ?? props.run.startedAt ?? props.run.queuedAt,
+              ),
+            })
+          }
+        >
+          Open ↗
+        </button>
+      ) : null}
       {props.expanded ? (
         <AutomationRunArtifactDetails
           backendThreadId={props.run.backendThreadId}
@@ -342,7 +365,7 @@ export function AutomationRunHistoryItem(props: {
   );
 }
 
-function AutomationRunArtifactDetails(props: {
+export function AutomationRunArtifactDetails(props: {
   backendThreadId?: string;
   backendTurnId?: string;
   error?: string;

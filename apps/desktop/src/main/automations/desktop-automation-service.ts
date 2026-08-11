@@ -10,6 +10,7 @@ import type {
   AutomationMutationResponse,
   AutomationRunSummary,
   AutomationRunStatus,
+  AutomationRunUsage,
   AutomationRunTranscriptEvent,
   AutomationTimelineCard,
   AutomationTriggerDefinition,
@@ -20,10 +21,14 @@ import type {
   ListAutomationCardsResponse,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
+  ListAutomationReplayCandidatesRequest,
+  ListAutomationReplayCandidatesResponse,
   ListAutomationsRequest,
   ListAutomationsResponse,
+  InboundPreviewMessage,
   MessagingChannelKind,
   MessagingSenderSuggestion,
+  ReplayAutomationInboundRequest,
   RunAutomationNowResponse,
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
@@ -55,6 +60,8 @@ import { AutomationScheduler } from "./automation-scheduler.js";
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
 import {
   anyAutomationInboundMatch,
+  buildAutomationReplayCandidates,
+  buildReplayRunSourceMetadata,
   matchAutomationInboundEvent,
 } from "./automation-trigger-matcher.js";
 import { mergeTranscriptEvents } from "./transcript-merge.js";
@@ -69,6 +76,14 @@ const automationServiceLog = getMainLogger("pwragent:automations");
 const RUN_ACTOR_CACHE_TTL_MS = 30_000;
 /** Runs scanned for distinct actors. Bounds the read on a long-lived automation. */
 const RUN_ACTOR_SCAN_LIMIT = 200;
+
+/**
+ * How long a changed usage snapshot may sit in memory before its sqlite
+ * write. One second matches the registry's live token-usage flush window:
+ * pricing stays responsive while a streaming turn's repeated updates share
+ * one payload rewrite instead of taking one commit each.
+ */
+const RUN_USAGE_FLUSH_INTERVAL_MS = 1_000;
 
 let service: DesktopAutomationService | null = null;
 let storeOverride: AutomationStore | null = null;
@@ -112,6 +127,17 @@ export class DesktopAutomationService {
     string,
     { actors: MessagingDirectoryActor[]; readAt: number }
   >();
+  private readonly automationsChangedListeners = new Set<() => void>();
+  /**
+   * Latest usage snapshot per run, waiting for one sqlite write. Pricing
+   * events carry cumulative totals, so repeated observations for a run
+   * replace each other in memory and only the newest needs to be durable —
+   * the same shape as the registry's live token-usage batching (PR #1417),
+   * at automation scale. Best-effort, not banking: a crash inside the flush
+   * window loses at most the last in-flight snapshot of a cost estimate.
+   */
+  private readonly pendingRunUsage = new Map<string, AutomationRunUsage>();
+  private pendingRunUsageTimer: NodeJS.Timeout | undefined;
 
   constructor(
     private readonly options: {
@@ -183,6 +209,11 @@ export class DesktopAutomationService {
     this.scheduler.stop();
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
+    if (this.pendingRunUsageTimer) {
+      clearTimeout(this.pendingRunUsageTimer);
+      this.pendingRunUsageTimer = undefined;
+    }
+    this.flushPendingRunUsage();
     this.options.registry.setAutomationInspectionHandler?.(null);
   }
 
@@ -191,6 +222,28 @@ export class DesktopAutomationService {
    * or a schedule/trigger shape this build predates). Surfaced to the renderer
    * so the user sees a warning instead of silently missing automations.
    */
+  /**
+   * Fires after any mutation that can change which conversations inbound
+   * automations watch (create/update/pause/resume/delete). The messaging
+   * runtime subscribes to keep adapters' observed-conversation sets current.
+   */
+  onAutomationsChanged(listener: () => void): () => void {
+    this.automationsChangedListeners.add(listener);
+    return () => {
+      this.automationsChangedListeners.delete(listener);
+    };
+  }
+
+  private notifyAutomationsChanged(): void {
+    for (const listener of [...this.automationsChangedListeners]) {
+      try {
+        listener();
+      } catch {
+        // A broken listener must not break the mutation that fired it.
+      }
+    }
+  }
+
   getLoadIssues(): AutomationLoadIssue[] {
     return this.options.store.getAutomationLoadIssues();
   }
@@ -207,14 +260,38 @@ export class DesktopAutomationService {
             if (request.threadId && automation.threadId !== request.threadId) return false;
             return true;
           });
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const todayMs = startOfToday.getTime();
     return {
       automations: automations.map((automation) =>
         toAutomationDetail(
           automation,
           this.options.store.getLatestRunForAutomation(automation.id),
+          this.sumRunCostSince(automation.id, todayMs),
         ),
       ),
     };
+  }
+
+  /**
+   * Summed run cost since `sinceMs`, from retained runs. This is honest only
+   * within the run-history window — a lifetime total needs a denormalized
+   * counter that survives pruning, which is a schema change deferred on
+   * purpose.
+   */
+  private sumRunCostSince(automationId: string, sinceMs: number): number | undefined {
+    let total = 0;
+    let sawCost = false;
+    for (const run of this.options.store.listRunsForAutomation(automationId, 200)) {
+      const at = run.completedAt ?? run.startedAt;
+      if (at === undefined || at < sinceMs) continue;
+      if (typeof run.usage?.totalCostMicros === "number") {
+        total += run.usage.totalCostMicros;
+        sawCost = true;
+      }
+    }
+    return sawCost ? total : undefined;
   }
 
   /**
@@ -436,6 +513,7 @@ export class DesktopAutomationService {
     });
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
+    this.notifyAutomationsChanged();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -520,6 +598,7 @@ export class DesktopAutomationService {
     }
     await this.notifyThreadAutomationsUpdated(updated);
     this.startSchedulerIfEnabled();
+    this.notifyAutomationsChanged();
     return { automation: toAutomationDetail(updated) };
   }
 
@@ -538,6 +617,7 @@ export class DesktopAutomationService {
     );
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
+    this.notifyAutomationsChanged();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -552,6 +632,7 @@ export class DesktopAutomationService {
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
+    this.notifyAutomationsChanged();
     return { automation: toAutomationDetail(automation) };
   }
 
@@ -564,7 +645,87 @@ export class DesktopAutomationService {
     if (!automation) throw new Error("Automation not found.");
     await this.notifyThreadAutomationsUpdated(automation);
     this.startSchedulerIfEnabled();
+    this.notifyAutomationsChanged();
     return { automation: toAutomationDetail(automation) };
+  }
+
+  /**
+   * Recent messages from an inbound automation's trigger conversation, each
+   * pre-judged against the trigger's filter so the Replay picker can offer
+   * both positive tests (replay a matching message) and negative ones (see
+   * that a message would NOT have fired the automation).
+   */
+  async listReplayCandidates(
+    request: ListAutomationReplayCandidatesRequest,
+    deps: {
+      fetchRecent: (params: {
+        provider: MessagingChannelKind;
+        conversationId: string;
+        parentId?: string;
+        limit?: number;
+      }) => Promise<InboundPreviewMessage[]>;
+      supportsHistory: (provider: MessagingChannelKind) => boolean;
+    },
+  ): Promise<ListAutomationReplayCandidatesResponse> {
+    const automation = this.options.store.getAutomation(request.automationId);
+    if (!automation) {
+      throw new Error("Automation not found.");
+    }
+    const trigger = automation.triggers.find(
+      (candidate) => candidate.kind === "inbound_message",
+    );
+    if (trigger?.kind !== "inbound_message") {
+      return { candidates: [], supported: false };
+    }
+    if (!deps.supportsHistory(trigger.conversation.channel)) {
+      return { candidates: [], supported: false };
+    }
+    const messages = await deps.fetchRecent({
+      provider: trigger.conversation.channel,
+      conversationId: trigger.conversation.conversationId,
+      ...(trigger.conversation.parentId
+        ? { parentId: trigger.conversation.parentId }
+        : {}),
+      limit: 15,
+    });
+    return {
+      candidates: buildAutomationReplayCandidates(trigger, messages),
+      supported: true,
+    };
+  }
+
+  async replayInbound(
+    request: ReplayAutomationInboundRequest,
+  ): Promise<RunAutomationNowResponse> {
+    this.assertAutomationsEnabled();
+    const automation = this.options.store.getAutomation(request.automationId);
+    if (!automation) {
+      throw new Error("Automation not found.");
+    }
+    const trigger = automation.triggers.find(
+      (candidate) => candidate.kind === "inbound_message",
+    );
+    if (trigger?.kind !== "inbound_message") {
+      throw new Error("This automation has no inbound trigger to replay.");
+    }
+    const result = await this.scheduler.replayInboundRun({
+      automation,
+      source: buildReplayRunSourceMetadata({
+        trigger,
+        message: request.message,
+      }),
+    });
+    const [run] = this.options.store.listRunsForAutomation(request.automationId, 1);
+    if (!run) {
+      throw new Error("Automation not found.");
+    }
+    await this.notifyThreadAutomationsUpdated(automation);
+    return {
+      run,
+      queueStatus: result?.status ?? "failed",
+      queueEntryId: result?.entry.id,
+      turnId: result?.status === "started" ? result.turnId : undefined,
+    };
   }
 
   async runNow(request: AutomationIdRequest): Promise<RunAutomationNowResponse> {
@@ -638,7 +799,102 @@ export class DesktopAutomationService {
     return this.options.store.buildThreadSummaries();
   }
 
+  /**
+   * Distill the pricing pipeline's turn-scope usage lines onto their runs.
+   *
+   * The registry already computes tokens AND list-price cost for every
+   * headless automation turn (recordLiveThreadUsage) — this just correlates
+   * the line to a run by backend turn id and freezes the numbers on the run
+   * payload. Lookup is any-status, not running-only: the final line can land
+   * after the turn-completion event has marked the run completed, and that
+   * final line is the one carrying the turn's full totals.
+   */
+  private captureRunUsageFromPricingEvent(event: AgentEvent): void {
+    // Event shape is `{ threadId, pricing: { lines, summaries } }` — the
+    // registry's emitThreadPricingUpdated nests readThreadPricing's result
+    // under `pricing`, it does not spread it.
+    const params = event.notification.params as
+      | { pricing?: { lines?: Array<Record<string, unknown>> } }
+      | undefined;
+    const lines = params?.pricing?.lines;
+    if (!Array.isArray(lines)) return;
+    for (const line of lines) {
+      if (line.scope !== "turn" || typeof line.turnId !== "string") continue;
+      const run =
+        this.options.store.findRunningRunByBackendTurnId({
+          backend: event.backend,
+          backendTurnId: line.turnId,
+        })
+        ?? this.options.store.findRunByBackendTurnId?.({
+          backend: event.backend,
+          backendTurnId: line.turnId,
+        });
+      if (!run) continue;
+      const usage: AutomationRunUsage = {
+        ...(typeof line.model === "string" ? { model: line.model } : {}),
+        ...(typeof line.uncachedInputTokens === "number"
+          ? { uncachedInputTokens: line.uncachedInputTokens }
+          : {}),
+        ...(typeof line.cachedInputTokens === "number"
+          ? { cachedInputTokens: line.cachedInputTokens }
+          : {}),
+        ...(typeof line.outputTokens === "number"
+          ? { outputTokens: line.outputTokens }
+          : {}),
+        ...(typeof line.reasoningOutputTokens === "number"
+          ? { reasoningOutputTokens: line.reasoningOutputTokens }
+          : {}),
+        ...(typeof line.totalTokens === "number"
+          ? { totalTokens: line.totalTokens }
+          : {}),
+        ...(typeof line.totalCostMicros === "number"
+          ? { totalCostMicros: line.totalCostMicros }
+          : {}),
+        ...(typeof line.currency === "string" ? { currency: line.currency } : {}),
+      };
+      this.bufferRunUsage(run, usage);
+    }
+  }
+
+  /**
+   * Debounced write path for run usage. A streaming turn emits pricing
+   * updates repeatedly, and each setRunUsage rewrites the whole run payload
+   * row — so identical snapshots are dropped, changed ones wait out one flush
+   * window, and terminal events drain their run immediately.
+   */
+  private bufferRunUsage(run: AutomationRunSummary, usage: AutomationRunUsage): void {
+    const current = this.pendingRunUsage.get(run.id) ?? run.usage;
+    if (current && automationRunUsageEquals(current, usage)) return;
+    this.pendingRunUsage.set(run.id, usage);
+    if (this.pendingRunUsageTimer) return;
+    const timer = setTimeout(() => {
+      this.pendingRunUsageTimer = undefined;
+      this.flushPendingRunUsage();
+    }, RUN_USAGE_FLUSH_INTERVAL_MS);
+    timer.unref?.();
+    this.pendingRunUsageTimer = timer;
+  }
+
+  private flushPendingRunUsage(runId?: string): void {
+    if (runId !== undefined) {
+      const usage = this.pendingRunUsage.get(runId);
+      if (!usage) return;
+      this.pendingRunUsage.delete(runId);
+      this.options.store.setRunUsage({ runId, usage });
+      return;
+    }
+    const entries = [...this.pendingRunUsage.entries()];
+    this.pendingRunUsage.clear();
+    for (const [id, usage] of entries) {
+      this.options.store.setRunUsage({ runId: id, usage });
+    }
+  }
+
   private async handleRegistryEvent(event: AgentEvent): Promise<void> {
+    if (event.notification.method === "thread/pricing/updated") {
+      this.captureRunUsageFromPricingEvent(event);
+      return;
+    }
     if (event.notification.method !== "thread/turnQueue/updated") {
       await this.captureAutomationRunTranscriptEvent(event);
       if (isTerminalTurnNotification(event.notification)) {
@@ -668,6 +924,15 @@ export class DesktopAutomationService {
       errorMessage: params.errorMessage,
     });
     if (params.automationRunId) {
+      if (
+        params.status === "failed"
+        || params.status === "cancelled"
+        || params.status === "terminal"
+      ) {
+        // The run just ended — make whatever usage we have durable now. A
+        // final pricing line landing after this still flushes on the timer.
+        this.flushPendingRunUsage(params.automationRunId);
+      }
       await this.publishAutomationRunUpdate({
         backend: event.backend,
         runId: params.automationRunId,
@@ -714,6 +979,9 @@ export class DesktopAutomationService {
 
     const finalText = finalTextFromTerminalTurnNotification(event.notification);
     const errorMessage = errorMessageFromTerminalTurnNotification(event.notification);
+    // Turn end is a durability boundary for the debounced usage snapshot. A
+    // final pricing line arriving afterwards still flushes on the timer.
+    this.flushPendingRunUsage(activeRun.id);
     await this.scheduler.handleTurnQueueUpdate({
       automationRunId: activeRun.id,
       status: "terminal",
@@ -1086,6 +1354,7 @@ function automationInspectionFailure(
 function toAutomationDetail(
   record: AutomationRecord,
   latestRun?: AutomationRunSummary,
+  costTodayMicros?: number,
 ): AutomationDetail {
   const latestRunAt = latestRun ? automationRunActivityAt(latestRun) : undefined;
   const useLatestRun =
@@ -1106,6 +1375,7 @@ function toAutomationDetail(
     backlogPolicy: record.backlogPolicy,
     executionProfile: record.executionProfile,
     priorRunLookback: record.priorRunLookback,
+    ...(costTodayMicros !== undefined ? { costTodayMicros } : {}),
     outputActions: record.outputActions,
     inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
     maxRunsPerHour: record.maxRunsPerHour,
@@ -1430,4 +1700,21 @@ function summarizeAutomationCard(params: {
 function firstLine(value: string | undefined): string | undefined {
   const line = value?.split(/\r?\n/).find((candidate) => candidate.trim());
   return line?.trim();
+}
+
+/** Field-wise equality so unchanged pricing snapshots never schedule a write. */
+function automationRunUsageEquals(
+  a: AutomationRunUsage,
+  b: AutomationRunUsage,
+): boolean {
+  return (
+    a.model === b.model
+    && a.uncachedInputTokens === b.uncachedInputTokens
+    && a.cachedInputTokens === b.cachedInputTokens
+    && a.outputTokens === b.outputTokens
+    && a.reasoningOutputTokens === b.reasoningOutputTokens
+    && a.totalTokens === b.totalTokens
+    && a.totalCostMicros === b.totalCostMicros
+    && a.currency === b.currency
+  );
 }

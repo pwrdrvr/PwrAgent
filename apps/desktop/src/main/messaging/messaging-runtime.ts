@@ -116,14 +116,20 @@ export type DesktopMessagingAdapter = {
    */
   searchDirectoryActors?: MessagingAdapter["searchDirectoryActors"];
   /**
+   * Push the set of conversations automations observe. Adapters forward all
+   * senders' messages there flagged observedOnly instead of dropping them at
+   * the per-user access gate.
+   */
+  updateObservedConversations?: (conversationIds: readonly string[]) => void;
+  /**
    * Optional history fetch for the Automations editor live preview. Providers
    * that can read recent conversation messages (e.g. Slack) implement this;
    * others omit it and the preview falls back to going-forward capture.
    */
-  fetchRecentMessages?(request: {
+  fetchRecentMessages?: (request: {
     conversationId: string;
     limit?: number;
-  }): Promise<MessagingInboundEvent[]>;
+  }) => Promise<MessagingInboundEvent[]>;
   /**
    * Optional subscription for serious runtime errors after a successful
    * start (e.g. Telegram's 409 Conflict when a second bot instance starts
@@ -341,6 +347,7 @@ export type CredentialValidationRequest =
 
 export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private adapters: DesktopMessagingAdapter[] = [];
+  private automationsChangedUnsubscribe?: () => void;
   private controllers: MessagingController[] = [];
   private readonly runningAdapters = new Map<
     MessagingChannelKind,
@@ -481,6 +488,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private async stopNow(
     options: { preserveStartupFailures?: boolean } = {},
   ): Promise<void> {
+    this.automationsChangedUnsubscribe?.();
+    this.automationsChangedUnsubscribe = undefined;
     if (!this.started) {
       if (!options.preserveStartupFailures) {
         this.clearRetainedStartupFailures();
@@ -764,6 +773,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   /**
+   * Whether a provider's adapter can read recent conversation history (Slack
+   * today). Callers use this to tell "no history support" apart from "the
+   * conversation is simply empty", which fetchRecentPreviewMessages cannot.
+   */
+  supportsPreviewHistory(provider: MessagingChannelKind): boolean {
+    const adapter = this.adapters.find((entry) => entry.channel === provider);
+    return Boolean(adapter?.fetchRecentMessages);
+  }
+
+  /**
    * Fetch recent messages for the Automations editor live preview. Delegates
    * to the provider adapter's optional history fetch (Slack today), maps to the
    * compact preview shape, and filters to the requested conversation scope.
@@ -797,10 +816,68 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         message.conversationId === params.conversationId ||
         message.parentId === params.conversationId
       ) {
-        messages.push(message);
+        messages.push({ ...message, origin: "history" });
       }
     }
+    // Breadcrumb for "why is the preview showing X": records exactly which
+    // conversation the provider was asked for and how much survived the
+    // conversation-scope check, so a suspected cross-channel leak can be
+    // ruled in or out from the profile log.
+    messagingLog.debug("preview history backfill", {
+      provider: params.provider,
+      conversationId: params.conversationId,
+      fetched: events.length,
+      forwarded: messages.length,
+    });
     return messages;
+  }
+
+  /**
+   * Conversations an enabled inbound automation watches on this platform.
+   * These become the adapter's observed set: all senders' messages there are
+   * forwarded (flagged observedOnly) instead of dying at the per-user gate —
+   * which is what lets a sender filter see bot alerts at all.
+   */
+  private collectAutomationObservedConversations(
+    platform: MessagingChannelKind,
+  ): string[] {
+    try {
+      const ids = new Set<string>();
+      for (const automation of getDesktopAutomationService().list({}).automations) {
+        if (automation.status !== "enabled") continue;
+        for (const trigger of automation.triggers) {
+          if (trigger.kind !== "inbound_message") continue;
+          if (trigger.conversation.channel !== platform) continue;
+          ids.add(trigger.conversation.conversationId);
+          if (trigger.conversation.parentId) {
+            ids.add(trigger.conversation.parentId);
+          }
+        }
+      }
+      return [...ids];
+    } catch (error) {
+      messagingLog.warn("failed to collect observed conversations", {
+        platform,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /** Re-push the observed-conversation sets to every running adapter. */
+  pushObservedConversations(): void {
+    for (const adapter of this.adapters) {
+      try {
+        adapter.updateObservedConversations?.(
+          this.collectAutomationObservedConversations(adapter.channel),
+        );
+      } catch (error) {
+        messagingLog.warn("failed to push observed conversations", {
+          platform: adapter.channel,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /**
@@ -1229,6 +1306,19 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     if (this.options.automationInboundMatches?.(event)) {
       return false;
     }
+    // The message is about to be dropped by mention-only mode after matching
+    // no automation filter. This is the correct outcome for ordinary chatter,
+    // but it is also exactly where a misconfigured filter (wrong sender id,
+    // typo'd text) disappears without a trace — so leave a debug breadcrumb
+    // an operator can find in the profile log.
+    messagingLog.debug("mention-only drop: no automation filter matched", {
+      platform: event.channel.channel,
+      conversationId: event.channel.conversation.id,
+      actorId: event.actor.platformUserId,
+      actorIsBot: event.actor.isBot === true,
+      kind: event.kind,
+      textLength: "text" in event ? event.text?.length ?? 0 : 0,
+    });
     return true;
   }
 
@@ -1333,6 +1423,30 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         // the surface before actor and ambient-message gates so an approved
         // channel remains selectable even when this sender cannot steer Agents.
         await this.recordObservedSurface(store, event.channel, event.receivedAt);
+        if (
+          (event.kind === "text" || event.kind === "media")
+          && event.observedOnly === true
+        ) {
+          // Observed-only traffic exists for automations and the editor's
+          // live preview; it must never reach the controller's reply/command
+          // path — the sender did not clear the per-user access gate.
+          this.recordActivityFromInbound(adapter.channel, event, false);
+          publishInboundPreview(event);
+          if (this.options.automationInboundMatches?.(event)) {
+            await this.options.automationInboundHandler?.(event);
+          } else {
+            messagingLog.debug(
+              "observed-only message matched no automation filter",
+              {
+                platform: adapter.channel,
+                conversationId: event.channel.conversation.id,
+                actorId: event.actor.platformUserId,
+                actorIsBot: event.actor.isBot === true,
+              },
+            );
+          }
+          return;
+        }
         const authorized = authorization.actorIdSet.has(event.actor.platformUserId);
         if (
           authorized &&
@@ -1717,6 +1831,20 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     const running = [...this.runningAdapters.values()];
     this.adapters = running.map((record) => record.adapter);
     this.controllers = running.map((record) => record.controller);
+    // The automation service may be unavailable (unit harnesses, an app
+    // instance with automations disabled); messaging must start regardless —
+    // observed sets simply stay empty.
+    try {
+      this.pushObservedConversations();
+      if (!this.automationsChangedUnsubscribe) {
+        this.automationsChangedUnsubscribe = getDesktopAutomationService()
+          .onAutomationsChanged(() => this.pushObservedConversations());
+      }
+    } catch (error) {
+      messagingLog.debug("observed-conversation sync unavailable", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async dispatchRevokeToControllers(

@@ -4,6 +4,7 @@ import type {
   AutomationScheduleDefinition,
   AutomationStatus,
 } from "@pwragent/shared";
+import { formatUsd } from "../thread-detail/context-panels/subagent-format";
 
 export function formatAutomationTimestamp(timestamp: number | undefined): string {
   if (!timestamp) {
@@ -59,4 +60,45 @@ export function formatScheduleKind(schedule: AutomationScheduleDefinition): stri
     return "Weekdays";
   }
   return "Weekly";
+}
+
+/**
+ * One-line run cost/usage summary: "$0.38 · 6.4k in · 1.2k out". Cost is the
+ * list price frozen at run time (micros), rendered with the same sub-ten-cent
+ * extra decimal the sub-agent cost line uses. Returns undefined when the run
+ * has no recorded usage, so callers can omit the line entirely.
+ */
+export function formatAutomationRunUsage(
+  usage:
+    | {
+        uncachedInputTokens?: number;
+        cachedInputTokens?: number;
+        outputTokens?: number;
+        totalCostMicros?: number;
+      }
+    | undefined,
+): string | undefined {
+  if (!usage) return undefined;
+  const parts: string[] = [];
+  if (typeof usage.totalCostMicros === "number") {
+    parts.push(formatUsd(usage.totalCostMicros / 1_000_000));
+  }
+  const inputTokens =
+    (usage.uncachedInputTokens ?? 0) + (usage.cachedInputTokens ?? 0);
+  if (inputTokens > 0) parts.push(`${formatTokenCount(inputTokens)} in`);
+  if (usage.outputTokens !== undefined && usage.outputTokens > 0) {
+    parts.push(`${formatTokenCount(usage.outputTokens)} out`);
+  }
+  return parts.length > 0 ? parts.join(" \u00b7 ") : undefined;
+}
+
+function formatTokenCount(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
+  return String(count);
+}
+
+export function formatCostTodayMicros(micros: number | undefined): string | undefined {
+  if (micros === undefined) return undefined;
+  return `${formatUsd(micros / 1_000_000)} today`;
 }

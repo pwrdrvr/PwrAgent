@@ -139,6 +139,36 @@ describe("buildAutomationTurnInput", () => {
     expect(text).toContain("ERROR api latency high");
   });
 
+
+  it("includes the source message for an operator replay", () => {
+    const [item] = buildAutomationTurnInput({
+      automation: buildAutomation(),
+      run: {
+        id: "run-replay",
+        automationId: "automation-1",
+        trigger: "manual",
+        status: "running",
+        scheduledWindows: [],
+        source: {
+          kind: "messaging",
+          sourceEventKey: "replay:m1:9000",
+          receivedAt: Date.UTC(2026, 4, 13, 14, 10),
+          matchedTriggerId: "datadog-error",
+          actor: { platformUserId: "B123", displayName: "Datadog", isBot: true },
+          conversation: { channel: "slack", conversationId: "C123" },
+          message: { text: "ERROR api latency high" },
+        },
+      },
+    });
+
+    const text = item?.type === "text" ? item.text : "";
+    expect(text).toContain("Trigger: manual Run Now");
+    expect(text).toContain(
+      "Source message (replayed by the operator for testing):",
+    );
+    expect(text).toContain("ERROR api latency high");
+  });
+
   it("injects bounded prior-run context, newest first", () => {
     const [item] = buildAutomationTurnInput({
       automation: buildAutomation(),

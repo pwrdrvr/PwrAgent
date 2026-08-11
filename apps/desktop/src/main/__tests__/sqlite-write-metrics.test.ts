@@ -9,6 +9,8 @@ import type {
 import { buildFederatedThreadRef } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { AutomationStore } from "../automations/automation-store";
+import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import {
   AppRuntimeInstanceStore,
@@ -226,6 +228,101 @@ describe("sqlite write metrics", () => {
       }
     } finally {
       await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds a burst of automation pricing snapshots to one run-usage write", async () => {
+    vi.useFakeTimers();
+    const automationStore = new AutomationStore(stateDb);
+    const registryListeners: Array<(event: AgentEvent) => void | Promise<void>> = [];
+    const registry = {
+      canStartThreadTurnImmediately: () => true,
+      getThreadAgentMetadata: async () => ({
+        name: "Agent",
+        instructionLineCount: 0,
+        instructionsTooLong: false,
+        updatedAt: 1,
+      }),
+      onEvent: (listener: (event: AgentEvent) => void | Promise<void>) => {
+        registryListeners.push(listener);
+        return () => {};
+      },
+      publishLocalEvent: async () => {},
+      setAutomationInspectionHandler: () => {},
+      startAutomationHeadlessTurn: async (params: {
+        agentThreadId: string;
+        automationRunId: string;
+        backend: string;
+      }) => ({
+        backend: params.backend,
+        headlessThreadId: "headless-1",
+        queueEntryId: `headless:${params.automationRunId}`,
+        threadId: params.agentThreadId,
+        turnId: "turn-1",
+      }),
+    } as unknown as ConstructorParameters<
+      typeof DesktopAutomationService
+    >[0]["registry"];
+    const service = new DesktopAutomationService({
+      registry,
+      store: automationStore,
+    });
+    try {
+      service.start();
+      const created = await service.create({
+        backend: "codex",
+        threadId: "thread-1",
+        name: "Usage burst",
+        taskPrompt: "Check.",
+        schedule: { kind: "interval", every: 5, unit: "minutes" },
+      });
+      await service.runNow({ automationId: created.automation.id });
+
+      const { writes } = await measureSqliteWrites(async () => {
+        // Fifty cumulative pricing snapshots for one streaming turn. Each
+        // setRunUsage rewrites the whole run payload row, so the debounce is
+        // what keeps this at one commit instead of fifty.
+        for (let observation = 1; observation <= 50; observation += 1) {
+          await Promise.all(
+            registryListeners.map((listener) =>
+              listener({
+                backend: "codex",
+                notification: {
+                  method: "thread/pricing/updated",
+                  params: {
+                    threadId: "thread-1",
+                    pricing: {
+                      summaries: [],
+                      lines: [
+                        {
+                          scope: "turn",
+                          turnId: "turn-1",
+                          model: "gpt-5",
+                          uncachedInputTokens: observation * 100,
+                          outputTokens: observation * 10,
+                          totalCostMicros: observation * 1_000,
+                          currency: "USD",
+                        },
+                      ],
+                    },
+                  },
+                },
+                // Partial ThreadUsageLineRecord: only what the capture reads.
+              } as unknown as AgentEvent),
+            ),
+          );
+        }
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      expectSqliteWriteBudget({
+        note: "50 cumulative pricing snapshots for one run, one debounced payload write",
+        scenario: "automation-run-usage",
+        writes,
+      });
+    } finally {
+      service.dispose();
       vi.useRealTimers();
     }
   });

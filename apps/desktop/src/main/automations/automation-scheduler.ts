@@ -128,6 +128,41 @@ export class AutomationScheduler {
     return await this.submitRun({ automation, runId: run.id, windows: [], now });
   }
 
+  /**
+   * Operator-initiated replay of a captured message. Deliberately a MANUAL
+   * run that carries the message as its source: it bypasses the inbound rate
+   * limit, coalescing, and source-event dedupe (all of which exist to police
+   * unattended traffic, not an operator pressing a button), while the prompt
+   * still receives the message exactly as an inbound run would.
+   */
+  async replayInboundRun(params: {
+    automation: AutomationRecord;
+    source: AutomationRunSourceMetadata;
+    now?: number;
+  }): Promise<Awaited<ReturnType<AutomationRunner["submitRun"]>> | undefined> {
+    const now = params.now ?? this.now();
+    const automation = params.automation;
+    const active = this.options.store.findActiveRunForAutomation(automation.id);
+    const run = this.options.store.createRun({
+      automationId: automation.id,
+      trigger: "manual",
+      scheduledWindows: [],
+      source: params.source,
+      now,
+    });
+    if (!run) return undefined;
+    if (active) {
+      const queued = this.options.store.markRunQueued({
+        runId: run.id,
+        queueEntryId: buildLaneQueueEntryId(run.id),
+        queuedAt: now,
+        now,
+      });
+      return buildLaneQueuedResult({ automation, run: queued ?? run, position: 1 });
+    }
+    return await this.submitRun({ automation, runId: run.id, windows: [], now });
+  }
+
   async runFromInboundEvent(params: {
     automation: AutomationRecord;
     source: AutomationRunSourceMetadata;

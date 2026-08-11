@@ -89,6 +89,10 @@ import type {
   LatestCodexConfigWarningResponse,
   ListAutomationCardsRequest,
   ListAutomationCardsResponse,
+  ListAutomationReplayCandidatesRequest,
+  ListAutomationReplayCandidatesResponse,
+  OpenAutomationRunWindowRequest,
+  ReplayAutomationInboundRequest,
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
   ListAutomationLoadIssuesResponse,
@@ -465,6 +469,15 @@ export type DesktopApi = {
     request: SearchMessagingSendersRequest,
   ) => Promise<SearchMessagingSendersResponse>;
   allocateAutomationWorkspace?: () => Promise<{ path: string }>;
+  listAutomationReplayCandidates?: (
+    request: ListAutomationReplayCandidatesRequest,
+  ) => Promise<ListAutomationReplayCandidatesResponse>;
+  replayAutomationInbound?: (
+    request: ReplayAutomationInboundRequest,
+  ) => Promise<RunAutomationNowResponse>;
+  openAutomationRunWindow?: (
+    request: OpenAutomationRunWindowRequest,
+  ) => Promise<{ opened: true }>;
   getAutomationRunArtifact?: (
     request: GetAutomationRunArtifactRequest,
   ) => Promise<GetAutomationRunArtifactResponse>;

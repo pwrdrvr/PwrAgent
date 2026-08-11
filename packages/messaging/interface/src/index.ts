@@ -1232,6 +1232,15 @@ export type MessagingInboundBaseEvent = {
   channel: MessagingChannelRef;
   receivedAt: number;
   /**
+   * True when the adapter forwarded this event ONLY because its conversation
+   * is being observed (an enabled inbound automation watches it), while the
+   * sender would otherwise fail the per-user access gate. Observed-only
+   * events must never reach the reply/command path — they exist so
+   * automations and the editor's live preview can see channel traffic (bot
+   * alerts especially) without widening who may command the bot.
+   */
+  observedOnly?: boolean;
+  /**
    * Provider-generated HTTPS destination for the original message or, when
    * the platform cannot expose a message permalink, its conversation.
    */

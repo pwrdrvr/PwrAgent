@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { BrowserWindow, ipcMain } from "electron";
 import type {
   AutomationIdRequest,
   DraftAutomationPromptRequest,
@@ -14,6 +14,10 @@ import type {
   ListAutomationRunsResponse,
   ListAutomationsRequest,
   ListAutomationsResponse,
+  ListAutomationReplayCandidatesRequest,
+  ListAutomationReplayCandidatesResponse,
+  OpenAutomationRunWindowRequest,
+  ReplayAutomationInboundRequest,
   RunAutomationNowResponse,
   SearchMessagingSendersRequest,
   SearchMessagingSendersResponse,
@@ -29,6 +33,9 @@ import {
   AUTOMATIONS_LIST_RUNS_CHANNEL,
   AUTOMATIONS_LOAD_ISSUES_CHANNEL,
   AUTOMATIONS_ALLOCATE_WORKSPACE_CHANNEL,
+  AUTOMATIONS_LIST_REPLAY_CANDIDATES_CHANNEL,
+  AUTOMATIONS_REPLAY_INBOUND_CHANNEL,
+  AUTOMATION_RUN_WINDOW_OPEN_CHANNEL,
   AUTOMATIONS_SEARCH_SENDERS_CHANNEL,
   AUTOMATIONS_PAUSE_CHANNEL,
   AUTOMATIONS_RESUME_CHANNEL,
@@ -42,6 +49,7 @@ import {
 import { generateAutomationPromptDraft } from "../app-server/automation-prompt-draft-service";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
 import { createScratchProjectDirectory } from "../app-server/scratch-projects";
+import { showAutomationRunWindow } from "../automation-run-window";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 
 export function registerAutomationIpcHandlers(): void {
@@ -131,6 +139,45 @@ export function registerAutomationIpcHandlers(): void {
     async (): Promise<{ path: string }> => ({
       path: await createScratchProjectDirectory(),
     }),
+  );
+
+  ipcMain.removeHandler(AUTOMATIONS_LIST_REPLAY_CANDIDATES_CHANNEL);
+  ipcMain.handle(
+    AUTOMATIONS_LIST_REPLAY_CANDIDATES_CHANNEL,
+    async (
+      _event,
+      request: ListAutomationReplayCandidatesRequest,
+    ): Promise<ListAutomationReplayCandidatesResponse> =>
+      getDesktopAutomationService().listReplayCandidates(request, {
+        fetchRecent: (params) =>
+          getDesktopMessagingRuntime().fetchRecentPreviewMessages(params),
+        supportsHistory: (provider) =>
+          getDesktopMessagingRuntime().supportsPreviewHistory(provider),
+      }),
+  );
+
+  ipcMain.removeHandler(AUTOMATION_RUN_WINDOW_OPEN_CHANNEL);
+  ipcMain.handle(
+    AUTOMATION_RUN_WINDOW_OPEN_CHANNEL,
+    async (
+      event,
+      request: OpenAutomationRunWindowRequest,
+    ): Promise<{ opened: true }> => {
+      showAutomationRunWindow(request, {
+        sourceWindow: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+      });
+      return { opened: true };
+    },
+  );
+
+  ipcMain.removeHandler(AUTOMATIONS_REPLAY_INBOUND_CHANNEL);
+  ipcMain.handle(
+    AUTOMATIONS_REPLAY_INBOUND_CHANNEL,
+    async (
+      _event,
+      request: ReplayAutomationInboundRequest,
+    ): Promise<RunAutomationNowResponse> =>
+      getDesktopAutomationService().replayInbound(request),
   );
 
   ipcMain.removeHandler(AUTOMATIONS_SEARCH_SENDERS_CHANNEL);

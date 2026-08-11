@@ -43,6 +43,7 @@ import {
 import { copyText } from "../../lib/copy-text";
 import { HelpCircleIcon } from "../../icons";
 import { AutomationConditionEditor } from "./AutomationConditionEditor";
+import { formatAutomationRelative } from "./automation-format";
 import { AutomationMcpPicker } from "./AutomationMcpPicker";
 import { ProjectPicker } from "../composer/ProjectPicker";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
@@ -256,7 +257,19 @@ export function AutomationEditor(props: AutomationEditorProps) {
             ],
           },
     );
-  const [senderLabels, setSenderLabels] = useState<Record<string, string>>({});
+  // Seeded from the persisted valueLabels so reopening the editor shows
+  // "datadog", not the opaque platform id captured at selection time.
+  const [senderLabels, setSenderLabels] = useState<Record<string, string>>(() => {
+    if (!initialInboundTrigger) return {};
+    const labels: Record<string, string> = {};
+    for (const condition of normalizeInboundTriggerConditions(initialInboundTrigger)
+      .conditions) {
+      for (const [value, label] of Object.entries(condition.valueLabels ?? {})) {
+        labels[value] = label;
+      }
+    }
+    return labels;
+  });
   const [inboundIncludeReplies, setInboundIncludeReplies] = useState(
     initialInboundTrigger?.includeThreadReplies ?? false,
   );
@@ -411,6 +424,47 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const selectedGroup = telegramGroups.find(
     (group) => group.id === groupSelection,
   );
+
+  // Same reconciliation the destination picker does below: `groupSelection`
+  // starts at MANUAL_GROUP_VALUE when editing (the catalog loads async), so
+  // without this, reopening an automation shows "Enter Channel ID manually…"
+  // with the raw platform id even though the catalog lists the channel by
+  // name. Runs once on the first catalog load that contains the initial id,
+  // and bails the moment the operator changes the conversation.
+  const inboundSelectionReconciledRef = useRef(false);
+  const initialInboundGroupId = initialIsTopic
+    ? initialConversation?.parentId
+    : initialConversation?.conversationId;
+  useEffect(() => {
+    if (inboundSelectionReconciledRef.current) return;
+    if (!initialConversation || !initialInboundGroupId) return;
+    if (inboundProvider !== initialConversation.channel) return;
+    if (inboundGroupId !== initialInboundGroupId) return;
+    const match = telegramGroups.find(
+      (group) => group.id === initialInboundGroupId,
+    );
+    if (!match) return;
+    setGroupSelection(match.id);
+    inboundSelectionReconciledRef.current = true;
+  }, [
+    telegramGroups,
+    inboundGroupId,
+    inboundProvider,
+    initialConversation,
+    initialInboundGroupId,
+  ]);
+
+  // The title snapshot stored on the trigger keeps naming the conversation
+  // even when the settings catalog does not list it (or has not loaded yet),
+  // as long as the operator has not pointed the trigger elsewhere.
+  const storedGroupTitle =
+    initialConversation
+    && inboundProvider === initialConversation.channel
+    && inboundGroupId.trim() === initialInboundGroupId
+      ? (initialIsTopic
+          ? initialConversation.parentTitle
+          : initialConversation.title)
+      : undefined;
   const destGroups = useMemo(
     () => providerGroups[destProvider] ?? [],
     [destProvider, providerGroups],
@@ -735,6 +789,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const inboundConversationLabel =
     selectedGroup?.title
     ?? capturedGroupTitle
+    ?? storedGroupTitle
     ?? (inboundGroupId.trim() || "this conversation");
 
   const inboundFilterSummary =
@@ -1038,9 +1093,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
     }
     const triggerConfig = buildTriggerConfig({
       broadcast: sourceReplyBroadcast,
-      conditionGroup: inboundConditions,
+      conditionGroup: stampConditionLabels(inboundConditions, senderLabels),
       groupId: inboundGroupId,
-      groupTitle: selectedGroup?.title ?? capturedGroupTitle,
+      groupTitle: selectedGroup?.title ?? capturedGroupTitle ?? storedGroupTitle,
       includeThreadReplies: inboundIncludeReplies,
       provider: inboundProvider,
       replyDestination,
@@ -1557,8 +1612,9 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       {previewOpen && previewConversationId ? (
                         <div className="automation-preview__panel" role="status">
                           <p className="automation-field__hint">
-                            Showing messages as they arrive (no history). Messages your
-                            filter would match are highlighted.
+                            Showing recent history where the platform allows it, then
+                            messages as they arrive. Messages your filter would match
+                            are highlighted.
                           </p>
                           {previewMessages.length === 0 ? (
                             <p className="automation-preview__empty">
@@ -1586,6 +1642,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
                                           {message.actor.platformUserId}
                                         </span>
                                       ) : null}
+                                      <span className="automation-preview__time">
+                                        {message.origin === "history"
+                                          ? `history · ${formatAutomationRelative(
+                                              message.receivedAt,
+                                            )}`
+                                          : formatAutomationRelative(message.receivedAt)}
+                                      </span>
                                     </span>
                                     <span className="automation-preview__text">
                                       {message.text || "(no text)"}
@@ -2113,7 +2176,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
 
         <AutomationStage verb="Deliver" title="Where results go">
           <div className="automation-lanes">
-            <div className="automation-lane automation-lane--agent">
+            <div className="automation-lane automation-lane--active">
               <span className="automation-lane__tag">Agent thread · always</span>
               {shouldShowAgentPicker(props) ? (
                 <div className="automation-field automation-agent-field">
@@ -2292,7 +2355,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
               </p>
             </div>
             {triggerKind === "inbound_message" ? (
-              <div className="automation-lane">
+              <div
+                className={
+                  resultMode === "agent_only"
+                    ? "automation-lane"
+                    : "automation-lane automation-lane--active"
+                }
+              >
                 <span className="automation-lane__tag">Messaging · optional</span>
                       <div className="automation-field-group">
                         <label className="automation-field">
@@ -2739,6 +2808,32 @@ function includeCurrentOption(
   return trimmed && !options.includes(trimmed)
     ? [trimmed, ...options]
     : [...options];
+}
+
+/**
+ * Persist the display names the picker resolved onto the conditions
+ * themselves. Without this the labels die with the editor session, and every
+ * later surface — reopening the editor, the list screen's trigger summary —
+ * falls back to raw platform ids.
+ */
+function stampConditionLabels(
+  group: AutomationInboundConditionGroup,
+  senderLabels: Record<string, string>,
+): AutomationInboundConditionGroup {
+  return {
+    ...group,
+    conditions: group.conditions.map((condition) => {
+      if (condition.field !== "sender") return condition;
+      const valueLabels: Record<string, string> = {};
+      for (const value of condition.values) {
+        const label = senderLabels[value] ?? condition.valueLabels?.[value];
+        if (label && label !== value) valueLabels[value] = label;
+      }
+      return Object.keys(valueLabels).length > 0
+        ? { ...condition, valueLabels }
+        : condition;
+    }),
+  };
 }
 
 function buildTriggerConfig(params: {
