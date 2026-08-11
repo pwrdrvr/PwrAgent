@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   AutomationBacklogPolicy,
   AutomationExecutionProfile,
+  AutomationPriorRunLookback,
   AutomationGateConfig,
   AutomationListItemSummary,
   AutomationLoadIssue,
@@ -30,6 +31,7 @@ import {
   buildThreadIdentityKey,
   formatAutomationScheduleSummary,
   isSupportedAutomationInboundConditionGroup,
+  normalizeAutomationPriorRunLookback,
   resolveAutomationRunsPerHour,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log.js";
@@ -69,6 +71,7 @@ export type AutomationRecord = {
   scheduleSummary: string;
   backlogPolicy: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
   outputActions: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
@@ -91,6 +94,7 @@ export type CreateAutomationInput = {
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
@@ -109,6 +113,7 @@ export type UpdateAutomationInput = {
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile | null;
+  priorRunLookback?: AutomationPriorRunLookback | null;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
@@ -197,6 +202,7 @@ type AutomationPayload = {
   schedule?: AutomationScheduleDefinition;
   scheduleSummary: string;
   executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
@@ -281,6 +287,7 @@ export class AutomationStore {
         : formatAutomationTriggerSummary(triggers),
       backlogPolicy: input.backlogPolicy ?? DEFAULT_AUTOMATION_BACKLOG_POLICY,
       executionProfile: input.executionProfile,
+      priorRunLookback: normalizeAutomationPriorRunLookback(input.priorRunLookback),
       outputActions: normalizeAutomationOutputActions(input.outputActions),
       maxRunsPerHour: resolveAutomationRunsPerHour(input.maxRunsPerHour),
       inboundCoalesceWindowMs: normalizeInboundCoalesceWindowMs(
@@ -326,6 +333,11 @@ export class AutomationStore {
         input.executionProfile === null
           ? undefined
           : input.executionProfile ?? current.executionProfile,
+      priorRunLookback:
+        input.priorRunLookback === null
+          ? undefined
+          : normalizeAutomationPriorRunLookback(input.priorRunLookback)
+            ?? current.priorRunLookback,
       outputActions: input.outputActions ?? current.outputActions,
       maxRunsPerHour:
         input.maxRunsPerHour === undefined
@@ -950,6 +962,7 @@ export class AutomationStore {
       schedule: record.schedule,
       scheduleSummary: record.scheduleSummary,
       executionProfile: record.executionProfile,
+      priorRunLookback: record.priorRunLookback,
       outputActions: record.outputActions,
       inboundCoalesceWindowMs: record.inboundCoalesceWindowMs,
       maxRunsPerHour: record.maxRunsPerHour,
@@ -1150,6 +1163,7 @@ export class AutomationStore {
       status: row.status,
       triggers,
       schedule,
+      priorRunLookback: normalizeAutomationPriorRunLookback(payload.priorRunLookback),
       scheduleSummary:
         payload.scheduleSummary ??
         (schedule

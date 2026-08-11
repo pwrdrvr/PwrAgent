@@ -635,6 +635,55 @@ export type AutomationRunSourceBatchedEntry = {
   message?: AutomationRunSourceMessage;
 };
 
+/**
+ * Bounds on how much of an automation's own history a new run may see.
+ *
+ * Each run is an ephemeral sub-agent that starts from the prompt every time,
+ * so without this it has no memory: "ERROR rate spike" reads the same on the
+ * first occurrence and the fifth. Feeding the last few run outcomes back in
+ * lets a prompt ask "is this becoming a pattern?" and escalate — once is
+ * noise, twice is a coincidence, three times in an hour is a problem.
+ *
+ * Presence enables the feature; `undefined` on the automation means runs see
+ * no history. Both bounds are caps, applied together.
+ */
+export type AutomationPriorRunLookback = {
+  /** Most-recent completed runs to include, 1..{@link AUTOMATION_PRIOR_RUN_LOOKBACK_MAX_RUNS}. */
+  maxRuns: number;
+  /** Ignore runs older than this. Undefined = bounded by count alone. */
+  maxAgeMs?: number;
+};
+
+export const AUTOMATION_PRIOR_RUN_LOOKBACK_MAX_RUNS = 20;
+
+export function normalizeAutomationPriorRunLookback(
+  value: AutomationPriorRunLookback | undefined,
+): AutomationPriorRunLookback | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const maxRuns = Math.floor(Number(value.maxRuns));
+  if (!Number.isFinite(maxRuns) || maxRuns < 1) return undefined;
+  const maxAgeMs =
+    value.maxAgeMs !== undefined && Number.isFinite(value.maxAgeMs) && value.maxAgeMs > 0
+      ? Math.floor(value.maxAgeMs)
+      : undefined;
+  return {
+    maxRuns: Math.min(maxRuns, AUTOMATION_PRIOR_RUN_LOOKBACK_MAX_RUNS),
+    ...(maxAgeMs !== undefined ? { maxAgeMs } : {}),
+  };
+}
+
+/**
+ * One prior run as the prompt builder receives it: the outcome, not the
+ * transcript. Assembled by the scheduler from run rows + artifacts so the
+ * prompt builder stays a pure function.
+ */
+export type AutomationPriorRunContext = {
+  completedAt: number;
+  status: AutomationRunStatus;
+  summary?: string;
+  details?: string;
+};
+
 export type AutomationExecutionProfile = {
   backend?: AppServerBackendKind;
   model?: string;
@@ -802,6 +851,7 @@ export type AutomationDetail = AutomationListItemSummary & {
   taskPrompt: string;
   gate?: AutomationGateConfig;
   executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
   outputActions: AutomationOutputActionDefinition[];
   /**
    * Inbound coalescing window in milliseconds. 0 disables coalescing (one run
@@ -929,6 +979,7 @@ export type CreateAutomationRequest = AutomationAgentAssignment & {
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile;
+  priorRunLookback?: AutomationPriorRunLookback;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;
@@ -947,6 +998,7 @@ export type UpdateAutomationRequest = {
   schedule?: AutomationScheduleDefinition;
   backlogPolicy?: AutomationBacklogPolicy;
   executionProfile?: AutomationExecutionProfile | null;
+  priorRunLookback?: AutomationPriorRunLookback | null;
   outputActions?: AutomationOutputActionDefinition[];
   inboundCoalesceWindowMs?: number;
   maxRunsPerHour?: number | null;

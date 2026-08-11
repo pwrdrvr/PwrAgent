@@ -1,4 +1,8 @@
-import type { AutomationRunSummary, ThreadExecutionMode } from "@pwragent/shared";
+import type {
+  AutomationPriorRunContext,
+  AutomationRunSummary,
+  ThreadExecutionMode,
+} from "@pwragent/shared";
 import type { AutomationGateRunResult } from "@pwragent/shared";
 import { automationSuppressesBindingBroadcast } from "@pwragent/shared";
 import type {
@@ -27,6 +31,7 @@ export type AutomationRunner = {
   submitRun(params: {
     automation: AutomationRecord;
     gateResult?: AutomationGateRunResult;
+    priorRuns?: AutomationPriorRunContext[];
     run: AutomationRunSummary;
   }): Promise<AutomationRunSubmissionResult>;
   updateQueuedRunInput?(params: {
@@ -73,6 +78,7 @@ export class HeadlessAutomationRunner implements AutomationRunner {
   async submitRun(params: {
     automation: AutomationRecord;
     gateResult?: AutomationGateRunResult;
+    priorRuns?: AutomationPriorRunContext[];
     run: AutomationRunSummary;
   }): Promise<AutomationRunSubmissionResult> {
     const input = buildAutomationTurnInput(params);
@@ -137,6 +143,7 @@ export class ThreadQueueAutomationRunner implements AutomationRunner {
   async submitRun(params: {
     automation: AutomationRecord;
     gateResult?: AutomationGateRunResult;
+    priorRuns?: AutomationPriorRunContext[];
     run: AutomationRunSummary;
   }): Promise<AutomationRunSubmissionResult> {
     return await this.queue.submit({

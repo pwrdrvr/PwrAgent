@@ -190,6 +190,58 @@ describe("AutomationEditor", () => {
     });
   });
 
+  it("submits prior-run lookback bounds when enabled", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: { slack: true } }))}
+        mode={{ assignment: { backend: "codex", threadId: "thread-1" }, kind: "create" }}
+        threads={[]}
+        onCancel={() => {}}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Escalation-aware triage" },
+    });
+    fireEvent.change(screen.getByLabelText("Task prompt"), {
+      target: { value: "If this happened before, raise the urgency." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Inbound message" }));
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Slack" })).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Provider"), {
+      target: { value: "slack" },
+    });
+    fireEvent.change(screen.getByLabelText("Channel ID"), {
+      target: { value: "C123" },
+    });
+    fireEvent.change(screen.getByLabelText("Value"), {
+      target: { value: "ERROR" },
+    });
+
+    fireEvent.click(
+      screen.getByLabelText("Show this run the outcomes of its own recent runs"),
+    );
+    fireEvent.change(screen.getByLabelText("Include up to"), {
+      target: { value: "10" },
+    });
+    fireEvent.change(screen.getByLabelText("No older than"), {
+      target: { value: String(60 * 60 * 1000) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      kind: "create",
+      request: expect.objectContaining({
+        priorRunLookback: { maxRuns: 10, maxAgeMs: 60 * 60 * 1000 },
+      }),
+    });
+  });
+
   it("collapses the filter and throttling stages for a schedule trigger", async () => {
     render(
       <AutomationEditor
@@ -434,9 +486,11 @@ describe("AutomationEditor", () => {
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "ERROR" },
     });
-    fireEvent.change(screen.getByLabelText("Allowed MCP servers"), {
-      target: { value: "datadog, aws-readonly" },
-    });
+    const mcpInput = screen.getByLabelText("Allowed MCP servers");
+    fireEvent.change(mcpInput, { target: { value: "datadog" } });
+    fireEvent.keyDown(mcpInput, { key: "Enter" });
+    fireEvent.change(mcpInput, { target: { value: "aws-readonly" } });
+    fireEvent.keyDown(mcpInput, { key: "Enter" });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -1400,6 +1454,32 @@ function fakeSettings(params: {
 function fakeDesktopApi(settings: ReadDesktopSettingsResponse): DesktopApi {
   return {
     readSettings: async () => settings,
+    // The execution Model/Reasoning selects are populated from this catalog —
+    // the same source the composer reads — so tests that pick a model exercise
+    // the real wiring instead of a hardcoded list.
+    listBackends: async () => ({
+      fetchedAt: 0,
+      backends: [
+        {
+          kind: "codex",
+          label: "Codex",
+          available: true,
+          methods: [],
+          capabilities: {},
+          executionModes: [],
+          launchpadOptions: {
+            models: [
+              {
+                id: "gpt-5",
+                reasoningEfforts: ["low", "medium", "high"],
+              },
+              { id: "gpt-5.4-mini" },
+            ],
+            reasoningEfforts: ["low", "medium", "high"],
+          },
+        },
+      ],
+    }),
   } as unknown as DesktopApi;
 }
 

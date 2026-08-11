@@ -7,6 +7,7 @@ import type {
   AutomationInboundMessageTriggerDefinition,
   AutomationMessagingConversationSnapshot,
   AutomationScheduleDefinition,
+  BackendSummary,
   AutomationSourceMessageDestination,
   AutomationWeekday,
   CreateAutomationRequest,
@@ -41,6 +42,7 @@ import {
 import { copyText } from "../../lib/copy-text";
 import { HelpCircleIcon } from "../../icons";
 import { AutomationConditionEditor } from "./AutomationConditionEditor";
+import { AutomationMcpPicker } from "./AutomationMcpPicker";
 import { AutomationFlow, AutomationStage } from "./AutomationFunnel";
 
 type AutomationEditorMode =
@@ -114,8 +116,6 @@ type ProviderGroups = Partial<
   Record<MessagingChannelKind, Array<{ id: string; title: string }>>
 >;
 
-const MODEL_OPTIONS = ["gpt-5", "gpt-5.4", "gpt-5.4-mini", "grok-4"] as const;
-const REASONING_OPTIONS = ["low", "medium", "high", "xhigh"] as const;
 const ACCESS_MODE_OPTIONS: Array<{ label: string; value: ThreadExecutionMode }> = [
   { label: "Default", value: "default" },
   { label: "Full Access", value: "full-access" },
@@ -320,14 +320,49 @@ export function AutomationEditor(props: AutomationEditorProps) {
     useState<OptionalExecutionMode>(
       initialAutomation?.executionProfile?.executionMode ?? "",
     );
-  const [profileMcpAllowlist, setProfileMcpAllowlist] = useState(
-    (initialAutomation?.executionProfile?.mcpAllowlist ?? []).join(", "),
+  const [profileBackend, setProfileBackend] = useState<"" | AppServerBackendKind>(
+    initialAutomation?.executionProfile?.backend ?? "",
   );
+  const [profileMcpAllowlist, setProfileMcpAllowlist] = useState<string[]>(
+    initialAutomation?.executionProfile?.mcpAllowlist ?? [],
+  );
+  const initialLookback = initialAutomation?.priorRunLookback;
+  const [lookbackEnabled, setLookbackEnabled] = useState(Boolean(initialLookback));
+  const [lookbackRuns, setLookbackRuns] = useState(
+    String(initialLookback?.maxRuns ?? 5),
+  );
+  // "" = no age bound (count-only lookback).
+  const [lookbackAgeMs, setLookbackAgeMs] = useState(
+    initialLookback
+      ? initialLookback.maxAgeMs !== undefined
+        ? String(initialLookback.maxAgeMs)
+        : ""
+      : String(60 * 60 * 1000),
+  );
+  const [backendCatalog, setBackendCatalog] = useState<BackendSummary[]>();
   const [profileToolAllowlist, setProfileToolAllowlist] = useState(
     (initialAutomation?.executionProfile?.toolAllowlist ?? []).join(", "),
   );
   const [enabledProviders, setEnabledProviders] = useState<MessagingChannelKind[]>();
   const [providerGroups, setProviderGroups] = useState<ProviderGroups>({});
+
+  // The same backend catalog the composer reads: providers, their model lists,
+  // and per-model reasoning efforts. Fetched once per editor mount.
+  useEffect(() => {
+    const list = props.desktopApi?.listBackends;
+    if (!list) return;
+    let cancelled = false;
+    void list({})
+      .then((response) => {
+        if (!cancelled) setBackendCatalog(response.backends);
+      })
+      .catch(() => {
+        // Selects degrade to free inherit-only choices; saving still works.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.desktopApi]);
 
   useEffect(() => {
     const readSettings = props.desktopApi?.readSettings;
@@ -797,6 +832,65 @@ export function AutomationEditor(props: AutomationEditorProps) {
     [agentQuery, threadOptions],
   );
   const selectedAgent = agentOptions.find((thread) => thread.key === threadKey);
+
+  // Execution settings resolve against the Agent chosen in the Deliver stage.
+  // "Inherit" is a symbolic reference applied at run time, so it is valid to
+  // store before an Agent exists — but the editor only claims to know the
+  // inherited values (and can only list a model catalog) once one is chosen.
+  const agentAssignment = useMemo(
+    () => readAssignmentFromThreadKey(threadKey),
+    [threadKey],
+  );
+  const agentThreadSummary = useMemo(
+    () =>
+      agentAssignment
+        ? (props.threads ?? []).find(
+            (thread) =>
+              thread.id === agentAssignment.threadId
+              && thread.source === agentAssignment.backend,
+          )
+        : undefined,
+    [agentAssignment, props.threads],
+  );
+  const effectiveBackendKind = profileBackend || agentAssignment?.backend;
+  const effectiveBackend = backendCatalog?.find(
+    (backend) => backend.kind === effectiveBackendKind,
+  );
+  const catalogModels = effectiveBackend?.launchpadOptions?.models ?? [];
+  const selectedCatalogModel = catalogModels.find(
+    (model) => model.id === profileModel,
+  );
+  const reasoningChoices =
+    selectedCatalogModel?.reasoningEfforts
+    ?? effectiveBackend?.launchpadOptions?.reasoningEfforts
+    ?? [];
+  const backendLabelFor = (kind: AppServerBackendKind | undefined): string =>
+    kind
+      ? backendCatalog?.find((backend) => backend.kind === kind)?.label ?? kind
+      : "";
+
+  const browseForCwd = async (): Promise<void> => {
+    const pick = props.desktopApi?.pickDirectoryFromDisk;
+    if (!pick) return;
+    try {
+      const result = await pick();
+      if (!result.canceled) setProfileCwd(result.path);
+    } catch {
+      // Dialog failures leave the typed path untouched.
+    }
+  };
+
+  const loadAgentMcpServers = useMemo(() => {
+    const list = props.desktopApi?.listThreadMcpServers;
+    if (!list || !agentAssignment) return undefined;
+    return async () => {
+      const response = await list({
+        backend: agentAssignment.backend,
+        threadId: agentAssignment.threadId,
+      });
+      return response.servers;
+    };
+  }, [props.desktopApi, agentAssignment]);
   const agentPickerLabel =
     threadKey === DEFER_AGENT_KEY
       ? DEFER_AGENT_LABEL
@@ -936,6 +1030,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
       return;
     }
     const executionProfile = buildExecutionProfile({
+      backend: profileBackend,
       cwd: profileCwd,
       executionMode: profileExecutionMode,
       mcpAllowlist: profileMcpAllowlist,
@@ -943,6 +1038,12 @@ export function AutomationEditor(props: AutomationEditorProps) {
       reasoningEffort: profileReasoning,
       toolAllowlist: profileToolAllowlist,
     });
+    const priorRunLookback = lookbackEnabled
+      ? {
+          maxRuns: Number(lookbackRuns),
+          ...(lookbackAgeMs ? { maxAgeMs: Number(lookbackAgeMs) } : {}),
+        }
+      : undefined;
 
     if (props.mode.kind === "edit") {
       const assignment = readAssignmentFromThreadKey(threadKey);
@@ -959,6 +1060,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
           enabled,
           executionProfile,
           gate: gate.gate,
+          priorRunLookback: priorRunLookback ?? null,
           ...(triggerKind === "inbound_message"
             ? {
                 inboundCoalesceWindowMs: parseCoalesceWindowMs(
@@ -994,6 +1096,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
         enabled,
         executionProfile,
         gate: gate.gate,
+        ...(priorRunLookback ? { priorRunLookback } : {}),
         ...(triggerKind === "inbound_message"
           ? {
               inboundCoalesceWindowMs: parseCoalesceWindowMs(
@@ -1539,6 +1642,13 @@ export function AutomationEditor(props: AutomationEditorProps) {
         ) : null}
 
         <AutomationStage verb="Then run" title="AI evaluation">
+          <p className="automation-field__hint">
+            Each run is an ephemeral sub-agent: it starts from this prompt every
+            time, has no memory of earlier runs unless you give it lookback
+            below, and can&rsquo;t be chatted with afterward. Its output lands in
+            the Agent&rsquo;s queryable context, where you — or the Agent — can
+            dig further and take corrective action.
+          </p>
           <div className="automation-field automation-prompt-field">
             <div className="automation-prompt-field__label-row">
               <span id={promptLabelId}>Task prompt</span>
@@ -1626,6 +1736,53 @@ export function AutomationEditor(props: AutomationEditorProps) {
               }}
             />
           </div>
+          <label className="automation-checkbox">
+            <input
+              checked={lookbackEnabled}
+              type="checkbox"
+              onChange={(event) => setLookbackEnabled(event.currentTarget.checked)}
+            />
+            <span>Show this run the outcomes of its own recent runs</span>
+          </label>
+          {lookbackEnabled ? (
+            <div className="automation-inline-fields">
+              <label className="automation-field automation-field--compact">
+                <span>Include up to</span>
+                <select
+                  value={lookbackRuns}
+                  onChange={(event) => setLookbackRuns(event.currentTarget.value)}
+                >
+                  {["1", "3", "5", "10", "20"].map((count) => (
+                    <option key={count} value={count}>
+                      {count === "1" ? "1 run" : `${count} runs`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="automation-field automation-field--compact">
+                <span>No older than</span>
+                <select
+                  value={lookbackAgeMs}
+                  onChange={(event) => setLookbackAgeMs(event.currentTarget.value)}
+                >
+                  <option value={String(15 * 60 * 1000)}>15 minutes</option>
+                  <option value={String(60 * 60 * 1000)}>1 hour</option>
+                  <option value={String(6 * 60 * 60 * 1000)}>6 hours</option>
+                  <option value={String(24 * 60 * 60 * 1000)}>24 hours</option>
+                  <option value="">Any age</option>
+                </select>
+              </label>
+            </div>
+          ) : null}
+          {lookbackEnabled ? (
+            <p className="automation-field__hint">
+              Prior outcomes are added to the prompt so it can judge whether an
+              event is new, recurring, or escalating — ask for that explicitly,
+              e.g. &ldquo;if this has happened before in the lookback, say how
+              often and raise the urgency.&rdquo;
+            </p>
+          ) : null}
+
           <details className="automation-advanced">
             <summary className="automation-advanced__summary">
               Advanced settings — model, access, tools, gate, backlog
@@ -1635,13 +1792,23 @@ export function AutomationEditor(props: AutomationEditorProps) {
             </p>
           <div className="automation-fieldset">
             <legend>Execution</legend>
-            <div className="automation-inline-fields automation-inline-fields--single">
+            <div className="automation-field-group">
               <label className="automation-field">
-                <span>Agent working directory</span>
-                <input
-                  value={profileCwd}
-                  onChange={(event) => setProfileCwd(event.currentTarget.value)}
-                />
+                <span>Working directory</span>
+                <div className="automation-cwd-row">
+                  <input
+                    value={profileCwd}
+                    placeholder="Inherit the Agent's directory"
+                    onChange={(event) => setProfileCwd(event.currentTarget.value)}
+                  />
+                  <button
+                    className="button button--ghost"
+                    type="button"
+                    onClick={() => void browseForCwd()}
+                  >
+                    Browse…
+                  </button>
+                </div>
               </label>
             </div>
             <div className="automation-inline-fields">
@@ -1662,29 +1829,103 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 </select>
               </label>
               <label className="automation-field">
+                <span>Model provider</span>
+                <select
+                  value={profileBackend}
+                  onChange={(event) => {
+                    const next = event.currentTarget.value as
+                      | ""
+                      | AppServerBackendKind;
+                    setProfileBackend(next);
+                    // A model belongs to one provider's catalog. Keep the
+                    // selection only when the new catalog still lists it.
+                    const nextKind = next || agentAssignment?.backend;
+                    const nextModels =
+                      backendCatalog?.find((backend) => backend.kind === nextKind)
+                        ?.launchpadOptions?.models ?? [];
+                    if (
+                      profileModel
+                      && !nextModels.some((model) => model.id === profileModel)
+                    ) {
+                      setProfileModel("");
+                      setProfileReasoning("");
+                    }
+                  }}
+                >
+                  <option value="">
+                    {agentAssignment
+                      ? `Inherit Agent provider (${backendLabelFor(agentAssignment.backend)})`
+                      : "Inherit Agent provider"}
+                  </option>
+                  {(backendCatalog ?? [])
+                    .filter(
+                      (backend) => backend.available || backend.kind === profileBackend,
+                    )
+                    .map((backend) => (
+                      <option key={backend.kind} value={backend.kind}>
+                        {backend.label}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            </div>
+            <div className="automation-inline-fields">
+              <label className="automation-field">
                 <span>Model</span>
                 <select
+                  disabled={!effectiveBackendKind}
                   value={profileModel}
-                  onChange={(event) => setProfileModel(event.currentTarget.value)}
+                  onChange={(event) => {
+                    const next = event.currentTarget.value;
+                    setProfileModel(next);
+                    // Reasoning choices are per-model; drop a value the new
+                    // model does not offer rather than sending it anyway.
+                    const nextModel = catalogModels.find(
+                      (model) => model.id === next,
+                    );
+                    const efforts =
+                      nextModel?.reasoningEfforts
+                      ?? effectiveBackend?.launchpadOptions?.reasoningEfforts
+                      ?? [];
+                    if (profileReasoning && !efforts.includes(profileReasoning)) {
+                      setProfileReasoning("");
+                    }
+                  }}
                 >
-                  <option value="">Inherit Agent model</option>
-                  {modelOptions(profileModel).map((model) => (
-                    <option key={model} value={model}>
-                      {model}
+                  <option value="">
+                    {agentThreadSummary?.model
+                      ? `Inherit Agent model (${agentThreadSummary.model})`
+                      : "Inherit Agent model"}
+                  </option>
+                  {profileModel
+                  && !catalogModels.some((model) => model.id === profileModel) ? (
+                    <option value={profileModel}>
+                      {profileModel} (not in this provider's catalog)
+                    </option>
+                  ) : null}
+                  {catalogModels.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label ?? model.id}
                     </option>
                   ))}
                 </select>
               </label>
-            </div>
-            <div className="automation-inline-fields automation-inline-fields--single">
               <label className="automation-field">
                 <span>Reasoning</span>
                 <select
+                  disabled={!effectiveBackendKind}
                   value={profileReasoning}
                   onChange={(event) => setProfileReasoning(event.currentTarget.value)}
                 >
-                  <option value="">Inherit Agent reasoning</option>
-                  {reasoningOptions(profileReasoning).map((reasoning) => (
+                  <option value="">
+                    {agentThreadSummary?.reasoningEffort
+                      ? `Inherit Agent reasoning (${agentThreadSummary.reasoningEffort})`
+                      : "Inherit Agent reasoning"}
+                  </option>
+                  {profileReasoning && !reasoningChoices.includes(profileReasoning) ? (
+                    <option value={profileReasoning}>{profileReasoning}</option>
+                  ) : null}
+                  {reasoningChoices.map((reasoning) => (
                     <option key={reasoning} value={reasoning}>
                       {reasoning}
                     </option>
@@ -1692,18 +1933,25 @@ export function AutomationEditor(props: AutomationEditorProps) {
                 </select>
               </label>
             </div>
-            <div className="automation-field-group">
-              <label className="automation-field">
-                <span>Allowed MCP servers</span>
-                <input
-                  placeholder="datadog, aws-readonly"
-                  value={profileMcpAllowlist}
-                  onChange={(event) => setProfileMcpAllowlist(event.currentTarget.value)}
-                />
-              </label>
+            {!effectiveBackendKind ? (
               <p className="automation-field__hint">
-                Comma-separated MCP server names this run may use to fetch data.
-                Leave blank to inherit the Agent's MCP servers.
+                Model choices come from the provider&rsquo;s catalog. Choose an
+                Agent in Deliver below, or pick a provider here, to list them.
+              </p>
+            ) : null}
+            <div className="automation-field-group">
+              <div className="automation-field">
+                <span>Allowed MCP servers</span>
+                <AutomationMcpPicker
+                  loadServers={loadAgentMcpServers}
+                  selected={profileMcpAllowlist}
+                  onChange={setProfileMcpAllowlist}
+                />
+              </div>
+              <p className="automation-field__hint">
+                MCP servers this run may use to fetch data, picked from the
+                Agent&rsquo;s configured servers. Leave empty to inherit all of
+                the Agent&rsquo;s MCP servers.
               </p>
             </div>
             <div className="automation-field-group">
@@ -2353,9 +2601,10 @@ function buildGate(params: {
 }
 
 function buildExecutionProfile(params: {
+  backend: "" | AppServerBackendKind;
   cwd: string;
   executionMode: OptionalExecutionMode;
-  mcpAllowlist: string;
+  mcpAllowlist: string[];
   model: string;
   reasoningEffort: string;
   toolAllowlist: string;
@@ -2363,9 +2612,12 @@ function buildExecutionProfile(params: {
   const cwd = params.cwd.trim();
   const model = params.model.trim();
   const reasoningEffort = params.reasoningEffort.trim();
-  const mcpAllowlist = parseAllowlist(params.mcpAllowlist);
+  const mcpAllowlist = params.mcpAllowlist
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
   const toolAllowlist = parseAllowlist(params.toolAllowlist);
   if (
+    !params.backend &&
     !cwd &&
     !params.executionMode &&
     !model &&
@@ -2376,6 +2628,7 @@ function buildExecutionProfile(params: {
     return undefined;
   }
   return {
+    ...(params.backend ? { backend: params.backend } : {}),
     ...(cwd ? { cwd } : {}),
     ...(params.executionMode ? { executionMode: params.executionMode } : {}),
     ...(model ? { model } : {}),
@@ -2404,13 +2657,7 @@ function parseAllowlist(value: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-function modelOptions(current: string): string[] {
-  return includeCurrentOption(MODEL_OPTIONS, current);
-}
 
-function reasoningOptions(current: string): string[] {
-  return includeCurrentOption(REASONING_OPTIONS, current);
-}
 
 function includeCurrentOption(
   options: readonly string[],

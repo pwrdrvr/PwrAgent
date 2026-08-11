@@ -1,14 +1,25 @@
 import type {
   AppServerTurnInputItem,
   AutomationGateRunResult,
+  AutomationPriorRunContext,
   AutomationRunSourceMetadata,
   AutomationRunSummary,
 } from "@pwragent/shared";
 import type { AutomationRecord } from "./automation-store.js";
 
+/** Longest prior-run summary/detail line injected into a prompt. */
+const MAX_PRIOR_RUN_TEXT_CHARS = 500;
+
 export function buildAutomationTurnInput(params: {
   automation: AutomationRecord;
   gateResult?: AutomationGateRunResult;
+  /**
+   * Outcomes of this automation's own recent runs, newest first, already
+   * bounded by the automation's `priorRunLookback`. Injected so the prompt can
+   * reason about recurrence — the run itself is an ephemeral sub-agent with no
+   * memory, and "has this happened before?" is unanswerable without history.
+   */
+  priorRuns?: AutomationPriorRunContext[];
   run: AutomationRunSummary;
 }): AppServerTurnInputItem[] {
   const { automation, run } = params;
@@ -43,6 +54,7 @@ export function buildAutomationTurnInput(params: {
         scheduledWindows || "- none",
         ...formatInboundSource(run),
         ...formatGateOutput(params.gateResult),
+        ...formatPriorRuns(params.priorRuns),
         "",
         "Return a JSON object as your final answer using this shape:",
         '{"decision":"post_card|quiet","summary":"short operator-facing summary","details":"optional detail","actions":[{"id":"optional-action-id","kind":"agent_context|source_message"}]}',
@@ -53,6 +65,47 @@ export function buildAutomationTurnInput(params: {
       ].join("\n"),
     },
   ];
+}
+
+/**
+ * Render prior run outcomes for the prompt. Newest first, with explicit
+ * timestamps so the model can judge recency ("three times in the last hour")
+ * rather than only recurrence. An empty history when lookback is enabled is
+ * itself signal, so the section states that instead of vanishing.
+ */
+function formatPriorRuns(
+  priorRuns: AutomationPriorRunContext[] | undefined,
+): string[] {
+  if (!priorRuns) return [];
+  if (priorRuns.length === 0) {
+    return [
+      "",
+      "Prior runs of this automation (within the configured lookback): none.",
+    ];
+  }
+  const lines = priorRuns.map((prior) => {
+    const summary = boundPriorText(prior.summary) ?? "(no summary)";
+    const details = boundPriorText(prior.details);
+    return [
+      `- ${new Date(prior.completedAt).toISOString()} [${prior.status}] ${summary}`,
+      ...(details ? [`  ${details}`] : []),
+    ].join("\n");
+  });
+  return [
+    "",
+    `Prior runs of this automation, newest first (${priorRuns.length} within the configured lookback):`,
+    ...lines,
+    "Use these to judge whether the current event is new, recurring, or escalating.",
+  ];
+}
+
+function boundPriorText(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const flattened = text.replace(/\s+/g, " ").trim();
+  if (!flattened) return undefined;
+  return flattened.length > MAX_PRIOR_RUN_TEXT_CHARS
+    ? `${flattened.slice(0, MAX_PRIOR_RUN_TEXT_CHARS)}…`
+    : flattened;
 }
 
 function formatInboundSource(run: AutomationRunSummary): string[] {

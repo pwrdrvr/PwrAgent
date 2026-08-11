@@ -17798,6 +17798,18 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 8px;
 }
 
+/* Working directory + Browse button on one line; the path takes the slack. */
+.automation-cwd-row {
+  display: flex;
+  gap: 8px;
+}
+
+.automation-cwd-row input {
+  flex: 1;
+  min-width: 0;
+  max-width: 460px;
+}
+
 .automation-sender-picker {
   position: relative;
   display: flex;
