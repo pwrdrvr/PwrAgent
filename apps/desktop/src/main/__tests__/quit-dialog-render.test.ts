@@ -73,6 +73,35 @@ describe("quit dialog HTML", () => {
     expect(html).toContain("overflow-y: auto");
   });
 
+  it("names the owning peer on a remote terminal row", () => {
+    const html = buildQuitConfirmationHtml({
+      countdownSeconds: 10,
+      inProgressThreadCount: 0,
+      terminalSessionCount: 1,
+      actionRunCount: 0,
+      items: [
+        {
+          kind: "terminal",
+          backend: "codex",
+          threadId: "0f9c2b7a-remote",
+          threadKey: "codex:0f9c2b7a-remote",
+          title: "Reap Windows Worktrees",
+          target: { scope: "remote", instanceId: "peer-a" },
+          detail: "Studio Mac",
+        },
+      ],
+      navigationPrefix: "pwragent-quit-confirmation://tok/",
+      colorScheme: "dark",
+      palette: QUIT_DIALOG_PALETTES.dark,
+    });
+
+    // The name the viewer already shows for this thread, plus the machine the
+    // shell is actually running on.
+    expect(html).toContain("Reap Windows Worktrees");
+    expect(html).toContain("Studio Mac");
+    expect(html).not.toContain(">0f9c2b7a-remote<");
+  });
+
   it("escapes the action detail, which carries a user-configured command", () => {
     const html = buildQuitConfirmationHtml({
       countdownSeconds: 10,

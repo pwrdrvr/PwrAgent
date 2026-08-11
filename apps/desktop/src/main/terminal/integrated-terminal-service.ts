@@ -4,7 +4,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { WebContents } from "electron";
 import type { IPty, IDisposable } from "node-pty";
-import type { DesktopIntegratedTerminalWindowsShell } from "@pwragent/shared";
+import type {
+  DesktopIntegratedTerminalWindowsShell,
+  FederationRemoteTarget,
+} from "@pwragent/shared";
 import {
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
   INTEGRATED_TERMINAL_EXIT_CHANNEL,
@@ -46,11 +49,40 @@ type TerminalSession = {
 
 type NodePtyModule = typeof import("node-pty");
 
+/**
+ * One shell holding up the quit. The owning peer travels with the thread key
+ * because a remote shell's thread does not exist in this instance's thread
+ * list — resolving its name against that list yields the raw thread id, which
+ * is exactly the uuid an operator sees in the quit dialog instead of the name
+ * their own sidebar is already showing.
+ */
+export type IntegratedTerminalQuitThread = {
+  threadKey: string;
+  /** Absent for a shell running on this machine. */
+  target?: FederationRemoteTarget;
+  /** Peer display label, when the federation runtime could compose one. */
+  instanceLabel?: string;
+};
+
 export type IntegratedTerminalQuitSnapshot = {
   count: number;
   sessionIds: string[];
-  threadKeys: string[];
+  threads: IntegratedTerminalQuitThread[];
 };
+
+/**
+ * Code-unit order, matching the plain `.sort()` these keys used before they
+ * became objects. `localeCompare` would reorder around the `:` and `-` that
+ * fill thread keys depending on the host locale, which is not something a
+ * quit dialog's row order should depend on.
+ */
+export function byThreadKey(
+  left: { threadKey: string },
+  right: { threadKey: string },
+): number {
+  if (left.threadKey === right.threadKey) return 0;
+  return left.threadKey < right.threadKey ? -1 : 1;
+}
 
 type IntegratedTerminalServiceOptions = {
   loadNodePty?: () => Promise<Pick<NodePtyModule, "spawn">>;
@@ -253,7 +285,9 @@ export class IntegratedTerminalService {
     return {
       count: sessions.length,
       sessionIds: sessions.map((session) => session.sessionId).sort(),
-      threadKeys: sessions.map((session) => session.threadKey).sort(),
+      threads: sessions
+        .map((session) => ({ threadKey: session.threadKey }))
+        .sort(byThreadKey),
     };
   }
 

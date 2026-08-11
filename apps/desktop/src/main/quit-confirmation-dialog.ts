@@ -1,4 +1,5 @@
 import { BrowserWindow, nativeTheme } from "electron";
+import type { FederationRemoteTarget } from "@pwragent/shared";
 import { parseThreadIdentityKey } from "@pwragent/shared";
 import { revealIntegratedTerminal } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
@@ -22,9 +23,16 @@ export type QuitBlockerItem = {
   backend: string;
   threadId: string;
   threadKey: string;
+  /**
+   * Peer that owns this work, when it does not run on this machine. Both the
+   * title lookup and the row's navigation need it: a remote thread is absent
+   * from this instance's thread list and from every window but the one
+   * fronting that peer.
+   */
+  target?: FederationRemoteTarget;
   /** Resolved just before the dialog opens; falls back to the thread id. */
   title?: string;
-  /** Secondary line — the command and pid for an action, for example. */
+  /** Secondary line — the owning peer, or an action's command and pid. */
   detail?: string;
 };
 
@@ -253,10 +261,19 @@ export async function showQuitConfirmationDialog(
       if (target) {
         const parsed = parseThreadIdentityKey(target.threadKey);
         if (parsed) {
-          if (target.kind === "terminal") {
-            revealIntegratedTerminal(target.threadKey);
-          }
-          requestShowThread(parsed);
+          // The reveal knows which window hosts the shell. Reuse that: the
+          // dialog itself holds focus here, so an unrouted request falls
+          // through to whichever window subscribed first — which for a
+          // peer's thread is a window that never mounted it.
+          const revealed =
+            target.kind === "terminal"
+              ? revealIntegratedTerminal(target.threadKey, {
+                  ...(target.instanceId
+                    ? { instanceId: target.instanceId }
+                    : {}),
+                })
+              : undefined;
+          requestShowThread(parsed, { preferWebContents: revealed?.owner });
         }
         finish("manual-cancel");
         return;
@@ -363,33 +380,49 @@ const QUIT_ITEM_GROUPS: ReadonlyArray<{
 ];
 
 /**
- * Encode a row's target as a single URL segment.
+ * Encode a row's target as URL segments.
  *
  * The thread key travels whole rather than as `backend/threadId`: an ACP
  * backend kind ("acp:grok") contains a colon, and thread ids are opaque, so
  * splitting on delimiters here corrupts the key that the terminal registry and
  * the renderer both index by.
+ *
+ * The owning instance rides along for remote rows. A thread key does not
+ * identify a thread across instances — the same reason titles are resolved per
+ * instance — so without it a peer's row and a same-keyed local row encode to
+ * the same action and the click cannot tell them apart.
  */
 export function formatQuitItemAction(item: QuitBlockerItem): string {
-  return `show-thread/${encodeURIComponent(item.threadKey)}/${encodeURIComponent(
-    item.kind,
-  )}`;
+  const segments = [
+    "show-thread",
+    encodeURIComponent(item.threadKey),
+    encodeURIComponent(item.kind),
+  ];
+  if (item.target) {
+    segments.push(encodeURIComponent(item.target.instanceId));
+  }
+  return segments.join("/");
 }
 
 export function parseQuitItemAction(
   action: string,
-): { threadKey: string; kind: string } | undefined {
+): { threadKey: string; kind: string; instanceId?: string } | undefined {
   if (!action.startsWith("show-thread/")) {
     return undefined;
   }
-  const [, encodedThreadKey, encodedKind] = action.split("/");
+  const [, encodedThreadKey, encodedKind, encodedInstanceId] =
+    action.split("/");
   if (!encodedThreadKey) {
     return undefined;
   }
   try {
+    const instanceId = encodedInstanceId
+      ? decodeURIComponent(encodedInstanceId)
+      : undefined;
     return {
       threadKey: decodeURIComponent(encodedThreadKey),
       kind: decodeURIComponent(encodedKind ?? ""),
+      ...(instanceId ? { instanceId } : {}),
     };
   } catch {
     return undefined;

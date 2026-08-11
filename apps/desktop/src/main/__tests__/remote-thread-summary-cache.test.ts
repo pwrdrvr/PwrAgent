@@ -383,6 +383,115 @@ describe("RemoteThreadSummaryCache — threadFromPeer", () => {
   });
 });
 
+describe("RemoteThreadSummaryCache — remembered thread names", () => {
+  const nameOf = (cache: RemoteThreadSummaryCache, threadId: string) =>
+    cache.cachedThreadNameFromPeer({
+      target: remoteTarget("peer-a"),
+      backend: "codex",
+      threadId,
+    })?.title;
+
+  it("answers from remembered names without ever contacting the peer", async () => {
+    const fetchSnapshot = vi.fn(async () =>
+      snapshotOf([
+        stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
+      ]),
+    );
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    // Cold: nothing seen yet, and asking must not go fetch it.
+    expect(nameOf(cache, "t1")).toBeUndefined();
+    expect(fetchSnapshot).not.toHaveBeenCalled();
+
+    await cache.searchForJump({ query: "Parent" });
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+
+    expect(nameOf(cache, "t1")).toBe("Parent");
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  // A federation window reads its navigation straight from the runtime and
+  // never populates the snapshot cache above. Without this, a peer's thread
+  // open in that window has no name here at all.
+  it("remembers names handed in from outside this cache", () => {
+    const fetchSnapshot = vi.fn(async () => snapshotOf([]));
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    cache.rememberThreadNames("peer-a", [
+      stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
+    ]);
+
+    expect(nameOf(cache, "t1")).toBe("Parent");
+    expect(fetchSnapshot).not.toHaveBeenCalled();
+  });
+
+  // Snapshots are backend- and filter-scoped, so a narrower one must not
+  // erase what a wider one already taught us.
+  it("merges rather than replacing, and ignores fallback titles", () => {
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    cache.rememberThreadNames("peer-a", [
+      stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
+      stampedThread({ instanceId: "peer-a", threadId: "t2", title: "Sibling" }),
+    ]);
+    cache.rememberThreadNames("peer-a", [
+      stampedThread({ instanceId: "peer-a", threadId: "t3", title: "Cousin" }),
+      // A fallback title IS the thread id; recording it would overwrite a
+      // real name with nothing.
+      {
+        ...stampedThread({ instanceId: "peer-a", threadId: "t1", title: "t1" }),
+        titleSource: "fallback",
+      },
+    ]);
+
+    expect(nameOf(cache, "t1")).toBe("Parent");
+    expect(nameOf(cache, "t2")).toBe("Sibling");
+    expect(nameOf(cache, "t3")).toBe("Cousin");
+  });
+
+  // A name one navigation refresh out of date still beats the raw thread id,
+  // and every alternative costs the round trip this tier avoids.
+  it("survives TTL lapse and invalidate", async () => {
+    let now = 1_000;
+    const fetchSnapshot = vi.fn(async () =>
+      snapshotOf([
+        stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
+      ]),
+    );
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+      ttlMs: 10,
+      now: () => now,
+    });
+
+    await cache.searchForJump({ query: "Parent" });
+    now += 10_000;
+    cache.invalidate("peer-a");
+    cache.invalidate();
+
+    expect(nameOf(cache, "t1")).toBe("Parent");
+    expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
 /** Let a kicked-off background refresh chain settle. */
 async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));

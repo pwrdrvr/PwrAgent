@@ -260,7 +260,7 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 1,
       sessionIds: [response.sessionId],
-      threadKeys: ["codex:thread-a"],
+      threads: [{ threadKey: "codex:thread-a" }],
     });
   });
 
@@ -286,7 +286,7 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 0,
       sessionIds: [],
-      threadKeys: [],
+      threads: [],
     });
   });
 
@@ -314,7 +314,7 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 1,
       sessionIds: [response.sessionId],
-      threadKeys: ["codex:thread-linux-pipeline"],
+      threads: [{ threadKey: "codex:thread-linux-pipeline" }],
     });
   });
 
@@ -342,7 +342,7 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 0,
       sessionIds: [],
-      threadKeys: [],
+      threads: [],
     });
   });
 
@@ -372,7 +372,7 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 1,
       sessionIds: [response.sessionId],
-      threadKeys: ["codex:thread-linux-lookup-failed"],
+      threads: [{ threadKey: "codex:thread-linux-lookup-failed" }],
     });
   });
 
@@ -398,7 +398,7 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 1,
       sessionIds: [response.sessionId],
-      threadKeys: ["codex:thread-windows"],
+      threads: [{ threadKey: "codex:thread-windows" }],
     });
   });
 
@@ -429,7 +429,7 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 1,
       sessionIds: [response.sessionId],
-      threadKeys: ["codex:thread-lookup-failed"],
+      threads: [{ threadKey: "codex:thread-lookup-failed" }],
     });
   });
 
@@ -593,7 +593,7 @@ describe("resolveTerminalShell", () => {
     expect(service.getQuitSnapshot()).toEqual({
       count: 0,
       sessionIds: [],
-      threadKeys: [],
+      threads: [],
     });
   });
 });

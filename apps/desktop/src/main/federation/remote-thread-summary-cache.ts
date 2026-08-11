@@ -21,6 +21,12 @@ export type RemoteThreadSummaryPeer = {
   capabilities: FederationCapability[];
 };
 
+/** A peer's display name for one of its threads. */
+export type RemoteThreadName = {
+  title: string;
+  titleSource: NavigationThreadSummary["titleSource"];
+};
+
 export type ResolvedRemotePins = {
   /** One stamped row per pin: fresh from the peer when reachable, else the
    *  cached payload stamped with the peer's current (non-connected) status. */
@@ -64,6 +70,16 @@ export class RemoteThreadSummaryCache {
   private readonly archivedCache = new Map<
     string,
     { fetchedAt: number; threadKeys: Set<string> }
+  >();
+  /**
+   * Display names per instance, keyed by thread identity. Deliberately NOT
+   * cleared by `invalidate` — see `cachedThreadNameFromPeer`. Dropping a name
+   * can only send a row back to its thread id, and a name is stale-tolerant
+   * in a way the snapshots above are not.
+   */
+  private readonly threadNames = new Map<
+    string,
+    Map<string, RemoteThreadName>
   >();
   private readonly peerInterestTimers = new Map<
     string,
@@ -193,9 +209,77 @@ export class RemoteThreadSummaryCache {
   }
 
   /**
-   * A single thread from a connected peer's cached snapshot, or undefined
-   * when the peer is unreachable or the thread is absent (e.g. archived).
-   * Used for best-effort lookups like companion parent-pinning.
+   * Record what a peer calls its threads, from any snapshot that reached this
+   * instance. Called from every path that fetches a peer snapshot — this
+   * cache's own fetch, and the federation-window navigation read, which does
+   * NOT go through this cache and is where a viewer sees most remote threads.
+   *
+   * Merged, never replaced: a backend- or filter-scoped snapshot carries only
+   * part of a peer's threads, and forgetting a name because the latest
+   * snapshot was narrower would send a row back to its raw thread id.
+   *
+   * Only names are kept, not summaries — this exists so a display string is
+   * always in hand, and holding whole rows for every thread ever seen on
+   * every peer would be a real memory cost for no extra answer. Rows whose
+   * title IS the thread id are skipped: recording one would overwrite a real
+   * name with nothing.
+   */
+  rememberThreadNames(
+    instanceId: string,
+    threads: readonly NavigationThreadSummary[],
+  ): void {
+    let names = this.threadNames.get(instanceId);
+    for (const thread of threads) {
+      const title = thread.title?.trim();
+      if (!title || thread.titleSource === "fallback") {
+        continue;
+      }
+      names ??= new Map();
+      names.set(buildThreadIdentityKey(thread.source, thread.id), {
+        title,
+        titleSource: thread.titleSource,
+      });
+    }
+    if (names) {
+      this.threadNames.set(instanceId, names);
+    }
+  }
+
+  /**
+   * What a peer calls one of its threads, out of names ALREADY seen. Never
+   * contacts the peer, never refetches on a lapsed TTL, never registers peer
+   * interest — it is a map read, and it is safe on any path that must not
+   * wait.
+   *
+   * This is the middle tier of thread-name resolution:
+   *
+   * 1. Local only — this instance's thread list. Correct only when the caller
+   *    knows every thread it can see is its own.
+   * 2. Local + cached remote (this method) — the right default. A remote
+   *    thread the operator can see was named by some snapshot on the way to
+   *    the screen; asking the peer again buys nothing.
+   * 3. Local + live remote (`threadFromPeer`) — for callers that genuinely
+   *    need current data and can afford to wait on a peer.
+   *
+   * Deliberately survives TTL lapse, peer disconnect, and `invalidate`: a
+   * name one navigation refresh out of date beats the raw thread id, and
+   * every alternative costs the round trip tier 2 exists to avoid.
+   */
+  cachedThreadNameFromPeer(params: {
+    target: FederationRemoteTarget;
+    backend: NavigationThreadSummary["source"];
+    threadId: string;
+  }): RemoteThreadName | undefined {
+    return this.threadNames
+      .get(params.target.instanceId)
+      ?.get(buildThreadIdentityKey(params.backend, params.threadId));
+  }
+
+  /**
+   * A single thread from a connected peer's snapshot, fetching when the cache
+   * has lapsed; undefined when the peer is unreachable or the thread is absent
+   * (e.g. archived). Tier 3 — it can wait on the peer. Callers that only need
+   * a name should use `cachedThreadFromPeer`.
    */
   async threadFromPeer(params: {
     target: FederationRemoteTarget;
@@ -590,6 +674,7 @@ export class RemoteThreadSummaryCache {
         fetchedAt: this.options.now?.() ?? Date.now(),
         threads,
       });
+      this.rememberThreadNames(target.instanceId, threads);
       this.touchPeerInterest(target.instanceId, ttlMs);
       // ANY successful fetch is proof of life, including one the jump
       // search started. Clearing the flag only in the pinned-refresh path

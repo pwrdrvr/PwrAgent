@@ -1956,6 +1956,24 @@ class DesktopAppServerService {
             },
           );
         this.remoteNavigationSnapshotCache.set(cacheKey, snapshot);
+        // A federation window reads its navigation here, not through
+        // RemoteThreadSummaryCache, so this is the only place most remote
+        // threads are ever named on this instance. Anything that later needs
+        // a display name without paying for a peer round trip — the quit
+        // dialog's blocker rows, for one — depends on this.
+        //
+        // Remembering a name is a side errand, never a reason to fail the
+        // snapshot the operator actually asked for: the worst case of losing
+        // it is a row that reads as a thread id somewhere else.
+        try {
+          getDesktopFederationRuntime()
+            .remoteThreadSummaries()
+            .rememberThreadNames(federationTarget.instanceId, snapshot.threads);
+        } catch (error) {
+          logDebug("rememberRemoteThreadNames failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return await this.applyRemoteDirectoryViewerOverlays(
           snapshot,
           federationTarget.instanceId,

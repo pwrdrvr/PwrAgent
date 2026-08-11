@@ -262,12 +262,56 @@ export class FederationTerminalBridge {
    * lives on the owner), so all of them count: quitting the viewer ends them,
    * and silently killing a shell mid-command is the failure this dialog
    * exists to prevent. A future `pty.status` round-trip could narrow it.
+   *
+   * Each row carries its owning peer: the quit dialog names a thread by
+   * looking it up, and a remote thread is not in THIS instance's thread list,
+   * so a peer-blind lookup can only fall back to the raw thread id.
    */
-  quitSnapshotSessions(): Array<{ sessionId: string; threadKey: string }> {
-    return [...this.sessionsById.values()].map((session) => ({
-      sessionId: session.sessionId,
-      threadKey: session.threadKey,
-    }));
+  quitSnapshotSessions(): Array<{
+    sessionId: string;
+    threadKey: string;
+    target: FederationRemoteTarget;
+    instanceLabel?: string;
+  }> {
+    const identities = this.remoteIdentities();
+    return [...this.sessionsById.values()].map((session) => {
+      const instanceLabel = identities.get(
+        session.target.instanceId,
+      )?.instanceLabel;
+      return {
+        sessionId: session.sessionId,
+        threadKey: session.threadKey,
+        target: session.target,
+        ...(instanceLabel ? { instanceLabel } : {}),
+      };
+    });
+  }
+
+  /**
+   * Un-hide a remote thread's terminal panel and report the windows that host
+   * it. The local PTY registry knows nothing about these sessions, so asking
+   * only it — as the quit dialog's row link once did — reports "no such
+   * session" for every shell running on a peer and reveals nothing.
+   */
+  revealSession(threadKey: string, instanceId?: string): WebContents[] {
+    const owners: WebContents[] = [];
+    for (const session of this.sessionsById.values()) {
+      if (session.threadKey !== threadKey || session.webContents.isDestroyed()) {
+        continue;
+      }
+      // Two instances can hold the same `backend:threadId`. When the caller
+      // knows which one it means, honor it rather than revealing a shell on
+      // the wrong machine.
+      if (instanceId && session.target.instanceId !== instanceId) {
+        continue;
+      }
+      if (session.panelHidden) {
+        session.panelHidden = false;
+        this.broadcastSessions(session.webContents);
+      }
+      owners.push(session.webContents);
+    }
+    return owners;
   }
 
   dispose(): void {

@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, type WebContents } from "electron";
 import {
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
@@ -19,7 +19,10 @@ import type {
   IntegratedTerminalWriteRequest,
 } from "../../shared/integrated-terminal";
 import { isRemoteFederationTarget } from "@pwragent/shared";
-import { IntegratedTerminalService } from "../terminal/integrated-terminal-service";
+import {
+  byThreadKey,
+  IntegratedTerminalService,
+} from "../terminal/integrated-terminal-service";
 import type { IntegratedTerminalQuitSnapshot } from "../terminal/integrated-terminal-service";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
@@ -177,10 +180,10 @@ export function disposeIntegratedTerminalIpcHandlers(): void {
 }
 
 export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnapshot {
-  const local = service?.getQuitSnapshot() ?? {
+  const local: IntegratedTerminalQuitSnapshot = service?.getQuitSnapshot() ?? {
     count: 0,
     sessionIds: [],
-    threadKeys: [],
+    threads: [],
   };
   // Quitting closes remote sessions too (the bridge ends them when the
   // window dies), so they belong in the blocker — otherwise a shell running
@@ -197,18 +200,35 @@ export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnaps
       ...local.sessionIds,
       ...remote.map((session) => session.sessionId),
     ].sort(),
-    threadKeys: [
-      ...local.threadKeys,
-      ...remote.map((session) => session.threadKey),
-    ].sort(),
+    threads: [
+      ...local.threads,
+      ...remote.map((session) => ({
+        threadKey: session.threadKey,
+        target: session.target,
+        ...(session.instanceLabel
+          ? { instanceLabel: session.instanceLabel }
+          : {}),
+      })),
+    ].sort(byThreadKey),
   };
 }
 
+export type IntegratedTerminalRevealResult = {
+  revealed: boolean;
+  /**
+   * A window hosting the revealed session. Callers that follow a reveal with
+   * a thread navigation use it so the request lands in a window that actually
+   * has the thread. Absent for local sessions, where the reveal is broadcast
+   * and no one window owns the thread.
+   */
+  owner?: WebContents;
+};
+
 /**
- * Ask every subscribed renderer to open a thread's terminal panel. Used by the
- * quit dialog's "running work" links: clicking a terminal row should land you
- * on the thread with the shell already on screen, whatever the panel's
- * remembered hidden state was.
+ * Ask the renderers hosting a thread's shell to open its terminal panel. Used
+ * by the quit dialog's "running work" links: clicking a terminal row should
+ * land you on the thread with the shell already on screen, whatever the
+ * panel's remembered hidden state was.
  *
  * No session, no reveal. The quit dialog renders a snapshot taken when the
  * prompt opened and can sit there indefinitely once the countdown is cancelled,
@@ -217,15 +237,37 @@ export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnaps
  * session, which spawned a brand-new login shell in the home directory — a
  * fresh quit blocker, conjured by trying to look at one.
  */
-export function revealIntegratedTerminal(threadKey: string): boolean {
-  const revealed = service?.revealSession(threadKey) ?? false;
-  if (!revealed) {
-    return false;
+export function revealIntegratedTerminal(
+  threadKey: string,
+  options: { instanceId?: string } = {},
+): IntegratedTerminalRevealResult {
+  // A caller naming an instance means a peer's shell, and the local registry
+  // can only answer for this machine — checking it first would reveal a local
+  // terminal that happens to share the thread key.
+  if (!options.instanceId && service?.revealSession(threadKey)) {
+    // A local session is hosted by whichever windows show the thread, so the
+    // broadcast is the routing.
+    for (const webContents of subscribersForChannel(
+      INTEGRATED_TERMINAL_REVEAL_CHANNEL,
+    )) {
+      webContents.send(INTEGRATED_TERMINAL_REVEAL_CHANNEL, { threadKey });
+    }
+    return { revealed: true };
   }
-  for (const webContents of subscribersForChannel(
-    INTEGRATED_TERMINAL_REVEAL_CHANNEL,
-  )) {
+  // A remote session belongs to the window that opened it — a federation
+  // window, or a main window showing a pinned remote thread. Telling every
+  // window to open a terminal panel for it would ask windows that do not have
+  // the thread to do something they cannot.
+  const owners =
+    federationBridge?.revealSession(threadKey, options.instanceId) ?? [];
+  if (owners.length === 0) {
+    return { revealed: false };
+  }
+  for (const webContents of owners) {
     webContents.send(INTEGRATED_TERMINAL_REVEAL_CHANNEL, { threadKey });
   }
-  return true;
+  // Remote mounts allocate a PTY per viewer window, so the same thread can be
+  // open in more than one. Any of them demonstrably has the thread, which is
+  // more than the focused-or-first fallback can promise.
+  return { revealed: true, owner: owners[0] };
 }

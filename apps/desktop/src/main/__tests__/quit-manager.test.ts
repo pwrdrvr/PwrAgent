@@ -19,9 +19,9 @@ vi.mock("../ipc/integrated-terminal", () => ({
   getIntegratedTerminalQuitSnapshot: vi.fn(() => ({
     count: 0,
     sessionIds: [],
-    threadKeys: [],
+    threads: [],
   })),
-  revealIntegratedTerminal: vi.fn(() => false),
+  revealIntegratedTerminal: vi.fn(() => ({ revealed: false })),
 }));
 
 vi.mock("../window-show-thread", () => ({ requestShowThread: vi.fn() }));
@@ -336,7 +336,10 @@ describe("createQuitManager", () => {
       getQuitBlockers: () =>
         buildQuitBlockerSnapshot({
           inProgressThreads: { count: 0, threadIds: [] },
-          terminalSessions: { count: 1, threadKeys: ["codex:thread-1"] },
+          terminalSessions: {
+            count: 1,
+            threads: [{ threadKey: "codex:thread-1" }],
+          },
         }),
       resolveThreadTitles: async () =>
         new Map([["codex:thread-1", "Migrate Next Chunk"]]),
@@ -359,6 +362,55 @@ describe("createQuitManager", () => {
     );
   });
 
+  it("titles a remote terminal row from its owning peer, not the local list", async () => {
+    const { buildQuitBlockerSnapshot, createQuitManager, quitBlockerTitleKey } =
+      await import("../quit-manager");
+    const confirm = vi.fn(async () => "manual-cancel" as const);
+    const target = { scope: "remote" as const, instanceId: "peer-a" };
+    const manager = createQuitManager({
+      confirm,
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () =>
+        buildQuitBlockerSnapshot({
+          inProgressThreads: { count: 0, threadIds: [] },
+          terminalSessions: {
+            count: 1,
+            threads: [
+              {
+                threadKey: "codex:0f9c2b7a-remote",
+                target,
+                instanceLabel: "Studio Mac",
+              },
+            ],
+          },
+        }),
+      resolveThreadTitles: async (items) =>
+        new Map(
+          items.map((item) => [
+            quitBlockerTitleKey(item),
+            item.target ? "Reap Windows Worktrees" : "wrong thread",
+          ]),
+        ),
+      log: {},
+      performQuit: vi.fn(),
+    });
+
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(false);
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            kind: "terminal",
+            title: "Reap Windows Worktrees",
+            threadKey: "codex:0f9c2b7a-remote",
+            target,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("still shows the dialog when thread-title resolution fails", async () => {
     const { buildQuitBlockerSnapshot, createQuitManager } = await import(
       "../quit-manager"
@@ -371,7 +423,10 @@ describe("createQuitManager", () => {
       getQuitBlockers: () =>
         buildQuitBlockerSnapshot({
           inProgressThreads: { count: 0, threadIds: [] },
-          terminalSessions: { count: 1, threadKeys: ["codex:thread-1"] },
+          terminalSessions: {
+            count: 1,
+            threads: [{ threadKey: "codex:thread-1" }],
+          },
         }),
       resolveThreadTitles: async () => {
         throw new Error("app-server unavailable");
@@ -408,7 +463,10 @@ describe("buildQuitBlockerSnapshot", () => {
 
     const snapshot = buildQuitBlockerSnapshot({
       inProgressThreads: { count: 1, threadIds: ["codex:thread-turn"] },
-      terminalSessions: { count: 1, threadKeys: ["acp:grok:thread-term"] },
+      terminalSessions: {
+        count: 1,
+        threads: [{ threadKey: "acp:grok:thread-term" }],
+      },
       actionRuns: [
         {
           runId: "run-1",
@@ -450,6 +508,230 @@ describe("buildQuitBlockerSnapshot", () => {
         detail: "pnpm dev · pid 4242",
       },
     ]);
+  });
+
+  it("carries a remote terminal's owning peer onto its row", async () => {
+    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+
+    const snapshot = buildQuitBlockerSnapshot({
+      inProgressThreads: { count: 0, threadIds: [] },
+      terminalSessions: {
+        count: 2,
+        threads: [
+          { threadKey: "codex:local-thread" },
+          {
+            threadKey: "codex:remote-thread",
+            target: { scope: "remote", instanceId: "peer-a" },
+            instanceLabel: "Studio Mac",
+          },
+        ],
+      },
+    });
+
+    // Without the target the title resolver has no way to know the thread
+    // lives on another machine, and the row reads as a raw uuid.
+    expect(snapshot.items).toEqual([
+      {
+        kind: "terminal",
+        backend: "codex",
+        threadId: "local-thread",
+        threadKey: "codex:local-thread",
+      },
+      {
+        kind: "terminal",
+        backend: "codex",
+        threadId: "remote-thread",
+        threadKey: "codex:remote-thread",
+        target: { scope: "remote", instanceId: "peer-a" },
+        // The peer's name is the only thing distinguishing this row from a
+        // local shell on a thread with the same key.
+        detail: "Studio Mac",
+      },
+    ]);
+    expect(snapshot.terminalThreadKeys).toEqual([
+      "codex:local-thread",
+      "codex:remote-thread",
+    ]);
+  });
+});
+
+describe("resolveQuitBlockerThreadTitles", () => {
+  const localItem = {
+    kind: "terminal" as const,
+    backend: "codex" as const,
+    threadId: "local-thread",
+    threadKey: "codex:local-thread",
+  };
+  const remoteItem = {
+    kind: "terminal" as const,
+    backend: "codex" as const,
+    threadId: "0f9c2b7a-remote",
+    threadKey: "codex:0f9c2b7a-remote",
+    target: { scope: "remote" as const, instanceId: "peer-a" },
+  };
+
+  it("names a remote thread from the peer's cached navigation summary", async () => {
+    const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
+      "../quit-manager"
+    );
+    const listLocalThreads = vi.fn(async () => [
+      { source: "codex" as const, id: "local-thread", title: "Local Work" },
+    ]);
+    const cachedRemoteThreadName = vi.fn(() => ({
+      title: "Reap Windows Worktrees",
+      titleSource: "derived" as const,
+    }));
+    const listRemoteThreadPins = vi.fn(async () => []);
+
+    const titles = await resolveQuitBlockerThreadTitles([localItem, remoteItem], {
+      listLocalThreads,
+      cachedRemoteThreadName,
+      listRemoteThreadPins,
+    });
+
+    expect(titles.get(quitBlockerTitleKey(remoteItem))).toBe(
+      "Reap Windows Worktrees",
+    );
+    expect(titles.get(quitBlockerTitleKey(localItem))).toBe("Local Work");
+    expect(cachedRemoteThreadName).toHaveBeenCalledWith({
+      target: { scope: "remote", instanceId: "peer-a" },
+      backend: "codex",
+      threadId: "0f9c2b7a-remote",
+    });
+    // The local list is a peer-blind lookup; asking it about a remote thread
+    // is what produced the uuid in the first place.
+    expect(listLocalThreads).toHaveBeenCalledTimes(1);
+    // The memory cache answered, so the store is never read.
+    expect(listRemoteThreadPins).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the pinned row's cached title when nothing is cached in memory", async () => {
+    const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
+      "../quit-manager"
+    );
+
+    const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
+      listLocalThreads: async () => [],
+      cachedRemoteThreadName: () => undefined,
+      listRemoteThreadPins: async () => [
+        {
+          ref: {
+            backend: "codex" as const,
+            threadId: "0f9c2b7a-remote",
+            target: { scope: "remote" as const, instanceId: "peer-a" },
+          },
+          addedAt: 1,
+          instanceLabel: "Studio Mac",
+          summary: {
+            source: "codex" as const,
+            id: "0f9c2b7a-remote",
+            title: "Reap Windows Worktrees",
+            titleSource: "derived" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          },
+        },
+      ],
+    });
+
+    expect(titles.get(quitBlockerTitleKey(remoteItem))).toBe(
+      "Reap Windows Worktrees",
+    );
+  });
+
+  // A thread can only be a quit blocker because it is mounted in a window on
+  // this machine, so its name is already cached. Reaching for the peer here
+  // could only re-answer a question we can answer, while making shutdown wait
+  // on a machine that may be asleep.
+  it("never waits on a peer", async () => {
+    const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
+      "../quit-manager"
+    );
+    let settled = false;
+
+    const pending = resolveQuitBlockerThreadTitles([remoteItem], {
+      listLocalThreads: async () => [],
+      cachedRemoteThreadName: () => ({
+        title: "Reap Windows Worktrees",
+        titleSource: "derived" as const,
+      }),
+      // A peer round trip would park here forever. Nothing may await it.
+      listRemoteThreadPins: () => new Promise(() => undefined),
+    }).then((titles) => {
+      settled = true;
+      return titles;
+    });
+
+    const titles = await pending;
+    expect(settled).toBe(true);
+    expect(titles.get(quitBlockerTitleKey(remoteItem))).toBe(
+      "Reap Windows Worktrees",
+    );
+  });
+
+  it("ignores a fallback title, which is just the thread id again", async () => {
+    const { resolveQuitBlockerThreadTitles } = await import("../quit-manager");
+
+    const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
+      listLocalThreads: async () => [],
+      cachedRemoteThreadName: () => ({
+        title: "0f9c2b7a-remote",
+        titleSource: "fallback" as const,
+      }),
+      listRemoteThreadPins: async () => [],
+    });
+
+    expect(titles.size).toBe(0);
+  });
+
+  it("keeps a remote thread's title off a local thread that shares its key", async () => {
+    const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
+      "../quit-manager"
+    );
+    const collidingLocal = {
+      kind: "turn" as const,
+      backend: "codex" as const,
+      threadId: "0f9c2b7a-remote",
+      threadKey: "codex:0f9c2b7a-remote",
+    };
+
+    const titles = await resolveQuitBlockerThreadTitles(
+      [collidingLocal, remoteItem],
+      {
+        listLocalThreads: async () => [],
+        cachedRemoteThreadName: () => ({
+          title: "Reap Windows Worktrees",
+          titleSource: "derived" as const,
+        }),
+        listRemoteThreadPins: async () => [],
+      },
+    );
+
+    expect(titles.get(quitBlockerTitleKey(remoteItem))).toBe(
+      "Reap Windows Worktrees",
+    );
+    expect(titles.get(quitBlockerTitleKey(collidingLocal))).toBeUndefined();
+  });
+
+  it("still names local rows when the remote lookups throw", async () => {
+    const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
+      "../quit-manager"
+    );
+
+    const titles = await resolveQuitBlockerThreadTitles([localItem, remoteItem], {
+      listLocalThreads: async () => [
+        { source: "codex" as const, id: "local-thread", title: "Local Work" },
+      ],
+      cachedRemoteThreadName: () => {
+        throw new Error("federation runtime unavailable");
+      },
+      listRemoteThreadPins: async () => {
+        throw new Error("overlay store unavailable");
+      },
+    });
+
+    expect(titles.get(quitBlockerTitleKey(localItem))).toBe("Local Work");
+    expect(titles.get(quitBlockerTitleKey(remoteItem))).toBeUndefined();
   });
 });
 
