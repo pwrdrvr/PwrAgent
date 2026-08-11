@@ -238,6 +238,235 @@ describe("ComposerDraftRecoveryStore", () => {
   });
 });
 
+describe("journal prefix collapse", () => {
+  const type = (text: string, index: number): void => {
+    store.save({
+      draft: buildDraft({
+        scopeKey: "thread:codex:typing",
+        threadId: "typing",
+        text,
+        updatedAt: 1000 + index,
+        // Hash the content, not its length. `composer_draft_journal` has a
+        // unique index on (scope_key, content_hash, status), so a
+        // length-derived hash makes two same-length drafts collide and the
+        // second silently replaces the first — which would quietly hide the
+        // very row this suite is counting.
+        contentHash: `hash-${text}`,
+        charCount: text.length,
+      }),
+      recordHistory: true,
+    });
+  };
+  const journalTexts = (): string[] =>
+    (
+      stateDb.raw
+        .prepare(
+          "SELECT payload FROM composer_draft_journal WHERE scope_key = ? ORDER BY id",
+        )
+        .all("thread:codex:typing") as { payload: string }[]
+    ).map((row) => (JSON.parse(row.payload) as { text: string }).text);
+
+  it("keeps one row while a message is extended", () => {
+    ["I like dogs", "I like dogs and cats", "I like dogs and cats and bears"]
+      .forEach(type);
+
+    expect(journalTexts()).toEqual(["I like dogs and cats and bears"]);
+  });
+
+  it("keeps one row across a space, which used to start a new one", () => {
+    // The regression this exists for. Both sides of the comparison are
+    // `trimEnd`ed, so the moment a space is typed the trimmed texts are equal
+    // — a strict "next must be longer" check then failed and inserted a fresh
+    // row. The journal grew by one row per WORD, so a sentence with fourteen
+    // spaces left fifteen near-identical rows.
+    ["I like", "I like ", "I like dogs"].forEach(type);
+
+    expect(journalTexts()).toEqual(["I like dogs"]);
+  });
+
+  it("keeps one row for a whole sentence typed character by character", () => {
+    const sentence = "I like dogs and cats and bears, and I have opinions.";
+    for (let index = 1; index <= sentence.length; index += 1) {
+      type(sentence.slice(0, index), index);
+    }
+
+    expect(journalTexts()).toEqual([sentence]);
+  });
+
+  it("starts a new row when the text stops being an extension", () => {
+    // Backspacing past what was already journalled is a real branch, not a
+    // continuation, and keeping it is the point of a recovery journal.
+    ["I like dogs", "I like cats"].forEach(type);
+
+    expect(journalTexts()).toEqual(["I like dogs", "I like cats"]);
+  });
+});
+
+// Fixed and recent, so the 30-day retention sweep running in the same
+// `cleanupExpired` pass never removes these fixtures out from under the
+// assertions.
+const NOW_FOR_COLLAPSE = 1_786_500_000_000;
+
+describe("journal prefix-chain collapse on the GC pass", () => {
+  /**
+   * Seeds rows in the shape the buggy runtime left behind — one per word —
+   * directly, since the point is what an EXISTING profile already carries.
+   */
+  const seedLegacyJournal = (
+    rows: Array<{
+      payload?: string;
+      scopeKey?: string;
+      status?: string;
+      text: string;
+    }>,
+  ): void => {
+    const insert = stateDb.raw.prepare(
+      `INSERT INTO composer_draft_journal(
+         scope_key, scope_kind, status, content_hash, char_count,
+         created_at, updated_at, payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    rows.forEach((row, index) => {
+      const scopeKey = row.scopeKey ?? "thread:codex:t1";
+      const status = row.status ?? "unsent";
+      insert.run(
+        scopeKey,
+        "thread",
+        status,
+        `hash-${scopeKey}-${status}-${row.text}`,
+        row.text.length,
+        1,
+        NOW_FOR_COLLAPSE + index,
+        row.payload ?? JSON.stringify({ scopeKey, status, text: row.text }),
+      );
+    });
+  };
+
+  const readJournal = (): Array<{ status: string; text: string }> =>
+    (
+      stateDb.raw
+        .prepare(
+          "SELECT status, payload FROM composer_draft_journal ORDER BY scope_key, updated_at, id",
+        )
+        .all() as { payload: string; status: string }[]
+    ).map((row) => ({
+      status: row.status,
+      text: (JSON.parse(row.payload) as { text: string }).text,
+    }));
+
+  it("collapses a chain left by the old per-word behaviour", () => {
+    seedLegacyJournal([
+      { text: "I" },
+      { text: "I like" },
+      { text: "I like dogs" },
+      { text: "I like dogs and" },
+      { text: "I like dogs and cats" },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    // The longest text survives — nothing an operator wrote is lost, only the
+    // redundant snapshots of the way there.
+    expect(readJournal()).toEqual([
+      { status: "unsent", text: "I like dogs and cats" },
+    ]);
+  });
+
+  it("collapses abandoned prefix chains too", () => {
+    seedLegacyJournal([
+      { status: "abandoned", text: "A recoverable" },
+      { status: "abandoned", text: "A recoverable abandoned draft" },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    expect(readJournal()).toEqual([
+      { status: "abandoned", text: "A recoverable abandoned draft" },
+    ]);
+  });
+
+  it("keeps a genuine branch rather than collapsing everything", () => {
+    seedLegacyJournal([
+      { text: "I like dogs" },
+      { text: "I like cats" },
+      { text: "I like cats a lot" },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    expect(readJournal()).toEqual([
+      { status: "unsent", text: "I like dogs" },
+      { status: "unsent", text: "I like cats a lot" },
+    ]);
+  });
+
+  it("never reads or deletes sent rows", () => {
+    // `sent` entries record what was actually submitted. The runtime's
+    // previous-row query excludes them, so this must too.
+    seedLegacyJournal([
+      { status: "sent", text: "I like dogs" },
+      { text: "I like dogs" },
+      { text: "I like dogs and cats" },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    expect(readJournal()).toEqual([
+      { status: "sent", text: "I like dogs" },
+      { status: "unsent", text: "I like dogs and cats" },
+    ]);
+  });
+
+  it("does not let one scope absorb another", () => {
+    seedLegacyJournal([
+      { scopeKey: "thread:codex:a", text: "Shared" },
+      { scopeKey: "thread:codex:b", text: "Shared prefix continues" },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    expect(readJournal()).toEqual([
+      { status: "unsent", text: "Shared" },
+      { status: "unsent", text: "Shared prefix continues" },
+    ]);
+  });
+
+  it("leaves malformed payloads alone and does not collapse across them", () => {
+    seedLegacyJournal([
+      { text: "I like" },
+      { payload: "{not-json", text: "malformed" },
+      { text: "I like dogs" },
+    ]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    const payloads = (
+      stateDb.raw
+        .prepare(
+          "SELECT payload FROM composer_draft_journal ORDER BY updated_at, id",
+        )
+        .all() as Array<{ payload: string }>
+    ).map((row) => row.payload);
+    expect(payloads).toHaveLength(3);
+    expect(payloads[0]).toContain('"text":"I like"');
+    expect(payloads[1]).toBe("{not-json");
+    expect(payloads[2]).toContain('"text":"I like dogs"');
+  });
+
+  it("deletes nothing on a second pass", () => {
+    // Idempotency is what makes running this every GC pass safe rather than
+    // needing a one-shot schema migration to gate it.
+    seedLegacyJournal([{ text: "I like" }, { text: "I like dogs" }]);
+
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+    const afterFirst = readJournal();
+    stateDb.cleanupExpired(NOW_FOR_COLLAPSE);
+
+    expect(readJournal()).toEqual(afterFirst);
+    expect(afterFirst).toEqual([{ status: "unsent", text: "I like dogs" }]);
+  });
+});
+
 function buildDraft(
   patch: Partial<ComposerDraftSnapshotRecord>,
 ): ComposerDraftSnapshotRecord {

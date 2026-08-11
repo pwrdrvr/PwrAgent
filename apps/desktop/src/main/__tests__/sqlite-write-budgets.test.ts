@@ -8,6 +8,7 @@ import type {
 } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -53,6 +54,69 @@ describe("sqlite write budgets", () => {
       transaction.immediate("immediate");
     });
     expect(writes).toMatchObject({ commits: 2, rowsChanged: 2, statements: 2 });
+  });
+
+  it("keeps a typed message to one journal row, at one commit per direct store save", async () => {
+    // ROWS is what this pins, and it is deliberately measured under a save
+    // per keystroke — a stress case for the collapse rule, not a claim about
+    // how often the app saves. `shouldReplacePreviousUnsentDraft` compares
+    // `trimEnd`ed texts, so a strict "next must be longer" check failed on
+    // every typed space and inserted a fresh row: one journal row per WORD,
+    // fifteen near-identical rows for one sentence. It must stay at one
+    // however many saves arrive.
+    //
+    // COMMITS here is the per-save cost at the STORE — one save call, one
+    // transaction — and 70 of them because this test makes 70 calls. Do not
+    // read it as the cost of typing a sentence: the renderer coalesces edits
+    // into at most one save per `DURABLE_SAVE_INTERVAL_MS` (5s) and skips
+    // unchanged content entirely, so real typing reaches this store roughly
+    // once every five seconds, not once per character.
+    const drafts = new ComposerDraftRecoveryStore(stateDb);
+    const sentence =
+      "I like dogs and cats and bears, and I have opinions about all of them.";
+
+    // Seeding is nothing here — the typing IS the measured work.
+    const { writes } = await meter.measure(() => {
+      for (let index = 1; index <= sentence.length; index += 1) {
+        const text = sentence.slice(0, index);
+        drafts.save({
+          draft: {
+            scopeKey: "thread:codex:typing",
+            scopeKind: "thread",
+            backend: "codex",
+            threadId: "typing",
+            text,
+            skillTokens: [],
+            imageAttachments: [],
+            status: "unsent",
+            createdAt: 1,
+            updatedAt: 1_786_500_000_000 + index,
+            contentHash: `hash-${text}`,
+            charCount: text.length,
+          },
+          recordHistory: true,
+        });
+      }
+    });
+
+    const journalRows = (
+      stateDb.raw
+        .prepare(
+          "SELECT COUNT(*) AS n FROM composer_draft_journal WHERE scope_key = ?",
+        )
+        .get("thread:codex:typing") as { n: number }
+    ).n;
+    expect(journalRows).toBe(1);
+
+    expectSqliteWriteBudget({
+      note:
+        "70 direct store saves (a stress case for prefix collapse, NOT the "
+        + "app's typing cadence — the renderer coalesces to one save per 5s): "
+        + "exactly one journal row survives, and commits track save calls "
+        + "because each save is its own transaction",
+      scenario: "composer-draft-typing",
+      writes,
+    });
   });
 
   it("pins streamed command output to one delta batch plus completion", async () => {
