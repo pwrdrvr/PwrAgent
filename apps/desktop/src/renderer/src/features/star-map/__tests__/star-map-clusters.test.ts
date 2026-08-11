@@ -3,6 +3,7 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import {
   buildInstanceClusters,
   computeClusterCloud,
+  forgetCluster,
   orderParentAdjacent,
   ORBIT_MAX_CARDS_PER_GROUP,
 } from "../star-map-clusters";
@@ -439,5 +440,204 @@ describe("computeClusterCloud", () => {
 
   it("is deterministic", () => {
     expect(cloudFor([8, 5, 2])).toEqual(cloudFor([8, 5, 2]));
+  });
+});
+
+/**
+ * The layout is incremental on purpose: archiving one thread must take
+ * one card off the map and disturb nothing else. Every assertion here is
+ * a thing that used to move on its own.
+ */
+describe("layout stability", () => {
+  const cardWidth = 200;
+
+  function layout(
+    threads: NavigationThreadSummary[],
+    memory?: ReturnType<typeof computeClusterCloud>["memory"],
+    expanded?: string[],
+  ) {
+    return computeClusterCloud({
+      clusters: buildInstanceClusters({
+        threads,
+        expandedKeys: new Set(expanded ?? []),
+      }),
+      cardWidth,
+      heightForThread: height,
+      memory,
+    });
+  }
+
+  function slotByThread(cloud: ReturnType<typeof computeClusterCloud>) {
+    return new Map(
+      cloud.threads.map((thread, index) => [thread.id, cloud.slots[index]]),
+    );
+  }
+
+  const project = (name: string, count: number, from = 0) =>
+    Array.from({ length: count }, (unused, index) =>
+      thread(`${name}-${index + from}`, { path: `/repo/${name}` }),
+    );
+
+  it("moves nothing but the archived card", () => {
+    const threads = [...project("alpha", 6), ...project("beta", 5)];
+    const before = layout(threads);
+    const after = layout(
+      threads.filter((entry) => entry.id !== "alpha-2"),
+      before.memory,
+    );
+
+    const was = slotByThread(before);
+    const now = slotByThread(after);
+    expect(now.has("alpha-2")).toBe(false);
+    expect(now.size).toBe(was.size - 1);
+    for (const [id, slot] of now) {
+      expect(slot).toEqual(was.get(id));
+    }
+  });
+
+  it("leaves every cloud centre where it was", () => {
+    const threads = [
+      ...project("alpha", 6),
+      ...project("beta", 5),
+      ...project("gamma", 3),
+    ];
+    const before = layout(threads);
+    const after = layout(
+      threads.filter((entry) => entry.id !== "beta-0"),
+      before.memory,
+    );
+    for (const cluster of after.clusters) {
+      const previous = before.clusters.find(
+        (entry) => entry.key === cluster.key,
+      )!;
+      expect(cluster.center).toEqual(previous.center);
+      expect(cluster.extent).toEqual(previous.extent);
+    }
+  });
+
+  it("does not pull a cloud inward when its outermost card leaves", () => {
+    // Extent drives cloud seating AND instance spacing, so a shrinking
+    // cloud used to shove its neighbours (and its own body) around.
+    const threads = project("alpha", 9);
+    const before = layout(threads);
+    const outermost = before.threads[before.threads.length - 1];
+    const after = layout(
+      threads.filter((entry) => entry.id !== outermost.id),
+      before.memory,
+    );
+    expect(after.clusters[0].extent).toEqual(before.clusters[0].extent);
+    expect(after.extent).toEqual(before.extent);
+  });
+
+  it("keeps the surviving clouds put when a whole cloud empties", () => {
+    const threads = [...project("alpha", 4), ...project("beta", 1)];
+    const before = layout(threads);
+    const after = layout(
+      threads.filter((entry) => !entry.id.startsWith("beta")),
+      before.memory,
+    );
+    expect(after.clusters).toHaveLength(1);
+    const alpha = after.clusters[0];
+    const previousAlpha = before.clusters.find(
+      (cluster) => cluster.key === alpha.key,
+    )!;
+    expect(alpha.center).toEqual(previousAlpha.center);
+  });
+
+  it("seats an arriving thread without moving the cards already there", () => {
+    const threads = project("alpha", 5);
+    const before = layout(threads);
+    const after = layout([...threads, thread("newcomer", { path: "/repo/alpha" })], before.memory);
+
+    const was = slotByThread(before);
+    const now = slotByThread(after);
+    for (const [id, slot] of was) {
+      expect(now.get(id)).toEqual(slot);
+    }
+    expect(now.get("newcomer")).toBeDefined();
+  });
+
+  it("gives an arrival the seat an archived card freed", () => {
+    const threads = project("alpha", 5);
+    const before = layout(threads);
+    const freed = slotByThread(before).get("alpha-2")!;
+    const without = layout(
+      threads.filter((entry) => entry.id !== "alpha-2"),
+      before.memory,
+    );
+    const after = layout(
+      [
+        ...threads.filter((entry) => entry.id !== "alpha-2"),
+        thread("newcomer", { path: "/repo/alpha" }),
+      ],
+      without.memory,
+    );
+    // Same seat, so the cloud does not sprout an outer ring for a card it
+    // has room for. The jitter is per-thread, so the position is close
+    // rather than identical.
+    const taken = slotByThread(after).get("newcomer")!;
+    expect(Math.hypot(taken.dx - freed.dx, taken.dy - freed.dy)).toBeLessThan(
+      cardWidth,
+    );
+  });
+
+  it("re-fits a cloud the operator expands, and only that cloud", () => {
+    const threads = [...project("alpha", 14), ...project("beta", 4)];
+    const before = layout(threads);
+    const alphaKey = "directory:/repo/alpha";
+    const after = layout(
+      threads,
+      forgetCluster(before.memory, alphaKey),
+      [alphaKey],
+    );
+    const beta = after.clusters.find((cluster) => cluster.key !== alphaKey)!;
+    const previousBeta = before.clusters.find(
+      (cluster) => cluster.key === beta.key,
+    )!;
+    expect(beta.center).toEqual(previousBeta.center);
+    const alpha = after.clusters.find((cluster) => cluster.key === alphaKey)!;
+    expect(alpha.slots).toHaveLength(14);
+  });
+
+  it("lays out the same way twice from a cold start", () => {
+    const threads = [...project("alpha", 6), ...project("beta", 5)];
+    expect(layout(threads)).toEqual(layout(threads));
+  });
+
+  it("is idempotent when the same input is laid out over its own memory", () => {
+    // The screen recomputes on every snapshot; feeding a layout its own
+    // memory must be a no-op or the map would drift while idle.
+    const threads = [...project("alpha", 6), ...project("beta", 5)];
+    const first = layout(threads);
+    const second = layout(threads, first.memory);
+    expect(second.slots).toEqual(first.slots);
+    expect(second.clusters.map((cluster) => cluster.center)).toEqual(
+      first.clusters.map((cluster) => cluster.center),
+    );
+  });
+
+  it("keeps a card's seat when a taller card joins its cloud", () => {
+    // Ring radii come from a nominal height, so one tall card cannot
+    // inflate the rings under everybody else.
+    const threads = project("alpha", 5);
+    const before = computeClusterCloud({
+      clusters: buildInstanceClusters({ threads }),
+      cardWidth,
+      heightForThread: () => 112,
+      memory: undefined,
+    });
+    const after = computeClusterCloud({
+      clusters: buildInstanceClusters({
+        threads: [...threads, thread("tall", { path: "/repo/alpha" })],
+      }),
+      cardWidth,
+      heightForThread: (key) => (key === "codex:tall" ? 260 : 112),
+      memory: before.memory,
+    });
+    const was = slotByThread(before);
+    const now = slotByThread(after);
+    for (const [id, slot] of was) {
+      expect(now.get(id)).toEqual(slot);
+    }
   });
 });

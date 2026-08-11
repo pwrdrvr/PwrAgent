@@ -9920,12 +9920,13 @@ textarea,
 }
 
 /* Label and chip paint above the thread cards (z 0..n by stack position)
-   and below the load card (STAR_MAP_LOAD_CARD_Z = 50). The label floats
-   over the sky the way the instance name does — no box around it. */
+   and below the load card. The label floats over the sky the way the
+   instance name does — no box around it. See the layer scale in
+   StarMapScreen, pinned by star-map-z-layers.test.ts. */
 .star-map__cluster-label {
   display: inline-flex;
   position: absolute;
-  z-index: 48;
+  z-index: 5000;
   transform: translate(-50%, -50%);
   align-items: baseline;
   gap: 6px;
@@ -9967,7 +9968,7 @@ textarea,
    like the lanes overflow text, but clickable. */
 .star-map__cluster-overflow {
   position: absolute;
-  z-index: 48;
+  z-index: 5000;
   transform: translate(-50%, -50%);
   padding: 3px 10px;
   border: none;
@@ -10027,11 +10028,12 @@ textarea,
    must not move under the pointer. */
 .star-map-card-shell:hover {
   /* !important because each shell carries an inline z-index (its stack
-     position), which otherwise beats any hover rule — cards deeper than
-     the old value of 5 never actually raised. Cloud rings shingle cards
-     on purpose, so the raise has to clear every stacked card (0..n) and
-     the cloud label/chip at 48, while staying under the load card at 50. */
-  z-index: 49 !important;
+     position), which otherwise beats any hover rule. The value has to
+     clear EVERY stacked card: cloud membership is unbounded, so a raise
+     pinned just above a card cap silently became a demotion for cards
+     past it. See the layer scale in StarMapScreen (pinned by
+     star-map-z-layers.test.ts). */
+  z-index: 6000 !important;
 }
 
 .star-map-card-shell:hover .star-map-card {

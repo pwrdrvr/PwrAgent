@@ -46,7 +46,10 @@ import {
 import {
   buildInstanceClusters,
   computeClusterCloud,
+  emptyCloudMemory,
+  forgetCluster,
   type StarMapClusterPlacement,
+  type StarMapCloudMemory,
 } from "./star-map-clusters";
 import {
   addFilterMatchCounts,
@@ -127,12 +130,26 @@ const LANE_CANVAS_PADDING = 120;
  */
 const ORBIT_LOAD_CARD_DY = -150;
 /**
- * The load card paints above every thread card in its cloud. Thread cards
- * take z 0..n by stack position, so a load card left at 0 ends up UNDER the
- * cards it sits among — and an operator-summoned readout hiding behind a
- * thread card reads as a broken button.
+ * Paint layers inside one cloud. `.star-map__cloud` is positioned with a
+ * z-index, so it opens a stacking context and these values are local to
+ * one instance's cards.
+ *
+ * Thread cards take 0..n by stack position, and n is NO LONGER BOUNDED —
+ * a cloud expands as far as the operator asks — so everything that must
+ * paint above the stack is pinned well clear of it rather than derived
+ * from a card cap. Deriving the load card's layer from the lane cap is
+ * exactly how it ended up underneath the 50th card, and the CSS hover
+ * raise (which must also clear the stack) had the same bug: a hovered
+ * card was pushed BELOW its neighbours instead of above them.
+ *
+ * `.star-map__cluster-label` / `-overflow` (chrome) and
+ * `.star-map-card-shell:hover` live in app.css and are pinned to these
+ * numbers by star-map-z-layers.test.ts.
  */
-const STAR_MAP_LOAD_CARD_Z = LANE_MAX_CARDS_PER_INSTANCE + 10;
+const STAR_MAP_CARD_MAX_Z = 4000;
+export const STAR_MAP_CLOUD_CHROME_Z = 5000;
+export const STAR_MAP_CARD_HOVER_Z = 6000;
+const STAR_MAP_LOAD_CARD_Z = 7000;
 /**
  * Chat cards float above the map chrome (close button, filters, view
  * options) so a card being read is never underneath a control strip.
@@ -260,6 +277,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const [expandedClusters, setExpandedClusters] = useState<Set<string>>(
     new Set(),
   );
+  /**
+   * Last cloud layout per instance. Held in a ref rather than state: it is
+   * an output of the layout that the next layout reads back, so writing it
+   * must not itself schedule a render. See `StarMapCloudMemory`.
+   */
+  const cloudMemory = useRef(new Map<string, StarMapCloudMemory>());
   // Orbit places bodies on a canvas larger than the window, so the surface
   // pans and zooms rather than compressing the map to fit.
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
@@ -689,15 +712,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
           expandedKeys.add(entry.slice(prefix.length));
         }
       }
-      clouds.set(
-        instanceId,
-        computeClusterCloud({
-          clusters: buildInstanceClusters({ threads, expandedKeys }),
-          cardWidth: ORBIT_CARD_WIDTH,
-          heightForThread: (threadKey) =>
-            cardHeights.get(threadKey) ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
-        }),
-      );
+      const cloud = computeClusterCloud({
+        clusters: buildInstanceClusters({ threads, expandedKeys }),
+        cardWidth: ORBIT_CARD_WIDTH,
+        heightForThread: (threadKey) =>
+          cardHeights.get(threadKey) ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+        memory: cloudMemory.current.get(instanceId),
+      });
+      // Carrying the layout forward is what keeps an archived thread from
+      // moving everything else: seats, ring allocation and cloud centres
+      // all persist across the snapshot that removed it. Re-running this
+      // memo with the same input is idempotent — every thread and cloud
+      // simply keeps what it was just given.
+      cloudMemory.current.set(instanceId, cloud.memory);
+      clouds.set(instanceId, cloud);
     }
     return clouds;
   }, [attentionByInstance, cardHeights, expandedClusters, orbitMode]);
@@ -727,6 +755,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const toggleClusterExpanded = useCallback(
     (instanceId: string, clusterKey: string) => {
+      // Unfolding or folding a cloud is a request to re-fit THAT cloud, so
+      // it forgets its seats and centre. Everything else keeps its layout.
+      cloudMemory.current.set(
+        instanceId,
+        forgetCluster(
+          cloudMemory.current.get(instanceId) ?? emptyCloudMemory(),
+          clusterKey,
+        ),
+      );
       setExpandedClusters((current) => {
         const next = new Set(current);
         const key = `${instanceId}::${clusterKey}`;
@@ -1872,7 +1909,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
               // Cloud slots hang cards from the top like lanes; only the
               // ring fallback (which renders no cards) centred on its slot.
               centered={orbitMode && !position.clusters}
-              stackIndex={index}
+              // Clamped so a deep cloud can never reach the layers above
+              // the stack (chrome, hover raise, load card).
+              stackIndex={Math.min(index, STAR_MAP_CARD_MAX_Z)}
               cardKey={`${position.instanceId}::${threadKey}`}
               selected={selection.has(`${position.instanceId}::${threadKey}`)}
               onToggleSelect={() =>
