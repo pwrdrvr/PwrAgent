@@ -49,6 +49,7 @@ import {
   computeClusterCloud,
   emptyCloudMemory,
   forgetCluster,
+  resolveCloudDrop,
   type StarMapClusterPlacement,
   type StarMapCloudMemory,
 } from "./star-map-clusters";
@@ -2216,6 +2217,70 @@ export function StarMapScreen(props: StarMapScreenProps) {
       </svg>
     ) : null;
 
+  /**
+   * A card dropped inside another cloud joins it, where "joining" is a
+   * thing the data can actually express — see `resolveCloudDrop`. Only
+   * parent/child membership moves: a project cloud groups on the thread's
+   * workspace, and a drag does not get to relink that.
+   *
+   * The hand-placed offset is cleared on the way, because it was measured
+   * from the OLD cloud's centre; keeping it would fling the card back out
+   * of the cloud it was just dropped into.
+   */
+  const applyCloudDrop = useCallback(
+    (params: {
+      instanceId: string;
+      thread: NavigationThreadSummary;
+      point: { x: number; y: number };
+    }): boolean => {
+      const cloud = clusterClouds?.get(params.instanceId);
+      if (!cloud || !desktopApi?.setThreadParent) return false;
+      const drop = resolveCloudDrop({
+        clusters: cloud.clusters,
+        point: params.point,
+        thread: params.thread,
+      });
+      if (drop.kind === "none") return false;
+
+      const threadKey = buildThreadIdentityKey(
+        params.thread.source,
+        params.thread.id,
+      );
+      arrangement.setCardPosition(params.instanceId, threadKey, null);
+      // The target cloud is about to gain or lose a card, so it re-fits
+      // rather than trying to seat the newcomer in a shape built without
+      // it. Every other cloud keeps its layout.
+      cloudMemory.current.set(
+        params.instanceId,
+        forgetCluster(
+          cloudMemory.current.get(params.instanceId) ?? emptyCloudMemory(),
+          drop.clusterKey,
+        ),
+      );
+      void desktopApi
+        .setThreadParent({
+          backend: params.thread.source,
+          threadId: params.thread.id,
+          ...(drop.kind === "adopt"
+            ? {
+                parentThreadId: drop.parent.id,
+                parentThreadBackend: drop.parent.source,
+              }
+            : { parentThreadId: null, parentThreadBackend: null }),
+        })
+        .then(() => refreshOwner(params.instanceId))
+        .catch((error: unknown) => {
+          setCardError(
+            error instanceof Error
+              ? error.message
+              : "Could not regroup that thread.",
+          );
+        });
+      return true;
+    },
+    [arrangement, clusterClouds, desktopApi, refreshOwner],
+  );
+
   const renderCloud = (position: {
     instanceId: string;
     x: number;
@@ -2424,7 +2489,30 @@ export function StarMapScreen(props: StarMapScreenProps) {
                           `${position.instanceId}::${threadKey}`,
                           delta,
                         ),
-                      onCommitOffset: (offset) =>
+                      onCommitOffset: (offset) => {
+                        // Where the card actually landed, body-relative
+                        // and by its centre — a drop is about the middle
+                        // of the card, not its top-left corner.
+                        if (
+                          cardCluster
+                          && applyCloudDrop({
+                            instanceId: position.instanceId,
+                            point: {
+                              x: anchorSlot.dx + offset.dx,
+                              y:
+                                anchorSlot.dy
+                                + offset.dy
+                                + (heights[index]
+                                  ?? STAR_MAP_ESTIMATED_CARD_HEIGHT) / 2,
+                            },
+                            thread,
+                          })
+                        ) {
+                          // Regrouped: the card belongs to another cloud
+                          // now and `applyCloudDrop` already cleared the
+                          // offset this would otherwise write back.
+                          return;
+                        }
                         arrangement.setCardPosition(
                           position.instanceId,
                           threadKey,
@@ -2439,7 +2527,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
                                   slot.dy + offset.dy - cardCluster.center.y,
                               }
                             : offset,
-                        ),
+                        );
+                      },
                     }
                   : undefined
               }

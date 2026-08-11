@@ -5,6 +5,7 @@ import {
   computeClusterCloud,
   forgetCluster,
   orderParentAdjacent,
+  resolveCloudDrop,
   ORBIT_MAX_CARDS_PER_GROUP,
 } from "../star-map-clusters";
 
@@ -639,5 +640,114 @@ describe("layout stability", () => {
     for (const [id, slot] of was) {
       expect(now.get(id)).toEqual(slot);
     }
+  });
+});
+
+
+/**
+ * Cloud membership is derived, so a drop can only change it by changing
+ * the data the grouping reads — and only one of the two kinds of cloud
+ * reads data a drag is allowed to touch.
+ */
+describe("resolveCloudDrop", () => {
+  function cloudOf(threads: NavigationThreadSummary[]) {
+    return computeClusterCloud({
+      clusters: buildInstanceClusters({ threads }),
+      cardWidth: 200,
+      heightForThread: height,
+    });
+  }
+
+  const parented = [
+    thread("parent", { path: "/repo/alpha", title: "MCP foundation" }),
+    thread("child", { path: "/repo/alpha", parentId: "parent" }),
+    thread("stray", { path: "/repo/alpha" }),
+    thread("other", { path: "/repo/beta" }),
+  ];
+
+  function centerOf(
+    cloud: ReturnType<typeof computeClusterCloud>,
+    predicate: (key: string) => boolean,
+  ) {
+    return cloud.clusters.find((cluster) => predicate(cluster.key))!.center;
+  }
+
+  it("adopts a card dropped into a parent cloud", () => {
+    const cloud = cloudOf(parented);
+    const drop = resolveCloudDrop({
+      clusters: cloud.clusters,
+      point: centerOf(cloud, (key) => key.includes("::pc:")),
+      thread: parented[2],
+    });
+    expect(drop.kind).toBe("adopt");
+    expect(drop.kind === "adopt" && drop.parent.id).toBe("parent");
+  });
+
+  it("releases a child dropped back on its project's catch-all", () => {
+    const cloud = cloudOf(parented);
+    const drop = resolveCloudDrop({
+      clusters: cloud.clusters,
+      point: centerOf(
+        cloud,
+        (key) => key === "directory:/repo/alpha",
+      ),
+      thread: parented[1],
+    });
+    expect(drop.kind).toBe("release");
+  });
+
+  it("never relinks a thread's project", () => {
+    // A project cloud groups on the thread's workspace — where its
+    // commands run. Dropping a card there moves the card and nothing else.
+    const cloud = cloudOf(parented);
+    const drop = resolveCloudDrop({
+      clusters: cloud.clusters,
+      point: centerOf(cloud, (key) => key === "directory:/repo/beta"),
+      thread: parented[2],
+    });
+    expect(drop.kind).toBe("none");
+  });
+
+  it("does nothing for a card dropped back in its own cloud", () => {
+    const cloud = cloudOf(parented);
+    const drop = resolveCloudDrop({
+      clusters: cloud.clusters,
+      point: centerOf(cloud, (key) => key.includes("::pc:")),
+      thread: parented[1],
+    });
+    expect(drop.kind).toBe("none");
+  });
+
+  it("does nothing for a drop on bare sky", () => {
+    const cloud = cloudOf(parented);
+    const drop = resolveCloudDrop({
+      clusters: cloud.clusters,
+      point: { x: 100_000, y: 100_000 },
+      thread: parented[2],
+    });
+    expect(drop.kind).toBe("none");
+  });
+
+  it("refuses to adopt a parent into its own descendant", () => {
+    // Walking up from the candidate would come back around to the card
+    // being dragged, and the grouping would fold in on itself.
+    const chain = [
+      thread("root", { path: "/repo/alpha", title: "Root" }),
+      thread("mid", { path: "/repo/alpha", parentId: "root" }),
+      thread("leaf", { path: "/repo/alpha", parentId: "mid" }),
+      thread("second", { path: "/repo/alpha", title: "Second" }),
+      thread("second-child", { path: "/repo/alpha", parentId: "second" }),
+    ];
+    const cloud = cloudOf(chain);
+    const rootCloud = cloud.clusters.find((cluster) =>
+      cluster.threads.some((entry) => entry.id === "leaf"),
+    )!;
+    // Drag the ROOT onto the cloud its own descendants are in.
+    const drop = resolveCloudDrop({
+      clusters: cloud.clusters,
+      point: rootCloud.center,
+      thread: chain[0],
+    });
+    expect(drop.kind).toBe("none");
   });
 });

@@ -716,3 +716,93 @@ export function computeClusterCloud(params: {
     memory: { centers: nextCenters, rings: nextRings, seats: nextSeats },
   };
 }
+
+export type StarMapCloudDrop =
+  /** Nothing to do: same cloud, a project cloud, or an illegal parent. */
+  | { kind: "none" }
+  /** Make the dragged thread a child of this cloud's parent. */
+  | { kind: "adopt"; clusterKey: string; parent: NavigationThreadSummary }
+  /** Take the dragged thread out of the parent cloud it was in. */
+  | { kind: "release"; clusterKey: string };
+
+/** Which cloud, if any, a point falls inside. */
+function clusterAt(
+  clusters: readonly StarMapClusterPlacement[],
+  point: { x: number; y: number },
+): StarMapClusterPlacement | undefined {
+  return clusters.find(
+    (cluster) =>
+      Math.abs(point.x - cluster.center.x) <= cluster.extent.rx
+      && Math.abs(point.y - cluster.center.y) <= cluster.extent.ry,
+  );
+}
+
+/**
+ * What dropping a card at this point means.
+ *
+ * Cloud membership is DERIVED, not stored, so a drop can only change it
+ * by changing the data the grouping reads — and the two kinds of cloud
+ * read very different data:
+ *
+ * - A parent/child cloud groups on `parentThreadId`, which the contract
+ *   calls a UI-only relationship that "only controls sidebar grouping".
+ *   Re-parenting on a drop is safe, reversible, and means exactly what
+ *   the gesture looks like it means.
+ * - A project cloud groups on the thread's linked directory — its actual
+ *   workspace, where its commands run and its worktree lives. A drag
+ *   must never silently relink that, so dropping on one moves the card
+ *   and changes nothing else.
+ *
+ * Dropping a child back on its own project's catch-all cloud releases
+ * it, which is the inverse gesture and the only way out that does not
+ * require finding the thread in the sidebar.
+ */
+export function resolveCloudDrop(params: {
+  clusters: readonly StarMapClusterPlacement[];
+  /** Centre of the dropped card, body-relative. */
+  point: { x: number; y: number };
+  thread: NavigationThreadSummary;
+}): StarMapCloudDrop {
+  const draggedKey = threadKeyOf(params.thread);
+  const target = clusterAt(params.clusters, params.point);
+  if (!target) return { kind: "none" };
+
+  const home = params.clusters.find((cluster) =>
+    cluster.threads.some((thread) => threadKeyOf(thread) === draggedKey),
+  );
+  if (target.key === home?.key) return { kind: "none" };
+
+  if (!target.isParentGroup) {
+    // Only a release, and only out of a parent cloud into the catch-all
+    // of the project the thread already belongs to. Any other landing is
+    // a project change, which a drag does not get to make.
+    const sameProject =
+      home?.isParentGroup === true && home.key.startsWith(`${target.key}::pc:`);
+    return sameProject && params.thread.parentThreadId !== undefined
+      ? { kind: "release", clusterKey: target.key }
+      : { kind: "none" };
+  }
+
+  const parent = target.threads[0];
+  if (!parent || threadKeyOf(parent) === draggedKey) return { kind: "none" };
+
+  // A thread cannot be adopted by its own descendant: walking up from the
+  // candidate would come back around to the card being dragged, and the
+  // grouping would fold in on itself.
+  const byKey = new Map<string, NavigationThreadSummary>();
+  for (const cluster of params.clusters) {
+    for (const thread of cluster.threads) byKey.set(threadKeyOf(thread), thread);
+  }
+  const seen = new Set<string>();
+  let walk: NavigationThreadSummary | undefined = parent;
+  while (walk) {
+    const key = threadKeyOf(walk);
+    if (key === draggedKey) return { kind: "none" };
+    if (seen.has(key)) break;
+    seen.add(key);
+    const parentKey = parentKeyOf(walk);
+    walk = parentKey ? byKey.get(parentKey) : undefined;
+  }
+
+  return { kind: "adopt", clusterKey: target.key, parent };
+}
