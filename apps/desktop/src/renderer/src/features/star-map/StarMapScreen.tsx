@@ -79,6 +79,7 @@ import { computeProjectLayout } from "./star-map-project-layout";
 import { StarMapProjectBody } from "./StarMapProjectBody";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { StarMapChatCard } from "./StarMapChatCard";
+import { chatCardEdgeToward } from "./star-map-chat-card-geometry";
 import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
@@ -1017,6 +1018,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       ? { width: projectLayout.canvasWidth, height: projectLayout.canvasHeight }
       : lanesCanvas;
 
+  /** Canvas extent for callbacks defined above it (see `cardRectsRef`). */
+  const canvasBoundsRef = useRef(panZoomCanvas);
+  canvasBoundsRef.current = panZoomCanvas;
+
   // Trackpad: two-finger drag pans, pinch (ctrl+wheel) zooms about the
   // pointer. Registered natively because the listener must not be passive.
   // Sits below panZoomCanvas because the clamp needs the canvas size.
@@ -1231,6 +1236,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [displayLabelPartsById, peers]);
 
   const chatCards = useStarMapChatCards();
+  /** Threads with a chat card open, so their card can say so. */
+  const chattingThreadKeys = useMemo(
+    () => new Set(chatCards.cards.map((card) => card.key)),
+    [chatCards.cards],
+  );
   const { desktopApi, onFocusLocalInstance, onOpenLocalThread } = props;
   const openInstance = useCallback(
     (instanceId: string) => {
@@ -1251,7 +1261,31 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // thread needs no pin and no snapshot merge.
   const openThread = useCallback(
     (thread: NavigationThreadSummary) => {
-      chatCards.open(thread);
+      // Open beside the thread's own card, in map coordinates. `cardRects`
+      // is read through a ref because it is declared further down; the
+      // callback only ever runs after a render has computed it.
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      let anchor: SnapRect | undefined;
+      for (const [key, rect] of cardRectsRef.current) {
+        if (key.endsWith(`::${threadKey}`)) {
+          anchor = rect;
+          break;
+        }
+      }
+      chatCards.open(
+        thread,
+        anchor
+          ? {
+              anchor: {
+                height: anchor.height,
+                width: anchor.width,
+                x: anchor.x,
+                y: anchor.y,
+              },
+              bounds: canvasBoundsRef.current,
+            }
+          : undefined,
+      );
     },
     [chatCards],
   );
@@ -1469,6 +1503,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     return rects;
   }, [arrangement, bodies, lanes]);
+
+  /**
+   * Latest card geometry and canvas extent, for callbacks defined above
+   * them (opening a chat card beside its thread). Refs rather than deps so
+   * those callbacks stay stable across every snapshot.
+   */
+  const cardRectsRef = useRef(cardRects);
+  cardRectsRef.current = cardRects;
 
   /**
    * Build the snap for one card. Threshold is screen-space so the pull
@@ -1749,6 +1791,75 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [bodies, cardRects, lanes, selection, view.scale],
   );
 
+  /**
+   * A line from each open chat card to the thread card it belongs to.
+   *
+   * Opening beside the source does most of the work, but a card can be
+   * dragged anywhere in the galaxy afterwards — and five open chats with
+   * no visible owner is the thing to avoid. Drawn inside the canvas, so
+   * it pans and zooms with both of its endpoints for free.
+   *
+   * A chat card whose thread has no card on the map (filtered out, or
+   * folded into a cloud's overflow) simply gets no tether: a line to
+   * nowhere is worse than no line.
+   */
+  const chatTethers = useMemo(() => {
+    if (chatCards.cards.length === 0 || projectsMode) return [];
+    return chatCards.cards.flatMap((card) => {
+      let source: SnapRect | undefined;
+      for (const [key, rect] of cardRects) {
+        if (key.endsWith(`::${card.key}`)) {
+          source = rect;
+          break;
+        }
+      }
+      if (!source) return [];
+      const target = {
+        x: source.x + source.width / 2,
+        y: source.y + source.height / 2,
+      };
+      const from = chatCardEdgeToward(card.rect, target);
+      const midX = (from.x + target.x) / 2;
+      const midY = (from.y + target.y) / 2;
+      // A shallow arc, so the tether reads as part of the same sky as the
+      // instance links rather than as a UI connector.
+      const lift = 0.12;
+      return [
+        {
+          key: card.key,
+          path:
+            `M ${from.x.toFixed(2)} ${from.y.toFixed(2)}`
+            + ` Q ${(midX + (target.y - from.y) * lift).toFixed(2)}`
+            + ` ${(midY - (target.x - from.x) * lift).toFixed(2)}`
+            + ` ${target.x.toFixed(2)} ${target.y.toFixed(2)}`,
+          target,
+        },
+      ];
+    });
+  }, [cardRects, chatCards.cards, projectsMode]);
+
+  const chatTetherPaths =
+    chatTethers.length > 0 ? (
+      <svg
+        className="star-map__tethers"
+        width={panZoomCanvas.width || viewportSize.width}
+        height={panZoomCanvas.height || viewportSize.height}
+        aria-hidden="true"
+      >
+        {chatTethers.map((tether) => (
+          <g key={tether.key}>
+            <path className="star-map__tether" d={tether.path} />
+            <circle
+              className="star-map__tether-anchor"
+              cx={tether.target.x}
+              cy={tether.target.y}
+              r={3}
+            />
+          </g>
+        ))}
+      </svg>
+    ) : null;
+
   const renderCloud = (position: {
     instanceId: string;
     x: number;
@@ -1914,6 +2025,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               stackIndex={Math.min(index, STAR_MAP_CARD_MAX_Z)}
               cardKey={`${position.instanceId}::${threadKey}`}
               selected={selection.has(`${position.instanceId}::${threadKey}`)}
+              chatting={chattingThreadKeys.has(threadKey)}
               onToggleSelect={() =>
                 toggleSelected(`${position.instanceId}::${threadKey}`)
               }
@@ -2384,6 +2496,40 @@ export function StarMapScreen(props: StarMapScreenProps) {
               );
             })
           : null}
+        {chatTetherPaths}
+        {/* Chat cards live INSIDE `.star-map__canvas`: they are objects in
+            the galaxy, not windows over it. Panning away and coming back
+            finds the open chats exactly where they were left, which is the
+            whole point of opening five of them and scooting off. */}
+        {chatCards.cards.map((card) => {
+          const target = card.thread.federation?.ref.target;
+          const cardInstanceId =
+            target && isRemoteFederationTarget(target)
+              ? target.instanceId
+              : undefined;
+          return (
+            <StarMapChatCard
+              key={card.key}
+              cardKey={card.key}
+              desktopApi={props.desktopApi}
+              instanceIcon={celestialIcons.iconFor(cardInstanceId)}
+              instanceLabel={
+                cardInstanceId
+                  ? displayLabelById.get(cardInstanceId)
+                  : displayLabelById.get(localInstanceId ?? "")
+              }
+              onClose={chatCards.close}
+              onOpenFull={openThreadFully}
+              onRaise={chatCards.raise}
+              onRectChange={chatCards.setRect}
+              rect={card.rect}
+              thread={card.thread}
+              scale={view.scale}
+              bounds={panZoomCanvas}
+              zIndex={STAR_MAP_CHAT_CARD_BASE_Z + chatCards.depthOf(card.key)}
+            />
+          );
+        })}
         </div>
       </div>
       {intakeTarget ? (
@@ -2412,36 +2558,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
           }}
         />
       ) : null}
-      {/* Chat cards sit outside `.star-map__canvas` on purpose: they are
-          windows over the star field, not objects in it, so panning and
-          zooming the map must not move or scale them. */}
-      {chatCards.cards.map((card) => {
-        const target = card.thread.federation?.ref.target;
-        const cardInstanceId =
-          target && isRemoteFederationTarget(target)
-            ? target.instanceId
-            : undefined;
-        return (
-          <StarMapChatCard
-            key={card.key}
-            cardKey={card.key}
-            desktopApi={props.desktopApi}
-            instanceIcon={celestialIcons.iconFor(cardInstanceId)}
-            instanceLabel={
-              cardInstanceId
-                ? displayLabelById.get(cardInstanceId)
-                : displayLabelById.get(localInstanceId ?? "")
-            }
-            onClose={chatCards.close}
-            onOpenFull={openThreadFully}
-            onRaise={chatCards.raise}
-            onRectChange={chatCards.setRect}
-            rect={card.rect}
-            thread={card.thread}
-            zIndex={STAR_MAP_CHAT_CARD_BASE_Z + chatCards.depthOf(card.key)}
-          />
-        );
-      })}
       {cardError ? (
         <p className="star-map__card-error" role="alert">
           {cardError}

@@ -66,6 +66,8 @@ export function StarMapThreadCard(props: {
   cardKey: string;
   /** Part of a multi-card selection, so it moves with the others. */
   selected?: boolean;
+  /** This thread has a chat card open on the map, tethered to this card. */
+  chatting?: boolean;
   /**
    * Add or remove this card from the selection. Deliberately outside
    * `drag`: amending a selection has to work before the durable instance
@@ -126,7 +128,9 @@ export function StarMapThreadCard(props: {
     <div
       className={`star-map-card-shell${
         props.entering ? " star-map-card-shell--entering" : ""
-      }${props.selected ? " star-map-card-shell--selected" : ""}`}
+      }${props.selected ? " star-map-card-shell--selected" : ""}${
+        props.chatting ? " star-map-card-shell--chatting" : ""
+      }`}
       style={style}
       data-thread-key={threadKey}
       data-card-key={props.cardKey}

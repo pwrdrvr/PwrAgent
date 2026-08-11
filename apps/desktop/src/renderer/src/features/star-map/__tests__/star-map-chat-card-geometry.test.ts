@@ -7,7 +7,9 @@ import {
   CHAT_CARD_MIN_HEIGHT,
   CHAT_CARD_MIN_WIDTH,
   cascadeChatCardRect,
+  chatCardEdgeToward,
   clampChatCardRect,
+  placeChatCardBesideAnchor,
   raiseChatCard,
   resizeChatCardRect,
 } from "../star-map-chat-card-geometry";
@@ -174,5 +176,84 @@ describe("raiseChatCard", () => {
 
   it("appends an unknown key", () => {
     expect(raiseChatCard(["a"], "b")).toEqual(["a", "b"]);
+  });
+});
+
+describe("placeChatCardBesideAnchor", () => {
+  const bounds = { width: 4000, height: 3000 };
+  const anchor = { x: 1000, y: 900, width: 200, height: 120 };
+
+  it("opens to the right of the thread card it belongs to", () => {
+    const rect = placeChatCardBesideAnchor({ anchor, bounds, occupied: [] });
+    expect(rect.left).toBeGreaterThan(anchor.x + anchor.width);
+    // Vertically overlapping the anchor, so the pairing reads at a glance.
+    expect(rect.top).toBeLessThan(anchor.y + anchor.height);
+    expect(rect.top + rect.height).toBeGreaterThan(anchor.y);
+  });
+
+  it("opens to the left when the right would leave the canvas", () => {
+    const rect = placeChatCardBesideAnchor({
+      anchor: { ...anchor, x: bounds.width - 260 },
+      bounds,
+      occupied: [],
+    });
+    expect(rect.left + rect.width).toBeLessThanOrEqual(bounds.width);
+  });
+
+  it("steps aside rather than opening on top of another chat card", () => {
+    const first = placeChatCardBesideAnchor({ anchor, bounds, occupied: [] });
+    const second = placeChatCardBesideAnchor({
+      anchor,
+      bounds,
+      occupied: [first],
+    });
+    const overlaps =
+      first.left < second.left + second.width
+      && second.left < first.left + first.width
+      && first.top < second.top + second.height
+      && second.top < first.top + first.height;
+    expect(overlaps).toBe(false);
+  });
+
+  it("keeps the card inside the canvas", () => {
+    const rect = placeChatCardBesideAnchor({
+      anchor: { x: 0, y: 0, width: 200, height: 120 },
+      bounds,
+      occupied: [],
+    });
+    expect(rect.top).toBeGreaterThanOrEqual(0);
+    expect(rect.left + rect.width).toBeLessThanOrEqual(bounds.width);
+  });
+});
+
+describe("chatCardEdgeToward", () => {
+  const rect = { left: 100, top: 100, width: 200, height: 100 };
+
+  it("stops on the border facing the thread card", () => {
+    const right = chatCardEdgeToward(rect, { x: 1000, y: 150 });
+    expect(right.x).toBeCloseTo(300, 5);
+    const above = chatCardEdgeToward(rect, { x: 200, y: -500 });
+    expect(above.y).toBeCloseTo(100, 5);
+  });
+
+  it("never reports a point outside the card", () => {
+    for (const target of [
+      { x: 0, y: 0 },
+      { x: 5000, y: 5000 },
+      { x: 200, y: 5000 },
+    ]) {
+      const point = chatCardEdgeToward(rect, target);
+      expect(point.x).toBeGreaterThanOrEqual(rect.left - 0.001);
+      expect(point.x).toBeLessThanOrEqual(rect.left + rect.width + 0.001);
+      expect(point.y).toBeGreaterThanOrEqual(rect.top - 0.001);
+      expect(point.y).toBeLessThanOrEqual(rect.top + rect.height + 0.001);
+    }
+  });
+
+  it("degenerates to the centre when the target sits on it", () => {
+    expect(chatCardEdgeToward(rect, { x: 200, y: 150 })).toEqual({
+      x: 200,
+      y: 150,
+    });
   });
 });

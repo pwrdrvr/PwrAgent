@@ -24767,3 +24767,30 @@ a.transcript-message__messaging-origin:focus-visible {
     0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent),
     0 8px 28px color-mix(in srgb, var(--accent) 25%, transparent);
 }
+
+/* Tether from an open chat card to the thread card it belongs to. Drawn
+   inside the canvas, so it pans and zooms with both endpoints. */
+.star-map__tethers {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.star-map__tether {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 45%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+
+.star-map__tether-anchor {
+  fill: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* The card end of that tether: the thread whose chat is open. */
+.star-map-card-shell--chatting .star-map-card {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}

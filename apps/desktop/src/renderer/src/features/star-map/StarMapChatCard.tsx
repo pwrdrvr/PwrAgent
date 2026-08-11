@@ -1,6 +1,5 @@
 import {
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -42,6 +41,14 @@ export type StarMapChatCardProps = {
   onRaise: (cardKey: string) => void;
   onRectChange: (cardKey: string, rect: ChatCardRect) => void;
   rect: ChatCardRect;
+  /**
+   * Canvas scale. The card lives IN the map, so a pointer that travels N
+   * screen pixels crosses N / scale canvas pixels — without this the card
+   * outruns the cursor exactly the way a zoomed thread card used to.
+   */
+  scale: number;
+  /** Canvas extent the card is kept inside, in canvas pixels. */
+  bounds: { width: number; height: number };
   thread: NavigationThreadSummary;
   /** Stack position; the host owns the order, we only read our depth. */
   zIndex: number;
@@ -55,13 +62,8 @@ type DragState = {
   startRect: ChatCardRect;
 };
 
-function viewportSize(): { width: number; height: number } {
-  if (typeof window === "undefined") return { width: 1440, height: 900 };
-  return { width: window.innerWidth, height: window.innerHeight };
-}
-
 /**
- * One floating chat card over the star map.
+ * One chat card, anchored in the star map.
  *
  * The card owns its own thread session rather than borrowing App's single
  * mounted ThreadView: that is what lets several cards be open at once, and
@@ -70,7 +72,7 @@ function viewportSize(): { width: number; height: number } {
  * handed, so a card over a peer's thread reads and writes on that peer.
  */
 export function StarMapChatCard(props: StarMapChatCardProps) {
-  const { cardKey, desktopApi, onOpenFull, onRaise, onRectChange, rect, thread } =
+  const { bounds, cardKey, desktopApi, onOpenFull, onRaise, onRectChange, rect, scale, thread } =
     props;
   const dragRef = useRef<DragState | undefined>(undefined);
   const [sendError, setSendError] = useState<string | undefined>(undefined);
@@ -126,9 +128,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     (event: ReactPointerEvent) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
-      const deltaX = event.clientX - drag.originX;
-      const deltaY = event.clientY - drag.originY;
-      const viewport = viewportSize();
+      // Screen pixels in, canvas pixels out.
+      const zoom = scale > 0 ? scale : 1;
+      const deltaX = (event.clientX - drag.originX) / zoom;
+      const deltaY = (event.clientY - drag.originY) / zoom;
       const next =
         drag.kind === "move"
           ? clampChatCardRect(
@@ -137,17 +140,17 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                 left: drag.startRect.left + deltaX,
                 top: drag.startRect.top + deltaY,
               },
-              viewport,
+              bounds,
             )
           : resizeChatCardRect({
               rect: drag.startRect,
               deltaX,
               deltaY,
-              viewport,
+              viewport: bounds,
             });
       onRectChange(cardKey, next);
     },
-    [cardKey, onRectChange],
+    [bounds, cardKey, onRectChange, scale],
   );
 
   const endDrag = useCallback((event: ReactPointerEvent) => {
@@ -157,21 +160,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     event.currentTarget.releasePointerCapture?.(event.pointerId);
   }, []);
 
-  // A card parked against an edge must stay reachable when the window
-  // shrinks under it. The listener reads the current rect through a ref
-  // rather than closing over it: `rect` changes on every pointermove, and
-  // depending on it here tore the listener down and re-added it on every
-  // frame of a drag.
-  const rectRef = useRef(rect);
-  rectRef.current = rect;
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const onResize = () => {
-      onRectChange(cardKey, clampChatCardRect(rectRef.current, viewportSize()));
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [cardKey, onRectChange]);
+  // No window-resize clamp: the card is anchored in the map, not in the
+  // window. Resizing the window changes what part of the galaxy is on
+  // screen, which is a pan, not a reason to move a card off its spot.
 
   /**
    * Returns whether the turn actually reached the backend. A peer can drop

@@ -305,3 +305,81 @@ describe("star map project cloud chrome", () => {
     ).toBeTruthy();
   });
 });
+
+/**
+ * Chat cards are objects in the galaxy, not windows over it: they ride
+ * the canvas transform, so panning away and coming back finds them where
+ * they were left.
+ */
+describe("star map chat cards in map space", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+  });
+
+  it("renders the chat card inside the transformed canvas", async () => {
+    const { container } = renderOrbit([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+      projectThread("a2", "/repo/alpha", "AlphaDir"),
+    ]);
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread a1/ }),
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".star-map-chat-card")).not.toBeNull();
+    });
+    // Inside the canvas is what makes it pan and zoom with the map; a
+    // card mounted beside the canvas would sit still while the sky moved.
+    expect(
+      container.querySelector(".star-map__canvas .star-map-chat-card"),
+    ).not.toBeNull();
+  });
+
+  it("opens the card beside the thread it belongs to, and tethers them", async () => {
+    const { container } = renderOrbit([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+      projectThread("a2", "/repo/alpha", "AlphaDir"),
+    ]);
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread a1/ }),
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".star-map__tether")).not.toBeNull();
+    });
+    const shell = cardShell(container, "codex:a1");
+    const chat = container.querySelector(".star-map-chat-card") as HTMLElement;
+    // Beside its card rather than cascaded into a corner: the horizontal
+    // gap is a card-width or two, not the width of the map.
+    const cardLeft = Number.parseFloat(shell.style.left);
+    expect(
+      Math.abs(Number.parseFloat(chat.style.left) - cardLeft),
+    ).toBeLessThan(800);
+    // The card end of the pairing says so too.
+    expect(shell.className).toContain("star-map-card-shell--chatting");
+  });
+
+  it("draws no tether when the thread has no card on the map", async () => {
+    const { container, rerenderThreads } = renderOrbit([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+      projectThread("a2", "/repo/alpha", "AlphaDir"),
+    ]);
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread a1/ }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".star-map__tether")).not.toBeNull();
+    });
+
+    // The thread leaves the map (archived here) while its chat stays open.
+    rerenderThreads([projectThread("a2", "/repo/alpha", "AlphaDir")]);
+    await waitFor(() => {
+      expect(container.querySelector(".star-map__tether")).toBeNull();
+    });
+    // A line to nowhere is worse than no line, but the chat stays open.
+    expect(container.querySelector(".star-map-chat-card")).not.toBeNull();
+  });
+});

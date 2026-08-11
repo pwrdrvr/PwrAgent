@@ -5,6 +5,7 @@ import {
 } from "@pwragent/shared";
 import {
   cascadeChatCardRect,
+  placeChatCardBesideAnchor,
   raiseChatCard,
   type ChatCardRect,
 } from "./star-map-chat-card-geometry";
@@ -21,7 +22,19 @@ export type StarMapChatCardsController = {
   closeAll: () => void;
   /** Stack depth of a card, lowest first. */
   depthOf: (cardKey: string) => number;
-  open: (thread: NavigationThreadSummary) => void;
+  /**
+   * Open a card for a thread. `placement` puts it beside the thread's own
+   * card on the map; without one the card cascades from a corner, which
+   * is the fallback when the thread has no card on screen (filtered out,
+   * or folded into a cloud's overflow).
+   */
+  open: (
+    thread: NavigationThreadSummary,
+    placement?: {
+      anchor: { x: number; y: number; width: number; height: number };
+      bounds: { width: number; height: number };
+    },
+  ) => void;
   raise: (cardKey: string) => void;
   setRect: (cardKey: string, rect: ChatCardRect) => void;
 };
@@ -48,7 +61,13 @@ export function useStarMapChatCards(): StarMapChatCardsController {
   }, []);
 
   const open = useCallback(
-    (thread: NavigationThreadSummary) => {
+    (
+      thread: NavigationThreadSummary,
+      placement?: {
+        anchor: { x: number; y: number; width: number; height: number };
+        bounds: { width: number; height: number };
+      },
+    ) => {
       const key = buildThreadIdentityKey(thread.source, thread.id);
       setCards((current) => {
         if (current.some((card) => card.key === key)) return current;
@@ -56,10 +75,16 @@ export function useStarMapChatCards(): StarMapChatCardsController {
           ...current,
           {
             key,
-            rect: cascadeChatCardRect({
-              openCardCount: current.length,
-              viewport: viewportSize(),
-            }),
+            rect: placement
+              ? placeChatCardBesideAnchor({
+                  anchor: placement.anchor,
+                  bounds: placement.bounds,
+                  occupied: current.map((card) => card.rect),
+                })
+              : cascadeChatCardRect({
+                  openCardCount: current.length,
+                  viewport: viewportSize(),
+                }),
             thread,
           },
         ];
