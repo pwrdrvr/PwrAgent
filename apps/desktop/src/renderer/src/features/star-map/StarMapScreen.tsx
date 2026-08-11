@@ -91,8 +91,10 @@ import {
 } from "./star-map-preferences";
 import {
   clampStarMapView,
+  isOverviewZoom,
   MAX_ZOOM,
   MIN_ZOOM,
+  overviewChromeScale,
   placeStarMapView,
   type StarMapView,
 } from "./star-map-view-geometry";
@@ -347,6 +349,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [paintView],
   );
   const orbitMode = preferences.layout === "orbit";
+  /**
+   * Pulled far enough out that cards are unreadable. The map draws named
+   * clouds instead — legible at a glance, and a few DOM nodes instead of
+   * every card in the fleet.
+   */
+  const overview = isOverviewZoom(view.scale);
+  const chromeScale = overviewChromeScale(view.scale);
   /** Projects as suns: threads pooled across instances, one body per repo. */
   const projectsMode = preferences.layout === "projects";
   /**
@@ -2096,7 +2105,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             onDismiss={() => toggleLoadCard(position.instanceId)}
           />
         ) : null}
-        {visible.map((thread, index) => {
+        {(overview && position.clusters ? [] : visible).map((thread, index) => {
           const slot = slots[index];
           const threadKey = buildThreadIdentityKey(thread.source, thread.id);
           const storedOffset = arrangement.offsetFor(
@@ -2241,8 +2250,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
             <button
               key={`cluster-label:${cluster.key}`}
               type="button"
-              className="star-map__cluster-label"
-              style={{ left: cluster.labelSlot.dx, top: cluster.labelSlot.dy }}
+              className={`star-map__cluster-label${
+                overview ? " star-map__cluster-label--overview" : ""
+              }`}
+              style={{
+                left: cluster.labelSlot.dx,
+                // In overview the label IS the cloud, so it sits on the
+                // centre rather than above the cards it is captioning, and
+                // counter-scales to stay readable as the canvas shrinks.
+                top: overview ? cluster.center.y : cluster.labelSlot.dy,
+                ...(overview
+                  ? {
+                      transform: `translate(-50%, -50%) scale(${chromeScale})`,
+                    }
+                  : {}),
+              }}
               aria-pressed={allSelected}
               aria-label={`Select the ${cluster.label} cards (${cluster.threads.length} threads)`}
               onClick={() =>

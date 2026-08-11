@@ -9953,6 +9953,22 @@ textarea,
   color: var(--text-primary);
 }
 
+/* Overview: the label stops captioning a cloud and becomes the cloud.
+   Sized in ems so the counter-scale in StarMapScreen carries it. */
+.star-map__cluster-label--overview {
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel) 70%, transparent);
+  color: var(--text-primary);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.star-map__cluster-label--overview .star-map__cluster-count {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .star-map__cluster-name {
   overflow: hidden;
   text-overflow: ellipsis;

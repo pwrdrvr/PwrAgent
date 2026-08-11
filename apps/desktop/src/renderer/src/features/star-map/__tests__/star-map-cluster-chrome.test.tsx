@@ -311,6 +311,72 @@ describe("star map project cloud chrome", () => {
  * the canvas transform, so panning away and coming back finds them where
  * they were left.
  */
+/**
+ * Pulled far out, a card is an unreadable smudge that still costs a whole
+ * subtree to mount. The map trades every card for one label per cloud, so
+ * the fleet stays legible AND the DOM shrinks exactly when it would
+ * otherwise be at its largest.
+ */
+describe("star map overview zoom", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+  });
+
+  it("drops cards for named clouds when zoomed out, and brings them back", async () => {
+    const { container } = renderOrbit([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+      projectThread("a2", "/repo/alpha", "AlphaDir"),
+      projectThread("b1", "/repo/beta", "BetaDir"),
+      projectThread("b2", "/repo/beta", "BetaDir"),
+    ]);
+    await screen.findByRole("button", { name: /Select the alpha cards/ });
+    expect(
+      container.querySelectorAll(".star-map-card-shell").length,
+    ).toBeGreaterThan(0);
+
+    const viewport = container.querySelector(
+      ".star-map__viewport",
+    ) as HTMLElement;
+    // Positive deltaY with ctrl is pinch-out; one step lands on MIN_ZOOM.
+    fireEvent.wheel(viewport, {
+      deltaY: 240,
+      ctrlKey: true,
+      clientX: 400,
+      clientY: 300,
+    });
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".star-map-card-shell")).toHaveLength(
+        0,
+      );
+    });
+    // The clouds are still named, which is the whole point of going out.
+    expect(
+      screen.getByRole("button", { name: /Select the alpha cards/ }),
+    ).toBeTruthy();
+    expect(
+      container.querySelectorAll(".star-map__cluster-label--overview").length,
+    ).toBe(2);
+
+    // Coming back in restores the cards rather than stranding the map in
+    // an overview it cannot leave. Each pinch step doubles the scale, so
+    // climbing back from the floor past the threshold takes a few.
+    for (let step = 0; step < 3; step += 1) {
+      fireEvent.wheel(viewport, {
+        deltaY: -240,
+        ctrlKey: true,
+        clientX: 400,
+        clientY: 300,
+      });
+    }
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(".star-map-card-shell").length,
+      ).toBeGreaterThan(0);
+    });
+  });
+});
+
 describe("star map chat cards in map space", () => {
   afterEach(() => {
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");
