@@ -12998,7 +12998,6 @@ export class DesktopBackendRegistry {
 
     const resources = [
       { name: "acp", close: () => this.acpBackend.close() },
-      { name: "pdf-mcp", close: () => this.pdfToolMcpServer?.close() },
       { name: "codex", close: () => this.codexClient.close() },
       { name: "grok", close: () => this.grokClient.close() },
       ...this.captureStores.splice(0).map((store, index) => ({

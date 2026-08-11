@@ -202,7 +202,7 @@ async function expectFakeProvidersFound(
 
 test.describe("Onboarding wizard", () => {
   test("Get started and Back buttons are clickable", async () => {
-    const app = await launchElectronApp(wizardLaunchOptions);
+    const app = await launchWizard();
     try {
       await expect(
         app.window.getByRole("heading", {
