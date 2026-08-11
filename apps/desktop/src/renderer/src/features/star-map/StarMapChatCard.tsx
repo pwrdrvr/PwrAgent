@@ -7,6 +7,8 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { ThreadContextPanel } from "../thread-detail/ThreadContextPanel";
+import type { ContextTabId } from "../thread-detail/context-panels/context-tab";
 import {
   buildThreadIdentityKey,
   type CelestialIconId,
@@ -55,6 +57,13 @@ export type StarMapChatCardProps = {
   zIndex: number;
 };
 
+/**
+ * How much wider a card gets while its context rail is open. Matches
+ * `RAIL_MIN_WIDTH` in ThreadContextPanel, so the rail renders at its own
+ * minimum rather than being squeezed below it.
+ */
+export const STAR_MAP_CHAT_CARD_RAIL_WIDTH = 300;
+
 type DragState = {
   kind: "move" | "resize";
   pointerId: number;
@@ -76,6 +85,18 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const { bounds, cardKey, desktopApi, onOpenFull, onRaise, onRectChange, rect, scale, thread } =
     props;
   const dragRef = useRef<DragState | undefined>(undefined);
+  /**
+   * The context rail, opened from the title bar.
+   *
+   * View-local rather than synced: which tab you are reading is a "what am
+   * I looking at" gesture, the same call the map makes for cloud expansion
+   * and selection.
+   */
+  const [railTab, setRailTab] = useState<ContextTabId | undefined>(undefined);
+  // Read by callbacks that must not re-bind on every pointermove.
+  const rectRef = useRef(rect);
+  rectRef.current = rect;
+  const railOpen = railTab !== undefined;
   const [sendError, setSendError] = useState<string | undefined>(undefined);
   // The card is draggable and clipped; a native `title` fights both, and
   // UI-THEME.md rules it out regardless.
@@ -154,6 +175,37 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     [bounds, cardKey, onRectChange, scale],
   );
 
+  /**
+   * Open or close the rail, growing the card by the rail's width rather
+   * than taking that width out of the transcript.
+   *
+   * A 420px card minus a 300px rail leaves 120px of transcript, which is
+   * not a chat any more. Growing the card is also what the full thread
+   * view does, so the two surfaces read the same — and the new width is
+   * clamped to the canvas, so a card near the edge cannot grow off it.
+   */
+  const toggleRail = useCallback(() => {
+    // The width change is a side effect, so it stays OUT of the state
+    // updater: React may invoke an updater more than once for the same
+    // click, which would grow the card twice for one press.
+    const opening = railTab === undefined;
+    setRailTab(opening ? "info" : undefined);
+    onRectChange(
+      cardKey,
+      clampChatCardRect(
+        {
+          ...rectRef.current,
+          width:
+            rectRef.current.width
+            + (opening
+              ? STAR_MAP_CHAT_CARD_RAIL_WIDTH
+              : -STAR_MAP_CHAT_CARD_RAIL_WIDTH),
+        },
+        bounds,
+      ),
+    );
+  }, [bounds, cardKey, onRectChange, railTab]);
+
   const endDrag = useCallback((event: ReactPointerEvent) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
@@ -171,8 +223,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // — so a card left outside the new bounds would be unreachable. Read
   // through a ref so this fires on a bounds change and not on every frame
   // of a drag.
-  const rectRef = useRef(rect);
-  rectRef.current = rect;
   useEffect(() => {
     const clamped = clampChatCardRect(rectRef.current, {
       width: bounds.width,
@@ -345,6 +395,22 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           </span>
         ) : undefined}
         <button
+          aria-expanded={railOpen}
+          aria-label={
+            railOpen
+              ? `Hide thread context for ${thread.title}`
+              : `Show thread context for ${thread.title}`
+          }
+          className={`star-map-chat-card__rail-toggle${
+            railOpen ? " is-on" : ""
+          }`}
+          onClick={() => toggleRail()}
+          onPointerDown={(event) => event.stopPropagation()}
+          type="button"
+        >
+          ⌸
+        </button>
+        <button
           aria-label={`Open ${thread.title} in the full thread view`}
           className="star-map-chat-card__expand"
           onClick={() => onOpenFull(thread)}
@@ -364,7 +430,26 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         </button>
       </header>
 
-      <div className="star-map-chat-card__transcript">
+      {railOpen ? (
+        // The rail anchors itself to the nearest positioned ancestor, which
+        // inside a card is the card — so it lands on the card's right edge,
+        // full height, exactly as it does against the thread view's layout.
+        // `pinned` because a card has no hover-reveal gutter to peek from.
+        <ThreadContextPanel
+          activeTab={railTab}
+          backends={[]}
+          desktopApi={desktopApi}
+          onActiveTabChange={setRailTab}
+          pinned
+          thread={thread}
+          width={STAR_MAP_CHAT_CARD_RAIL_WIDTH}
+        />
+      ) : null}
+      <div
+        className={`star-map-chat-card__transcript${
+          railOpen ? " star-map-chat-card__transcript--railed" : ""
+        }`}
+      >
         <TranscriptList
           activeTurnId={session.activeTurnId}
           activeTurnStartedAt={session.activeTurnStartedAt}

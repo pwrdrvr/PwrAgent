@@ -24928,3 +24928,40 @@ a.transcript-message__messaging-origin:focus-visible {
   border-color: var(--accent-border);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
 }
+
+/* Context rail drawer on a star map chat card. The rail positions itself
+   against the nearest positioned ancestor — inside a card that is the
+   card — so it needs no placement here, only a gutter so the transcript
+   stops where the rail starts. The card grows by the rail's width when it
+   opens, so the transcript keeps the width it had. */
+.star-map-chat-card__transcript--railed {
+  padding-right: 300px;
+}
+
+.star-map-chat-card__rail-toggle {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.star-map-chat-card__rail-toggle:hover {
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+.star-map-chat-card__rail-toggle.is-on {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.star-map-chat-card__rail-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}

@@ -1,8 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { StarMapChatCard } from "../StarMapChatCard";
+import {
+  STAR_MAP_CHAT_CARD_RAIL_WIDTH,
+  StarMapChatCard,
+} from "../StarMapChatCard";
 import {
   DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
   DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT,
@@ -233,5 +237,91 @@ describe("StarMapChatCard send failures", () => {
     expect(
       await screen.findByText("in flight", { ignore: "textarea" }),
     ).toBeTruthy();
+  });
+});
+
+describe("context rail drawer", () => {
+  /**
+   * The screen owns a card's rect and feeds it back, so the harness does
+   * too — a static rect would let the card compute its next width from a
+   * stale one and hide exactly the bug that produces.
+   */
+  function RailHarness(props: { onWidth: (width: number) => void }) {
+    const [rect, setRect] = useState(RECT);
+    return (
+      <StarMapChatCard
+        cardKey="card-1"
+        desktopApi={buildApi()}
+        onClose={() => undefined}
+        onOpenFull={() => undefined}
+        onRaise={() => undefined}
+        onRectChange={(unused, next) => {
+          props.onWidth(next.width);
+          setRect(next);
+        }}
+        rect={rect}
+        scale={1}
+        bounds={{ width: 4000, height: 3000 }}
+        thread={localThread()}
+        zIndex={40}
+      />
+    );
+  }
+
+  function renderRailCard(onWidth: (width: number) => void = () => undefined) {
+    return render(<RailHarness onWidth={onWidth} />);
+  }
+
+  it("opens the thread context tabs beside the transcript", async () => {
+    const { container } = renderRailCard();
+    const toggle = screen.getByRole("button", {
+      name: /Show thread context/,
+    });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".context-rail")).toBeNull();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(container.querySelector(".context-rail")).not.toBeNull();
+    });
+    expect(
+      screen.getByRole("button", { name: /Hide thread context/ }),
+    ).toBeTruthy();
+    // The transcript reserves the gutter rather than sliding under the rail.
+    expect(
+      container.querySelector(".star-map-chat-card__transcript--railed"),
+    ).not.toBeNull();
+  });
+
+  it("grows the card by the rail's width instead of squeezing the chat", async () => {
+    // 420 minus a 300px rail leaves 120px of transcript, which is not a
+    // chat any more.
+    const widths: number[] = [];
+    renderRailCard((width) => widths.push(width));
+
+    fireEvent.click(screen.getByRole("button", { name: /Show thread context/ }));
+    await waitFor(() => expect(widths).toHaveLength(1));
+    expect(widths[0]).toBe(RECT.width + STAR_MAP_CHAT_CARD_RAIL_WIDTH);
+
+    fireEvent.click(screen.getByRole("button", { name: /Hide thread context/ }));
+    await waitFor(() => expect(widths).toHaveLength(2));
+    expect(widths[1]).toBe(RECT.width);
+  });
+
+  it("closes the rail back down", async () => {
+    const { container } = renderRailCard();
+    fireEvent.click(screen.getByRole("button", { name: /Show thread context/ }));
+    await waitFor(() => {
+      expect(container.querySelector(".context-rail")).not.toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Hide thread context/ }));
+    await waitFor(() => {
+      expect(container.querySelector(".context-rail")).toBeNull();
+    });
+    expect(
+      container.querySelector(".star-map-chat-card__transcript--railed"),
+    ).toBeNull();
   });
 });
