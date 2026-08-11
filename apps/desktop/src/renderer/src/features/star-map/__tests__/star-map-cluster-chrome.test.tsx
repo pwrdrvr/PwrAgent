@@ -474,6 +474,43 @@ describe("star map load card in overview", () => {
   });
 });
 
+describe("clicking the sky releases focus back to the map", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+  });
+
+  it("takes focus off a chat composer so the flight keys work again", async () => {
+    // The pan's preventDefault suppresses the browser's default focus
+    // change, so a press on bare sky never blurred the composer (or a
+    // terminal) — the WASD guard kept seeing keys aimed at text, and the
+    // only way out was closing the map.
+    const { container } = renderOrbit([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+      projectThread("a2", "/repo/alpha", "AlphaDir"),
+    ]);
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread a1/ }),
+    );
+    const composer = (await screen.findByRole("textbox", {
+      name: /Message Thread a1/,
+    })) as HTMLTextAreaElement;
+    composer.focus();
+    expect(document.activeElement).toBe(composer);
+
+    fireEvent.pointerDown(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { button: 0, clientX: 40, clientY: 600 },
+    );
+
+    // Focus lands on the map layer — where Escape and the flight keys
+    // already listen — not merely off the composer.
+    expect(document.activeElement).toBe(
+      container.querySelector(".star-map"),
+    );
+  });
+});
+
 describe("star map load card overview fixes", () => {
   afterEach(() => {
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");

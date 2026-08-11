@@ -503,6 +503,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const startCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     if (!shouldStartCanvasPan(event.target)) return;
+    // A press on bare sky is also how the operator LEAVES a terminal or a
+    // chat composer. The pan's preventDefault below suppresses the
+    // browser's default focus change, so without this the shell kept
+    // focus, the flight guard kept seeing keys aimed at text, and there
+    // was no way to fly again short of Escape-ing the whole map. Focus
+    // moves to the layer, which is where the map's own keys listen.
+    layerRef.current?.focus();
     // Shift sweeps a fresh selection, Cmd/Ctrl extends the one already
     // there; everything else pans.
     if (event.shiftKey) {
