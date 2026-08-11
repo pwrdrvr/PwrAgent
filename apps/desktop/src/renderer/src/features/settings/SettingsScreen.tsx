@@ -28,6 +28,7 @@ import { ArchivedThreadsSettings } from "./ArchivedThreadsSettings";
 import { ThreadManagementSettings } from "./ThreadManagementSettings";
 import { TroubleshootingSettings } from "./TroubleshootingSettings";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
+import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { WorktreesSettings } from "./WorktreesSettings";
 import {
   buildDiscordPatchDelta,
@@ -125,6 +126,7 @@ export function SettingsScreen(props: {
     backend: AppServerBackendKind;
     threadId: string;
   }) => void;
+  onShowNotice?: (notice: AppNoticeToastNotice) => void;
   /** Fired from the title-bar messaging controller.
    *  The App-level handler closes the Settings overlay and opens the
    *  Messaging Activity overlay (its own top-level mainView). */
@@ -308,6 +310,7 @@ export function SettingsScreen(props: {
               cachedBackends={props.cachedBackends}
               desktopApi={props.desktopApi}
               onOpenThread={props.onOpenThread}
+              onShowNotice={props.onShowNotice}
               profiles={props.profiles}
               section={section}
               settings={props.settings}
@@ -333,6 +336,7 @@ function SettingsSectionBody(props: {
     backend: AppServerBackendKind;
     threadId: string;
   }) => void;
+  onShowNotice?: (notice: AppNoticeToastNotice) => void;
   profiles?: PwrAgentProfilesState;
   section: SettingsSection;
   settings: DesktopSettingsState;
@@ -391,6 +395,7 @@ function SettingsSectionBody(props: {
     return (
       <TroubleshootingSettings
         desktopApi={props.desktopApi}
+        onShowNotice={props.onShowNotice}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onDeveloperModeChange={async (developerMode: boolean) => {

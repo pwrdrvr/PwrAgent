@@ -2128,6 +2128,7 @@ function DesktopAppShell(props: {
                   setMainView("thread");
                   void navigation.showThread(target);
                 }}
+                onShowNotice={showAppNotice}
               />
             </Suspense>
           </div>

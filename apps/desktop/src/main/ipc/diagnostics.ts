@@ -2,13 +2,17 @@ import { join } from "node:path";
 import { ipcMain, type WebContents } from "electron";
 import {
   DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
+  DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL,
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
+  DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,
+  DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL,
 } from "../../shared/ipc";
 import type {
   CaptureHeapSnapshotRequest,
   CaptureHeapSnapshotResult,
 } from "../../shared/heap-snapshot";
 import { captureHeapSnapshot } from "../diagnostics/manual-heap-snapshot";
+import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { subscribersForChannel } from "../window-channels";
@@ -67,6 +71,21 @@ async function runCapture(
 
 export function registerDiagnosticsIpcHandlers(): void {
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL);
+  ipcMain.removeHandler(DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL);
+  ipcMain.removeHandler(DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL);
+  ipcMain.removeHandler(DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL);
+  ipcMain.handle(
+    DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL,
+    () => getDesktopBackendRegistry().getCodexProtocolCaptureStatus(),
+  );
+  ipcMain.handle(
+    DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,
+    async () => await getDesktopBackendRegistry().startCodexProtocolCapture(),
+  );
+  ipcMain.handle(
+    DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL,
+    async () => await getDesktopBackendRegistry().stopCodexProtocolCapture(),
+  );
   ipcMain.handle(
     DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
     (
@@ -107,6 +126,9 @@ export function registerDiagnosticsIpcHandlers(): void {
 
 export function disposeDiagnosticsIpcHandlers(): void {
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL);
+  ipcMain.removeHandler(DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL);
+  ipcMain.removeHandler(DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL);
+  ipcMain.removeHandler(DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL);
   if (pendingCapture) {
     clearTimeout(pendingCapture);
     pendingCapture = undefined;

@@ -121,6 +121,15 @@ export class ProtocolCaptureStore {
     return path.join(this.params.rootDir, "index.json");
   }
 
+  async open(): Promise<void> {
+    const nextWrite = this.writeQueue.then(async () => {
+      await this.ensureInitialized();
+      await fs.appendFile(this.captureFilePath, "", "utf8");
+    });
+    this.writeQueue = nextWrite;
+    await nextWrite;
+  }
+
   async append(params: {
     direction: "inbound" | "outbound";
     diagnostics?: ProtocolCaptureDiagnostics;

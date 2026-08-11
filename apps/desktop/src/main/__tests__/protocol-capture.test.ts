@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ProtocolCaptureStore, readProtocolCaptureFile } from "../testing/capture-store";
 import { analyzeProtocolCaptureTraffic } from "../testing/protocol-capture-analysis";
 import { createProtocolCaptureObserver, createProtocolCaptureFromEnv } from "../testing/protocol-capture";
+import { CodexProtocolCaptureSession } from "../diagnostics/codex-protocol-capture";
 
 async function createTempDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-protocol-capture-"));
@@ -139,6 +140,63 @@ describe("ProtocolCaptureStore", () => {
       },
       raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"model/list","params":{}}',
     });
+  });
+
+  it("starts and stops a session-local Codex diagnostic capture", async () => {
+    const rootDir = await createTempDir();
+    cleanupPaths.push(rootDir);
+    let now = Date.parse("2026-08-10T12:00:00.000Z");
+    const session = new CodexProtocolCaptureSession({
+      createCaptureId: () => "diagnostic-snippet",
+      now: () => now,
+      rootDir,
+    });
+
+    expect(session.getStatus()).toEqual({ active: false, available: true });
+    await expect(session.start()).resolves.toMatchObject({
+      active: true,
+      available: true,
+      captureFilePath: path.join(rootDir, "diagnostic-snippet.jsonl"),
+    });
+
+    await session.observer.onMessage({
+      direction: "outbound",
+      raw: '{"jsonrpc":"2.0","id":"rpc-1","method":"thread/read","params":{"threadId":"thread-1"}}',
+      envelope: {
+        jsonrpc: "2.0",
+        id: "rpc-1",
+        method: "thread/read",
+        params: { threadId: "thread-1" },
+      },
+    });
+
+    now += 5_000;
+    const result = await session.stop();
+    const captureContents = await fs.readFile(
+      path.join(rootDir, "diagnostic-snippet.jsonl"),
+      "utf8",
+    );
+    expect(result).toEqual({
+      captureFilePath: path.join(rootDir, "diagnostic-snippet.jsonl"),
+      sizeBytes: Buffer.byteLength(captureContents),
+      startedAt: "2026-08-10T12:00:00.000Z",
+      stoppedAt: "2026-08-10T12:00:05.000Z",
+    });
+    expect(captureContents).toContain('"method":"thread/read"');
+    expect(session.getStatus()).toEqual({ active: false, available: true });
+
+    await session.observer.onMessage({
+      direction: "inbound",
+      raw: '{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-1"}}',
+      envelope: {
+        jsonrpc: "2.0",
+        method: "turn/started",
+        params: { threadId: "thread-1" },
+      },
+    });
+    await expect(
+      fs.readFile(path.join(rootDir, "diagnostic-snippet.jsonl"), "utf8"),
+    ).resolves.toBe(captureContents);
   });
 
   it("creates an env-backed capture session only when recording is enabled", async () => {
