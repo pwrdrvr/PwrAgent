@@ -3,14 +3,21 @@ import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
   type AppServerBackendKind,
+  type AppServerThreadTitleSource,
+  type FederationRemoteTarget,
+  type NavigationThreadSummary,
+  type RemoteThreadPin,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import {
   listRunningDetachedCommands,
   type DetachedCommandSummary,
 } from "./app-server/codex-environment-runtime";
+import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
+import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { getIntegratedTerminalQuitSnapshot } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
+import type { IntegratedTerminalQuitThread } from "./terminal/integrated-terminal-service";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import {
   focusActiveQuitConfirmationDialog,
@@ -64,9 +71,13 @@ export type QuitManagerDependencies = {
   getConfirmationEnabled: () => boolean;
   getFocusedWindow?: () => BrowserWindow | null;
   getQuitBlockers: () => QuitBlockerSnapshot;
-  /** Best-effort thread-title lookup for the dialog's links. */
+  /**
+   * Best-effort thread-title lookup for the dialog's links, keyed by
+   * `quitBlockerTitleKey`. Takes whole items rather than thread keys because
+   * naming a row requires knowing which instance owns it.
+   */
   resolveThreadTitles?: (
-    threadKeys: string[],
+    items: QuitBlockerItem[],
   ) => Promise<Map<string, string>>;
   log: {
     info?: (message: string, meta?: Record<string, unknown>) => void;
@@ -212,24 +223,33 @@ export function buildQuitBlockerSnapshot(params: {
   };
   terminalSessions: {
     count: number;
-    threadKeys: string[];
+    threads: IntegratedTerminalQuitThread[];
   };
   actionRuns?: DetachedCommandSummary[];
 }): QuitBlockerSnapshot {
   const threadIds = [...params.inProgressThreads.threadIds].sort();
-  const terminalThreadKeys = [...params.terminalSessions.threadKeys].sort();
+  const terminalThreads = [...params.terminalSessions.threads].sort(
+    (left, right) => left.threadKey.localeCompare(right.threadKey),
+  );
+  const terminalThreadKeys = terminalThreads.map((thread) => thread.threadKey);
   const actionRuns = params.actionRuns ?? [];
 
   const items: QuitBlockerItem[] = [
+    // Turns and actions are driven by THIS instance's registry and runtime,
+    // so they are always local. Only terminals can be a peer's.
     ...threadIds.map((threadKey) => ({
       kind: "turn" as const,
       ...splitQuitThreadKey(threadKey),
       threadKey,
     })),
-    ...terminalThreadKeys.map((threadKey) => ({
+    ...terminalThreads.map((thread) => ({
       kind: "terminal" as const,
-      ...splitQuitThreadKey(threadKey),
-      threadKey,
+      ...splitQuitThreadKey(thread.threadKey),
+      threadKey: thread.threadKey,
+      ...(thread.target ? { target: thread.target } : {}),
+      // The peer's name is what separates this row from a local shell; the
+      // title alone reads as though the work is on this machine.
+      ...(thread.instanceLabel ? { detail: thread.instanceLabel } : {}),
     })),
     ...actionRuns.map((run) => ({
       kind: "action" as const,
@@ -270,11 +290,13 @@ async function withResolvedTitles(
   if (!resolve || items.length === 0) {
     return items;
   }
-  const threadKeys = [...new Set(items.map((item) => item.threadKey))];
+  const byTitleKey = new Map(
+    items.map((item) => [quitBlockerTitleKey(item), item]),
+  );
   let titles: Map<string, string>;
   try {
     titles = await Promise.race([
-      resolve(threadKeys),
+      resolve([...byTitleKey.values()]),
       new Promise<Map<string, string>>((_resolve, reject) => {
         setTimeout(
           () => reject(new Error("thread-title resolution timed out")),
@@ -289,9 +311,176 @@ async function withResolvedTitles(
     return items;
   }
   return items.map((item) => {
-    const title = titles.get(item.threadKey);
+    const title = titles.get(quitBlockerTitleKey(item));
     return title ? { ...item, title } : item;
   });
+}
+
+/**
+ * Identity of the thread a row points at. A thread key alone is not it: two
+ * instances can hold the same `backend:threadId`, and a remote row must never
+ * inherit a same-keyed local thread's name.
+ */
+export function quitBlockerTitleKey(
+  item: Pick<QuitBlockerItem, "threadKey" | "target">,
+): string {
+  return item.target
+    ? `${item.target.instanceId}::${item.threadKey}`
+    : item.threadKey;
+}
+
+type QuitBlockerThreadTitle = {
+  title?: string;
+  titleSource?: AppServerThreadTitleSource;
+};
+
+export type QuitBlockerTitleResolverDependencies = {
+  /** Threads owned by THIS instance. */
+  listLocalThreads: () => Promise<
+    ReadonlyArray<{
+      source: AppServerBackendKind;
+      id: string;
+      title?: string;
+      titleSource?: AppServerThreadTitleSource;
+    }>
+  >;
+  /** A peer's own summary of one of its threads, when it is reachable. */
+  remoteThreadSummary: (params: {
+    target: FederationRemoteTarget;
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => Promise<QuitBlockerThreadTitle | undefined>;
+  /** Locally cached rows for pinned remote threads, for offline naming. */
+  listRemoteThreadPins: () => Promise<ReadonlyArray<RemoteThreadPin>>;
+  /** Overrides `QUIT_PEER_TITLE_TIMEOUT_MS`. */
+  peerTimeoutMs?: number;
+};
+
+/**
+ * How long the peer lookups get before the cached pin rows answer instead.
+ * Deliberately well inside `QUIT_TITLE_RESOLVE_TIMEOUT_MS`: that outer race
+ * discards the WHOLE map when it fires, so a peer that has to refetch its
+ * navigation snapshot would otherwise take the locally-cached names down with
+ * it and put the operator back in front of a uuid.
+ */
+const QUIT_PEER_TITLE_TIMEOUT_MS = 750;
+
+/**
+ * Name every blocker row, asking each thread's OWNER what it is called.
+ *
+ * The local thread list cannot answer for a peer's thread — it returns
+ * nothing, the row falls back to the thread id, and the operator is asked to
+ * decide about a uuid while their sidebar shows that same thread by name. So
+ * remote rows are resolved from the peer's own navigation summary, and from
+ * the pinned row's cached summary when the peer is unreachable.
+ *
+ * Every lookup degrades to "no title" rather than throwing: a row that reads
+ * as a thread id still links correctly, and nothing here is worth delaying a
+ * quit over.
+ */
+export async function resolveQuitBlockerThreadTitles(
+  items: readonly QuitBlockerItem[],
+  dependencies: QuitBlockerTitleResolverDependencies,
+): Promise<Map<string, string>> {
+  const titles = new Map<string, string>();
+  const localItems = items.filter((item) => !item.target);
+  const remoteItems = items.flatMap((item) =>
+    item.target ? [{ item, target: item.target }] : [],
+  );
+
+  const resolveLocal = async (): Promise<void> => {
+    if (localItems.length === 0) return;
+    const threads = await dependencies.listLocalThreads();
+    const byThreadKey = new Map(
+      threads.map((thread) => [
+        buildThreadIdentityKey(thread.source, thread.id),
+        thread,
+      ]),
+    );
+    for (const item of localItems) {
+      record(titles, item, byThreadKey.get(item.threadKey));
+    }
+  };
+
+  const resolveRemote = async (): Promise<void> => {
+    if (remoteItems.length === 0) return;
+    // One store read for the whole batch; the per-item peer lookups run
+    // concurrently because each is its own round trip.
+    const pinsPromise = dependencies
+      .listRemoteThreadPins()
+      .catch(() => [] as ReadonlyArray<RemoteThreadPin>);
+    const summaries = await settleWithin(
+      Promise.all(
+        remoteItems.map(async ({ item, target }) => {
+          try {
+            return await dependencies.remoteThreadSummary({
+              target,
+              backend: item.backend as AppServerBackendKind,
+              threadId: item.threadId,
+            });
+          } catch {
+            return undefined;
+          }
+        }),
+      ),
+      dependencies.peerTimeoutMs ?? QUIT_PEER_TITLE_TIMEOUT_MS,
+      [] as Array<QuitBlockerThreadTitle | undefined>,
+    );
+    const pins = await pinsPromise;
+    const pinnedByTitleKey = new Map<string, NavigationThreadSummary>();
+    for (const pin of pins) {
+      if (pin.ref.target.scope !== "remote" || !pin.summary) continue;
+      pinnedByTitleKey.set(
+        quitBlockerTitleKey({
+          threadKey: buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId),
+          target: pin.ref.target,
+        }),
+        pin.summary,
+      );
+    }
+    remoteItems.forEach(({ item }, index) => {
+      record(
+        titles,
+        item,
+        summaries[index] ?? pinnedByTitleKey.get(quitBlockerTitleKey(item)),
+      );
+    });
+  };
+
+  await Promise.all([
+    resolveLocal().catch(() => undefined),
+    resolveRemote().catch(() => undefined),
+  ]);
+  return titles;
+}
+
+/** Resolve to `fallback` if `promise` has not settled in time. Never rejects
+ *  and never cancels: the abandoned work just stops being waited on. */
+async function settleWithin<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+): Promise<T> {
+  return await Promise.race([
+    promise,
+    new Promise<T>((resolve) => {
+      setTimeout(() => resolve(fallback), timeoutMs).unref?.();
+    }),
+  ]);
+}
+
+/** A "fallback" title IS the thread id, so recording it changes nothing but
+ *  hides that the name is unknown. */
+function record(
+  titles: Map<string, string>,
+  item: QuitBlockerItem,
+  thread: QuitBlockerThreadTitle | undefined,
+): void {
+  if (!thread || thread.titleSource === "fallback") return;
+  const title = thread.title?.trim();
+  if (title) {
+    titles.set(quitBlockerTitleKey(item), title);
+  }
 }
 
 /** Split a canonical `buildThreadIdentityKey` back into its parts. Unparseable
@@ -318,20 +507,22 @@ export const appQuitManager = createQuitManager({
       terminalSessions: getIntegratedTerminalQuitSnapshot(),
       actionRuns: listRunningDetachedCommands(),
     }),
-  resolveThreadTitles: async (threadKeys) => {
-    const wanted = new Set(threadKeys);
-    const threads = await getDesktopBackendRegistry().listThreads({
-      callerReason: "quit-confirmation",
-    });
-    const titles = new Map<string, string>();
-    for (const thread of threads) {
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      if (wanted.has(threadKey) && thread.title) {
-        titles.set(threadKey, thread.title);
-      }
-    }
-    return titles;
-  },
+  resolveThreadTitles: async (items) =>
+    await resolveQuitBlockerThreadTitles(items, {
+      listLocalThreads: async () =>
+        await getDesktopBackendRegistry().listThreads({
+          callerReason: "quit-confirmation",
+        }),
+      // Reads the peer's cached navigation snapshot, and only refetches when
+      // that has gone stale — the same source the sidebar renders these
+      // threads from, which is why it already knows the name.
+      remoteThreadSummary: async (params) =>
+        await getDesktopFederationRuntime()
+          .remoteThreadSummaries()
+          .threadFromPeer(params),
+      listRemoteThreadPins: async () =>
+        await getDesktopOverlayStore().listRemoteThreadPins(),
+    }),
   log: quitLog,
   performQuit: () => {
     app.quit();

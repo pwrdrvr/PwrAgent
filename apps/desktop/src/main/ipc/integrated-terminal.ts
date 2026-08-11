@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, type WebContents } from "electron";
 import {
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
@@ -177,10 +177,10 @@ export function disposeIntegratedTerminalIpcHandlers(): void {
 }
 
 export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnapshot {
-  const local = service?.getQuitSnapshot() ?? {
+  const local: IntegratedTerminalQuitSnapshot = service?.getQuitSnapshot() ?? {
     count: 0,
     sessionIds: [],
-    threadKeys: [],
+    threads: [],
   };
   // Quitting closes remote sessions too (the bridge ends them when the
   // window dies), so they belong in the blocker — otherwise a shell running
@@ -197,18 +197,34 @@ export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnaps
       ...local.sessionIds,
       ...remote.map((session) => session.sessionId),
     ].sort(),
-    threadKeys: [
-      ...local.threadKeys,
-      ...remote.map((session) => session.threadKey),
-    ].sort(),
+    threads: [
+      ...local.threads,
+      ...remote.map((session) => ({
+        threadKey: session.threadKey,
+        target: session.target,
+        ...(session.instanceLabel
+          ? { instanceLabel: session.instanceLabel }
+          : {}),
+      })),
+    ].sort((left, right) => left.threadKey.localeCompare(right.threadKey)),
   };
 }
 
+export type IntegratedTerminalRevealResult = {
+  revealed: boolean;
+  /**
+   * The single window hosting the session, when there is one. Callers that
+   * follow a reveal with a thread navigation use it so the request lands in
+   * the window that actually has the thread.
+   */
+  owner?: WebContents;
+};
+
 /**
- * Ask every subscribed renderer to open a thread's terminal panel. Used by the
- * quit dialog's "running work" links: clicking a terminal row should land you
- * on the thread with the shell already on screen, whatever the panel's
- * remembered hidden state was.
+ * Ask the renderers hosting a thread's shell to open its terminal panel. Used
+ * by the quit dialog's "running work" links: clicking a terminal row should
+ * land you on the thread with the shell already on screen, whatever the
+ * panel's remembered hidden state was.
  *
  * No session, no reveal. The quit dialog renders a snapshot taken when the
  * prompt opened and can sit there indefinitely once the countdown is cancelled,
@@ -217,15 +233,28 @@ export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnaps
  * session, which spawned a brand-new login shell in the home directory — a
  * fresh quit blocker, conjured by trying to look at one.
  */
-export function revealIntegratedTerminal(threadKey: string): boolean {
-  const revealed = service?.revealSession(threadKey) ?? false;
-  if (!revealed) {
-    return false;
+export function revealIntegratedTerminal(
+  threadKey: string,
+): IntegratedTerminalRevealResult {
+  if (service?.revealSession(threadKey)) {
+    // A local session is hosted by whichever windows show the thread, so the
+    // broadcast is the routing.
+    for (const webContents of subscribersForChannel(
+      INTEGRATED_TERMINAL_REVEAL_CHANNEL,
+    )) {
+      webContents.send(INTEGRATED_TERMINAL_REVEAL_CHANNEL, { threadKey });
+    }
+    return { revealed: true };
   }
-  for (const webContents of subscribersForChannel(
-    INTEGRATED_TERMINAL_REVEAL_CHANNEL,
-  )) {
+  // A remote session belongs to the one window that opened it — a federation
+  // window, or a main window showing a pinned remote thread. Telling every
+  // window to open a terminal panel for it would ask windows that do not have
+  // the thread to do something they cannot.
+  const owners = federationBridge?.revealSession(threadKey) ?? [];
+  for (const webContents of owners) {
     webContents.send(INTEGRATED_TERMINAL_REVEAL_CHANNEL, { threadKey });
   }
-  return true;
+  return owners.length > 0
+    ? { revealed: true, owner: owners.length === 1 ? owners[0] : undefined }
+    : { revealed: false };
 }

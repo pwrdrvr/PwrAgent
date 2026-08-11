@@ -4,6 +4,7 @@ import {
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_LIST_CHANNEL,
+  INTEGRATED_TERMINAL_REVEAL_CHANNEL,
   INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
   INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL,
   INTEGRATED_TERMINAL_WRITE_CHANNEL,
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => {
     localWrite: vi.fn(),
     localClose: vi.fn(),
     localSetPanelHidden: vi.fn(),
+    localRevealSession: vi.fn(() => false),
     federationWindowIds: new Set<number>(),
     federationTargets: new Map<number, { scope: "remote"; instanceId: string }>(),
     connectedPeers: [
@@ -37,7 +39,7 @@ const mocks = vi.hoisted(() => {
     localQuitSnapshot: {
       count: 0,
       sessionIds: [] as string[],
-      threadKeys: [] as string[],
+      threads: [] as Array<{ threadKey: string }>,
     },
     channelSubscribers: [] as Array<{ id: number; send: (...args: unknown[]) => void }>,
     localSessionsChanged: undefined as
@@ -85,6 +87,7 @@ vi.mock("../terminal/integrated-terminal-service", () => ({
     close = mocks.localClose;
     listSessions = vi.fn(() => []);
     setPanelHidden = mocks.localSetPanelHidden;
+    revealSession = mocks.localRevealSession;
     getQuitSnapshot = () => mocks.localQuitSnapshot;
     dispose = vi.fn();
   },
@@ -131,6 +134,7 @@ import {
   disposeIntegratedTerminalIpcHandlers,
   getIntegratedTerminalQuitSnapshot,
   registerIntegratedTerminalIpcHandlers,
+  revealIntegratedTerminal,
 } from "../ipc/integrated-terminal";
 
 function fakeWebContents(id: number): WebContents {
@@ -161,7 +165,8 @@ describe("integrated terminal IPC federation branch", () => {
         capabilities: ["remote_pty"],
       },
     ];
-    mocks.localQuitSnapshot = { count: 0, sessionIds: [], threadKeys: [] };
+    mocks.localQuitSnapshot = { count: 0, sessionIds: [], threads: [] };
+    mocks.localRevealSession.mockReturnValue(false);
     mocks.channelSubscribers = [];
     mocks.localSessionsChanged = undefined;
     disposeIntegratedTerminalIpcHandlers();
@@ -381,7 +386,7 @@ describe("integrated terminal IPC federation branch", () => {
     mocks.localQuitSnapshot = {
       count: 1,
       sessionIds: ["local-session"],
-      threadKeys: ["codex:local-thread"],
+      threads: [{ threadKey: "codex:local-thread" }],
     };
     await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
       threadKey: "codex:remote-pinned",
@@ -392,11 +397,61 @@ describe("integrated terminal IPC federation branch", () => {
 
     const snapshot = getIntegratedTerminalQuitSnapshot();
     expect(snapshot.count).toBe(2);
-    expect(snapshot.threadKeys).toEqual([
-      "codex:local-thread",
-      "codex:remote-pinned",
+    // The owning peer rides along: the quit dialog cannot name a remote
+    // thread by asking the LOCAL thread list about it.
+    expect(snapshot.threads).toEqual([
+      { threadKey: "codex:local-thread" },
+      {
+        threadKey: "codex:remote-pinned",
+        target: { scope: "remote", instanceId: "peer-a" },
+        instanceLabel: "Peer Mac",
+      },
     ]);
     expect(snapshot.sessionIds).toContain("remote-session");
+  });
+
+  it("reveals a remote terminal in the window that owns it", async () => {
+    const federationWindow = fakeWebContents(11);
+    mocks.federationWindowIds.add(11);
+    mocks.federationTargets.set(11, { scope: "remote", instanceId: "peer-a" });
+    const otherWindow = fakeWebContents(12);
+    mocks.channelSubscribers = [
+      federationWindow as unknown as { id: number; send: (...args: unknown[]) => void },
+      otherWindow as unknown as { id: number; send: (...args: unknown[]) => void },
+    ];
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, federationWindow, {
+      threadKey: "codex:remote-thread",
+      cols: 80,
+      rows: 24,
+    });
+    await invoke(INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL, federationWindow, {
+      threadKey: "codex:remote-thread",
+      hidden: true,
+    });
+
+    const result = revealIntegratedTerminal("codex:remote-thread");
+
+    // Asking only the LOCAL PTY registry reported "no such session" and the
+    // quit dialog's terminal row silently did nothing.
+    expect(result.revealed).toBe(true);
+    expect(result.owner).toBe(federationWindow);
+    const revealCalls = (
+      federationWindow.send as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.filter(
+      ([channel]) => channel === INTEGRATED_TERMINAL_REVEAL_CHANNEL,
+    );
+    expect(revealCalls).toHaveLength(1);
+    // A window that does not own the session must not open a terminal panel
+    // for a thread it may not even have.
+    expect(
+      (otherWindow.send as unknown as { mock: { calls: unknown[][] } }).mock.calls,
+    ).toHaveLength(0);
+  });
+
+  it("reports nothing to reveal when no window owns the thread", async () => {
+    mocks.localRevealSession.mockReturnValue(false);
+
+    expect(revealIntegratedTerminal("codex:vanished").revealed).toBe(false);
   });
 
   it("throws for a federation window with no remote target instead of spawning locally", async () => {

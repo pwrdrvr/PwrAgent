@@ -1,4 +1,5 @@
 import { BrowserWindow, nativeTheme } from "electron";
+import type { FederationRemoteTarget } from "@pwragent/shared";
 import { parseThreadIdentityKey } from "@pwragent/shared";
 import { revealIntegratedTerminal } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
@@ -22,9 +23,16 @@ export type QuitBlockerItem = {
   backend: string;
   threadId: string;
   threadKey: string;
+  /**
+   * Peer that owns this work, when it does not run on this machine. Both the
+   * title lookup and the row's navigation need it: a remote thread is absent
+   * from this instance's thread list and from every window but the one
+   * fronting that peer.
+   */
+  target?: FederationRemoteTarget;
   /** Resolved just before the dialog opens; falls back to the thread id. */
   title?: string;
-  /** Secondary line — the command and pid for an action, for example. */
+  /** Secondary line — the owning peer, or an action's command and pid. */
   detail?: string;
 };
 
@@ -253,10 +261,15 @@ export async function showQuitConfirmationDialog(
       if (target) {
         const parsed = parseThreadIdentityKey(target.threadKey);
         if (parsed) {
-          if (target.kind === "terminal") {
-            revealIntegratedTerminal(target.threadKey);
-          }
-          requestShowThread(parsed);
+          // The reveal knows which window hosts the shell. Reuse that: the
+          // dialog itself holds focus here, so an unrouted request falls
+          // through to whichever window subscribed first — which for a
+          // peer's thread is a window that never mounted it.
+          const revealed =
+            target.kind === "terminal"
+              ? revealIntegratedTerminal(target.threadKey)
+              : undefined;
+          requestShowThread(parsed, { preferWebContents: revealed?.owner });
         }
         finish("manual-cancel");
         return;

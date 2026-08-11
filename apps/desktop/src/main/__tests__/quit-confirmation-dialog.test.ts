@@ -11,8 +11,10 @@ type FakeDialogWindow = {
   closed: number;
   once: (event: string, handler: (...args: unknown[]) => void) => void;
   webContents: { on: () => void; setWindowOpenHandler: () => void };
+  /** The data: URL the dialog loaded, so tests can read the page it built. */
+  loadedUrl?: string;
   /** Stays pending unless a test settles it — the real load is async too. */
-  loadURL: () => Promise<void>;
+  loadURL: (url: string) => Promise<void>;
   rejectLoad: (error: Error) => void;
   isDestroyed: () => boolean;
   isMinimized: () => boolean;
@@ -42,7 +44,10 @@ function createFakeDialogWindow(): FakeDialogWindow {
       on: vi.fn(),
       setWindowOpenHandler: vi.fn(),
     },
-    loadURL: () => loaded,
+    loadURL: (url: string) => {
+      window.loadedUrl = url;
+      return loaded;
+    },
     rejectLoad: (error) => rejectLoad(error),
     isDestroyed: () => window.destroyed,
     isMinimized: () => window.minimized,
@@ -92,7 +97,10 @@ vi.mock("../settings/appearance-bootstrap", () => ({
   readBootstrapAppearance: () => ({ theme: "dark" }),
 }));
 
+import type { WebContents } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
+import { revealIntegratedTerminal } from "../ipc/integrated-terminal";
+import { requestShowThread } from "../window-show-thread";
 import {
   focusActiveQuitConfirmationDialog,
   formatQuitItemAction,
@@ -249,6 +257,101 @@ describe("raising the open quit dialog", () => {
     expect(focusActiveQuitConfirmationDialog()).toBe(true);
 
     window.listeners.get("closed")?.();
+    await expect(pending).resolves.toBe("manual-cancel");
+  });
+});
+
+describe("clicking a quit dialog row", () => {
+  afterEach(async () => {
+    for (const window of dialogWindows) {
+      if (!window.destroyed) {
+        window.listeners.get("closed")?.();
+      }
+    }
+    await Promise.resolve();
+    dialogWindows.length = 0;
+    vi.mocked(revealIntegratedTerminal).mockReset();
+  });
+
+  /**
+   * Fire the dialog's own `will-navigate` handler with a row action, using
+   * the per-dialog navigation prefix the page was actually built with.
+   */
+  function clickRow(window: (typeof dialogWindows)[number], action: string) {
+    const on = window.webContents.on as unknown as {
+      mock: { calls: Array<[string, (event: unknown, url: string) => void]> };
+    };
+    const willNavigate = on.mock.calls.find(
+      ([event]) => event === "will-navigate",
+    )?.[1];
+    if (!willNavigate) throw new Error("dialog registered no will-navigate handler");
+    const prefix = /pwragent-quit-confirmation:\/\/[^/]+\//.exec(
+      decodeURIComponent(window.loadedUrl ?? ""),
+    )?.[0];
+    if (!prefix) throw new Error("dialog page carries no navigation prefix");
+    willNavigate({ preventDefault: vi.fn() }, `${prefix}${action}`);
+  }
+
+  it("routes the show-thread request to the window that owns a remote terminal", async () => {
+    const owner = { id: 11 } as unknown as WebContents;
+    vi.mocked(revealIntegratedTerminal).mockReturnValue({
+      revealed: true,
+      owner,
+    });
+    const item: QuitBlockerItem = {
+      kind: "terminal",
+      backend: "codex",
+      threadId: "0f9c2b7a-remote",
+      threadKey: "codex:0f9c2b7a-remote",
+      target: { scope: "remote", instanceId: "peer-a" },
+    };
+    const pending = showQuitConfirmationDialog({
+      countdownSeconds: 10,
+      inProgressThreadCount: 0,
+      terminalSessionCount: 1,
+      items: [item],
+    });
+    const window = dialogWindows.at(-1)!;
+    window.listeners.get("ready-to-show")?.();
+
+    clickRow(window, formatQuitItemAction(item));
+
+    expect(revealIntegratedTerminal).toHaveBeenCalledWith(
+      "codex:0f9c2b7a-remote",
+    );
+    // The dialog is what has focus, so requestShowThread would otherwise fall
+    // back to whichever window subscribed first — for a peer's terminal that
+    // is a window with no such thread.
+    expect(requestShowThread).toHaveBeenCalledWith(
+      { backend: "codex", threadId: "0f9c2b7a-remote" },
+      { preferWebContents: owner },
+    );
+    await expect(pending).resolves.toBe("manual-cancel");
+  });
+
+  it("leaves a local terminal row on the ordinary broadcast path", async () => {
+    vi.mocked(revealIntegratedTerminal).mockReturnValue({ revealed: true });
+    const item: QuitBlockerItem = {
+      kind: "terminal",
+      backend: "codex",
+      threadId: "local-thread",
+      threadKey: "codex:local-thread",
+    };
+    const pending = showQuitConfirmationDialog({
+      countdownSeconds: 10,
+      inProgressThreadCount: 0,
+      terminalSessionCount: 1,
+      items: [item],
+    });
+    const window = dialogWindows.at(-1)!;
+    window.listeners.get("ready-to-show")?.();
+
+    clickRow(window, formatQuitItemAction(item));
+
+    expect(requestShowThread).toHaveBeenCalledWith(
+      { backend: "codex", threadId: "local-thread" },
+      { preferWebContents: undefined },
+    );
     await expect(pending).resolves.toBe("manual-cancel");
   });
 });
