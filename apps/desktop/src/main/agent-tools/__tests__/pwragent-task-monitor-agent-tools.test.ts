@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveAgentToolCatalogs } from "../agent-tool-catalog-registry";
+import { PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION } from "../agent-tool-router";
 import { buildPwrAgentTaskMonitorToolRouter } from "../pwragent-task-monitor-agent-tools";
 
 describe("PwrAgent task monitor agent tools", () => {
@@ -50,21 +51,21 @@ describe("PwrAgent task monitor agent tools", () => {
       (tool) => tool.name === "create_monitor_delegation",
     );
     expect(createMonitorTool?.description).toContain(
-      "Normally omit preferredModel and preferredReasoningEffort",
+      "Omit preferredModel and preferredReasoningEffort",
     );
     expect(createMonitorTool?.description).toContain(
-      "Do not use this to poll an attached pull request",
+      "Do not use it for an attached PR",
     );
     expect(createMonitorTool?.inputSchema).toMatchObject({
       properties: {
         preferredModel: {
           description: expect.stringContaining(
-            "Normally omit so PwrAgent uses its managed monitor default",
+            "Omit it to use the monitor default",
           ),
         },
         preferredReasoningEffort: {
           description: expect.stringContaining(
-            "Normally omit so PwrAgent uses its managed monitor default",
+            "Omit it to use the monitor default",
           ),
         },
       },
@@ -78,6 +79,35 @@ describe("PwrAgent task monitor agent tools", () => {
     expect(cancelMonitorTool?.inputSchema).toMatchObject({
       required: ["monitorId"],
     });
+  });
+
+  it("keeps reflected descriptions at 20 words or fewer", () => {
+    const descriptions = new Set<string>([
+      PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
+    ]);
+    const visit = (value: unknown): void => {
+      if (!value || typeof value !== "object") {
+        return;
+      }
+      for (const [key, child] of Object.entries(value)) {
+        if (key === "description" && typeof child === "string") {
+          descriptions.add(child);
+        } else {
+          visit(child);
+        }
+      }
+    };
+    for (const catalog of resolveAgentToolCatalogs({})) {
+      visit(catalog.dynamicTools);
+    }
+
+    for (const description of descriptions) {
+      expect(description).not.toContain(";");
+      for (const sentence of description.split(/[.!?]+(?:\s|$)/u)) {
+        const wordCount = sentence.trim().split(/\s+/u).filter(Boolean).length;
+        expect(wordCount, sentence).toBeLessThanOrEqual(20);
+      }
+    }
   });
 
   it("dispatches dynamic and MCP monitor creation with matching ACP context", async () => {

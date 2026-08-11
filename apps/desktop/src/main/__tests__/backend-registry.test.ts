@@ -8868,19 +8868,19 @@ script = "echo setup"
     const getThreadStatusTool = pwragentDynamicTools(dynamicTools)
       .find((tool) => tool.name === "get_thread_status");
     expect(getThreadStatusTool?.description).toContain(
-      "Omit backend and threadId to inspect the current thread",
+      "Omit backend and threadId for the current thread",
     );
     expect(getThreadStatusTool?.inputSchema?.required ?? []).toEqual([]);
     const attachPullRequestTool = pwragentDynamicTools(dynamicTools)
       .find((tool) => tool.name === "attach_thread_pull_request");
     expect(attachPullRequestTool?.description).toContain(
-      "Omit backend and threadId to attach to the current thread",
+      "Omit backend and threadId for the current thread",
     );
     expect(attachPullRequestTool?.inputSchema?.required ?? []).toEqual([]);
     const checkPullRequestStatusTool = pwragentDynamicTools(dynamicTools)
       .find((tool) => tool.name === "check_thread_pull_request_status");
     expect(checkPullRequestStatusTool?.description).toContain(
-      "Omit backend and threadId to check the current thread",
+      "Omit backend and threadId for the current thread",
     );
     expect(checkPullRequestStatusTool?.inputSchema?.required ?? []).toEqual([]);
     await expect(

@@ -185,21 +185,21 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "handoff_task":
-      return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend-native spawning unless the user requests it or needs an unsupported capability. Omitted settings inherit from the invoking turn. Same-project handoffs default to grouped subthreads in a new worktree; omit cwd so they inherit the caller's workspace source. Pass cwd only when the user explicitly selects another project or directory; task text never selects cwd. Cross-project handoffs are ungrouped. Use seedMode=fork only for explicit forks, same_workspace only for explicit sharing, project_local for the project checkout, and none for unscoped work. Provider overrides require a registered backend and exact model ID. Startup can take minutes; do not retry while pending. Inspect pendingHandoffs for progress, and return threadLink verbatim.";
+      return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend spawning unless the user requests it or needs an unsupported feature. Agent settings inherit from the current turn. By default, same-project handoffs create grouped subthreads in new worktrees. Omit cwd to inherit the workspace source. Set cwd only for a user-selected project or directory. Task text never selects cwd. Cross-project handoffs are not grouped. Use fork or same_workspace only when the user requests them. Use project_local for the project checkout and none for no workspace. Provider overrides need a registered backend and exact model ID. Do not retry while startup is pending. Inspect pendingHandoffs and return threadLink verbatim.";
     case "attach_thread_directory":
-      return "Attach an additional Git directory to the current PwrAgent thread. Use this for cross-project work when the user asks to link another repo or create a secondary worktree for another repo. Omitted backend targets the invoking thread. workspaceMode=local attaches the repository directory itself; workspaceMode=new_worktree asks PwrAgent to allocate and attach a managed worktree for the provided repository path. In Default Access, an untrusted path triggers operator confirmation before it can grant agent read/write/delete scope or allocate a managed worktree. This does not change the thread's primary cwd; use detach_thread_directory separately if a temporary local reference should be removed.";
+      return "Attach another Git directory to the current PwrAgent thread. Use this for user-requested cross-project work. Omit backend for the current thread. Use workspaceMode=local for the repository or new_worktree for a managed worktree. Default Access requires confirmation for an untrusted path. This tool does not change the primary cwd. Use detach_thread_directory to remove a temporary link.";
     case "detach_thread_directory":
-      return "Detach a secondary linked directory from the current PwrAgent thread. Use this only for user-requested cleanup of extra directory references. The primary provider/runtime cwd cannot be detached. Pass directoryId when known, or path/worktreePath from get_thread_status linked directory metadata.";
+      return "Detach a secondary directory from the current PwrAgent thread. Use this only when the user requests cleanup. You cannot detach the primary provider/runtime cwd. Pass directoryId when known. Otherwise, pass path or worktreePath from get_thread_status.";
     case "move_thread_workspace":
-      return "Move the current PwrAgent thread runtime workspace after the invoking turn reaches a terminal boundary. Use this when the user asks to continue this same thread from an isolated worktree instead of creating a child handoff thread. The operation is path-keyed: pass sourcePath when the thread has multiple linked directories or when the intended workspace is not obvious. The tool returns a pending workspaceMoveId and stop-and-wait guidance; after the current turn ends, PwrAgent performs the move, updates future-turn cwd metadata, rebinds an ACP session when required, and starts a same-thread continuation with the result. Do not keep editing after a successful call in the invoking turn; wait for the continuation or inspect get_thread_status pendingWorkspaceMoves.";
+      return "Move the current thread workspace after this turn ends. Use this to move this thread to an isolated worktree. Do not create a child thread. Pass sourcePath when the thread has multiple directories or the source is unclear. After success, stop work and end the turn. PwrAgent moves the workspace, updates cwd, reconnects ACP when necessary, and starts a continuation. Check pendingWorkspaceMoves only after the turn.";
     case "send_message_to_thread":
-      return "Send an ordinary follow-up prompt as a new turn to another existing PwrAgent thread. If the target already has an active turn, this schedules/queues the follow-up instead of steering that turn. Use steer_thread when guidance must reach a long-running active turn at its next tool completion or message boundary, and stop_thread only for an urgent interruption. Use search_threads or read_thread first when the target threadId is unknown. Pass instanceId when a remote create/search result or thread link supplied it; omit it for local threads and older results, which PwrAgent resolves through durable ownership metadata and connected-peer discovery. Set includeRemote=false for a local-only lookup. Do not use this for the current thread; reply normally instead. The result includes threadLink, a ready-made markdown link to the target thread. When you mention that thread to the user, include threadLink verbatim instead of the raw threadId so it renders as a clickable chip.";
+      return "Send a follow-up as a new turn to another PwrAgent thread. If a turn is active, PwrAgent queues the follow-up. Use steer_thread for guidance to the active turn. Use stop_thread for an urgent interruption. Find an unknown thread with search_threads or read_thread. Pass instanceId from a remote result when available. Set includeRemote=false for local resolution. Reply normally to the current thread. Return threadLink verbatim.";
     case "steer_thread":
-      return "Steer the active turn on another PwrAgent thread. Use this when the target is likely to run for a while and guidance needs to reach it at the next tool completion or message boundary, avoiding wasted time and tokens. This preserves real steer semantics: it never reports a queued follow-up as steered. Use send_message_to_thread for an ordinary queued/new-turn follow-up and stop_thread for an urgent interruption. The owning local or federated instance discovers the active turn and rejects stale expectedTurnId races. Pass instanceId when known; set includeRemote=false for local-only resolution. requestId is an idempotency key: reuse it only to retry the exact same steer. The current thread cannot steer itself through this tool; reply normally instead.";
+      return "Steer the active turn on another PwrAgent thread. Use this when guidance must reach a long turn at the next tool boundary. This tool never reports a queued follow-up as steered. Use send_message_to_thread for a new turn and stop_thread for an urgent interruption. The owner rejects a stale expectedTurnId. Pass instanceId when known. Set includeRemote=false for local resolution. Reuse requestId only to retry the same steer. This thread cannot steer itself.";
     case "stop_thread":
-      return "Immediately interrupt the active turn on another PwrAgent thread. Use this high-urgency control only when the target must stop promptly; it calls the owning backend's interrupt operation and never queues text. It works for local and federated targets through turn-control routing. The owning instance discovers the active turn and rejects stale expectedTurnId races. Pass instanceId when known; set includeRemote=false for local-only resolution. requestId is an idempotency key: reuse it only to retry the exact same stop. The current turn cannot stop itself through this tool because its tool result could not be delivered safely.";
+      return "Stop the active turn on another PwrAgent thread immediately. Use this only for an urgent interruption. This tool interrupts the backend and does not queue text. The owner rejects a stale expectedTurnId. Pass instanceId when known. Set includeRemote=false for local resolution. Reuse requestId only to retry the same stop. This thread cannot stop itself.";
     case "start_review":
-      return "Schedule a code review of the invoking PwrAgent thread after the current turn completes successfully. Use this only when the operator explicitly asks for a review. Choose one structured target: uncommittedChanges, baseBranch, commit, or custom. The tool returns a pendingReviewId; after a successful call, stop work and let the current turn finish so PwrAgent can start the review. Do not poll or call the tool again for the same request.";
+      return "Schedule a review of this PwrAgent thread after the current turn ends successfully. Use this only after an explicit operator request. Select one target type. After success, stop work and end the turn. Do not poll or call this tool again.";
   }
 }
 
@@ -216,7 +216,7 @@ function inputSchemaForOperation(
           backend: {
             type: "string",
             description:
-              "Optional backend override. Omitted defaults to the invoking thread backend; the first implementation supports the current thread only.",
+              "Optional backend override. Omit it for the current thread. This implementation supports only the current thread.",
           },
           path: {
             type: "string",
@@ -227,7 +227,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: ATTACH_THREAD_DIRECTORY_WORKSPACE_MODES,
             description:
-              "`local` attaches the repository directory itself and is the default. `new_worktree` asks PwrAgent to allocate a managed worktree for that repository and attach it after the source repo path is trusted.",
+              "`local` attaches the repository and is the default. `new_worktree` creates and attaches a managed worktree after PwrAgent trusts the source path.",
           },
           branchName: {
             type: "string",
@@ -250,7 +250,7 @@ function inputSchemaForOperation(
           backend: {
             type: "string",
             description:
-              "Optional backend override. Omitted defaults to the invoking thread backend; the first implementation supports the current thread only.",
+              "Optional backend override. Omit it for the current thread. This implementation supports only the current thread.",
           },
           directoryId: {
             type: "string",
@@ -291,24 +291,24 @@ function inputSchemaForOperation(
             type: "string",
             enum: HANDOFF_TASK_SEED_MODES,
             description:
-              "`clean` starts a fresh thread and is the default. `fork` copies the current thread transcript and should be used only when the user explicitly asks to fork this thread.",
+              "`clean` starts a new thread and is the default. `fork` copies this transcript. Use `fork` only when the user requests it.",
           },
           groupingMode: {
             type: "string",
             enum: HANDOFF_TASK_GROUPING_MODES,
             description:
-              "`subthread` defaults for same-project handoffs; `none` is explicitly ungrouped. Cross-project handoffs are always ungrouped.",
+              "`subthread` is the same-project default. `none` does not group the thread. Cross-project handoffs are never grouped.",
           },
           workspaceMode: {
             type: "string",
             enum: HANDOFF_TASK_WORKSPACE_MODES,
             description:
-              "`new_worktree` requests an isolated Git worktree and is the default for workspace-backed handoffs; set branchName to an existing base ref such as `origin/master` when the user asks for a specific source branch. `same_workspace` shares the selected cwd and is valid only with groupingMode=subthread. `project_local` uses the selected project's primary/local checkout. `none` allows a no-workspace thread. `same` is a legacy alias for `same_workspace`.",
+              "`new_worktree` is the default for workspace handoffs. `same_workspace` requires groupingMode=subthread. `project_local` uses the project checkout. `none` uses no workspace. `same` aliases `same_workspace`.",
           },
           cwd: {
             type: "string",
             description:
-              "Omit to inherit the caller workspace. Set only when the user explicitly selects another project or directory; task text does not select cwd.",
+              "Omit cwd to inherit the current workspace. Set it only for a user-selected project or directory. Task text does not select cwd.",
           },
           messagingAttachment: {
             type: "string",
@@ -319,7 +319,7 @@ function inputSchemaForOperation(
           backend: {
             type: "string",
             description:
-              "Registered backend override; omitted inherits the caller (Grok: `acp:grok`).",
+              "Registered backend override. Omit it to inherit the current backend. Use `acp:grok` for Grok.",
           },
           model: {
             type: "string",
@@ -335,7 +335,7 @@ function inputSchemaForOperation(
           branchName: {
             type: "string",
             description:
-              "Optional existing base branch/ref for workspaceMode=new_worktree, for example `origin/master`. This is not the new feature branch name; tell the delegated thread to create or switch to its work branch in the task text.",
+              "Existing base ref for workspaceMode=new_worktree, such as `origin/main`. This is not a new branch name. Put branch creation in the task.",
           },
         },
       };
@@ -347,7 +347,7 @@ function inputSchemaForOperation(
           backend: {
             type: "string",
             description:
-              "Optional backend override. Omitted defaults to the invoking thread backend; same-thread moves require the invoking backend.",
+              "Optional backend override. Omit it for the current backend. A same-thread move must use the current backend.",
           },
           direction: {
             type: "string",

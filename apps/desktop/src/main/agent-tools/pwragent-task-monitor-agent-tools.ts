@@ -16,7 +16,7 @@ import {
 import { AgentToolRouter } from "./agent-tool-router.js";
 
 export const TASK_MONITOR_CREATE_TOOL_DESCRIPTION =
-  "Create and start a lightweight PwrAgent-managed monitor thread for long-running asynchronous work or repeatable status checks. Do not use this to poll an attached pull request when PwrAgent PR automation can wake the thread: call check_thread_pull_request_status, follow prAutomation.guidance, and use watch_thread_pull_request for one-shot success/failure notification. Use this monitor for other work that may take more than one short status check, especially when you are about to sleep/wait/poll every few seconds for a command, job, service, or external operation to finish. If you have checked something for progress for about 30 seconds and the check is repeatable, hand it to this monitor with enough context to run that check for you. The task and monitorContext must include the exact monitoring procedure the parent was about to run itself: cwd or target location, command/status command or wait API, poll cadence, terminal success/failure conditions, and relevant log collection steps. Do not pass parent-local Codex/tool session ids such as exec_command/write_stdin session_id values; monitor threads cannot access those sessions, stdout/stderr streams, stdin, or exit status. For a local build/test/script, delegate before starting it and provide cwd plus the exact command so the monitor starts it and captures output itself. Prefer separate stdout/stderr capture files plus a combined output file when practical, and include those file paths in the final handoff. If the command is already running, provide durable process/log/status files that the monitor can read. Use pollIntervalSeconds as the combined poll and heartbeat cadence; default to 30 seconds unless the delegated procedure clearly needs a different cadence. Normally omit preferredModel and preferredReasoningEffort so PwrAgent applies the managed monitor defaults. Specify them only when the user explicitly requests an override or applicable user/project instructions require one; do not infer overrides from the parent model or task complexity. PwrAgent starts the monitor with the returned preferred model/reasoning settings and the monitor callback tools attached; do not call generic spawnAgent for this flow.";
+  "Create a PwrAgent monitor thread for long tasks or repeated status checks. Do not use it for an attached PR when PR automation can wake the thread. Use check_thread_pull_request_status and follow prAutomation.guidance. Use watch_thread_pull_request for one-time PR success or failure notifications. Delegate a repeatable check after about 30 seconds of parent polling. Give the monitor the target, exact check, interval, success and failure conditions, and log steps. Do not pass local tool session IDs. A monitor cannot access parent streams, input, or exit status. Delegate a local command before it starts so the monitor can run and capture it. For an active command, provide durable process, log, or status files. Use pollIntervalSeconds for polling and heartbeats. The default is 30 seconds. Omit preferredModel and preferredReasoningEffort unless the user or project instructions require an override. Do not use backend spawn tools for this workflow.";
 
 export const TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA = {
   type: "object",
@@ -28,12 +28,12 @@ export const TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA = {
     preferredModel: {
       type: "string",
       description:
-        "Optional explicit override. Normally omit so PwrAgent uses its managed monitor default; specify only when the user explicitly requests an override or applicable user/project instructions require one.",
+        "Optional override. Omit it to use the monitor default. Set it only when the user or project instructions require an override.",
     },
     preferredReasoningEffort: {
       type: "string",
       description:
-        "Optional explicit override. Normally omit so PwrAgent uses its managed monitor default; specify only when the user explicitly requests an override or applicable user/project instructions require one.",
+        "Optional override. Omit it to use the monitor default. Set it only when the user or project instructions require an override.",
     },
     finalHandoffPrompt: { type: "string" },
   },
@@ -42,7 +42,7 @@ export const TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA = {
 } satisfies Record<string, unknown>;
 
 export const TASK_MONITOR_CANCEL_TOOL_DESCRIPTION =
-  "Cancel an active PwrAgent-managed monitor delegation immediately. Use the monitorId returned by create_monitor_delegation. This interrupts the monitor's active turn, records a cancelled result in the parent thread, and does not start or queue another parent turn. Use this instead of send_message_to_thread when a running monitor must stop.";
+  "Cancel an active PwrAgent monitor now. Pass the monitorId from create_monitor_delegation. This interrupts the monitor and records cancellation in the parent thread. It does not start or queue a parent turn. Use this instead of send_message_to_thread to stop a monitor.";
 
 export const TASK_MONITOR_CANCEL_TOOL_INPUT_SCHEMA = {
   type: "object",
