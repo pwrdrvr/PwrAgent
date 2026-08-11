@@ -3911,6 +3911,7 @@ export class DesktopFederationRuntime {
     if (
       event.notification.method === "thread/pullRequests/updated"
       || event.notification.method === "thread/reactions/updated"
+      || event.notification.method === "thread/name/updated"
     ) {
       this.remoteThreadSummaryCache?.invalidate(sourceInstanceId);
     }

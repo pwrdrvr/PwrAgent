@@ -6571,6 +6571,13 @@ export class DesktopBackendRegistry {
    */
   private readonly notificationThreadTitles = new Map<string, string>();
   private readonly notificationThreadProjectLabels = new Map<string, string>();
+  /**
+   * Live `thread/name/updated` observations are newer than the provider's
+   * thread list during an active turn. Reconcile list rows through this map so
+   * federation snapshots and remote search do not regress to a placeholder
+   * after the local renderer has already received the generated name.
+   */
+  private readonly observedThreadNames = new Map<string, string>();
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
@@ -7834,31 +7841,38 @@ export class DesktopBackendRegistry {
       skipArchivedMetadataRefresh:
         normalizedParams.skipArchivedMetadataRefresh === true,
     });
+    // An event can invalidate or replace this entry while the read awaits
+    // enrichment. Only the promise that still owns the key may publish it.
+    const pendingState: ThreadListCacheState = {};
     const promise = this.readThreadList(normalizedParams)
       .then((threads) => {
-        this.threadListCache.set(cacheKey, {
-          expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
-          threads,
-        });
-        logDebug("threadListCache:store", {
-          archived: normalizedParams.archived === true,
-          backend: normalizedParams.backend ?? "all",
-          callerReason: normalizedParams.callerReason ?? "thread-list",
-          durationMs: Date.now() - startedAt,
-          enrichDirectories: normalizedParams.enrichDirectories,
-          expiresInMs: THREAD_LIST_REUSE_WINDOW_MS,
-          filterPresent: Boolean(normalizedParams.filter?.trim()),
-          forceRefresh: normalizedParams.forceRefresh === true,
-          limit: normalizedParams.limit,
-          maxPages: normalizedParams.maxPages,
-          skipArchivedMetadataRefresh:
-            normalizedParams.skipArchivedMetadataRefresh === true,
-          threadCount: threads.length,
-        });
+        if (this.threadListCache.get(cacheKey) === pendingState) {
+          this.threadListCache.set(cacheKey, {
+            expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
+            threads,
+          });
+          logDebug("threadListCache:store", {
+            archived: normalizedParams.archived === true,
+            backend: normalizedParams.backend ?? "all",
+            callerReason: normalizedParams.callerReason ?? "thread-list",
+            durationMs: Date.now() - startedAt,
+            enrichDirectories: normalizedParams.enrichDirectories,
+            expiresInMs: THREAD_LIST_REUSE_WINDOW_MS,
+            filterPresent: Boolean(normalizedParams.filter?.trim()),
+            forceRefresh: normalizedParams.forceRefresh === true,
+            limit: normalizedParams.limit,
+            maxPages: normalizedParams.maxPages,
+            skipArchivedMetadataRefresh:
+              normalizedParams.skipArchivedMetadataRefresh === true,
+            threadCount: threads.length,
+          });
+        }
         return threads;
       })
       .catch((error) => {
-        this.threadListCache.delete(cacheKey);
+        if (this.threadListCache.get(cacheKey) === pendingState) {
+          this.threadListCache.delete(cacheKey);
+        }
         logDebug("threadListCache:error", {
           archived: normalizedParams.archived === true,
           backend: normalizedParams.backend ?? "all",
@@ -7875,7 +7889,8 @@ export class DesktopBackendRegistry {
         });
         throw error;
       });
-    this.threadListCache.set(cacheKey, { promise });
+    pendingState.promise = promise;
+    this.threadListCache.set(cacheKey, pendingState);
     return await promise;
   }
 
@@ -18680,15 +18695,64 @@ export class DesktopBackendRegistry {
     callerReason?: string;
     ownerId?: string;
   }): Promise<AppServerThreadSummary[]> {
-    const defaultThreads = await this.codexClient
-      .listThreads(params, diagnostics)
-      .catch((error) => {
-        if (diagnostics?.callerReason === "archive-cleanup") {
-          throw error;
-        }
+    const observedFilterThreadIds =
+      this.observedCodexThreadIdsMatchingFilter(params.filter);
+    // Codex applies searchTerm before returning rows. During its naming lag,
+    // fetch unfiltered candidates only when a live observed title matches the
+    // query, then retain just those thread ids alongside provider matches.
+    const [providerFilteredThreads, observedFilterCandidates] =
+      await Promise.all([
+        this.codexClient
+          .listThreads(params, diagnostics)
+          .catch((error) => {
+            if (diagnostics?.callerReason === "archive-cleanup") {
+              throw error;
+            }
 
-        return [];
-      });
+            return [];
+          }),
+        observedFilterThreadIds.size > 0
+          ? this.codexClient.listThreads(
+              {
+                ...params,
+                filter: undefined,
+                limit: undefined,
+                maxPages: undefined,
+              },
+              diagnostics
+                ? {
+                    ...diagnostics,
+                    callerReason:
+                      `${diagnostics.callerReason ?? "thread-list"}:observed-name-filter`,
+                  }
+                : undefined,
+            ).catch((error) => {
+              backendRegistryLog.debug(
+                "live Codex name filter fallback failed",
+                {
+                  error: error instanceof Error ? error.message : String(error),
+                  filter: params.filter,
+                },
+              );
+              return [];
+            })
+          : Promise.resolve([]),
+      ]);
+    const providerFilteredThreadIds = new Set(
+      providerFilteredThreads.map((thread) => thread.id),
+    );
+    const defaultThreadsById = new Map(
+      providerFilteredThreads.map((thread) => [thread.id, thread]),
+    );
+    for (const thread of observedFilterCandidates) {
+      if (
+        observedFilterThreadIds.has(thread.id)
+        && !defaultThreadsById.has(thread.id)
+      ) {
+        defaultThreadsById.set(thread.id, thread);
+      }
+    }
+    const defaultThreads = [...defaultThreadsById.values()];
     const nativeSubAgentThreads =
       !params.archived &&
       !params.filter?.trim() &&
@@ -18770,11 +18834,19 @@ export class DesktopBackendRegistry {
       }),
     );
 
-    const statusReconciledThreads = enrichedThreads.map((thread) =>
-      this.reconcileCodexThreadListStatus(thread)
-    );
+    const statusReconciledThreads = enrichedThreads
+      .map((thread) => this.reconcileCodexThreadListStatus(thread))
+      .map((thread) => this.withObservedThreadName(thread));
+    const normalizedFilter = params.filter?.trim().toLowerCase();
+    const filteredThreads = normalizedFilter && observedFilterThreadIds.size > 0
+      ? statusReconciledThreads.filter(
+          (thread) =>
+            providerFilteredThreadIds.has(thread.id)
+            || thread.title.toLowerCase().includes(normalizedFilter),
+        )
+      : statusReconciledThreads;
 
-    return statusReconciledThreads.sort(
+    return filteredThreads.sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
   }
@@ -28137,10 +28209,9 @@ export class DesktopBackendRegistry {
       if (typeof threadId === "string" && typeof threadName === "string") {
         const trimmed = threadName.trim();
         if (trimmed) {
-          this.notificationThreadTitles.set(
-            buildThreadIdentityKey(event.backend, threadId),
-            trimmed,
-          );
+          const key = buildThreadIdentityKey(event.backend, threadId);
+          this.notificationThreadTitles.set(key, trimmed);
+          this.observedThreadNames.set(key, trimmed);
         }
       }
       return;
@@ -28156,6 +28227,46 @@ export class DesktopBackendRegistry {
       }
       this.rememberThreadNotificationContext(event.backend, threadId, params.thread);
     }
+  }
+
+  private withObservedThreadName(
+    thread: AppServerThreadSummary,
+  ): AppServerThreadSummary {
+    const key = buildThreadIdentityKey(thread.source, thread.id);
+    const observedName = this.observedThreadNames.get(key);
+    if (!observedName) {
+      return thread;
+    }
+    if (thread.titleSource === "explicit") {
+      // Matching explicit text means the provider acknowledged our event.
+      // Different explicit text is durable provider truth from a rename this
+      // process may not have observed (profiles can be shared by processes).
+      this.observedThreadNames.delete(key);
+      return thread;
+    }
+    return {
+      ...thread,
+      title: observedName,
+      titleSource: "explicit",
+    };
+  }
+
+  private observedCodexThreadIdsMatchingFilter(filter?: string): Set<string> {
+    const normalizedFilter = filter?.trim().toLowerCase();
+    const threadIds = new Set<string>();
+    if (!normalizedFilter) {
+      return threadIds;
+    }
+    const keyPrefix = buildThreadIdentityKey("codex", "");
+    for (const [key, observedName] of this.observedThreadNames) {
+      if (
+        key.startsWith(keyPrefix)
+        && observedName.toLowerCase().includes(normalizedFilter)
+      ) {
+        threadIds.add(key.slice(keyPrefix.length));
+      }
+    }
+    return threadIds;
   }
 
   private rememberThreadNotificationContext(
@@ -28711,6 +28822,7 @@ export class DesktopBackendRegistry {
       this.recordTaskMonitorActivity(event.notification);
     }
 
+    this.rememberThreadTitleFromEvent(event);
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
       this.invalidateThreadListCache(event.backend);
     }
@@ -29171,7 +29283,6 @@ export class DesktopBackendRegistry {
     await this.recordCodexNativeSubAgentNames(event);
     await this.recordTaskMonitorUsage(event);
 
-    this.rememberThreadTitleFromEvent(event);
     this.notifyForAttentionRequired(event);
     await this.notifyForTerminalOutcome(event);
 

@@ -1514,6 +1514,7 @@ class MockBackendClient {
       rateLimits?: BackendRateLimitSummary[];
       listThreadsError?: Error;
       listThreadsDelay?: Promise<unknown>;
+      respectThreadTitleFilter?: boolean;
       archivedThreads?: AppServerThreadSummary[];
       archiveThreadError?: Error;
       startThreadResult?: { threadId: string };
@@ -1572,10 +1573,14 @@ class MockBackendClient {
     if (this.options.listThreadsDelay) {
       await this.options.listThreadsDelay;
     }
-    if (params?.archived === true && this.options.archivedThreads) {
-      return this.options.archivedThreads;
-    }
-    return this.options.threads ?? [];
+    const threads =
+      params?.archived === true && this.options.archivedThreads
+        ? this.options.archivedThreads
+        : this.options.threads ?? [];
+    const filter = params?.filter?.trim().toLowerCase();
+    return this.options.respectThreadTitleFilter && filter
+      ? threads.filter((thread) => thread.title.toLowerCase().includes(filter))
+      : threads;
   }
 
   async listNativeSubAgentThreads(params?: {
@@ -4442,6 +4447,266 @@ describe("DesktopBackendRegistry", () => {
         id: "session-1",
         title: "Exploring PwrSnap Project",
       }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("exposes live Codex thread names while thread/list still returns the placeholder", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        title: "Untitled thread",
+        titleSource: "fallback",
+      }),
+    ]);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "Sync generated names over federation",
+        },
+      },
+    });
+
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        title: "Sync generated names over federation",
+        titleSource: "explicit",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("reconciles a Codex name update that arrives during list enrichment", async () => {
+    const enrichment = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const getThreadOverlayStates = vi.spyOn(
+      overlayStore,
+      "getThreadOverlayStates",
+    ).mockImplementation(async () => {
+      await enrichment.promise;
+      return {};
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    const pendingList = registry.listThreads({ backend: "codex" });
+    await waitForCondition(() => getThreadOverlayStates.mock.calls.length === 1);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "Sync generated names over federation",
+        },
+      },
+    });
+    enrichment.resolve();
+
+    await expect(pendingList).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        title: "Sync generated names over federation",
+        titleSource: "explicit",
+      }),
+    ]);
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        title: "Sync generated names over federation",
+      }),
+    ]);
+    expect(codexClient.listThreadsCallCount).toBe(2);
+
+    await registry.close();
+  });
+
+  it("includes live Codex name matches omitted by provider-side filtering", async () => {
+    const codexClient = new MockBackendClient({
+      respectThreadTitleFilter: true,
+      threads: [
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.listThreads({ backend: "codex" });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "Sync generated names over federation",
+        },
+      },
+    });
+
+    await expect(
+      registry.listThreads({
+        backend: "codex",
+        filter: "generated names",
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        title: "Sync generated names over federation",
+      }),
+    ]);
+    expect(codexClient.listThreadsCalls.map(({ params }) => params?.filter))
+      .toEqual([undefined, "generated names", undefined]);
+
+    await registry.close();
+  });
+
+  it("retires observed Codex names when the provider acknowledges them", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "First generated name",
+        },
+      },
+    });
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({ title: "First generated name" }),
+    ]);
+
+    codexClient.setThreads([
+      {
+        id: "thread-1",
+        title: "First generated name",
+        titleSource: "explicit",
+        linkedDirectories: [],
+        source: "codex",
+      },
+    ]);
+    await registry.listThreads({ backend: "codex", forceRefresh: true });
+    codexClient.setThreads([
+      {
+        id: "thread-1",
+        title: "New name from another process",
+        titleSource: "explicit",
+        linkedDirectories: [],
+        source: "codex",
+      },
+    ]);
+
+    await expect(
+      registry.listThreads({ backend: "codex", forceRefresh: true }),
+    ).resolves.toEqual([
+      expect.objectContaining({ title: "New name from another process" }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("trusts a different explicit provider name over an unacknowledged observation", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "First generated name",
+        },
+      },
+    });
+    codexClient.setThreads([
+      {
+        id: "thread-1",
+        title: "New name from another process",
+        titleSource: "explicit",
+        linkedDirectories: [],
+        source: "codex",
+      },
+    ]);
+
+    await expect(
+      registry.listThreads({ backend: "codex", forceRefresh: true }),
+    ).resolves.toEqual([
+      expect.objectContaining({ title: "New name from another process" }),
     ]);
 
     await registry.close();
