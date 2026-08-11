@@ -9,20 +9,21 @@ import { StarMapScreen } from "../StarMapScreen";
  * empty space, so the modifier is what keeps them apart.
  */
 
+/** What the map learns about itself once federation health lands. */
+const LOCAL_HEALTH = {
+  enabled: false,
+  role: "client" as const,
+  status: "disabled" as const,
+  instanceId: "pwr_local",
+  localCelestialIcon: "sun" as const,
+  localLabel: "Harold-MBP-M5-Max",
+  localProfileName: "default",
+  peers: [],
+};
+
 function buildDesktopApi(): DesktopApi {
   return {
-    readFederationHealth: vi.fn(async () => ({
-      health: {
-        enabled: false,
-        role: "client" as const,
-        status: "disabled" as const,
-        instanceId: "pwr_local",
-        localCelestialIcon: "sun" as const,
-        localLabel: "Harold-MBP-M5-Max",
-        localProfileName: "default",
-        peers: [],
-      },
-    })),
+    readFederationHealth: vi.fn(async () => ({ health: LOCAL_HEALTH })),
     onAgentEvent: vi.fn(() => () => undefined),
     readStarMapArrangement: vi.fn(async () => ({ entries: [] })),
     setStarMapCardPosition: vi.fn(async () => undefined),
@@ -89,8 +90,24 @@ function renderMap(
   };
 }
 
-/** Sweep the whole cloud, so every card lands in the selection. */
-function sweepEverything(modifier: "shiftKey" | "metaKey" = "shiftKey") {
+/**
+ * Sweep the whole cloud, so every card lands in the selection.
+ *
+ * Waits for the cards to carry their owning instance's DURABLE id first.
+ * `ready()` only proves the instance body rendered; the local cloud is
+ * keyed "local" until `readFederationHealth` resolves, and a sweep in that
+ * window builds a selection of keys that name a cloud about to disappear.
+ * Nothing retries it, so the assertion that follows measures a race rather
+ * than the selection. This is a precondition, not a timeout — a slower
+ * machine widens the window, which is why CI hit it and this laptop rarely
+ * did.
+ */
+async function sweepEverything(modifier: "shiftKey" | "metaKey" = "shiftKey") {
+  await waitFor(() => {
+    const keys = shells().map((shell) => shell.dataset.cardKey ?? "");
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every((key) => key.startsWith("pwr_local::"))).toBe(true);
+  });
   fireEvent.pointerDown(viewport(), {
     button: 0,
     [modifier]: true,
@@ -160,14 +177,7 @@ describe("star map marquee selection", () => {
     expect(document.querySelector(".star-map-card-shell--selected")).toBeNull();
 
     // A sweep large enough to cover the whole cloud.
-    fireEvent.pointerDown(viewport(), {
-      button: 0,
-      shiftKey: true,
-      clientX: -4000,
-      clientY: -4000,
-    });
-    fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
-    fireEvent.pointerUp(window, { clientX: 4000, clientY: 4000 });
+    await sweepEverything();
 
     await waitFor(() => {
       expect(
@@ -213,14 +223,7 @@ describe("star map marquee selection", () => {
     renderMap(4);
     await ready();
 
-    fireEvent.pointerDown(viewport(), {
-      button: 0,
-      shiftKey: true,
-      clientX: -4000,
-      clientY: -4000,
-    });
-    fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
-    fireEvent.pointerUp(window, { clientX: 4000, clientY: 4000 });
+    await sweepEverything();
 
     await waitFor(() => {
       expect(
@@ -263,7 +266,7 @@ describe("star map selection is amendable", () => {
     await ready();
     expect(screen.queryByText(/cards selected/)).toBeNull();
 
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => {
       expect(screen.getByText(/\d+ cards selected/)).toBeTruthy();
     });
@@ -273,7 +276,7 @@ describe("star map selection is amendable", () => {
   it("clears the selection on a click on empty canvas", async () => {
     renderMap(4);
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
 
     // Press and release in the same spot: a click, not an abandoned pan.
@@ -286,7 +289,7 @@ describe("star map selection is amendable", () => {
   it("keeps the selection when a pan is released somewhere else", async () => {
     renderMap(4);
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
     const before = selectedShells().length;
 
@@ -301,7 +304,7 @@ describe("star map selection is amendable", () => {
     const onClose = vi.fn();
     renderMap(4, { onClose });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
 
     const layer = document.querySelector(".star-map");
@@ -319,7 +322,7 @@ describe("star map selection is amendable", () => {
   it("takes a card back out of the selection on a modifier-click", async () => {
     renderMap(4);
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
     const before = selectedShells().length;
 
@@ -336,7 +339,7 @@ describe("star map selection is amendable", () => {
   it("extends the selection on a Cmd-sweep and replaces it on a Shift-sweep", async () => {
     renderMap(4);
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
     const before = selectedShells().length;
 
@@ -367,7 +370,7 @@ describe("star map selection is amendable", () => {
     const desktopApi = buildDesktopApi();
     const { showThreads } = renderMap(4, { desktopApi });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBe(4));
 
     // Two cards leave — a filter change, or the instance that owns them
@@ -415,7 +418,7 @@ describe("star map card menu acts on the selection", () => {
     const desktopApi = buildMutatingDesktopApi();
     renderMap(4, { desktopApi });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells()).toHaveLength(4));
 
     openCardMenu("t0");
@@ -437,7 +440,7 @@ describe("star map card menu acts on the selection", () => {
     const desktopApi = buildMutatingDesktopApi();
     renderMap(3, { desktopApi });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells()).toHaveLength(3));
 
     openCardMenu("t1");
@@ -458,7 +461,7 @@ describe("star map card menu acts on the selection", () => {
     const desktopApi = buildMutatingDesktopApi();
     renderMap(4, { desktopApi });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells()).toHaveLength(4));
 
     // Take one card back out, then use its kebab: the menu is about the
@@ -491,7 +494,7 @@ describe("star map card menu acts on the selection", () => {
     const onRefreshLocalThreads = vi.fn();
     renderMap(3, { desktopApi, onRefreshLocalThreads });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells()).toHaveLength(3));
 
     openCardMenu("t0");
@@ -524,7 +527,7 @@ describe("star map card menu acts on the selection", () => {
     const onRefreshLocalThreads = vi.fn();
     renderMap(4, { desktopApi, onRefreshLocalThreads });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells()).toHaveLength(4));
 
     openCardMenu("t0");
@@ -544,7 +547,7 @@ describe("star map card menu acts on the selection", () => {
     const desktopApi = buildMutatingDesktopApi();
     const { showThreads } = renderMap(4, { desktopApi });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(selectedShells()).toHaveLength(4));
 
     // Two cards leave — a filter change, or their instance dropping. They
@@ -566,7 +569,7 @@ describe("star map card menu acts on the selection", () => {
     const desktopApi = buildMutatingDesktopApi();
     renderMap(4, { desktopApi });
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(screen.getByText("4 cards selected")).toBeTruthy());
 
     openCardMenu("t0");
@@ -600,7 +603,7 @@ describe("star map selection stops at the projects lens", () => {
     // The cards are on screen, so the sweep has something to miss.
     await waitFor(() => expect(shells()).toHaveLength(4));
 
-    sweepEverything();
+    await sweepEverything();
     await act(async () => {
       await Promise.resolve();
     });
@@ -611,10 +614,60 @@ describe("star map selection stops at the projects lens", () => {
     expect(screen.getByRole("menuitem", { name: "Archive thread" })).toBeTruthy();
   });
 
+  it("drops a selection swept before the durable instance id arrived", async () => {
+    // Every pending read, not just the last one: `useCelestialIcons` reads
+    // federation health too, so holding a single resolver lands the wrong
+    // caller's promise and leaves the one that owns `instanceId` hanging.
+    const pendingHealthReads: ((value: unknown) => void)[] = [];
+    const desktopApi = {
+      ...buildDesktopApi(),
+      readFederationHealth: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            pendingHealthReads.push(resolve);
+          }),
+      ),
+    } as unknown as DesktopApi;
+    renderMap(4, { desktopApi });
+
+    // Cards render under the placeholder id while health is still in
+    // flight — this is the window a real operator can sweep in.
+    await waitFor(() => expect(shells()).toHaveLength(4));
+    expect(shells()[0].dataset.cardKey?.startsWith("local::")).toBe(true);
+
+    fireEvent.pointerDown(viewport(), {
+      button: 0,
+      shiftKey: true,
+      clientX: -4000,
+      clientY: -4000,
+    });
+    fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
+    fireEvent.pointerUp(window, { clientX: 4000, clientY: 4000 });
+    await waitFor(() => {
+      expect(screen.getByText("4 cards selected")).toBeTruthy();
+    });
+
+    await act(async () => {
+      for (const resolve of pendingHealthReads) {
+        resolve({ health: LOCAL_HEALTH });
+      }
+    });
+
+    // Every card is now keyed to the durable id, so the swept keys point at
+    // nothing. A counter still claiming four cards — none of them painted
+    // selected, none of them reachable from the kebab — is worse than an
+    // empty selection.
+    await waitFor(() => {
+      expect(shells()[0]?.dataset.cardKey?.startsWith("pwr_local::")).toBe(true);
+    });
+    expect(screen.queryByText(/cards selected/)).toBeNull();
+    expect(selectedShells()).toHaveLength(0);
+  });
+
   it("drops the selection when the operator switches lens", async () => {
     renderMap(4);
     await ready();
-    sweepEverything();
+    await sweepEverything();
     await waitFor(() => expect(screen.getByText("4 cards selected")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "View" }));

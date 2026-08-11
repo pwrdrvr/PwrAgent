@@ -1113,6 +1113,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const [marquee, setMarquee] = useState<SnapRect | undefined>(undefined);
 
   /**
+   * A card key names its owning instance, and the local instance's durable
+   * id only arrives with federation health — until then the local cloud is
+   * keyed "local". A selection swept in that window points at a cloud that
+   * no longer exists the moment health lands: the counter keeps counting,
+   * no card paints as selected, and the kebab finds nothing of it to act
+   * on. Drop it, the same way a card withholds dragging until the durable
+   * id is known rather than persisting against the placeholder.
+   */
+  useEffect(() => {
+    setSelection((current) => (current.size > 0 ? new Set() : current));
+  }, [localInstanceId]);
+
+  /**
    * Refresh whichever cloud owns a thread. Archive removes it from the
    * owning instance, so the map has to re-fetch rather than guess.
    */
