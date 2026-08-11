@@ -228,19 +228,40 @@ function createDataTransfer(threadKey: string) {
   };
 }
 
-function fireDragEventAt(
+const THREAD_PIN_POINTER_ID = 41;
+
+function startThreadPinPointerDrag(
   element: Element,
-  type: "dragover" | "drop",
-  dataTransfer: ReturnType<typeof createDataTransfer>,
   point: { x: number; y: number },
 ): void {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperties(event, {
-    clientX: { value: point.x },
-    clientY: { value: point.y },
-    dataTransfer: { value: dataTransfer },
+  fireEvent.pointerDown(element, {
+    button: 0,
+    clientX: point.x,
+    clientY: point.y,
+    pointerId: THREAD_PIN_POINTER_ID,
   });
-  fireEvent(element, event);
+}
+
+function moveThreadPinPointer(
+  point: { x: number; y: number },
+): void {
+  fireEvent.pointerMove(window, {
+    buttons: 1,
+    clientX: point.x,
+    clientY: point.y,
+    pointerId: THREAD_PIN_POINTER_ID,
+  });
+}
+
+function releaseThreadPinPointer(
+  point: { x: number; y: number },
+): void {
+  fireEvent.pointerUp(window, {
+    button: 0,
+    clientX: point.x,
+    clientY: point.y,
+    pointerId: THREAD_PIN_POINTER_ID,
+  });
 }
 
 afterEach(() => {
@@ -3738,7 +3759,7 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("pins a same-directory thread by dropping it on the directory divider", () => {
+  it("pins a same-directory thread after a pointer drag leaves its source", async () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
     const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
     const pinnedThread = {
@@ -3777,20 +3798,20 @@ describe("Sidebar", () => {
     const unpinnedRow = screen
       .getByRole("button", { name: /Cross-project cleanup/i })
       .closest(".thread-row-shell");
-    const dataTransfer = createDataTransfer("codex:thread-1");
-    fireEvent.dragStart(unpinnedRow!, { dataTransfer });
+    startThreadPinPointerDrag(unpinnedRow!, { x: 50, y: 150 });
     const pinnedRow = screen
       .getByRole("button", { name: /Updated thread/i })
       .closest(".thread-row-shell");
-    fireEvent.dragOver(pinnedRow!, { dataTransfer });
+    moveThreadPinPointer({ x: 50, y: 90 });
     expect(pinnedRow).not.toHaveClass("is-drop-target-before");
     expect(pinnedRow).not.toHaveClass("is-drop-target-after");
     const appendTarget = screen.getByRole("separator", {
       name: "Pin thread after pinned threads for PwrAgent",
     });
-    fireEvent.dragOver(appendTarget, { dataTransfer });
-    expect(appendTarget).toHaveClass("is-drop-target-before");
-    fireEvent.drop(appendTarget, { dataTransfer });
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+    releaseThreadPinPointer({ x: 50, y: 90 });
     fireEvent.click(directoryThreads);
 
     expect(onReorderThreadPins).toHaveBeenCalledWith([
@@ -3800,7 +3821,72 @@ describe("Sidebar", () => {
     expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
   });
 
-  it("cancels over the source and appends after leaving an empty pin section", () => {
+  it("keeps wheel input on the normal renderer path during a pointer drag", async () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const row = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    expect(row).not.toHaveAttribute("draggable", "true");
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue({
+      bottom: 200,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
+    });
+    const list = row.closest(".directory-list") as HTMLElement;
+    const onWheel = vi.fn();
+    list.addEventListener("wheel", onWheel);
+
+    startThreadPinPointerDrag(row, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 50, y: 90 });
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute(
+        "data-native-drag-active",
+      );
+      expect(document.body.querySelector(".thread-row--drag-image"))
+        .not.toBeNull();
+    });
+
+    const wheelEvent = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 120,
+    });
+    list.dispatchEvent(wheelEvent);
+    expect(onWheel).toHaveBeenCalledTimes(1);
+    expect(wheelEvent.defaultPrevented).toBe(false);
+
+    releaseThreadPinPointer({ x: 50, y: 90 });
+    expect(document.documentElement).not.toHaveAttribute(
+      "data-native-drag-active",
+    );
+  });
+
+  it("cancels over the source and appends after leaving an empty pin section", async () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
 
     const { container } = render(
@@ -3847,31 +3933,34 @@ describe("Sidebar", () => {
       x: 0,
       y: 100,
     });
-    const dataTransfer = createDataTransfer("codex:thread-1");
-    fireEvent.dragStart(row!, { clientX: 50, clientY: 150, dataTransfer });
+    startThreadPinPointerDrag(row!, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 60, y: 160 });
 
     let appendTarget = screen.getByRole("separator", {
       name: "Pin thread after pinned threads for PwrAgent",
     });
     expect(appendTarget).toBe(mountedAppendTarget);
     expect(appendTarget).toHaveClass("is-drag-enabled");
-    fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 150 });
-    expect(appendTarget).not.toHaveClass("is-drop-target-before");
-    fireDragEventAt(appendTarget, "drop", dataTransfer, { x: 50, y: 150 });
+    await waitFor(() => {
+      expect(appendTarget).not.toHaveClass("is-drop-target-before");
+    });
+    releaseThreadPinPointer({ x: 50, y: 150 });
     expect(onReorderThreadPins).not.toHaveBeenCalled();
 
-    fireEvent.dragStart(row!, { clientX: 50, clientY: 150, dataTransfer });
+    startThreadPinPointerDrag(row!, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 50, y: 90 });
     appendTarget = screen.getByRole("separator", {
       name: "Pin thread after pinned threads for PwrAgent",
     });
-    fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 90 });
-    expect(appendTarget).toHaveClass("is-drop-target-before");
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
 
-    fireDragEventAt(appendTarget, "drop", dataTransfer, { x: 50, y: 90 });
+    releaseThreadPinPointer({ x: 50, y: 90 });
     expect(onReorderThreadPins).toHaveBeenCalledWith(["codex:thread-1"]);
   });
 
-  it("uses the source row's live bounds after directory-list scrolling", () => {
+  it("uses the source row's live bounds after directory-list scrolling", async () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
 
     render(
@@ -3909,8 +3998,14 @@ describe("Sidebar", () => {
       x: 0,
       y: 100,
     });
-    const dataTransfer = createDataTransfer("codex:thread-1");
-    fireEvent.dragStart(row!, { clientX: 50, clientY: 150, dataTransfer });
+    startThreadPinPointerDrag(row!, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 50, y: 90 });
+    const appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
+    });
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
 
     sourceBounds.mockReturnValue({
       bottom: 120,
@@ -3923,19 +4018,20 @@ describe("Sidebar", () => {
       x: 0,
       y: 20,
     });
-    const appendTarget = screen.getByRole("separator", {
-      name: "Pin thread after pinned threads for PwrAgent",
+    fireEvent.scroll(row!.closest(".directory-list")!);
+    await waitFor(() => {
+      expect(appendTarget).not.toHaveClass("is-drop-target-before");
     });
-    fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 50 });
-    expect(appendTarget).not.toHaveClass("is-drop-target-before");
 
-    fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 150 });
-    expect(appendTarget).toHaveClass("is-drop-target-before");
-    fireDragEventAt(appendTarget, "drop", dataTransfer, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 50, y: 150 });
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+    releaseThreadPinPointer({ x: 50, y: 150 });
     expect(onReorderThreadPins).toHaveBeenCalledWith(["codex:thread-1"]);
   });
 
-  it("keeps an escaped directory pin drag canceled through release", () => {
+  it("keeps an escaped directory pin drag canceled through release", async () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
 
     render(
@@ -3972,13 +4068,14 @@ describe("Sidebar", () => {
       x: 0,
       y: 100,
     });
-    const dataTransfer = createDataTransfer("codex:thread-1");
-    fireEvent.dragStart(row!, { clientX: 50, clientY: 150, dataTransfer });
+    startThreadPinPointerDrag(row!, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 50, y: 90 });
     const appendTarget = screen.getByRole("separator", {
       name: "Pin thread after pinned threads for PwrAgent",
     });
-    fireDragEventAt(appendTarget, "dragover", dataTransfer, { x: 50, y: 90 });
-    expect(appendTarget).toHaveClass("is-drop-target-before");
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(
@@ -3986,11 +4083,11 @@ describe("Sidebar", () => {
         name: "Pin thread after pinned threads for PwrAgent",
       }),
     ).not.toBeInTheDocument();
-    fireEvent.dragEnd(row!, { dataTransfer });
+    releaseThreadPinPointer({ x: 50, y: 90 });
     expect(onReorderThreadPins).not.toHaveBeenCalled();
   });
 
-  it("shows directory drop targets for pinned row edges and the append slot", () => {
+  it("shows directory drop targets for pinned row edges and the append slot", async () => {
     // Pin reorder-by-drag lives only where a pinned section is rendered, which
     // after the Updated/Created lenses became pure sort orders means the
     // Directories lens alone.
@@ -4041,8 +4138,7 @@ describe("Sidebar", () => {
       .getByRole("button", { name: /Cross-project cleanup/i })
       .closest(".thread-row-shell");
     expect(draggedRow).not.toBeNull();
-    const dataTransfer = createDataTransfer("codex:thread-1");
-    fireEvent.dragStart(draggedRow!, { dataTransfer });
+    startThreadPinPointerDrag(draggedRow!, { x: 50, y: 150 });
 
     const pinnedRow = screen
       .getByRole("button", { name: /Updated thread/i })
@@ -4060,26 +4156,38 @@ describe("Sidebar", () => {
       y: 0,
     });
 
-    fireDragEventAt(pinnedRow!, "dragover", dataTransfer, { x: 50, y: 25 });
-    expect(pinnedRow).toHaveClass("is-drop-target-before");
-
-    fireDragEventAt(pinnedRow!, "dragover", dataTransfer, { x: 50, y: 75 });
-    expect(pinnedRow).not.toHaveClass("is-drop-target-before");
-    expect(pinnedRow).toHaveClass("is-drop-target-after");
-
-    fireEvent.dragLeave(pinnedRow!, {
-      relatedTarget: null,
+    moveThreadPinPointer({ x: 50, y: 25 });
+    await waitFor(() => {
+      expect(pinnedRow).toHaveClass("is-drop-target-before");
     });
-    expect(pinnedRow).not.toHaveClass("is-drop-target-before");
-    expect(pinnedRow).not.toHaveClass("is-drop-target-after");
+
+    moveThreadPinPointer({ x: 50, y: 75 });
+    await waitFor(() => {
+      expect(pinnedRow).not.toHaveClass("is-drop-target-before");
+      expect(pinnedRow).toHaveClass("is-drop-target-after");
+    });
 
     const appendTarget = screen.getByRole("separator", {
       name: "Pin thread after pinned threads for PwrAgent",
     });
-    fireEvent.dragOver(appendTarget, {
-      dataTransfer,
+    vi.spyOn(appendTarget, "getBoundingClientRect").mockReturnValue({
+      bottom: 132,
+      height: 32,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
     });
-    expect(appendTarget).toHaveClass("is-drop-target-before");
+    moveThreadPinPointer({ x: 50, y: 115 });
+    await waitFor(() => {
+      expect(pinnedRow).not.toHaveClass("is-drop-target-before");
+      expect(pinnedRow).not.toHaveClass("is-drop-target-after");
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+    releaseThreadPinPointer({ x: 50, y: 115 });
   });
 
   it("renders no pinned section or drag affordance in the Created lens", () => {

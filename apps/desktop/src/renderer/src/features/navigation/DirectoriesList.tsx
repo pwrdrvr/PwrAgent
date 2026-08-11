@@ -4,9 +4,9 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent,
   type ReactElement,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -41,6 +41,10 @@ import {
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import {
+  beginNativeDragInteraction,
+  endNativeDragInteraction,
+} from "../../lib/native-drag-interaction";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
   getSubthreadDisclosureCount,
@@ -48,6 +52,10 @@ import {
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
 import { ThreadRow } from "./ThreadRow";
+import {
+  createThreadRowPointerDragPreview,
+  type ThreadRowPointerDragPreview,
+} from "./thread-row-drag-preview";
 import {
   formatActiveThreadCount,
   formatReviewThreadCount,
@@ -165,6 +173,7 @@ function buildLaunchpadSelectionKey(directoryKey: string): string {
  * frames without swallowing the user's next intentional click.
  */
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
+const POINTER_DRAG_ACTIVATION_PX = 4;
 
 const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: ExpandedDirectoryThreadRenderModel = {
   cappedUnpinnedThreads: [],
@@ -215,12 +224,35 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
 }
 
 type ThreadPinDragSession = {
+  activated: boolean;
   appendTargetElement?: HTMLDivElement;
   canceled: boolean;
+  directory: NavigationDirectorySummary;
+  directoryElement: HTMLElement;
+  frame: number;
+  lastPoint: { x: number; y: number };
+  pointerId: number;
+  preview?: ThreadRowPointerDragPreview;
+  releaseClickSuppression?: () => void;
+  removeListeners?: () => void;
+  scrollElement?: HTMLElement;
   sourceElement: HTMLDivElement;
   sourceWasPinned: boolean;
+  target?: ThreadPinPointerDropTarget;
   threadKey: string;
 };
+
+type ThreadPinPointerDropTarget =
+  | {
+      element: HTMLDivElement;
+      kind: "append";
+    }
+  | {
+      element: HTMLDivElement;
+      kind: "row";
+      position: "before" | "after";
+      threadKey: string;
+    };
 
 function setThreadPinAppendTargetActive(
   session: ThreadPinDragSession,
@@ -251,6 +283,105 @@ function isPointInsideDragSource(
     && point.y >= sourceBounds.top
     && point.y <= sourceBounds.bottom
   );
+}
+
+function getPointInsideElement(
+  element: Element,
+  point: { x: number; y: number },
+): boolean {
+  const bounds = element.getBoundingClientRect();
+  return (
+    bounds.right > bounds.left
+    && bounds.bottom > bounds.top
+    && point.x >= bounds.left
+    && point.x <= bounds.right
+    && point.y >= bounds.top
+    && point.y <= bounds.bottom
+  );
+}
+
+function resolveThreadPinPointerDropTarget(
+  session: ThreadPinDragSession,
+): ThreadPinPointerDropTarget | undefined {
+  if (
+    session.canceled
+    || isPointInsideDragSource(session, session.lastPoint)
+  ) {
+    return undefined;
+  }
+
+  if (!session.sourceWasPinned) {
+    return session.appendTargetElement
+      ? { element: session.appendTargetElement, kind: "append" }
+      : undefined;
+  }
+
+  const buildRowTarget = (
+    row: HTMLDivElement,
+  ): ThreadPinPointerDropTarget | undefined => {
+    const threadKey = row.dataset.threadPinKey;
+    if (
+      row === session.sourceElement
+      || !threadKey
+      || threadKey === session.threadKey
+    ) {
+      return undefined;
+    }
+    const bounds = row.getBoundingClientRect();
+    return {
+      element: row,
+      kind: "row",
+      position:
+        session.lastPoint.y > bounds.top + bounds.height / 2
+          ? "after"
+          : "before",
+      threadKey,
+    };
+  };
+
+  if (typeof document.elementFromPoint === "function") {
+    const hit = document.elementFromPoint(
+      session.lastPoint.x,
+      session.lastPoint.y,
+    );
+    const hitRow = hit?.closest<HTMLDivElement>(
+      '.thread-row-shell[data-thread-pin-state="pinned"]',
+    );
+    if (
+      hitRow
+      && session.directoryElement.contains(hitRow)
+    ) {
+      return buildRowTarget(hitRow);
+    }
+    if (
+      hit
+      && session.appendTargetElement?.contains(hit)
+    ) {
+      return { element: session.appendTargetElement, kind: "append" };
+    }
+    return undefined;
+  }
+
+  const pinnedRows = session.directoryElement.querySelectorAll<HTMLDivElement>(
+    '.thread-row-shell[data-thread-pin-state="pinned"]',
+  );
+  for (const row of pinnedRows) {
+    if (
+      !getPointInsideElement(row, session.lastPoint)
+    ) {
+      continue;
+    }
+    const target = buildRowTarget(row);
+    if (target) return target;
+  }
+
+  if (
+    session.appendTargetElement
+    && getPointInsideElement(session.appendTargetElement, session.lastPoint)
+  ) {
+    return { element: session.appendTargetElement, kind: "append" };
+  }
+  return undefined;
 }
 function getDirectoryRowLinkedDirectoryMode(
   thread: NavigationThreadSummary,
@@ -344,6 +475,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const threadPinDragSessionRef = useRef<ThreadPinDragSession | undefined>(
     undefined,
   );
+  const threadPinDragCleanupRef = useRef<(() => void) | undefined>(undefined);
   /**
    * Suppress the directory summary button's expand/collapse click
    * when the click is the trailing edge of a drag gesture. Browsers
@@ -365,50 +497,241 @@ export function DirectoriesList(props: DirectoriesListProps) {
   // pinning a thread never also minimizes the section.
   const lastDirectoryThreadDropAtRef = useRef(0);
 
-  const beginThreadPinDrag = (
-    event: DragEvent<HTMLDivElement>,
+  const deactivateThreadPinDrag = (session: ThreadPinDragSession): void => {
+    if (session.frame) {
+      cancelAnimationFrame(session.frame);
+      session.frame = 0;
+    }
+    session.preview?.remove();
+    session.preview = undefined;
+    session.sourceElement.classList.remove("is-pointer-dragging");
+    setThreadPinAppendTargetActive(session, false);
+    dropIndicator.clear();
+    session.target = undefined;
+    if (session.activated) {
+      endNativeDragInteraction();
+      session.activated = false;
+    }
+  };
+
+  const finishThreadPinDrag = (session: ThreadPinDragSession): void => {
+    deactivateThreadPinDrag(session);
+    session.removeListeners?.();
+    session.removeListeners = undefined;
+    session.releaseClickSuppression?.();
+    session.releaseClickSuppression = undefined;
+    if (threadPinDragSessionRef.current === session) {
+      threadPinDragSessionRef.current = undefined;
+    }
+    if (threadPinDragCleanupRef.current) {
+      threadPinDragCleanupRef.current = undefined;
+    }
+  };
+
+  const updateThreadPinPointerTarget = (
+    session: ThreadPinDragSession,
+  ): void => {
+    session.preview?.move(session.lastPoint);
+    session.target = resolveThreadPinPointerDropTarget(session);
+    if (!session.target) {
+      dropIndicator.clear();
+      return;
+    }
+    dropIndicator.show(session.target.element, {
+      targetKey:
+        session.target.kind === "row"
+          ? `${session.directory.key}:${session.target.threadKey}`
+          : `pinned-append:${session.directory.key}`,
+      position:
+        session.target.kind === "row" ? session.target.position : "before",
+    });
+  };
+
+  const scheduleThreadPinPointerTarget = (
+    session: ThreadPinDragSession,
+  ): void => {
+    if (session.frame || !session.activated || session.canceled) return;
+    session.frame = requestAnimationFrame(() => {
+      session.frame = 0;
+      updateThreadPinPointerTarget(session);
+    });
+  };
+
+  /**
+   * Thread pinning deliberately avoids native HTML drag-and-drop. Chromium's
+   * drag processing model suppresses ordinary input events, and its macOS
+   * trackpad path can queue momentum at scroll boundaries for seconds. A
+   * pointer session leaves wheel scrolling browser-controlled while batching
+   * our preview and hit testing to one update per animation frame.
+   */
+  const beginThreadPinPointerDrag = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    directory: NavigationDirectorySummary,
     threadKey: string,
     sourceWasPinned: boolean,
   ): void => {
+    if (event.button !== 0 || !props.onReorderThreadPins) return;
+    threadPinDragCleanupRef.current?.();
+
+    const sourceElement = event.currentTarget;
+    const directoryElement = sourceElement.closest(".directory-row");
+    if (!(directoryElement instanceof HTMLElement)) return;
+
+    const startPoint = { x: event.clientX, y: event.clientY };
     const session: ThreadPinDragSession = {
+      activated: false,
       appendTargetElement:
-        event.currentTarget
-          .closest(".directory-row")
-          ?.querySelector<HTMLDivElement>(".directory-row__pin-drop-slot")
-        ?? undefined,
+        directoryElement.querySelector<HTMLDivElement>(
+          ".directory-row__pin-drop-slot",
+        ) ?? undefined,
       canceled: false,
-      sourceElement: event.currentTarget,
+      directory,
+      directoryElement,
+      frame: 0,
+      lastPoint: startPoint,
+      pointerId: event.pointerId,
+      scrollElement:
+        sourceElement.closest<HTMLElement>(".directory-list") ?? undefined,
+      sourceElement,
       sourceWasPinned,
       threadKey,
     };
     threadPinDragSessionRef.current = session;
-    setThreadPinAppendTargetActive(session, true);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", threadKey);
-  };
 
-  const finishThreadPinDrag = (): void => {
-    const session = threadPinDragSessionRef.current;
-    if (session) {
-      setThreadPinAppendTargetActive(session, false);
-    }
-    threadPinDragSessionRef.current = undefined;
-    dropIndicator.clear();
-  };
-
-  useEffect(() => {
-    const cancelThreadPinDrag = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      const session = threadPinDragSessionRef.current;
-      if (!session) return;
-      session.canceled = true;
-      setThreadPinAppendTargetActive(session, false);
-      dropIndicator.clear();
+    let suppressClickTimer: number | undefined;
+    const removeClickSuppression = (): void => {
+      session.directoryElement.removeEventListener(
+        "click",
+        suppressReleaseClick,
+        true,
+      );
+      if (suppressClickTimer !== undefined) {
+        window.clearTimeout(suppressClickTimer);
+        suppressClickTimer = undefined;
+      }
+    };
+    const suppressReleaseClick = (clickEvent: globalThis.MouseEvent): void => {
+      clickEvent.preventDefault();
+      clickEvent.stopImmediatePropagation();
+      removeClickSuppression();
+    };
+    const armClickSuppression = (): void => {
+      session.directoryElement.addEventListener(
+        "click",
+        suppressReleaseClick,
+        true,
+      );
+      session.releaseClickSuppression = () => {
+        suppressClickTimer = window.setTimeout(
+          removeClickSuppression,
+          POST_DRAG_CLICK_SUPPRESS_MS,
+        );
+      };
     };
 
-    window.addEventListener("keydown", cancelThreadPinDrag);
-    return () => window.removeEventListener("keydown", cancelThreadPinDrag);
-  }, [dropIndicator]);
+    const activate = (): void => {
+      if (session.activated || session.canceled) return;
+      session.activated = true;
+      beginNativeDragInteraction();
+      session.sourceElement.classList.add("is-pointer-dragging");
+      setThreadPinAppendTargetActive(session, true);
+      session.preview = createThreadRowPointerDragPreview(
+        session.sourceElement,
+        startPoint,
+      );
+      armClickSuppression();
+      session.scrollElement?.addEventListener("scroll", onScroll, {
+        passive: true,
+      });
+      scheduleThreadPinPointerTarget(session);
+    };
+    const move = (pointerEvent: globalThis.PointerEvent): void => {
+      if (pointerEvent.pointerId !== session.pointerId || session.canceled) {
+        return;
+      }
+      session.lastPoint = {
+        x: pointerEvent.clientX,
+        y: pointerEvent.clientY,
+      };
+      if (
+        !session.activated
+        && Math.hypot(
+          session.lastPoint.x - startPoint.x,
+          session.lastPoint.y - startPoint.y,
+        ) < POINTER_DRAG_ACTIVATION_PX
+      ) {
+        return;
+      }
+      activate();
+      pointerEvent.preventDefault();
+      scheduleThreadPinPointerTarget(session);
+    };
+    const onScroll = (): void => scheduleThreadPinPointerTarget(session);
+    const stop = (pointerEvent: globalThis.PointerEvent): void => {
+      if (pointerEvent.pointerId !== session.pointerId) return;
+      session.lastPoint = {
+        x: pointerEvent.clientX,
+        y: pointerEvent.clientY,
+      };
+      if (session.activated && !session.canceled) {
+        if (session.frame) {
+          cancelAnimationFrame(session.frame);
+          session.frame = 0;
+        }
+        updateThreadPinPointerTarget(session);
+      }
+      const target = session.target;
+      const wasActivated = session.activated;
+      finishThreadPinDrag(session);
+      if (!target || session.canceled || !wasActivated) return;
+
+      lastDirectoryThreadDropAtRef.current = Date.now();
+      if (target.kind === "append") {
+        dropThreadAfterDirectoryPins(session.directory, session.threadKey);
+        return;
+      }
+      if (session.sourceWasPinned) {
+        moveDirectoryPin(
+          session.directory,
+          session.threadKey,
+          target.threadKey,
+          target.position,
+        );
+      }
+    };
+    const cancel = (): void => {
+      session.canceled = true;
+      finishThreadPinDrag(session);
+    };
+    const cancelOnPointer = (pointerEvent: globalThis.PointerEvent): void => {
+      if (pointerEvent.pointerId === session.pointerId) cancel();
+    };
+    const cancelOnEscape = (keyboardEvent: globalThis.KeyboardEvent): void => {
+      if (keyboardEvent.key !== "Escape") return;
+      session.canceled = true;
+      deactivateThreadPinDrag(session);
+    };
+    const removeListeners = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", cancelOnPointer);
+      window.removeEventListener("blur", cancel);
+      window.removeEventListener("keydown", cancelOnEscape);
+      session.scrollElement?.removeEventListener("scroll", onScroll);
+    };
+    session.removeListeners = removeListeners;
+    threadPinDragCleanupRef.current = cancel;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", cancelOnPointer);
+    window.addEventListener("blur", cancel);
+    window.addEventListener("keydown", cancelOnEscape);
+  };
+
+  useEffect(
+    () => () => threadPinDragCleanupRef.current?.(),
+    [],
+  );
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -961,7 +1284,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             draftThreadKeys={props.draftThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
             compact
-            draggable={Boolean(props.onReorderThreadPins)}
+            pointerDraggable={Boolean(props.onReorderThreadPins)}
             includeLinkedDirectories
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
             revealSelectedThreadRequest={props.revealSelectedThreadRequest}
@@ -971,6 +1294,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             subthreadsCollapsed={subthreadsCollapsed}
             thinkingThreadKeys={props.thinkingThreadKeys}
             thread={thread}
+            threadPinState="unpinned"
             onToggleSubthreads={
               subthreadCount > 0 && props.onSetSubthreadsCollapsed
                 ? () =>
@@ -980,10 +1304,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     )
                 : undefined
             }
-            onDragStartThread={(event) => {
-              beginThreadPinDrag(event, threadKey, false);
+            onPointerDownThread={(event) => {
+              beginThreadPinPointerDrag(event, directory, threadKey, false);
             }}
-            onDragEndThread={finishThreadPinDrag}
             onOpenContextMenu={props.onOpenThreadContextMenu}
             onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
             onDetachPullRequest={props.onDetachPullRequest}
@@ -1277,7 +1600,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   <div className="sidebar-list sidebar-list--compact directory-row__threads">
                     {directoryPinnedThreads.map((thread) => {
 	                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-	                      const rowDropKey = `${directory.key}:${threadKey}`;
                           const ordinarySubthreadCount =
                             childThreadsByParentKey.get(threadKey)?.length ?? 0;
                           const subthreadCount = getSubthreadDisclosureCount(
@@ -1296,7 +1618,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           draftThreadKeys={props.draftThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           compact
-                          draggable={Boolean(props.onReorderThreadPins)}
+                          pointerDraggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
                           linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
                           revealSelectedThreadRequest={
@@ -1308,6 +1630,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                               subthreadsCollapsed={subthreadsCollapsed}
 	                          thinkingThreadKeys={props.thinkingThreadKeys}
                           thread={thread}
+                          threadPinState="pinned"
                               onToggleSubthreads={
                                 subthreadCount > 0 && props.onSetSubthreadsCollapsed
                                   ? () =>
@@ -1317,57 +1640,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                       )
                                   : undefined
                               }
-                          onDragOverThread={(event) => {
-                            const session = threadPinDragSessionRef.current;
-                            const draggedThread = session
-                              ? threadsByKey.get(session.threadKey)
-                              : undefined;
-                            if (
-                              !draggedThread ||
-                              !session ||
-                              session.canceled ||
-                              !session.sourceWasPinned ||
-                              session.threadKey === threadKey ||
-                              !directory.threadKeys.includes(session.threadKey)
-                            ) {
-                              event.dataTransfer.dropEffect = "none";
-                              dropIndicator.clear();
-                              return;
-                            }
-
-                            event.preventDefault();
-                            event.dataTransfer.dropEffect = "move";
-                            dropIndicator.show(event.currentTarget, {
-                              targetKey: rowDropKey,
-                              position: getDropIndicatorPosition(event),
-                            });
-                          }}
-                          onDragStartThread={(event) => {
-                            beginThreadPinDrag(event, threadKey, true);
-                          }}
-                          onDragLeaveThread={(event) => {
-                            if (didDragLeaveCurrentTarget(event)) {
-                              dropIndicator.clear();
-                            }
-                          }}
-                          onDragEndThread={finishThreadPinDrag}
-                          onDropOnThread={(event) => {
-                            event.preventDefault();
-                            const draggedKey = event.dataTransfer.getData("text/plain");
-                            const session = threadPinDragSessionRef.current;
-                            const canceled =
-                              !session
-                              || session.canceled
-                              || !session.sourceWasPinned
-                              || session.threadKey !== draggedKey;
-                            finishThreadPinDrag();
-                            if (canceled || !draggedKey) return;
-                            const position = getDropIndicatorPosition(event);
-                            moveDirectoryPin(
+                          onPointerDownThread={(event) => {
+                            beginThreadPinPointerDrag(
+                              event,
                               directory,
-                              draggedKey,
                               threadKey,
-                              position,
+                              true,
                             );
                           }}
                           onMovePinnedThread={(pinnedThread, direction) => {
@@ -1404,51 +1682,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           aria-hidden="true"
                           className="directory-row__pin-drop-slot"
                           role="separator"
-                          onDragOver={(event) => {
-                            const session = threadPinDragSessionRef.current;
-                            if (
-                              !session
-                              || session.canceled
-                              || !directory.threadKeys.includes(session.threadKey)
-                              || isPointInsideDragSource(session, {
-                                x: event.clientX,
-                                y: event.clientY,
-                              })
-                            ) {
-                              event.dataTransfer.dropEffect = "none";
-                              dropIndicator.clear();
-                              return;
-                            }
-
-                            event.preventDefault();
-                            event.dataTransfer.dropEffect = "move";
-                            dropIndicator.show(event.currentTarget, {
-                              targetKey: `pinned-append:${directory.key}`,
-                              position: "before",
-                            });
-                          }}
-                          onDragLeave={(event) => {
-                            if (didDragLeaveCurrentTarget(event)) {
-                              dropIndicator.clear();
-                            }
-                          }}
-                          onDrop={(event) => {
-                            event.preventDefault();
-                            const session = threadPinDragSessionRef.current;
-                            const draggedKey = event.dataTransfer.getData("text/plain");
-                            const canceled =
-                              !session
-                              || session.canceled
-                              || session.threadKey !== draggedKey
-                              || isPointInsideDragSource(session, {
-                                x: event.clientX,
-                                y: event.clientY,
-                              });
-                            lastDirectoryThreadDropAtRef.current = Date.now();
-                            finishThreadPinDrag();
-                            if (canceled) return;
-                            dropThreadAfterDirectoryPins(directory, draggedKey);
-                          }}
                         />
                       </div>
                     ) : null}

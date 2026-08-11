@@ -5,6 +5,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type DragEvent,
+  type PointerEvent,
 } from "react";
 import type {
   MessagingThreadBindingSummary,
@@ -25,6 +26,7 @@ import type { DropIndicatorPosition } from "./drag-drop";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
+import { setThreadRowNativeDragPreview } from "./thread-row-drag-preview";
 
 const HOVER_PREFETCH_DELAY_MS = 750;
 const absoluteDateFormatter = new Intl.DateTimeFormat(undefined, {
@@ -52,6 +54,7 @@ type ThreadRowProps = {
   compact?: boolean;
   dropIndicator?: DropIndicatorPosition;
   draggable?: boolean;
+  pointerDraggable?: boolean;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
   nested?: boolean;
@@ -66,6 +69,7 @@ type ThreadRowProps = {
   subthreadCount?: number;
   subthreadsCollapsed?: boolean;
   thinkingThreadKeys?: Record<string, boolean>;
+  threadPinState?: "pinned" | "unpinned";
   thread: NavigationThreadSummary;
   onOpenContextMenu: (
     thread: NavigationThreadSummary,
@@ -108,6 +112,7 @@ type ThreadRowProps = {
   onDragLeaveThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragEndThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDropOnThread?: (event: DragEvent<HTMLDivElement>) => void;
+  onPointerDownThread?: (event: PointerEvent<HTMLDivElement>) => void;
   onMovePinnedThread?: (
     thread: NavigationThreadSummary,
     direction: "up" | "down",
@@ -231,16 +236,20 @@ export function ThreadRow(props: ThreadRowProps) {
 
   return (
     <div
-      className={`thread-row-shell${props.draggable ? " is-draggable" : ""}${
+      className={`thread-row-shell${
+        props.draggable || props.pointerDraggable ? " is-draggable" : ""
+      }${
         props.dropIndicator ? ` is-drop-target-${props.dropIndicator}` : ""
       }${props.nested ? " thread-row-shell--nested" : ""}${
         props.subthreadCount ? " has-subthreads" : ""
       }`}
       draggable={props.draggable}
+      data-thread-pin-key={props.threadPinState ? threadKey : undefined}
+      data-thread-pin-state={props.threadPinState}
       role="listitem"
       onDragStart={(event) => {
         if (props.draggable) {
-          setThreadRowDragImage(event);
+          setThreadRowNativeDragPreview(event);
         }
         props.onDragStartThread?.(event);
       }}
@@ -248,6 +257,7 @@ export function ThreadRow(props: ThreadRowProps) {
       onDragLeave={props.onDragLeaveThread}
       onDragEnd={props.onDragEndThread}
       onDrop={props.onDropOnThread}
+      onPointerDown={props.onPointerDownThread}
       onContextMenu={(event) => {
         event.preventDefault();
         props.onOpenContextMenu(props.thread, {
@@ -462,33 +472,6 @@ export function ThreadRow(props: ThreadRowProps) {
       ) : null}
     </div>
   );
-}
-
-function setThreadRowDragImage(event: DragEvent<HTMLDivElement>): void {
-  const row = event.currentTarget.querySelector(".thread-row");
-  if (!(row instanceof HTMLElement)) {
-    return;
-  }
-
-  const rect = row.getBoundingClientRect();
-  const clone = row.cloneNode(true) as HTMLElement;
-  clone.classList.add("thread-row--drag-image");
-  clone.classList.remove("thread-row--compact");
-  clone.querySelector(".thread-row__actions")?.remove();
-  clone.querySelector(".thread-row__chip--add-reaction")?.remove();
-  clone.querySelector(".thread-row__overflow-button")?.remove();
-  clone.setAttribute("aria-hidden", "true");
-  clone.style.width = `${rect.width}px`;
-  clone.style.height = `${rect.height}px`;
-  document.body.appendChild(clone);
-
-  event.dataTransfer.setDragImage(
-    clone,
-    Math.max(0, Math.min(event.clientX - rect.left, rect.width)),
-    Math.max(0, Math.min(event.clientY - rect.top, rect.height)),
-  );
-
-  window.setTimeout(() => clone.remove(), 0);
 }
 
 function ReactionChip(props: { emoji: string; onToggle: () => void }) {
