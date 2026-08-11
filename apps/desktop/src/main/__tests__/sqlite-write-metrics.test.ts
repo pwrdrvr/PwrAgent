@@ -1134,6 +1134,92 @@ function buildInvocation(invocationId: string) {
     });
   });
 
+  it("keeps the hourly GC pass at one commit while sweeping stale drafts", async () => {
+    // Added for the composer-draft staleness sweep, but it measures the WHOLE
+    // `cleanupExpired` call, because that is the unit that costs a commit.
+    // The number to defend is `commits: 1` — every sweep in there rides one
+    // transaction, and a new sweep that opens its own would show up here as a
+    // second commit. Statements and rows legitimately move when someone adds
+    // a sweep; re-record then, and do not read such a change as a composer
+    // regression.
+    const NOW = 1_786_500_000_000;
+    const DAY = 24 * 60 * 60 * 1000;
+    const drafts = new ComposerDraftRecoveryStore(stateDb);
+    for (let index = 0; index < 40; index += 1) {
+      drafts.save({
+        draft: {
+          scopeKey: `thread:codex:thread-${index}`,
+          scopeKind: "thread",
+          backend: "codex",
+          threadId: `thread-${index}`,
+          text: `draft ${index}`,
+          skillTokens: [],
+          imageAttachments: [],
+          status: "unsent",
+          createdAt: 1,
+          // Half are stale enough to sweep, half are current.
+          updatedAt: index < 20 ? NOW - 200 * DAY : NOW - DAY,
+          contentHash: `hash-${index}`,
+          charCount: 7,
+        },
+      });
+    }
+
+    // Also give the journal prefix-collapse real work, so this budget covers
+    // every sweep in the transaction rather than only the one it was written
+    // for. These rows have to be inserted RAW: `save()` applies the collapse
+    // at write time, so seeding through it would leave an already-collapsed
+    // journal and the GC pass would measure nothing.
+    const insertJournalRow = stateDb.raw.prepare(
+      `INSERT INTO composer_draft_journal(
+         scope_key, scope_kind, status, content_hash, char_count,
+         created_at, updated_at, payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const sentence = "I like dogs and cats and bears";
+    for (let index = 1; index <= sentence.length; index += 1) {
+      const text = sentence.slice(0, index);
+      insertJournalRow.run(
+        "thread:codex:journal",
+        "thread",
+        "unsent",
+        `journal-hash-${text}`,
+        text.length,
+        1,
+        NOW - DAY + index,
+        JSON.stringify({ text }),
+      );
+    }
+
+    // Seeding is outside the measured region, so the budget tracks the sweeps.
+    const { writes } = await measureSqliteWrites(async () => {
+      stateDb.cleanupExpired(NOW);
+    });
+
+    // The collapse ran inside the measured pass: one row survives the chain.
+    expect(
+      (
+        stateDb.raw
+          .prepare(
+            "SELECT COUNT(*) AS n FROM composer_draft_journal WHERE scope_key = ?",
+          )
+          .get("thread:codex:journal") as { n: number }
+      ).n,
+    ).toBe(1);
+
+    expectSqliteWriteBudget({
+      note:
+        "one whole cleanupExpired GC pass doing real work in both composer "
+        + "sweeps: ageing out 20 drafts past 180 days AND collapsing a 30-row "
+        + "journal prefix chain to 1. commits is the assertion that matters "
+        + "(every sweep rides one transaction); statements/rows legitimately "
+        + "move when a sweep is added, so re-record rather than reading it as "
+        + "a composer regression",
+      scenario: "cleanup-expired-gc-pass",
+      writes,
+    });
+  });
+
 function createStubBackendClient(options?: {
   replay?: AppServerThreadReplay;
 }) {

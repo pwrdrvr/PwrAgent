@@ -236,6 +236,88 @@ describe("ComposerDraftRecoveryStore", () => {
       }),
     ]);
   });
+
+  describe("composer_draft_latest retention", () => {
+    // 2026-08-11, so the arithmetic below reads as real dates rather than
+    // offsets from an implicit now.
+    const NOW = 1_786_500_000_000;
+    const DAY = 24 * 60 * 60 * 1000;
+
+    const countLatest = (): number =>
+      (
+        stateDb.raw
+          .prepare("SELECT COUNT(*) AS n FROM composer_draft_latest")
+          .get() as { n: number }
+      ).n;
+
+    const seedDraft = (scope: string, updatedAt: number): void => {
+      store.save({
+        draft: buildDraft({
+          scopeKey: `thread:codex:${scope}`,
+          threadId: scope,
+          text: `draft ${scope}`,
+          updatedAt,
+        }),
+      });
+    };
+
+    it("keeps drafts edited this year", () => {
+      // The bar for discarding current work is high on purpose: a draft five
+      // months old is still something someone meant to send.
+      seedDraft("today", NOW);
+      seedDraft("last-month", NOW - 30 * DAY);
+      seedDraft("five-months-ago", NOW - 150 * DAY);
+
+      stateDb.cleanupExpired(NOW);
+
+      expect(countLatest()).toBe(3);
+    });
+
+    it("ages out a draft nobody has edited in half a year", () => {
+      seedDraft("recent", NOW - DAY);
+      seedDraft("ancient", NOW - 200 * DAY);
+
+      stateDb.cleanupExpired(NOW);
+
+      expect(store.listLatest().map((draft) => draft.scopeKey)).toEqual([
+        "thread:codex:recent",
+      ]);
+    });
+
+    it("does not delete a draft when its thread is archived", () => {
+      // Archiving is reversible here (`restoreThread` / the Codex
+      // `thread/unarchive` method), so discarding unsent text at archive time
+      // would destroy data at the one moment the operator can undo the action
+      // that caused it. An archived thread's draft stays put and stays
+      // reachable through the composer's recovery cycle; it only leaves once
+      // it has gone stale like any other. Staleness is also the only signal
+      // available here — the state layer cannot tell a deleted thread from an
+      // archived one, and an archived thread cannot be opened, so its draft
+      // is exactly what this ages out.
+      seedDraft("archived-thread", NOW - DAY);
+
+      stateDb.cleanupExpired(NOW);
+
+      expect(
+        store
+          .listCandidates({ includeSent: true, limit: 20 })
+          .map((candidate) => candidate.scopeKey),
+      ).toContain("thread:codex:archived-thread");
+    });
+
+    it("does not evict on volume alone", () => {
+      // A row cap would fire here and a staleness sweep must not: these are
+      // all current drafts, and destroying the oldest of them because there
+      // are many is exactly the data loss this sweep exists to avoid.
+      for (let index = 0; index < 600; index += 1) {
+        seedDraft(`thread-${index}`, NOW - index * 1000);
+      }
+
+      stateDb.cleanupExpired(NOW);
+
+      expect(countLatest()).toBe(600);
+    });
+  });
 });
 
 describe("journal prefix collapse", () => {
