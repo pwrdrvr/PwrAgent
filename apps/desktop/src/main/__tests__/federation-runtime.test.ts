@@ -123,7 +123,7 @@ type RuntimeHarness = {
   };
   remoteNavigationSnapshot: (
     target: { scope: "remote"; instanceId: FederationInstanceId },
-    request: Record<string, never>,
+    request: { backend?: "all" | "codex"; filter?: string },
   ) => Promise<NavigationSnapshot>;
   remoteThreadSummaries: () => {
     searchForJump: (request: { query: string }) => Promise<{ results: unknown[] }>;
@@ -441,7 +441,9 @@ describe("DesktopFederationRuntime", () => {
     }];
     const target = { scope: "remote" as const, instanceId: "client_one" };
 
-    const first = await runtime.remoteNavigationSnapshot(target, {});
+    const first = await runtime.remoteNavigationSnapshot(target, {
+      backend: "all",
+    });
     const changed = await runtime.remoteNavigationSnapshot(target, {});
     const unchanged = await runtime.remoteNavigationSnapshot(target, {});
 
@@ -518,7 +520,7 @@ describe("DesktopFederationRuntime", () => {
 
     const snapshot = await runtime.remoteNavigationSnapshot(
       { scope: "remote", instanceId: "older_owner" },
-      {},
+      { backend: "all" },
     );
 
     expect(snapshot.threads[0]).toMatchObject({
@@ -1756,7 +1758,11 @@ describe("DesktopFederationRuntime", () => {
     router.registerConnection(
       createConnection({
         peerId: "client_one",
-        capabilities: ["scheduled_actions", "event_subscriptions"],
+        capabilities: [
+          "scheduled_actions",
+          "event_subscriptions",
+          "navigation_snapshot_deltas",
+        ],
         sendEnvelope: (envelope) => forwarded.push(envelope),
       }),
     );
@@ -1775,30 +1781,37 @@ describe("DesktopFederationRuntime", () => {
       sourceInstanceId: "gateway_one",
       subscriberInstanceId: "client_one",
       eventClasses: ["scheduled_actions"],
+      threadSelection: {
+        kind: "threads",
+        threads: [{ backend: "codex", threadId: "thread-1" }],
+      },
     });
 
-    runtime.forwardLocalBackendEvent({
-      backend: "codex",
-      notification: {
-        method: "thread/scheduledAction/updated",
-        params: {
-          action: {
-            id: "scheduled-1",
-            backend: "codex",
-            threadId: "thread-1",
-            kind: "turn",
-            origin: "desktop",
-            status: "scheduled",
-            scheduledFor: 3_000,
-            displayText: "Follow up",
-            turn: { input: [{ type: "text", text: "Follow up" }] },
-            createdAt: 1_000,
-            updatedAt: 1_000,
+    for (const threadId of ["thread-2", "thread-1"]) {
+      runtime.forwardLocalBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/scheduledAction/updated",
+          params: {
+            action: {
+              id: `scheduled:${threadId}`,
+              backend: "codex",
+              threadId,
+              kind: "turn",
+              origin: "desktop",
+              status: "scheduled",
+              scheduledFor: 3_000,
+              displayText: "Follow up",
+              turn: { input: [{ type: "text", text: "Follow up" }] },
+              createdAt: 1_000,
+              updatedAt: 1_000,
+            },
           },
         },
-      },
-    } as AgentEvent);
+      } as AgentEvent);
+    }
 
+    expect(forwarded).toHaveLength(1);
     expect(forwarded).toMatchObject([
       {
         kind: "notification",

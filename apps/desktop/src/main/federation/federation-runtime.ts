@@ -118,6 +118,7 @@ import {
   type DesktopFederationMode,
   type DesktopSettingsSnapshot,
   type HandoffThreadWorkspaceRequest,
+  type GetNavigationSnapshotRequest,
   type GetWorktreeUnpublishedCommitDiffRequest,
   type GetWorktreeUnpublishedCommitDiffResponse,
   type InterruptTurnRequest,
@@ -632,18 +633,29 @@ function eventMatchesThreadSelection(
   if (selection.kind === "all") return true;
   const params = event.notification.params as Record<string, unknown> | undefined;
   const nestedThread = params?.thread as Record<string, unknown> | undefined;
+  const scheduledAction =
+    event.notification.method === "thread/scheduledAction/updated"
+      ? params?.action as Record<string, unknown> | undefined
+      : undefined;
   const threadId =
-    typeof params?.threadId === "string"
-      ? params.threadId
-      : typeof nestedThread?.id === "string"
-        ? nestedThread.id
-        : undefined;
+    typeof scheduledAction?.threadId === "string"
+      ? scheduledAction.threadId
+      : typeof params?.threadId === "string"
+        ? params.threadId
+        : typeof nestedThread?.id === "string"
+          ? nestedThread.id
+          : undefined;
   // Some navigation invalidations (for example PR status observations) name
   // a shared resource rather than one thread. Sparse consumers still need the
   // tiny invalidation so they can refresh their selected rows; the expensive
   // snapshot response remains filtered.
   if (!threadId) return eventClass === "navigation";
-  const key = buildThreadIdentityKey(event.backend, threadId);
+  const actionBackend =
+    typeof scheduledAction?.backend === "string"
+    && isAppServerBackendKind(scheduledAction.backend)
+      ? scheduledAction.backend
+      : event.backend;
+  const key = buildThreadIdentityKey(actionBackend, threadId);
   return selection.threads.some((thread) =>
     buildThreadIdentityKey(thread.backend, thread.threadId) === key
   );
@@ -652,13 +664,17 @@ function eventMatchesThreadSelection(
 function projectNavigationSnapshot(
   snapshot: NavigationSnapshot,
   request: {
-    backend?: AppServerListThreadsRequest["backend"];
+    backend?: GetNavigationSnapshotRequest["backend"];
     filter?: string;
   },
 ): NavigationSnapshot {
   const query = request.filter?.trim();
   const threads = snapshot.threads.filter((thread) =>
-    (!request.backend || thread.source === request.backend)
+    (
+      !request.backend
+      || request.backend === "all"
+      || thread.source === request.backend
+    )
     && (!query || threadMatchesQuery(thread, query))
   );
   const threadKeys = new Set(
@@ -1726,7 +1742,7 @@ export class DesktopFederationRuntime {
 
   async remoteNavigationSnapshot(
     target: FederationRemoteTarget,
-    request: { backend?: AppServerListThreadsRequest["backend"]; filter?: string },
+    request: Pick<GetNavigationSnapshotRequest, "backend" | "filter">,
     selectionOverride?: FederationThreadSelection,
   ): Promise<NavigationSnapshot> {
     const backend = this.remoteBackend(target);

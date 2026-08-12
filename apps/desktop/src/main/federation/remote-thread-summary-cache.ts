@@ -433,9 +433,13 @@ export class RemoteThreadSummaryCache {
         const now = this.options.now?.() ?? Date.now();
         const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
         const cached = this.cache.get(instanceId);
-        const requestedSelection = threadSelection(
-          group.map((pin) => pin.ref),
-        );
+        // A pinned parent can mount descendants owned by another instance.
+        // Their identities are only discoverable from the owner's full
+        // navigation projection, so a direct-pin selection would silently
+        // drop them on a cold cache. Keep this collection broad until the
+        // Federation protocol can request a server-computed descendant
+        // closure.
+        const requestedSelection = { kind: "all" } as const;
         const cacheSatisfies = cached
           && selectionIncludes(cached.selection, requestedSelection);
         if (
@@ -589,7 +593,7 @@ export class RemoteThreadSummaryCache {
     const failedBefore = this.refreshFailures.has(instanceId);
     this.threadsForPeer(
       target,
-      threadSelection(pins.map((pin) => pin.ref)),
+      { kind: "all" },
       "pins",
     ).then(
       async (threads) => {

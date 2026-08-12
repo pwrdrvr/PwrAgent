@@ -503,19 +503,14 @@ async function settle(): Promise<void> {
 }
 
 describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
-  it("subscribes to and fetches only the pinned thread identities", async () => {
+  it("fetches all threads so pinned mounted descendants survive a cold cache", async () => {
     const fetchSnapshot = vi.fn(async (
       _target: FederationRemoteTarget,
       selection: FederationThreadSelection,
-    ) => snapshotOf(
-      selection.kind === "threads"
-        ? selection.threads.map((thread) => stampedThread({
-            instanceId: "peer-a",
-            threadId: thread.threadId,
-            title: thread.threadId,
-          }))
-        : [],
-    ));
+    ) => snapshotOf(selection.kind === "all" ? [
+      stampedThread({ instanceId: "peer-a", threadId: "t1", title: "t1" }),
+      stampedThread({ instanceId: "peer-a", threadId: "t2", title: "t2" }),
+    ] : []));
     const onPeerInterestChanged = vi.fn();
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
@@ -530,20 +525,13 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
       pin({ instanceId: "peer-a", threadId: "t1" }),
     ]);
 
-    const expectedSelection = {
-      kind: "threads",
-      threads: [
-        { backend: "codex", threadId: "t1" },
-        { backend: "codex", threadId: "t2" },
-      ],
-    } as const;
     expect(fetchSnapshot).toHaveBeenCalledWith(
       remoteTarget("peer-a"),
-      expectedSelection,
+      { kind: "all" },
     );
     expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{
       instanceId: "peer-a",
-      threadSelection: expectedSelection,
+      threadSelection: { kind: "all" },
     }]);
   });
 
@@ -600,7 +588,9 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     child.parentThreadInstanceId = "peer-a";
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
-      fetchSnapshot: async () => snapshotOf([parent, child]),
+      fetchSnapshot: async (_target, selection) => snapshotOf(
+        selection.kind === "all" ? [parent, child] : [parent],
+      ),
       fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({ status: "connected" }),
     });
