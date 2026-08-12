@@ -14,8 +14,72 @@ export const MCP_CONNECTION_IDS = [
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
 ] as const;
+export type McpConnectionId = string;
 
-export type McpConnectionId = (typeof MCP_CONNECTION_IDS)[number];
+export type McpConnectionAuthMode = "oauth";
+
+export type McpConnectionKind = "remote" | "pwrsnap";
+
+export type McpConnectionRecord = {
+  id: McpConnectionId;
+  displayName: string;
+  serverUrl: string;
+  authMode: McpConnectionAuthMode;
+  kind: McpConnectionKind;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type McpConnectionRuntimeState =
+  | "disconnected"
+  | "connecting"
+  | "ready"
+  | "refreshing"
+  | "reauthorization_required"
+  | "temporarily_unavailable";
+
+export type McpConnectionStatus = McpConnectionRecord & {
+  state: McpConnectionRuntimeState;
+  configured: boolean;
+  detail?: string;
+};
+
+export type ListMcpConnectionsResponse = {
+  connections: McpConnectionStatus[];
+};
+
+export type CreateMcpConnectionRequest = {
+  displayName: string;
+  serverUrl: string;
+};
+
+export type CreateMcpConnectionResponse = {
+  connection: McpConnectionStatus;
+};
+
+export type AuthorizeMcpConnectionRequest = {
+  connectionId: McpConnectionId;
+};
+
+export type AuthorizeMcpConnectionResponse = {
+  connection: McpConnectionStatus;
+};
+
+export type DisconnectMcpConnectionRequest = {
+  connectionId: McpConnectionId;
+};
+
+export type RemoveMcpConnectionRequest = {
+  connectionId: McpConnectionId;
+};
+
+export type MutateMcpConnectionResponse = {
+  connectionId: McpConnectionId;
+  removed?: true;
+  connection?: McpConnectionStatus;
+};
+
 
 export function isMcpConnectionId(value: string): value is McpConnectionId {
   return (MCP_CONNECTION_IDS as readonly string[]).includes(value);

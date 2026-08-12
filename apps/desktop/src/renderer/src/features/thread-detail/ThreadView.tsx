@@ -111,6 +111,7 @@ import {
   PwrSnapConnectionPrompt,
   pwrSnapConnectionIds,
 } from "./PwrSnapConnectionPrompt";
+import { ManagedMcpConnectionsPrompt } from "./ManagedMcpConnectionsPrompt";
 import {
   PwrGitConnectionPrompt,
   pwrGitConnectionIds,
@@ -3381,6 +3382,22 @@ export function ThreadView(props: ThreadViewProps) {
                     );
                   }}
                 />
+              <ManagedMcpConnectionsPrompt
+                backend={selectedLaunchpad.backend}
+                desktopApi={props.desktopApi}
+                enabledConnectionIds={selectedLaunchpad.mcpConnectionIds ?? []}
+                remote={Boolean(props.activeFederationTarget)}
+                onEnabledChange={async (connectionId, enabled) => {
+                  const current = selectedLaunchpad.mcpConnectionIds ?? [];
+                  const next = enabled
+                    ? [...new Set([...current, connectionId])]
+                    : current.filter((id) => id !== connectionId);
+                  await props.onUpdateLaunchpad?.(
+                    selectedLaunchpad.directoryKey,
+                    { mcpConnectionIds: next },
+                  );
+                }}
+              />
               </div>
             ) : null}
             <div className={`thread-view__launchpad-composer${launchpadMaterializing ? " is-materializing" : ""}`}>

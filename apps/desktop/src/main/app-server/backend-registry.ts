@@ -16183,11 +16183,9 @@ export class DesktopBackendRegistry {
     const registrations: McpConnectionBridgeRegistration[] = [];
     for (const connectionId of selected) {
       const service =
-        connectionId === PWRSNAP_MCP_CONNECTION_ID
-          ? this.mcpConnectionService
-          : connectionId === PWRGIT_MCP_CONNECTION_ID
-            ? this.pwrGitConnectionService
-            : undefined;
+        connectionId === PWRGIT_MCP_CONNECTION_ID
+          ? this.pwrGitConnectionService
+          : this.mcpConnectionService;
       if (!service) {
         // A known connection with no service behind it is a runtime that
         // cannot honor the thread's setting. That fails loudly rather than

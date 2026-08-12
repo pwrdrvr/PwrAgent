@@ -174,6 +174,11 @@ export const MCP_CONNECTION_PWRGIT_OPEN_CHANNEL =
   "mcp-connection:pwrgit-open";
 export const MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL =
   "mcp-connection:pwrgit-download";
+export const MCP_CONNECTION_LIST_CHANNEL = "mcp-connection:list";
+export const MCP_CONNECTION_CREATE_CHANNEL = "mcp-connection:create";
+export const MCP_CONNECTION_AUTHORIZE_CHANNEL = "mcp-connection:authorize";
+export const MCP_CONNECTION_DISCONNECT_CHANNEL = "mcp-connection:disconnect";
+export const MCP_CONNECTION_REMOVE_CHANNEL = "mcp-connection:remove";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_QUERY_PAGE_CHANNEL = "navigation:get-query-page";
 export const NAVIGATION_QUERY_RELEASE_CHANNEL = "navigation:release-query";
