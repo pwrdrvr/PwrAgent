@@ -161,6 +161,7 @@ import {
   buildStatusIntent,
   buildToolUpdateBatchMessageIntent,
   buildToolUpdateMessageIntent,
+  buildWorkingCardIntent,
 } from "./messaging-renderer.js";
 import {
   artifactFromPlanEntry,
@@ -917,6 +918,10 @@ export class MessagingController {
   // Bounded so a turn that ends without a clean terminal event to clear it
   // cannot grow the map without limit.
   private readonly turnProse = new Map<string, MessagingTurnProseState>();
+  private readonly workingCards = new Map<
+    string,
+    { activities: Map<string, MessagingToolActivity>; sequence: number }
+  >();
   private readonly completedTaskMonitorTurns = new Set<string>();
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
@@ -1664,6 +1669,13 @@ export class MessagingController {
           });
         }
         if (terminalTurnId) {
+          await this.finalizeWorkingCard(
+            binding,
+            terminalTurnId,
+            lifecycle?.status === "failed" || lifecycle?.status === "interrupted"
+              ? "failed"
+              : "completed",
+          );
           this.clearTurnProse(binding.id, terminalTurnId);
           if (!privateResponseFallback) {
             const workingUpdateKey = this.turnProseKey(
@@ -15464,6 +15476,9 @@ export class MessagingController {
   ): Promise<MessagingDeliveryResult> {
     if (binding && shouldFlushToolUpdatesBeforeIntent(intent)) {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
+      if (intent.kind === "approval" || intent.kind === "questionnaire") {
+        await this.markWorkingCardWaiting(binding);
+      }
     }
     const displayIntent = binding?.backend === "codex"
       ? stripCodexGitActionDirectivesFromMessagingIntent(intent)
@@ -15641,6 +15656,40 @@ export class MessagingController {
       }
       return result;
     }
+  }
+
+  private async markWorkingCardWaiting(
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    if (binding.channel.channel !== "slack") {
+      return;
+    }
+    const entry = [...this.workingCards.entries()].find(([key]) =>
+      key.startsWith(`${binding.id}\0`)
+    );
+    if (!entry) {
+      return;
+    }
+    const [key, state] = entry;
+    state.sequence += 1;
+    const card = buildWorkingCardIntent({
+      activities: [...state.activities.values()],
+      bindingId: binding.id,
+      createdAt: this.now(),
+      displayHint: "plan",
+      id: this.newIntentId("working-card-waiting"),
+      key,
+      sequence: state.sequence,
+    });
+    card.card.phase = "waiting";
+    await this.deliver(card, binding);
+    await this.deliver(buildActivityIntent({
+      activity: "typing",
+      bindingId: binding.id,
+      createdAt: this.now(),
+      id: this.newIntentId("working-card-waiting-idle"),
+      state: "idle",
+    }), binding);
   }
 
   private async deliverArtifactForBinding(params: {
@@ -15841,7 +15890,9 @@ export class MessagingController {
   }
 
   private clearTurnProse(bindingId: string, turnId: string): void {
-    this.turnProse.delete(this.turnProseKey(bindingId, turnId));
+    const key = this.turnProseKey(bindingId, turnId);
+    this.turnProse.delete(key);
+    this.workingCards.delete(key);
   }
 
   private rememberCompletedTaskMonitorTurn(
@@ -15909,8 +15960,9 @@ export class MessagingController {
       return;
     }
 
-    const intent =
-      delivery.kind === "individual"
+    const intent = binding.channel.channel === "slack"
+      ? this.buildWorkingCardDeliveryIntent(delivery, binding.id, activities)
+      : delivery.kind === "individual"
         ? buildToolUpdateMessageIntent({
             activity: activities[0]!,
             bindingId: binding.id,
@@ -15978,6 +16030,65 @@ export class MessagingController {
         this.workingUpdateDeliveries.delete(cancellationKey);
       }
     }
+  }
+
+  private buildWorkingCardDeliveryIntent(
+    delivery: MessagingToolUpdatePolicyDelivery,
+    bindingId: string,
+    activities: MessagingToolActivity[],
+  ): MessagingSurfaceIntent {
+    const key = this.turnProseKey(bindingId, delivery.turnId);
+    let state = this.workingCards.get(key);
+    if (!state) {
+      state = { activities: new Map(), sequence: 0 };
+      this.workingCards.set(key, state);
+    }
+    for (const activity of activities) {
+      state.activities.set(activity.id, activity);
+    }
+    state.sequence += 1;
+    return buildWorkingCardIntent({
+      activities: [...state.activities.values()],
+      bindingId,
+      createdAt: this.now(),
+      displayHint: delivery.mode === "show_all"
+        ? "timeline"
+        : delivery.mode === "show_less"
+          ? "dense"
+          : "plan",
+      id: this.newIntentId("working-card"),
+      key,
+      sequence: state.sequence,
+    });
+  }
+
+  private async finalizeWorkingCard(
+    binding: MessagingBindingRecord,
+    turnId: string,
+    phase: "completed" | "failed",
+  ): Promise<void> {
+    if (binding.channel.channel !== "slack") {
+      return;
+    }
+    const key = this.turnProseKey(binding.id, turnId);
+    const state = this.workingCards.get(key);
+    if (!state) {
+      return;
+    }
+    state.sequence += 1;
+    const intent = buildWorkingCardIntent({
+      activities: [...state.activities.values()],
+      bindingId: binding.id,
+      createdAt: this.now(),
+      displayHint: "plan",
+      id: this.newIntentId("working-card-final"),
+      key,
+      sequence: state.sequence,
+    });
+    intent.card.phase = phase;
+    intent.card.isFinal = true;
+    await this.deliver(intent, binding);
+    this.workingCards.delete(key);
   }
 
   private filterUndeliveredProseActivities(
@@ -19894,6 +20005,8 @@ export function messagingDeliveryPriority(
       return "critical_interactive";
     case "stream_update":
       return intent.stream.isFinal ? "final_turn" : "stream_partial";
+    case "working_card":
+      return "tool_progress";
     case "message":
       if (intent.id.startsWith("assistant-resume-repost-important")) {
         return "user_command";

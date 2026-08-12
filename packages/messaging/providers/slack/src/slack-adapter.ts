@@ -96,6 +96,11 @@ export type SlackProviderLogger = {
 };
 
 export type SlackApi = {
+  appendStream?(params: {
+    channel: string;
+    chunks: SlackStreamChunk[];
+    ts: string;
+  }): Promise<void>;
   setAssistantThreadStatus?(params: {
     channelId: string;
     loadingMessages?: string[];
@@ -121,6 +126,19 @@ export type SlackApi = {
   downloadFile(params: { url: string; maxBytes: number }): Promise<Uint8Array>;
   filesInfo(params: { file: string }): Promise<SlackFileInfo | undefined>;
   postMessage(params: SlackPostBody): Promise<SlackMessageResult>;
+  startStream?(params: {
+    channel: string;
+    chunks: SlackStreamChunk[];
+    recipientTeamId?: string;
+    recipientUserId?: string;
+    taskDisplayMode: "timeline" | "plan" | "dense";
+    threadTs: string;
+  }): Promise<SlackMessageResult>;
+  stopStream?(params: {
+    channel: string;
+    chunks?: SlackStreamChunk[];
+    ts: string;
+  }): Promise<void>;
   publishHomeView?(params: {
     userId: string;
     view: SlackHomeView;
@@ -140,6 +158,14 @@ export type SlackApi = {
     limit?: number;
   }): Promise<SlackUserListPage>;
   botsInfo?(params: { bot: string }): Promise<{ name?: string } | undefined>;
+};
+
+export type SlackStreamChunk = {
+  details?: string;
+  id: string;
+  status: "pending" | "in_progress" | "complete" | "error";
+  title: string;
+  type: "task_update";
 };
 
 export type SlackUserListPage = {
@@ -446,6 +472,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       text: string;
     }>
   >();
+  private readonly workingCardStreams = new Map<
+    string,
+    { channelId: string; sequence: number; ts: string }
+  >();
   private botAccount: string | undefined;
   private botAccountDetail: string | undefined;
   private botId: string | undefined;
@@ -625,6 +655,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
     if (intent.kind === "stream_update") {
       return await this.deliverStreamUpdate(intent);
+    }
+    if (intent.kind === "working_card") {
+      return await this.deliverWorkingCard(intent);
     }
 
     const target = this.resolveTarget(intent);
@@ -1658,6 +1691,90 @@ export class SlackAdapter implements SlackProviderAdapter {
         ...(rateLimit ? { rateLimit } : {}),
       };
     }
+  }
+
+  private async deliverWorkingCard(
+    intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
+  ): Promise<MessagingDeliveryResult> {
+    const deliveredAt = this.now();
+    const target = this.resolveTarget(intent);
+    const current = this.workingCardStreams.get(intent.card.key);
+    if (current && intent.card.sequence <= current.sequence) {
+      return { outcome: "discarded", channel: this.channel, deliveredAt };
+    }
+    if (
+      !target?.threadTs
+      || !this.api.startStream
+      || !this.api.appendStream
+      || !this.api.stopStream
+    ) {
+      return await this.deliverWorkingCardFallback(intent);
+    }
+    const chunks = intent.card.tasks.map((task): SlackStreamChunk => ({
+      type: "task_update",
+      id: clampSlackTaskField(task.id),
+      title: clampSlackTaskField(task.title),
+      status: task.status === "cancelled" ? "error" : task.status,
+      ...(task.detail ? { details: clampSlackTaskField(task.detail) } : {}),
+    }));
+    try {
+      if (!current) {
+        const result = await this.api.startStream({
+          channel: target.channelId,
+          chunks,
+          taskDisplayMode: intent.card.displayHint,
+          threadTs: target.threadTs,
+          ...(intent.audit?.actor.platformUserId
+            ? { recipientUserId: intent.audit.actor.platformUserId }
+            : {}),
+          ...(target.channelRef.conversation.workspaceId
+            ? { recipientTeamId: target.channelRef.conversation.workspaceId }
+            : {}),
+        });
+        if (!result.ts) {
+          throw new Error("Slack chat.startStream returned no timestamp");
+        }
+        this.workingCardStreams.set(intent.card.key, {
+          channelId: target.channelId,
+          sequence: intent.card.sequence,
+          ts: result.ts,
+        });
+        if (intent.card.isFinal) {
+          await this.api.stopStream({ channel: target.channelId, ts: result.ts });
+          this.workingCardStreams.delete(intent.card.key);
+        }
+        return { outcome: "presented", channel: this.channel, deliveredAt };
+      }
+      if (intent.card.isFinal) {
+        await this.api.stopStream({ channel: current.channelId, chunks, ts: current.ts });
+        this.workingCardStreams.delete(intent.card.key);
+      } else {
+        await this.api.appendStream({ channel: current.channelId, chunks, ts: current.ts });
+        current.sequence = intent.card.sequence;
+      }
+      return { outcome: "updated", channel: this.channel, deliveredAt };
+    } catch (error) {
+      this.workingCardStreams.delete(intent.card.key);
+      this.logger.warn?.("Slack Thinking Steps stream unavailable; using text Working Update", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return await this.deliverWorkingCardFallback(intent);
+    }
+  }
+
+  private async deliverWorkingCardFallback(
+    intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
+  ): Promise<MessagingDeliveryResult> {
+    return await this.deliver({
+      ...intent,
+      kind: "message",
+      role: "system",
+      parts: [{
+        type: "text",
+        text: intent.fallbackText ?? "Working update",
+        markdown: "light",
+      }],
+    });
   }
 
   private resolveTarget(intent: MessagingSurfaceIntent):
@@ -2701,6 +2818,43 @@ export function createSlackAdapter(
 export function createSlackApi(botToken: string): SlackApi {
   const client = new WebClient(botToken, { rejectRateLimitedCalls: true });
   return {
+    async startStream(params) {
+      const chat = client.chat as unknown as {
+        startStream(input: Record<string, unknown>): Promise<SlackMessageResult>;
+      };
+      return await chat.startStream({
+        channel: params.channel,
+        chunks: params.chunks,
+        thread_ts: params.threadTs,
+        task_display_mode: params.taskDisplayMode,
+        ...(params.recipientUserId
+          ? { recipient_user_id: params.recipientUserId }
+          : {}),
+        ...(params.recipientTeamId
+          ? { recipient_team_id: params.recipientTeamId }
+          : {}),
+      });
+    },
+    async appendStream(params) {
+      const chat = client.chat as unknown as {
+        appendStream(input: Record<string, unknown>): Promise<unknown>;
+      };
+      await chat.appendStream({
+        channel: params.channel,
+        chunks: params.chunks,
+        ts: params.ts,
+      });
+    },
+    async stopStream(params) {
+      const chat = client.chat as unknown as {
+        stopStream(input: Record<string, unknown>): Promise<unknown>;
+      };
+      await chat.stopStream({
+        channel: params.channel,
+        ts: params.ts,
+        ...(params.chunks ? { chunks: params.chunks } : {}),
+      });
+    },
     async authTest() {
       return (await client.auth.test()) as SlackAuthTestResult;
     },
@@ -2945,6 +3099,10 @@ function findSlackMentionOutsideCode(text: string, mention: string): number {
     index += 1;
   }
   return -1;
+}
+
+function clampSlackTaskField(value: string): string {
+  return value.length <= 256 ? value : `${value.slice(0, 255)}…`;
 }
 
 function parseCommand(text: string): { command: string; args: string[] } | undefined {

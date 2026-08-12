@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Messaging - Render Slack Working Updates as one live Thinking Steps task card per turn, with sequenced updates, terminal/waiting state handling, and text fallback when Slack streaming is unavailable.
+
 ## v1.1.0-beta.1 - 2026-08-09
 
 - Federation and Star Map - Added secure remote-instance federation, live remote thread and terminal access, and the Star Map mission-control surface with project lenses, filters, arrangement controls, load visibility, and drag, snap, and multi-select interactions.

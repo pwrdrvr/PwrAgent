@@ -100,6 +100,22 @@ long-lived sqlite records:
 
 Adapters own platform limits and degradation:
 
+### Working cards
+
+`working_card` is a channel-neutral, turn-scoped Working Updates surface. The
+controller owns the dial policy and emits only admitted, redacted tasks with a
+stable `key` and monotonic `sequence`. Adapters must discard stale sequences.
+Slack renders the intent with Thinking Steps (`chat.startStream`,
+`chat.appendStream`, and `chat.stopStream`) when a thread target is available;
+stream state stays in memory. If native streaming is unavailable, the adapter
+delivers `fallbackText` as the existing Working Update. Providers without a
+native live-card surface continue to use that text fallback.
+
+An open native card replaces classic tool-update posts for those activities.
+Task titles and details must be clamped to provider limits and must never add
+raw command output or secrets. Waiting and terminal phases clear transient
+working indicators; the final assistant message remains authoritative.
+
 - chunk long messages according to platform limits
 - preserve inline code and fenced code when supported
 - escape or neutralize markdown dialect hazards

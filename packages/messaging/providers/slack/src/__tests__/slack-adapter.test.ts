@@ -57,6 +57,7 @@ function conversationKey(channel: MessagingChannelRef): string {
 function fakeApi(spies: {
   assistantStatusError?: Error;
   assistantStatuses?: Array<{ channelId: string; status: string; threadTs: string }>;
+  appendedStreams?: unknown[];
   bots?: Record<string, string>;
   botsInfoCalls?: string[];
   conversations?: Record<string, string>;
@@ -70,9 +71,21 @@ function fakeApi(spies: {
   postedTimestamps?: string[];
   replies?: Record<string, string>;
   updated?: unknown[];
+  startedStreams?: unknown[];
+  stoppedStreams?: unknown[];
   users?: Record<string, { displayName?: string; realName?: string; username?: string }>;
 }): SlackApi {
   return {
+    startStream: async (params) => {
+      spies.startedStreams?.push(params);
+      return { channel: params.channel, ts: "1700000000.900001" };
+    },
+    appendStream: async (params) => {
+      spies.appendedStreams?.push(params);
+    },
+    stopStream: async (params) => {
+      spies.stoppedStreams?.push(params);
+    },
     authTest: async () => ({
       bot_id: "B0PWRAGENT",
       user: "pwragent",
@@ -3981,6 +3994,103 @@ describe("SlackAdapter", () => {
         .messageTimestamps
         .map((ts) => ({ channel: "D012ABCDEF0", ts })),
     );
+  });
+
+  it("streams one sequenced Thinking Steps card and drops stale updates", async () => {
+    const appendedStreams: unknown[] = [];
+    const startedStreams: unknown[] = [];
+    const stoppedStreams: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ appendedStreams, startedStreams, stoppedStreams }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const intent = (sequence: number, isFinal = false): MessagingSurfaceIntent => ({
+      id: `working-card-${sequence}`,
+      kind: "working_card",
+      bindingId: "slack-binding-1",
+      createdAt: sequence,
+      fallbackText: "Tool update: searched files",
+      card: {
+        displayHint: "plan",
+        isFinal,
+        key: "slack-binding-1\0turn-1",
+        phase: isFinal ? "completed" : "working",
+        sequence,
+        tasks: [{ id: "task-1", title: "x".repeat(300), status: "complete" }],
+      },
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        bindingId: "slack-binding-1",
+        channel: {
+          channel: "slack",
+          conversation: {
+            id: "C012ABCDEF0",
+            kind: "thread",
+            parentId: "1700000000.000001",
+            workspaceId: "T012ABCDEF0",
+          },
+        },
+        occurredAt: sequence,
+      },
+    });
+
+    await expect(adapter.deliver(intent(1))).resolves.toMatchObject({ outcome: "presented" });
+    await expect(adapter.deliver(intent(1))).resolves.toMatchObject({ outcome: "discarded" });
+    await expect(adapter.deliver(intent(2))).resolves.toMatchObject({ outcome: "updated" });
+    await expect(adapter.deliver(intent(3, true))).resolves.toMatchObject({ outcome: "updated" });
+
+    expect(startedStreams).toHaveLength(1);
+    expect(appendedStreams).toHaveLength(1);
+    expect(stoppedStreams).toHaveLength(1);
+    expect(JSON.stringify(startedStreams[0])).not.toContain("x".repeat(257));
+  });
+
+  it("falls back to the classic text Working Update without stream APIs", async () => {
+    const posted: unknown[] = [];
+    const api = fakeApi({ posted });
+    api.startStream = undefined;
+    api.appendStream = undefined;
+    api.stopStream = undefined;
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(adapter.deliver({
+      id: "working-card-fallback",
+      kind: "working_card",
+      createdAt: 1,
+      fallbackText: "Tool update: searched files",
+      card: {
+        displayHint: "plan",
+        isFinal: false,
+        key: "fallback-turn",
+        phase: "working",
+        sequence: 1,
+        tasks: [{ id: "task-1", title: "Searched files", status: "complete" }],
+      },
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        channel: {
+          channel: "slack",
+          conversation: {
+            id: "C012ABCDEF0",
+            kind: "thread",
+            parentId: "1700000000.000001",
+          },
+        },
+        occurredAt: 1,
+      },
+    })).resolves.toMatchObject({ outcome: "presented" });
+
+    expect(posted).toHaveLength(1);
+    expect(JSON.stringify(posted[0])).toContain("Tool update: searched files");
   });
 
   it("splits long Markdown with images and attaches them to the final post", async () => {

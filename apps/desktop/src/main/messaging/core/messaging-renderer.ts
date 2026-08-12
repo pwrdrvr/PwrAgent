@@ -11,6 +11,7 @@ import type {
   MessagingSurfaceAction,
   MessagingMessageIntent,
   MessagingThreadPickerIntent,
+  MessagingWorkingCardIntent,
 } from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
@@ -166,6 +167,45 @@ export function buildToolUpdateBatchMessageIntent(params: {
         markdown: hasProse ? "markdown" : "light",
       },
     ],
+  };
+}
+
+export function buildWorkingCardIntent(params: {
+  activities: MessagingToolActivity[];
+  bindingId: string;
+  createdAt: number;
+  displayHint: MessagingWorkingCardIntent["card"]["displayHint"];
+  id: string;
+  key: string;
+  sequence: number;
+}): MessagingWorkingCardIntent {
+  const fallback = buildToolUpdateBatchMessageIntent({
+    activities: params.activities,
+    bindingId: params.bindingId,
+    createdAt: params.createdAt,
+    id: `${params.id}:fallback`,
+  });
+  const fallbackPart = fallback.parts[0];
+  return {
+    id: params.id,
+    kind: "working_card",
+    bindingId: params.bindingId,
+    createdAt: params.createdAt,
+    fallbackText: fallbackPart?.type === "text"
+      ? fallbackPart.text
+      : "Working update",
+    card: {
+      displayHint: params.displayHint,
+      isFinal: false,
+      key: params.key,
+      phase: "working",
+      sequence: params.sequence,
+      tasks: params.activities.map((activity) => ({
+        id: activity.id,
+        status: activity.status === "failed" ? "error" : "complete",
+        title: formatToolActivityLine(activity),
+      })),
+    },
   };
 }
 

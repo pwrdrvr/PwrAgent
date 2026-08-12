@@ -66,6 +66,7 @@ export const MESSAGING_SURFACE_INTENT_KINDS = [
   "activity",
   "message",
   "stream_update",
+  "working_card",
   "status",
   "progress",
   "thread_picker",
@@ -845,6 +846,23 @@ export type MessagingStreamUpdateIntent = MessagingBaseSurfaceIntent & {
   text: string;
 };
 
+export type MessagingWorkingCardIntent = MessagingBaseSurfaceIntent & {
+  kind: "working_card";
+  card: {
+    displayHint: "timeline" | "plan" | "dense";
+    isFinal: boolean;
+    key: string;
+    phase: "queued" | "working" | "waiting" | "completed" | "failed";
+    sequence: number;
+    tasks: Array<{
+      detail?: string;
+      id: string;
+      status: "pending" | "in_progress" | "complete" | "error" | "cancelled";
+      title: string;
+    }>;
+  };
+};
+
 export type MessagingActivityIntent = MessagingBaseSurfaceIntent & {
   kind: "activity";
   activity: "typing";
@@ -1170,6 +1188,7 @@ export type MessagingSurfaceIntent =
   | MessagingActivityIntent
   | MessagingMessageIntent
   | MessagingStreamUpdateIntent
+  | MessagingWorkingCardIntent
   | MessagingStatusIntent
   | MessagingProgressIntent
   | MessagingThreadPickerIntent

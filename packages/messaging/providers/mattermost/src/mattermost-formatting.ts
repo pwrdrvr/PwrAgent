@@ -240,6 +240,8 @@ export function textForMattermostIntent(intent: MessagingSurfaceIntent): string 
       return renderContentParts(intent.parts);
     case "stream_update":
       return intent.text;
+    case "working_card":
+      return intent.fallbackText ?? "Working update";
     case "status":
       return intent.text;
     case "progress":

@@ -3200,7 +3200,10 @@ describe("MessagingController", () => {
       toolUpdateDefaultMode: "show_all",
       deliver: async (intent) => {
         delivered.push(intent);
-        if (intent.id.startsWith("tool-update")) {
+        if (
+          intent.id.startsWith("tool-update")
+          || intent.id.startsWith("working-card")
+        ) {
           resolveWorkingUpdateStarted();
           await workingUpdateRelease;
           return {
@@ -3261,7 +3264,10 @@ describe("MessagingController", () => {
     const recordDelivery = harness.store.recordDelivery.bind(harness.store);
     vi.spyOn(harness.store, "recordDelivery").mockImplementation(async (delivery) => {
       const recorded = await recordDelivery(delivery);
-      if (delivery.intentId?.startsWith("tool-update:")) {
+      if (
+        delivery.intentId?.startsWith("tool-update:")
+        || delivery.intentId?.startsWith("working-card:")
+      ) {
         resolveWorkingUpdateRecorded();
         await workingUpdateRecordRelease;
       }
