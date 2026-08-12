@@ -44,6 +44,7 @@ import type {
   ListRecentFileReferencesResponse,
   MarkThreadSeenResponse,
   MessagingPlatformStatus,
+  NavigationSnapshotTransportState,
   PwrSnapConnectionStatus,
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
@@ -76,7 +77,9 @@ import {
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
+  applyNavigationSnapshotTransportResponse,
   buildFederatedThreadRef,
+  buildNavigationSnapshotTransportScopeKey,
   encodeLegacyThreadIdentityKey,
   federationEndpointAcceptsCloudflareCredentials,
   isCelestialIconAssignment,
@@ -199,6 +202,7 @@ import {
   recordRecentFileReferencePaths,
 } from "../state/recent-file-references-store";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import {
   createFederationEnrollmentInvite,
   decodeFederationInvite,
@@ -356,6 +360,7 @@ function rewriteLiveTranscriptImagesForFederation(
 const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
+  "navigation_snapshot_deltas",
   "thread_detail",
   "turn_control",
   "scheduled_actions",
@@ -548,6 +553,11 @@ export class DesktopFederationRuntime {
     Omit<FederationEndpointStatus, "url">
   >();
   private readonly rpcByPeer = new Map<FederationInstanceId, FederationRpcEndpoint>();
+  private readonly remoteNavigationTransportByScope = new Map<
+    string,
+    NavigationSnapshotTransportState
+  >();
+  private ownedNavigationSnapshotTransport?: NavigationSnapshotTransport;
   private readonly remotePeerDirectory = new Map<
     FederationInstanceId,
     FederationPeerSummary
@@ -817,6 +827,9 @@ export class DesktopFederationRuntime {
     this.unsubscribeLocalBackendEvents = undefined;
     this.remoteThreadSummaryCache?.dispose();
     this.remoteThreadSummaryCache = undefined;
+    this.remoteNavigationTransportByScope.clear();
+    this.ownedNavigationSnapshotTransport?.clear();
+    this.ownedNavigationSnapshotTransport = undefined;
     // Owner shutdown kills every remote session immediately, mirroring how
     // the local panel's shells die with the app.
     this.ptyService?.disposeAll();
@@ -1305,7 +1318,7 @@ export class DesktopFederationRuntime {
     };
   }
 
-  remoteBackend(target: FederationRemoteTarget): FederationBackendOperations {
+  remoteBackend(target: FederationRemoteTarget): FederationRemoteBackendClient {
     return new FederationRemoteBackendClient(
       this.rpcFor(target),
       async (response) =>
@@ -1533,12 +1546,101 @@ export class DesktopFederationRuntime {
     request: { backend?: AppServerListThreadsRequest["backend"]; filter?: string },
   ): Promise<NavigationSnapshot> {
     const backend = this.remoteBackend(target);
-    const response = normalizeNavigationSnapshotThreadKeys(
-      await backend.getNavigationSnapshot({
-        backend: request.backend,
-        filter: request.filter,
-      }),
+    const snapshotRequest = {
+      backend: request.backend,
+      filter: request.filter,
+    };
+    if (
+      typeof backend.getNavigationSnapshotTransport !== "function"
+      || !this.remotePeerAdvertisesCapability(
+        target.instanceId,
+        "navigation_snapshot_deltas",
+      )
+    ) {
+      return await this.stampRemoteNavigationSnapshot(
+        target,
+        normalizeNavigationSnapshotThreadKeys(
+          await backend.getNavigationSnapshot(snapshotRequest),
+        ),
+      );
+    }
+    const transportScopeKey = `${target.instanceId}\u0000${
+      buildNavigationSnapshotTransportScopeKey(snapshotRequest)
+    }`;
+    const previousTransportState =
+      this.remoteNavigationTransportByScope.get(transportScopeKey);
+    let transportResponse = await backend.getNavigationSnapshotTransport({
+      ...snapshotRequest,
+      transport: {
+        protocol: 1,
+        ...(previousTransportState
+          ? { baseRevision: previousTransportState.revision }
+          : {}),
+      },
+    });
+    if ("threads" in transportResponse) {
+      return await this.stampRemoteNavigationSnapshot(
+        target,
+        normalizeNavigationSnapshotThreadKeys(transportResponse),
+      );
+    }
+    let nextTransportState = applyNavigationSnapshotTransportResponse(
+      previousTransportState,
+      transportResponse,
     );
+    if (!nextTransportState) {
+      transportResponse = await backend.getNavigationSnapshotTransport({
+        ...snapshotRequest,
+        transport: { protocol: 1 },
+      });
+      if ("threads" in transportResponse) {
+        return await this.stampRemoteNavigationSnapshot(
+          target,
+          normalizeNavigationSnapshotThreadKeys(transportResponse),
+        );
+      }
+      nextTransportState = applyNavigationSnapshotTransportResponse(
+        undefined,
+        transportResponse,
+      );
+    }
+    if (!nextTransportState) {
+      throw new Error(
+        "Federation navigation snapshot transport did not provide a recoverable baseline.",
+      );
+    }
+    this.remoteNavigationTransportByScope.set(
+      transportScopeKey,
+      nextTransportState,
+    );
+    const response = normalizeNavigationSnapshotThreadKeys(
+      nextTransportState.snapshot,
+    );
+    return await this.stampRemoteNavigationSnapshot(target, response);
+  }
+
+  private remotePeerAdvertisesCapability(
+    instanceId: FederationInstanceId,
+    capability: FederationCapability,
+  ): boolean {
+    let visiblePeer: FederationPeerSummary | undefined;
+    try {
+      visiblePeer = this.visiblePeers().find(
+        (candidate) => candidate.id === instanceId,
+      );
+    } catch {
+      // Direct connection metadata remains available during early boot and
+      // in store-injected harnesses where the app-state database is absent.
+    }
+    return this.viewerCapabilitiesFor(instanceId, visiblePeer).includes(
+      capability,
+    );
+  }
+
+  private async stampRemoteNavigationSnapshot(
+    target: FederationRemoteTarget,
+    response: NavigationSnapshot,
+  ): Promise<NavigationSnapshot> {
     // visiblePeers reads the app-state db (local instance id); during
     // early boot or in store-injected test harnesses that db may be
     // absent — fall back to the bare store record (mirrors the menu's
@@ -1872,7 +1974,7 @@ export class DesktopFederationRuntime {
       },
       additionalRequiredCapabilities: additionalFederationBackendCapabilities,
     });
-    registerFederationBackendHandlers({
+    this.ownedNavigationSnapshotTransport = registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
       resolveSourceInstance: (instanceId) =>
@@ -2476,6 +2578,19 @@ export class DesktopFederationRuntime {
       ),
     );
     this.rpcByPeer.delete(peerId);
+    this.clearRemoteNavigationTransportForPeer(peerId);
+    this.ownedNavigationSnapshotTransport?.clearClient(peerId);
+  }
+
+  private clearRemoteNavigationTransportForPeer(
+    peerId: FederationInstanceId,
+  ): void {
+    const prefix = `${peerId}\u0000`;
+    for (const scopeKey of this.remoteNavigationTransportByScope.keys()) {
+      if (scopeKey.startsWith(prefix)) {
+        this.remoteNavigationTransportByScope.delete(scopeKey);
+      }
+    }
   }
 
   private disconnectAdvertisedPeers(reason: string): void {
@@ -2494,6 +2609,7 @@ export class DesktopFederationRuntime {
       if (peer.status === "connected") {
         this.ptyService?.notifyPeerDisconnected(peerId);
       }
+      this.clearRemoteNavigationTransportForPeer(peerId);
       this.publishPeerStatus(
         peerId,
         peer.status === "revoked" ? "revoked" : "disconnected",

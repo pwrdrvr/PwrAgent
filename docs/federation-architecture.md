@@ -74,6 +74,15 @@ The scheduled-action RPC surface is part of federation protocol v1 while the
 protocol remains under development. Peers must authorize `scheduled_actions`
 explicitly; `turn_control` does not imply scheduler access.
 
+Navigation snapshot transfer is negotiated independently from navigation
+access. A peer that advertises `navigation_snapshot_deltas` may receive a full
+baseline followed by revision-based sparse deltas or unchanged responses from
+`backend.getNavigationSnapshot`; the request carries the transport protocol
+and prior revision. Peers that do not advertise the capability retain the
+protocol-v1 full-snapshot contract. Snapshot production remains full on the
+owner—the optimization applies at the Federation serialization boundary and
+avoids retransmitting and reconstructing unchanged thread rows on the wire.
+
 ### Event subscriptions
 
 An authenticated connection does not subscribe a peer to backend events.

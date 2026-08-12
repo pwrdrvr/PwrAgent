@@ -1684,6 +1684,7 @@ function parseFederationListenPort(value: string): number {
 const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   remote_window: "open a remote workspace",
   thread_navigation: "browse and create threads",
+  navigation_snapshot_deltas: "exchange compact navigation updates",
   thread_detail: "read transcripts",
   turn_control: "prompt, steer, and interrupt",
   scheduled_actions: "schedule and manage messages",

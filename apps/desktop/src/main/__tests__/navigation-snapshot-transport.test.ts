@@ -46,7 +46,7 @@ describe("NavigationSnapshotTransport", () => {
       buildThread(index),
     );
     const full = transport.encode({
-      rendererId: 7,
+      clientId: 7,
       request: {},
       snapshot: buildSnapshot(threads),
     });
@@ -58,7 +58,7 @@ describe("NavigationSnapshotTransport", () => {
 
     const unchanged = transport.encode({
       baseRevision: full.revision,
-      rendererId: 7,
+      clientId: 7,
       request: {},
       snapshot: buildSnapshot(threads, 2),
     });
@@ -78,7 +78,7 @@ describe("NavigationSnapshotTransport", () => {
       buildThread(index),
     );
     const full = transport.encode({
-      rendererId: 8,
+      clientId: 8,
       request: {},
       snapshot: buildSnapshot(threads),
     });
@@ -93,7 +93,7 @@ describe("NavigationSnapshotTransport", () => {
 
     const updated = transport.encode({
       baseRevision: full.revision,
-      rendererId: 8,
+      clientId: 8,
       request: {},
       snapshot: buildSnapshot(updatedThreads, 2),
     });
@@ -109,7 +109,7 @@ describe("NavigationSnapshotTransport", () => {
     const remainingThreads = updatedThreads.slice(5);
     const removed = transport.encode({
       baseRevision: updated.revision,
-      rendererId: 8,
+      clientId: 8,
       request: {},
       snapshot: buildSnapshot(remainingThreads, 3),
     });
@@ -135,7 +135,7 @@ describe("NavigationSnapshotTransport", () => {
     const transport = new NavigationSnapshotTransport();
     const snapshot = buildSnapshot([buildThread(1)]);
     const first = transport.encode({
-      rendererId: 9,
+      clientId: "renderer:9",
       request: {},
       snapshot,
     });
@@ -145,13 +145,13 @@ describe("NavigationSnapshotTransport", () => {
 
     expect(transport.encode({
       baseRevision: "stale",
-      rendererId: 9,
+      clientId: "renderer:9",
       request: {},
       snapshot,
     }).kind).toBe("full");
     expect(transport.encode({
       baseRevision: first.revision,
-      rendererId: 10,
+      clientId: "federation:viewer-10",
       request: {},
       snapshot,
     }).kind).toBe("full");
@@ -161,12 +161,12 @@ describe("NavigationSnapshotTransport", () => {
     const transport = new NavigationSnapshotTransport();
     const snapshot = buildSnapshot([buildThread(1)]);
     const full = transport.encode({
-      rendererId: 11,
+      clientId: 11,
       request: {},
       snapshot,
     });
     const activeRecent = transport.encode({
-      rendererId: 11,
+      clientId: 11,
       request: { refreshMode: "active-recent" },
       snapshot,
     });
@@ -176,7 +176,7 @@ describe("NavigationSnapshotTransport", () => {
 
     expect(transport.encode({
       baseRevision: full.revision,
-      rendererId: 11,
+      clientId: 11,
       request: { refreshMode: "full" },
       snapshot,
     })).toEqual({
@@ -185,7 +185,7 @@ describe("NavigationSnapshotTransport", () => {
     });
     expect(transport.encode({
       baseRevision: activeRecent.revision,
-      rendererId: 11,
+      clientId: 11,
       request: { refreshMode: "active-recent" },
       snapshot,
     })).toEqual({

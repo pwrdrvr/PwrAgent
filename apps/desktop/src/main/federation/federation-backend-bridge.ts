@@ -31,6 +31,7 @@ import type {
   ForkThreadRequest,
   ForkThreadResponse,
   GetNavigationSnapshotRequest,
+  GetNavigationSnapshotTransportRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   GetWorktreeUnpublishedCommitDiffRequest,
@@ -70,6 +71,7 @@ import type {
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
   NavigationSnapshot,
+  NavigationSnapshotTransportResponse,
   NavigationThreadSummary,
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
@@ -134,6 +136,7 @@ import {
   encodeNavigationSnapshotThreadKeysForProtocolV1,
   normalizeNavigationSnapshotThreadKeys,
 } from "@pwragent/shared";
+import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 import {
@@ -619,15 +622,38 @@ export function registerFederationBackendHandlers(params: {
     event: CodexEnvironmentSetupProgressEvent,
     targetInstanceId: string,
   ) => void;
-}): void {
+}): NavigationSnapshotTransport {
+  const navigationSnapshotTransport = new NavigationSnapshotTransport();
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
-    async (envelope) =>
-      encodeNavigationSnapshotThreadKeysForProtocolV1(
-        await params.backend.getNavigationSnapshot(
-          (envelope.params ?? {}) as GetNavigationSnapshotRequest,
-        ),
-      ),
+    async (envelope) => {
+      const request = (envelope.params ?? {}) as
+        | GetNavigationSnapshotRequest
+        | GetNavigationSnapshotTransportRequest;
+      const transportRequest =
+        "transport" in request && request.transport?.protocol === 1
+          ? request
+          : undefined;
+      if (!transportRequest) {
+        const { transport: _unsupportedTransport, ...snapshotRequest } =
+          request as GetNavigationSnapshotRequest & {
+            transport?: unknown;
+          };
+        return encodeNavigationSnapshotThreadKeysForProtocolV1(
+          await params.backend.getNavigationSnapshot(snapshotRequest),
+        );
+      }
+      const { transport, ...snapshotRequest } = transportRequest;
+      const snapshot = encodeNavigationSnapshotThreadKeysForProtocolV1(
+        await params.backend.getNavigationSnapshot(snapshotRequest),
+      );
+      return navigationSnapshotTransport.encode({
+        baseRevision: transport.baseRevision,
+        clientId: envelope.sourceInstanceId,
+        request: snapshotRequest,
+        snapshot,
+      });
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listThreads,
@@ -1170,6 +1196,7 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as StarMapIntakeRequest,
       ),
   );
+  return navigationSnapshotTransport;
 }
 
 export class FederationRemoteBackendClient implements FederationBackendOperations {
@@ -1191,6 +1218,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
         params: request,
       }),
     );
+  }
+
+  async getNavigationSnapshotTransport(
+    request: GetNavigationSnapshotTransportRequest,
+  ): Promise<NavigationSnapshot | NavigationSnapshotTransportResponse> {
+    return await this.rpc.request<
+      NavigationSnapshot | NavigationSnapshotTransportResponse
+    >({
+      method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
+      params: request,
+    });
   }
 
   async listThreads(

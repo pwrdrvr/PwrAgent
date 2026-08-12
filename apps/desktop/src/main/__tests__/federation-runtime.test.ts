@@ -8,7 +8,9 @@ import type {
   FederationEventSubscription,
   FederationInstanceId,
   FederationProtocolEnvelope,
+  GetNavigationSnapshotTransportRequest,
   NavigationSnapshot,
+  NavigationSnapshotTransportResponse,
   SetCelestialIconResponse,
   StarMapArrangementEntry,
 } from "@pwragent/shared";
@@ -110,6 +112,9 @@ type RuntimeHarness = {
     instanceId: FederationInstanceId;
   }) => {
     getNavigationSnapshot: () => Promise<NavigationSnapshot>;
+    getNavigationSnapshotTransport?: (
+      request: GetNavigationSnapshotTransportRequest,
+    ) => Promise<NavigationSnapshot | NavigationSnapshotTransportResponse>;
     listThreads: (request: { backend: "codex" }) => Promise<{
       backend: "codex";
       fetchedAt: number;
@@ -349,6 +354,177 @@ describe("DesktopFederationRuntime", () => {
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
       pwrAgentWorktree,
     );
+  });
+
+  it("reconstructs Federation navigation deltas against the peer revision", async () => {
+    const firstSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [
+        {
+          id: "thread-1",
+          title: "Remote one",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+        },
+        {
+          id: "thread-2",
+          title: "Remote two",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+        },
+      ],
+      inboxThreadKeys: ["codex:thread-1", "codex:thread-2"],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const getNavigationSnapshotTransport = vi
+      .fn<(request: GetNavigationSnapshotTransportRequest) =>
+        Promise<NavigationSnapshotTransportResponse>>()
+      .mockResolvedValueOnce({
+        kind: "full",
+        revision: "peer-revision-1",
+        snapshot: firstSnapshot,
+      })
+      .mockResolvedValueOnce({
+        kind: "delta",
+        baseRevision: "peer-revision-1",
+        revision: "peer-revision-2",
+        fetchedAt: 2_000,
+        removedThreadKeys: ["codex:thread-2"],
+        upsertedThreads: [{
+          ...firstSnapshot.threads[0]!,
+          title: "Remote one updated",
+        }],
+        removedDirectoryKeys: [],
+        upsertedDirectories: [],
+        removedInboxThreadKeys: ["codex:thread-2"],
+      })
+      .mockResolvedValueOnce({
+        kind: "unchanged",
+        revision: "peer-revision-2",
+      });
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.remoteBackend = () => ({
+      getNavigationSnapshot: async () => firstSnapshot,
+      getNavigationSnapshotTransport,
+      listThreads: async () => ({
+        backend: "codex",
+        fetchedAt: 1_000,
+        threads: [],
+      }),
+    });
+    runtime.store = () => ({
+      getPeer: () => ({ label: "Studio Mac", status: "connected" }),
+      listPeers: () => [],
+    });
+    runtime.visiblePeers = () => [{
+      id: "client_one",
+      label: "Studio Mac",
+      role: "client",
+      status: "connected",
+      capabilities: ["thread_navigation", "navigation_snapshot_deltas"],
+    }];
+    const target = { scope: "remote" as const, instanceId: "client_one" };
+
+    const first = await runtime.remoteNavigationSnapshot(target, {});
+    const changed = await runtime.remoteNavigationSnapshot(target, {});
+    const unchanged = await runtime.remoteNavigationSnapshot(target, {});
+
+    expect(first.threads.map((thread) => thread.title)).toEqual([
+      "Remote one",
+      "Remote two",
+    ]);
+    expect(changed.threads.map((thread) => thread.title)).toEqual([
+      "Remote one updated",
+    ]);
+    expect(changed.inboxThreadKeys).toEqual(["codex:thread-1"]);
+    expect(unchanged.threads.map((thread) => thread.title)).toEqual([
+      "Remote one updated",
+    ]);
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(2, {
+      backend: undefined,
+      filter: undefined,
+      transport: {
+        baseRevision: "peer-revision-1",
+        protocol: 1,
+      },
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(3, {
+      backend: undefined,
+      filter: undefined,
+      transport: {
+        baseRevision: "peer-revision-2",
+        protocol: 1,
+      },
+    });
+  });
+
+  it("uses full snapshots when an older owner does not advertise delta support", async () => {
+    const legacySnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [{
+        id: "legacy-thread",
+        title: "Legacy owner thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      }],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const getNavigationSnapshotTransport = vi.fn(async () => legacySnapshot);
+    const getNavigationSnapshot = vi.fn(async () => legacySnapshot);
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.remoteBackend = () => ({
+      getNavigationSnapshot,
+      getNavigationSnapshotTransport,
+      listThreads: async () => ({
+        backend: "codex",
+        fetchedAt: 1_000,
+        threads: [],
+      }),
+    });
+    runtime.store = () => ({
+      getPeer: () => ({ label: "Older Mac", status: "connected" }),
+      listPeers: () => [],
+    });
+    runtime.visiblePeers = () => [{
+      id: "older_owner",
+      label: "Older Mac",
+      role: "client",
+      status: "connected",
+      capabilities: ["thread_navigation"],
+    }];
+
+    const snapshot = await runtime.remoteNavigationSnapshot(
+      { scope: "remote", instanceId: "older_owner" },
+      {},
+    );
+
+    expect(snapshot.threads[0]).toMatchObject({
+      id: "legacy-thread",
+      federation: {
+        instanceLabel: "Older Mac",
+      },
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(getNavigationSnapshotTransport).not.toHaveBeenCalled();
   });
 
   it("preserves a transitive child's true federation owner", async () => {

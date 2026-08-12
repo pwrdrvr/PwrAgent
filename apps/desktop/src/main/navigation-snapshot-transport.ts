@@ -157,36 +157,41 @@ function buildDelta(params: {
 }
 
 /**
- * Per-renderer revision cache for the Electron IPC boundary. The app-server
- * service still builds and returns complete snapshots to every internal
- * caller; only renderer clients that opt into protocol 1 receive deltas.
+ * Per-client revision cache shared by the Electron IPC and Federation RPC
+ * boundaries. Snapshot producers still build complete snapshots; clients
+ * that opt into protocol 1 receive deltas at the serialization boundary.
  */
 export class NavigationSnapshotTransport {
   private nextRevision = 0;
-  private readonly snapshotsByRenderer = new Map<
-    number,
+  private readonly snapshotsByClient = new Map<
+    string | number,
     Map<string, CachedNavigationSnapshot>
   >();
 
   clearRenderer(rendererId: number): void {
-    this.snapshotsByRenderer.delete(rendererId);
+    this.clearClient(rendererId);
+  }
+
+  clearClient(clientId: string | number): void {
+    this.snapshotsByClient.delete(clientId);
   }
 
   clear(): void {
-    this.snapshotsByRenderer.clear();
+    this.snapshotsByClient.clear();
   }
 
   encode(params: {
     baseRevision?: string;
-    rendererId: number;
+    clientId: string | number;
     request: GetNavigationSnapshotRequest;
     snapshot: NavigationSnapshot;
   }): NavigationSnapshotTransportResponse {
+    const clientId = params.clientId;
     const scopeKey = buildNavigationSnapshotTransportScopeKey(params.request);
-    const rendererSnapshots =
-      this.snapshotsByRenderer.get(params.rendererId) ?? new Map();
-    this.snapshotsByRenderer.set(params.rendererId, rendererSnapshots);
-    const cached = rendererSnapshots.get(scopeKey);
+    const clientSnapshots =
+      this.snapshotsByClient.get(clientId) ?? new Map();
+    this.snapshotsByClient.set(clientId, clientSnapshots);
+    const cached = clientSnapshots.get(scopeKey);
 
     if (
       !cached
@@ -198,7 +203,7 @@ export class NavigationSnapshotTransport {
       )
     ) {
       const revision = String(++this.nextRevision);
-      rendererSnapshots.set(scopeKey, {
+      clientSnapshots.set(scopeKey, {
         revision,
         snapshot: params.snapshot,
       });
@@ -219,7 +224,7 @@ export class NavigationSnapshotTransport {
       revision,
     });
     if (!delta) {
-      rendererSnapshots.set(scopeKey, {
+      clientSnapshots.set(scopeKey, {
         revision: cached.revision,
         snapshot: params.snapshot,
       });
@@ -230,7 +235,7 @@ export class NavigationSnapshotTransport {
     }
 
     this.nextRevision += 1;
-    rendererSnapshots.set(scopeKey, {
+    clientSnapshots.set(scopeKey, {
       revision,
       snapshot: params.snapshot,
     });

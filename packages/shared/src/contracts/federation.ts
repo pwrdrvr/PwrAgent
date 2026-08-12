@@ -13,6 +13,7 @@ export const FEDERATION_TRANSPORT_VERSION = 1;
 export const FEDERATION_CAPABILITIES = [
   "remote_window",
   "thread_navigation",
+  "navigation_snapshot_deltas",
   "thread_detail",
   "turn_control",
   "scheduled_actions",

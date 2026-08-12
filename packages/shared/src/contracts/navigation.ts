@@ -1234,9 +1234,9 @@ export type GetNavigationSnapshotRequest = {
 };
 
 /**
- * Opt-in renderer transport layered over the full navigation snapshot API.
- * Internal main-process, messaging, and federation callers continue to use
- * `GetNavigationSnapshotRequest` and always receive a complete snapshot.
+ * Opt-in revision transport layered over the full navigation snapshot API.
+ * Sending `transport.protocol` advertises client support; callers that omit
+ * it retain the legacy complete-snapshot response contract.
  */
 export type GetNavigationSnapshotTransportRequest =
   GetNavigationSnapshotRequest & {
@@ -1247,8 +1247,8 @@ export type GetNavigationSnapshotTransportRequest =
   };
 
 /**
- * Stable renderer/main cache scope. `forceRefresh` is a scheduling hint and
- * does not change the semantic snapshot population.
+ * Stable per-client cache scope. `forceRefresh` is a scheduling hint and does
+ * not change the semantic snapshot population.
  */
 export function buildNavigationSnapshotTransportScopeKey(
   request: GetNavigationSnapshotRequest,

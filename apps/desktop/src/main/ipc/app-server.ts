@@ -7471,7 +7471,7 @@ export function registerAppServerIpcHandlers(): void {
           }
           return navigationSnapshotTransport.encode({
             baseRevision: transport.baseRevision,
-            rendererId,
+            clientId: rendererId,
             request: snapshotRequest,
             snapshot,
           });
