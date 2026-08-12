@@ -148,6 +148,9 @@ desktop replay scenarios do not exercise Codex sidebar directory identity.
   hide low-signal hunks via the focused diff path
 - `thread-image-fit/`: pasted transcript image preview preserves its natural
   aspect ratio and fits within the preview container without cropping
+- `markdown-findings-table/`: wide markdown tables keep their headings and
+  separators inside the scrollable split block; table-block and full-message
+  clipboard actions retain their distinct scopes
 - `mcp-elicitation/`: Codex MCP elicitation request for Playwright
   `browser_tabs`, including MCP-shaped approval handling and progress rendering
 

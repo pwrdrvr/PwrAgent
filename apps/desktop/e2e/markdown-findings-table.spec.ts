@@ -4,6 +4,21 @@ import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
+const harnessTableBlock = `## Quick matrix
+
+---
+
+| Harness | Executable | Primary install | First run |
+|---|---|---|---|
+| Grok Build | \`grok\` | Shell installer on macOS/Linux; PowerShell installer on Windows | Browser sign-in or API key |
+| Kimi Code | \`kimi\` | Vendor installer, with Git for Windows on native Windows | Run \`/login\` in the TUI |
+| Qwen Code | \`qwen\` | Standalone installer; package-manager fallback needs Node 22+ | Run \`/auth\` in the session |
+| Codex CLI | \`codex\` | Standalone installer for macOS, Linux, and Windows | Sign in with ChatGPT or provide an API key |`;
+const harnessMessage = `Research is complete. This is a compact cross-platform setup guide for the public harnesses.
+
+${harnessTableBlock}
+
+Implementation note: keep the matrix horizontally scrollable without widening the transcript.`;
 
 test("renders a wide assistant markdown findings table without crushing the columns", async () => {
   const app = await launchElectronApp({
@@ -52,6 +67,9 @@ test("renders a wide assistant markdown findings table without crushing the colu
     await expect(proseMessage).toBeVisible();
     await expect(proseMessage).not.toHaveClass(/transcript-message--table-wide/);
     await expect(wideTableMessage).toBeVisible();
+    await expect(
+      wideTableMessage.getByRole("heading", { level: 2, name: "Findings" })
+    ).toBeVisible();
     await expect(tableScroll).toBeVisible();
     await expect(table).toBeVisible();
     await expect(table.getByRole("columnheader", { name: "#" })).toBeVisible();
@@ -140,6 +158,42 @@ test("renders a wide assistant markdown findings table without crushing the colu
     expect(oversizedDimensions.northAmericaRight).toBeLessThanOrEqual(
       oversizedDimensions.europeLeft + 1
     );
+
+    const harnessProseMessage = transcript
+      .locator(".transcript-message--assistant")
+      .filter({ hasText: "Research is complete" })
+      .first();
+    const harnessTableMessage = transcript
+      .locator(".transcript-message--table-wide")
+      .filter({ hasText: "Quick matrix" })
+      .first();
+    await expect(harnessProseMessage).toBeVisible();
+    await expect(harnessProseMessage).not.toContainText("Quick matrix");
+    await expect(harnessTableMessage).toBeVisible();
+    await expect(
+      harnessTableMessage.getByRole("heading", { level: 2, name: "Quick matrix" })
+    ).toBeVisible();
+    await expect(harnessTableMessage.locator(".transcript-message__rule")).toBeVisible();
+    await expect(harnessTableMessage.locator("table")).toContainText("Grok Build");
+
+    await app.electronApp.evaluate(({ clipboard }) => clipboard.writeText(""));
+    await harnessTableMessage
+      .getByRole("button", { name: "Copy table block" })
+      .click();
+    await expect
+      .poll(async () =>
+        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
+      )
+      .toBe(harnessTableBlock);
+
+    await harnessProseMessage
+      .getByRole("button", { name: "Copy message" })
+      .click();
+    await expect
+      .poll(async () =>
+        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
+      )
+      .toBe(harnessMessage);
   } finally {
     await app.close();
   }

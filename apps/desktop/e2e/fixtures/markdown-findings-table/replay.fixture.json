@@ -2,7 +2,7 @@
   "metadata": {
     "backend": "codex",
     "scenario": "markdown-findings-table",
-    "sourceCaptureId": "synthetic-sanitized-2026-05-11",
+    "sourceCaptureId": "synthetic-sanitized-2026-08-11",
     "threadId": "thread-markdown-findings-table"
   },
   "steps": [
@@ -78,6 +78,12 @@
             "id": "message-assistant-4",
             "role": "assistant",
             "text": "Alternate review header schema (proves the classifier is content-aware, not keyed to the literal `# / Sev / File / Issue / Fix` header). Same content shape, different labels — expect tag / label / prose / prose:\n\n| Severity | Module | Symptom | Fix |\n|:---:|---|---|---|\n| P0 | billing/dispatch | Duplicate-notice emission after retry suppression, observed in shadow rollouts at 0.3% rate. Caused by fallback path not respecting suppression flag. | Propagate suppression flag into the secondary provider path and gate the fallback emission behind it. Add an integration test that exercises the suppression interleaving. |\n| P1 | window/ledger | Tenant identity merging across cache normalization. Two tenants with the same period and bucket ids are indistinguishable to the cache key. | Add `tenantId` to the `LedgerIdentity` tuple, the `stableKey` serializer, and the sorting comparator. Regression test in `window/ledger.spec.ts`. |\n| P2 | window/observation | Failure-heavy buckets remain sparse indefinitely because the call-count threshold excludes failures from observed calls. | Switch the threshold input to total attempts, keep the win-ratio math on resolved auctions, and add a failure-heavy regression test. |"
+          },
+          {
+            "type": "message",
+            "id": "message-assistant-5",
+            "role": "assistant",
+            "text": "Research is complete. This is a compact cross-platform setup guide for the public harnesses.\n\n## Quick matrix\n\n---\n\n| Harness | Executable | Primary install | First run |\n|---|---|---|---|\n| Grok Build | `grok` | Shell installer on macOS/Linux; PowerShell installer on Windows | Browser sign-in or API key |\n| Kimi Code | `kimi` | Vendor installer, with Git for Windows on native Windows | Run `/login` in the TUI |\n| Qwen Code | `qwen` | Standalone installer; package-manager fallback needs Node 22+ | Run `/auth` in the session |\n| Codex CLI | `codex` | Standalone installer for macOS, Linux, and Windows | Sign in with ChatGPT or provide an API key |\n\nImplementation note: keep the matrix horizontally scrollable without widening the transcript."
           }
         ],
         "messages": [
@@ -105,6 +111,11 @@
             "id": "message-assistant-4",
             "role": "assistant",
             "text": "Alternate review header schema (proves the classifier is content-aware, not keyed to the literal `# / Sev / File / Issue / Fix` header). Same content shape, different labels — expect tag / label / prose / prose:\n\n| Severity | Module | Symptom | Fix |\n|:---:|---|---|---|\n| P0 | billing/dispatch | Duplicate-notice emission after retry suppression, observed in shadow rollouts at 0.3% rate. Caused by fallback path not respecting suppression flag. | Propagate suppression flag into the secondary provider path and gate the fallback emission behind it. Add an integration test that exercises the suppression interleaving. |\n| P1 | window/ledger | Tenant identity merging across cache normalization. Two tenants with the same period and bucket ids are indistinguishable to the cache key. | Add `tenantId` to the `LedgerIdentity` tuple, the `stableKey` serializer, and the sorting comparator. Regression test in `window/ledger.spec.ts`. |\n| P2 | window/observation | Failure-heavy buckets remain sparse indefinitely because the call-count threshold excludes failures from observed calls. | Switch the threshold input to total attempts, keep the win-ratio math on resolved auctions, and add a failure-heavy regression test. |"
+          },
+          {
+            "id": "message-assistant-5",
+            "role": "assistant",
+            "text": "Research is complete. This is a compact cross-platform setup guide for the public harnesses.\n\n## Quick matrix\n\n---\n\n| Harness | Executable | Primary install | First run |\n|---|---|---|---|\n| Grok Build | `grok` | Shell installer on macOS/Linux; PowerShell installer on Windows | Browser sign-in or API key |\n| Kimi Code | `kimi` | Vendor installer, with Git for Windows on native Windows | Run `/login` in the TUI |\n| Qwen Code | `qwen` | Standalone installer; package-manager fallback needs Node 22+ | Run `/auth` in the session |\n| Codex CLI | `codex` | Standalone installer for macOS, Linux, and Windows | Sign in with ChatGPT or provide an API key |\n\nImplementation note: keep the matrix horizontally scrollable without widening the transcript."
           }
         ],
         "lastUserMessage": "Review the billing pacing change and present the findings in a compact table.",

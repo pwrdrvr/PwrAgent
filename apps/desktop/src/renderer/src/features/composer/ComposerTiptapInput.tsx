@@ -358,6 +358,67 @@ function containsBlockMarkdown(text: string): boolean {
   return text.split("\n").some((line) => isMarkdownBlockStart(line));
 }
 
+function splitMarkdownTableCells(line: string): string[] {
+  const trimmed = line.trim();
+  let content = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
+  let trailingBackslashes = 0;
+  for (
+    let index = content.length - 2;
+    index >= 0 && content[index] === "\\";
+    index -= 1
+  ) {
+    trailingBackslashes += 1;
+  }
+  if (content.endsWith("|") && trailingBackslashes % 2 === 0) {
+    content = content.slice(0, -1);
+  }
+
+  const cells: string[] = [];
+  let cell = "";
+  let escaped = false;
+  for (const character of content) {
+    if (escaped) {
+      cell += character;
+      escaped = false;
+    } else if (character === "\\") {
+      cell += character;
+      escaped = true;
+    } else if (character === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+// Mirrors micromark-extension-gfm-table's delimiter grammar: each cell is an
+// optional colon, one or more hyphens, and an optional colon. The header and
+// delimiter must have the same cell count, while a pipe or colon distinguishes
+// a one-column table from a setext heading.
+function parseMarkdownTableDelimiterRow(line: string): string[] | undefined {
+  const cells = splitMarkdownTableCells(line);
+  const hasTableMarker =
+    line.includes("|")
+    || cells.some((cell) => cell.includes(":"));
+  return hasTableMarker && cells.every((cell) => /^:?-+:?$/.test(cell))
+    ? cells
+    : undefined;
+}
+
+function containsMarkdownTable(text: string): boolean {
+  const lines = text.split("\n");
+  return lines.some((line, index) => {
+    if (!line.trim()) {
+      return false;
+    }
+    const delimiterCells = parseMarkdownTableDelimiterRow(lines[index + 1] ?? "");
+    return delimiterCells?.length === splitMarkdownTableCells(line).length;
+  });
+}
+
 function isMarkdownSectionLabelLine(line: string): boolean {
   return /^[^\s].*:\s*$/.test(line);
 }
@@ -1415,12 +1476,17 @@ function pastePlainMarkdownText(
   event: ClipboardEvent<HTMLDivElement>,
 ): boolean {
   const text = getPlainTextFromPaste(event);
+  const preserveMarkdownTableSource = containsMarkdownTable(text);
   // Only reroute through the markdown parser when the text carries block
-  // structure the default paste won't rebuild (fences, bullet/ordered lists).
+  // structure the default paste won't rebuild (fences, bullet/ordered lists),
+  // or when text/plain contains a GFM table. In that table case, text/plain is
+  // the lossless Markdown source: ProseMirror adds blank paragraphs between
+  // rows for plain-only paste, while the rich HTML path flattens adjacent cell
+  // text because the composer schema deliberately has no table node.
   // Pure prose — and inline-only markdown like **bold** / `code`, which paste
   // rules already handle — stays on the default path so we don't disturb
   // mid-sentence pastes.
-  if (!containsBlockMarkdown(text)) {
+  if (!containsBlockMarkdown(text) && !preserveMarkdownTableSource) {
     return false;
   }
 
@@ -1442,7 +1508,10 @@ function pastePlainMarkdownText(
   // this targets — one rendered message copied with both flavors — and is not
   // meant to be a general markdown/HTML merge. Note <p> alone does NOT count:
   // bare paragraph HTML around a text/plain fence must still reach the parser.
-  if (clipboardHtmlHasStructuredBlocks(event)) {
+  if (
+    !preserveMarkdownTableSource
+    && clipboardHtmlHasStructuredBlocks(event)
+  ) {
     return false;
   }
 
