@@ -198,16 +198,9 @@ function startBootWatchdog(): void {
   bootWatchdogTimer.unref?.();
 }
 
-function markMainWindowBooted(window: BrowserWindow): void {
-  const onShown = (): void => {
-    mainWindowEverShown = true;
-    clearBootWatchdog();
-  };
-  if (window.isVisible()) {
-    onShown();
-    return;
-  }
-  window.once("show", onShown);
+function markMainWindowBooted(): void {
+  mainWindowEverShown = true;
+  clearBootWatchdog();
 }
 
 function formatBootError(error: unknown): string {
@@ -979,12 +972,9 @@ export function bootstrapApp(): void {
     registerMessagingStatusIpcHandlers();
     recordStartupProfileEvent({ type: "main-window-create:start" });
     const mainWindow = createMainWindow({
+      onShown: markMainWindowBooted,
       startupCpuProfiler,
     });
-    // Boot is "done" once the main window actually shows; this cancels the
-    // boot watchdog and downgrades later unhandled rejections from "fatal
-    // startup failure dialog" to "log only".
-    markMainWindowBooted(mainWindow);
     quitAppOnMainWindowClose(mainWindow);
     recordStartupProfileEvent({ type: "main-window-create:end" });
     recordStartupProfileEvent({ type: "startup-thread-list-prewarm:start" });
