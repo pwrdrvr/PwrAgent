@@ -110,10 +110,11 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
           lookup-only: "true"
 
   lint:
@@ -127,10 +128,11 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: License metadata
         timeout-minutes: 10
@@ -194,10 +196,11 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: Build
         timeout-minutes: 10
@@ -214,10 +217,11 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: Install ripgrep
         uses: ./.github/actions/install-ripgrep
@@ -248,11 +252,12 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@e19a1a140ed1851a536fcc2cc116e9d3df6b0ce9 # v1.2.0
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.14.1
           working-directory: .
+          cache-electron: "true"
           lookup-only: "true"
 
   windows-verify:
@@ -267,11 +272,12 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@e19a1a140ed1851a536fcc2cc116e9d3df6b0ce9 # v1.2.0
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.14.1
           working-directory: .
+          cache-electron: "true"
 
       - name: Type check
         timeout-minutes: 10
@@ -293,11 +299,12 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@e19a1a140ed1851a536fcc2cc116e9d3df6b0ce9 # v1.2.0
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.14.1
           working-directory: .
+          cache-electron: "true"
 
       - name: Test
         timeout-minutes: 20
@@ -315,11 +322,12 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@e19a1a140ed1851a536fcc2cc116e9d3df6b0ce9 # v1.2.0
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.14.1
           working-directory: .
+          cache-electron: "true"
 
       - name: Install ripgrep
         timeout-minutes: 5
@@ -424,10 +432,11 @@ jobs:
           lfs: true
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: Run desktop replay-backed Electron tests
         timeout-minutes: 10
@@ -488,10 +497,11 @@ jobs:
         # macOS runner and break a later job's checkout.
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
           lookup-only: "true"
 
   desktop-e2e-macos:
@@ -536,10 +546,11 @@ jobs:
         run: git lfs pull
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@v1
+        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: Clear leftover Electron state from previous jobs
         # This runner is a persistent Tart guest, not a fresh VM per job, so a
