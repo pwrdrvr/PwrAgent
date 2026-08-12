@@ -213,6 +213,23 @@ async function openLocalHandoffDialog(page: Page, title: string) {
   return dialog;
 }
 
+/**
+ * Picks a row in the handoff dialog's "leave current checkout on" branch
+ * picker. `optionLabel` is the row's visible text, so the detached-HEAD
+ * sentinel is "Detached HEAD" rather than the "HEAD" value it submits.
+ */
+async function chooseLeaveLocalBranch(page: Page, optionLabel: string) {
+  const dialog = page.getByRole("dialog", { name: "Handoff to New Worktree" });
+  // `exact` matters: the picker's listbox is labelled "<name> options" and
+  // getByLabel matches substrings, so a bare name resolves to two elements
+  // once the popover opens.
+  await dialog.getByLabel("Leave current checkout on", { exact: true }).click();
+  await dialog
+    .getByRole("listbox", { name: "Leave current checkout on options" })
+    .getByRole("option", { name: optionLabel, exact: true })
+    .click();
+}
+
 async function handoffBackToLocal(page: Page) {
   await page.getByLabel("Workspace mode").click();
   await page.getByRole("menuitem", { name: "Handoff to Local" }).click();
@@ -256,7 +273,7 @@ test.describe("workspace handoff git flows", () => {
       configure: async (page: Page) => {
         const dialog = page.getByRole("dialog", { name: "Handoff to New Worktree" });
         await dialog.getByRole("radio", { name: /Handoff Current Branch/ }).click();
-        await dialog.getByLabel("Leave current checkout on").selectOption("main");
+        await chooseLeaveLocalBranch(page, "main");
       },
       expectedLocalBranchAfterLocalHandoff: "main",
       expectedLocalBranchAfterReturn: "feature/handoff",
@@ -267,7 +284,7 @@ test.describe("workspace handoff git flows", () => {
       configure: async (page: Page) => {
         const dialog = page.getByRole("dialog", { name: "Handoff to New Worktree" });
         await dialog.getByRole("radio", { name: /Handoff Current Branch/ }).click();
-        await dialog.getByLabel("Leave current checkout on").selectOption("HEAD");
+        await chooseLeaveLocalBranch(page, "Detached HEAD");
       },
       expectedLocalBranchAfterLocalHandoff: "",
       expectedLocalBranchAfterReturn: "feature/handoff",

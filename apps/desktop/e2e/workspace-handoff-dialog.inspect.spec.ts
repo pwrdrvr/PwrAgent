@@ -31,7 +31,11 @@ test("opens the local-to-worktree handoff dialog until Electron is closed manual
     await expect(dialog).toContainText("Handoff to Detached HEAD");
     await expect(dialog).toContainText("main");
     await dialog.getByRole("radio", { name: /Handoff Current Branch/ }).click();
-    await expect(dialog.getByLabel("Leave current checkout on")).toHaveValue("HEAD");
+    // `exact` matters: the branch picker's listbox is labelled
+    // "Leave current checkout on options", and getByLabel matches substrings.
+    await expect(
+      dialog.getByLabel("Leave current checkout on", { exact: true }),
+    ).toHaveAttribute("data-value", "HEAD");
     await expect(dialog).toContainText("Ignored files are not moved by handoff.");
 
     console.log(
