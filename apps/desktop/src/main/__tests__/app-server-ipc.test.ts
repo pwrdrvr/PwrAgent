@@ -2282,13 +2282,14 @@ describe("app server ipc", () => {
       state: "passing",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/922",
     });
+    const fetchedAt = Date.now();
     readPrLookupCache.mockResolvedValueOnce({
       [lookupKey]: {
         lookupKey,
         provider: "github.com",
         branch: "feat/cached-detached-pr",
         directoryPaths: ["/repo"],
-        fetchedAt: Date.now(),
+        fetchedAt,
         prs: [detachedPr, cachedPr],
       },
     });
@@ -2299,7 +2300,7 @@ describe("app server ipc", () => {
       extraLinkedDirectories: [],
       detachedPrKeys: ["github.com/pwrdrvr/pwragent#921"],
       prs: [previousPr],
-      prsFetchedAt: Date.now() - 120_000,
+      prsFetchedAt: fetchedAt - 120_000,
       prsRefreshKey: "old-refresh-key",
     });
     setThreadPullRequests.mockResolvedValueOnce({
@@ -2308,7 +2309,7 @@ describe("app server ipc", () => {
       executionMode: "default",
       extraLinkedDirectories: [],
       prs: [previousPr, cachedPr],
-      prsFetchedAt: Date.now(),
+      prsFetchedAt: fetchedAt,
       prsRefreshKey: requestKey,
     });
 
