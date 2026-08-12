@@ -274,7 +274,7 @@ for (const unexpected of [
 for (const expected of [
   "ubuntu-24.04-arm",
   "Package Linux DEB",
-  "Publish Linux DEB artifacts",
+  "Publish release assets",
   "Publish release notes",
   "scripts/extract-release-notes.mjs",
   "--notes-file",
@@ -282,6 +282,7 @@ for (const expected of [
   "PWRAGENT_LINUX_ARCH",
   "SHA256SUMS",
   "windows-release-signing-input",
+  "windows-installer",
   "EXPECTED_SHA256",
   "scripts/release/install-trusted-signing.ps1",
   "--win --sign-stage-only --no-publish --require-signing",
@@ -350,6 +351,55 @@ for (const expected of [
     expected,
   );
 }
+for (const expected of [
+  "--sign-stage-only --no-publish",
+  "Upload macOS release assets",
+]) {
+  assertWorkflowJobContainsText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "sign",
+    expected,
+  );
+}
+for (const unexpected of [
+  "gh release upload",
+  "continue-on-error: true",
+]) {
+  assertWorkflowJobExcludesText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "sign",
+    unexpected,
+  );
+}
+for (const expected of [
+  "linux-package",
+  "sign",
+  "windows-sign",
+  "Checkout repository",
+  "Download macOS release artifacts",
+  "Download Windows installer artifact",
+  "Create release and publish all platform assets",
+  "gh release create",
+  "--verify-tag",
+  "--prerelease",
+  "--latest",
+  "windows-dist/*",
+]) {
+  assertWorkflowJobContainsText(
+    releaseWorkflow,
+    ".github/workflows/release.yml",
+    "publish-release-assets",
+    expected,
+  );
+}
+assertWorkflowJobContainsText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "publish-release-notes",
+  "publish-release-assets",
+);
 for (const unexpected of [
   "actions/checkout@",
   "./.github/actions/configure-windows-nodejs",
@@ -431,8 +481,7 @@ for (const expected of [
   }
 }
 for (const stepName of [
-  "Upload release artifacts (debug retention)",
-  "Upload Linux artifacts (debug retention)",
+  "Upload assembled release artifacts (debug retention)",
 ]) {
   assertWorkflowStepContinuesOnError(
     releaseWorkflow,
