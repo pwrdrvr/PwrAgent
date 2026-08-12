@@ -2153,14 +2153,18 @@ class DiscordRestApi implements DiscordApi {
   }
 }
 
-class DiscordJsGatewayConnection implements DiscordGatewayConnection {
+export class DiscordJsGatewayConnection implements DiscordGatewayConnection {
   private readonly client: Client;
   private readonly config: DiscordMessagingConfig;
   private readonly listeners = new Set<DiscordGatewayListener>();
+  private lifecycleGeneration = 0;
 
-  constructor(config: DiscordMessagingConfig) {
+  constructor(
+    config: DiscordMessagingConfig,
+    client?: Client,
+  ) {
     this.config = config;
-    this.client = new Client({
+    this.client = client ?? new Client({
       intents: [
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.GuildMessages,
@@ -2169,22 +2173,44 @@ class DiscordJsGatewayConnection implements DiscordGatewayConnection {
       ],
       partials: [Partials.Channel],
     });
+    this.guardGatewayDiscovery();
     this.registerHandlers();
   }
 
   async start(): Promise<void> {
+    this.lifecycleGeneration += 1;
     await this.client.login(this.config.botToken);
   }
 
   async close(): Promise<void> {
+    this.lifecycleGeneration += 1;
     this.client.removeAllListeners();
-    this.client.destroy();
+    await this.client.destroy();
   }
 
   onEvent(listener: DiscordGatewayListener): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+    };
+  }
+
+  private guardGatewayDiscovery(): void {
+    // discord.js fetches /gateway/bot before its internal manager opens any
+    // websocket shards. `Client.destroy()` cannot cancel that REST request;
+    // without this post-fetch guard, the suspended login continuation can
+    // still call the internal websocket manager after close() has returned.
+    const rest = this.client.rest as unknown as {
+      get(...args: unknown[]): Promise<unknown>;
+    };
+    const get = rest.get.bind(rest);
+    rest.get = async (...args: unknown[]) => {
+      const lifecycleGeneration = this.lifecycleGeneration;
+      const response = await get(...args);
+      if (lifecycleGeneration !== this.lifecycleGeneration) {
+        throw new Error("Discord gateway startup was cancelled.");
+      }
+      return response;
     };
   }
 

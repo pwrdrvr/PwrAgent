@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { SlackAdapter, type SlackApi, type SlackSocketClient } from "../slack-adapter.ts";
+import {
+  SlackAdapter,
+  SlackSocketModeConnection,
+  type SlackApi,
+  type SlackSocketClient,
+} from "../slack-adapter.ts";
 import type { SlackHomeView } from "../slack-home.ts";
 import type {
   MessagingChannelRef,
@@ -161,6 +166,39 @@ function fakeSocket(): SlackSocketClient & {
 }
 
 describe("SlackAdapter", () => {
+  it("cancels URL discovery before a stopped Socket Mode client can connect", async () => {
+    let resolveUrl!: (value: string) => void;
+    const pendingUrl = new Promise<string>((resolve) => {
+      resolveUrl = resolve;
+    });
+    const connect = vi.fn();
+    const retrieveWSSURL = vi.fn(async () => await pendingUrl);
+    const client = {
+      disconnect: vi.fn(async () => undefined),
+      off: vi.fn(),
+      on: vi.fn(),
+      removeAllListeners: vi.fn(),
+      retrieveWSSURL,
+      start: vi.fn(async function(this: { retrieveWSSURL(): Promise<string> }) {
+        const url = await this.retrieveWSSURL();
+        connect(url);
+      }),
+    };
+    const socket = new SlackSocketModeConnection(client);
+
+    const startPromise = socket.start();
+    await vi.waitFor(() => {
+      expect(retrieveWSSURL).toHaveBeenCalledTimes(1);
+    });
+    await socket.disconnect();
+    resolveUrl("wss://socket-mode.example.test");
+
+    await expect(startPromise).rejects.toThrow(
+      "Slack Socket Mode startup was cancelled.",
+    );
+    expect(connect).not.toHaveBeenCalled();
+  });
+
   it("detaches socket listeners when startup is stopped before connecting", async () => {
     let rejectStart!: (reason?: unknown) => void;
     const pendingStart = new Promise<never>((_resolve, reject) => {

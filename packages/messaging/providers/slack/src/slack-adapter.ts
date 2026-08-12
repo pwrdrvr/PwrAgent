@@ -2858,10 +2858,58 @@ export function createSlackSocketClient(
   if (!appToken?.trim()) {
     return undefined;
   }
-  return new SocketModeClient({
+  return new SlackSocketModeConnection(new SocketModeClient({
     appToken,
     autoReconnectEnabled: true,
-  }) as SlackSocketClient;
+  }) as unknown as SlackSocketModeClientWithDiscovery);
+}
+
+type SlackSocketModeClientWithDiscovery = SlackSocketClient & {
+  retrieveWSSURL(): Promise<string>;
+};
+
+export class SlackSocketModeConnection implements SlackSocketClient {
+  private lifecycleGeneration = 0;
+
+  constructor(
+    private readonly client: SlackSocketModeClientWithDiscovery,
+  ) {
+    // SocketModeClient.start() awaits apps.connections.open before it creates
+    // `websocket`. Its public disconnect() cannot close anything during that
+    // gap, so guard the SDK's discovery seam and reject before the suspended
+    // start continuation can construct and connect a SlackWebSocket.
+    const retrieveWSSURL = client.retrieveWSSURL.bind(client);
+    client.retrieveWSSURL = async () => {
+      const lifecycleGeneration = this.lifecycleGeneration;
+      const url = await retrieveWSSURL();
+      if (lifecycleGeneration !== this.lifecycleGeneration) {
+        throw new Error("Slack Socket Mode startup was cancelled.");
+      }
+      return url;
+    };
+  }
+
+  disconnect(): Promise<void> {
+    this.lifecycleGeneration += 1;
+    return this.client.disconnect();
+  }
+
+  off(event: string, listener: (payload: unknown) => void): unknown {
+    return this.client.off?.(event, listener);
+  }
+
+  on(event: string, listener: (payload: unknown) => void): unknown {
+    return this.client.on(event, listener);
+  }
+
+  removeAllListeners(event?: string): unknown {
+    return this.client.removeAllListeners?.(event);
+  }
+
+  async start(): Promise<unknown> {
+    this.lifecycleGeneration += 1;
+    return await this.client.start();
+  }
 }
 
 /**
