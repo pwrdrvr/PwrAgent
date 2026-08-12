@@ -685,6 +685,48 @@ describe("GitDirectoryService", () => {
     expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("release");
   });
 
+  it("restores an excluded source branch when worktree reservation is exhausted", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const sourceWorktree = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "pwragent-exhausted-transfer-source-")),
+      "fixture",
+    );
+    cleanupPaths.push(path.dirname(sourceWorktree));
+    runGit(repoDir, ["worktree", "add", sourceWorktree, "release"]);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const fixedTimestamp = 1730000000000;
+
+    for (let reservation = 0; reservation <= 10; reservation += 1) {
+      await computeWorktreePath({
+        repoRoot: repoDir,
+        storage: "in-repo",
+        timestamp: fixedTimestamp,
+      });
+    }
+
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(fixedTimestamp);
+    try {
+      await expect(
+        service.prepareLaunchpadWorkspace({
+          directoryKind: "directory",
+          directoryLabel: "FixtureRepo",
+          directoryPath: repoDir,
+          excludedWorktreePaths: [sourceWorktree],
+          workMode: "worktree",
+          branchName: "release",
+          worktreeBranchMode: "attached",
+        }),
+      ).rejects.toThrow("Unable to allocate a unique worktree path");
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("release");
+  });
+
   it("rolls back a detached destination worktree", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
@@ -916,7 +958,7 @@ describe("GitDirectoryService", () => {
     });
   });
 
-  it("computeWorktreePath suffixes the hash when the path already exists", async () => {
+  it("computeWorktreePath advances the timestamp when the path already exists", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
     const fixedTimestamp = 1730000000000;
@@ -935,7 +977,118 @@ describe("GitDirectoryService", () => {
 
     expect(second).not.toBe(first);
     expect(path.basename(second)).toBe(path.basename(first));
-    expect(path.basename(path.dirname(second))).toMatch(/-2$/);
+    expect(path.basename(path.dirname(second))).toBe(
+      (fixedTimestamp + 1).toString(36),
+    );
+  });
+
+  it("probes at most ten timestamp increments", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const fixedTimestamp = 1730000000000;
+
+    for (
+      let timestampIncrement = 0;
+      timestampIncrement <= 10;
+      timestampIncrement += 1
+    ) {
+      const allocated = await computeWorktreePath({
+        repoRoot: repoDir,
+        storage: "in-repo",
+        timestamp: fixedTimestamp,
+      });
+      expect(path.basename(path.dirname(allocated))).toBe(
+        (fixedTimestamp + timestampIncrement).toString(36),
+      );
+    }
+
+    await expect(
+      computeWorktreePath({
+        repoRoot: repoDir,
+        storage: "in-repo",
+        timestamp: fixedTimestamp,
+      }),
+    ).rejects.toThrow("Unable to allocate a unique worktree path");
+  });
+
+  it("reserves distinct paths for concurrent allocations in the same millisecond", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const fixedTimestamp = 1730000000000;
+
+    const [first, second] = await Promise.all([
+      computeWorktreePath({
+        repoRoot: repoDir,
+        storage: "in-repo",
+        timestamp: fixedTimestamp,
+      }),
+      computeWorktreePath({
+        repoRoot: repoDir,
+        storage: "in-repo",
+        timestamp: fixedTimestamp,
+      }),
+    ]);
+
+    expect(first).not.toBe(second);
+    expect(path.basename(first)).toBe(path.basename(second));
+    expect(
+      [
+        path.basename(path.dirname(first)),
+        path.basename(path.dirname(second)),
+      ].sort(),
+    ).toEqual([
+      fixedTimestamp.toString(36),
+      (fixedTimestamp + 1).toString(36),
+    ]);
+  });
+
+  it("creates distinct worktrees for concurrent launchpads in the same millisecond", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const fixedTimestamp = 1730000000000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(fixedTimestamp);
+
+    try {
+      const [first, second] = await Promise.all([
+        service.prepareLaunchpadWorkspace({
+          directoryKind: "directory",
+          directoryLabel: "FixtureRepo",
+          directoryPath: repoDir,
+          workMode: "worktree",
+          branchName: "main",
+        }),
+        service.prepareLaunchpadWorkspace({
+          directoryKind: "directory",
+          directoryLabel: "FixtureRepo",
+          directoryPath: repoDir,
+          workMode: "worktree",
+          branchName: "main",
+        }),
+      ]);
+
+      expect(first.workMode).toBe("worktree");
+      expect(second.workMode).toBe("worktree");
+      expect(first.cwd).toBeDefined();
+      expect(second.cwd).toBeDefined();
+      expect(first.cwd).not.toBe(second.cwd);
+      expect(
+        [
+          path.basename(path.dirname(first.cwd!)),
+          path.basename(path.dirname(second.cwd!)),
+        ].sort(),
+      ).toEqual([
+        fixedTimestamp.toString(36),
+        (fixedTimestamp + 1).toString(36),
+      ]);
+      expect(runGit(first.cwd!, ["rev-parse", "HEAD"])).toBe(
+        runGit(second.cwd!, ["rev-parse", "HEAD"]),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("removes the worktree and prunes the empty hash parent on cleanup", async () => {
