@@ -231,6 +231,7 @@ export class AcpAgentClient {
   private readonly sessionLoadReplays = new Map<string, AcpSessionLoadReplay>();
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
+  private readonly retainableSessionIds = new Set<string>();
   private readonly now: () => number;
   private readonly approvalRequesterName: string;
   private unsubscribe?: () => void;
@@ -319,6 +320,18 @@ export class AcpAgentClient {
     return this.activeOperations > 0;
   }
 
+  ownsSession(sessionId: string): boolean {
+    return this.agentSessionIdsByAppSessionId.has(sessionId);
+  }
+
+  hasRetainableSessions(): boolean {
+    return this.retainableSessionIds.size > 0;
+  }
+
+  supportsSessionLoad(): boolean {
+    return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
+  }
+
   // Count the whole public operation, including setup before the transport
   // request and state updates after it, so launch replacement cannot dispose
   // this client at either edge of an in-flight RPC.
@@ -339,6 +352,7 @@ export class AcpAgentClient {
     this.unsubscribeRequest = undefined;
     this.agentSessionIdsByAppSessionId.clear();
     this.appSessionIdsByAgentSessionId.clear();
+    this.retainableSessionIds.clear();
     this.loadedSessionCwds.clear();
     await this.options.transport.close?.();
   }
@@ -1386,10 +1400,6 @@ export class AcpAgentClient {
     return result;
   }
 
-  private supportsSessionLoad(): boolean {
-    return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
-  }
-
   private isSessionLoaded(metadata: AcpSessionMetadata): boolean {
     const cwd = metadata.cwd ?? process.cwd();
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
@@ -1586,6 +1596,9 @@ export class AcpAgentClient {
     const protocolSessionId = protocolSessionIdForMetadata(metadata);
     this.agentSessionIdsByAppSessionId.set(metadata.sessionId, protocolSessionId);
     this.appSessionIdsByAgentSessionId.set(protocolSessionId, metadata.sessionId);
+    if (metadata.hidden !== true) {
+      this.retainableSessionIds.add(metadata.sessionId);
+    }
   }
 
   private protocolSessionIdFor(sessionId: string): string {
