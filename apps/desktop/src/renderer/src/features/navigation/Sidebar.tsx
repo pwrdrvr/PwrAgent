@@ -1031,6 +1031,11 @@ export function Sidebar(props: SidebarProps) {
     void props.onMarkThreadUnread?.(thread);
   };
 
+  const markReadFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    void props.onMarkThreadsSeen?.([thread]);
+  };
+
   const removeRemotePinFromContextMenu = (
     thread: NavigationThreadSummary,
   ): void => {
@@ -1283,6 +1288,13 @@ export function Sidebar(props: SidebarProps) {
       contextMenu.thread.updatedAt !== undefined &&
       props.onMarkThreadUnread,
   );
+  const contextMenuCanMarkRead = Boolean(
+    contextMenu &&
+      !contextMenuIsBulk &&
+      !contextMenuIsMainWindowRemoteRow &&
+      contextMenu.thread.inbox.inInbox &&
+      props.onMarkThreadsSeen,
+  );
   const contextMenuChildThreadCount = contextMenu && !contextMenuIsBulk
     ? props.threads.filter(
         (thread) =>
@@ -1381,6 +1393,7 @@ export function Sidebar(props: SidebarProps) {
     contextMenuCanUnlinkSubthread ||
     contextMenuShowMoveItems ||
     contextMenuCanRename ||
+    contextMenuCanMarkRead ||
     contextMenuCanMarkUnread ||
     contextMenuCanArchive;
   const contextMenuHasTopActions =
@@ -2118,6 +2131,17 @@ export function Sidebar(props: SidebarProps) {
                       }
                     >
                       Mark Unread
+                    </button>
+                  ) : null}
+                  {contextMenuCanMarkRead ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() =>
+                        markReadFromContextMenu(contextMenu.thread)
+                      }
+                    >
+                      Mark Read
                     </button>
                   ) : null}
                   {contextMenuCanArchive && contextMenuHasChildThreads ? (
