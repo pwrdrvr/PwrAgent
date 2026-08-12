@@ -1,15 +1,15 @@
 import { useCallback, useRef, useState } from "react";
 
 /**
- * Owns the thread-list quick search — the popup opened by ⌘K from anywhere, or
- * by ⌘F while the sidebar holds focus.
+ * Owns the thread-jump palette — the modal opened by ⌘K from anywhere, or by
+ * ⌘F while the sidebar holds focus.
  *
- * The popup renders inside the sidebar, and a hidden sidebar (⌘B) is
- * `display: none`, so opening the search over a hidden sidebar has to reveal it
- * first. That reveal is a PEEK, not a preference change: it never writes
- * config.toml, and closing the search puts the sidebar back. Someone who
- * deliberately hides their sidebar shouldn't have it silently — and permanently
- * — reopened just because they reached for a thread.
+ * The palette portals onto `document.body`, so opening it no longer requires a
+ * sidebar. Picking a thread still scrolls its sidebar row into view, and
+ * `scrollIntoView` is a no-op inside the `display: none` subtree that ⌘B leaves
+ * behind. A hidden sidebar is therefore revealed at PICK time, not open time:
+ * a temporary peek that writes nothing to config.toml and ends as soon as the
+ * selected row's landing scroll completes.
  */
 export function useThreadJump(options: {
   sidebarHidden: boolean;
@@ -20,22 +20,15 @@ export function useThreadJump(options: {
   openJump: () => void;
   closeJump: () => void;
   /**
-   * Whether the sidebar on screen right now is a peek — i.e. it's about to be
-   * hidden again when the search closes. Callers that scroll the thread list on
-   * the way out need this: the scroll has to be instant, not animated, to land
-   * before the sidebar goes away. Read it at event time, not during render.
+   * Reveal a hidden sidebar so a jump's scroll-into-view has layout to land in.
+   * Returns whether a peek started, which selects an instant landing scroll.
    */
-  isPeeking: () => boolean;
-  /** ⌘K again backs out of a jump you didn't mean to start. */
+  beginRevealPeek: () => boolean;
+  /** Restore a peek after the selected row's landing scroll completes. */
+  completePeekRestore: () => void;
+  /** ⌘K again backs out of a jump you did not mean to start. */
   toggleJump: () => void;
-  /**
-   * Call from whatever persists the sidebar preference (⌘B, the toggle chips).
-   * An explicit preference outranks a peek: ending it here means the closing
-   * search can't revert what the operator just chose. Nothing in today's UI can
-   * actually toggle the sidebar while the popup is up — a click dismisses the
-   * popup first, and ⌘B is inert while the caret sits in its field — so this is
-   * a rail, not a live path.
-   */
+  /** End any pending peek when the operator explicitly changes the preference. */
   endPeek: () => void;
 } {
   const { sidebarHidden, setSidebarHidden } = options;
@@ -43,43 +36,45 @@ export function useThreadJump(options: {
   const peekedRef = useRef(false);
 
   const openJump = useCallback(() => {
-    if (sidebarHidden) {
-      peekedRef.current = true;
-      setSidebarHidden(false);
-    }
     setOpen(true);
-  }, [sidebarHidden, setSidebarHidden]);
+  }, []);
 
   const closeJump = useCallback(() => {
     setOpen(false);
+  }, []);
+
+  const beginRevealPeek = useCallback(() => {
+    if (!sidebarHidden) {
+      return false;
+    }
+    peekedRef.current = true;
+    setSidebarHidden(false);
+    return true;
+  }, [sidebarHidden, setSidebarHidden]);
+
+  const completePeekRestore = useCallback(() => {
     if (!peekedRef.current) {
       return;
     }
     peekedRef.current = false;
-    // Restore on the NEXT frame, not in this commit. Picking a thread closes the
-    // popup and schedules a scroll-the-selected-row-into-view for that same
-    // frame (App's onJumpToThread), and `scrollIntoView` inside a
-    // `display: none` subtree is a no-op — so re-hiding here would silently eat
-    // the scroll and the row would be off-screen when the sidebar came back.
-    // Chromium restores a scroll offset across `display: none`, so all we owe
-    // the reveal is a laid-out sidebar for the frame it runs in. Its rAF was
-    // queued first, so it runs before ours.
-    requestAnimationFrame(() => setSidebarHidden(true));
+    setSidebarHidden(true);
   }, [setSidebarHidden]);
 
   const toggleJump = useCallback(() => {
-    if (open) {
-      closeJump();
-      return;
-    }
-    openJump();
-  }, [open, closeJump, openJump]);
+    setOpen((current) => !current);
+  }, []);
 
   const endPeek = useCallback(() => {
     peekedRef.current = false;
   }, []);
 
-  const isPeeking = useCallback(() => peekedRef.current, []);
-
-  return { open, openJump, closeJump, isPeeking, toggleJump, endPeek };
+  return {
+    open,
+    openJump,
+    closeJump,
+    beginRevealPeek,
+    completePeekRestore,
+    toggleJump,
+    endPeek,
+  };
 }

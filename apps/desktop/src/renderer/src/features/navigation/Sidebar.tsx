@@ -770,6 +770,9 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside className="sidebar" aria-label="Threads">
+      {/* Mounted here because the thread set and jump handlers already live
+          here, but it portals onto document.body so the sidebar's container
+          query and hidden state cannot clip or suppress the modal. */}
       {props.threadJumpOpen ? (
         <SidebarSearchPopup
           threads={props.threads}
@@ -803,7 +806,13 @@ export function Sidebar(props: SidebarProps) {
         <div className="sidebar__masthead-actions">
           <MastheadActionButton
             ariaLabel="Search threads"
-            tooltipText={`Search threads  (${formatPrimaryAccel("F", { shift: true })})`}
+            // ⌘K leads because the palette is the surface this button most
+            // closely resembles and the global shortcut operators reach for.
+            tooltipText={[
+              `Quick Thread List Search  (${formatPrimaryAccel("K")})`,
+              `Open Search All  (${formatPrimaryAccel("F", { shift: true })})`,
+              `Context Search  (${formatPrimaryAccel("F")}) — Thread List in sidebar, Thread Chat elsewhere`,
+            ].join("\n")}
             ariaPressed={props.threadSearchActive}
             className={`sidebar__icon-button${props.threadSearchActive ? " is-active" : ""}`}
             onClick={props.onOpenThreadSearch}
