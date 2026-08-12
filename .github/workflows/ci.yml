@@ -110,7 +110,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -128,7 +128,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -196,7 +196,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -217,7 +217,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -252,7 +252,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.14.1
@@ -272,7 +272,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.14.1
@@ -299,7 +299,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.14.1
@@ -322,7 +322,7 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.14.1
@@ -432,7 +432,7 @@ jobs:
           lfs: true
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -497,7 +497,7 @@ jobs:
         # macOS runner and break a later job's checkout.
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
@@ -546,7 +546,7 @@ jobs:
         run: git lfs pull
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@agent/cache-lifecycle-downloads
+        uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
           node-version: 24.x
