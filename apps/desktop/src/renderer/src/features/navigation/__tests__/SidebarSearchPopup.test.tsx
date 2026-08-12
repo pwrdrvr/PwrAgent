@@ -162,7 +162,7 @@ describe("SidebarSearchPopup", () => {
     expect(screen.getByLabelText("Runs on Laptop")).toBeInTheDocument();
   });
 
-  it("prioritizes and describes the exact PR when a thread has several PRs", async () => {
+  it("prioritizes exact PRs and describes numeric substring matches", async () => {
     const exact = localThread({
       id: "exact",
       title: "Stacked PRs",
@@ -189,6 +189,8 @@ describe("SidebarSearchPopup", () => {
     const rows = screen.getAllByRole("option");
     expect(rows[0]).toHaveTextContent("Stacked PRs");
     expect(rows[0]).toHaveTextContent("#49");
+    expect(rows[1]).toHaveTextContent("Newer substring");
+    expect(rows[1]).toHaveTextContent("#349");
     await settleRemoteSearch();
   });
 
