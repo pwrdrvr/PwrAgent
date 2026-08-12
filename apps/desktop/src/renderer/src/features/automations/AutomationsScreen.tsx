@@ -38,6 +38,7 @@ import {
 } from "./AutomationEditor";
 import { AutomationRunHistoryItem } from "./ThreadAutomationsPanel";
 import { useAutomationRuns, useAutomations } from "./useAutomations";
+import { useExpandedIds } from "./useExpandedIds";
 
 type AutomationsScreenProps = {
   desktopApi?: DesktopApi;
@@ -58,7 +59,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
     | undefined
   >();
   const [saving, setSaving] = useState(false);
-  const [expandedAutomationId, setExpandedAutomationId] = useState<string>();
+  const automationExpansion = useExpandedIds();
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -206,7 +207,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                     key={automation.id}
                     automation={automation}
                     desktopApi={props.desktopApi}
-                    expanded={expandedAutomationId === automation.id}
+                    expanded={automationExpansion.isExpanded(automation.id)}
                     hasRowsBelow={index < automations.automations.length - 1}
                     thread={thread}
                     onDelete={async () => {
@@ -216,11 +217,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                       await props.onRefreshNavigation?.();
                     }}
                     onEdit={() => setEditorMode({ automation, kind: "edit" })}
-                    onExpand={() =>
-                      setExpandedAutomationId((current) =>
-                        current === automation.id ? undefined : automation.id,
-                      )
-                    }
+                    onExpand={() => automationExpansion.toggle(automation.id)}
                     onPauseResume={async () => {
                       if (automation.status === "paused") {
                         await automations.resumeAutomation({
@@ -237,12 +234,12 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                       await automations.runAutomationNow({
                         automationId: automation.id,
                       });
-                      setExpandedAutomationId(automation.id);
+                      automationExpansion.expand(automation.id);
                       await props.onRefreshNavigation?.();
                     }}
                     onReplayed={async () => {
                       await automations.refresh();
-                      setExpandedAutomationId(automation.id);
+                      automationExpansion.expand(automation.id);
                       await props.onRefreshNavigation?.();
                     }}
                     onSelectThread={
@@ -671,7 +668,7 @@ function AutomationTableHistory(props: {
   desktopApi?: DesktopApi;
 }) {
   const runs = useAutomationRuns(props.desktopApi, props.automationId);
-  const [expandedRunId, setExpandedRunId] = useState<string>();
+  const runExpansion = useExpandedIds();
 
   return (
     <div
@@ -691,13 +688,9 @@ function AutomationTableHistory(props: {
             <AutomationRunHistoryItem
               key={run.id}
               desktopApi={props.desktopApi}
-              expanded={expandedRunId === run.id}
+              expanded={runExpansion.isExpanded(run.id)}
               run={run}
-              onToggle={() =>
-                setExpandedRunId((current) =>
-                  current === run.id ? undefined : run.id,
-                )
-              }
+              onToggle={() => runExpansion.toggle(run.id)}
             />
           ))}
         </ol>

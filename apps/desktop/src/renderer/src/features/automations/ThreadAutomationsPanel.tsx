@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type {
   AppServerThreadEntry,
   AutomationDetail,
@@ -33,6 +33,7 @@ import {
   useAutomationRuns,
   useAutomations,
 } from "./useAutomations";
+import { useExpandedIds } from "./useExpandedIds";
 
 type ThreadAutomationsPanelProps = {
   desktopApi?: DesktopApi;
@@ -54,14 +55,7 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
     | undefined
   >();
   const [saving, setSaving] = useState(false);
-  const [expandedAutomationId, setExpandedAutomationId] = useState<string>();
-  const expandedAutomation = useMemo(
-    () =>
-      automations.automations.find(
-        (automation) => automation.id === expandedAutomationId,
-      ),
-    [automations.automations, expandedAutomationId],
-  );
+  const automationExpansion = useExpandedIds();
 
   const submitEditor = async (submission: AutomationEditorSubmit): Promise<void> => {
     setSaving(true);
@@ -154,17 +148,13 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
             <li key={automation.id} className="automation-list__item">
               <AutomationSummary
                 automation={automation}
-                expanded={automation.id === expandedAutomationId}
+                expanded={automationExpansion.isExpanded(automation.id)}
                 onDelete={async () => {
                   await automations.deleteAutomation({ automationId: automation.id });
                   await props.onRefreshNavigation?.();
                 }}
                 onEdit={() => setEditorMode({ automation, kind: "edit" })}
-                onExpand={() =>
-                  setExpandedAutomationId((current) =>
-                    current === automation.id ? undefined : automation.id,
-                  )
-                }
+                onExpand={() => automationExpansion.toggle(automation.id)}
                 onPauseResume={async () => {
                   if (automation.status === "paused") {
                     await automations.resumeAutomation({ automationId: automation.id });
@@ -175,11 +165,11 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
                 }}
                 onRunNow={async () => {
                   await automations.runAutomationNow({ automationId: automation.id });
-                  setExpandedAutomationId(automation.id);
+                  automationExpansion.expand(automation.id);
                   await props.onRefreshNavigation?.();
                 }}
               />
-              {expandedAutomation?.id === automation.id ? (
+              {automationExpansion.isExpanded(automation.id) ? (
                 <AutomationRunHistory
                   automationId={automation.id}
                   desktopApi={props.desktopApi}
@@ -332,7 +322,7 @@ export function AutomationRunHistory(props: {
   desktopApi?: DesktopApi;
 }) {
   const runs = useAutomationRuns(props.desktopApi, props.automationId);
-  const [expandedRunId, setExpandedRunId] = useState<string>();
+  const runExpansion = useExpandedIds();
 
   if (runs.loading) {
     return <p className="automation-run-history__empty">Loading run history...</p>;
@@ -352,11 +342,9 @@ export function AutomationRunHistory(props: {
         <AutomationRunHistoryItem
           key={run.id}
           desktopApi={props.desktopApi}
-          expanded={expandedRunId === run.id}
+          expanded={runExpansion.isExpanded(run.id)}
           run={run}
-          onToggle={() =>
-            setExpandedRunId((current) => (current === run.id ? undefined : run.id))
-          }
+          onToggle={() => runExpansion.toggle(run.id)}
         />
       ))}
     </ol>

@@ -456,26 +456,79 @@ describe("row runtime and actions", () => {
       />,
     );
 
-    // First of two: capped, so a long history cannot bury the second row.
     fireEvent.click(
       await screen.findByRole("button", {
         name: "Show run history for Check email",
       }),
     );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show run history for Second" }),
+    );
+
+    const groups = view.container.querySelectorAll(".automations-table__group");
     await waitFor(() =>
       expect(
-        view.container.querySelector(".automations-table__history--capped"),
+        groups[0].querySelector(".automations-table__history"),
       ).not.toBeNull(),
     );
 
-    // Last row: nothing below it, so nothing to reserve space for.
-    fireEvent.click(screen.getByRole("button", { name: "Show run history for Second" }));
-    await waitFor(() =>
-      expect(view.container.querySelector(".automations-table__history")).not.toBeNull(),
-    );
+    // First of two: capped, so a long history cannot bury the second row.
     expect(
-      view.container.querySelector(".automations-table__history--capped"),
+      groups[0].querySelector(".automations-table__history--capped"),
+    ).not.toBeNull();
+    // Last row: nothing below it, so nothing to reserve space for.
+    expect(groups[1].querySelector(".automations-table__history")).not.toBeNull();
+    expect(
+      groups[1].querySelector(".automations-table__history--capped"),
     ).toBeNull();
+  });
+
+  it("keeps other rows open when one more is expanded", async () => {
+    const second: AutomationDetail = { ...automation, id: "a2", name: "Second" };
+    const view = render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({
+              automations: [automation, second],
+            })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [automationRun] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show run history for Second" }),
+    );
+
+    // Closing one to open another removes its content from the page, which
+    // clamps the scroll position and throws the operator back to the top.
+    await waitFor(() =>
+      expect(
+        view.container.querySelectorAll(".automations-table__history"),
+      ).toHaveLength(2),
+    );
+
+    // Same rule one level down: two runs can be read side by side.
+    const runDisclosures = screen.getAllByRole("button", {
+      name: /^Show run details from/,
+    });
+    fireEvent.click(runDisclosures[0]);
+    fireEvent.click(runDisclosures[1]);
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: /^Hide run details from/ }),
+      ).toHaveLength(2),
+    );
   });
 
   it("keeps Pause and Delete behind the row overflow menu", async () => {
