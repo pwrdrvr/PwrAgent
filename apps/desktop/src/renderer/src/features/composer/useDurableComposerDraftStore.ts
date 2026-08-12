@@ -22,7 +22,22 @@ import type {
   ComposerDraftStore,
 } from "./useComposerDraftStore";
 
-const DURABLE_SAVE_DEBOUNCE_MS = 200;
+/**
+ * How often an edited draft is written to sqlite, at most.
+ *
+ * This is an INTERVAL, not a debounce: the first edit after a quiet period
+ * schedules a write this far out, and every edit inside that window is
+ * coalesced into it. A trailing debounce would be wrong in the other
+ * direction — someone typing continuously would never reach the quiet gap and
+ * nothing would be persisted at all until they stopped.
+ *
+ * It was 200ms, which meant roughly five sqlite commits per second of typing
+ * (~18,000/hour) for a feature whose purpose is shell-style draft RECOVERY —
+ * getting back a message you walked away from. Recovery does not need
+ * per-keystroke granularity; losing the last few seconds of typing on a hard
+ * crash is not what this exists to prevent.
+ */
+const DURABLE_SAVE_INTERVAL_MS = 5_000;
 const HISTORY_TEXT_THRESHOLD = 120;
 
 type SaveComposerDraft = NonNullable<DesktopApi["saveComposerDraft"]>;
@@ -43,6 +58,14 @@ export function useDurableComposerDraftStore(
 ): ComposerDraftStore {
   const pendingSavesRef = useRef(new Map<string, PendingDraftSave>());
   const createdAtRef = useRef(new Map<string, number>());
+  // Content hash of what is actually in sqlite for each scope. Guards the
+  // "edited" half of the rule: opening a thread and leaving, or any other
+  // re-save of identical content, must not cost a write.
+  const persistedHashRef = useRef(new Map<string, string>());
+  // A clear invalidates every save that started before it. Without this
+  // generation guard, a stale async completion can put the cleared hash back
+  // and suppress persistence when the composer restores the same snapshot.
+  const clearGenerationRef = useRef(new Map<string, number>());
   const localRecoveryCandidatesRef = useRef<LocalRecoveryCandidate[]>([]);
   const localRecoverySequenceRef = useRef(0);
   const [hydrationVersion, setHydrationVersion] = useState(0);
@@ -83,6 +106,7 @@ export function useDurableComposerDraftStore(
         "unsent",
         createdAtRef,
       );
+      const clearGeneration = clearGenerationRef.current.get(scopeKey) ?? 0;
       if (shouldRecordHistory(pending.snapshot, "unsent")) {
         rememberLocalRecoveryCandidate(record);
       }
@@ -90,6 +114,20 @@ export function useDurableComposerDraftStore(
         .saveComposerDraft({
           draft: record,
           recordHistory: shouldRecordHistory(pending.snapshot, "unsent"),
+        })
+        .then((response) => {
+          if (
+            (clearGenerationRef.current.get(scopeKey) ?? 0) !== clearGeneration
+          ) {
+            return;
+          }
+          // This map describes what is ACTUALLY durable, not what was merely
+          // attempted. Leaving the old hash in place on failure lets a later
+          // unchanged composer flush retry instead of suppressing the save.
+          persistedHashRef.current.set(
+            scopeKey,
+            response.draft.contentHash,
+          );
         })
         .catch((error) => {
           console.warn("Failed to save composer draft", error);
@@ -114,6 +152,7 @@ export function useDurableComposerDraftStore(
           if (!baseStore.get(draft.scopeKey)) {
             baseStore.set(draft.scopeKey, snapshotFromDraftRecord(draft));
             createdAtRef.current.set(draft.scopeKey, draft.createdAt);
+            persistedHashRef.current.set(draft.scopeKey, draft.contentHash);
             hydratedAny = true;
           }
         }
@@ -130,21 +169,69 @@ export function useDurableComposerDraftStore(
     };
   }, [baseStore, desktopApi]);
 
+  const flushAllPendingSaves = useCallback((): void => {
+    for (const [scopeKey, pending] of [...pendingSavesRef.current]) {
+      flushPendingSave(scopeKey, pending);
+    }
+  }, [flushPendingSave]);
+
   useEffect(() => {
     return () => {
-      for (const [scopeKey, pending] of [...pendingSavesRef.current]) {
-        flushPendingSave(scopeKey, pending);
+      flushAllPendingSaves();
+    };
+  }, [flushAllPendingSaves]);
+
+  /**
+   * Flush whenever the operator stops interacting with this window.
+   *
+   * The unmount cleanup above is a React lifecycle hook, and a renderer being
+   * torn down — window closed, app quit — does not run it. That was near
+   * enough to harmless while the write interval was 200ms; at 5s it would mean
+   * typing for four seconds, quitting, and losing it, which is precisely the
+   * failure a draft-recovery feature exists to prevent.
+   *
+   * Blur and `visibilitychange` both land well BEFORE teardown, so the async
+   * IPC has a normal amount of time to complete — unlike `beforeunload`, where
+   * an in-flight `invoke` may never be delivered. `beforeunload` is registered
+   * anyway as a last resort for paths that somehow skip the others; it is
+   * best-effort by nature, not the thing being relied on.
+   *
+   * Flushing on blur is cheap because the dirty check already gates it: a
+   * window that lost focus with nothing pending writes nothing.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const flushIfHidden = (): void => {
+      if (document.visibilityState === "hidden") {
+        flushAllPendingSaves();
       }
     };
-  }, [flushPendingSave]);
+
+    window.addEventListener("blur", flushAllPendingSaves);
+    window.addEventListener("beforeunload", flushAllPendingSaves);
+    document.addEventListener("visibilitychange", flushIfHidden);
+    return () => {
+      window.removeEventListener("blur", flushAllPendingSaves);
+      window.removeEventListener("beforeunload", flushAllPendingSaves);
+      document.removeEventListener("visibilitychange", flushIfHidden);
+    };
+  }, [flushAllPendingSaves]);
 
   return useMemo(
     () => ({
       ...baseStore,
       hydrationVersion,
       delete: (scopeKey) => {
+        clearGenerationRef.current.set(
+          scopeKey,
+          (clearGenerationRef.current.get(scopeKey) ?? 0) + 1,
+        );
         baseStore.delete(scopeKey);
         createdAtRef.current.delete(scopeKey);
+        persistedHashRef.current.delete(scopeKey);
         const pending = pendingSavesRef.current.get(scopeKey);
         if (pending) {
           window.clearTimeout(pending.timer);
@@ -194,7 +281,25 @@ export function useDurableComposerDraftStore(
 
         const existingPending = pendingSavesRef.current.get(scopeKey);
         if (existingPending) {
-          window.clearTimeout(existingPending.timer);
+          // A write is already scheduled. Take the newer snapshot but LEAVE
+          // the timer alone — resetting it here is what would turn this back
+          // into a debounce that never fires while someone keeps typing.
+          pendingSavesRef.current.set(scopeKey, {
+            ...existingPending,
+            snapshot,
+          });
+          return;
+        }
+
+        // Nothing scheduled, so this is the first edit of a new window — and
+        // only a real edit earns a write. An unchanged snapshot reaches here
+        // constantly: the composer re-saves on unmount without a dirty check,
+        // so merely opening a thread and navigating away would otherwise cost
+        // a write and restamp `updated_at`.
+        if (
+          hashDraftContent(snapshot) === persistedHashRef.current.get(scopeKey)
+        ) {
+          return;
         }
 
         const saveComposerDraft = desktopApi.saveComposerDraft;
@@ -203,7 +308,7 @@ export function useDurableComposerDraftStore(
           if (pending) {
             flushPendingSave(scopeKey, pending);
           }
-        }, DURABLE_SAVE_DEBOUNCE_MS);
+        }, DURABLE_SAVE_INTERVAL_MS);
         pendingSavesRef.current.set(scopeKey, {
           saveComposerDraft,
           snapshot,
@@ -416,33 +521,96 @@ function shouldReplacePreviousUnsentCandidate(
   }
   const previousText = previous.text.trimEnd();
   const nextText = next.text.trimEnd();
-  return (
-    previousText.length > 0 &&
-    nextText.length > previousText.length &&
-    nextText.startsWith(previousText)
-  );
+  // Must stay in step with `shouldReplacePreviousUnsentDraft` in
+  // composer-draft-recovery-store.ts — this is the in-memory half of the same
+  // rule, and it carried the same bug: both sides are `trimEnd`ed, so a
+  // strict length comparison failed on every typed space and left one
+  // candidate per word instead of one per edit. Non-text recovery content must
+  // also remain distinct when attachments, tokens, or editor state change.
+  return previousText.length > 0
+    && nextText.startsWith(previousText)
+    && serializeRecoverableNonTextDraftContent(previous)
+      === serializeRecoverableNonTextDraftContent(next);
 }
 
+/**
+ * Content fingerprint for a snapshot.
+ *
+ * Note what this now decides. It started as a dedupe/ranking key for recovery
+ * candidates, where a collision merely merged two entries in a list. It is now
+ * also the dirty check that decides whether an edit is persisted AT ALL, so a
+ * collision means a draft change is silently never written. djb2/32-bit makes
+ * that vanishingly unlikely between successive edits of one document, and the
+ * consequence is bounded (the next distinct edit writes), but the risk class
+ * changed when the second caller arrived — do not widen its use further
+ * without swapping in something with real collision resistance.
+ *
+ * It must also stay in step with the record round-trip: hydration seeds the
+ * persisted-hash map straight from a stored `contentHash`, so if this function
+ * and `snapshotFromDraftRecord` ever disagree about which fields matter, the
+ * dirty check either stops suppressing (harmless) or suppresses a real edit
+ * (not). `useDurableComposerDraftStore.test.tsx` pins that round-trip.
+ */
 function hashDraftContent(snapshot: ComposerDraftSnapshot): string {
   const content = JSON.stringify({
     text: snapshot.draft,
-    editorDocument: snapshot.editorDocument,
-    skillTokens: snapshot.skillTokens.map((token) => ({
-      id: token.id,
-      index: token.index,
-      name: token.name,
-      path: token.path,
-    })),
-    imageAttachments: snapshot.imageAttachments.map((attachment) => ({
-      url: attachment.url,
-    })),
-    fileAttachments: (snapshot.fileAttachments ?? []).map((attachment) => ({
-      path: attachment.path,
-    })),
+    ...getRecoverableNonTextDraftContent(snapshot),
   });
   let hash = 5381;
   for (let index = 0; index < content.length; index += 1) {
     hash = (hash * 33) ^ content.charCodeAt(index);
   }
   return `h${(hash >>> 0).toString(36)}`;
+}
+
+function serializeRecoverableNonTextDraftContent(
+  draft: Pick<
+    ComposerDraftSnapshotRecord,
+    | "editorDocument"
+    | "fileAttachments"
+    | "imageAttachments"
+    | "skillTokens"
+  >,
+): string {
+  return JSON.stringify(getRecoverableNonTextDraftContent(draft));
+}
+
+function getRecoverableNonTextDraftContent(draft: {
+  editorDocument?: unknown;
+  fileAttachments?: readonly unknown[];
+  imageAttachments: readonly unknown[];
+  skillTokens: readonly unknown[];
+}): {
+  editorDocument: unknown;
+  fileAttachments: readonly unknown[];
+  imageAttachments: readonly unknown[];
+  skillTokens: readonly unknown[];
+} {
+  return {
+    // `draft` carries the changing plain text. Normalize only Tiptap text-node
+    // strings here so prefix typing remains collapsible while structure,
+    // marks, attributes, and every other editor-state field remain distinct.
+    editorDocument: withoutEditorTextNodeContent(draft.editorDocument),
+    skillTokens: draft.skillTokens,
+    imageAttachments: draft.imageAttachments,
+    fileAttachments: draft.fileAttachments ?? [],
+  };
+}
+
+function withoutEditorTextNodeContent(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(withoutEditorTextNodeContent);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(record).map(([key, child]) => [
+      key,
+      record.type === "text" && key === "text" && typeof child === "string"
+        ? ""
+        : withoutEditorTextNodeContent(child),
+    ]),
+  );
 }

@@ -1,4 +1,11 @@
 {
+  "composer-draft-typing": {
+    "commits": 70,
+    "note": "70 direct store saves (a stress case for prefix collapse, NOT the app's typing cadence — the renderer coalesces to one save per 5s): exactly one journal row survives, and commits track save calls because each save is its own transaction",
+    "observedWalBytes": 1738640,
+    "rowsChanged": 140,
+    "statements": 209
+  },
   "live-thread-token-usage": {
     "commits": 1,
     "note": "500 cumulative usage observations across 10 turns, then one terminal flush",

@@ -308,10 +308,30 @@ function parseDraftPayload(
   }
 }
 
-function hashDraftContent(draft: Pick<ComposerDraftSnapshotRecord, "text">): string {
+function hashDraftContent(
+  draft: Pick<
+    ComposerDraftSnapshotRecord,
+    | "editorDocument"
+    | "fileAttachments"
+    | "imageAttachments"
+    | "skillTokens"
+    | "text"
+  >,
+): string {
+  const content = JSON.stringify({
+    text: draft.text,
+    editorDocument: withoutEditorTextNodeContent(draft.editorDocument),
+    skillTokens: Array.isArray(draft.skillTokens) ? draft.skillTokens : [],
+    imageAttachments: Array.isArray(draft.imageAttachments)
+      ? draft.imageAttachments
+      : [],
+    fileAttachments: Array.isArray(draft.fileAttachments)
+      ? draft.fileAttachments
+      : [],
+  });
   let hash = 5381;
-  for (let index = 0; index < draft.text.length; index += 1) {
-    hash = (hash * 33) ^ draft.text.charCodeAt(index);
+  for (let index = 0; index < content.length; index += 1) {
+    hash = (hash * 33) ^ content.charCodeAt(index);
   }
   return `h${(hash >>> 0).toString(36)}`;
 }
@@ -408,9 +428,59 @@ function shouldReplacePreviousUnsentDraft(
   }
   const previousText = previous.text.trimEnd();
   const nextText = next.text.trimEnd();
-  return (
-    previousText.length > 0 &&
-    nextText.length > previousText.length &&
-    nextText.startsWith(previousText)
+  // `startsWith` already implies next is at least as long, so no length
+  // comparison is needed — and a STRICT one was the bug this replaced. Both
+  // sides are `trimEnd`ed, so the moment an operator types a space the trimmed
+  // texts are equal, strict growth is false, and the entry gets inserted as a
+  // new row instead of collapsing. That made the journal grow by one row per
+  // WORD typed: a sentence with fourteen spaces left fifteen near-identical
+  // rows, each a prefix of the next.
+  //
+  // Equal trimmed text is deliberately replaced rather than skipped when the
+  // rest of the recoverable content is unchanged: it is the same draft
+  // re-saved with trailing whitespace only. Attachments, skill tokens, and the
+  // editor document are part of recovery state too, so a change to any of them
+  // must start a distinct branch even when the visible text is identical.
+  return previousText.length > 0
+    && nextText.startsWith(previousText)
+    && serializeRecoverableNonTextDraftContent(previous)
+      === serializeRecoverableNonTextDraftContent(next);
+}
+
+function serializeRecoverableNonTextDraftContent(
+  draft: Pick<
+    ComposerDraftSnapshotRecord,
+    | "editorDocument"
+    | "fileAttachments"
+    | "imageAttachments"
+    | "skillTokens"
+  >,
+): string {
+  return JSON.stringify({
+    // Plain text growth is already governed by the prefix predicate. Ignore
+    // only Tiptap text-node strings here so normal typing can collapse while
+    // document structure, marks, attributes, and other editor state cannot.
+    editorDocument: withoutEditorTextNodeContent(draft.editorDocument),
+    skillTokens: draft.skillTokens,
+    imageAttachments: draft.imageAttachments,
+    fileAttachments: draft.fileAttachments ?? [],
+  });
+}
+
+function withoutEditorTextNodeContent(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(withoutEditorTextNodeContent);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.entries(record).map(([key, child]) => [
+      key,
+      record.type === "text" && key === "text" && typeof child === "string"
+        ? ""
+        : withoutEditorTextNodeContent(child),
+    ]),
   );
 }

@@ -493,9 +493,10 @@ describe("AutomationEditor", () => {
     expect(await screen.findByText(/Send this code: ABC123/)).toBeInTheDocument();
     // The code is copyable (the app root sets user-select: none).
     expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    await waitFor(() => expect(pairingListener).toBeDefined());
 
     act(() => {
-      pairingListener?.({
+      pairingListener!({
         at: 1,
         entry: {
           id: "pair-1",
