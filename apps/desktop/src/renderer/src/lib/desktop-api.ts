@@ -87,8 +87,6 @@ import type {
   StopSubAgentRequest,
   StopSubAgentResponse,
   LatestCodexConfigWarningResponse,
-  ListAutomationCardsRequest,
-  ListAutomationCardsResponse,
   ListAutomationReplayCandidatesRequest,
   ListAutomationReplayCandidatesResponse,
   OpenAutomationRunWindowRequest,
@@ -470,9 +468,6 @@ export type DesktopApi = {
   listAutomationRuns?: (
     request: ListAutomationRunsRequest,
   ) => Promise<ListAutomationRunsResponse>;
-  listAutomationCards?: (
-    request: ListAutomationCardsRequest,
-  ) => Promise<ListAutomationCardsResponse>;
   searchAutomationSenders?: (
     request: SearchMessagingSendersRequest,
   ) => Promise<SearchMessagingSendersResponse>;

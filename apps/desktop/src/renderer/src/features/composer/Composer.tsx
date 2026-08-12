@@ -166,6 +166,7 @@ import {
   formatRunningDurationMs,
 } from "../thread-detail/EnvActionRunsView";
 import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
+import { ActiveAutomationRunsStrip } from "../automations/ActiveAutomationRunsStrip";
 import {
   buildThreadComposerScopeKey,
   getNextReleasableQueuedTurn,
@@ -10170,6 +10171,13 @@ export function Composer(props: ComposerProps) {
       <ActiveSubAgentsStrip
         desktopApi={props.desktopApi}
         onRefreshNavigation={props.onRefreshNavigation}
+        thread={props.thread}
+      />
+
+      {/* Same band, same reasoning: automation runs fire without the operator
+          asking, so only the in-flight and the broken get their eyeline. */}
+      <ActiveAutomationRunsStrip
+        desktopApi={props.desktopApi}
         thread={props.thread}
       />
 

@@ -20,7 +20,6 @@ import type {
   AppServerThreadFileChangeKind,
   AppServerSkillSummary,
   AppServerThreadReplayPagination,
-  AutomationTimelineCard,
   DesktopApplicationsSnapshot,
   PendingRequestAction,
   PendingRequestApprovalContext,
@@ -37,7 +36,6 @@ import {
   buildPendingRequestApprovalContext,
   isAppServerBackendKind,
 } from "@pwragent/shared";
-import { injectAutomationCards } from "./automation-card-entries";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
@@ -82,7 +80,6 @@ type TranscriptListProps = {
     | "openApplication"
     | "openMarkdownFileViewer"
     | "readMarkdownFile"
-    | "listAutomationCards"
     | "onAgentEvent"
   >;
   directoryPaths?: string[];
@@ -800,52 +797,6 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingRequest ? buildPendingRequestActions(props.pendingRequest) : [],
     [props.pendingRequest],
   );
-  const automationThreadTarget = useMemo(
-    () => parseThreadIdentity(props.threadId),
-    [props.threadId],
-  );
-  const [automationCards, setAutomationCards] = useState<AutomationTimelineCard[]>([]);
-  const refreshAutomationCards = useCallback(async () => {
-    if (!automationThreadTarget || !props.desktopApi?.listAutomationCards) {
-      setAutomationCards([]);
-      return;
-    }
-    const response = await props.desktopApi.listAutomationCards({
-      backend: automationThreadTarget.backend,
-      threadId: automationThreadTarget.threadId,
-      limit: 50,
-    });
-    setAutomationCards(response.cards);
-  }, [automationThreadTarget, props.desktopApi]);
-
-  useEffect(() => {
-    void refreshAutomationCards();
-  }, [refreshAutomationCards]);
-
-  useEffect(() => {
-    if (
-      !automationThreadTarget ||
-      !props.desktopApi?.onAgentEvent ||
-      !props.desktopApi?.listAutomationCards
-    ) {
-      return;
-    }
-    return props.desktopApi.onAgentEvent((event) => {
-      if (
-        event.backend !== automationThreadTarget.backend ||
-        !("threadId" in event.notification.params) ||
-        event.notification.params.threadId !== automationThreadTarget.threadId
-      ) {
-        return;
-      }
-      if (
-        event.notification.method === "automation/run/updated" ||
-        event.notification.method === "thread/automations/updated"
-      ) {
-        void refreshAutomationCards();
-      }
-    });
-  }, [automationThreadTarget, props.desktopApi, refreshAutomationCards]);
 
   const transcriptEntries = useMemo(() => {
     const entries = [...props.entries];
@@ -868,19 +819,15 @@ export function TranscriptList(props: TranscriptListProps) {
     }
     return injectTurnFailures(
       injectQuestionnaireActivities(
-        injectAutomationCards(
-          injectMessagingBindingTransitions(
-            injectPermissionTransitions(entries, props.permissionTransitions),
-            props.messagingBindingTransitions,
-          ),
-          automationCards,
+        injectMessagingBindingTransitions(
+          injectPermissionTransitions(entries, props.permissionTransitions),
+          props.messagingBindingTransitions,
         ),
         props.questionnaireActivities,
       ),
       props.turnFailures,
     );
   }, [
-    automationCards,
     props.entries,
     props.pendingActivityEntry,
     props.pendingProtocolActivityEntry,

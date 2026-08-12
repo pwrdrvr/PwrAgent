@@ -1,4 +1,11 @@
-import { useMemo, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import type {
   AutomationDetail,
   AutomationReplayCandidate,
@@ -12,13 +19,18 @@ import {
   CODEX_AGENT_THREAD_CREATION_NOTE,
   canChangeExistingThreadAgentDesignation,
 } from "../../lib/agent-thread";
+import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { ChevronRightIcon, MoreVerticalIcon } from "../../icons";
+import { useDismissableMenu } from "../composer/ComposerDropdown";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import {
   formatCostTodayMicros,
   formatAutomationRelative,
   formatAutomationStatus,
   formatBacklogPolicy,
+  formatWorkspacePathLabel,
 } from "./automation-format";
 import {
   AutomationEditor,
@@ -26,6 +38,7 @@ import {
 } from "./AutomationEditor";
 import { AutomationRunHistoryItem } from "./ThreadAutomationsPanel";
 import { useAutomationRuns, useAutomations } from "./useAutomations";
+import { useExpandedIds } from "./useExpandedIds";
 
 type AutomationsScreenProps = {
   desktopApi?: DesktopApi;
@@ -46,7 +59,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
     | undefined
   >();
   const [saving, setSaving] = useState(false);
-  const [expandedAutomationId, setExpandedAutomationId] = useState<string>();
+  const automationExpansion = useExpandedIds();
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -180,12 +193,12 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
             <div className="automations-table" role="table" aria-label="Automations">
               <div className="automations-table__header" role="row">
                 <span role="columnheader">Automation</span>
-                <span role="columnheader">Agent</span>
-                <span role="columnheader">Schedule</span>
+                <span role="columnheader">Runs as</span>
+                <span role="columnheader">Trigger</span>
                 <span role="columnheader">Status</span>
                 <span role="columnheader">Actions</span>
               </div>
-              {automations.automations.map((automation) => {
+              {automations.automations.map((automation, index) => {
                 const thread = threadsByKey.get(
                   buildThreadIdentityKey(automation.backend, automation.threadId),
                 );
@@ -194,7 +207,8 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                     key={automation.id}
                     automation={automation}
                     desktopApi={props.desktopApi}
-                    expanded={expandedAutomationId === automation.id}
+                    expanded={automationExpansion.isExpanded(automation.id)}
+                    hasRowsBelow={index < automations.automations.length - 1}
                     thread={thread}
                     onDelete={async () => {
                       await automations.deleteAutomation({
@@ -203,11 +217,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                       await props.onRefreshNavigation?.();
                     }}
                     onEdit={() => setEditorMode({ automation, kind: "edit" })}
-                    onExpand={() =>
-                      setExpandedAutomationId((current) =>
-                        current === automation.id ? undefined : automation.id,
-                      )
-                    }
+                    onExpand={() => automationExpansion.toggle(automation.id)}
                     onPauseResume={async () => {
                       if (automation.status === "paused") {
                         await automations.resumeAutomation({
@@ -224,12 +234,12 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
                       await automations.runAutomationNow({
                         automationId: automation.id,
                       });
-                      setExpandedAutomationId(automation.id);
+                      automationExpansion.expand(automation.id);
                       await props.onRefreshNavigation?.();
                     }}
                     onReplayed={async () => {
                       await automations.refresh();
-                      setExpandedAutomationId(automation.id);
+                      automationExpansion.expand(automation.id);
                       await props.onRefreshNavigation?.();
                     }}
                     onSelectThread={
@@ -252,6 +262,8 @@ function AutomationTableRow(props: {
   automation: AutomationDetail;
   desktopApi?: DesktopApi;
   expanded: boolean;
+  /** Whether another automation follows this one in the list. */
+  hasRowsBelow: boolean;
   onDelete: () => Promise<void>;
   onEdit: () => void;
   onExpand: () => void;
@@ -262,6 +274,23 @@ function AutomationTableRow(props: {
   thread?: NavigationThreadSummary;
 }) {
   const [busy, setBusy] = useState<string>();
+  // The run lines stick below this row, and its height depends on how much of
+  // the execution profile the automation overrides — so it is measured rather
+  // than assumed. Only while expanded: a collapsed row has nothing under it.
+  const rowRef = useRef<HTMLElement>(null);
+  const [rowHeight, setRowHeight] = useState(0);
+  useEffect(() => {
+    const element = rowRef.current;
+    if (!props.expanded || !element || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      setRowHeight(element.offsetHeight);
+    });
+    observer.observe(element);
+    setRowHeight(element.offsetHeight);
+    return () => observer.disconnect();
+  }, [props.expanded]);
   const [replayOpen, setReplayOpen] = useState(false);
   const [replayCandidates, setReplayCandidates] =
     useState<ListAutomationReplayCandidatesResponse>();
@@ -312,30 +341,65 @@ function AutomationTableRow(props: {
     }
   };
 
+  const agentLabel = formatAutomationAgentLabel(props);
+  const threadSubtitle = props.thread?.agent
+    ? props.thread.title === agentLabel
+      ? undefined
+      : props.thread.title
+    : "legacy thread";
+  const scheduleTriggered = props.automation.triggers.some(
+    (trigger) => trigger.kind === "schedule",
+  );
+
   return (
-    <>
-      <article className="automations-table__row" role="row">
-        <div role="cell">
-          <h3>{props.automation.name}</h3>
-          <p>{formatBacklogPolicy(props.automation.backlogPolicy)}</p>
+    <div
+      className="automations-table__group"
+      role="rowgroup"
+      style={
+        rowHeight > 0
+          ? ({ "--automation-row-h": `${rowHeight}px` } as CSSProperties)
+          : undefined
+      }
+    >
+      <article className="automations-table__row" ref={rowRef} role="row">
+        <div className="automations-table__identity" role="cell">
+          <button
+            aria-expanded={props.expanded}
+            aria-label={`${props.expanded ? "Hide" : "Show"} run history for ${props.automation.name}`}
+            className="automations-table__disclosure"
+            type="button"
+            onClick={props.onExpand}
+          >
+            <ChevronRightIcon aria-hidden="true" size={14} />
+          </button>
+          <div className="automations-table__identity-text">
+            <h3>{props.automation.name}</h3>
+            {props.onSelectThread ? (
+              <button
+                className="automations-table__thread-link"
+                type="button"
+                onClick={props.onSelectThread}
+              >
+                {agentLabel}
+              </button>
+            ) : (
+              <span>{agentLabel}</span>
+            )}
+            {threadSubtitle ? <p>{threadSubtitle}</p> : null}
+          </div>
         </div>
-        <div role="cell">
-          {props.onSelectThread ? (
-            <button
-              className="automations-table__thread-link"
-              type="button"
-              onClick={props.onSelectThread}
-            >
-              {formatAutomationAgentLabel(props)}
-            </button>
-          ) : (
-            <span>{formatAutomationAgentLabel(props)}</span>
-          )}
-          <p>{props.thread?.agent ? props.thread.title : "legacy thread"}</p>
-        </div>
+        <AutomationRuntimeCell automation={props.automation} />
         <div role="cell">
           <span>{props.automation.scheduleSummary}</span>
-          <p>Next {formatAutomationRelative(props.automation.nextRunAt)}</p>
+          {props.automation.nextRunAt ? (
+            <p>Next {formatAutomationRelative(props.automation.nextRunAt)}</p>
+          ) : null}
+          {/* Backlog policy only decides what happens to *missed scheduled*
+              runs, so it belongs with the schedule rather than under the
+              automation's name where it outranked everything else. */}
+          {scheduleTriggered ? (
+            <p>{formatBacklogPolicy(props.automation.backlogPolicy)}</p>
+          ) : null}
         </div>
         <div role="cell">
           <span className={`automation-status automation-status--${props.automation.status}`}>
@@ -369,27 +433,31 @@ function AutomationTableRow(props: {
           <button className="context-list__action" type="button" onClick={props.onEdit}>
             Edit
           </button>
-          <button
-            className="context-list__action"
-            disabled={Boolean(busy)}
-            type="button"
-            onClick={() => void runAction("pause", props.onPauseResume)}
-          >
-            {props.automation.status === "paused" ? "Resume" : "Pause"}
-          </button>
-          <button className="context-list__action" type="button" onClick={props.onExpand}>
-            {props.expanded ? "Hide" : "History"}
-          </button>
-          <button
-            className="context-list__action context-list__action--danger"
-            disabled={Boolean(busy)}
-            type="button"
-            onClick={() => void runAction("delete", props.onDelete)}
-          >
-            Delete
-          </button>
+          {/* Pause and Delete are rarer and one of them is destructive, so
+              they sit behind an overflow rather than competing with Run and
+              Edit for the same visual weight in every row. */}
+          <AutomationRowMenu
+            busy={Boolean(busy)}
+            name={props.automation.name}
+            paused={props.automation.status === "paused"}
+            onDelete={() => void runAction("delete", props.onDelete)}
+            onPauseResume={() => void runAction("pause", props.onPauseResume)}
+          />
         </div>
       </article>
+      {/* An ARIA table may only own rows and rowgroups, so the panels this row
+          expands into live in a detail row of their own rather than sitting
+          loose inside the group. The group still exists for sticky
+          containment; this keeps that structural need from making the table
+          semantics invalid. */}
+      {replayOpen || props.expanded ? (
+        <div className="automations-table__detail" role="row">
+          <div
+            aria-colindex={1}
+            aria-colspan={5}
+            className="automations-table__detail-cell"
+            role="cell"
+          >
       {replayOpen ? (
         <div className="automations-table__replay">
           <p className="automations-table__replay-lead">
@@ -457,10 +525,118 @@ function AutomationTableRow(props: {
       {props.expanded ? (
         <AutomationTableHistory
           automationId={props.automation.id}
+          capHeight={props.hasRowsBelow}
           desktopApi={props.desktopApi}
         />
       ) : null}
-    </>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * "What will this thing run as" — the answer an operator needs before they
+ * decide whether an automation deserves watching. Backend pill and model line
+ * reuse the sub-agent card's vocabulary; access mode and working directory are
+ * here because a Full Access automation loose in a real repo is the case worth
+ * spotting from across the table.
+ */
+function AutomationRuntimeCell(props: { automation: AutomationDetail }) {
+  const profile = props.automation.executionProfile;
+  const runtimeDetails = [
+    profile?.model,
+    profile?.reasoningEffort,
+    profile?.fastMode ? "Fast" : undefined,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+  const fullAccess = profile?.executionMode === "full-access";
+  return (
+    <div className="automations-table__runtime" role="cell">
+      <p className="automations-table__runtime-line">
+        <span className="automation-runtime__provider">
+          {formatBackendLabel(profile?.backend ?? props.automation.backend)}
+        </span>
+        <span className="automation-runtime__model">
+          {runtimeDetails || "Agent default"}
+        </span>
+      </p>
+      {/* Only stated when the automation actually overrides it. Printing
+          "Default Access" for an inheriting automation would claim a setting
+          it does not hold. */}
+      {profile?.executionMode ? (
+        <p className="automations-table__runtime-line">
+          <span
+            className={`automation-runtime__access${
+              fullAccess ? " automation-runtime__access--elevated" : ""
+            }`}
+          >
+            {formatExecutionModeLabel(profile.executionMode)}
+          </span>
+        </p>
+      ) : null}
+      {profile?.cwd ? (
+        <p className="automations-table__cwd" title={profile.cwd}>
+          {formatWorkspacePathLabel(profile.cwd)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function AutomationRowMenu(props: {
+  busy: boolean;
+  name: string;
+  paused: boolean;
+  onDelete: () => void;
+  onPauseResume: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuId = useId();
+  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  return (
+    <div className="automations-table__menu" ref={ref}>
+      <button
+        aria-controls={open ? menuId : undefined}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={`More actions for ${props.name}`}
+        className="context-list__action automations-table__menu-button"
+        disabled={props.busy}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <MoreVerticalIcon aria-hidden="true" size={14} />
+      </button>
+      {open ? (
+        <div className="automations-table__menu-list" id={menuId} role="menu">
+          <button
+            className="automations-table__menu-item"
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              props.onPauseResume();
+            }}
+          >
+            {props.paused ? "Resume" : "Pause"}
+          </button>
+          <button
+            className="automations-table__menu-item automations-table__menu-item--danger"
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              props.onDelete();
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -498,13 +674,24 @@ function formatAutomationLatestRun(automation: AutomationDetail): string {
 
 function AutomationTableHistory(props: {
   automationId: string;
+  /**
+   * Scroll the run list inside its own box instead of letting it grow. The
+   * cap exists to keep the *next* automation reachable, so it is applied only
+   * when there is a next automation — otherwise it reserves screen space for
+   * nobody and squeezes an open run's details into a sliver.
+   */
+  capHeight: boolean;
   desktopApi?: DesktopApi;
 }) {
   const runs = useAutomationRuns(props.desktopApi, props.automationId);
-  const [expandedRunId, setExpandedRunId] = useState<string>();
+  const runExpansion = useExpandedIds();
 
   return (
-    <div className="automations-table__history">
+    <div
+      className={`automations-table__history${
+        props.capHeight ? " automations-table__history--capped" : ""
+      }`}
+    >
       {runs.loading ? (
         <p>Loading run history...</p>
       ) : runs.error ? (
@@ -517,13 +704,9 @@ function AutomationTableHistory(props: {
             <AutomationRunHistoryItem
               key={run.id}
               desktopApi={props.desktopApi}
-              expanded={expandedRunId === run.id}
+              expanded={runExpansion.isExpanded(run.id)}
               run={run}
-              onToggle={() =>
-                setExpandedRunId((current) =>
-                  current === run.id ? undefined : run.id,
-                )
-              }
+              onToggle={() => runExpansion.toggle(run.id)}
             />
           ))}
         </ol>

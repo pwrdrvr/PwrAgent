@@ -320,8 +320,18 @@ describe("AutomationsScreen", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "History" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    // Run history hangs off the row's disclosure chevron rather than a
+    // fifth action button competing with Run/Edit.
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
+    // Runs disclose the same way their automation does — a chevron, not a
+    // button that reads like an action.
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Show run details from/ }),
+    );
 
     expect(await screen.findByText("Bring an umbrella.")).toBeInTheDocument();
     expect(screen.getByText("Captured automation events")).toBeInTheDocument();
@@ -329,6 +339,256 @@ describe("AutomationsScreen", () => {
     expect(screen.getByText("Scheduled windows covered")).toBeInTheDocument();
     expect(screen.getByText("Ephemeral rollout")).toBeInTheDocument();
     expect(screen.getByText("It will rain at 4 PM.")).toBeInTheDocument();
+  });
+});
+
+describe("row runtime and actions", () => {
+  it("states the execution profile so a risky automation is spottable", async () => {
+    const risky: AutomationDetail = {
+      ...automation,
+      executionProfile: {
+        backend: "codex",
+        cwd: "/Users/dev/work/payments-api",
+        executionMode: "full-access",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+      },
+    };
+    render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [risky] })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    // Backend, model, effort, access, and directory all readable without
+    // opening the editor — that is the point of the column.
+    expect(await screen.findByText("OpenAI")).toBeInTheDocument();
+    expect(screen.getByText("gpt-5.6-sol · high")).toBeInTheDocument();
+    expect(screen.getByText("Full Access")).toBeInTheDocument();
+    // Shortened head-first so the repo name survives the cell width; the
+    // full path stays reachable as the title.
+    const cwd = screen.getByText("…/work/payments-api");
+    expect(cwd).toHaveAttribute("title", "/Users/dev/work/payments-api");
+  });
+
+  it("says the runtime is inherited rather than inventing an access mode", async () => {
+    render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [automation] })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Agent default")).toBeInTheDocument();
+    // An automation that overrides nothing holds no access mode, so claiming
+    // "Default Access" here would state a setting it does not have.
+    expect(screen.queryByText("Default Access")).not.toBeInTheDocument();
+  });
+
+  it("names the backend, model, and effort each run actually used", async () => {
+    render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [automation] })),
+            listAutomationRuns: vi.fn(async () => ({
+              runs: [
+                {
+                  ...automationRun,
+                  backend: "acp:gemini",
+                  usage: {
+                    model: "gemini-3-pro",
+                    reasoningEffort: "medium",
+                    totalCostMicros: 52_000,
+                  },
+                },
+              ],
+            })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
+
+    // Read off the run's own record, so editing the automation later cannot
+    // rewrite what its history claims to have run.
+    expect(await screen.findByText("Gemini")).toBeInTheDocument();
+    expect(screen.getByText("gemini-3-pro · medium")).toBeInTheDocument();
+    expect(screen.getByText(/\$0\.052/)).toBeInTheDocument();
+  });
+
+  it("only caps run-history height when an automation follows it", async () => {
+    const second: AutomationDetail = { ...automation, id: "a2", name: "Second" };
+    const desktopApi = {
+      listAutomations: vi.fn(async () => ({ automations: [automation, second] })),
+      listAutomationRuns: vi.fn(async () => ({ runs: [automationRun] })),
+      onAgentEvent: () => () => undefined,
+    } as unknown as DesktopApi;
+
+    const view = render(
+      <AutomationsScreen
+        desktopApi={desktopApi}
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show run history for Second" }),
+    );
+
+    const groups = view.container.querySelectorAll(".automations-table__group");
+    await waitFor(() =>
+      expect(
+        groups[0].querySelector(".automations-table__history"),
+      ).not.toBeNull(),
+    );
+
+    // First of two: capped, so a long history cannot bury the second row.
+    expect(
+      groups[0].querySelector(".automations-table__history--capped"),
+    ).not.toBeNull();
+    // Last row: nothing below it, so nothing to reserve space for.
+    expect(groups[1].querySelector(".automations-table__history")).not.toBeNull();
+    expect(
+      groups[1].querySelector(".automations-table__history--capped"),
+    ).toBeNull();
+  });
+
+  it("keeps the expanded panels inside a row, so the table owns only rows", async () => {
+    const view = render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [automation] })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [automationRun] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
+
+    // An ARIA table may only own rows and rowgroups. The group exists for
+    // sticky containment, so the panels it expands into need a row of their
+    // own rather than sitting loose beside the automation's row.
+    const group = view.container.querySelector(".automations-table__group");
+    for (const child of Array.from(group?.children ?? [])) {
+      expect(child.getAttribute("role")).toBe("row");
+    }
+    const detail = view.container.querySelector(".automations-table__detail");
+    expect(detail?.children).toHaveLength(1);
+    expect(detail?.firstElementChild?.getAttribute("role")).toBe("cell");
+    expect(
+      detail?.querySelector(".automations-table__history"),
+    ).not.toBeNull();
+  });
+
+  it("keeps other rows open when one more is expanded", async () => {
+    const second: AutomationDetail = { ...automation, id: "a2", name: "Second" };
+    const view = render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({
+              automations: [automation, second],
+            })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [automationRun] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show run history for Second" }),
+    );
+
+    // Closing one to open another removes its content from the page, which
+    // clamps the scroll position and throws the operator back to the top.
+    await waitFor(() =>
+      expect(
+        view.container.querySelectorAll(".automations-table__history"),
+      ).toHaveLength(2),
+    );
+
+    // Same rule one level down: two runs can be read side by side.
+    const runDisclosures = screen.getAllByRole("button", {
+      name: /^Show run details from/,
+    });
+    fireEvent.click(runDisclosures[0]);
+    fireEvent.click(runDisclosures[1]);
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("button", { name: /^Hide run details from/ }),
+      ).toHaveLength(2),
+    );
+  });
+
+  it("keeps Pause and Delete behind the row overflow menu", async () => {
+    render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [automation] })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    const menuButton = await screen.findByRole("button", {
+      name: "More actions for Check email",
+    });
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    fireEvent.click(menuButton);
+    expect(screen.getByRole("menuitem", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
   });
 });
 

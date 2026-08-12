@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type {
   AppServerThreadEntry,
   AutomationDetail,
@@ -8,14 +8,20 @@ import type {
   AutomationRunWindow,
   NavigationThreadSummary,
 } from "@pwragent/shared";
+import { ChevronRightIcon } from "../../icons";
+import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import {
   formatAutomationRunUsage,
+  formatAutomationRunRuntime,
   formatAutomationRelative,
   formatAutomationStatus,
   formatAutomationTimestamp,
   formatBacklogPolicy,
+  formatCostTodayMicros,
   formatRunStatus,
+  formatWorkspacePathLabel,
 } from "./automation-format";
 import {
   AutomationEditor,
@@ -27,10 +33,13 @@ import {
   useAutomationRuns,
   useAutomations,
 } from "./useAutomations";
+import { useExpandedIds } from "./useExpandedIds";
 
 type ThreadAutomationsPanelProps = {
   desktopApi?: DesktopApi;
   thread: NavigationThreadSummary;
+  /** Opens the full Automations screen; omitted where there is nowhere to go. */
+  onOpenAutomations?: () => void;
   onRefreshNavigation?: () => Promise<void>;
 };
 
@@ -46,14 +55,7 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
     | undefined
   >();
   const [saving, setSaving] = useState(false);
-  const [expandedAutomationId, setExpandedAutomationId] = useState<string>();
-  const expandedAutomation = useMemo(
-    () =>
-      automations.automations.find(
-        (automation) => automation.id === expandedAutomationId,
-      ),
-    [automations.automations, expandedAutomationId],
-  );
+  const automationExpansion = useExpandedIds();
 
   const submitEditor = async (submission: AutomationEditorSubmit): Promise<void> => {
     setSaving(true);
@@ -79,19 +81,31 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
             {formatThreadAutomationSummary(props.thread)}
           </p>
         </div>
-        <button
-          className="context-list__action"
-          disabled={!isAgentThread}
-          title={
-            isAgentThread
-              ? "Add automation"
-              : "Mark this thread as an Agent first"
-          }
-          type="button"
-          onClick={() => setEditorMode({ kind: "create" })}
-        >
-          Add
-        </button>
+        <div className="automation-section-header__actions">
+          {props.onOpenAutomations ? (
+            <button
+              className="context-list__action"
+              title="Open the Automations screen"
+              type="button"
+              onClick={props.onOpenAutomations}
+            >
+              Open all ↗
+            </button>
+          ) : null}
+          <button
+            className="context-list__action"
+            disabled={!isAgentThread}
+            title={
+              isAgentThread
+                ? "Add automation"
+                : "Mark this thread as an Agent first"
+            }
+            type="button"
+            onClick={() => setEditorMode({ kind: "create" })}
+          >
+            Add
+          </button>
+        </div>
       </div>
 
       {editorMode ? (
@@ -134,17 +148,13 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
             <li key={automation.id} className="automation-list__item">
               <AutomationSummary
                 automation={automation}
-                expanded={automation.id === expandedAutomationId}
+                expanded={automationExpansion.isExpanded(automation.id)}
                 onDelete={async () => {
                   await automations.deleteAutomation({ automationId: automation.id });
                   await props.onRefreshNavigation?.();
                 }}
                 onEdit={() => setEditorMode({ automation, kind: "edit" })}
-                onExpand={() =>
-                  setExpandedAutomationId((current) =>
-                    current === automation.id ? undefined : automation.id,
-                  )
-                }
+                onExpand={() => automationExpansion.toggle(automation.id)}
                 onPauseResume={async () => {
                   if (automation.status === "paused") {
                     await automations.resumeAutomation({ automationId: automation.id });
@@ -155,11 +165,11 @@ export function ThreadAutomationsPanel(props: ThreadAutomationsPanelProps) {
                 }}
                 onRunNow={async () => {
                   await automations.runAutomationNow({ automationId: automation.id });
-                  setExpandedAutomationId(automation.id);
+                  automationExpansion.expand(automation.id);
                   await props.onRefreshNavigation?.();
                 }}
               />
-              {expandedAutomation?.id === automation.id ? (
+              {automationExpansion.isExpanded(automation.id) ? (
                 <AutomationRunHistory
                   automationId={automation.id}
                   desktopApi={props.desktopApi}
@@ -195,6 +205,21 @@ function AutomationSummary(props: {
     }
   };
 
+  // Same information rules as the Automations screen, narrower canvas: what
+  // it runs as leads, backlog policy only speaks for schedules, and a next
+  // run is only claimed when one exists.
+  const profile = props.automation.executionProfile;
+  const runtimeDetails = [
+    profile?.model,
+    profile?.reasoningEffort,
+    profile?.fastMode ? "Fast" : undefined,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+  const scheduleTriggered = props.automation.triggers.some(
+    (trigger) => trigger.kind === "schedule",
+  );
+  const costToday = formatCostTodayMicros(props.automation.costTodayMicros);
   return (
     <article className="automation-row">
       <div className="automation-row__main">
@@ -205,10 +230,45 @@ function AutomationSummary(props: {
           </span>
         </div>
         <p className="automation-row__schedule">{props.automation.scheduleSummary}</p>
-        <p className="automation-row__meta">
-          next {formatAutomationRelative(props.automation.nextRunAt)} -{" "}
-          {formatBacklogPolicy(props.automation.backlogPolicy)}
+        <p className="automation-row__runtime">
+          <span className="automation-runtime__provider">
+            {formatBackendLabel(profile?.backend ?? props.automation.backend)}
+          </span>
+          <span className="automation-runtime__model">
+            {runtimeDetails || "Agent default"}
+          </span>
+          {profile?.executionMode ? (
+            <span
+              className={`automation-runtime__access${
+                profile.executionMode === "full-access"
+                  ? " automation-runtime__access--elevated"
+                  : ""
+              }`}
+            >
+              {formatExecutionModeLabel(profile.executionMode)}
+            </span>
+          ) : null}
         </p>
+        {profile?.cwd ? (
+          <p className="automations-table__cwd" title={profile.cwd}>
+            {formatWorkspacePathLabel(profile.cwd)}
+          </p>
+        ) : null}
+        {props.automation.nextRunAt || scheduleTriggered ? (
+          <p className="automation-row__meta">
+            {[
+              props.automation.nextRunAt
+                ? `next ${formatAutomationRelative(props.automation.nextRunAt)}`
+                : undefined,
+              scheduleTriggered
+                ? formatBacklogPolicy(props.automation.backlogPolicy)
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        ) : null}
+        {costToday ? <p className="automation-row__meta">{costToday}</p> : null}
         {props.automation.pendingRunCount || props.automation.coalescedWindowCount ? (
           <p className="automation-row__meta">
             {props.automation.pendingRunCount ?? 0} queued -{" "}
@@ -229,15 +289,20 @@ function AutomationSummary(props: {
           Edit
         </button>
         <button
+          aria-expanded={props.expanded}
+          className="context-list__action"
+          type="button"
+          onClick={props.onExpand}
+        >
+          {props.expanded ? "Hide runs" : "Runs"}
+        </button>
+        <button
           className="context-list__action"
           disabled={Boolean(busy)}
           type="button"
           onClick={() => void runAction("pause", props.onPauseResume)}
         >
           {props.automation.status === "paused" ? "Resume" : "Pause"}
-        </button>
-        <button className="context-list__action" type="button" onClick={props.onExpand}>
-          {props.expanded ? "Hide" : "History"}
         </button>
         <button
           className="context-list__action context-list__action--danger"
@@ -257,7 +322,7 @@ export function AutomationRunHistory(props: {
   desktopApi?: DesktopApi;
 }) {
   const runs = useAutomationRuns(props.desktopApi, props.automationId);
-  const [expandedRunId, setExpandedRunId] = useState<string>();
+  const runExpansion = useExpandedIds();
 
   if (runs.loading) {
     return <p className="automation-run-history__empty">Loading run history...</p>;
@@ -277,11 +342,9 @@ export function AutomationRunHistory(props: {
         <AutomationRunHistoryItem
           key={run.id}
           desktopApi={props.desktopApi}
-          expanded={expandedRunId === run.id}
+          expanded={runExpansion.isExpanded(run.id)}
           run={run}
-          onToggle={() =>
-            setExpandedRunId((current) => (current === run.id ? undefined : run.id))
-          }
+          onToggle={() => runExpansion.toggle(run.id)}
         />
       ))}
     </ol>
@@ -298,54 +361,78 @@ export function AutomationRunHistoryItem(props: {
     props.desktopApi,
     props.expanded ? props.run.id : undefined,
   );
+  const runAt =
+    props.run.completedAt ?? props.run.startedAt ?? props.run.queuedAt;
+  const usageLine = formatAutomationRunUsage(props.run.usage);
+  const runtimeLine = formatAutomationRunRuntime(props.run.usage);
   return (
     <li className="automation-run-history__item">
-      <span className={`automation-run-status automation-run-status--${props.run.status}`}>
-        {formatRunStatus(props.run.status)}
-      </span>
-      <span>
-        {props.run.trigger}
-        {props.run.scheduledFor
-          ? ` for ${formatAutomationTimestamp(props.run.scheduledFor)}`
-          : ""}
-      </span>
-      <span className="automation-run-history__time">
-        {formatAutomationTimestamp(
-          props.run.completedAt ?? props.run.startedAt ?? props.run.queuedAt,
-        )}
-      </span>
-      {props.run.scheduledWindows.length > 1 ? (
-        <span className="automation-run-history__time">
-          {props.run.scheduledWindows.length} windows
-        </span>
-      ) : null}
-      {props.run.errorMessage ? (
-        <span className="automation-run-history__error">{props.run.errorMessage}</span>
-      ) : null}
-      {formatAutomationRunUsage(props.run.usage) ? (
-        <span className="automation-run-history__time">
-          {formatAutomationRunUsage(props.run.usage)}
-        </span>
-      ) : null}
-      <button className="context-list__action" type="button" onClick={props.onToggle}>
-        {props.expanded ? "Hide details" : "Details"}
-      </button>
-      {props.desktopApi?.openAutomationRunWindow ? (
+      {/* One wrapping line, actions pushed to the trailing edge. This was a
+          two-column grid, which turned every control after the second cell
+          into a full-width row of its own once the list rendered wide. */}
+      <div className="automation-run-history__line">
+        {/* Same disclosure affordance as the automation row above, so the
+            nesting reads as one control repeated at two depths. */}
         <button
-          className="context-list__action"
+          aria-expanded={props.expanded}
+          aria-label={`${props.expanded ? "Hide" : "Show"} run details from ${formatAutomationTimestamp(runAt)}`}
+          className="automation-run-history__disclosure"
           type="button"
-          onClick={() =>
-            void props.desktopApi?.openAutomationRunWindow?.({
-              automationId: props.run.automationId,
-              runId: props.run.id,
-              title: formatAutomationTimestamp(
-                props.run.completedAt ?? props.run.startedAt ?? props.run.queuedAt,
-              ),
-            })
-          }
+          onClick={props.onToggle}
         >
-          Open ↗
+          <ChevronRightIcon aria-hidden="true" size={13} />
         </button>
+        <span className={`automation-run-status automation-run-status--${props.run.status}`}>
+          {formatRunStatus(props.run.status)}
+        </span>
+        <span>
+          {props.run.trigger}
+          {props.run.scheduledFor
+            ? ` for ${formatAutomationTimestamp(props.run.scheduledFor)}`
+            : ""}
+        </span>
+        <span className="automation-run-history__time">
+          {formatAutomationTimestamp(runAt)}
+        </span>
+        {props.run.scheduledWindows.length > 1 ? (
+          <span className="automation-run-history__time">
+            {props.run.scheduledWindows.length} windows
+          </span>
+        ) : null}
+        {/* What actually ran, in the sub-agent card's vocabulary: backend
+            pill, then model · effort. Read off the run's own usage line, so
+            editing the automation never rewrites its history. */}
+        {props.run.backend ? (
+          <span className="automation-runtime__provider">
+            {formatBackendLabel(props.run.backend)}
+          </span>
+        ) : null}
+        {runtimeLine ? (
+          <span className="automation-runtime__model">{runtimeLine}</span>
+        ) : null}
+        {usageLine ? (
+          <span className="automation-run-history__time">{usageLine}</span>
+        ) : null}
+        <span className="automation-run-history__actions">
+          {props.desktopApi?.openAutomationRunWindow ? (
+            <button
+              className="context-list__action"
+              type="button"
+              onClick={() =>
+                void props.desktopApi?.openAutomationRunWindow?.({
+                  automationId: props.run.automationId,
+                  runId: props.run.id,
+                  title: formatAutomationTimestamp(runAt),
+                })
+              }
+            >
+              Open ↗
+            </button>
+          ) : null}
+        </span>
+      </div>
+      {props.run.errorMessage ? (
+        <p className="automation-run-history__error">{props.run.errorMessage}</p>
       ) : null}
       {props.expanded ? (
         <AutomationRunArtifactDetails

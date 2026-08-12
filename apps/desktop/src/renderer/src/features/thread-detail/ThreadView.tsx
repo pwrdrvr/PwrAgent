@@ -976,6 +976,7 @@ export type ThreadViewProps = {
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging Activity. */
+  onOpenAutomations?: () => void;
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
   /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging settings. */
   onOpenMessagingSettings?: () => void;
@@ -2818,6 +2819,7 @@ export function ThreadView(props: ThreadViewProps) {
             backendError={props.backendError}
             backends={props.backends}
             desktopApi={props.desktopApi}
+            onOpenAutomations={props.onOpenAutomations}
             onActiveTabChange={onActiveContextTabChange}
             onResizingChange={setContextRailResizing}
             onWidthChange={setContextRailWidth}
@@ -3066,6 +3068,7 @@ export function ThreadView(props: ThreadViewProps) {
             backendError={props.backendError}
             backends={props.backends}
             desktopApi={props.desktopApi}
+            onOpenAutomations={props.onOpenAutomations}
             onActiveTabChange={onActiveContextTabChange}
             onResizingChange={setContextRailResizing}
             onWidthChange={setContextRailWidth}
@@ -3401,6 +3404,7 @@ export function ThreadView(props: ThreadViewProps) {
           backendError={props.backendError}
           backends={props.backends}
           desktopApi={props.desktopApi}
+          onOpenAutomations={props.onOpenAutomations}
           editedFileGroups={editedFileGroups}
           editedFileCommitStates={editedFileCommitStates}
           editedFilesWorktreeRoot={editedFilesWorktreeRoot}

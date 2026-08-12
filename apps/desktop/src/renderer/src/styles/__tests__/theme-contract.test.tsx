@@ -262,6 +262,11 @@ describe("Tangerine Terminal theme contract", () => {
       // Live run strip row height — defined on `.live-strip`, not `:root`.
       // The four-row scroll cap is derived from it, so the two cannot drift.
       "live-strip-row-h",
+      // Automations table sticky stack — defined on `.automations-table`, not
+      // `:root`. Column-header height, and the measured row height its run
+      // lines offset themselves by; both are layout, not theme.
+      "automations-header-h",
+      "automation-row-h",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

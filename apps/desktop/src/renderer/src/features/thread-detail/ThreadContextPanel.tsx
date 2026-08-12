@@ -90,6 +90,7 @@ type ThreadContextPanelProps = {
   backends: BackendSummary[];
   desktopApi?: DesktopApi;
   initialLoadDurationMs?: number;
+  onOpenAutomations?: () => void;
   onRefreshNavigation?: () => Promise<void>;
   onResizingChange?: (resizing: boolean) => void;
   onWidthChange?: (width: number) => void;
@@ -793,6 +794,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <ThreadAutomationsPanel
             desktopApi={props.desktopApi}
             thread={props.thread}
+            onOpenAutomations={props.onOpenAutomations}
             onRefreshNavigation={props.onRefreshNavigation}
           />
         );

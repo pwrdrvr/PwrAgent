@@ -1582,6 +1582,9 @@ function DesktopAppShell(props: {
         throw new Error("Could not save the Full Access warning preference.");
       }
     },
+    onOpenAutomations: () => {
+      setMainView("automations");
+    },
     onOpenMessagingActivity: openMessagingActivityWindow,
     onOpenMessagingSettings: openMessagingSettings,
     onRevealSelectedThreadInList: revealSelectedThreadInList,

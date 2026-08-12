@@ -12,13 +12,10 @@ import type {
   AutomationRunStatus,
   AutomationRunUsage,
   AutomationRunTranscriptEvent,
-  AutomationTimelineCard,
   AutomationTriggerDefinition,
   CreateAutomationRequest,
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
-  ListAutomationCardsRequest,
-  ListAutomationCardsResponse,
   ListAutomationRunsRequest,
   ListAutomationRunsResponse,
   ListAutomationReplayCandidatesRequest,
@@ -439,24 +436,6 @@ export class DesktopAutomationService {
     return { runs: [] };
   }
 
-  listCards(request: ListAutomationCardsRequest): ListAutomationCardsResponse {
-    const cards = this.options.store
-      .listRunsForThread({
-        backend: request.backend,
-        threadId: request.threadId,
-        limit: request.limit ?? 50,
-      })
-      .map((run) => {
-        const automation = this.options.store.getAutomation(run.automationId, {
-          includeDeleted: true,
-        });
-        if (!automation) return undefined;
-        const artifact = this.options.store.getRunArtifact(run.id);
-        return buildAutomationTimelineCard({ automation, artifact, run });
-      })
-      .filter((card): card is AutomationTimelineCard => Boolean(card));
-    return { cards };
-  }
 
   async getRunArtifact(
     request: GetAutomationRunArtifactRequest,
@@ -832,6 +811,9 @@ export class DesktopAutomationService {
       if (!run) continue;
       const usage: AutomationRunUsage = {
         ...(typeof line.model === "string" ? { model: line.model } : {}),
+        ...(typeof line.reasoningEffort === "string"
+          ? { reasoningEffort: line.reasoningEffort }
+          : {}),
         ...(typeof line.uncachedInputTokens === "number"
           ? { uncachedInputTokens: line.uncachedInputTokens }
           : {}),
@@ -1382,6 +1364,7 @@ function toAutomationDetail(
     nextRunAt: record.nextRunAt,
     lastRunAt: useLatestRun ? latestRunAt : record.lastRunAt,
     lastRunStatus: useLatestRun ? latestRun.status : record.lastRunStatus,
+    ...(useLatestRun ? { lastRunId: latestRun.id } : {}),
     updatedAt: record.updatedAt,
     createdAt: record.createdAt,
     deletedAt: record.deletedAt,
@@ -1645,63 +1628,6 @@ function automationToolSummary(
   return undefined;
 }
 
-function buildAutomationTimelineCard(params: {
-  automation: AutomationRecord;
-  artifact?: ReturnType<AutomationStore["getRunArtifact"]>;
-  run: AutomationRunSummary;
-}): AutomationTimelineCard | undefined {
-  const notable =
-    params.run.trigger === "manual" ||
-    params.run.status === "failed" ||
-    params.run.status === "cancelled" ||
-    params.artifact?.outputDecision?.kind === "post_card" ||
-    params.artifact?.outputDecision?.kind === "parse_failed" ||
-    (!params.artifact?.outputDecision && Boolean(params.artifact?.finalText));
-  if (!notable) return undefined;
-
-  return {
-    id: `automation-card:${params.run.id}`,
-    backend: params.automation.backend,
-    threadId: params.automation.threadId,
-    automationId: params.automation.id,
-    automationName: params.automation.name,
-    runId: params.run.id,
-    status: params.run.status,
-    summary: summarizeAutomationCard(params),
-    details: params.artifact?.outputDecision?.details,
-    occurredAt:
-      params.run.completedAt ??
-      params.run.startedAt ??
-      params.run.queuedAt ??
-      params.run.scheduledFor ??
-      Date.now(),
-  };
-}
-
-function summarizeAutomationCard(params: {
-  automation: AutomationRecord;
-  artifact?: ReturnType<AutomationStore["getRunArtifact"]>;
-  run: AutomationRunSummary;
-}): string {
-  const summary =
-    params.artifact?.outputDecision?.summary ??
-    firstLine(params.artifact?.finalText) ??
-    params.artifact?.errorMessage ??
-    params.run.errorMessage;
-  if (summary) {
-    return `${params.automation.name}: ${summary}`;
-  }
-  if (params.run.status === "completed") {
-    return `${params.automation.name}: completed`;
-  }
-  return `${params.automation.name}: ${params.run.status}`;
-}
-
-function firstLine(value: string | undefined): string | undefined {
-  const line = value?.split(/\r?\n/).find((candidate) => candidate.trim());
-  return line?.trim();
-}
-
 /** Field-wise equality so unchanged pricing snapshots never schedule a write. */
 function automationRunUsageEquals(
   a: AutomationRunUsage,
@@ -1709,6 +1635,7 @@ function automationRunUsageEquals(
 ): boolean {
   return (
     a.model === b.model
+    && a.reasoningEffort === b.reasoningEffort
     && a.uncachedInputTokens === b.uncachedInputTokens
     && a.cachedInputTokens === b.cachedInputTokens
     && a.outputTokens === b.outputTokens

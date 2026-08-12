@@ -865,6 +865,8 @@ export type AutomationListItemSummary = AutomationThreadAssignment & {
   nextRunAt?: number;
   lastRunAt?: number;
   lastRunStatus?: AutomationRunStatus;
+  /** Identifies the run behind lastRunStatus, so a caller can open it. */
+  lastRunId?: string;
   pendingRunCount?: number;
   coalescedWindowCount?: number;
   updatedAt: number;
@@ -929,6 +931,11 @@ export type AutomationRunSkipReason = "lane_busy" | "rate_limited";
  */
 export type AutomationRunUsage = {
   model?: string;
+  /**
+   * The effort the turn actually ran with, not the automation's current
+   * setting — history has to stay honest after the config is edited.
+   */
+  reasoningEffort?: string;
   uncachedInputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
@@ -941,6 +948,8 @@ export type AutomationRunUsage = {
 export type AutomationRunSummary = {
   id: string;
   automationId: string;
+  /** Backend that served this run, so history can name it without the parent. */
+  backend?: AppServerBackendKind;
   trigger: AutomationRunTrigger;
   status: AutomationRunStatus;
   scheduledFor?: number;
@@ -1129,14 +1138,6 @@ export type ListAutomationRunsRequest = {
 
 export type ListAutomationRunsResponse = {
   runs: AutomationRunSummary[];
-};
-
-export type ListAutomationCardsRequest = AutomationAgentAssignment & {
-  limit?: number;
-};
-
-export type ListAutomationCardsResponse = {
-  cards: AutomationTimelineCard[];
 };
 
 export type GetAutomationRunArtifactRequest = {
