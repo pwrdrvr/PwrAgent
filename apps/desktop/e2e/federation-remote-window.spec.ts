@@ -7,6 +7,7 @@ import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { generateFederationIdentityKeyPair } from "../src/main/federation/federation-identity";
 import { generateFederationNoiseStaticKeyPair } from "../src/main/federation/federation-noise";
+import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { launchElectronApp } from "./fixtures/electron-app";
 import {
   buildFakeAgentConfigToml,
@@ -199,6 +200,19 @@ async function restoreE2eFederationIdentity(params: {
       noiseStaticPrivateKeyBase64: params.noiseStaticPrivateKeyBase64,
       restartMode: params.restartMode,
     },
+  );
+}
+
+function disableE2eFederationBeforeRelaunch(homeRoot: string): void {
+  applyDesktopSettingsPatch(
+    path.join(
+      homeRoot,
+      ".pwragent",
+      "profiles",
+      "default",
+      "config.toml",
+    ),
+    { federation: { mode: "disabled" } },
   );
 }
 
@@ -1148,6 +1162,10 @@ test.describe("federation remote window", () => {
 
       const viewerHomeRoot = viewer.homeRoot;
       await viewer.electronApp.close();
+      // The E2E memory secret store intentionally does not survive process
+      // exit. Keep federation stopped during boot so a temporary regenerated
+      // identity cannot be rejected before the original keys are restored.
+      disableE2eFederationBeforeRelaunch(viewerHomeRoot);
       viewer = await launchElectronApp({
         homeRoot: viewerHomeRoot,
         requiresReplayDriver: false,
@@ -1186,6 +1204,7 @@ test.describe("federation remote window", () => {
 
       const ownerHomeRoot = owner.homeRoot;
       await owner.electronApp.close();
+      disableE2eFederationBeforeRelaunch(ownerHomeRoot);
       const remoteParentRow = viewer.window.locator(".thread-row", {
         has: viewer.window.locator(".thread-row__title", {
           hasText: "Remote Kimi parent",
