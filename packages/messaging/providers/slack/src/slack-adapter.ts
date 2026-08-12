@@ -518,6 +518,9 @@ export class SlackAdapter implements SlackProviderAdapter {
   private userInfoLookupDisabled = false;
   private listener: SlackInboundListener | undefined;
   private started = false;
+  private lifecycleGeneration = 0;
+  private socketListenersAttached = false;
+  private socketStartPending = false;
 
   constructor(options: SlackAdapterOptions) {
     this.config = options.config;
@@ -664,8 +667,13 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   async start(listener: SlackInboundListener): Promise<void> {
     if (this.started) return;
+    const lifecycleGeneration = ++this.lifecycleGeneration;
     this.listener = listener;
     const auth = await this.api.authTest();
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+      return;
+    }
     this.botId = auth.bot_id;
     this.botUserId = auth.user_id;
     this.botAccount = auth.user ?? auth.user_id;
@@ -682,16 +690,28 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.socketClient.on("slack_event", this.handleSlackEvent);
     this.socketClient.on("interactive", this.handleInteractive);
     this.socketClient.on("slash_commands", this.handleSlashCommand);
+    this.socketListenersAttached = true;
+    this.socketStartPending = true;
     await this.socketClient.start();
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+      this.socketStartPending = false;
+      return;
+    }
+    this.socketStartPending = false;
     this.started = true;
     // Existing PwrAgent Slack apps may have the Home tab enabled without an
     // `app_home_opened` subscription. Pre-publishing for configured users
     // replaces Slack's indefinite loading state as soon as the adapter starts;
     // the event handler below keeps the view fresh for apps that do subscribe.
     await this.publishAppHomes(this.authorizedActorIdsValue);
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+    }
   }
 
   async stop(): Promise<void> {
+    this.lifecycleGeneration += 1;
     for (const state of this.workingCardStreams.values()) {
       state.cancelled = true;
       if (state.retryTimer) clearTimeout(state.retryTimer);
@@ -699,13 +719,24 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.workingCardStreams.clear();
     this.workingCardTombstones.clear();
     this.workingCardRateLimits.clear();
-    if (!this.started) return;
-    this.socketClient?.off?.("slack_event", this.handleSlackEvent);
-    this.socketClient?.off?.("interactive", this.handleInteractive);
-    this.socketClient?.off?.("slash_commands", this.handleSlashCommand);
-    await this.socketClient?.disconnect();
-    this.started = false;
-    this.listener = undefined;
+    const shouldDisconnect =
+      this.started
+      || this.socketListenersAttached
+      || this.socketStartPending;
+    try {
+      if (this.socketListenersAttached) {
+        this.socketClient?.off?.("slack_event", this.handleSlackEvent);
+        this.socketClient?.off?.("interactive", this.handleInteractive);
+        this.socketClient?.off?.("slash_commands", this.handleSlashCommand);
+        this.socketListenersAttached = false;
+      }
+      if (shouldDisconnect) {
+        await this.socketClient?.disconnect();
+      }
+    } finally {
+      this.started = false;
+      this.listener = undefined;
+    }
   }
 
   async deliver(intent: MessagingSurfaceIntent): Promise<MessagingDeliveryResult> {
@@ -3406,10 +3437,58 @@ export function createSlackSocketClient(
   if (!appToken?.trim()) {
     return undefined;
   }
-  return new SocketModeClient({
+  return new SlackSocketModeConnection(new SocketModeClient({
     appToken,
     autoReconnectEnabled: true,
-  }) as SlackSocketClient;
+  }) as unknown as SlackSocketModeClientWithDiscovery);
+}
+
+type SlackSocketModeClientWithDiscovery = SlackSocketClient & {
+  retrieveWSSURL(): Promise<string>;
+};
+
+export class SlackSocketModeConnection implements SlackSocketClient {
+  private lifecycleGeneration = 0;
+
+  constructor(
+    private readonly client: SlackSocketModeClientWithDiscovery,
+  ) {
+    // SocketModeClient.start() awaits apps.connections.open before it creates
+    // `websocket`. Its public disconnect() cannot close anything during that
+    // gap, so guard the SDK's discovery seam and reject before the suspended
+    // start continuation can construct and connect a SlackWebSocket.
+    const retrieveWSSURL = client.retrieveWSSURL.bind(client);
+    client.retrieveWSSURL = async () => {
+      const lifecycleGeneration = this.lifecycleGeneration;
+      const url = await retrieveWSSURL();
+      if (lifecycleGeneration !== this.lifecycleGeneration) {
+        throw new Error("Slack Socket Mode startup was cancelled.");
+      }
+      return url;
+    };
+  }
+
+  disconnect(): Promise<void> {
+    this.lifecycleGeneration += 1;
+    return this.client.disconnect();
+  }
+
+  off(event: string, listener: (payload: unknown) => void): unknown {
+    return this.client.off?.(event, listener);
+  }
+
+  on(event: string, listener: (payload: unknown) => void): unknown {
+    return this.client.on(event, listener);
+  }
+
+  removeAllListeners(event?: string): unknown {
+    return this.client.removeAllListeners?.(event);
+  }
+
+  async start(): Promise<unknown> {
+    this.lifecycleGeneration += 1;
+    return await this.client.start();
+  }
 }
 
 /**

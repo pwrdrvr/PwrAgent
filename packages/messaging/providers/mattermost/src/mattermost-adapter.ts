@@ -302,6 +302,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private botUserId: string | undefined;
   private botUsername: string | undefined;
   private started = false;
+  private lifecycleGeneration = 0;
   /**
    * `true` once `stop()` has been called. Suppresses the runtime-error
    * fan-out for any websocket-close / -error events that fire as part
@@ -447,11 +448,20 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (this.started) {
       return;
     }
+    const lifecycleGeneration = ++this.lifecycleGeneration;
     this.listener = listener;
     await this.callbackServer.start();
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+      return;
+    }
 
     try {
       const me = (await this.client.getMe()) as { id: string; username?: string };
+      if (lifecycleGeneration !== this.lifecycleGeneration) {
+        await this.stop();
+        return;
+      }
       this.botUserId = me.id;
       this.botUsername = me.username;
     } catch (error) {
@@ -540,6 +550,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // tradeoff.
     if (this.config.registerSlashCommands === true) {
       await this.reconcileSlashCommandsAcrossTeams();
+      if (lifecycleGeneration !== this.lifecycleGeneration) {
+        await this.stop();
+        return;
+      }
     } else {
       this.logger.info(
         "mattermost adapter: slash-command registration disabled (registerSlashCommands=false)",
@@ -557,9 +571,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   }
 
   async stop(): Promise<void> {
-    if (!this.started) {
-      return;
-    }
+    this.lifecycleGeneration += 1;
     this.stopping = true;
     this.started = false;
     this.listener = undefined;
@@ -570,13 +582,16 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    await this.callbackServer.stop();
-    // Reset latch + drop listeners so a subsequent `start()` re-arms.
-    this.runtimeErrorListeners.clear();
-    this.reconnectListeners.clear();
-    this.wsErroredLatched = false;
-    this.websocketReconnectActive = false;
-    this.stopping = false;
+    try {
+      await this.callbackServer.stop();
+    } finally {
+      // Reset latch + drop listeners so a subsequent `start()` re-arms.
+      this.runtimeErrorListeners.clear();
+      this.reconnectListeners.clear();
+      this.wsErroredLatched = false;
+      this.websocketReconnectActive = false;
+      this.stopping = false;
+    }
     this.logger.info("mattermost adapter stopped", {});
   }
 

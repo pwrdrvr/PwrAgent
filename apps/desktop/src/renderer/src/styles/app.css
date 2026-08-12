@@ -3143,10 +3143,10 @@ textarea,
      lane inset. See `--sidebar-masthead-pull` on `.sidebar`. */
   width: calc(100% - 2 * var(--sidebar-masthead-pull));
   margin-inline: var(--sidebar-masthead-pull);
-  /* Five tabs, four of which are a single 16px icon. The Attention tab
-     carries two indicator + count pairs, so it is the only one whose content
-     can outgrow an equal share — `min-content` floors every track at its own
-     content width and lets Attention take what it needs before the icon tabs
+  /* Five tabs: three are a single 16px icon, Drafts is an icon plus a count
+     when it has one, and Attention carries two indicator + count pairs.
+     `min-content` floors every track at its own content width, so the two
+     that can outgrow an equal share take what they need before the icon tabs
      divide the surplus. NOT interchangeable with `auto`:
      `.lens-switch__button` sets overflow: hidden, which zeroes a grid item's
      automatic minimum size, so minmax(auto, 1fr) would resolve the floor to 0
@@ -3155,11 +3155,14 @@ textarea,
 
      At the 280px sidebar minimum (a 264px container, see
      `--sidebar-masthead-pull`) Attention floors at ~74px with two-digit
-     counts. What the four icon tabs then divide is arithmetic, not a
+     counts. What the four remaining tabs then divide is arithmetic, not a
      measurement: 264 − 4px padding − 4 × 1px gap = 256, less Attention's 74,
      is ~45px each — comfortably above the 28px an icon tab can shrink to
-     (16px glyph + 2 × 6px padding). The container query below is what keeps
-     that true past two digits. */
+     (16px glyph + 2 × 6px padding). A three-digit Drafts count floors that tab
+     at ~50px (16 + 4px gap + ~18px of 10px mono digits + 12px padding), which
+     comes out of the surplus and still leaves the three icon tabs ~44px each.
+     The container query below is what keeps that true past two digits on
+     Attention. */
   grid-template-columns: repeat(5, minmax(min-content, 1fr));
   gap: 2px;
   padding: 3px;
@@ -3221,6 +3224,21 @@ textarea,
   flex: 0 0 auto;
   align-items: center;
   gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The Drafts tab's count. Same mono, size and tabular figures as the Attention
+   readouts so the row reads as one control — but no colour of its own: it
+   inherits the tab's, which means it picks up the accent only while the lens
+   is active. There is no zero state to style; the count is absent at zero
+   (LensTab), which is what makes "no number" mean "no drafts". */
+.lens-switch__count {
+  /* Never the thing that gives — a half-eaten count reads as a different
+     number, so the icon shrinks before the digits do. */
+  flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
@@ -3675,6 +3693,11 @@ textarea,
   cursor: grabbing;
 }
 
+.thread-row-shell.is-pointer-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
 .thread-row-shell.is-drop-target-before::before,
 .thread-row-shell.is-drop-target-after::after {
   content: "";
@@ -3825,6 +3848,28 @@ textarea,
     0 0 0 1px var(--surface-border-faint),
     0 18px 44px var(--shadow-tint-strong);
   pointer-events: none;
+}
+
+/* Sidebar drag sessions keep hit-testing the live DOM beneath their preview.
+   Rows contain buttons, copy targets, PR hover cards, menus, and native-title
+   controls; letting those surfaces activate while a card is held creates
+   target churn and can open hover UI over the drag. The shared drag guard
+   stamps this attribute for both pointer-driven thread pinning and the native
+   directory/subthread drags. Interactive descendants become transparent while
+   every hover overlay is suppressed until release, drop, Escape, or blur. */
+:root[data-native-drag-active] .sidebar button,
+:root[data-native-drag-active] .sidebar a,
+:root[data-native-drag-active] .sidebar input,
+:root[data-native-drag-active] .sidebar select,
+:root[data-native-drag-active] .sidebar textarea,
+:root[data-native-drag-active] .sidebar [role="button"] {
+  pointer-events: none !important;
+}
+
+:root[data-native-drag-active] [role="tooltip"],
+:root[data-native-drag-active] [role="menu"],
+:root[data-native-drag-active] .tooltip-target[data-tooltip]::after {
+  display: none !important;
 }
 
 .thread-row__actions {
@@ -5265,6 +5310,66 @@ textarea,
      header. */
   padding-left: 8px;
   padding-right: 8px;
+}
+
+.directory-row__pin-drop-boundary {
+  position: relative;
+  z-index: 7;
+  height: 0;
+  flex: 0 0 auto;
+  /* The list contributes a 4px gap on both sides of this flex item. Cancel
+     those gaps so this permanently mounted zero-height target is layout-neutral
+     and starting a drag never moves the source row under the held card. */
+  margin-block: -4px;
+}
+
+:root[data-density="compact"] .directory-row__pin-drop-boundary {
+  /* Compact density reduces `.sidebar-list` to a 2px gap. Keep the boundary's
+     compensation paired with that value so it remains layout-neutral. */
+  margin-block: -2px;
+}
+
+.directory-row__pin-drop-slot {
+  position: absolute;
+  /* Reach upward into the pinned lane while leaving a small guarded overlap
+     with the source row. Runtime source-bounds checks keep that overlap a
+     cancel zone; the line itself stays exactly on the section boundary. */
+  top: -24px;
+  right: 6px;
+  left: 6px;
+  height: 32px;
+  cursor: grabbing;
+  pointer-events: none;
+}
+
+.directory-row__pin-drop-slot.is-drag-enabled {
+  pointer-events: auto;
+}
+
+.directory-row__pin-drop-slot::after {
+  content: "";
+  position: absolute;
+  top: 24px;
+  right: 8px;
+  left: 8px;
+  height: 1px;
+  border-radius: 999px;
+  background: var(--border-subtle);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.directory-row__pin-drop-slot.is-drag-enabled::after {
+  opacity: 1;
+}
+
+.directory-row__pin-drop-slot.is-drop-target-before::after {
+  height: 3px;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--row-active-tint-strong),
+    0 0 14px var(--accent-shadow);
 }
 
 .directory-row__thread-divider {

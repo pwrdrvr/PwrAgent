@@ -6,6 +6,7 @@ import {
   useState,
   type ReactElement,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -36,10 +37,14 @@ import {
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
-  type DropIndicatorState,
+  useDropIndicatorController,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import {
+  beginNativeDragInteraction,
+  endNativeDragInteraction,
+} from "../../lib/native-drag-interaction";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
   getSubthreadDisclosureCount,
@@ -47,6 +52,10 @@ import {
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
 import { ThreadRow } from "./ThreadRow";
+import {
+  createThreadRowPointerDragPreview,
+  type ThreadRowPointerDragPreview,
+} from "./thread-row-drag-preview";
 import {
   formatActiveThreadCount,
   formatReviewThreadCount,
@@ -164,6 +173,7 @@ function buildLaunchpadSelectionKey(directoryKey: string): string {
  * frames without swallowing the user's next intentional click.
  */
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
+const POINTER_DRAG_ACTIVATION_PX = 4;
 
 const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: ExpandedDirectoryThreadRenderModel = {
   cappedUnpinnedThreads: [],
@@ -213,6 +223,166 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
   );
 }
 
+type ThreadPinDragSession = {
+  activated: boolean;
+  appendTargetElement?: HTMLDivElement;
+  canceled: boolean;
+  directory: NavigationDirectorySummary;
+  directoryElement: HTMLElement;
+  frame: number;
+  lastPoint: { x: number; y: number };
+  pointerId: number;
+  preview?: ThreadRowPointerDragPreview;
+  releaseClickSuppression?: () => void;
+  removeListeners?: () => void;
+  scrollElement?: HTMLElement;
+  sourceElement: HTMLDivElement;
+  sourceWasPinned: boolean;
+  target?: ThreadPinPointerDropTarget;
+  threadKey: string;
+};
+
+type ThreadPinPointerDropTarget =
+  | {
+      element: HTMLDivElement;
+      kind: "append";
+    }
+  | {
+      element: HTMLDivElement;
+      kind: "row";
+      position: "before" | "after";
+      threadKey: string;
+    };
+
+function setThreadPinAppendTargetActive(
+  session: ThreadPinDragSession,
+  active: boolean,
+): void {
+  session.appendTargetElement?.classList.toggle("is-drag-enabled", active);
+  if (active) {
+    session.appendTargetElement?.removeAttribute("aria-hidden");
+  } else {
+    session.appendTargetElement?.setAttribute("aria-hidden", "true");
+  }
+}
+
+function isPointInsideDragSource(
+  session: ThreadPinDragSession,
+  point: { x: number; y: number },
+): boolean {
+  const sourceBounds = session.sourceElement.getBoundingClientRect();
+  if (
+    sourceBounds.right <= sourceBounds.left
+    || sourceBounds.bottom <= sourceBounds.top
+  ) {
+    return false;
+  }
+  return (
+    point.x >= sourceBounds.left
+    && point.x <= sourceBounds.right
+    && point.y >= sourceBounds.top
+    && point.y <= sourceBounds.bottom
+  );
+}
+
+function getPointInsideElement(
+  element: Element,
+  point: { x: number; y: number },
+): boolean {
+  const bounds = element.getBoundingClientRect();
+  return (
+    bounds.right > bounds.left
+    && bounds.bottom > bounds.top
+    && point.x >= bounds.left
+    && point.x <= bounds.right
+    && point.y >= bounds.top
+    && point.y <= bounds.bottom
+  );
+}
+
+function resolveThreadPinPointerDropTarget(
+  session: ThreadPinDragSession,
+): ThreadPinPointerDropTarget | undefined {
+  if (
+    session.canceled
+    || isPointInsideDragSource(session, session.lastPoint)
+  ) {
+    return undefined;
+  }
+
+  if (!session.sourceWasPinned) {
+    return session.appendTargetElement
+      ? { element: session.appendTargetElement, kind: "append" }
+      : undefined;
+  }
+
+  const buildRowTarget = (
+    row: HTMLDivElement,
+  ): ThreadPinPointerDropTarget | undefined => {
+    const threadKey = row.dataset.threadPinKey;
+    if (
+      row === session.sourceElement
+      || !threadKey
+      || threadKey === session.threadKey
+    ) {
+      return undefined;
+    }
+    const bounds = row.getBoundingClientRect();
+    return {
+      element: row,
+      kind: "row",
+      position:
+        session.lastPoint.y > bounds.top + bounds.height / 2
+          ? "after"
+          : "before",
+      threadKey,
+    };
+  };
+
+  if (typeof document.elementFromPoint === "function") {
+    const hit = document.elementFromPoint(
+      session.lastPoint.x,
+      session.lastPoint.y,
+    );
+    const hitRow = hit?.closest<HTMLDivElement>(
+      '.thread-row-shell[data-thread-pin-state="pinned"]',
+    );
+    if (
+      hitRow
+      && session.directoryElement.contains(hitRow)
+    ) {
+      return buildRowTarget(hitRow);
+    }
+    if (
+      hit
+      && session.appendTargetElement?.contains(hit)
+    ) {
+      return { element: session.appendTargetElement, kind: "append" };
+    }
+    return undefined;
+  }
+
+  const pinnedRows = session.directoryElement.querySelectorAll<HTMLDivElement>(
+    '.thread-row-shell[data-thread-pin-state="pinned"]',
+  );
+  for (const row of pinnedRows) {
+    if (
+      !getPointInsideElement(row, session.lastPoint)
+    ) {
+      continue;
+    }
+    const target = buildRowTarget(row);
+    if (target) return target;
+  }
+
+  if (
+    session.appendTargetElement
+    && getPointInsideElement(session.appendTargetElement, session.lastPoint)
+  ) {
+    return { element: session.appendTargetElement, kind: "append" };
+  }
+  return undefined;
+}
 function getDirectoryRowLinkedDirectoryMode(
   thread: NavigationThreadSummary,
 ): "kind" | "label" {
@@ -279,15 +449,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [unpinnedExpandedByKey, setUnpinnedExpandedByKey] = useState<
     Record<string, boolean>
   >({});
-  const [dropIndicator, setDropIndicator] = useState<
-    DropIndicatorState | undefined
-  >(undefined);
-  const [dividerDropTarget, setDividerDropTarget] = useState<
-    string | undefined
-  >(undefined);
-  const [draggedThreadKey, setDraggedThreadKey] = useState<string | undefined>(
-    undefined,
-  );
+  const dropIndicator = useDropIndicatorController();
   // Sub-thread (child) drag/drop state — kept SEPARATE from the
   // pinned-thread / directory drag state above so a child reorder can
   // never cross-wire with a pin or directory drag. Child drags carry the
@@ -296,9 +458,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [draggedSubthreadKey, setDraggedSubthreadKey] = useState<
     string | undefined
   >(undefined);
-  const [subthreadDropIndicator, setSubthreadDropIndicator] = useState<
-    DropIndicatorState | undefined
-  >(undefined);
+  const subthreadDropIndicator = useDropIndicatorController();
   // Directory drag/drop state (plan 2026-05-09-002 Unit K). Mirrors
   // the per-thread state above but tracks directory keys rather
   // than thread keys. The `directoriesPinnedDividerDropTarget`
@@ -307,13 +467,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [draggedDirectoryKey, setDraggedDirectoryKey] = useState<
     string | undefined
   >(undefined);
-  const [directoryDropIndicator, setDirectoryDropIndicator] = useState<
-    DropIndicatorState | undefined
-  >(undefined);
+  const directoryDropIndicator = useDropIndicatorController();
   const [directoriesPinnedDividerDropTarget, setDirectoriesPinnedDividerDropTarget] =
     useState(false);
   const previousSelectedItemKeyRef = useRef<string | undefined>(undefined);
   const handledRevealRequestRef = useRef(0);
+  const threadPinDragSessionRef = useRef<ThreadPinDragSession | undefined>(
+    undefined,
+  );
+  const threadPinDragCleanupRef = useRef<(() => void) | undefined>(undefined);
   /**
    * Suppress the directory summary button's expand/collapse click
    * when the click is the trailing edge of a drag gesture. Browsers
@@ -334,6 +496,242 @@ export function DirectoriesList(props: DirectoriesListProps) {
   // Suppress the click browsers synthesize immediately after a drop so
   // pinning a thread never also minimizes the section.
   const lastDirectoryThreadDropAtRef = useRef(0);
+
+  const deactivateThreadPinDrag = (session: ThreadPinDragSession): void => {
+    if (session.frame) {
+      cancelAnimationFrame(session.frame);
+      session.frame = 0;
+    }
+    session.preview?.remove();
+    session.preview = undefined;
+    session.sourceElement.classList.remove("is-pointer-dragging");
+    setThreadPinAppendTargetActive(session, false);
+    dropIndicator.clear();
+    session.target = undefined;
+    if (session.activated) {
+      endNativeDragInteraction();
+      session.activated = false;
+    }
+  };
+
+  const finishThreadPinDrag = (session: ThreadPinDragSession): void => {
+    deactivateThreadPinDrag(session);
+    session.removeListeners?.();
+    session.removeListeners = undefined;
+    session.releaseClickSuppression?.();
+    session.releaseClickSuppression = undefined;
+    if (threadPinDragSessionRef.current === session) {
+      threadPinDragSessionRef.current = undefined;
+    }
+    if (threadPinDragCleanupRef.current) {
+      threadPinDragCleanupRef.current = undefined;
+    }
+  };
+
+  const updateThreadPinPointerTarget = (
+    session: ThreadPinDragSession,
+  ): void => {
+    session.preview?.move(session.lastPoint);
+    session.target = resolveThreadPinPointerDropTarget(session);
+    if (!session.target) {
+      dropIndicator.clear();
+      return;
+    }
+    dropIndicator.show(session.target.element, {
+      targetKey:
+        session.target.kind === "row"
+          ? `${session.directory.key}:${session.target.threadKey}`
+          : `pinned-append:${session.directory.key}`,
+      position:
+        session.target.kind === "row" ? session.target.position : "before",
+    });
+  };
+
+  const scheduleThreadPinPointerTarget = (
+    session: ThreadPinDragSession,
+  ): void => {
+    if (session.frame || !session.activated || session.canceled) return;
+    session.frame = requestAnimationFrame(() => {
+      session.frame = 0;
+      updateThreadPinPointerTarget(session);
+    });
+  };
+
+  /**
+   * Thread pinning deliberately avoids native HTML drag-and-drop. Chromium's
+   * drag processing model suppresses ordinary input events, and its macOS
+   * trackpad path can queue momentum at scroll boundaries for seconds. A
+   * pointer session leaves wheel scrolling browser-controlled while batching
+   * our preview and hit testing to one update per animation frame.
+   */
+  const beginThreadPinPointerDrag = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    directory: NavigationDirectorySummary,
+    threadKey: string,
+    sourceWasPinned: boolean,
+  ): void => {
+    if (event.button !== 0 || !props.onReorderThreadPins) return;
+    threadPinDragCleanupRef.current?.();
+
+    const sourceElement = event.currentTarget;
+    const directoryElement = sourceElement.closest(".directory-row");
+    if (!(directoryElement instanceof HTMLElement)) return;
+
+    const startPoint = { x: event.clientX, y: event.clientY };
+    const session: ThreadPinDragSession = {
+      activated: false,
+      appendTargetElement:
+        directoryElement.querySelector<HTMLDivElement>(
+          ".directory-row__pin-drop-slot",
+        ) ?? undefined,
+      canceled: false,
+      directory,
+      directoryElement,
+      frame: 0,
+      lastPoint: startPoint,
+      pointerId: event.pointerId,
+      scrollElement:
+        sourceElement.closest<HTMLElement>(".directory-list") ?? undefined,
+      sourceElement,
+      sourceWasPinned,
+      threadKey,
+    };
+    threadPinDragSessionRef.current = session;
+
+    let suppressClickTimer: number | undefined;
+    const removeClickSuppression = (): void => {
+      session.directoryElement.removeEventListener(
+        "click",
+        suppressReleaseClick,
+        true,
+      );
+      if (suppressClickTimer !== undefined) {
+        window.clearTimeout(suppressClickTimer);
+        suppressClickTimer = undefined;
+      }
+    };
+    const suppressReleaseClick = (clickEvent: globalThis.MouseEvent): void => {
+      clickEvent.preventDefault();
+      clickEvent.stopImmediatePropagation();
+      removeClickSuppression();
+    };
+    const armClickSuppression = (): void => {
+      session.directoryElement.addEventListener(
+        "click",
+        suppressReleaseClick,
+        true,
+      );
+      session.releaseClickSuppression = () => {
+        suppressClickTimer = window.setTimeout(
+          removeClickSuppression,
+          POST_DRAG_CLICK_SUPPRESS_MS,
+        );
+      };
+    };
+
+    const activate = (): void => {
+      if (session.activated || session.canceled) return;
+      session.activated = true;
+      beginNativeDragInteraction();
+      session.sourceElement.classList.add("is-pointer-dragging");
+      setThreadPinAppendTargetActive(session, true);
+      session.preview = createThreadRowPointerDragPreview(
+        session.sourceElement,
+        startPoint,
+      );
+      armClickSuppression();
+      session.scrollElement?.addEventListener("scroll", onScroll, {
+        passive: true,
+      });
+      scheduleThreadPinPointerTarget(session);
+    };
+    const move = (pointerEvent: globalThis.PointerEvent): void => {
+      if (pointerEvent.pointerId !== session.pointerId || session.canceled) {
+        return;
+      }
+      session.lastPoint = {
+        x: pointerEvent.clientX,
+        y: pointerEvent.clientY,
+      };
+      if (
+        !session.activated
+        && Math.hypot(
+          session.lastPoint.x - startPoint.x,
+          session.lastPoint.y - startPoint.y,
+        ) < POINTER_DRAG_ACTIVATION_PX
+      ) {
+        return;
+      }
+      activate();
+      pointerEvent.preventDefault();
+      scheduleThreadPinPointerTarget(session);
+    };
+    const onScroll = (): void => scheduleThreadPinPointerTarget(session);
+    const stop = (pointerEvent: globalThis.PointerEvent): void => {
+      if (pointerEvent.pointerId !== session.pointerId) return;
+      session.lastPoint = {
+        x: pointerEvent.clientX,
+        y: pointerEvent.clientY,
+      };
+      if (session.activated && !session.canceled) {
+        if (session.frame) {
+          cancelAnimationFrame(session.frame);
+          session.frame = 0;
+        }
+        updateThreadPinPointerTarget(session);
+      }
+      const target = session.target;
+      const wasActivated = session.activated;
+      finishThreadPinDrag(session);
+      if (!target || session.canceled || !wasActivated) return;
+
+      lastDirectoryThreadDropAtRef.current = Date.now();
+      if (target.kind === "append") {
+        dropThreadAfterDirectoryPins(session.directory, session.threadKey);
+        return;
+      }
+      if (session.sourceWasPinned) {
+        moveDirectoryPin(
+          session.directory,
+          session.threadKey,
+          target.threadKey,
+          target.position,
+        );
+      }
+    };
+    const cancel = (): void => {
+      session.canceled = true;
+      finishThreadPinDrag(session);
+    };
+    const cancelOnPointer = (pointerEvent: globalThis.PointerEvent): void => {
+      if (pointerEvent.pointerId === session.pointerId) cancel();
+    };
+    const cancelOnEscape = (keyboardEvent: globalThis.KeyboardEvent): void => {
+      if (keyboardEvent.key !== "Escape") return;
+      session.canceled = true;
+      deactivateThreadPinDrag(session);
+    };
+    const removeListeners = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", cancelOnPointer);
+      window.removeEventListener("blur", cancel);
+      window.removeEventListener("keydown", cancelOnEscape);
+      session.scrollElement?.removeEventListener("scroll", onScroll);
+    };
+    session.removeListeners = removeListeners;
+    threadPinDragCleanupRef.current = cancel;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", cancelOnPointer);
+    window.addEventListener("blur", cancel);
+    window.addEventListener("keydown", cancelOnEscape);
+  };
+
+  useEffect(
+    () => () => threadPinDragCleanupRef.current?.(),
+    [],
+  );
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -677,9 +1075,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // directory is already pinned (matches the thread-pin pattern:
       // first pin lives via context menu, drag is reordering).
       (directoryPinned || pinnedDirectories.length > 0);
-    const isDirectoryDropTarget =
-      directoryDropIndicator?.targetKey === directory.key;
-
     const selectedLaunchpad =
       props.selectedItemKey === buildLaunchpadSelectionKey(directory.key);
     const selectedDirectory = selectedLaunchpad || Boolean(
@@ -750,11 +1145,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
               composerSourceThreadKey={props.composerSourceThreadKey}
               compact
               draggable={reorderable}
-              dropIndicator={
-                subthreadDropIndicator?.targetKey === rowDropKey
-                  ? subthreadDropIndicator.position
-                  : undefined
-              }
               includeLinkedDirectories
               linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
               nested
@@ -780,31 +1170,32 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   : undefined;
                 if (
                   !draggedThread
+                  || draggedSubthreadKey === childKey
                   || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
                 ) {
                   event.dataTransfer.dropEffect = "none";
-                  setSubthreadDropIndicator(undefined);
+                  subthreadDropIndicator.clear();
                   return;
                 }
                 event.dataTransfer.dropEffect = "move";
-                setSubthreadDropIndicator({
+                subthreadDropIndicator.show(event.currentTarget, {
                   targetKey: rowDropKey,
                   position: getDropIndicatorPosition(event),
                 });
               }}
               onDragLeaveThread={(event) => {
                 if (didDragLeaveCurrentTarget(event)) {
-                  setSubthreadDropIndicator(undefined);
+                  subthreadDropIndicator.clear();
                 }
               }}
               onDragEndThread={() => {
                 setDraggedSubthreadKey(undefined);
-                setSubthreadDropIndicator(undefined);
+                subthreadDropIndicator.clear();
               }}
               onDropOnThread={(event) => {
                 event.preventDefault();
                 setDraggedSubthreadKey(undefined);
-                setSubthreadDropIndicator(undefined);
+                subthreadDropIndicator.clear();
                 const draggedKey = event.dataTransfer.getData(
                   "application/x-pwragent-subthread",
                 );
@@ -863,6 +1254,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
       selectionOrder,
       unpinnedExpanded,
     } = expandedThreadModel;
+    const renderPinnedAppendTarget = Boolean(
+      props.onReorderThreadPins
+      && directoryUnpinnedThreadCount > 0
+    );
     // Render one unpinned thread row. Shared by the always-shown capped
     // slice and the overflow slice so the "Show more / Show less" toggle
     // sits at a fixed pivot between them — collapsing never makes the
@@ -889,7 +1284,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             draftThreadKeys={props.draftThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
             compact
-            draggable={Boolean(props.onReorderThreadPins)}
+            pointerDraggable={Boolean(props.onReorderThreadPins)}
             includeLinkedDirectories
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
             revealSelectedThreadRequest={props.revealSelectedThreadRequest}
@@ -899,6 +1294,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             subthreadsCollapsed={subthreadsCollapsed}
             thinkingThreadKeys={props.thinkingThreadKeys}
             thread={thread}
+            threadPinState="unpinned"
             onToggleSubthreads={
               subthreadCount > 0 && props.onSetSubthreadsCollapsed
                 ? () =>
@@ -908,15 +1304,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     )
                 : undefined
             }
-            onDragStartThread={(event) => {
-              setDraggedThreadKey(threadKey);
-              event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("text/plain", threadKey);
-            }}
-            onDragEndThread={() => {
-              setDraggedThreadKey(undefined);
-              setDropIndicator(undefined);
-              setDividerDropTarget(undefined);
+            onPointerDownThread={(event) => {
+              beginThreadPinPointerDrag(event, directory, threadKey, false);
             }}
             onOpenContextMenu={props.onOpenThreadContextMenu}
             onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
@@ -936,14 +1325,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
       );
     };
 
-    const dropIndicatorClass = isDirectoryDropTarget
-      ? ` is-drop-target-${directoryDropIndicator!.position}`
-      : "";
-
     return (
       <section
         key={directory.key}
-        className={`directory-row${dropIndicatorClass}`}
+        className="directory-row"
         onDragOver={
           directoryDragEnabled
             ? (event) => {
@@ -971,7 +1356,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 }
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
-                setDirectoryDropIndicator({
+                directoryDropIndicator.show(event.currentTarget, {
                   targetKey: directory.key,
                   position: getDropIndicatorPosition(event),
                 });
@@ -983,7 +1368,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
           directoryDragEnabled
             ? (event) => {
                 if (didDragLeaveCurrentTarget(event)) {
-                  setDirectoryDropIndicator(undefined);
+                  directoryDropIndicator.clear();
                 }
               }
             : undefined
@@ -1003,7 +1388,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 }
                 event.preventDefault();
                 setDraggedDirectoryKey(undefined);
-                setDirectoryDropIndicator(undefined);
+                directoryDropIndicator.clear();
                 setDirectoriesPinnedDividerDropTarget(false);
                 lastDirectoryDragEndedAtRef.current = Date.now();
                 if (draggedKey === directory.key) {
@@ -1071,7 +1456,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             directoryDragEnabled
               ? () => {
                   setDraggedDirectoryKey(undefined);
-                  setDirectoryDropIndicator(undefined);
+                  directoryDropIndicator.clear();
                   setDirectoriesPinnedDividerDropTarget(false);
                   // Record drag-end so the summary button's click
                   // handler can suppress the synthetic post-release
@@ -1215,7 +1600,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   <div className="sidebar-list sidebar-list--compact directory-row__threads">
                     {directoryPinnedThreads.map((thread) => {
 	                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-	                      const rowDropKey = `${directory.key}:${threadKey}`;
                           const ordinarySubthreadCount =
                             childThreadsByParentKey.get(threadKey)?.length ?? 0;
                           const subthreadCount = getSubthreadDisclosureCount(
@@ -1234,12 +1618,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           draftThreadKeys={props.draftThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           compact
-                          dropIndicator={
-                            dropIndicator?.targetKey === rowDropKey
-                              ? dropIndicator.position
-                              : undefined
-                          }
-                          draggable={Boolean(props.onReorderThreadPins)}
+                          pointerDraggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
                           linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
                           revealSelectedThreadRequest={
@@ -1250,7 +1629,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
                               subthreadCount={subthreadCount}
                               subthreadsCollapsed={subthreadsCollapsed}
 	                          thinkingThreadKeys={props.thinkingThreadKeys}
-	                          thread={thread}
+                          thread={thread}
+                          threadPinState="pinned"
                               onToggleSubthreads={
                                 subthreadCount > 0 && props.onSetSubthreadsCollapsed
                                   ? () =>
@@ -1260,56 +1640,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                       )
                                   : undefined
                               }
-                          onDragOverThread={(event) => {
-                            event.preventDefault();
-                            const draggedThread = draggedThreadKey
-                              ? threadsByKey.get(draggedThreadKey)
-                              : undefined;
-                            if (
-                              !draggedThreadKey ||
-                              !draggedThread ||
-                              !directory.threadKeys.includes(draggedThreadKey)
-                            ) {
-                              event.dataTransfer.dropEffect = "none";
-                              setDropIndicator(undefined);
-                              return;
-                            }
-
-                            event.dataTransfer.dropEffect = "move";
-                            setDropIndicator({
-                              targetKey: rowDropKey,
-                              position: getDropIndicatorPosition(event),
-                            });
-                            setDividerDropTarget(undefined);
-                          }}
-                          onDragStartThread={(event) => {
-                            setDraggedThreadKey(threadKey);
-                            event.dataTransfer.effectAllowed = "move";
-                            event.dataTransfer.setData("text/plain", threadKey);
-                          }}
-                          onDragLeaveThread={(event) => {
-                            if (didDragLeaveCurrentTarget(event)) {
-                              setDropIndicator(undefined);
-                            }
-                          }}
-                          onDragEndThread={() => {
-                            setDraggedThreadKey(undefined);
-                            setDropIndicator(undefined);
-                            setDividerDropTarget(undefined);
-                          }}
-                          onDropOnThread={(event) => {
-                            event.preventDefault();
-                            setDraggedThreadKey(undefined);
-                            setDropIndicator(undefined);
-                            setDividerDropTarget(undefined);
-                            const draggedKey = event.dataTransfer.getData("text/plain");
-                            if (!draggedKey) return;
-                            const position = getDropIndicatorPosition(event);
-                            moveDirectoryPin(
+                          onPointerDownThread={(event) => {
+                            beginThreadPinPointerDrag(
+                              event,
                               directory,
-                              draggedKey,
                               threadKey,
-                              position,
+                              true,
                             );
                           }}
                           onMovePinnedThread={(pinnedThread, direction) => {
@@ -1339,15 +1675,22 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                      );
                     })}
 
+                    {renderPinnedAppendTarget ? (
+                      <div className="directory-row__pin-drop-boundary">
+                        <div
+                          aria-label={`Pin thread after pinned threads for ${directory.label}`}
+                          aria-hidden="true"
+                          className="directory-row__pin-drop-slot"
+                          role="separator"
+                        />
+                      </div>
+                    ) : null}
+
                     {directoryPinnedThreads.length > 0 &&
                     directoryUnpinnedThreadCount > 0 ? (
                       <button
                         type="button"
-                        className={`recents-pinned-divider directory-row__thread-divider${
-                          dividerDropTarget === directory.key
-                            ? " is-drop-target"
-                            : ""
-                        }`}
+                        className="recents-pinned-divider directory-row__thread-divider"
                         aria-expanded={!directoryThreadsCollapsed}
                         aria-label={`${
                           directoryThreadsCollapsed ? "Show" : "Hide"
@@ -1363,36 +1706,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           void props.onSetDirectoryThreadsCollapsed?.(
                             directory,
                             !directoryThreadsCollapsed,
-                          );
-                        }}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          if (
-                            !draggedThreadKey ||
-                            !directory.threadKeys.includes(draggedThreadKey)
-                          ) {
-                            event.dataTransfer.dropEffect = "none";
-                            setDividerDropTarget(undefined);
-                            return;
-                          }
-
-                          event.dataTransfer.dropEffect = "move";
-                          setDropIndicator(undefined);
-                          setDividerDropTarget(directory.key);
-                        }}
-                        onDragLeave={(event) => {
-                          if (didDragLeaveCurrentTarget(event)) {
-                            setDividerDropTarget(undefined);
-                          }
-                        }}
-                        onDrop={(event) => {
-                          event.preventDefault();
-                          lastDirectoryThreadDropAtRef.current = Date.now();
-                          setDraggedThreadKey(undefined);
-                          setDividerDropTarget(undefined);
-                          dropThreadAfterDirectoryPins(
-                            directory,
-                            event.dataTransfer.getData("text/plain"),
                           );
                         }}
                       >
@@ -1476,7 +1789,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             }
             event.preventDefault();
             event.dataTransfer.dropEffect = "move";
-            setDirectoryDropIndicator(undefined);
+            directoryDropIndicator.clear();
             setDirectoriesPinnedDividerDropTarget(true);
           }}
           onDragLeave={(event) => {

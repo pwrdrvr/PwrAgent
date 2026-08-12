@@ -2532,6 +2532,101 @@ describe("AcpAgentClient", () => {
     expect(rolloutStore.appendUpdate).toHaveBeenCalled();
   });
 
+  it("retains fallback history after a rejected partial session replay", async () => {
+    const rolloutStore = {
+      appendUpdate: vi.fn(),
+      readUpdates: vi.fn(() => []),
+      flushAll: vi.fn(),
+    };
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: true,
+        },
+      },
+    });
+    let loadAttempts = 0;
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      rolloutStore,
+      store,
+      transport: {
+        request: async (method, params) => {
+          if (method === "session/load") {
+            loadAttempts += 1;
+            if (loadAttempts === 1) {
+              transport.emitSessionUpdate(
+                "session-1",
+                {
+                  session_update: "agent_message_chunk",
+                  content: { type: "text", text: "Partial replay" },
+                },
+                { agentTimestampMs: 1_700_000_000_000, isReplay: true },
+              );
+              throw new Error("session/load failed");
+            }
+            return {};
+          }
+          return await transport.request(method, params);
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 1_800_000_000_000,
+    });
+    store.upsertSession({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      title: "Grok session",
+      cwd: "/repo",
+      createdAt: 1_600_000_000_000,
+      updatedAt: 1_600_000_000_000,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const metadata = store.getSession("acp:grok", "session-1")!;
+    await expect(client.loadSession(metadata)).rejects.toThrow(
+      "session/load failed",
+    );
+    expect(client.didSessionLoadReplayHistory("session-1")).toBe(false);
+
+    await client.refreshSession(metadata);
+    expect(loadAttempts).toBe(2);
+    expect(client.didSessionLoadReplayHistory("session-1")).toBe(false);
+
+    rolloutStore.appendUpdate.mockClear();
+    client.startPrompt({
+      sessionId: "session-1",
+      prompt: "Continue after retry",
+      turnId: "turn-2",
+    });
+    transport.emitSessionUpdate("session-1", {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "Fallback remains active." },
+    });
+
+    expect(rolloutStore.appendUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          kind: "pwragent_user_prompt",
+          prompt: "Continue after retry",
+        }),
+      }),
+    );
+    expect(rolloutStore.appendUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          session_update: "agent_message_chunk",
+        }),
+      }),
+    );
+  });
+
   it("does not call session/load when the ACP agent says loading is unsupported", async () => {
     const transport = new FakeAcpAgentTransport({
       initialize: {

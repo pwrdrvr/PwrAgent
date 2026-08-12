@@ -228,6 +228,42 @@ function createDataTransfer(threadKey: string) {
   };
 }
 
+const THREAD_PIN_POINTER_ID = 41;
+
+function startThreadPinPointerDrag(
+  element: Element,
+  point: { x: number; y: number },
+): void {
+  fireEvent.pointerDown(element, {
+    button: 0,
+    clientX: point.x,
+    clientY: point.y,
+    pointerId: THREAD_PIN_POINTER_ID,
+  });
+}
+
+function moveThreadPinPointer(
+  point: { x: number; y: number },
+): void {
+  fireEvent.pointerMove(window, {
+    buttons: 1,
+    clientX: point.x,
+    clientY: point.y,
+    pointerId: THREAD_PIN_POINTER_ID,
+  });
+}
+
+function releaseThreadPinPointer(
+  point: { x: number; y: number },
+): void {
+  fireEvent.pointerUp(window, {
+    button: 0,
+    clientX: point.x,
+    clientY: point.y,
+    pointerId: THREAD_PIN_POINTER_ID,
+  });
+}
+
 afterEach(() => {
   delete (window as unknown as {
     __pwragentFederationLabel?: unknown;
@@ -740,7 +776,9 @@ describe("Sidebar", () => {
     // the whole name — a tab that loses its aria-label announces as unlabeled.
     expect(lensTabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
       "Attention, 0 active threads, 1 thread to review",
-      "Drafts",
+      // Drafts announces its emptiness even though it shows no badge: the
+      // vanishing count is only readable if you can see the row.
+      "Drafts, No threads with unsent drafts",
       "Updated",
       "Created",
       "Directories",
@@ -2596,19 +2634,107 @@ describe("Sidebar", () => {
       const onBrowseModeChange = vi.fn();
       renderDrafts("inbox", onBrowseModeChange);
 
-      const tab = screen.getByRole("tab", { name: "Drafts" });
+      const tab = screen.getByRole("tab", { name: /^Drafts,/ });
       expect(tab).toHaveAttribute("aria-selected", "false");
       fireEvent.click(tab);
       expect(onBrowseModeChange).toHaveBeenCalledWith("drafts");
     });
 
-    it("explains the lens in its tooltip", async () => {
+    it("explains the lens in its tooltip, including the count", async () => {
       renderDrafts();
 
-      fireEvent.mouseEnter(screen.getByRole("tab", { name: "Drafts" }));
+      fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Drafts,/ }));
       expect((await screen.findByRole("tooltip")).textContent).toBe(
-        "Drafts — threads with a reply you started and never sent",
+        "Drafts — threads with a reply you started and never sent"
+          + "\n1 thread with an unsent draft",
       );
+    });
+
+    it("counts the drafted threads on its tab", () => {
+      const secondDraftThread = {
+        ...sharedThread,
+        id: "second-thread-with-draft",
+        title: "Second thread with a draft",
+        inbox: { inInbox: false },
+      };
+
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          createThreadError={undefined}
+          directories={directories}
+          draftThreadKeys={{
+            ...draftThreadKeys,
+            [`${secondDraftThread.source}:${secondDraftThread.id}`]: true,
+          }}
+          inboxThreads={[...allThreads, secondDraftThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={[...allThreads, secondDraftThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      const tab = screen.getByRole("tab", {
+        name: "Drafts, 2 threads with unsent drafts",
+      });
+      expect(tab.querySelector(".lens-switch__count")).toHaveTextContent("2");
+    });
+
+    // The label must never contain "reply": `getByLabel` is a substring match
+    // in Playwright, and 31 specs across 23 files drive the composer with
+    // `getByLabel("Reply")` — a tab that matches makes every one of them a
+    // strict-mode violation as soon as a thread has a draft. Desktop E2E is
+    // the only suite that catches it (Testing Library matches names exactly),
+    // so guard the wording here, where it costs nothing. See "E2E Locator
+    // Hygiene Around Global Chrome" in apps/desktop/AGENTS.md.
+    //
+    // Asserted at ONE draft, not two: "replies" contains no "reply", so the
+    // plural can never trip the substring match. The singular is the whole
+    // hazard — "1 unsent reply" is the exact label that broke E2E — and a
+    // guard sitting on the plural would have watched it ship.
+    it('keeps "reply" out of the tab label at the singular count', () => {
+      renderDrafts();
+
+      // Matched loosely on purpose: pinning the exact string here would make a
+      // reworded label fail on the lookup, and the reader would never see
+      // which rule the new wording broke.
+      const tab = screen.getByRole("tab", { name: /^Drafts,/ });
+      expect(tab.getAttribute("aria-label")).not.toMatch(/reply/i);
+    });
+
+    it("drops the count entirely when nothing is half-written", () => {
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={allThreads}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={allThreads}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      // No badge at all — not a greyed "0". An absent count is how this lens
+      // says "no drafts"; a zero would be one more number to read past.
+      const tab = screen.getByRole("tab", {
+        name: "Drafts, No threads with unsent drafts",
+      });
+      expect(tab.querySelector(".lens-switch__count")).toBeNull();
     });
 
     it("shows an empty state when nothing is half-written", () => {
@@ -3723,7 +3849,7 @@ describe("Sidebar", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("pins a same-directory thread by dropping it on the directory divider", () => {
+  it("pins a same-directory thread after a pointer drag leaves its source", async () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
     const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
     const pinnedThread = {
@@ -3759,10 +3885,23 @@ describe("Sidebar", () => {
     const directoryThreads = screen.getByRole("button", {
       name: "Hide directory threads for PwrAgent",
     });
-    fireEvent.drop(
-      directoryThreads,
-      { dataTransfer: createDataTransfer("codex:thread-1") },
-    );
+    const unpinnedRow = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell");
+    startThreadPinPointerDrag(unpinnedRow!, { x: 50, y: 150 });
+    const pinnedRow = screen
+      .getByRole("button", { name: /Updated thread/i })
+      .closest(".thread-row-shell");
+    moveThreadPinPointer({ x: 50, y: 90 });
+    expect(pinnedRow).not.toHaveClass("is-drop-target-before");
+    expect(pinnedRow).not.toHaveClass("is-drop-target-after");
+    const appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
+    });
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+    releaseThreadPinPointer({ x: 50, y: 90 });
     fireEvent.click(directoryThreads);
 
     expect(onReorderThreadPins).toHaveBeenCalledWith([
@@ -3772,13 +3911,288 @@ describe("Sidebar", () => {
     expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
   });
 
-  it("shows directory drop targets for row edges and the pin divider", () => {
+  it("keeps wheel input on the normal renderer path during a pointer drag", async () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const row = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell") as HTMLElement;
+    expect(row).not.toHaveAttribute("draggable", "true");
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue({
+      bottom: 200,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
+    });
+    const list = row.closest(".directory-list") as HTMLElement;
+    const onWheel = vi.fn();
+    list.addEventListener("wheel", onWheel);
+
+    startThreadPinPointerDrag(row, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 50, y: 90 });
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute(
+        "data-native-drag-active",
+      );
+      expect(document.body.querySelector(".thread-row--drag-image"))
+        .not.toBeNull();
+    });
+
+    const wheelEvent = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 120,
+    });
+    list.dispatchEvent(wheelEvent);
+    expect(onWheel).toHaveBeenCalledTimes(1);
+    expect(wheelEvent.defaultPrevented).toBe(false);
+
+    releaseThreadPinPointer({ x: 50, y: 90 });
+    expect(document.documentElement).not.toHaveAttribute(
+      "data-native-drag-active",
+    );
+  });
+
+  it("cancels over the source and appends after leaving an empty pin section", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("separator", {
+        name: "Pin thread after pinned threads for PwrAgent",
+      }),
+    ).not.toBeInTheDocument();
+    const mountedAppendTarget = container.querySelector(
+      ".directory-row__pin-drop-slot",
+    );
+    expect(mountedAppendTarget).toHaveAttribute("aria-hidden", "true");
+
+    const row = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell");
+    vi.spyOn(row!, "getBoundingClientRect").mockReturnValue({
+      bottom: 200,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
+    });
+    startThreadPinPointerDrag(row!, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 60, y: 160 });
+
+    let appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
+    });
+    expect(appendTarget).toBe(mountedAppendTarget);
+    expect(appendTarget).toHaveClass("is-drag-enabled");
+    await waitFor(() => {
+      expect(appendTarget).not.toHaveClass("is-drop-target-before");
+    });
+    releaseThreadPinPointer({ x: 50, y: 150 });
+    expect(onReorderThreadPins).not.toHaveBeenCalled();
+
+    startThreadPinPointerDrag(row!, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 50, y: 90 });
+    appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
+    });
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+
+    releaseThreadPinPointer({ x: 50, y: 90 });
+    expect(onReorderThreadPins).toHaveBeenCalledWith(["codex:thread-1"]);
+  });
+
+  it("uses the source row's live bounds after directory-list scrolling", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const row = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell");
+    const sourceBounds = vi.spyOn(row!, "getBoundingClientRect");
+    sourceBounds.mockReturnValue({
+      bottom: 200,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
+    });
+    startThreadPinPointerDrag(row!, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 50, y: 90 });
+    const appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
+    });
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+
+    sourceBounds.mockReturnValue({
+      bottom: 120,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 20,
+      width: 300,
+      x: 0,
+      y: 20,
+    });
+    fireEvent.scroll(row!.closest(".directory-list")!);
+    await waitFor(() => {
+      expect(appendTarget).not.toHaveClass("is-drop-target-before");
+    });
+
+    moveThreadPinPointer({ x: 50, y: 150 });
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+    releaseThreadPinPointer({ x: 50, y: 150 });
+    expect(onReorderThreadPins).toHaveBeenCalledWith(["codex:thread-1"]);
+  });
+
+  it("keeps an escaped directory pin drag canceled through release", async () => {
+    const onReorderThreadPins = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const row = screen
+      .getByRole("button", { name: /Cross-project cleanup/i })
+      .closest(".thread-row-shell");
+    vi.spyOn(row!, "getBoundingClientRect").mockReturnValue({
+      bottom: 200,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
+    });
+    startThreadPinPointerDrag(row!, { x: 50, y: 150 });
+    moveThreadPinPointer({ x: 50, y: 90 });
+    const appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
+    });
+    await waitFor(() => {
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(
+      screen.queryByRole("separator", {
+        name: "Pin thread after pinned threads for PwrAgent",
+      }),
+    ).not.toBeInTheDocument();
+    releaseThreadPinPointer({ x: 50, y: 90 });
+    expect(onReorderThreadPins).not.toHaveBeenCalled();
+  });
+
+  it("shows directory drop targets for pinned row edges and the append slot", async () => {
     // Pin reorder-by-drag lives only where a pinned section is rendered, which
     // after the Updated/Created lenses became pure sort orders means the
     // Directories lens alone.
-    const pinnedThread = {
-      ...updatedSinceSeenThread,
+    const firstPinnedThread = {
+      ...sharedThread,
       pinnedRank: "1024",
+    };
+    const secondPinnedThread = {
+      ...updatedSinceSeenThread,
+      pinnedRank: "2048",
+    };
+    const unpinnedThread = {
+      ...sharedThread,
+      id: "thread-unpinned",
+      title: "Unpinned thread",
     };
 
     render(
@@ -3789,15 +4203,19 @@ describe("Sidebar", () => {
         directories={[
           {
             ...directories[0]!,
-            threadKeys: ["codex:thread-1", "codex:thread-updated"],
+            threadKeys: [
+              "codex:thread-1",
+              "codex:thread-updated",
+              "codex:thread-unpinned",
+            ],
           },
         ]}
-        inboxThreads={[sharedThread]}
+        inboxThreads={[firstPinnedThread, secondPinnedThread, unpinnedThread]}
         launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
-        threads={[sharedThread, pinnedThread]}
+        threads={[firstPinnedThread, secondPinnedThread, unpinnedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
         onOpenLaunchpad={async () => undefined}
@@ -3810,8 +4228,7 @@ describe("Sidebar", () => {
       .getByRole("button", { name: /Cross-project cleanup/i })
       .closest(".thread-row-shell");
     expect(draggedRow).not.toBeNull();
-    const dataTransfer = createDataTransfer("codex:thread-1");
-    fireEvent.dragStart(draggedRow!, { dataTransfer });
+    startThreadPinPointerDrag(draggedRow!, { x: 50, y: 150 });
 
     const pinnedRow = screen
       .getByRole("button", { name: /Updated thread/i })
@@ -3829,24 +4246,38 @@ describe("Sidebar", () => {
       y: 0,
     });
 
-    fireEvent.dragOver(pinnedRow!, {
-      clientY: 75,
-      dataTransfer,
+    moveThreadPinPointer({ x: 50, y: 25 });
+    await waitFor(() => {
+      expect(pinnedRow).toHaveClass("is-drop-target-before");
     });
-    expect(pinnedRow).toHaveClass("is-drop-target-before");
 
-    fireEvent.dragLeave(pinnedRow!, {
-      relatedTarget: null,
+    moveThreadPinPointer({ x: 50, y: 75 });
+    await waitFor(() => {
+      expect(pinnedRow).not.toHaveClass("is-drop-target-before");
+      expect(pinnedRow).toHaveClass("is-drop-target-after");
     });
-    expect(pinnedRow).not.toHaveClass("is-drop-target-before");
 
-    const divider = screen.getByRole("button", {
-      name: "Hide directory threads for PwrAgent",
+    const appendTarget = screen.getByRole("separator", {
+      name: "Pin thread after pinned threads for PwrAgent",
     });
-    fireEvent.dragOver(divider, {
-      dataTransfer,
+    vi.spyOn(appendTarget, "getBoundingClientRect").mockReturnValue({
+      bottom: 132,
+      height: 32,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
     });
-    expect(divider).toHaveClass("is-drop-target");
+    moveThreadPinPointer({ x: 50, y: 115 });
+    await waitFor(() => {
+      expect(pinnedRow).not.toHaveClass("is-drop-target-before");
+      expect(pinnedRow).not.toHaveClass("is-drop-target-after");
+      expect(appendTarget).toHaveClass("is-drop-target-before");
+    });
+    releaseThreadPinPointer({ x: 50, y: 115 });
   });
 
   it("renders no pinned section or drag affordance in the Created lens", () => {
@@ -5694,11 +6125,10 @@ describe("Sidebar thread pinning Move items", () => {
     threadKeys,
   });
 
-  it("moves a pin across backends — pin order is global, not per-backend", async () => {
-    // Pin order is global across backends (mirrors directory pinning). The
-    // top global pin can Move Down past another backend's pins, producing an
-    // interleaved cross-backend order. This is exactly the behavior the old
-    // per-backend slice blocked.
+  it("moves a colliding remote pin above a newer local pin", async () => {
+    // A local auto-pin used to reuse a viewer-owned remote rank. Recency then
+    // put the newer local row first, but Move Up must still submit one global
+    // order that places the remote row above it.
     const onReorderThreadPins = vi.fn(async () => undefined);
     const codexTop = {
       ...sharedThread,
@@ -5706,13 +6136,25 @@ describe("Sidebar thread pinning Move items", () => {
       title: "Codex top pin",
       source: "codex" as const,
       pinnedRank: "1024",
+      updatedAt: 2_000,
     };
     const grokMiddle = {
       ...sharedThread,
       id: "grok-middle",
       title: "Grok middle pin",
       source: "acp:grok" as const,
-      pinnedRank: "2048",
+      pinnedRank: "1024",
+      updatedAt: 1_000,
+      federation: {
+        ref: {
+          backend: "acp:grok" as const,
+          target: { scope: "remote" as const, instanceId: "peer-laptop" },
+          threadId: "grok-middle",
+        },
+        instanceLabel: "Laptop",
+        peerStatus: "connected" as const,
+        capabilities: [],
+      },
     };
     const grokBottom = {
       ...sharedThread,
@@ -5749,24 +6191,21 @@ describe("Sidebar thread pinning Move items", () => {
       />,
     );
 
-    // Codex's pin is the GLOBAL top (rank 1024). Move Up is disabled (nothing
-    // above it), but Move Down is enabled and crosses into grok's pins.
-    const codexRow = screen
-      .getByRole("button", { name: /Codex top pin/i })
+    const remoteRow = screen
+      .getByRole("button", { name: /Grok middle pin/i })
       .closest(".thread-row-shell") as HTMLElement;
     fireEvent.click(
-      codexRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+      remoteRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
     );
 
     const moveUp = await screen.findByRole("menuitem", { name: /Move Up/i });
     const moveDown = await screen.findByRole("menuitem", {
       name: /Move Down/i,
     });
-    expect(moveUp).toBeDisabled();
+    expect(moveUp).toBeEnabled();
     expect(moveDown).toBeEnabled();
 
-    fireEvent.click(moveDown);
-    // Global, interleaved new order: grok-middle now above the codex pin.
+    fireEvent.click(moveUp);
     expect(onReorderThreadPins).toHaveBeenCalledWith([
       "acp:grok:grok-middle",
       "codex:codex-top",

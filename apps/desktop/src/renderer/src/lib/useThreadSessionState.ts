@@ -148,7 +148,7 @@ type ThreadSessionEntry = {
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
-  loadedOlderHistory: boolean;
+  loadedHistoryEntryCount: number;
   loading: boolean;
   loadingMore: boolean;
   needsHydrationAfterCompletion: boolean;
@@ -200,7 +200,7 @@ function createEmptyThreadSessionEntry(): ThreadSessionEntry {
     expectOwnUpdate: false,
     interacted: false,
     lastTouchedAt: Date.now(),
-    loadedOlderHistory: false,
+    loadedHistoryEntryCount: 0,
     loading: false,
     loadingMore: false,
     needsHydrationAfterCompletion: false,
@@ -586,31 +586,128 @@ function mergeTranscriptMessages(
 function preserveLoadedTranscriptHistory(
   response: AppServerReadThreadResponse,
   retainedResponse: AppServerReadThreadResponse | undefined,
-  shouldPreserve: boolean
+  loadedHistoryEntryCount: number
 ): AppServerReadThreadResponse {
   if (
-    !shouldPreserve ||
+    loadedHistoryEntryCount === 0 ||
     !retainedResponse ||
     !response.replay.pagination.supportsPagination
   ) {
     return response;
   }
 
+  // The explicit boundary keeps a latest page that starts mid-turn from
+  // claiming entries that were loaded by an older-page request.
+  const retainedPrefix = retainedResponse.replay.entries.slice(
+    0,
+    loadedHistoryEntryCount
+  );
+  const retainedTail = retainedResponse.replay.entries.slice(
+    loadedHistoryEntryCount
+  );
+  // A refresh can lag the live stream. Replace only exact or uniquely
+  // equivalent retained entries; keep anything the refresh omitted.
+  const matchedRetainedEntries = new Set<AppServerThreadEntry>();
+  for (const freshEntry of response.replay.entries) {
+    const retainedMatch = findUniqueTranscriptRefreshMatch(
+      freshEntry,
+      retainedTail.filter((entry) => !matchedRetainedEntries.has(entry))
+    );
+    if (retainedMatch) {
+      matchedRetainedEntries.add(retainedMatch);
+    }
+  }
+  const retainedTailRemainder = retainedTail.filter(
+    (entry) => !matchedRetainedEntries.has(entry)
+  );
+  const entries = mergeItems(
+    retainedPrefix,
+    mergeTranscriptEntries(response.replay.entries, retainedTailRemainder)
+  );
+  const messagesById = new Map(
+    [
+      ...retainedResponse.replay.messages,
+      ...response.replay.messages,
+    ].map((message) => [message.id, message] as const)
+  );
+
   return {
     ...response,
     replay: {
       ...response.replay,
-      entries: mergeItems(
-        retainedResponse.replay.entries,
-        response.replay.entries
-      ),
-      messages: mergeItems(
-        retainedResponse.replay.messages,
-        response.replay.messages
-      ),
+      entries,
+      messages: entries.flatMap((entry) => {
+        if (entry.type !== "message") {
+          return [];
+        }
+
+        const message = messagesById.get(entry.id);
+        return message
+          ? [message]
+          : [{
+              id: entry.id,
+              role: entry.role,
+              text: entry.text,
+              ...(entry.parts ? { parts: entry.parts } : {}),
+              ...(entry.origin ? { origin: entry.origin } : {}),
+              ...(entry.createdAt !== undefined
+                ? { createdAt: entry.createdAt }
+                : {}),
+            }];
+      }),
       pagination: retainedResponse.replay.pagination,
     },
   };
+}
+
+function findUniqueTranscriptRefreshMatch(
+  freshEntry: AppServerThreadEntry,
+  retainedEntries: AppServerThreadEntry[]
+): AppServerThreadEntry | undefined {
+  const exactMatch = retainedEntries.find(
+    (retainedEntry) => retainedEntry.id === freshEntry.id
+  );
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const logicalMatches = retainedEntries.filter((retainedEntry) => {
+    if (
+      freshEntry.turn?.id &&
+      retainedEntry.turn?.id &&
+      freshEntry.turn.id !== retainedEntry.turn.id
+    ) {
+      return false;
+    }
+    if (
+      freshEntry.type === "message" &&
+      retainedEntry.type === "message" &&
+      freshEntry.phase &&
+      retainedEntry.phase &&
+      freshEntry.phase !== retainedEntry.phase
+    ) {
+      return false;
+    }
+
+    return transcriptEntriesMatch(freshEntry, retainedEntry);
+  });
+
+  return logicalMatches.length === 1 ? logicalMatches[0] : undefined;
+}
+
+function loadedHistoryPrefixGrowth(
+  currentEntries: AppServerThreadEntry[],
+  mergedEntries: AppServerThreadEntry[]
+): number {
+  const currentFirstEntryId = currentEntries[0]?.id;
+  if (!currentFirstEntryId) {
+    return mergedEntries.length;
+  }
+
+  const currentBoundaryIndex = mergedEntries.findIndex(
+    (entry) => entry.id === currentFirstEntryId
+  );
+  return currentBoundaryIndex === -1 ? 0 : currentBoundaryIndex;
 }
 
 function isCodexImageBoundaryText(value: string): boolean {
@@ -3849,7 +3946,7 @@ export function useThreadSessionState(params: {
           const responseWithLoadedHistory = preserveLoadedTranscriptHistory(
             orderedResponse,
             current.response,
-            current.loadedOlderHistory
+            current.loadedHistoryEntryCount
           );
           const hydratedPendingRequest = response.pendingRequest;
           const hydratedPendingUserInput =
@@ -5579,28 +5676,42 @@ export function useThreadSessionState(params: {
         return;
       }
 
-      updateSession(threadKey, (current) => ({
-        ...current,
-        lastTouchedAt: Date.now(),
-        loadingMore: false,
-        response: current.response
-          ? {
-              ...olderResponse,
-              replay: {
-                ...olderResponse.replay,
-                entries: mergeItems(
-                  olderResponse.replay.entries,
-                  current.response.replay.entries
-                ),
-                messages: mergeItems(
-                  olderResponse.replay.messages,
-                  current.response.replay.messages
-                ),
-              },
-            }
-          : olderResponse,
-        loadedOlderHistory: Boolean(current.response),
-      }));
+      updateSession(threadKey, (current) => {
+        if (!current.response) {
+          return {
+            ...current,
+            lastTouchedAt: Date.now(),
+            loadingMore: false,
+            response: olderResponse,
+          };
+        }
+
+        const mergedEntries = mergeItems(
+          olderResponse.replay.entries,
+          current.response.replay.entries
+        );
+        return {
+          ...current,
+          lastTouchedAt: Date.now(),
+          loadedHistoryEntryCount:
+            current.loadedHistoryEntryCount + loadedHistoryPrefixGrowth(
+              current.response.replay.entries,
+              mergedEntries
+            ),
+          loadingMore: false,
+          response: {
+            ...olderResponse,
+            replay: {
+              ...olderResponse.replay,
+              entries: mergedEntries,
+              messages: mergeItems(
+                olderResponse.replay.messages,
+                current.response.replay.messages
+              ),
+            },
+          },
+        };
+      });
     } catch (error) {
       if ((requestVersionsRef.current[threadKey] ?? 0) !== requestVersion) {
         return;

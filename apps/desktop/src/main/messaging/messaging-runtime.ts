@@ -234,7 +234,10 @@ type PendingAdapterStart = {
 type AdapterStartOutcome = "cancelled" | "failed" | "started";
 
 class AdapterStartCancelledError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly startInvoked = true,
+  ) {
     super(message);
     this.name = "AdapterStartCancelledError";
   }
@@ -1521,7 +1524,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           reason: error instanceof Error ? error.message : String(error),
         });
       }
-      await this.stopAdapterAfterFailedStart(adapter);
+      if (!(error instanceof AdapterStartCancelledError && !error.startInvoked)) {
+        await this.stopAdapterAfterFailedStart(adapter);
+      }
       return cancelled ? "cancelled" : "failed";
     }
 
@@ -1588,6 +1593,17 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         reject(new AdapterStartCancelledError(reason));
       };
     });
+    const pending: PendingAdapterStart = {
+      cancel: (reason) => cancel?.(reason),
+    };
+    this.pendingAdapterStarts.set(adapter.channel, pending);
+    const queuedCancellationReason = this.pendingAdapterStopReason
+      ?? this.pendingAdapterStartCancellationReasons.get(adapter.channel);
+    if (queuedCancellationReason) {
+      this.pendingAdapterStarts.delete(adapter.channel);
+      throw new AdapterStartCancelledError(queuedCancellationReason, false);
+    }
+
     const startPromise = Promise.resolve().then(async () => {
       await adapter.start?.(listener);
     });
@@ -1598,15 +1614,6 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       }, timeoutMs);
       if (timeoutHandle.unref) timeoutHandle.unref();
     });
-    const pending: PendingAdapterStart = {
-      cancel: (reason) => cancel?.(reason),
-    };
-    this.pendingAdapterStarts.set(adapter.channel, pending);
-    const queuedCancellationReason = this.pendingAdapterStopReason
-      ?? this.pendingAdapterStartCancellationReasons.get(adapter.channel);
-    if (queuedCancellationReason) {
-      pending.cancel(queuedCancellationReason);
-    }
 
     try {
       await Promise.race([startPromise, cancellation, timeout]);
@@ -1617,7 +1624,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       ) {
         void startPromise.then(
           async () => this.stopAdapterAfterLateStart(adapter),
-          () => undefined,
+          async () => this.stopAdapterAfterLateStart(adapter),
         );
       }
       throw error;

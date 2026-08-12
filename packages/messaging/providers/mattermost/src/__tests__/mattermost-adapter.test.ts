@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MattermostAdapter, stripBotMention, summarizeThreadRoot } from "../mattermost-adapter.ts";
 import type {
   MessagingCallbackHandleRecord,
@@ -143,6 +143,40 @@ function fakeClient4(spies: {
 }
 
 describe("MattermostAdapter — capability profile", () => {
+  it("stops a callback server while bot identity startup is still pending", async () => {
+    let rejectGetMe!: (reason?: unknown) => void;
+    const getMe = new Promise<never>((_resolve, reject) => {
+      rejectGetMe = reject;
+    });
+    const client = fakeClient4({ createdPosts: [], patchedPosts: [] });
+    client.getMe = vi.fn(async () => await getMe) as never;
+    const callbackServer = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      signContext: () => ({ hmac: "x", issuedAt: 0 }),
+    };
+    const websocketClient = fakeWebSocketClient();
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      callbackServer: callbackServer as never,
+      client,
+      config: baseConfig,
+      logger: silentLogger,
+      websocketClient,
+    });
+
+    const startPromise = adapter.start(async () => {});
+    await vi.waitFor(() => {
+      expect(callbackServer.start).toHaveBeenCalledTimes(1);
+      expect(client.getMe).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+
+    expect(callbackServer.stop).toHaveBeenCalledTimes(1);
+    rejectGetMe(new Error("identity rejected after stop"));
+    await expect(startPromise).rejects.toThrow("identity rejected after stop");
+  });
+
   it("declares Mattermost capability profile with documented limits", () => {
     const adapter = new MattermostAdapter({
       callbackHandleStore: fakeStore,

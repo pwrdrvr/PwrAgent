@@ -2120,6 +2120,7 @@ describe("app server ipc", () => {
     // The unread remote row bumps the group's "N to review" badge past the
     // reconcile-computed local count.
     expect(appDirectory?.needsAttentionCount).toBe(2);
+    expect(rememberCompleteNavigationSnapshot).toHaveBeenCalledWith(response);
   });
 
   it("marks a pinned remote snapshot changed when only reactions change", async () => {

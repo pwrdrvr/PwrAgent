@@ -14,7 +14,7 @@ import {
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
-  type DropIndicatorState,
+  useDropIndicatorController,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
@@ -93,9 +93,7 @@ type RecentsListProps = {
  * the same global pinned-key list.
  */
 export function RecentsList(props: RecentsListProps) {
-  const [dropIndicator, setDropIndicator] = useState<
-    DropIndicatorState | undefined
-  >(undefined);
+  const dropIndicator = useDropIndicatorController();
   const [draggedThreadKey, setDraggedThreadKey] = useState<string | undefined>(
     undefined,
   );
@@ -148,11 +146,6 @@ export function RecentsList(props: RecentsListProps) {
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
-              dropIndicator={
-                dropIndicator?.targetKey === rowDropKey
-                  ? dropIndicator.position
-                  : undefined
-              }
               draggable={children.length > 1 && Boolean(props.onUpdateSubthreadOrder)}
               includeLinkedDirectories
               nested
@@ -167,14 +160,15 @@ export function RecentsList(props: RecentsListProps) {
                 const draggedThread = draggedKey ? threadByKey.get(draggedKey) : undefined;
                 if (
                   !draggedThread
+                  || draggedKey === childKey
                   || resolveThreadParentKey(draggedThread, threadByKey) !== parentKey
                 ) {
                   event.dataTransfer.dropEffect = "none";
-                  setDropIndicator(undefined);
+                  dropIndicator.clear();
                   return;
                 }
                 event.dataTransfer.dropEffect = "move";
-                setDropIndicator({
+                dropIndicator.show(event.currentTarget, {
                   targetKey: rowDropKey,
                   position: getDropIndicatorPosition(event),
                 });
@@ -187,17 +181,17 @@ export function RecentsList(props: RecentsListProps) {
               }}
               onDragLeaveThread={(event) => {
                 if (didDragLeaveCurrentTarget(event)) {
-                  setDropIndicator(undefined);
+                  dropIndicator.clear();
                 }
               }}
               onDragEndThread={() => {
                 setDraggedThreadKey(undefined);
-                setDropIndicator(undefined);
+                dropIndicator.clear();
               }}
               onDropOnThread={(event) => {
                 event.preventDefault();
                 setDraggedThreadKey(undefined);
-                setDropIndicator(undefined);
+                dropIndicator.clear();
                 const draggedKey =
                   event.dataTransfer.getData("application/x-pwragent-subthread") ||
                   event.dataTransfer.getData("text/plain");

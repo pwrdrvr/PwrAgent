@@ -8,6 +8,10 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import {
+  isNativeDragInteractionActive,
+  subscribeNativeDragInteraction,
+} from "./native-drag-interaction";
 
 const VIEWPORT_PADDING = 12;
 /** Gap between the tooltip and the target element (above or below). */
@@ -108,6 +112,10 @@ export function useViewportTooltip(options: {
   }, [state]);
 
   const show = useCallback((target: HTMLElement, content: ReactNode): void => {
+    if (isNativeDragInteractionActive()) {
+      setState(undefined);
+      return;
+    }
     const rect = target.getBoundingClientRect();
     setState({
       content,
@@ -137,9 +145,13 @@ export function useViewportTooltip(options: {
     if (!visible) {
       return;
     }
+    const unsubscribeNativeDrag = subscribeNativeDragInteraction((active) => {
+      if (active) hide();
+    });
     window.addEventListener("blur", hide);
     window.addEventListener("scroll", hide, { capture: true });
     return () => {
+      unsubscribeNativeDrag();
       window.removeEventListener("blur", hide);
       window.removeEventListener("scroll", hide, { capture: true });
     };
