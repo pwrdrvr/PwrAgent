@@ -108,6 +108,7 @@ import {
   PwrSnapConnectionPrompt,
   pwrSnapConnectionIds,
 } from "./PwrSnapConnectionPrompt";
+import { ManagedMcpConnectionsPrompt } from "./ManagedMcpConnectionsPrompt";
 import {
   buildQuestionnaireResponse,
   type PendingQuestionnaireState,
@@ -3322,7 +3323,30 @@ export function ThreadView(props: ThreadViewProps) {
                 onEnabledChange={async (enabled) => {
                   await props.onUpdateLaunchpad?.(
                     selectedLaunchpad.directoryKey,
-                    { mcpConnectionIds: pwrSnapConnectionIds(enabled) },
+                    {
+                      mcpConnectionIds: pwrSnapConnectionIds(
+                        enabled,
+                        selectedLaunchpad.mcpConnectionIds,
+                      ),
+                    },
+                  );
+                }}
+              />
+            ) : null}
+            {!launchpadMaterializing ? (
+              <ManagedMcpConnectionsPrompt
+                backend={selectedLaunchpad.backend}
+                desktopApi={props.desktopApi}
+                enabledConnectionIds={selectedLaunchpad.mcpConnectionIds ?? []}
+                remote={Boolean(props.activeFederationTarget)}
+                onEnabledChange={async (connectionId, enabled) => {
+                  const current = selectedLaunchpad.mcpConnectionIds ?? [];
+                  const next = enabled
+                    ? [...new Set([...current, connectionId])]
+                    : current.filter((id) => id !== connectionId);
+                  await props.onUpdateLaunchpad?.(
+                    selectedLaunchpad.directoryKey,
+                    { mcpConnectionIds: next },
                   );
                 }}
               />

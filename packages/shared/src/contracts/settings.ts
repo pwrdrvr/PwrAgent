@@ -561,6 +561,7 @@ export type DesktopSettingsSecretName =
   | "federationCloudflareClientPrivateKey"
   | "federationCloudflareAccessClientId"
   | "federationCloudflareAccessClientSecret"
+  | "mcpConnectionCredentials"
   | "pwrsnapMcpCredential";
 
 /**
@@ -601,6 +602,7 @@ export function isMessagingRuntimeSecret(
     case "federationCloudflareClientPrivateKey":
     case "federationCloudflareAccessClientId":
     case "federationCloudflareAccessClientSecret":
+    case "mcpConnectionCredentials":
     case "pwrsnapMcpCredential":
       return false;
   }

@@ -38,7 +38,11 @@ class ConnectionRpcClient {
     private readonly token: string,
   ) {}
 
-  request(operation: string, params?: unknown): Promise<unknown> {
+  request(
+    operation: string,
+    params?: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const socket: Socket = connect(this.socketPath);
       let buffer = "";
@@ -47,6 +51,7 @@ class ConnectionRpcClient {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
+        signal?.removeEventListener("abort", onAbort);
         socket.destroy();
         if (error) reject(error);
         else resolve(value);
@@ -55,6 +60,14 @@ class ConnectionRpcClient {
         () => finish(new Error("PwrAgent MCP bridge timed out.")),
         MCP_CONNECTION_TOOL_TIMEOUT_MS,
       );
+      const onAbort = (): void => {
+        finish(new DOMException("The MCP request was cancelled.", "AbortError"));
+      };
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
       socket.setEncoding("utf8");
       socket.on("connect", () => {
         socket.write(`${JSON.stringify({
@@ -93,8 +106,9 @@ class ConnectionRpcClient {
 async function main(): Promise<void> {
   const socketPath = process.env.PWRAGENT_MCP_CONNECTION_SOCKET;
   const token = process.env.PWRAGENT_MCP_CONNECTION_TOKEN;
-  if (!socketPath || !token) {
-    logStderr("missing bridge socket or token; refusing to start");
+  const connectionName = process.env.PWRAGENT_MCP_CONNECTION_NAME;
+  if (!socketPath || !token || !connectionName) {
+    logStderr("missing bridge connection name, socket, or token; refusing to start");
     process.exit(1);
   }
   const rpc = new ConnectionRpcClient(socketPath, token);
@@ -105,7 +119,7 @@ async function main(): Promise<void> {
     ...(description.prompts ? { prompts: {} } : {}),
   };
   const server = new Server(
-    { name: "pwrsnap", version: "1.0.0" },
+    { name: connectionName, version: "1.0.0" },
     { capabilities },
   );
 
@@ -113,8 +127,8 @@ async function main(): Promise<void> {
     server.setRequestHandler(ListToolsRequestSchema, async (request) =>
       await rpc.request("tools/list", request.params) as never,
     );
-    server.setRequestHandler(CallToolRequestSchema, async (request) =>
-      await rpc.request("tools/call", request.params) as never,
+    server.setRequestHandler(CallToolRequestSchema, async (request, extra) =>
+      await rpc.request("tools/call", request.params, extra.signal) as never,
     );
   }
   if (description.resources) {

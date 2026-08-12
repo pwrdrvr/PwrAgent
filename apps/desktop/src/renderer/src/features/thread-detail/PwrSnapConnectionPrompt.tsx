@@ -211,6 +211,14 @@ export function PwrSnapConnectionPrompt(props: {
   );
 }
 
-export function pwrSnapConnectionIds(enabled: boolean): string[] {
-  return enabled ? [PWRSNAP_MCP_CONNECTION_ID] : [];
+export function pwrSnapConnectionIds(
+  enabled: boolean,
+  current: string[] = [],
+): string[] {
+  const withoutPwrSnap = current.filter(
+    (connectionId) => connectionId !== PWRSNAP_MCP_CONNECTION_ID,
+  );
+  return enabled
+    ? [PWRSNAP_MCP_CONNECTION_ID, ...withoutPwrSnap]
+    : withoutPwrSnap;
 }

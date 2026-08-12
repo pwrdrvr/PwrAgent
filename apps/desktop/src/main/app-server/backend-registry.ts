@@ -15738,13 +15738,6 @@ export class DesktopBackendRegistry {
     }
     const registrations: McpConnectionBridgeRegistration[] = [];
     for (const connectionId of selected) {
-      if (connectionId !== PWRSNAP_MCP_CONNECTION_ID) {
-        backendRegistryLog.warn("ignoring unknown MCP connection", {
-          connectionId,
-          threadId: threadId ?? null,
-        });
-        continue;
-      }
       registrations.push(
         await this.mcpConnectionService.registerBridge(connectionId, threadId),
       );

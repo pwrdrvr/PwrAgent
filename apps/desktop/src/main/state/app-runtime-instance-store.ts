@@ -4,6 +4,7 @@ import type { StateDb } from "./state-db.js";
 
 const MESSAGING_LEASE_KEY = "profile-messaging";
 const FEDERATION_LEASE_KEY = "profile-federation";
+const MCP_CONNECTIONS_LEASE_KEY = "profile-mcp-connections";
 const PID_OWNED_LEASE_EXPIRES_AT = Number.MAX_SAFE_INTEGER;
 export const RUNTIME_LEASE_DEAD_OWNER_GRACE_MS = 60_000;
 
@@ -50,6 +51,8 @@ export type MessagingLeaseAcquireResult =
 // differ.
 export type FederationRuntimeLeaseRecord = MessagingRuntimeLeaseRecord;
 export type FederationLeaseAcquireResult = MessagingLeaseAcquireResult;
+export type McpConnectionsRuntimeLeaseRecord = MessagingRuntimeLeaseRecord;
+export type McpConnectionsLeaseAcquireResult = MessagingLeaseAcquireResult;
 
 type InstanceRow = {
   instance_id: string;
@@ -194,6 +197,14 @@ export class AppRuntimeInstanceStore {
     return this.acquireLease({ leaseKey: FEDERATION_LEASE_KEY, ...params });
   }
 
+  acquireMcpConnectionsLease(params: {
+    instanceId: string;
+    isOwnerAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
+    now: number;
+  }): McpConnectionsLeaseAcquireResult {
+    return this.acquireLease({ leaseKey: MCP_CONNECTIONS_LEASE_KEY, ...params });
+  }
+
   releaseMessagingLease(params: { instanceId: string; now: number }): boolean {
     return this.releaseLease({
       leaseKey: MESSAGING_LEASE_KEY,
@@ -213,12 +224,23 @@ export class AppRuntimeInstanceStore {
     return this.releaseLease({ leaseKey: FEDERATION_LEASE_KEY, ...params });
   }
 
+  releaseMcpConnectionsLease(params: {
+    instanceId: string;
+    now: number;
+  }): boolean {
+    return this.releaseLease({ leaseKey: MCP_CONNECTIONS_LEASE_KEY, ...params });
+  }
+
   getMessagingLease(): MessagingRuntimeLeaseRecord | undefined {
     return this.readLease(MESSAGING_LEASE_KEY);
   }
 
   getFederationLease(): FederationRuntimeLeaseRecord | undefined {
     return this.readLease(FEDERATION_LEASE_KEY);
+  }
+
+  getMcpConnectionsLease(): McpConnectionsRuntimeLeaseRecord | undefined {
+    return this.readLease(MCP_CONNECTIONS_LEASE_KEY);
   }
 
   private acquireLease(params: {

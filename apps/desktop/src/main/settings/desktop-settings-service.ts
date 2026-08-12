@@ -2039,6 +2039,18 @@ export class DesktopSettingsService {
     return await this.options.secretStore.getSecret("pwrsnapMcpCredential");
   }
 
+  async resolveMcpConnectionCredentials(): Promise<string | undefined> {
+    return await this.options.secretStore.getSecret("mcpConnectionCredentials");
+  }
+
+  async saveMcpConnectionCredentials(value: string): Promise<void> {
+    await this.options.secretStore.setSecret("mcpConnectionCredentials", value);
+  }
+
+  async clearMcpConnectionCredentials(): Promise<void> {
+    await this.options.secretStore.deleteSecret("mcpConnectionCredentials");
+  }
+
   async savePwrSnapMcpCredential(value: string): Promise<void> {
     await this.options.secretStore.setSecret("pwrsnapMcpCredential", value);
   }

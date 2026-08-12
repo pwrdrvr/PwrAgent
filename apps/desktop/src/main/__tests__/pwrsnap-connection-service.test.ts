@@ -6,11 +6,19 @@ import {
 
 function createSettings(initial?: string) {
   let credential = initial;
+  let connectionCredentials: string | undefined;
   return {
+    clearMcpConnectionCredentials: vi.fn(async () => {
+      connectionCredentials = undefined;
+    }),
     clearPwrSnapMcpCredential: vi.fn(async () => {
       credential = undefined;
     }),
+    resolveMcpConnectionCredentials: vi.fn(async () => connectionCredentials),
     resolvePwrSnapMcpCredential: vi.fn(async () => credential),
+    saveMcpConnectionCredentials: vi.fn(async (value: string) => {
+      connectionCredentials = value;
+    }),
     savePwrSnapMcpCredential: vi.fn(async (value: string) => {
       credential = value;
     }),
@@ -31,6 +39,7 @@ describe("PwrSnapConnectionService", () => {
       }),
       resolveInstallPaths: () => [],
       settings: createSettings(),
+      leaseManager: null,
     });
     services.push(absent);
 
@@ -45,6 +54,7 @@ describe("PwrSnapConnectionService", () => {
       settings: createSettings(JSON.stringify({
         tokens: { access_token: "secret", token_type: "bearer" },
       })),
+      leaseManager: null,
     });
     services.push(running);
 
@@ -64,6 +74,7 @@ describe("PwrSnapConnectionService", () => {
       launchPollAttempts: 0,
       resolveInstallPaths: () => [fileURLToPath(import.meta.url)],
       settings: createSettings(),
+      leaseManager: null,
     });
     services.push(service);
 
@@ -80,6 +91,7 @@ describe("PwrSnapConnectionService", () => {
       settings: createSettings(JSON.stringify({
         tokens: { access_token: "secret", token_type: "bearer" },
       })),
+      leaseManager: null,
     });
     services.push(service);
 
@@ -93,6 +105,7 @@ describe("PwrSnapConnectionService", () => {
       args: ["/test/mcp-connection-bridge.js"],
       env: {
         ELECTRON_RUN_AS_NODE: "1",
+        PWRAGENT_MCP_CONNECTION_NAME: "pwrsnap",
       },
     });
     expect(first.server.env.PWRAGENT_MCP_CONNECTION_TOKEN).toBeTruthy();
@@ -105,22 +118,35 @@ describe("PwrSnapConnectionService", () => {
       settings: createSettings(JSON.stringify({
         tokens: { access_token: "secret", token_type: "bearer" },
       })),
+      leaseManager: null,
     });
     services.push(service);
+    const token = "test-token";
     Object.assign(service, {
-      upstreamClient: { callTool, close: vi.fn(async () => undefined) },
+      upstreamSessions: new Map([[token, {
+        client: { callTool, close: vi.fn(async () => undefined) },
+        transport: { close: vi.fn(async () => undefined) },
+      }]]),
     });
 
     const bridge = service as unknown as {
       dispatchBridgeOperation: (
+        token: string,
+        grant: { connectionId: string; threadId?: string },
         operation: unknown,
         params: unknown,
+        signal?: AbortSignal,
       ) => Promise<unknown>;
     };
-    await bridge.dispatchBridgeOperation("tools/call", {
-      name: "pwrsnap_image_edit_send",
-      arguments: { captureId: "cap-1", instruction: "Add an arrow" },
-    });
+    await bridge.dispatchBridgeOperation(
+      token,
+      { connectionId: "pwrsnap", threadId: "thread-1" },
+      "tools/call",
+      {
+        name: "pwrsnap_image_edit_send",
+        arguments: { captureId: "cap-1", instruction: "Add an arrow" },
+      },
+    );
 
     expect(callTool).toHaveBeenCalledWith(
       {
@@ -129,6 +155,23 @@ describe("PwrSnapConnectionService", () => {
       },
       undefined,
       { timeout: 720_000 },
+    );
+
+    const abortController = new AbortController();
+    await bridge.dispatchBridgeOperation(
+      token,
+      { connectionId: "pwrsnap", threadId: "thread-1" },
+      "tools/call",
+      {
+        name: "pwrsnap_image_edit_send",
+        arguments: { captureId: "cap-2", instruction: "Add a label" },
+      },
+      abortController.signal,
+    );
+    expect(callTool).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: "pwrsnap_image_edit_send" }),
+      undefined,
+      { signal: abortController.signal, timeout: 720_000 },
     );
   });
 });

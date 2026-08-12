@@ -1,31 +1,48 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer, type Server as NetServer, type Socket } from "node:net";
+import {
+  connect,
+  createServer,
+  type Server as NetServer,
+  type Socket,
+} from "node:net";
 import { shell } from "electron";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import {
-  auth,
-  type OAuthClientProvider,
-  type OAuthDiscoveryState,
-} from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type {
-  OAuthClientInformationMixed,
-  OAuthClientMetadata,
-  OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
+  type CreateMcpConnectionRequest,
+  type McpConnectionRecord,
+  type McpConnectionStatus,
   type ConnectPwrSnapResponse,
   type OpenPwrSnapResponse,
   type PwrSnapConnectionStatus,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
+import {
+  getRuntimeLeaseManager,
+  type RuntimeLeaseManager,
+  type RuntimeLeaseHolder,
+} from "../runtime-lease-manager";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import {
+  McpConnectionRegistry,
+} from "./mcp-connection-registry";
+import {
+  McpConnectionBrokerDiscovery,
+  type McpConnectionBrokerRecord,
+} from "./mcp-connection-broker-discovery";
+import {
+  McpCredentialVault,
+} from "./mcp-credential-vault";
+import {
+  McpOAuthSessionCoordinator,
+} from "./mcp-oauth-session-coordinator";
+import { createMcpSafeFetch } from "./mcp-safe-fetch";
 import { MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts";
 
 const connectionLog = getMainLogger("pwragent:mcp-connections");
@@ -47,20 +64,19 @@ const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
 const MAX_RPC_LINE_BYTES = 1024 * 1024;
 const MAX_RPC_CONNECTIONS = 32;
 
-type PwrSnapCredential = {
-  clientInformation?: OAuthClientInformationMixed;
-  codeVerifier?: string;
-  discoveryState?: OAuthDiscoveryState;
-  tokens?: OAuthTokens;
+type BridgeGrant = {
+  connectionId: string;
+  threadId?: string;
 };
 
-type BridgeGrant = {
-  connectionId: typeof PWRSNAP_MCP_CONNECTION_ID;
-  threadId?: string;
+type UpstreamSession = {
+  client: Client;
+  transport: StreamableHTTPClientTransport;
 };
 
 type BridgeRequest = {
   token?: unknown;
+  brokerToken?: unknown;
   op?: unknown;
   params?: unknown;
 };
@@ -68,6 +84,10 @@ type BridgeRequest = {
 type BridgeResponse =
   | { ok: true; result: unknown }
   | { ok: false; error: string };
+
+type ProfileOwnership =
+  | { owned: true }
+  | { owned: false; holder: RuntimeLeaseHolder };
 
 export type McpConnectionBridgeServer = {
   name: string;
@@ -85,7 +105,10 @@ export type McpConnectionBridgeRegistration = {
 type PwrSnapSettings = Pick<
   ReturnType<typeof getDesktopSettingsService>,
   | "clearPwrSnapMcpCredential"
+  | "clearMcpConnectionCredentials"
+  | "resolveMcpConnectionCredentials"
   | "resolvePwrSnapMcpCredential"
+  | "saveMcpConnectionCredentials"
   | "savePwrSnapMcpCredential"
 >;
 
@@ -103,124 +126,14 @@ export type PwrSnapConnectionServiceOptions = {
   launchPollDelayMs?: number;
   resolveInstallPaths?: () => string[];
   settings?: PwrSnapSettings;
+  registry?: McpConnectionRegistry;
+  credentialVault?: McpCredentialVault;
+  leaseManager?: Pick<
+    RuntimeLeaseManager,
+    "acquire" | "id" | "release" | "snapshot"
+  > | null;
+  brokerDiscovery?: McpConnectionBrokerDiscovery;
 };
-
-class StoredOAuthProvider implements OAuthClientProvider {
-  private credential: PwrSnapCredential;
-
-  constructor(
-    private readonly callbackUrl: URL,
-    credential: PwrSnapCredential,
-    private readonly authorizationState: string,
-    private readonly onRedirect: (url: URL) => Promise<void>,
-    private readonly persistCredential: (
-      credential: PwrSnapCredential,
-    ) => Promise<void>,
-  ) {
-    this.credential = { ...credential };
-  }
-
-  get redirectUrl(): URL {
-    return this.callbackUrl;
-  }
-
-  get clientMetadata(): OAuthClientMetadata {
-    return {
-      client_name: "PwrAgent",
-      redirect_uris: [this.callbackUrl.href],
-      grant_types: ["authorization_code"],
-      response_types: ["code"],
-      token_endpoint_auth_method: "none",
-    };
-  }
-
-  state(): string {
-    return this.authorizationState;
-  }
-
-  clientInformation(): OAuthClientInformationMixed | undefined {
-    return this.credential.clientInformation;
-  }
-
-  async saveClientInformation(
-    clientInformation: OAuthClientInformationMixed,
-  ): Promise<void> {
-    this.credential.clientInformation = clientInformation;
-    await this.persistIfAuthorized();
-  }
-
-  tokens(): OAuthTokens | undefined {
-    return this.credential.tokens;
-  }
-
-  async saveTokens(tokens: OAuthTokens): Promise<void> {
-    this.credential.tokens = tokens;
-    await this.persistCredential(this.snapshot());
-  }
-
-  async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
-    await this.onRedirect(authorizationUrl);
-  }
-
-  async saveCodeVerifier(codeVerifier: string): Promise<void> {
-    this.credential.codeVerifier = codeVerifier;
-    await this.persistIfAuthorized();
-  }
-
-  codeVerifier(): string {
-    if (!this.credential.codeVerifier) {
-      throw new Error("PwrSnap OAuth code verifier is unavailable.");
-    }
-    return this.credential.codeVerifier;
-  }
-
-  async saveDiscoveryState(state: OAuthDiscoveryState): Promise<void> {
-    this.credential.discoveryState = state;
-    await this.persistIfAuthorized();
-  }
-
-  discoveryState(): OAuthDiscoveryState | undefined {
-    return this.credential.discoveryState;
-  }
-
-  async invalidateCredentials(
-    scope: "all" | "client" | "tokens" | "verifier" | "discovery",
-  ): Promise<void> {
-    if (scope === "all" || scope === "client") {
-      delete this.credential.clientInformation;
-    }
-    if (scope === "all" || scope === "tokens") {
-      delete this.credential.tokens;
-    }
-    if (scope === "all" || scope === "verifier") {
-      delete this.credential.codeVerifier;
-    }
-    if (scope === "all" || scope === "discovery") {
-      delete this.credential.discoveryState;
-    }
-    await this.persistCredential(this.snapshot());
-  }
-
-  snapshot(): PwrSnapCredential {
-    return { ...this.credential };
-  }
-
-  private async persistIfAuthorized(): Promise<void> {
-    if (this.credential.tokens?.access_token) {
-      await this.persistCredential(this.snapshot());
-    }
-  }
-}
-
-function parseCredential(value: string | undefined): PwrSnapCredential {
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value) as PwrSnapCredential;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
 
 function resolveDefaultPwrSnapInstallPaths(): string[] {
   if (process.platform === "darwin") {
@@ -256,9 +169,14 @@ function delay(milliseconds: number): Promise<void> {
 function htmlResponse(
   title: string,
   detail: string,
-  options: { liveStatus?: boolean } = {},
+  options: { displayName?: string; liveStatus?: boolean } = {},
 ): string {
   const safeTitle = escapeHtml(title);
+  const displayName = options.displayName ?? "MCP server";
+  const safeDisplayName = escapeHtml(displayName);
+  const connectedTitle = JSON.stringify(
+    `PwrAgent is connected to ${displayName}`,
+  ).replaceAll("<", "\\u003c");
   const liveStatus = options.liveStatus === true;
   return `<!doctype html>
 <html lang="en">
@@ -278,7 +196,7 @@ function htmlResponse(
     .detail { max-width: 610px; margin: 20px auto 0; color: #aaa49d; font-size: 17px; line-height: 1.55; }
     .connection { display: grid; grid-template-columns: 138px minmax(140px, 1fr) 138px; align-items: center; gap: 22px; max-width: 650px; margin: 58px auto 50px; }
     .app { display: grid; justify-items: center; gap: 13px; color: #d9d4cd; font-size: 13px; font-weight: 680; }
-    .app-icon { width: 104px; height: 104px; padding: 4px; border: 1px solid #2b2926; border-radius: 27px; object-fit: contain; background: #141312; box-shadow: 0 20px 55px rgba(0, 0, 0, .45); }
+    .app-icon { display: grid; width: 104px; height: 104px; padding: 4px; place-items: center; border: 1px solid #2b2926; border-radius: 27px; object-fit: contain; color: #f1883a; background: #141312; box-shadow: 0 20px 55px rgba(0, 0, 0, .45); font-size: 30px; font-weight: 760; }
     .line { position: relative; height: 38px; }
     .line::before { content: ""; position: absolute; top: 18px; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #8a3c17, #ff8a1f 45%, #ffc174 55%, #8a3c17); box-shadow: 0 0 14px rgba(255, 138, 31, .7); }
     .signal { position: absolute; top: 12px; left: -4px; width: 14px; height: 14px; border: 3px solid #090909; border-radius: 50%; background: #ff9c43; box-shadow: 0 0 0 3px rgba(255, 138, 31, .18), 0 0 18px #ff8a1f; animation: call 1.8s cubic-bezier(.45, 0, .25, 1) infinite; }
@@ -296,13 +214,15 @@ function htmlResponse(
 </head>
 <body${liveStatus ? "" : " class=\"is-failed\""}>
   <main>
-    <p class="eyebrow">PwrSuite connection</p>
+    <p class="eyebrow">Secure MCP connection</p>
     <h1 id="title">${safeTitle}</h1>
     <p class="detail" id="detail">${escapeHtml(detail)}</p>
-    <div class="connection" aria-label="PwrAgent connection to PwrSnap">
+    <div class="connection" aria-label="PwrAgent connection to ${safeDisplayName}">
       <div class="app"><img class="app-icon" src="/assets/pwragent.png" alt="PwrAgent"><span>PwrAgent</span></div>
       <div class="line" aria-hidden="true"><span class="signal"></span></div>
-      <div class="app"><img class="app-icon" src="/assets/pwrsnap.png" alt="PwrSnap"><span>PwrSnap</span></div>
+      <div class="app">${displayName === "PwrSnap"
+        ? `<img class="app-icon" src="/assets/pwrsnap.png" alt="PwrSnap">`
+        : `<span class="app-icon" aria-hidden="true">MCP</span>`}<span>${safeDisplayName}</span></div>
     </div>
     <div class="status"><span class="status-dot"></span><span id="status">${liveStatus ? "Finishing secure connection…" : "Connection stopped"}</span></div>
     <p class="close">You can close this window at any time.</p>
@@ -314,7 +234,7 @@ function htmlResponse(
         const result = await response.json();
         if (result.state === "connected") {
           document.body.className = "is-connected";
-          document.getElementById("title").textContent = "PwrAgent is connected to PwrSnap";
+          document.getElementById("title").textContent = ${connectedTitle};
           document.getElementById("detail").textContent = result.detail;
           document.getElementById("status").textContent = "Secure connection ready";
           return;
@@ -385,6 +305,12 @@ export class PwrSnapConnectionService {
   private readonly openPath: (path: string) => Promise<string>;
   private readonly resolveInstallPaths: () => string[];
   private readonly settings: PwrSnapSettings;
+  private readonly registry: McpConnectionRegistry;
+  private readonly credentialVault: McpCredentialVault;
+  private readonly leaseManager:
+    | Pick<RuntimeLeaseManager, "acquire" | "id" | "release" | "snapshot">
+    | null;
+  private readonly brokerDiscovery: McpConnectionBrokerDiscovery;
   private readonly launchPollAttempts: number;
   private readonly launchPollDelayMs: number;
   private bridgeServer?: NetServer;
@@ -396,9 +322,12 @@ export class PwrSnapConnectionService {
     string,
     { server: McpConnectionBridgeServer; token: string }
   >();
-  private upstreamClient?: Client;
-  private upstreamTransport?: StreamableHTTPClientTransport;
+  private readonly coordinators = new Map<string, McpOAuthSessionCoordinator>();
+  private readonly upstreamSessions = new Map<string, UpstreamSession>();
   private connectPromise?: Promise<ConnectPwrSnapResponse>;
+  private leaseHeld = false;
+  private brokerToken?: string;
+  private nonOwnerHolder?: RuntimeLeaseHolder;
 
   constructor(options: PwrSnapConnectionServiceOptions = {}) {
     this.bridgeEntryPath =
@@ -409,13 +338,30 @@ export class PwrSnapConnectionService {
     this.resolveInstallPaths =
       options.resolveInstallPaths ?? resolveDefaultPwrSnapInstallPaths;
     this.settings = options.settings ?? getDesktopSettingsService();
+    this.registry = options.registry ?? new McpConnectionRegistry();
+    this.credentialVault =
+      options.credentialVault
+      ?? new McpCredentialVault({ settings: this.settings });
+    this.leaseManager = options.leaseManager === undefined
+      ? getRuntimeLeaseManager()
+      : options.leaseManager;
+    this.brokerDiscovery =
+      options.brokerDiscovery ?? new McpConnectionBrokerDiscovery();
     this.launchPollAttempts = options.launchPollAttempts ?? 16;
     this.launchPollDelayMs = options.launchPollDelayMs ?? 500;
   }
 
   async readStatus(): Promise<PwrSnapConnectionStatus> {
-    const [credential, endpointAvailable] = await Promise.all([
-      this.readCredential(),
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<PwrSnapConnectionStatus>(
+        ownership.holder,
+        "broker/pwrsnap-status",
+      );
+    }
+    const [configured, endpointAvailable] = await Promise.all([
+      this.coordinatorFor(this.requireConnection(PWRSNAP_MCP_CONNECTION_ID))
+        .configured(),
       this.isEndpointAvailable(),
     ]);
     const installed = endpointAvailable || Boolean(this.findInstalledPath());
@@ -427,7 +373,7 @@ export class PwrSnapConnectionService {
         : installed
           ? "installed"
           : "not_installed",
-      configured: Boolean(credential.tokens?.access_token),
+      configured,
       ...(!endpointAvailable && installed
         ? {
             detail:
@@ -459,6 +405,13 @@ export class PwrSnapConnectionService {
   }
 
   async connect(): Promise<ConnectPwrSnapResponse> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<ConnectPwrSnapResponse>(
+        ownership.holder,
+        "broker/pwrsnap-connect",
+      );
+    }
     if (!this.connectPromise) {
       this.connectPromise = this.connectNow().finally(() => {
         this.connectPromise = undefined;
@@ -467,16 +420,134 @@ export class PwrSnapConnectionService {
     return await this.connectPromise;
   }
 
+  async listConnections(): Promise<McpConnectionStatus[]> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus[]>(
+        ownership.holder,
+        "broker/list",
+      );
+    }
+    return await Promise.all(
+      this.registry.list().map(async (connection) =>
+        await this.connectionStatus(connection),
+      ),
+    );
+  }
+
+  async createConnection(
+    request: CreateMcpConnectionRequest,
+  ): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/create",
+        request,
+      );
+    }
+    const connection = this.registry.create(request);
+    return await this.connectionStatus(connection);
+  }
+
+  async authorizeConnection(connectionId: string): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/authorize",
+        { connectionId },
+      );
+    }
+    const connection = this.requireConnection(connectionId);
+    await this.closeConnectionSessions(connectionId);
+    const authorizationState = randomBytes(24).toString("base64url");
+    const callback = await this.createOAuthCallback(
+      authorizationState,
+      connection.displayName,
+    );
+    try {
+      await this.coordinatorFor(connection).authorize({
+        redirectUrl: callback.url,
+        state: authorizationState,
+        onRedirect: async (url) => await this.openExternal(url.href),
+        waitForCode: callback.waitForCode,
+      });
+      if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
+        await this.settings.clearPwrSnapMcpCredential();
+      }
+      callback.complete(
+        "connected",
+        `PwrAgent can now offer ${connection.displayName} to the agents and threads you choose.`,
+      );
+      return await this.connectionStatus(connection);
+    } catch (cause) {
+      callback.complete(
+        "failed",
+        cause instanceof Error
+          ? cause.message
+          : "The secure connection could not be completed.",
+      );
+      throw cause;
+    } finally {
+      await callback.close();
+    }
+  }
+
+  async disconnectConnection(connectionId: string): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/disconnect",
+        { connectionId },
+      );
+    }
+    const connection = this.requireConnection(connectionId);
+    await this.closeConnectionSessions(connectionId);
+    await this.coordinatorFor(connection).disconnect();
+    if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
+      await this.settings.clearPwrSnapMcpCredential();
+    }
+    return await this.connectionStatus(connection);
+  }
+
+  async removeConnection(connectionId: string): Promise<boolean> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<boolean>(
+        ownership.holder,
+        "broker/remove",
+        { connectionId },
+      );
+    }
+    if (connectionId === PWRSNAP_MCP_CONNECTION_ID) {
+      throw new Error("The built-in PwrSnap connection cannot be removed.");
+    }
+    this.requireConnection(connectionId);
+    await this.closeConnectionSessions(connectionId);
+    await this.coordinatorFor(this.requireConnection(connectionId)).disconnect();
+    this.coordinators.delete(connectionId);
+    return this.registry.remove(connectionId);
+  }
+
   async registerBridge(
     connectionId: string,
     threadId?: string,
   ): Promise<McpConnectionBridgeRegistration> {
-    if (connectionId !== PWRSNAP_MCP_CONNECTION_ID) {
-      throw new Error(`Unknown MCP connection: ${connectionId}`);
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.registerOwnerBridge(
+        ownership.holder,
+        connectionId,
+        threadId,
+      );
     }
-    const credential = await this.readCredential();
-    if (!credential.tokens?.access_token) {
-      throw new Error("PwrSnap is not connected to PwrAgent.");
+    const connection = this.requireConnection(connectionId);
+    if (!(await this.coordinatorFor(connection).configured())) {
+      throw new Error(
+        `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
+      );
     }
     const registrationKey = threadId
       ? `${connectionId}:${threadId}`
@@ -489,22 +560,13 @@ export class PwrSnapConnectionService {
     }
     await this.startBridgeServer();
     const token = randomBytes(32).toString("base64url");
-    this.grants.set(token, { connectionId: PWRSNAP_MCP_CONNECTION_ID });
+    this.grants.set(token, { connectionId });
     const socketPath = this.bridgeSocketPath;
     if (!socketPath) {
       this.grants.delete(token);
       throw new Error("The PwrAgent MCP bridge is unavailable.");
     }
-    const server = {
-      name: PWRSNAP_MCP_CONNECTION_ID,
-      command: process.execPath,
-      args: [this.bridgeEntryPath],
-      env: {
-        ELECTRON_RUN_AS_NODE: "1",
-        PWRAGENT_MCP_CONNECTION_SOCKET: socketPath,
-        PWRAGENT_MCP_CONNECTION_TOKEN: token,
-      },
-    } satisfies McpConnectionBridgeServer;
+    const server = this.buildBridgeServer(connectionId, token, socketPath);
     if (registrationKey) {
       this.threadRegistrations.set(registrationKey, { server, token });
     }
@@ -531,6 +593,7 @@ export class PwrSnapConnectionService {
       },
       revoke: () => {
         this.grants.delete(token);
+        void this.closeUpstreamSession(token);
         if (currentRegistrationKey) {
           this.threadRegistrations.delete(currentRegistrationKey);
         }
@@ -541,7 +604,11 @@ export class PwrSnapConnectionService {
   async close(): Promise<void> {
     this.grants.clear();
     this.threadRegistrations.clear();
-    await this.closeUpstream();
+    await Promise.all(
+      [...this.upstreamSessions.keys()].map(async (token) =>
+        await this.closeUpstreamSession(token),
+      ),
+    );
     const server = this.bridgeServer;
     this.bridgeServer = undefined;
     this.bridgeSocketPath = undefined;
@@ -553,6 +620,219 @@ export class PwrSnapConnectionService {
     if (directory) {
       await rm(directory, { recursive: true, force: true }).catch(() => undefined);
     }
+    if (this.leaseHeld) {
+      if (this.leaseManager) {
+        try {
+          this.brokerDiscovery.clear(this.leaseManager.id);
+        } catch (error) {
+          connectionLog.warn("MCP broker discovery cleanup failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      this.leaseManager?.release("mcp_connections");
+      this.leaseHeld = false;
+      this.brokerToken = undefined;
+    }
+  }
+
+  async start(): Promise<void> {
+    const ownership = this.claimProfileOwnership();
+    if (!ownership.owned) {
+      this.readOwnerBrokerRecord(ownership.holder);
+      return;
+    }
+    try {
+      await this.startBridgeServer();
+    } catch (error) {
+      this.releaseOwnershipAfterBrokerFailure();
+      throw error;
+    }
+  }
+
+  private claimProfileOwnership(): ProfileOwnership {
+    if (!this.leaseManager || this.leaseHeld) return { owned: true };
+    if (this.nonOwnerHolder) {
+      return { owned: false, holder: this.nonOwnerHolder };
+    }
+    const result = this.leaseManager.acquire("mcp_connections");
+    if (!result.acquired) {
+      this.nonOwnerHolder = result.holder;
+      return { owned: false, holder: result.holder };
+    }
+    this.nonOwnerHolder = undefined;
+    this.leaseHeld = true;
+    this.brokerToken = randomBytes(32).toString("base64url");
+    return { owned: true };
+  }
+
+  private async ensureOwnerBroker(): Promise<ProfileOwnership> {
+    const ownership = this.claimProfileOwnership();
+    if (ownership.owned && this.leaseManager && this.leaseHeld) {
+      try {
+        await this.startBridgeServer();
+      } catch (error) {
+        this.releaseOwnershipAfterBrokerFailure();
+        throw error;
+      }
+    }
+    return ownership;
+  }
+
+  private releaseOwnershipAfterBrokerFailure(): void {
+    this.leaseManager?.release("mcp_connections");
+    this.leaseHeld = false;
+    this.brokerToken = undefined;
+  }
+
+  private readOwnerBrokerRecord(
+    holder: RuntimeLeaseHolder,
+  ): McpConnectionBrokerRecord {
+    const record = this.brokerDiscovery.read();
+    if (!record || record.ownerInstanceId !== holder.instanceId) {
+      this.nonOwnerHolder = undefined;
+      throw new Error(
+        "The MCP connection owner has not published a valid local broker endpoint.",
+      );
+    }
+    return record;
+  }
+
+  private async requestOwnerBroker<T>(
+    holder: RuntimeLeaseHolder,
+    operation: string,
+    params?: unknown,
+  ): Promise<T> {
+    try {
+      return await this.requestBrokerRecord<T>(
+        this.readOwnerBrokerRecord(holder),
+        operation,
+        params,
+      );
+    } catch (error) {
+      this.nonOwnerHolder = undefined;
+      throw error;
+    }
+  }
+
+  private requestBrokerRecord<T>(
+    record: McpConnectionBrokerRecord,
+    operation: string,
+    params?: unknown,
+  ): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const socket = connect(record.socketPath);
+      let buffer = "";
+      let settled = false;
+      const finish = (error?: Error, value?: T): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        socket.destroy();
+        if (error) reject(error);
+        else resolve(value as T);
+      };
+      const timeout = setTimeout(
+        () => finish(new Error("The MCP connection owner did not respond.")),
+        MCP_CONNECTION_TOOL_TIMEOUT_MS,
+      );
+      timeout.unref();
+      socket.setEncoding("utf8");
+      socket.on("connect", () => {
+        socket.write(`${JSON.stringify({
+          brokerToken: record.brokerToken,
+          op: operation,
+          ...(params === undefined ? {} : { params }),
+        })}\n`);
+      });
+      socket.on("data", (chunk: string) => {
+        buffer += chunk;
+        if (buffer.length > MAX_RPC_LINE_BYTES) {
+          finish(new Error("The MCP connection owner response was too large."));
+          return;
+        }
+        const newline = buffer.indexOf("\n");
+        if (newline === -1) return;
+        try {
+          const response = JSON.parse(buffer.slice(0, newline)) as BridgeResponse;
+          if (!response.ok) {
+            finish(new Error(response.error));
+            return;
+          }
+          finish(undefined, response.result as T);
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+      socket.on("error", (error) => finish(error));
+      socket.on("close", () => {
+        finish(new Error("The MCP connection owner closed unexpectedly."));
+      });
+    });
+  }
+
+  private async registerOwnerBridge(
+    holder: RuntimeLeaseHolder,
+    connectionId: string,
+    threadId?: string,
+  ): Promise<McpConnectionBridgeRegistration> {
+    let record: McpConnectionBrokerRecord;
+    let result: { token: string };
+    try {
+      record = this.readOwnerBrokerRecord(holder);
+      result = await this.requestBrokerRecord<{ token: string }>(
+        record,
+        "broker/register",
+        { connectionId, threadId },
+      );
+    } catch (error) {
+      this.nonOwnerHolder = undefined;
+      throw error;
+    }
+    const server = this.buildBridgeServer(
+      connectionId,
+      result.token,
+      record.socketPath,
+    );
+    return {
+      server,
+      bindThread: (nextThreadId) => {
+        void this.requestBrokerRecord(
+          record,
+          "broker/bind",
+          { threadId: nextThreadId, token: result.token },
+        ).catch((error) => {
+          connectionLog.warn("remote MCP bridge bind failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      },
+      revoke: () => {
+        void this.requestBrokerRecord(
+          record,
+          "broker/revoke",
+          { token: result.token },
+        ).catch(() => undefined);
+      },
+    };
+  }
+
+  private buildBridgeServer(
+    connectionId: string,
+    token: string,
+    socketPath: string,
+  ): McpConnectionBridgeServer {
+    return {
+      name: connectionId,
+      command: process.execPath,
+      args: [this.bridgeEntryPath],
+      env: {
+        ELECTRON_RUN_AS_NODE: "1",
+        PWRAGENT_MCP_CONNECTION_NAME: connectionId,
+        PWRAGENT_MCP_CONNECTION_SOCKET: socketPath,
+        PWRAGENT_MCP_CONNECTION_TOKEN: token,
+      },
+    };
   }
 
   private async connectNow(): Promise<ConnectPwrSnapResponse> {
@@ -572,54 +852,14 @@ export class PwrSnapConnectionService {
       }
     }
 
-    await this.closeUpstream();
-    const authorizationState = randomBytes(24).toString("base64url");
-    const callback = await this.createOAuthCallback(authorizationState);
-    const provider = new StoredOAuthProvider(
-      callback.url,
-      {},
-      authorizationState,
-      async (url) => await this.openExternal(url.href),
-      async (credential) => await this.persistCredential(credential),
-    );
-    try {
-      const initial = await auth(provider, {
-        serverUrl: PWRSNAP_MCP_URL,
-        scope: PWRSNAP_SCOPES,
-        fetchFn: this.fetchFn,
-      });
-      if (initial !== "REDIRECT") {
-        throw new Error("PwrSnap authorization did not open a consent request.");
-      }
-      const authorizationCode = await callback.waitForCode();
-      const completed = await auth(provider, {
-        serverUrl: PWRSNAP_MCP_URL,
-        authorizationCode,
-        scope: PWRSNAP_SCOPES,
-        fetchFn: this.fetchFn,
-      });
-      if (completed !== "AUTHORIZED") {
-        throw new Error("PwrSnap authorization did not complete.");
-      }
-      await this.persistCredential(provider.snapshot());
-      await this.ensureUpstreamClient();
-      callback.complete(
-        "connected",
-        "PwrAgent can now offer PwrSnap to the agents and threads you choose.",
-      );
-      return { outcome: "connected", status: await this.readStatus() };
-    } catch (cause) {
-      callback.complete(
-        "failed",
-        cause instanceof Error ? cause.message : "The secure connection could not be completed.",
-      );
-      throw cause;
-    } finally {
-      await callback.close();
-    }
+    await this.authorizeConnection(PWRSNAP_MCP_CONNECTION_ID);
+    return { outcome: "connected", status: await this.readStatus() };
   }
 
-  private async createOAuthCallback(expectedState: string): Promise<{
+  private async createOAuthCallback(
+    expectedState: string,
+    displayName: string,
+  ): Promise<{
     url: URL;
     waitForCode: () => Promise<string>;
     complete: (state: "connected" | "failed", detail: string) => void;
@@ -676,7 +916,9 @@ export class PwrSnapConnectionService {
           requestUrl.searchParams.get("error_description") ?? error;
         callbackState = { state: "failed", detail };
         response.writeHead(400, callbackHtmlHeaders());
-        response.end(htmlResponse("PwrSnap connection declined", detail));
+        response.end(htmlResponse(`${displayName} connection declined`, detail, {
+          displayName,
+        }));
         rejectRequest?.(new Error(detail));
         return;
       }
@@ -688,19 +930,20 @@ export class PwrSnapConnectionService {
         response.writeHead(400, callbackHtmlHeaders());
         response.end(
           htmlResponse(
-            "PwrSnap connection rejected",
+            `${displayName} connection rejected`,
             "The authorization state did not match.",
+            { displayName },
           ),
         );
-        rejectRequest?.(new Error("PwrSnap authorization state did not match."));
+        rejectRequest?.(new Error(`${displayName} authorization state did not match.`));
         return;
       }
       response.writeHead(200, callbackHtmlHeaders());
       response.end(
         htmlResponse(
-          "Connecting PwrAgent to PwrSnap",
-          "PwrSnap approved the request. PwrAgent is finishing the secure local connection.",
-          { liveStatus: true },
+          `Connecting PwrAgent to ${displayName}`,
+          `${displayName} approved the request. PwrAgent is finishing the secure connection.`,
+          { displayName, liveStatus: true },
         ),
       );
       resolveRequest?.(requestUrl);
@@ -715,18 +958,20 @@ export class PwrSnapConnectionService {
     const address = server.address();
     if (!address || typeof address === "string") {
       server.close();
-      throw new Error("Could not start the PwrSnap OAuth callback.");
+      throw new Error(`Could not start the ${displayName} OAuth callback.`);
     }
     return {
       url: new URL(`http://127.0.0.1:${address.port}/oauth/callback`),
       waitForCode: async () => {
         const timeout = setTimeout(() => {
-          rejectRequest?.(new Error("PwrSnap authorization timed out."));
+          rejectRequest?.(new Error(`${displayName} authorization timed out.`));
         }, OAUTH_CALLBACK_TIMEOUT_MS);
         try {
           const requestUrl = await requestPromise;
           const code = requestUrl.searchParams.get("code");
-          if (!code) throw new Error("PwrSnap did not return an authorization code.");
+          if (!code) {
+            throw new Error(`${displayName} did not return an authorization code.`);
+          }
           return code;
         } finally {
           clearTimeout(timeout);
@@ -759,64 +1004,110 @@ export class PwrSnapConnectionService {
     return this.resolveInstallPaths().find((candidate) => existsSync(candidate));
   }
 
-  private async readCredential(): Promise<PwrSnapCredential> {
-    return parseCredential(await this.settings.resolvePwrSnapMcpCredential());
+  private requireConnection(connectionId: string): McpConnectionRecord {
+    const connection = this.registry.get(connectionId);
+    if (!connection || !connection.enabled) {
+      throw new Error(`Unknown or disabled MCP connection: ${connectionId}`);
+    }
+    return connection;
   }
 
-  private async persistCredential(
-    credential: PwrSnapCredential,
-  ): Promise<void> {
-    if (!credential.tokens?.access_token) {
-      await this.settings.clearPwrSnapMcpCredential();
-      return;
+  private coordinatorFor(
+    connection: McpConnectionRecord,
+  ): McpOAuthSessionCoordinator {
+    let coordinator = this.coordinators.get(connection.id);
+    if (!coordinator) {
+      const serverUrl = new URL(connection.serverUrl);
+      const allowLoopback = serverUrl.hostname === "127.0.0.1"
+        || serverUrl.hostname === "localhost"
+        || serverUrl.hostname === "[::1]";
+      coordinator = new McpOAuthSessionCoordinator({
+        connectionId: connection.id,
+        serverUrl,
+        ...(connection.kind === "pwrsnap" ? { scope: PWRSNAP_SCOPES } : {}),
+        vault: this.credentialVault,
+        fetchFn: createMcpSafeFetch({
+          allowLoopback,
+          fetchFn: this.fetchFn,
+        }),
+        onStateChange: (state, detail) => {
+          connectionLog.info("MCP connection state changed", {
+            connectionId: connection.id,
+            state,
+            ...(detail ? { detail } : {}),
+          });
+        },
+      });
+      this.coordinators.set(connection.id, coordinator);
     }
-    await this.settings.savePwrSnapMcpCredential(JSON.stringify(credential));
+    return coordinator;
   }
 
-  private async ensureUpstreamClient(): Promise<Client> {
-    if (this.upstreamClient) return this.upstreamClient;
-    const credential = await this.readCredential();
-    if (!credential.tokens?.access_token) {
-      throw new Error("PwrSnap is not connected to PwrAgent.");
+  private async connectionStatus(
+    connection: McpConnectionRecord,
+  ): Promise<McpConnectionStatus> {
+    const coordinator = this.coordinatorFor(connection);
+    const configured = await coordinator.configured();
+    return {
+      ...connection,
+      configured,
+      state: configured ? coordinator.state : "disconnected",
+      ...(coordinator.detail ? { detail: coordinator.detail } : {}),
+    };
+  }
+
+  private async ensureUpstreamClient(
+    token: string,
+    grant: BridgeGrant,
+  ): Promise<Client> {
+    const existing = this.upstreamSessions.get(token);
+    if (existing) return existing.client;
+    const connection = this.requireConnection(grant.connectionId);
+    const coordinator = this.coordinatorFor(connection);
+    if (!(await coordinator.configured())) {
+      throw new Error(
+        `${connection.displayName} needs to be reauthorized in Settings → Plugins.`,
+      );
     }
-    const provider = new StoredOAuthProvider(
-      new URL("http://127.0.0.1/oauth/callback"),
-      credential,
-      randomBytes(24).toString("base64url"),
-      async () => {
-        throw new Error("PwrSnap needs to be reconnected from New Thread.");
-      },
-      async (next) => await this.persistCredential(next),
+    const transport = new StreamableHTTPClientTransport(
+      new URL(connection.serverUrl),
+      { fetch: coordinator.authorizedFetch() },
     );
-    const transport = new StreamableHTTPClientTransport(PWRSNAP_MCP_URL, {
-      authProvider: provider,
-      fetch: this.fetchFn,
-    });
     const client = new Client(
-      { name: "pwragent-pwrsnap-proxy", version: "1.0.0" },
+      {
+        name: `pwragent-${connection.id}-proxy`,
+        version: "1.0.0",
+      },
       { capabilities: {} },
     );
     try {
       await client.connect(transport);
+      if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
+        await this.settings.clearPwrSnapMcpCredential();
+      }
     } catch (error) {
       await transport.close().catch(() => undefined);
       throw error;
     }
-    this.upstreamClient = client;
-    this.upstreamTransport = transport;
+    this.upstreamSessions.set(token, { client, transport });
     return client;
   }
 
-  private async closeUpstream(): Promise<void> {
-    const client = this.upstreamClient;
-    const transport = this.upstreamTransport;
-    this.upstreamClient = undefined;
-    this.upstreamTransport = undefined;
-    if (client) {
-      await client.close().catch(() => undefined);
-    } else if (transport) {
-      await transport.close().catch(() => undefined);
-    }
+  private async closeUpstreamSession(token: string): Promise<void> {
+    const session = this.upstreamSessions.get(token);
+    this.upstreamSessions.delete(token);
+    if (!session) return;
+    await session.client.close().catch(async () => {
+      await session.transport.close().catch(() => undefined);
+    });
+  }
+
+  private async closeConnectionSessions(connectionId: string): Promise<void> {
+    await Promise.all(
+      [...this.grants.entries()]
+        .filter(([, grant]) => grant.connectionId === connectionId)
+        .map(async ([token]) => await this.closeUpstreamSession(token)),
+    );
   }
 
   private async startBridgeServer(): Promise<void> {
@@ -852,6 +1143,28 @@ export class PwrSnapConnectionService {
     }
     this.bridgeServer = server;
     this.bridgeSocketPath = socketPath;
+    if (this.leaseHeld && this.leaseManager && this.brokerToken) {
+      try {
+        this.brokerDiscovery.publish({
+          version: 1,
+          ownerInstanceId: this.leaseManager.id,
+          socketPath,
+          brokerToken: this.brokerToken,
+          publishedAt: Date.now(),
+        });
+      } catch (error) {
+        this.bridgeServer = undefined;
+        this.bridgeSocketPath = undefined;
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        const directory = this.bridgeSocketDirectory;
+        this.bridgeSocketDirectory = undefined;
+        if (directory) {
+          await rm(directory, { recursive: true, force: true })
+            .catch(() => undefined);
+        }
+        throw error;
+      }
+    }
     connectionLog.info("MCP connection bridge listening", { socketPath });
   }
 
@@ -882,29 +1195,194 @@ export class PwrSnapConnectionService {
       this.respond(socket, { ok: false, error: "malformed request" });
       return;
     }
-    if (typeof request.token !== "string" || !this.grants.has(request.token)) {
+    if (typeof request.brokerToken === "string") {
+      if (!secureTokenEqual(request.brokerToken, this.brokerToken)) {
+        this.respond(socket, { ok: false, error: "unauthorized" });
+        return;
+      }
+      try {
+        const result = await this.dispatchBrokerOperation(
+          request.op,
+          request.params,
+        );
+        this.respond(socket, { ok: true, result });
+      } catch (error) {
+        this.respond(socket, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+    if (typeof request.token !== "string") {
       this.respond(socket, { ok: false, error: "unauthorized" });
       return;
     }
+    const grant = this.grants.get(request.token);
+    if (!grant) {
+      this.respond(socket, { ok: false, error: "unauthorized" });
+      return;
+    }
+    const abortController = new AbortController();
+    socket.once("close", () => abortController.abort());
     try {
-      const result = await this.dispatchBridgeOperation(request.op, request.params);
+      const result = await this.dispatchBridgeOperation(
+        request.token,
+        grant,
+        request.op,
+        request.params,
+        abortController.signal,
+      );
       this.respond(socket, { ok: true, result });
     } catch (error) {
-      await this.closeUpstream();
+      await this.closeUpstreamSession(request.token);
       const message = error instanceof Error ? error.message : String(error);
       connectionLog.warn("proxied MCP operation failed", {
-        message,
+        connectionId: grant.connectionId,
+        errorName: error instanceof Error ? error.name : "Error",
         operation: request.op,
       });
       this.respond(socket, { ok: false, error: message });
     }
   }
 
-  private async dispatchBridgeOperation(
+  private async dispatchBrokerOperation(
     operation: unknown,
     params: unknown,
   ): Promise<unknown> {
-    const client = await this.ensureUpstreamClient();
+    const values = params && typeof params === "object"
+      ? params as Record<string, unknown>
+      : {};
+    if (operation === "broker/list") {
+      return await this.listConnections();
+    }
+    if (operation === "broker/pwrsnap-status") {
+      return await this.readStatus();
+    }
+    if (operation === "broker/pwrsnap-connect") {
+      return await this.connect();
+    }
+    if (operation === "broker/create") {
+      if (
+        typeof values.displayName !== "string"
+        || typeof values.serverUrl !== "string"
+      ) {
+        throw new Error("Invalid MCP connection create request.");
+      }
+      return await this.createConnection({
+        displayName: values.displayName,
+        serverUrl: values.serverUrl,
+      });
+    }
+    if (
+      operation === "broker/authorize"
+      || operation === "broker/disconnect"
+      || operation === "broker/remove"
+    ) {
+      if (typeof values.connectionId !== "string") {
+        throw new Error("Invalid MCP connection request.");
+      }
+      if (operation === "broker/authorize") {
+        return await this.authorizeConnection(values.connectionId);
+      }
+      if (operation === "broker/disconnect") {
+        return await this.disconnectConnection(values.connectionId);
+      }
+      return await this.removeConnection(values.connectionId);
+    }
+    if (operation === "broker/register") {
+      if (typeof values.connectionId !== "string") {
+        throw new Error("Invalid MCP bridge registration request.");
+      }
+      const connection = this.requireConnection(values.connectionId);
+      if (!(await this.coordinatorFor(connection).configured())) {
+        throw new Error(
+          `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
+        );
+      }
+      const threadId = typeof values.threadId === "string"
+        ? values.threadId
+        : undefined;
+      const registrationKey = threadId
+        ? `${connection.id}:${threadId}`
+        : undefined;
+      const existing = registrationKey
+        ? this.threadRegistrations.get(registrationKey)
+        : undefined;
+      if (existing && this.grants.has(existing.token)) {
+        return { token: existing.token };
+      }
+      const token = randomBytes(32).toString("base64url");
+      this.grants.set(token, {
+        connectionId: connection.id,
+        ...(threadId ? { threadId } : {}),
+      });
+      if (registrationKey && this.bridgeSocketPath) {
+        this.threadRegistrations.set(registrationKey, {
+          server: this.buildBridgeServer(
+            connection.id,
+            token,
+            this.bridgeSocketPath,
+          ),
+          token,
+        });
+      }
+      return { token };
+    }
+    if (operation === "broker/bind") {
+      if (
+        typeof values.token !== "string"
+        || typeof values.threadId !== "string"
+      ) {
+        throw new Error("Invalid MCP bridge bind request.");
+      }
+      const grant = this.grants.get(values.token);
+      if (!grant) throw new Error("The MCP bridge grant is no longer active.");
+      grant.threadId = values.threadId;
+      for (const [key, registration] of this.threadRegistrations) {
+        if (registration.token === values.token) {
+          this.threadRegistrations.delete(key);
+        }
+      }
+      if (this.bridgeSocketPath) {
+        this.threadRegistrations.set(
+          `${grant.connectionId}:${values.threadId}`,
+          {
+            server: this.buildBridgeServer(
+              grant.connectionId,
+              values.token,
+              this.bridgeSocketPath,
+            ),
+            token: values.token,
+          },
+        );
+      }
+      return true;
+    }
+    if (operation === "broker/revoke") {
+      if (typeof values.token !== "string") {
+        throw new Error("Invalid MCP bridge revoke request.");
+      }
+      this.grants.delete(values.token);
+      for (const [key, registration] of this.threadRegistrations) {
+        if (registration.token === values.token) {
+          this.threadRegistrations.delete(key);
+        }
+      }
+      await this.closeUpstreamSession(values.token);
+      return true;
+    }
+    throw new Error("Unsupported MCP owner broker operation.");
+  }
+
+  private async dispatchBridgeOperation(
+    token: string,
+    grant: BridgeGrant,
+    operation: unknown,
+    params: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const client = await this.ensureUpstreamClient(token, grant);
     const values = params && typeof params === "object"
       ? params as Record<string, unknown>
       : {};
@@ -923,7 +1401,10 @@ export class PwrSnapConnectionService {
         return await client.callTool(
           values as Parameters<Client["callTool"]>[0],
           undefined,
-          { timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS },
+          {
+            ...(signal ? { signal } : {}),
+            timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS,
+          },
         );
       case "resources/list":
         return await client.listResources(values);
@@ -947,6 +1428,14 @@ export class PwrSnapConnectionService {
   private respond(socket: Socket, response: BridgeResponse): void {
     if (!socket.destroyed) socket.end(`${JSON.stringify(response)}\n`);
   }
+}
+
+function secureTokenEqual(candidate: string, expected: string | undefined): boolean {
+  if (!expected) return false;
+  const candidateBytes = Buffer.from(candidate);
+  const expectedBytes = Buffer.from(expected);
+  return candidateBytes.length === expectedBytes.length
+    && timingSafeEqual(candidateBytes, expectedBytes);
 }
 
 let pwrSnapConnectionService: PwrSnapConnectionService | undefined;

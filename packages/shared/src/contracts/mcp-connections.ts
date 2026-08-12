@@ -2,7 +2,71 @@ import type { FederationRemoteTarget } from "./federation";
 
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
 
-export type McpConnectionId = typeof PWRSNAP_MCP_CONNECTION_ID;
+export type McpConnectionId = string;
+
+export type McpConnectionAuthMode = "oauth";
+
+export type McpConnectionKind = "remote" | "pwrsnap";
+
+export type McpConnectionRecord = {
+  id: McpConnectionId;
+  displayName: string;
+  serverUrl: string;
+  authMode: McpConnectionAuthMode;
+  kind: McpConnectionKind;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type McpConnectionRuntimeState =
+  | "disconnected"
+  | "connecting"
+  | "ready"
+  | "refreshing"
+  | "reauthorization_required"
+  | "temporarily_unavailable";
+
+export type McpConnectionStatus = McpConnectionRecord & {
+  state: McpConnectionRuntimeState;
+  configured: boolean;
+  detail?: string;
+};
+
+export type ListMcpConnectionsResponse = {
+  connections: McpConnectionStatus[];
+};
+
+export type CreateMcpConnectionRequest = {
+  displayName: string;
+  serverUrl: string;
+};
+
+export type CreateMcpConnectionResponse = {
+  connection: McpConnectionStatus;
+};
+
+export type AuthorizeMcpConnectionRequest = {
+  connectionId: McpConnectionId;
+};
+
+export type AuthorizeMcpConnectionResponse = {
+  connection: McpConnectionStatus;
+};
+
+export type DisconnectMcpConnectionRequest = {
+  connectionId: McpConnectionId;
+};
+
+export type RemoveMcpConnectionRequest = {
+  connectionId: McpConnectionId;
+};
+
+export type MutateMcpConnectionResponse = {
+  connectionId: McpConnectionId;
+  removed?: true;
+  connection?: McpConnectionStatus;
+};
 
 export type PwrSnapConnectionAvailability =
   | "not_installed"
@@ -10,7 +74,7 @@ export type PwrSnapConnectionAvailability =
   | "running";
 
 export type PwrSnapConnectionStatus = {
-  connectionId: McpConnectionId;
+  connectionId: typeof PWRSNAP_MCP_CONNECTION_ID;
   displayName: "PwrSnap";
   availability: PwrSnapConnectionAvailability;
   configured: boolean;

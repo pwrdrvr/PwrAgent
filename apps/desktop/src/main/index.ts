@@ -1338,6 +1338,13 @@ export function bootstrapApp(): void {
     registerImageNormalizationIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
     registerMcpConnectionIpcHandlers();
+    if (bootMode === "active-profile") {
+      void getPwrSnapConnectionService().start().catch((error) => {
+        mainLog.error("MCP connection gateway failed during startup", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     installTranscriptImageProtocol({
       resolveFederatedImage: async ({ instanceId, url }) =>
         await getDesktopFederationRuntime()

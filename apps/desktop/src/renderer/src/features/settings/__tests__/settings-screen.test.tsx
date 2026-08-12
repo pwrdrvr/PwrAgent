@@ -19,6 +19,7 @@ import type {
   DesktopSettingsSnapshot,
   InspectDiscordThreadPermissionsResponse,
   ListMessagingRoutesResponse,
+  McpConnectionStatus,
   MessagingPairingEntry,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -6411,6 +6412,78 @@ describe("SettingsScreen", () => {
     expect(
       within(datadogRow!).getByRole("button", { name: "More actions for datadog" }),
     ).toBeEnabled();
+  });
+
+  it("creates and authorizes a PwrAgent-managed MCP connection", async () => {
+    const managedConnection = {
+      id: "datadog",
+      displayName: "Datadog",
+      serverUrl: "https://mcp.example.com/mcp",
+      authMode: "oauth" as const,
+      kind: "remote" as const,
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1,
+      configured: false,
+      state: "disconnected" as const,
+    };
+    let connections: McpConnectionStatus[] = [];
+    const listMcpConnections = vi.fn(async () => ({ connections }));
+    const createMcpConnection = vi.fn(async () => {
+      connections = [managedConnection];
+      return { connection: managedConnection };
+    });
+    const authorizeMcpConnection = vi.fn(async () => {
+      const connection = {
+        ...managedConnection,
+        configured: true,
+        state: "ready" as const,
+      };
+      connections = [connection];
+      return { connection };
+    });
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          authorizeMcpConnection,
+          createMcpConnection,
+          listMcpConnections,
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [],
+          })),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "Datadog" },
+    });
+    fireEvent.change(screen.getByLabelText("Remote MCP URL"), {
+      target: { value: "https://mcp.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add and authorize" }));
+
+    await waitFor(() => {
+      expect(createMcpConnection).toHaveBeenCalledWith({
+        displayName: "Datadog",
+        serverUrl: "https://mcp.example.com/mcp",
+      });
+      expect(authorizeMcpConnection).toHaveBeenCalledWith({
+        connectionId: "datadog",
+      });
+      expect(screen.getByText("Datadog is connected through PwrAgent."))
+        .toBeInTheDocument();
+    });
+    const row = screen.getByText("Datadog")
+      .closest<HTMLElement>(".settings-mcp-row");
+    expect(row).not.toBeNull();
+    expect(within(row!).getByText("Ready")).toBeInTheDocument();
   });
 
   it("disables MCP mutations when the selected Codex profile changed after startup", async () => {
