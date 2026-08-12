@@ -335,11 +335,15 @@ export async function computeWorktreePath(params: {
     homeDir: params.homeDir,
   });
   const projectName = path.basename(path.resolve(params.repoRoot)) || "project";
-  const baseHash = (params.timestamp ?? Date.now()).toString(36);
+  const baseTimestamp = params.timestamp ?? Date.now();
   await mkdir(root, { recursive: true });
 
-  for (let attempt = 0; attempt < 32; attempt += 1) {
-    const hash = attempt === 0 ? baseHash : `${baseHash}-${attempt + 1}`;
+  for (
+    let timestampIncrement = 0;
+    timestampIncrement <= 10;
+    timestampIncrement += 1
+  ) {
+    const hash = (baseTimestamp + timestampIncrement).toString(36);
     const hashParent = path.join(root, hash);
     try {
       // Reserving the hash directory makes path allocation atomic across

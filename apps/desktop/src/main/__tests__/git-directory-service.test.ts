@@ -1239,7 +1239,7 @@ describe("GitDirectoryService", () => {
     });
   });
 
-  it("computeWorktreePath suffixes the hash when the path already exists", async () => {
+  it("computeWorktreePath advances the timestamp when the path already exists", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
     const fixedTimestamp = 1730000000000;
@@ -1258,7 +1258,38 @@ describe("GitDirectoryService", () => {
 
     expect(second).not.toBe(first);
     expect(path.basename(second)).toBe(path.basename(first));
-    expect(path.basename(path.dirname(second))).toMatch(/-2$/);
+    expect(path.basename(path.dirname(second))).toBe(
+      (fixedTimestamp + 1).toString(36),
+    );
+  });
+
+  it("probes at most ten timestamp increments", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const fixedTimestamp = 1730000000000;
+
+    for (
+      let timestampIncrement = 0;
+      timestampIncrement <= 10;
+      timestampIncrement += 1
+    ) {
+      const allocated = await computeWorktreePath({
+        repoRoot: repoDir,
+        storage: "in-repo",
+        timestamp: fixedTimestamp,
+      });
+      expect(path.basename(path.dirname(allocated))).toBe(
+        (fixedTimestamp + timestampIncrement).toString(36),
+      );
+    }
+
+    await expect(
+      computeWorktreePath({
+        repoRoot: repoDir,
+        storage: "in-repo",
+        timestamp: fixedTimestamp,
+      }),
+    ).rejects.toThrow("Unable to allocate a unique worktree path");
   });
 
   it("reserves distinct paths for concurrent allocations in the same millisecond", async () => {
@@ -1282,10 +1313,13 @@ describe("GitDirectoryService", () => {
     expect(first).not.toBe(second);
     expect(path.basename(first)).toBe(path.basename(second));
     expect(
-      [path.basename(path.dirname(first)), path.basename(path.dirname(second))].sort(),
+      [
+        path.basename(path.dirname(first)),
+        path.basename(path.dirname(second)),
+      ].sort(),
     ).toEqual([
       fixedTimestamp.toString(36),
-      `${fixedTimestamp.toString(36)}-2`,
+      (fixedTimestamp + 1).toString(36),
     ]);
   });
 
@@ -1295,7 +1329,8 @@ describe("GitDirectoryService", () => {
     const service = new GitDirectoryService({
       resolveWorktreeStorage: () => "in-repo",
     });
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1730000000000);
+    const fixedTimestamp = 1730000000000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(fixedTimestamp);
 
     try {
       const [first, second] = await Promise.all([
@@ -1320,6 +1355,15 @@ describe("GitDirectoryService", () => {
       expect(first.cwd).toBeDefined();
       expect(second.cwd).toBeDefined();
       expect(first.cwd).not.toBe(second.cwd);
+      expect(
+        [
+          path.basename(path.dirname(first.cwd!)),
+          path.basename(path.dirname(second.cwd!)),
+        ].sort(),
+      ).toEqual([
+        fixedTimestamp.toString(36),
+        (fixedTimestamp + 1).toString(36),
+      ]);
       expect(runGit(first.cwd!, ["rev-parse", "HEAD"])).toBe(
         runGit(second.cwd!, ["rev-parse", "HEAD"]),
       );
