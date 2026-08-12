@@ -145,6 +145,7 @@ describe("federation backend bridge", () => {
       id: string,
       baseRevision?: string,
       peerId = "viewer_one",
+      threadKeys?: string[],
     ): Promise<NavigationSnapshotTransportResponse> => {
       await router.routeEnvelope({
         sourcePeerId: peerId,
@@ -156,6 +157,9 @@ describe("federation backend bridge", () => {
             transport: {
               protocol: 1,
               ...(baseRevision ? { baseRevision } : {}),
+              ...(threadKeys
+                ? { selection: { kind: "threads", threadKeys } }
+                : {}),
             },
           },
           protocolVersion: 1,
@@ -175,6 +179,12 @@ describe("federation backend bridge", () => {
       full.revision,
       "viewer_two",
     );
+    const sparse = await request(
+      "navigation-sparse",
+      undefined,
+      "viewer_two",
+      ["codex:thread-3", "codex:thread-9"],
+    );
 
     expect(unchanged).toEqual({
       kind: "unchanged",
@@ -183,6 +193,12 @@ describe("federation backend bridge", () => {
     expect(JSON.stringify(unchanged).length).toBeLessThan(
       JSON.stringify(full).length / 1_000,
     );
+    if (sparse.kind !== "full") throw new Error("Expected sparse baseline");
+    expect(sparse.revision).toBe(full.revision);
+    expect(sparse.snapshot.threads.map((thread) => thread.id)).toEqual([
+      "thread-3",
+      "thread-9",
+    ]);
 
     threads = threads.map((thread, index) =>
       index < 10
@@ -199,6 +215,10 @@ describe("federation backend bridge", () => {
     expect(JSON.stringify(delta).length).toBeLessThan(
       JSON.stringify(full).length / 50,
     );
+    expect(backend.getNavigationSnapshot).toHaveBeenLastCalledWith({
+      forceRefresh: undefined,
+      refreshMode: "full",
+    });
   });
 
   it("routes thread reactions through the thread-navigation capability", async () => {

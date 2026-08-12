@@ -46,9 +46,21 @@ export const FEDERATION_EVENT_CLASSES = [
 export type FederationEventClass =
   (typeof FEDERATION_EVENT_CLASSES)[number];
 
+export type FederationThreadSelection =
+  | { kind: "all" }
+  | {
+      kind: "threads";
+      threads: Array<{
+        backend: AppServerBackendKind;
+        threadId: ThreadIdentifier;
+      }>;
+    };
+
 export type FederationEventSubscription = {
   sourceInstanceId: FederationInstanceId;
   eventClasses: FederationEventClass[];
+  /** Absent means `all` for peers that predate filtered subscriptions. */
+  threadSelection?: FederationThreadSelection;
 };
 
 export type FederationEventSubscriptionConsumer =

@@ -1243,8 +1243,18 @@ export type GetNavigationSnapshotTransportRequest =
     transport: {
       baseRevision?: string;
       protocol: 1;
+      selection?: NavigationSnapshotTransportSelection;
     };
   };
+
+/**
+ * The materialized navigation collection a revision client wants to retain.
+ * `threads` is intentionally an identity set rather than a query: lenses and
+ * search remain client-side projections over the received collection.
+ */
+export type NavigationSnapshotTransportSelection =
+  | { kind: "all" }
+  | { kind: "threads"; threadKeys: string[] };
 
 /**
  * Stable shared revision-history scope. `forceRefresh` is a scheduling hint

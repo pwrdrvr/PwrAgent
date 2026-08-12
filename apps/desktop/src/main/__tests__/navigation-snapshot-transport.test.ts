@@ -182,6 +182,57 @@ describe("NavigationSnapshotTransport", () => {
     });
   });
 
+  it("filters one canonical history for sparse and full consumers", () => {
+    const transport = new NavigationSnapshotTransport();
+    const threads = Array.from({ length: 1_200 }, (_, index) =>
+      buildThread(index),
+    );
+    const sparseSelection = {
+      kind: "threads" as const,
+      threadKeys: ["codex:thread-3", "codex:thread-9"],
+    };
+    const sparse = transport.encode({
+      request: {},
+      scopeKey: "federation-navigation",
+      selection: sparseSelection,
+      snapshot: buildSnapshot(threads),
+    });
+    if (sparse.kind !== "full") throw new Error("Expected sparse baseline");
+    expect(sparse.snapshot.threads.map((thread) => thread.id)).toEqual([
+      "thread-3",
+      "thread-9",
+    ]);
+
+    const updatedThreads = threads.map((thread) =>
+      thread.id === "thread-3" || thread.id === "thread-700"
+        ? { ...thread, title: `${thread.title} updated` }
+        : thread
+    );
+    const sparseDelta = transport.encode({
+      baseRevision: sparse.revision,
+      request: { filter: "ignored-owner-scope" },
+      scopeKey: "federation-navigation",
+      selection: sparseSelection,
+      snapshot: buildSnapshot(updatedThreads, 2),
+    });
+    if (sparseDelta.kind !== "delta") {
+      throw new Error("Expected sparse delta");
+    }
+    expect(sparseDelta.upsertedThreads.map((thread) => thread.id)).toEqual([
+      "thread-3",
+    ]);
+
+    const full = transport.encode({
+      request: { refreshMode: "active-recent" },
+      scopeKey: "federation-navigation",
+      selection: { kind: "all" },
+      snapshot: buildSnapshot(updatedThreads, 3),
+    });
+    if (full.kind !== "full") throw new Error("Expected full baseline");
+    expect(full.revision).toBe(sparseDelta.revision);
+    expect(full.snapshot.threads).toHaveLength(1_200);
+  });
+
   it("evicts the least recently used shared scope", () => {
     const transport = new NavigationSnapshotTransport({ maxScopes: 2 });
     const snapshot = buildSnapshot([buildThread(1)]);

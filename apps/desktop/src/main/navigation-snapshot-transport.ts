@@ -5,11 +5,13 @@ import type {
   NavigationSnapshot,
   NavigationSnapshotTransportDelta,
   NavigationSnapshotTransportResponse,
+  NavigationSnapshotTransportSelection,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
   buildNavigationSnapshotTransportScopeKey,
   buildThreadIdentityKey,
+  normalizeThreadIdentityKey,
 } from "@pwragent/shared";
 
 type CachedNavigationSnapshot = {
@@ -41,6 +43,77 @@ function positiveIntegerOrDefault(
 
 function threadKey(thread: NavigationThreadSummary): string {
   return buildThreadIdentityKey(thread.source, thread.id);
+}
+
+function selectionHasKey(selected: ReadonlySet<string>, key: string): boolean {
+  return selected.has(normalizeThreadIdentityKey(key) ?? key);
+}
+
+function filterSnapshot(
+  snapshot: NavigationSnapshot,
+  selection: NavigationSnapshotTransportSelection,
+): NavigationSnapshot {
+  if (selection.kind === "all") return snapshot;
+  const selected = new Set(selection.threadKeys);
+  return {
+    ...snapshot,
+    threads: snapshot.threads.filter((thread) => selected.has(threadKey(thread))),
+    inboxThreadKeys: snapshot.inboxThreadKeys.filter((key) =>
+      selectionHasKey(selected, key)
+    ),
+    // Sparse consumers (messaging bindings and pinned summaries) consume
+    // thread rows, not the owner's directory lens. Keeping directory models
+    // out also means an unrelated directory edit cannot wake or inflate them.
+    directories: [],
+  };
+}
+
+function filterDelta(
+  delta: NavigationSnapshotTransportDelta,
+  selection: NavigationSnapshotTransportSelection,
+): NavigationSnapshotTransportDelta {
+  if (selection.kind === "all") return delta;
+  const selected = new Set(selection.threadKeys);
+  return {
+    ...delta,
+    removedThreadKeys: delta.removedThreadKeys.filter((key) =>
+      selectionHasKey(selected, key)
+    ),
+    upsertedThreads: delta.upsertedThreads.filter((thread) =>
+      selected.has(threadKey(thread))
+    ),
+    ...(delta.threadKeys
+      ? {
+          threadKeys: delta.threadKeys.filter((key) =>
+            selectionHasKey(selected, key)
+          ),
+        }
+      : {}),
+    removedDirectoryKeys: [],
+    upsertedDirectories: [],
+    ...(delta.directoryKeys ? { directoryKeys: [] } : {}),
+    ...(delta.addedInboxThreadKeys
+      ? {
+          addedInboxThreadKeys: delta.addedInboxThreadKeys.filter((key) =>
+            selectionHasKey(selected, key)
+          ),
+        }
+      : {}),
+    ...(delta.removedInboxThreadKeys
+      ? {
+          removedInboxThreadKeys: delta.removedInboxThreadKeys.filter((key) =>
+            selectionHasKey(selected, key)
+          ),
+        }
+      : {}),
+    ...(delta.inboxThreadKeys
+      ? {
+          inboxThreadKeys: delta.inboxThreadKeys.filter((key) =>
+            selectionHasKey(selected, key)
+          ),
+        }
+      : {}),
+  };
 }
 
 function keysEqual(left: string[], right: string[]): boolean {
@@ -217,19 +290,24 @@ export class NavigationSnapshotTransport {
 
   private full(
     scope: CachedNavigationScope,
+    selection: NavigationSnapshotTransportSelection,
   ): NavigationSnapshotTransportResponse {
     return {
       kind: "full",
       revision: scope.current.revision,
-      snapshot: { ...scope.current.snapshot, unchanged: false },
+      snapshot: {
+        ...filterSnapshot(scope.current.snapshot, selection),
+        unchanged: false,
+      },
     };
   }
 
   private responseSince(
     scope: CachedNavigationScope,
     baseRevision: string | undefined,
+    selection: NavigationSnapshotTransportSelection,
   ): NavigationSnapshotTransportResponse {
-    if (!baseRevision) return this.full(scope);
+    if (!baseRevision) return this.full(scope, selection);
     if (baseRevision === scope.current.revision) {
       return {
         kind: "unchanged",
@@ -239,15 +317,17 @@ export class NavigationSnapshotTransport {
     const start = scope.changes.findIndex(
       (change) => change.baseRevision === baseRevision,
     );
-    if (start < 0) return this.full(scope);
-    const changes = scope.changes.slice(start);
+    if (start < 0) return this.full(scope, selection);
+    const changes = scope.changes.slice(start).map((change) =>
+      filterDelta(change, selection)
+    );
     for (let index = 1; index < changes.length; index += 1) {
       if (changes[index]!.baseRevision !== changes[index - 1]!.revision) {
-        return this.full(scope);
+        return this.full(scope, selection);
       }
     }
     if (changes.at(-1)?.revision !== scope.current.revision) {
-      return this.full(scope);
+      return this.full(scope, selection);
     }
     if (changes.length === 1) return changes[0]!;
     return {
@@ -261,9 +341,13 @@ export class NavigationSnapshotTransport {
   encode(params: {
     baseRevision?: string;
     request: GetNavigationSnapshotRequest;
+    scopeKey?: string;
+    selection?: NavigationSnapshotTransportSelection;
     snapshot: NavigationSnapshot;
   }): NavigationSnapshotTransportResponse {
-    const scopeKey = buildNavigationSnapshotTransportScopeKey(params.request);
+    const scopeKey =
+      params.scopeKey ?? buildNavigationSnapshotTransportScopeKey(params.request);
+    const selection = params.selection ?? { kind: "all" };
     let scope = this.scopes.get(scopeKey);
     if (!scope) {
       scope = {
@@ -274,12 +358,12 @@ export class NavigationSnapshotTransport {
         },
       };
       this.cacheScope(scopeKey, scope);
-      return this.full(scope);
+      return this.full(scope, selection);
     }
 
     if (params.snapshot.fetchedAt < scope.current.snapshot.fetchedAt) {
       this.cacheScope(scopeKey, scope);
-      return this.responseSince(scope, params.baseRevision);
+      return this.responseSince(scope, params.baseRevision, selection);
     }
     if (
       params.snapshot.backend !== scope.current.snapshot.backend
@@ -296,7 +380,7 @@ export class NavigationSnapshotTransport {
         },
       };
       this.cacheScope(scopeKey, scope);
-      return this.full(scope);
+      return this.full(scope, selection);
     }
 
     const revision = String(this.nextRevision + 1);
@@ -323,6 +407,6 @@ export class NavigationSnapshotTransport {
       scope.current.snapshot = params.snapshot;
     }
     this.cacheScope(scopeKey, scope);
-    return this.responseSince(scope, params.baseRevision);
+    return this.responseSince(scope, params.baseRevision, selection);
   }
 }

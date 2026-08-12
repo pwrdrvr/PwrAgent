@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildFederatedThreadRef,
   type FederationRemoteTarget,
+  type FederationThreadSelection,
   type NavigationSnapshot,
   type NavigationThreadSummary,
   type RemoteThreadPin,
@@ -282,7 +283,10 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
     try {
       await cache.searchForJump({ query: "49" });
       expect(onPeerInterestChanged).toHaveBeenCalledTimes(1);
-      expect(onPeerInterestChanged).toHaveBeenLastCalledWith(["peer-a"]);
+      expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{
+        instanceId: "peer-a",
+        threadSelection: { kind: "all" },
+      }]);
 
       await vi.advanceTimersByTimeAsync(50);
       await cache.searchForJump({ query: "49" });
@@ -499,6 +503,50 @@ async function settle(): Promise<void> {
 }
 
 describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
+  it("subscribes to and fetches only the pinned thread identities", async () => {
+    const fetchSnapshot = vi.fn(async (
+      _target: FederationRemoteTarget,
+      selection: FederationThreadSelection,
+    ) => snapshotOf(
+      selection.kind === "threads"
+        ? selection.threads.map((thread) => stampedThread({
+            instanceId: "peer-a",
+            threadId: thread.threadId,
+            title: thread.threadId,
+          }))
+        : [],
+    ));
+    const onPeerInterestChanged = vi.fn();
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+      onPeerInterestChanged,
+    });
+
+    await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t2" }),
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+
+    const expectedSelection = {
+      kind: "threads",
+      threads: [
+        { backend: "codex", threadId: "t1" },
+        { backend: "codex", threadId: "t2" },
+      ],
+    } as const;
+    expect(fetchSnapshot).toHaveBeenCalledWith(
+      remoteTarget("peer-a"),
+      expectedSelection,
+    );
+    expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{
+      instanceId: "peer-a",
+      threadSelection: expectedSelection,
+    }]);
+  });
+
   it("serves cached stamped rows for reachable owners and queues payload refreshes", async () => {
     const fresh = stampedThread({
       instanceId: "peer-a",

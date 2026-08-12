@@ -5,6 +5,7 @@ import type {
   FederationJumpSearchResponse,
   FederationPeerSummary,
   FederationRemoteTarget,
+  FederationThreadSelection,
   NavigationSnapshot,
   NavigationThreadSummary,
   RemoteThreadPin,
@@ -55,16 +56,75 @@ const REMOTE_SNAPSHOT_PEER_TIMEOUT_MS = 10_000;
 const DEFAULT_JUMP_SEARCH_LIMIT = 8;
 const MAX_JUMP_SEARCH_LIMIT = 50;
 
+function threadSelection(
+  refs: ReadonlyArray<Pick<RemoteThreadPin["ref"], "backend" | "threadId">>,
+): FederationThreadSelection {
+  const threads = new Map<
+    string,
+    Extract<FederationThreadSelection, { kind: "threads" }>["threads"][number]
+  >();
+  for (const ref of refs) {
+    threads.set(buildThreadIdentityKey(ref.backend, ref.threadId), {
+      backend: ref.backend,
+      threadId: ref.threadId,
+    });
+  }
+  return {
+    kind: "threads",
+    threads: [...threads.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, ref]) => ref),
+  };
+}
+
+function selectionKey(selection: FederationThreadSelection): string {
+  return selection.kind === "all"
+    ? "all"
+    : JSON.stringify(selection.threads.map((thread) =>
+        buildThreadIdentityKey(thread.backend, thread.threadId)
+      ));
+}
+
+function selectionIncludes(
+  available: FederationThreadSelection,
+  requested: FederationThreadSelection,
+): boolean {
+  if (available.kind === "all") return true;
+  if (requested.kind === "all") return false;
+  const availableKeys = new Set(available.threads.map((thread) =>
+    buildThreadIdentityKey(thread.backend, thread.threadId)
+  ));
+  return requested.threads.every((thread) => availableKeys.has(
+    buildThreadIdentityKey(thread.backend, thread.threadId)
+  ));
+}
+
+function mergeSelections(
+  selections: Iterable<FederationThreadSelection>,
+): FederationThreadSelection {
+  const refs: Array<Pick<RemoteThreadPin["ref"], "backend" | "threadId">> = [];
+  for (const selection of selections) {
+    if (selection.kind === "all") return { kind: "all" };
+    refs.push(...selection.threads);
+  }
+  return threadSelection(refs);
+}
+
 export class RemoteThreadSummaryCache {
   private readonly cache = new Map<
     string,
-    { fetchedAt: number; threads: NavigationThreadSummary[] }
+    {
+      fetchedAt: number;
+      selection: FederationThreadSelection;
+      threads: NavigationThreadSummary[];
+    }
   >();
   private readonly inFlight = new Map<
     string,
     {
       generation: string;
       promise: Promise<NavigationThreadSummary[]>;
+      selection: FederationThreadSelection;
     }
   >();
   private readonly archivedCache = new Map<
@@ -81,9 +141,15 @@ export class RemoteThreadSummaryCache {
     string,
     Map<string, RemoteThreadName>
   >();
-  private readonly peerInterestTimers = new Map<
+  private readonly peerInterests = new Map<
     string,
-    ReturnType<typeof setTimeout>
+    Map<
+      string,
+      {
+        selection: FederationThreadSelection;
+        timer: ReturnType<typeof setTimeout>;
+      }
+    >
   >();
   private globalGeneration = 0;
   private readonly peerGenerations = new Map<string, number>();
@@ -100,7 +166,10 @@ export class RemoteThreadSummaryCache {
       /** Connected peers able to serve navigation snapshots. */
       peers: () => RemoteThreadSummaryPeer[];
       /** Stamped snapshot fetch — `DesktopFederationRuntime.remoteNavigationSnapshot`. */
-      fetchSnapshot: (target: FederationRemoteTarget) => Promise<NavigationSnapshot>;
+      fetchSnapshot: (
+        target: FederationRemoteTarget,
+        selection: FederationThreadSelection,
+      ) => Promise<NavigationSnapshot>;
       /** Archived threads for one backend on a connected peer. */
       fetchArchivedThreads: (
         target: FederationRemoteTarget,
@@ -118,8 +187,11 @@ export class RemoteThreadSummaryCache {
         celestialIcon?: CelestialIconId;
         capabilities?: FederationCapability[];
       };
-      /** Peers whose cached summaries currently need navigation updates. */
-      onPeerInterestChanged?: (instanceIds: string[]) => void;
+      /** Exact navigation collections currently retained by cache consumers. */
+      onPeerInterestChanged?: (interests: Array<{
+        instanceId: string;
+        threadSelection: FederationThreadSelection;
+      }>) => void;
       /**
        * Fired when a background pinned-summary pass would change what
        * `resolvePinnedThreads` serves: fresh rows landed, pins were proved
@@ -157,11 +229,13 @@ export class RemoteThreadSummaryCache {
   }
 
   dispose(): void {
-    const hadPeerInterest = this.peerInterestTimers.size > 0;
-    for (const timer of this.peerInterestTimers.values()) {
-      clearTimeout(timer);
+    const hadPeerInterest = this.peerInterests.size > 0;
+    for (const interests of this.peerInterests.values()) {
+      for (const interest of interests.values()) {
+        clearTimeout(interest.timer);
+      }
     }
-    this.peerInterestTimers.clear();
+    this.peerInterests.clear();
     if (hadPeerInterest) {
       this.options.onPeerInterestChanged?.([]);
     }
@@ -181,7 +255,11 @@ export class RemoteThreadSummaryCache {
     const groups = await Promise.all(
       this.navigationPeers().map(async (peer) => {
         try {
-          return await this.threadsForPeer(peer.target);
+          return await this.threadsForPeer(
+            peer.target,
+            { kind: "all" },
+            "jump-search",
+          );
         } catch {
           // ⌘K is a jump surface, not a diagnostics surface: a slow or
           // failing peer contributes nothing rather than an error row.
@@ -293,7 +371,12 @@ export class RemoteThreadSummaryCache {
       return undefined;
     }
     try {
-      const threads = await this.threadsForPeer(params.target);
+      const selection = threadSelection([params]);
+      const threads = await this.threadsForPeer(
+        params.target,
+        selection,
+        `thread:${selectionKey(selection)}`,
+      );
       return threads.find(
         (thread) =>
           thread.source === params.backend && thread.id === params.threadId,
@@ -350,10 +433,18 @@ export class RemoteThreadSummaryCache {
         const now = this.options.now?.() ?? Date.now();
         const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
         const cached = this.cache.get(instanceId);
-        if (!cached || now - cached.fetchedAt >= ttlMs) {
+        const requestedSelection = threadSelection(
+          group.map((pin) => pin.ref),
+        );
+        const cacheSatisfies = cached
+          && selectionIncludes(cached.selection, requestedSelection);
+        if (
+          !cacheSatisfies
+          || (cached && now - cached.fetchedAt >= ttlMs)
+        ) {
           this.refreshPeerSummariesInBackground(peer.target, group);
         }
-        served = cached?.threads;
+        served = cacheSatisfies ? cached?.threads : undefined;
         fetchFailed = this.refreshFailures.has(instanceId);
       }
       const servedByKey = new Map(
@@ -496,7 +587,11 @@ export class RemoteThreadSummaryCache {
     }
     const previous = this.cache.get(instanceId)?.threads;
     const failedBefore = this.refreshFailures.has(instanceId);
-    this.threadsForPeer(target).then(
+    this.threadsForPeer(
+      target,
+      threadSelection(pins.map((pin) => pin.ref)),
+      "pins",
+    ).then(
       async (threads) => {
         this.refreshFailures.delete(instanceId);
         const provedArchived = await this.proveArchivedPins(
@@ -645,44 +740,73 @@ export class RemoteThreadSummaryCache {
 
   private async threadsForPeer(
     target: FederationRemoteTarget,
+    selection: FederationThreadSelection,
+    interestKey: string,
   ): Promise<NavigationThreadSummary[]> {
     const now = this.options.now?.() ?? Date.now();
     const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
-    this.touchPeerInterest(target.instanceId, ttlMs);
+    this.touchPeerInterest(
+      target.instanceId,
+      interestKey,
+      selection,
+      ttlMs,
+    );
     const cached = this.cache.get(target.instanceId);
-    if (cached && now - cached.fetchedAt < ttlMs) {
+    if (
+      cached
+      && selectionIncludes(cached.selection, selection)
+      && now - cached.fetchedAt < ttlMs
+    ) {
       return cached.threads;
     }
     const generation = this.generationFor(target.instanceId);
     const pending = this.inFlight.get(target.instanceId);
-    if (pending?.generation === generation) {
+    if (
+      pending?.generation === generation
+      && selectionIncludes(pending.selection, selection)
+    ) {
       return await pending.promise;
+    }
+    if (pending?.generation === generation) {
+      try {
+        await pending.promise;
+      } catch {
+        // The next read below gets its own attempt for the wider/different
+        // collection; an unrelated sparse failure must not answer it.
+      }
+      return await this.threadsForPeer(target, selection, interestKey);
     }
     const promise = (async () => {
       const timeoutMs =
         this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
       const snapshot = await withTimeout(
-        this.options.fetchSnapshot(target),
+        this.options.fetchSnapshot(target, selection),
         timeoutMs,
         `Remote thread summaries timed out after ${Math.round(timeoutMs / 1000)}s.`,
       );
       if (this.generationFor(target.instanceId) !== generation) {
-        return await this.threadsForPeer(target);
+        return await this.threadsForPeer(target, selection, interestKey);
       }
       const threads = snapshot.threads;
       this.cache.set(target.instanceId, {
         fetchedAt: this.options.now?.() ?? Date.now(),
+        selection,
         threads,
       });
       this.rememberThreadNames(target.instanceId, threads);
-      this.touchPeerInterest(target.instanceId, ttlMs);
+      this.touchPeerInterest(
+        target.instanceId,
+        interestKey,
+        selection,
+        ttlMs,
+      );
       // ANY successful fetch is proof of life, including one the jump
       // search started. Clearing the flag only in the pinned-refresh path
       // would keep freshly-fetched rows dimmed until the next TTL lapse.
       this.refreshFailures.delete(target.instanceId);
       return threads;
     })();
-    const entry = { generation, promise };
+    const entry = { generation, promise, selection };
     this.inFlight.set(target.instanceId, entry);
     try {
       return await promise;
@@ -738,28 +862,49 @@ export class RemoteThreadSummaryCache {
     return `${this.globalGeneration}:${this.peerGenerations.get(instanceId) ?? 0}`;
   }
 
-  private touchPeerInterest(instanceId: string, ttlMs: number): void {
-    const existing = this.peerInterestTimers.get(instanceId);
+  private touchPeerInterest(
+    instanceId: string,
+    interestKey: string,
+    selection: FederationThreadSelection,
+    ttlMs: number,
+  ): void {
+    const interests = this.peerInterests.get(instanceId) ?? new Map();
+    const existing = interests.get(interestKey);
     if (existing) {
-      clearTimeout(existing);
+      clearTimeout(existing.timer);
     }
     const timer = setTimeout(() => {
-      if (this.peerInterestTimers.get(instanceId) !== timer) {
+      const currentInterests = this.peerInterests.get(instanceId);
+      if (currentInterests?.get(interestKey)?.timer !== timer) {
         return;
       }
-      this.peerInterestTimers.delete(instanceId);
+      currentInterests.delete(interestKey);
+      if (currentInterests.size === 0) {
+        this.peerInterests.delete(instanceId);
+      }
       this.notifyPeerInterestChanged();
     }, ttlMs);
     timer.unref?.();
-    this.peerInterestTimers.set(instanceId, timer);
-    if (!existing) {
+    interests.set(interestKey, { selection, timer });
+    this.peerInterests.set(instanceId, interests);
+    if (
+      !existing
+      || selectionKey(existing.selection) !== selectionKey(selection)
+    ) {
       this.notifyPeerInterestChanged();
     }
   }
 
   private notifyPeerInterestChanged(): void {
     this.options.onPeerInterestChanged?.(
-      [...this.peerInterestTimers.keys()].sort(),
+      [...this.peerInterests]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([instanceId, interests]) => ({
+          instanceId,
+          threadSelection: mergeSelections(
+            [...interests.values()].map((interest) => interest.selection),
+          ),
+        })),
     );
   }
 }

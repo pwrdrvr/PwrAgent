@@ -72,6 +72,7 @@ import type {
   ReorderThreadPinsResponse,
   NavigationSnapshot,
   NavigationSnapshotTransportResponse,
+  NavigationSnapshotTransportSelection,
   NavigationThreadSummary,
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
@@ -623,7 +624,11 @@ export function registerFederationBackendHandlers(params: {
     targetInstanceId: string,
   ) => void;
 }): NavigationSnapshotTransport {
-  const navigationSnapshotTransport = new NavigationSnapshotTransport();
+  const navigationSnapshotTransport = new NavigationSnapshotTransport({
+    // Federation has one owner collection and one resource-version history.
+    // Request selectors never create histories of their own.
+    maxScopes: 1,
+  });
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
     async (envelope) => {
@@ -644,12 +649,30 @@ export function registerFederationBackendHandlers(params: {
         );
       }
       const { transport, ...snapshotRequest } = transportRequest;
+      const selection: NavigationSnapshotTransportSelection =
+        transport.selection?.kind === "threads"
+        && Array.isArray(transport.selection.threadKeys)
+          ? {
+              kind: "threads",
+              threadKeys: transport.selection.threadKeys.filter(
+                (key): key is string => typeof key === "string",
+              ),
+            }
+          : { kind: "all" };
       const snapshot = encodeNavigationSnapshotThreadKeysForProtocolV1(
-        await params.backend.getNavigationSnapshot(snapshotRequest),
+        // One canonical collection drives Federation resource versions.
+        // Backend/filter/search are client-side lenses over that collection;
+        // allowing them into this read would recreate per-query histories.
+        await params.backend.getNavigationSnapshot({
+          forceRefresh: snapshotRequest.forceRefresh,
+          refreshMode: "full",
+        }),
       );
       return navigationSnapshotTransport.encode({
         baseRevision: transport.baseRevision,
-        request: snapshotRequest,
+        request: {},
+        scopeKey: "federation-navigation",
+        selection,
         snapshot,
       });
     },

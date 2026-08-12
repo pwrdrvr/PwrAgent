@@ -21,6 +21,7 @@ import type {
   FederationInstanceId,
   FederationRemoteTarget,
   FederationTarget,
+  FederationThreadSelection,
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
@@ -99,6 +100,7 @@ export type DesktopMessagingFederationBridge = {
   remoteNavigationSnapshot(
     target: FederationRemoteTarget,
     request: GetNavigationSnapshotRequest,
+    selectionOverride?: FederationThreadSelection,
   ): Promise<NavigationSnapshot>;
 };
 
@@ -225,7 +227,11 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         // browse and drive its threads — skip peers that don't grant it.
         .filter(({ capabilities }) => capabilities.includes("messaging_route"))
         .map(({ target }) =>
-          this.federation!.remoteNavigationSnapshot(target, request)
+          this.federation!.remoteNavigationSnapshot(
+            target,
+            request,
+            { kind: "all" },
+          )
         ),
     );
     const availableRemoteSnapshots = remoteSnapshots.flatMap((result) =>
@@ -303,6 +309,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
           backend: request.backend,
           federationTarget,
         },
+        { kind: "all" },
       );
       const thread = navigation.threads.find(
         (candidate) =>

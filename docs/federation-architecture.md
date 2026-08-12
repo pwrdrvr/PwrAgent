@@ -78,13 +78,15 @@ Navigation snapshot transfer is negotiated independently from navigation
 access. A peer that advertises `navigation_snapshot_deltas` may receive a full
 baseline followed by revision-based sparse deltas or unchanged responses from
 `backend.getNavigationSnapshot`; the request carries the transport protocol
-and prior revision. Peers that do not advertise the capability retain the
-protocol-v1 full-snapshot contract. Snapshot production remains full on the
-owner—the optimization applies at the Federation serialization boundary and
-avoids retransmitting and reconstructing unchanged thread rows on the wire.
-The owner keeps bounded shared change history per semantic request scope, not
-per-peer snapshot state. A revision older than that history receives a new full
-baseline, matching list-then-watch recovery semantics.
+and prior revision. The owner maintains one bounded revision history for its
+canonical navigation collection. Backend, filter, refresh mode, and viewer
+lens do not create additional histories; clients project those locally. A
+request selects either the whole collection or an explicit set of thread
+identities, and that selector filters the baseline and changes without creating
+owner-side client state. A revision older than the shared history receives a
+new filtered baseline, matching Kubernetes-style list/watch recovery. Peers
+that do not advertise the capability retain the protocol-v1 full-snapshot
+contract.
 
 ### Event subscriptions
 
@@ -96,13 +98,17 @@ replace-style subscriptions scoped by all three of:
 - owning/source instance
 - event class (`navigation`, `transcript`, `pending_requests`,
   `scheduled_actions`, or `star_map`)
+- thread selection (`all` or an explicit identity set)
 
 Remote workspace windows subscribe to their fixed owning instance for only the
 classes supported by that peer. The Star Map subscribes while mounted to
 `navigation`, `scheduled_actions`, and `star_map` for its connected visible
 instances; it does not request transcript or pending-request traffic.
-Messaging subscribes only for instances referenced by active federated
-bindings and clears that desired state when messaging stops.
+Messaging subscribes only to the exact remote threads referenced by active
+federated bindings and clears that desired state when messaging stops. Multiple
+sparse consumers are unioned. If a full remote workspace is also open, its
+`all` selection dominates until that window closes, after which the aggregate
+falls back to the remaining sparse set.
 
 Subscriptions are desired state, not additive commands. Retargeting or closing
 a consumer replaces its old set (an empty set is unsubscribe). The subscriber
