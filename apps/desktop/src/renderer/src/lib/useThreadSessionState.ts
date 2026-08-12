@@ -596,21 +596,60 @@ function preserveLoadedTranscriptHistory(
     return response;
   }
 
+  const retainedEntries = retainedTranscriptPrefix(
+    retainedResponse.replay.entries,
+    response.replay.entries
+  );
+  const retainedMessageIds = new Set(
+    retainedEntries.flatMap((entry) =>
+      entry.type === "message" ? [entry.id] : []
+    )
+  );
+
   return {
     ...response,
     replay: {
       ...response.replay,
       entries: mergeItems(
-        retainedResponse.replay.entries,
+        retainedEntries,
         response.replay.entries
       ),
       messages: mergeItems(
-        retainedResponse.replay.messages,
+        retainedResponse.replay.messages.filter((message) =>
+          retainedMessageIds.has(message.id)
+        ),
         response.replay.messages
       ),
       pagination: retainedResponse.replay.pagination,
     },
   };
+}
+
+function retainedTranscriptPrefix(
+  retainedEntries: AppServerThreadEntry[],
+  freshEntries: AppServerThreadEntry[]
+): AppServerThreadEntry[] {
+  // A latest-page refresh owns its whole overlap. Live notifications and a
+  // later thread/read can describe the same message with different item IDs,
+  // so an ID-only merge would append the coarse hydrated tail after the live
+  // interleaved transcript. Keep only the genuinely older page prefix.
+  for (const freshEntry of freshEntries) {
+    const exactOverlapIndex = retainedEntries.findIndex(
+      (retainedEntry) => retainedEntry.id === freshEntry.id
+    );
+    const overlapIndex = exactOverlapIndex !== -1
+      ? exactOverlapIndex
+      : freshEntry.turn?.id
+        ? retainedEntries.findIndex(
+            (retainedEntry) => retainedEntry.turn?.id === freshEntry.turn?.id
+          )
+        : -1;
+    if (overlapIndex !== -1) {
+      return retainedEntries.slice(0, overlapIndex);
+    }
+  }
+
+  return retainedEntries;
 }
 
 function isCodexImageBoundaryText(value: string): boolean {

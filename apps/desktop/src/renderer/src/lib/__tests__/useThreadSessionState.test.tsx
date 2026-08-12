@@ -389,6 +389,263 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("replaces an overlapping live tail when hydrated message ids change", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const activeTurn = {
+      id: "turn-current",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+    const completedTurn = {
+      ...activeTurn,
+      status: "completed" as const,
+      completedAt: 2_000,
+    };
+    const initialTail = readThreadResponse({
+      entries: [
+        {
+          ...messageEntry({
+            id: "stable-tail-anchor",
+            role: "user",
+            text: "Earlier prompt",
+            createdAt: 500,
+          }),
+          turn: { id: "turn-earlier", status: "completed" },
+        },
+        {
+          ...messageEntry({
+            id: "current-user",
+            role: "user",
+            text: "Audit the backports",
+            createdAt: 1_000,
+          }),
+          turn: activeTurn,
+        },
+      ],
+      hasPreviousPage: true,
+      previousCursor: "stable-tail-anchor",
+      threadStatus: "active",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "older-message",
+          role: "user",
+          text: "Older history",
+          createdAt: 100,
+        }),
+      ],
+      hasPreviousPage: false,
+    });
+    const refreshedTail = readThreadResponse({
+      entries: [
+        {
+          ...messageEntry({
+            id: "stable-tail-anchor",
+            role: "user",
+            text: "Earlier prompt",
+            createdAt: 500,
+          }),
+          turn: { id: "turn-earlier", status: "completed" },
+        },
+        {
+          ...messageEntry({
+            id: "current-user",
+            role: "user",
+            text: "Audit the backports",
+            createdAt: 1_000,
+          }),
+          turn: completedTurn,
+        },
+        {
+          ...messageEntry({
+            id: "item-57",
+            text: "First commentary.",
+            createdAt: 1_100,
+          }),
+          phase: "commentary" as const,
+          turn: completedTurn,
+        },
+        {
+          ...messageEntry({
+            id: "item-58",
+            text: "Second commentary.",
+            createdAt: 1_300,
+          }),
+          phase: "commentary" as const,
+          turn: completedTurn,
+        },
+        {
+          ...messageEntry({
+            id: "item-61",
+            text: "Final answer.",
+            createdAt: 2_000,
+          }),
+          phase: "final" as const,
+          turn: completedTurn,
+        },
+      ],
+      hasPreviousPage: true,
+      previousCursor: "stable-tail-anchor",
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage)
+      .mockResolvedValueOnce(refreshedTail);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: activeTurn,
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: activeTurn.id,
+            itemId: "live-commentary-1",
+            delta: "First commentary.",
+            phase: "commentary",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: activeTurn.id,
+            item: {
+              id: "read-1",
+              type: "commandExecution",
+              command: "rg -n backport src",
+              commandActions: [{ type: "search", path: "src" }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: activeTurn.id,
+            itemId: "live-commentary-2",
+            delta: "Second commentary.",
+            phase: "commentary",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: activeTurn.id,
+            item: {
+              id: "live-commentary-2",
+              type: "agentMessage",
+              phase: "commentary",
+              text: "Second commentary.",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: activeTurn.id,
+            item: {
+              id: "live-final",
+              type: "agentMessage",
+              phase: "final_answer",
+              text: "Final answer.",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: activeTurn.id,
+            turn: {
+              ...completedTurn,
+              output: [{ type: "text", text: "Final answer." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Older history",
+      "message:Earlier prompt",
+      "message:Audit the backports",
+      "message:First commentary.",
+      "activity:Searched src",
+      "message:Second commentary.",
+      "message:Final answer.",
+    ]);
+
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Older history",
+        "message:Earlier prompt",
+        "message:Audit the backports",
+        "message:First commentary.",
+        "activity:Searched src",
+        "message:Second commentary.",
+        "message:Final answer.",
+      ]);
+    });
+  });
+
   it("releases older-history loading when a fresher hydration supersedes it", async () => {
     const initialTail = readThreadResponse({
       entries: [
