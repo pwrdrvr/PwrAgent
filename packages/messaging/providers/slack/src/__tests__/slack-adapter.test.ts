@@ -4458,6 +4458,71 @@ describe("SlackAdapter", () => {
     }
   });
 
+  it("shares method budgets across simultaneous working cards", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      const startedStreams: Array<{
+        chunks: Array<{ id: string }>;
+      }> = [];
+      const appendedStreams: Array<{
+        chunks: Array<{ id: string }>;
+      }> = [];
+      const stoppedStreams: Array<{
+        chunks: Array<{ id: string }>;
+      }> = [];
+      const adapter = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api: fakeApi({ appendedStreams, startedStreams, stoppedStreams }),
+        socketClient: fakeSocket(),
+      });
+      const first = (sequence: number, isFinal = false) =>
+        slackWorkingCardIntent(sequence, {
+          isFinal,
+          key: "slack-binding-1\0turn-1",
+        });
+      const second = (sequence: number, isFinal = false) =>
+        slackWorkingCardIntent(sequence, {
+          isFinal,
+          key: "slack-binding-1\0turn-2",
+        });
+
+      await adapter.deliver(first(1));
+      await adapter.deliver(second(1));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(startedStreams).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(startedStreams).toHaveLength(2);
+
+      await adapter.deliver(first(2));
+      await adapter.deliver(second(2));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(appendedStreams).toHaveLength(1);
+
+      await adapter.deliver(first(3, true));
+      await adapter.deliver(second(3, true));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Stop has its own workspace budget, so one terminal call proceeds even
+      // while the second append is queued. Each method still serializes calls
+      // shared by all cards on this adapter.
+      expect(stoppedStreams).toHaveLength(1);
+      expect(appendedStreams).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(stoppedStreams).toHaveLength(2);
+      expect(appendedStreams).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("splits long Markdown with images and attaches them to the final post", async () => {
     const posted: Array<{
       blocks?: Array<{ image_url?: string; text?: string; type: string }>;
