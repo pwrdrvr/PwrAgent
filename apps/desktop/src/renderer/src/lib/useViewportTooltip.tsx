@@ -68,6 +68,7 @@ export function useViewportTooltip(options: {
   tooltipNode: ReactNode;
 } {
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const targetRef = useRef<HTMLElement | null>(null);
   const tooltipId = useId();
   const [state, setState] = useState<TooltipState | undefined>(undefined);
 
@@ -102,6 +103,7 @@ export function useViewportTooltip(options: {
 
   const show = useCallback((target: HTMLElement, content: ReactNode): void => {
     const rect = target.getBoundingClientRect();
+    targetRef.current = target;
     setState({
       content,
       targetTop: rect.top,
@@ -115,6 +117,7 @@ export function useViewportTooltip(options: {
   }, []);
 
   const hide = useCallback((): void => {
+    targetRef.current = null;
     setState(undefined);
   }, []);
 
@@ -122,19 +125,31 @@ export function useViewportTooltip(options: {
   // us no dismissal signal when the window loses focus (cmd-tab away leaves
   // the pointer "over" the chip, so no `mouseleave` fires) or when the list
   // scrolls underneath the position:fixed portal (the tooltip detaches from
-  // its target and lingers). Tear it down on either, matching ReactionPicker's
-  // window-level teardown. Keyed on visibility so the measure pass doesn't
-  // resubscribe each render.
+  // its target and lingers). Tear it down when the viewport or an ancestor of
+  // the target scrolls. A captured scroll from an unrelated pane must not
+  // dismiss it — transcript auto-scrolls otherwise close sidebar tooltips.
+  // Keyed on visibility so the measure pass doesn't resubscribe each render.
   const visible = state !== undefined;
   useEffect(() => {
     if (!visible) {
       return;
     }
+    const onScroll = (event: Event): void => {
+      const scrollTarget = event.target;
+      const target = targetRef.current;
+      if (
+        scrollTarget === window
+        || scrollTarget === document
+        || (scrollTarget instanceof Node && target && scrollTarget.contains(target))
+      ) {
+        hide();
+      }
+    };
     window.addEventListener("blur", hide);
-    window.addEventListener("scroll", hide, { capture: true });
+    window.addEventListener("scroll", onScroll, { capture: true });
     return () => {
       window.removeEventListener("blur", hide);
-      window.removeEventListener("scroll", hide, { capture: true });
+      window.removeEventListener("scroll", onScroll, { capture: true });
     };
   }, [visible, hide]);
 
