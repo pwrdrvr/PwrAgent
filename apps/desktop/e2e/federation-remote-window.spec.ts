@@ -851,6 +851,10 @@ test.describe("federation remote window", () => {
   });
 
   test("keeps a cross-instance child attached through restart, reconnect, unlink, and archive", async () => {
+    test.skip(
+      process.platform !== "darwin",
+      "The full process-restart lifecycle targets the macOS VM reproduction; cross-platform federation transport remains covered above.",
+    );
     test.setTimeout(300_000);
 
     const fixtureRoot = await mkdtemp(
