@@ -2137,6 +2137,121 @@ describe("app server ipc", () => {
     expect(rememberCompleteNavigationSnapshot).toHaveBeenCalledWith(response);
   });
 
+  it("shows an unconfigured project for a mounted remote thread until Add Directory matches it", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "remote-grok-build",
+    });
+    const pin = { ref, addedAt: 1_000, instanceLabel: "Laptop" };
+    const remoteRow = {
+      source: "codex" as const,
+      id: "remote-grok-build",
+      title: "grok-build fork and ACP review",
+      titleSource: "explicit" as const,
+      projectKey: "/peer/.codex/worktrees/abc/grok-build",
+      linkedDirectories: [
+        {
+          id: "/peer/repos/grok-build",
+          label: "grok-build",
+          path: "/peer/repos/grok-build",
+          worktreePath: "/peer/.codex/worktrees/abc/grok-build",
+          kind: "worktree" as const,
+        },
+        {
+          id: "/peer/repos/PwrAgent",
+          label: "PwrAgent",
+          path: "/peer/repos/PwrAgent",
+          kind: "local" as const,
+        },
+      ],
+      inbox: { inInbox: true, reason: "updated-since-seen" as const },
+      federation: {
+        ref,
+        instanceLabel: "Laptop",
+        peerStatus: "connected" as const,
+        capabilities: [],
+      },
+    };
+    const localSnapshot = (directories: Array<{
+      key: string;
+      kind: "directory";
+      label: string;
+      path: string;
+      threadKeys: string[];
+      needsAttentionCount: number;
+      latestUpdatedAt: number;
+    }>) => ({
+      backend: "all" as const,
+      fetchedAt: 1_234,
+      unchanged: false,
+      threads: [],
+      inboxThreadKeys: [],
+      directories,
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    });
+    reconcileNavigationSnapshot
+      .mockResolvedValueOnce(localSnapshot([]))
+      .mockResolvedValueOnce(localSnapshot([
+        {
+          key: "directory:/viewer/repos/grok-build",
+          kind: "directory" as const,
+          label: "grok-build",
+          path: "/viewer/repos/grok-build",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 2_000,
+        },
+      ]));
+    listRemoteThreadPins.mockResolvedValue([pin]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValue({
+      threads: [remoteRow],
+      refreshed: [],
+      archived: [],
+    });
+    registerAppServerIpcHandlers();
+
+    const first = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    )) as { directories: Array<{
+      key: string;
+      label: string;
+      localAvailability?: string;
+      threadKeys: string[];
+      needsAttentionCount: number;
+    }> };
+    expect(first.directories).toContainEqual({
+      key: "unconfigured-directory:grok-build",
+      kind: "directory",
+      label: "grok-build",
+      localAvailability: "unconfigured",
+      threadKeys: ["codex:remote-grok-build"],
+      needsAttentionCount: 1,
+    });
+
+    // Registering the same project locally gives the next snapshot a real
+    // directory row. The mounted thread converges into it by project identity;
+    // the temporary owner-path-free placeholder does not survive beside it.
+    const second = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    )) as typeof first;
+    expect(second.directories).toContainEqual(expect.objectContaining({
+      key: "directory:/viewer/repos/grok-build",
+      label: "grok-build",
+      threadKeys: ["codex:remote-grok-build"],
+    }));
+    expect(second.directories).not.toContainEqual(expect.objectContaining({
+      localAvailability: "unconfigured",
+    }));
+  });
+
   it("marks a pinned remote snapshot changed when only reactions change", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const { buildFederatedThreadRef } = await import("@pwragent/shared");

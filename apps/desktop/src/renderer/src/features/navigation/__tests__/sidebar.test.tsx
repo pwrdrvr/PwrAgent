@@ -2037,6 +2037,49 @@ describe("Sidebar", () => {
     expect(onOpenLaunchpad).toHaveBeenCalledWith(directories[0], undefined);
   });
 
+  it("shows mounted projects that are not configured on this instance", async () => {
+    const unconfiguredDirectory: NavigationDirectorySummary = {
+      key: "unconfigured-directory:grok-build",
+      kind: "directory",
+      label: "grok-build",
+      localAvailability: "unconfigured",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[unconfiguredDirectory]}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const summary = screen.getByRole("button", {
+      name: /^grok-build, not configured on this instance/,
+    });
+    expect(summary).toHaveClass("directory-row__summary--unconfigured");
+    expect(screen.queryByRole("button", {
+      name: "Open new thread launchpad for grok-build",
+    })).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(summary);
+    expect(await screen.findByText(
+      "This project directory isn't configured on this instance. Use Add Directory to connect it.",
+    )).toBeInTheDocument();
+  });
+
   it("does not highlight an opened-only launchpad as a pending draft", () => {
     const openedOnlyDirectories: NavigationDirectorySummary[] = [
       {

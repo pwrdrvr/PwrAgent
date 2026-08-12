@@ -5237,6 +5237,15 @@ textarea,
   outline-offset: -2px;
 }
 
+.directory-row__summary--unconfigured .directory-row__icon,
+.directory-row__summary--unconfigured .thread-row__title {
+  color: var(--text-muted);
+}
+
+.directory-row__summary--unconfigured .directory-row__icon {
+  opacity: 0.72;
+}
+
 .directory-row__summary-main,
 .directory-row__summary-meta,
 .directory-row__title-wrap {

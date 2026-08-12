@@ -846,6 +846,14 @@ export type NavigationDirectorySummary = {
   kind: DirectorySummaryKind;
   label: string;
   path?: string;
+  /**
+   * The row was derived from a mounted remote thread, but this viewer has not
+   * registered a matching local checkout yet. The Directories lens keeps the
+   * thread discoverable under this placeholder while suppressing actions that
+   * require a local path. Registering the project replaces the placeholder on
+   * the next snapshot.
+   */
+  localAvailability?: "unconfigured";
   threadKeys: string[];
   needsAttentionCount: number;
   latestUpdatedAt?: number;

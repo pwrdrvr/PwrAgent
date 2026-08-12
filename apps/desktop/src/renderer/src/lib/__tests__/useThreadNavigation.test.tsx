@@ -11518,7 +11518,9 @@ describe("useThreadNavigation", () => {
 
     it("addProjectDirectory tracks an empty repo and reveals the Directories lens", async () => {
       const launchpad = buildPickedLaunchpad({ registeredAt: 1_500 });
+      const getNavigationSnapshot = vi.fn(async () => buildSnapshot());
       const desktopApi = buildBaseDesktopApi({
+        getNavigationSnapshot,
         pickDirectoryFromDisk: vi.fn(async () => ({
           canceled: false as const,
           path: "/Users/me/repos/PwrAgent",
@@ -11542,6 +11544,7 @@ describe("useThreadNavigation", () => {
       });
 
       expect(result.current.browseMode).toBe("directories");
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
       expect(result.current.selectedItemKey).toBeUndefined();
       expect(result.current.directories).toEqual(
         expect.arrayContaining([

@@ -5796,8 +5796,9 @@ export function useThreadNavigation(
     const picked = await pickDirectoryForReference();
     if (picked) {
       updateBrowseMode("directories");
+      await refresh();
     }
-  }, [pickDirectoryForReference, updateBrowseMode]);
+  }, [pickDirectoryForReference, refresh, updateBrowseMode]);
 
   const pickAndAttachDirectoryToSelectedThread = useCallback(async (): Promise<void> => {
     if (rendererFederationTarget) {

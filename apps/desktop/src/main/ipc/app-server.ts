@@ -85,6 +85,7 @@ import {
   type RegisterDirectoryFromDiskResponse,
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
+  type NavigationDirectorySummary,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
   type NavigationThreadGitWorkingStateUpdatedNotification,
@@ -550,8 +551,9 @@ async function renderExplicitComposerPdfPreview(
  * when it identifies a linked directory; fallback preference is a local
  * checkout before a worktree, then linked-directory order.
  *
- * Remote threads whose project has no local counterpart stay ungrouped and
- * surface only in the Updated / Created lenses.
+ * Remote threads whose project has no local counterpart receive an
+ * unconfigured placeholder group. That keeps Cmd+K-mounted rows discoverable
+ * in the Directories lens until Add Directory registers a matching checkout.
  */
 /**
  * The single local directory group a remote thread belongs to, by project
@@ -579,21 +581,7 @@ function findRemoteHomeDirectoryIndex(
       }
     }
   });
-  const projectKey = thread.projectKey;
-  const linkedDirectories = thread.linkedDirectories ?? [];
-  const primaryProjectDirectory = projectKey
-    ? linkedDirectories.find((directory) =>
-        linkedDirectoryMatchesProjectKey(directory, projectKey)
-      )
-    : undefined;
-  const linkedByHomePreference = primaryProjectDirectory
-    ? [primaryProjectDirectory]
-    : [...linkedDirectories].sort((left, right) => {
-      if (left.kind !== right.kind) {
-        return left.kind === "worktree" ? 1 : -1;
-      }
-      return 0;
-    });
+  const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
   for (const linked of linkedByHomePreference) {
     const names = [linked.label, path.basename(linked.path)]
       .map((name) => (name ?? "").trim().toLowerCase())
@@ -606,6 +594,50 @@ function findRemoteHomeDirectoryIndex(
     }
   }
   return undefined;
+}
+
+function remoteLinkedDirectoriesByHomePreference(
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+): LinkedDirectorySummary[] {
+  const linkedDirectories = thread.linkedDirectories ?? [];
+  const projectKey = thread.projectKey;
+  const primaryProjectDirectory = projectKey
+    ? linkedDirectories.find((directory) =>
+        linkedDirectoryMatchesProjectKey(directory, projectKey)
+      )
+    : undefined;
+  if (primaryProjectDirectory) {
+    return [primaryProjectDirectory];
+  }
+
+  return [...linkedDirectories].sort((left, right) => {
+    if (left.kind !== right.kind) {
+      return left.kind === "worktree" ? 1 : -1;
+    }
+    return 0;
+  });
+}
+
+function remoteDirectoryPlaceholder(
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+): NavigationDirectorySummary | undefined {
+  const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
+  if (!home) {
+    return undefined;
+  }
+  const label = home.label.trim() || path.basename(home.path).trim();
+  if (!label) {
+    return undefined;
+  }
+
+  return {
+    key: `unconfigured-directory:${encodeURIComponent(label.toLowerCase())}`,
+    kind: "directory",
+    label,
+    localAvailability: "unconfigured",
+    threadKeys: [],
+    needsAttentionCount: 0,
+  };
 }
 
 function linkedDirectoryMatchesProjectKey(
@@ -633,18 +665,28 @@ function attachRemoteThreadsToLocalDirectories(
   if (remoteThreads.length === 0) {
     return directories;
   }
+  const mergedDirectories = [...directories];
   const addedByDirectoryIndex = new Map<
     number,
     Array<{ threadKey: string; inInbox: boolean }>
   >();
   for (const thread of remoteThreads) {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    const homeIndex = findRemoteHomeDirectoryIndex(
-      directories,
+    let homeIndex = findRemoteHomeDirectoryIndex(
+      mergedDirectories,
       thread,
     );
     if (homeIndex === undefined) {
-      continue;
+      const placeholder = remoteDirectoryPlaceholder(thread);
+      if (!placeholder) {
+        continue;
+      }
+      homeIndex = mergedDirectories.findIndex(
+        (directory) => directory.key === placeholder.key,
+      );
+      if (homeIndex === -1) {
+        homeIndex = mergedDirectories.push(placeholder) - 1;
+      }
     }
     const added = addedByDirectoryIndex.get(homeIndex) ?? [];
     added.push({ threadKey, inInbox: Boolean(thread.inbox?.inInbox) });
@@ -653,7 +695,7 @@ function attachRemoteThreadsToLocalDirectories(
   if (addedByDirectoryIndex.size === 0) {
     return directories;
   }
-  return directories.map((directory, index) => {
+  return mergedDirectories.map((directory, index) => {
     const added = addedByDirectoryIndex
       .get(index)
       ?.filter((entry) => !directory.threadKeys.includes(entry.threadKey));
