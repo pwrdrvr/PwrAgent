@@ -497,8 +497,12 @@ export function MessagingSettings(props: {
       </SettingsSection>
 
       <MessagingRoutesSettings
+        agentRouteToolUpdateMode={managerToolUpdateMode.value}
+        agentRouteToolUpdateModeSource={sourceBadge(managerToolUpdateMode)}
         configuredPlatforms={configuredRoutePlatforms}
         desktopApi={props.desktopApi}
+        saving={props.saving}
+        onAgentRouteToolUpdateModeChange={props.onManagerToolUpdateModeChange}
         onOpenThread={props.onOpenThread}
       />
 

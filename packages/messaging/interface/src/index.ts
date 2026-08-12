@@ -1657,6 +1657,8 @@ export type MessagingDefaultAgentAssignmentRecord = {
   id: string;
   scope: MessagingDefaultAgentScope;
   target: MessagingDefaultAgentTarget;
+  /** Per-route override. Omitted assignments inherit the Agent-route default. */
+  toolUpdateMode?: MessagingToolUpdateMode;
   createdAt: number;
   updatedAt: number;
   revokedAt?: number;

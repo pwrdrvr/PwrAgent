@@ -1692,7 +1692,7 @@ describe("MessagingController", () => {
     const harness = await createHarness({
       createManagedConversation,
       navigation,
-      toolUpdateDefaultMode: "show_all",
+      toolUpdateDefaultMode: "show_none",
     });
     const channel = buildTopicChannel("13056");
     const event = buildTextEvent("find the thread for 13056", {
@@ -1705,7 +1705,12 @@ describe("MessagingController", () => {
         },
       },
     });
-    await seedConversationDefaultAgent(harness.store, channel);
+    await seedConversationDefaultAgent(
+      harness.store,
+      channel,
+      "codex",
+      "show_all",
+    );
 
     await harness.controller.handleInboundEvent(event);
 
@@ -23276,6 +23281,7 @@ async function seedConversationDefaultAgent(
   store: MessagingStore,
   channel: MessagingInboundEvent["channel"],
   backend: AppServerBackendKind = "codex",
+  toolUpdateMode?: MessagingToolUpdateMode,
 ): Promise<void> {
   await store.upsertDefaultAgentAssignment({
     id: `default-agent:${channel.channel}:${channel.conversation.id}`,
@@ -23288,6 +23294,7 @@ async function seedConversationDefaultAgent(
       backend,
       threadId: "thread-1",
     },
+    ...(toolUpdateMode ? { toolUpdateMode } : {}),
     createdAt: 1000,
     updatedAt: 1000,
   });

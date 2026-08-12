@@ -3394,6 +3394,7 @@ export class MessagingController {
     const binding = this.defaultAgentRouteBinding(event, {
       backend: selected.assignment.target.backend,
       threadId: selected.assignment.target.threadId,
+      toolUpdateMode: selected.assignment.toolUpdateMode,
     });
     await this.turnAdmission.append({
       binding,
@@ -15351,6 +15352,7 @@ export class MessagingController {
     target: {
       backend: AppServerBackendKind;
       threadId: ThreadIdentifier;
+      toolUpdateMode?: MessagingToolUpdateMode;
     },
   ): MessagingBindingRecord {
     const now = this.now();
@@ -15362,6 +15364,14 @@ export class MessagingController {
       targetKind: "agent_thread",
       backend: target.backend,
       threadId: target.threadId,
+      ...(target.toolUpdateMode
+        ? {
+            preferences: {
+              toolUpdateMode: target.toolUpdateMode,
+              updatedAt: now,
+            },
+          }
+        : {}),
       authorizedActorIds: [event.actor.platformUserId],
       routingState: event.routingState,
       createdAt: now,

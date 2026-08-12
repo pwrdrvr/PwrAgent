@@ -646,6 +646,27 @@ describe("MessagingStore", () => {
     expect(migrated.version).toBe(3);
   });
 
+  it("preserves valid per-route Working Updates overrides and rejects invalid ones", () => {
+    const valid = buildDefaultAgentAssignment({ toolUpdateMode: "show_more" });
+    const migrated = migrateMessagingStoreData({
+      version: 3,
+      defaultAgentAssignments: {
+        valid,
+        invalid: {
+          ...valid,
+          id: "invalid",
+          toolUpdateMode: "show_everything",
+        },
+      },
+    });
+
+    expect(migrated.defaultAgentAssignments.valid).toMatchObject({
+      id: valid.id,
+      toolUpdateMode: "show_more",
+    });
+    expect(migrated.defaultAgentAssignments.invalid).toBeUndefined();
+  });
+
   it("migrates pre-merge default Agent assignment records", () => {
     const channel = buildBinding().channel;
     const migrated = migrateMessagingStoreData({

@@ -986,6 +986,22 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    const routeWorkingUpdates = screen.getByRole("radiogroup", {
+      name: "Agent route Working Updates",
+    });
+    expect(
+      within(routeWorkingUpdates).getByRole("radio", { name: "Show None" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      within(routeWorkingUpdates).getByRole("radio", { name: "Show Some" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          managerToolUpdateMode: "show_some",
+        },
+      });
+    });
     fireEvent.change(screen.getByLabelText("Input debounce"), {
       target: { value: "750" },
     });
