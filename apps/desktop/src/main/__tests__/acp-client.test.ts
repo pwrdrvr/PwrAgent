@@ -76,7 +76,7 @@ describe("AcpAgentClient", () => {
 
     await client.initialize();
     expect(client.hasActiveOperations()).toBe(false);
-    expect(client.hasOwnedSessions()).toBe(false);
+    expect(client.hasRetainableSessions()).toBe(false);
     expect(client.ownsSession("session-1")).toBe(false);
 
     const session = client.startSession({
@@ -88,7 +88,7 @@ describe("AcpAgentClient", () => {
     sessionResponse.resolve({ sessionId: "session-1" });
     await expect(session).resolves.toMatchObject({ sessionId: "session-1" });
     expect(client.hasActiveOperations()).toBe(false);
-    expect(client.hasOwnedSessions()).toBe(true);
+    expect(client.hasRetainableSessions()).toBe(true);
     expect(client.ownsSession("session-1")).toBe(true);
 
     const runtimeOption = client.setRuntimeOption({
@@ -103,8 +103,30 @@ describe("AcpAgentClient", () => {
     expect(client.hasActiveOperations()).toBe(false);
 
     await client.dispose();
-    expect(client.hasOwnedSessions()).toBe(false);
+    expect(client.hasRetainableSessions()).toBe(false);
     expect(client.ownsSession("session-1")).toBe(false);
+  });
+
+  it("does not retain the client solely for hidden helper sessions", async () => {
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport: new FakeAcpAgentTransport({
+        "session/new": { sessionId: "hidden-session" },
+      }),
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      hidden: true,
+      mcpServers: "none",
+    });
+
+    expect(client.ownsSession("hidden-session")).toBe(true);
+    expect(client.hasRetainableSessions()).toBe(false);
   });
 
   it("initializes, starts sessions, sends prompts, and normalizes updates", async () => {
@@ -2438,6 +2460,7 @@ describe("AcpAgentClient", () => {
     });
 
     await client.initialize();
+    expect(client.supportsSessionLoad()).toBe(false);
     const replay = await client.loadSession(
       store.getSession("acp:gemini", "session-1")!,
     );

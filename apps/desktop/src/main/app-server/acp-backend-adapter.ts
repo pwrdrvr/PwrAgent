@@ -130,11 +130,12 @@ export type AcpRuntimeClient = Pick<
       | "didSessionLoadReplayHistory"
       | "hasActiveOperations"
       | "hasActiveTurns"
-      | "hasOwnedSessions"
+      | "hasRetainableSessions"
       | "ownsSession"
       | "readProviderStatus"
       | "sendControlPrompt"
       | "setRuntimeOption"
+      | "supportsSessionLoad"
     >
   >;
 
@@ -1458,9 +1459,11 @@ export class AcpBackendAdapter {
         return await cached.promise;
       }
       this.acpClients.delete(backend);
+      const supportsSessionLoad =
+        cached.client.supportsSessionLoad?.() ?? cached.supportsSessionLoad;
       if (
-        !cached.supportsSessionLoad
-        && cached.client.hasOwnedSessions?.() === true
+        !supportsSessionLoad
+        && cached.client.hasRetainableSessions?.() === true
       ) {
         // Replace the launch target without replacing ownership of sessions
         // that the new process has no protocol method to recover.

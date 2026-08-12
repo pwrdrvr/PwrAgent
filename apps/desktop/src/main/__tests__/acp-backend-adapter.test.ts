@@ -3026,13 +3026,6 @@ describe("AcpBackendAdapter", () => {
         args: ["acp"],
         env: {},
       },
-      runtimeCapabilities: {
-        schemaVersion: 1,
-        status: "discovered",
-        agentCapabilities: {
-          loadSession: false,
-        },
-      },
     };
     const overrideAgent: AcpInstalledAgentRecord = {
       ...firstAgent,
@@ -3048,9 +3041,10 @@ describe("AcpBackendAdapter", () => {
       dispose: firstDispose,
       hasActiveOperations: () => false,
       hasActiveTurns: () => false,
-      hasOwnedSessions: () => true,
+      hasRetainableSessions: () => true,
       initialize: vi.fn(async () => undefined),
       ownsSession: (sessionId: string) => sessionId === "session-1",
+      supportsSessionLoad: () => false,
     };
     const secondOwnedSessions = new Set<string>();
     const secondDispose = vi.fn(async () => undefined);
@@ -3058,9 +3052,10 @@ describe("AcpBackendAdapter", () => {
       dispose: secondDispose,
       hasActiveOperations: () => false,
       hasActiveTurns: () => false,
-      hasOwnedSessions: () => secondOwnedSessions.size > 0,
+      hasRetainableSessions: () => secondOwnedSessions.size > 0,
       initialize: vi.fn(async () => undefined),
       ownsSession: (sessionId: string) => secondOwnedSessions.has(sessionId),
+      supportsSessionLoad: () => false,
       startSession: vi.fn(async () => {
         secondOwnedSessions.add("session-2");
         return { sessionId: "session-2" };
@@ -3136,18 +3131,20 @@ describe("AcpBackendAdapter", () => {
       dispose: firstDispose,
       hasActiveOperations: () => false,
       hasActiveTurns: () => false,
-      hasOwnedSessions: () => true,
+      hasRetainableSessions: () => true,
       initialize: vi.fn(async () => undefined),
       ownsSession: (sessionId: string) => sessionId === "session-1",
+      supportsSessionLoad: () => true,
     };
     const secondDispose = vi.fn(async () => undefined);
     const secondClient = {
       dispose: secondDispose,
       hasActiveOperations: () => false,
       hasActiveTurns: () => false,
-      hasOwnedSessions: () => false,
+      hasRetainableSessions: () => false,
       initialize: vi.fn(async () => undefined),
       ownsSession: () => false,
+      supportsSessionLoad: () => true,
     };
     const adapter = new AcpBackendAdapter({
       acpAgentStore: null,
