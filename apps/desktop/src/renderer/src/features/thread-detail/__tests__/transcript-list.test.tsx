@@ -560,6 +560,54 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Follow-up prose should not inherit", { exact: false })).toBeInTheDocument();
   });
 
+  it("keeps a trailing heading and separators with its wide table split block", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const tableBlock = `## Quick matrix
+
+---
+
+${wideMarkdownTable}`;
+    const messageText = `Research is complete. The concise guide follows.
+
+${tableBlock}
+
+Implementation notes remain in a readable bubble.`;
+
+    const { container } = render(
+      <TranscriptList
+        desktopApi={{ copyText }}
+        entries={[
+          {
+            type: "message",
+            id: "message-table-heading",
+            role: "assistant",
+            text: messageText,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    const tableArticle = screen.getByRole("heading", { name: "Quick matrix" }).closest("article");
+    expect(articles).toHaveLength(3);
+    expect(articles[0]).toHaveTextContent("Research is complete");
+    expect(articles[0]).not.toHaveTextContent("Quick matrix");
+    expect(tableArticle).toHaveClass("transcript-message--table-wide");
+    expect(tableArticle?.querySelector(".transcript-message__rule")).toBeInTheDocument();
+    expect(tableArticle?.querySelector("table.thread-markdown__table")).toBeInTheDocument();
+    expect(articles[2]).toHaveTextContent("Implementation notes remain");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy table block" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(tableBlock);
+    });
+    expect(copyText).not.toHaveBeenCalledWith(messageText);
+  });
+
   it("copies the full original message when the rendered message is split into segments", async () => {
     const copyText = vi.fn(async () => undefined);
     const messageText = `Intro prose should stay in the normal readable assistant bubble.\n\n${wideMarkdownTable}\n\nFollow-up prose should not inherit the table width.`;

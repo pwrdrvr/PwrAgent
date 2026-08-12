@@ -94,6 +94,10 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
             continuation: index > 0,
             desktopApi: props.desktopApi,
             message: props.message,
+            segmentText:
+              segment.type === "table" && messageSegments.length > 1
+                ? segment.text
+                : undefined,
             sourceThreadLink,
             threadLinks,
             text: messageCopyText,
@@ -223,8 +227,14 @@ function splitMarkdownTableBlocks(markdown: string): MarkdownBlock[] {
       isMarkdownTableHeader(line) &&
       isMarkdownTableDelimiter(lines[index + 1] ?? "")
     ) {
+      const tableHeading = splitTrailingTableHeading(textBuffer);
+      textBuffer = tableHeading.remainingLines;
       flushText();
-      const tableLines = [line, lines[index + 1] ?? ""];
+      const tableLines = [
+        ...tableHeading.headingLines,
+        line,
+        lines[index + 1] ?? "",
+      ];
       index += 2;
       while (index < lines.length && isMarkdownTableRow(lines[index] ?? "")) {
         tableLines.push(lines[index] ?? "");
@@ -240,6 +250,39 @@ function splitMarkdownTableBlocks(markdown: string): MarkdownBlock[] {
 
   flushText();
   return blocks;
+}
+
+function splitTrailingTableHeading(lines: string[]): {
+  headingLines: string[];
+  remainingLines: string[];
+} {
+  let headingIndex = lines.length - 1;
+  while (
+    headingIndex >= 0
+    && (
+      lines[headingIndex]?.trim() === ""
+      || isMarkdownThematicBreak(lines[headingIndex] ?? "")
+    )
+  ) {
+    headingIndex -= 1;
+  }
+
+  if (!isMarkdownAtxHeading(lines[headingIndex] ?? "")) {
+    return { headingLines: [], remainingLines: lines };
+  }
+
+  return {
+    headingLines: lines.slice(headingIndex),
+    remainingLines: lines.slice(0, headingIndex),
+  };
+}
+
+function isMarkdownAtxHeading(line: string): boolean {
+  return /^\s{0,3}#{1,6}(?:\s+|$)/.test(line);
+}
+
+function isMarkdownThematicBreak(line: string): boolean {
+  return /^\s{0,3}(?:(?:\*\s*){3,}|(?:_\s*){3,}|(?:-\s*){3,})$/.test(line);
 }
 
 function isMarkdownTableHeader(line: string): boolean {
@@ -273,7 +316,14 @@ function splitTableCells(line: string): string[] {
 }
 
 function isWideMarkdownTable(table: string): boolean {
-  const [header = "", , ...rows] = table.split("\n");
+  const lines = table.split("\n");
+  const headerIndex = lines.findIndex(
+    (line, index) =>
+      isMarkdownTableHeader(line)
+      && isMarkdownTableDelimiter(lines[index + 1] ?? ""),
+  );
+  const header = lines[headerIndex] ?? "";
+  const rows = lines.slice(headerIndex + 2);
   const columnCount = splitTableCells(header).length;
   const longestRowLength = rows.reduce(
     (longest, row) => Math.max(longest, row.length),
@@ -466,12 +516,29 @@ function renderMessageHeader(params: {
   continuation: boolean;
   desktopApi?: Pick<DesktopApi, "copyText">;
   message: AppServerThreadMessageEntry;
+  segmentText?: string;
   sourceThreadLink?: ResolvedThreadLink;
   threadLinks: ReturnType<typeof useThreadLinks>;
   text: string;
 }): ReactNode {
+  const segmentCopyButton = params.segmentText ? (
+    <TranscriptCopyButton
+      className="transcript-copy-button--segment"
+      copiedLabel="Copied table block"
+      desktopApi={params.desktopApi}
+      label="Copy table block"
+      text={params.segmentText}
+    />
+  ) : null;
+
   if (params.continuation) {
-    return null;
+    return segmentCopyButton ? (
+      <header className="transcript-message__header transcript-message__header--continuation">
+        <span className="transcript-message__header-actions">
+          {segmentCopyButton}
+        </span>
+      </header>
+    ) : null;
   }
 
   return (
@@ -497,6 +564,7 @@ function renderMessageHeader(params: {
           ) : null}
       </span>
       <span className="transcript-message__header-actions">
+        {segmentCopyButton}
         {params.text ? (
           <TranscriptCopyButton
             className="transcript-copy-button--message"
