@@ -6259,6 +6259,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   Pick<
     SqliteOverlayStore,
     | "readThreadGitWorkingStateCache"
+    | "listRemoteThreadPins"
     | "upsertThreadUsageLines"
     | "writeThreadGitWorkingStateCacheEntry"
   >
@@ -10594,8 +10595,31 @@ export class DesktopBackendRegistry {
     }
 
     return await this.createdThreadVisibilityLock.run("global-pin-order", async () => {
+      // Remote rows pinned into this viewer's main window own ranks in
+      // `remote_thread_pins`, not the local thread overlay. New local threads
+      // still join the same user-curated list, so rank allocation must include
+      // both stores or it can reuse a remote rank and strand the two rows at
+      // the local/remote boundary.
+      let remotePinnedRanks: Array<string | undefined> = [];
+      try {
+        remotePinnedRanks =
+          typeof this.overlayStore.listRemoteThreadPins === "function"
+            ? (await this.overlayStore.listRemoteThreadPins())
+                .map((pin) => pin.localPinnedRank)
+            : [];
+      } catch (error) {
+        // Auto-pinning is a visibility enhancement. A read failure should not
+        // turn a successfully created thread into a failed creation response.
+        backendRegistryLog.warn("remote pin ranks unavailable during auto-pin", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId: params.threadId,
+        });
+      }
       const pinnedRank = buildAppendPinRank(
-        this.createdThreadVisibilityPinnedRanks,
+        [
+          ...this.createdThreadVisibilityPinnedRanks,
+          ...remotePinnedRanks,
+        ],
       );
       try {
         await this.overlayStore.setThreadPin({

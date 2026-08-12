@@ -17,6 +17,7 @@ import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
+  buildFederatedThreadRef,
   buildNavigationSnapshot,
   buildThreadIdentityKey,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
@@ -327,6 +328,7 @@ function createOverlayStoreMock(params?: {
   executionMode?: "default" | "full-access";
   launchpadDefaults?: NavigationLaunchpadDefaults;
   overlays?: Record<string, ThreadOverlayState>;
+  remotePinnedRanks?: string[];
   toolAccounting?: ThreadToolAccounting;
 }) {
   const toolAccounting: ThreadToolAccounting = params?.toolAccounting ?? {
@@ -372,6 +374,17 @@ function createOverlayStoreMock(params?: {
   }
 
   return {
+    listRemoteThreadPins: async () =>
+      (params?.remotePinnedRanks ?? []).map((localPinnedRank, index) => ({
+        ref: buildFederatedThreadRef({
+          backend: "codex",
+          instanceId: "peer-laptop",
+          threadId: `remote-${index + 1}`,
+        }),
+        addedAt: 1_000 + index,
+        instanceLabel: "Laptop",
+        localPinnedRank,
+      })),
     getThreadOverlayState: async ({
       backend,
       threadId,
@@ -6674,7 +6687,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("auto-pins a top-level thread created through the shared launchpad materialization path", async () => {
+  it("auto-pins a new local thread after the existing local and remote pins", async () => {
     const directoryPath = expectedDir(
       path.join(os.tmpdir(), "pwragent-auto-pin-project"),
     );
@@ -6695,6 +6708,9 @@ describe("DesktopBackendRegistry", () => {
           pinnedRank: "1024",
         },
       },
+      // Viewer-owned remote ranks live outside the local thread overlay but
+      // participate in the same user-curated order.
+      remotePinnedRanks: ["2048"],
     });
     const codexClient = new MockBackendClient({
       threads: [
@@ -6748,21 +6764,21 @@ describe("DesktopBackendRegistry", () => {
     expect(response).toMatchObject({
       backend: "codex",
       threadId: "thread-1",
-      pinnedRank: "2048",
+      pinnedRank: "3072",
     });
     await expect(
       overlayStore.getThreadOverlayState({
         backend: "codex",
         threadId: "thread-1",
       }),
-    ).resolves.toMatchObject({ pinnedRank: "2048" });
+    ).resolves.toMatchObject({ pinnedRank: "3072" });
     expect(events).toContainEqual({
       backend: "codex",
       notification: {
         method: "thread/pin/added",
         params: {
           threadId: "thread-1",
-          pinnedRank: "2048",
+          pinnedRank: "3072",
         },
       },
     });

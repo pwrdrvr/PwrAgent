@@ -2056,13 +2056,6 @@ class DesktopAppServerService {
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });
-    if (
-      backend === "all"
-      && !request.filter?.trim()
-      && !activeRecentRefresh
-    ) {
-      getDesktopBackendRegistry().rememberCompleteNavigationSnapshot(snapshot);
-    }
     await this.loadPrStatusRegistry();
     await this.loadPrLookupRegistry();
     this.seedPrStatusRegistryFromThreads(snapshot.threads);
@@ -2128,7 +2121,7 @@ class DesktopAppServerService {
 
     const remotePins = await this.mergePinnedRemoteThreads();
 
-    return {
+    const response = {
       ...snapshot,
       threads: [...threadsWithWorkingState, ...remotePins.threads],
       // One unified ranking over local + remote rows: the local keys were
@@ -2154,6 +2147,16 @@ class DesktopAppServerService {
         && !primaryGitRepositoriesChanged
         && !remotePins.changed,
     };
+    if (
+      backend === "all"
+      && !request.filter?.trim()
+      && !activeRecentRefresh
+    ) {
+      // Creation-time visibility and append-rank decisions must see the same
+      // merged local + viewer-owned remote pin list the renderer sees.
+      getDesktopBackendRegistry().rememberCompleteNavigationSnapshot(response);
+    }
+    return response;
   }
 
   private async applyRemoteDirectoryViewerOverlays(
