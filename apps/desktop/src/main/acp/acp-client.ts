@@ -1228,16 +1228,16 @@ export class AcpAgentClient {
       });
     } finally {
       this.loadingSessions.delete(protocolSessionId);
-      if (loadState.replayedTranscript) {
-        this.sessionLoadReplays.set(protocolSessionId, {
-          ...(loadState.lastTimestampedTranscriptAt !== undefined
-            ? {
-                lastTimestampedTranscriptAt:
-                  loadState.lastTimestampedTranscriptAt,
-              }
-            : {}),
-        });
-      }
+    }
+    if (loadState.replayedTranscript) {
+      this.sessionLoadReplays.set(protocolSessionId, {
+        ...(loadState.lastTimestampedTranscriptAt !== undefined
+          ? {
+              lastTimestampedTranscriptAt:
+                loadState.lastTimestampedTranscriptAt,
+            }
+          : {}),
+      });
     }
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "session-load",
