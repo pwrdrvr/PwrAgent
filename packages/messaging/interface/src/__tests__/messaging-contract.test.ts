@@ -27,6 +27,7 @@ describe("messaging surface contract", () => {
       "activity",
       "message",
       "stream_update",
+      "working_card",
       "status",
       "progress",
       "thread_picker",
