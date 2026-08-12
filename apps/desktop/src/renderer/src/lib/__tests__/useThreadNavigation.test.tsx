@@ -3714,6 +3714,144 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("records remote-root ownership for locally created children and forks", async () => {
+    const rootTarget = {
+      scope: "remote" as const,
+      instanceId: "root-owner",
+    };
+    const worktree = {
+      id: "wt",
+      label: "Repo",
+      path: "/repo",
+      worktreePath: "/wt/repo",
+      kind: "worktree" as const,
+    };
+    const remoteRoot: NavigationThreadSummary = {
+      id: "thread-root",
+      title: "Remote root",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [worktree],
+      inbox: { inInbox: false },
+      subthreadOrder: ["thread-local-child"],
+      federation: {
+        ref: {
+          backend: "codex",
+          target: rootTarget,
+          threadId: "thread-root",
+        },
+        instanceLabel: "Root Mac",
+      },
+    };
+    const localChild: NavigationThreadSummary = {
+      ...remoteRoot,
+      id: "thread-local-child",
+      title: "Local child",
+      parentThreadId: "thread-root",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "root-owner",
+      federation: undefined,
+    };
+    const directoryKey =
+      "subthread:codex:thread-local-child:same-worktree";
+    const launchpad = {
+      directoryKey,
+      directoryKind: "directory" as const,
+      directoryLabel: "Repo",
+      directoryPath: "/wt/repo",
+      workMode: "local" as const,
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad,
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const updateDirectoryLaunchpad = vi.fn(async (request) => ({
+      launchpad: { ...launchpad, ...request.patch, updatedAt: 2 },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const forkThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      sourceThreadId: "thread-local-child",
+      threadId: "thread-fork",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    }));
+    const updateSubthreadOrder = vi.fn(async (request) => ({
+      backend: "codex" as const,
+      parentThreadId: request.parentThreadId,
+      threadIds: request.threadIds,
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      forkThread,
+      getNavigationSnapshot: vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [remoteRoot, localChild],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })),
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+      updateSubthreadOrder,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.createSubthread(localChild, "same-worktree");
+    });
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        federationTarget: undefined,
+        parentThreadId: "thread-root",
+        parentThreadInstanceId: "root-owner",
+      }),
+    );
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        patch: expect.objectContaining({
+          federationTarget: undefined,
+          parentThreadId: "thread-root",
+          parentThreadInstanceId: "root-owner",
+        }),
+      }),
+    );
+
+    await act(async () => {
+      await result.current.forkThread(localChild, "same-worktree");
+    });
+    expect(forkThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        federationTarget: undefined,
+        parentThreadId: "thread-root",
+        parentThreadInstanceId: "root-owner",
+      }),
+    );
+    expect(updateSubthreadOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        federationTarget: rootTarget,
+        parentThreadId: "thread-root",
+      }),
+    );
+  });
+
   it("pins unlinked siblings together immediately above their pinned parent", async () => {
     const pinnedBefore = {
       id: "thread-before",
@@ -3829,6 +3967,7 @@ describe("useThreadNavigation", () => {
           threadId: "thread-child",
         },
         instanceLabel: "Child Mac",
+        derivedFromMountedParent: true,
       },
     };
     const snapshot: NavigationSnapshot = {
@@ -3844,10 +3983,20 @@ describe("useThreadNavigation", () => {
       backend: "codex" as const,
       threadId: "thread-child",
     }));
+    const addRemoteThreadPin = vi.fn(async () => ({
+      pin: {
+        ref: child.federation!.ref,
+        instanceLabel: "Child Mac",
+        pinnedVia: "explicit" as const,
+        addedAt: Date.now(),
+      },
+    }));
+    const reorderThreadPins = vi.fn(async () => ({ pinnedRanks: {} }));
     const desktopApi: DesktopApi = {
+      addRemoteThreadPin,
       getNavigationSnapshot: vi.fn(async () => snapshot),
       onAgentEvent: () => () => undefined,
-      reorderThreadPins: vi.fn(async () => ({ pinnedRanks: {} })),
+      reorderThreadPins,
       setThreadParent,
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
@@ -3861,6 +4010,18 @@ describe("useThreadNavigation", () => {
       backend: "codex",
       federationTarget: remoteTarget,
       threadId: "thread-child",
+    });
+    expect(addRemoteThreadPin).toHaveBeenCalledWith({
+      ref: child.federation?.ref,
+      instanceLabel: "Child Mac",
+      summary: child,
+    });
+    expect(addRemoteThreadPin.mock.invocationCallOrder[0]).toBeLessThan(
+      setThreadParent.mock.invocationCallOrder[0]!,
+    );
+    expect(reorderThreadPins).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      threadKeys: ["codex:thread-child", "codex:thread-parent"],
     });
   });
 

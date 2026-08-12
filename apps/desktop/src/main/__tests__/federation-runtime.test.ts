@@ -722,6 +722,14 @@ describe("DesktopFederationRuntime", () => {
       browseMode: "directories",
       directories: [
         {
+          key: "directory:/other",
+          kind: "directory",
+          label: "Other",
+          path: "/other",
+          threadKeys: [buildThreadIdentityKey("codex", "child")],
+          directoryThreadsCollapsed: false,
+        },
+        {
           key: "directory:/repo",
           kind: "directory",
           label: "Repo",
@@ -730,17 +738,7 @@ describe("DesktopFederationRuntime", () => {
           directoryThreadsCollapsed: true,
         },
       ],
-      threads: [
-        {
-          source: "codex",
-          id: "existing-pin",
-          title: "Existing pin",
-          titleSource: "explicit",
-          linkedDirectories: [],
-          inbox: { inInbox: true, reason: "active" },
-          pinnedRank: "1024",
-        },
-      ],
+      threads: [],
       launchpadDefaults: {} as never,
       federationPeers: [],
     } as never);
@@ -753,6 +751,28 @@ describe("DesktopFederationRuntime", () => {
     ).mockResolvedValue(parentSummary);
 
     try {
+      const existingRemoteRef = buildFederatedThreadRef({
+        backend: "codex",
+        instanceId: "other-peer",
+        threadId: "existing-pin",
+      });
+      await overlayStore.addRemoteThreadPin({
+        ref: existingRemoteRef,
+        instanceLabel: "Other Mac",
+        pinnedVia: "explicit",
+        summary: {
+          source: "codex",
+          id: "existing-pin",
+          title: "Existing remote pin",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      });
+      await overlayStore.setRemoteThreadLocalPin({
+        ref: existingRemoteRef,
+        pinnedRank: "1024",
+      });
       await runtime.localBackend().materializeDirectoryLaunchpad({
         directoryKey: "directory:/repo",
         parentThreadId: "parent",
@@ -774,7 +794,9 @@ describe("DesktopFederationRuntime", () => {
         backend: "codex",
         threadId: "parent",
       });
-      const [pin] = await overlayStore.listRemoteThreadPins();
+      const pin = (await overlayStore.listRemoteThreadPins()).find(
+        (candidate) => candidate.ref.threadId === "parent",
+      );
       expect(pin).toMatchObject({
         ref: {
           backend: "codex",
@@ -784,7 +806,43 @@ describe("DesktopFederationRuntime", () => {
         pinnedVia: "companion",
         summary: parentSummary,
       });
-      expect(pin?.localPinnedRank).toBeTruthy();
+      // The raw backend snapshot contains no viewer-owned remote pins. The
+      // visibility calculation still sees that Pins is active and appends
+      // after its existing rank without colliding.
+      expect(pin?.localPinnedRank).toBe("2048");
+
+      await overlayStore.addRemoteThreadPin({
+        ref: pin!.ref,
+        instanceLabel: "Parent Mac",
+        pinnedVia: "explicit",
+        summary: { ...parentSummary, title: "Older cached parent" },
+      });
+      await overlayStore.setRemoteThreadLocalPin({
+        ref: pin!.ref,
+        pinnedRank: "4096",
+      });
+      await runtime.localBackend().materializeDirectoryLaunchpad({
+        directoryKey: "directory:/repo",
+        parentThreadId: "parent",
+        parentThreadBackend: "codex",
+        parentThreadInstanceId: "parent-peer",
+        launchpad: {
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+        },
+      } as never, {
+        sourceInstanceId: "parent-peer",
+      });
+      const preserved = (await overlayStore.listRemoteThreadPins()).find(
+        (candidate) => candidate.ref.threadId === "parent",
+      );
+      expect(preserved).toMatchObject({
+        pinnedVia: "explicit",
+        localPinnedRank: "4096",
+        summary: parentSummary,
+      });
       expect(publish).toHaveBeenCalledWith({
         backend: "codex",
         notification: {

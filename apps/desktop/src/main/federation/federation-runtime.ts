@@ -82,7 +82,6 @@ import {
   applyNavigationSnapshotTransportResponse,
   buildAppendPinRank,
   buildFederatedThreadRef,
-  buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
   federationEndpointAcceptsCloudflareCredentials,
   isCelestialIconAssignment,
@@ -4489,28 +4488,67 @@ async function mountRemoteParentForLocalChild(
     threadId: parentThreadId,
   });
   const overlayStore = getDesktopOverlayStore();
-  await overlayStore.addRemoteThreadPin({
-    ref,
-    summary,
-    instanceLabel:
-      parentSummary?.federation?.instanceLabel ?? parentInstanceId,
-    pinnedVia: "companion",
-  });
+  const instanceLabel =
+    parentSummary?.federation?.instanceLabel ?? parentInstanceId;
+  const existingPins = await overlayStore.listRemoteThreadPins();
+  const existingPin = existingPins.find(
+    (pin) =>
+      pin.ref.backend === ref.backend
+      && pin.ref.threadId === ref.threadId
+      && isRemoteFederationTarget(pin.ref.target)
+      && pin.ref.target.instanceId === parentInstanceId,
+  );
+  if (existingPin) {
+    // Snapshot refreshes must not replace viewer-owned rank or provenance.
+    // In particular, creating another child cannot demote an explicit pin to
+    // a companion or remove it from the viewer's Pins section.
+    await overlayStore.updateRemoteThreadPinSnapshots([{
+      ref,
+      summary,
+      instanceLabel,
+    }]);
+  } else {
+    await overlayStore.addRemoteThreadPin({
+      ref,
+      summary,
+      instanceLabel,
+      pinnedVia: "companion",
+    });
+  }
 
   const snapshot = await new DesktopMessagingBackendBridge()
     .getNavigationSnapshot({});
-  const childKey = buildThreadIdentityKey(response.backend, response.threadId);
+  const launchpadDirectoryKey =
+    request.launchpad?.directoryKey ?? request.directoryKey;
   const childDirectory = snapshot.directories.find(
-    (directory) => directory.threadKeys.includes(childKey),
+    (directory) => directory.key === launchpadDirectoryKey,
   );
-  const hasPinnedTopLevelThread = snapshot.threads.some(
-    (thread) => thread.pinnedRank && !thread.parentThreadId,
+  const localRanks = await overlayStore.listPinnedThreadOverlayRanks();
+  const remotePins = await overlayStore.listRemoteThreadPins();
+  const parentPin = remotePins.find(
+    (pin) =>
+      pin.ref.backend === ref.backend
+      && pin.ref.threadId === ref.threadId
+      && isRemoteFederationTarget(pin.ref.target)
+      && pin.ref.target.instanceId === parentInstanceId,
   );
-  if (childDirectory?.directoryThreadsCollapsed && hasPinnedTopLevelThread) {
+  const hasPinnedTopLevelThread =
+    localRanks.some((entry) => !entry.parentThreadId)
+    || remotePins.some(
+      (pin) => pin.localPinnedRank && !pin.summary?.parentThreadId,
+    );
+  if (
+    childDirectory?.directoryThreadsCollapsed
+    && hasPinnedTopLevelThread
+    && !parentPin?.localPinnedRank
+  ) {
     await overlayStore.setRemoteThreadLocalPin({
       ref,
       pinnedRank: buildAppendPinRank(
-        snapshot.threads.map((thread) => thread.pinnedRank),
+        [
+          ...localRanks.map((entry) => entry.pinnedRank),
+          ...remotePins.map((pin) => pin.localPinnedRank),
+        ],
       ),
     });
   }

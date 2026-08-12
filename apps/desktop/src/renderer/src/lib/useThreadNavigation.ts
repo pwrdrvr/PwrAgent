@@ -5215,11 +5215,13 @@ export function useThreadNavigation(
         && isRemoteFederationTarget(groupRoot.federation.ref.target)
         ? groupRoot.federation.ref.target.instanceId
         : parent.parentThreadInstanceId;
-      const parentThreadInstanceId =
-        federationTarget
+      const childOwnerInstanceId = federationTarget
         && isRemoteFederationTarget(federationTarget)
-        && groupRootInstanceId
-        && groupRootInstanceId !== federationTarget.instanceId
+        ? federationTarget.instanceId
+        : undefined;
+      const parentThreadInstanceId =
+        groupRootInstanceId
+        && groupRootInstanceId !== childOwnerInstanceId
           ? groupRootInstanceId
           : undefined;
       setCreatingThread({
@@ -5364,11 +5366,13 @@ export function useThreadNavigation(
         && isRemoteFederationTarget(groupRoot.federation.ref.target)
         ? groupRoot.federation.ref.target.instanceId
         : parent.parentThreadInstanceId;
-      const parentThreadInstanceId =
-        federationTarget
+      const childOwnerInstanceId = federationTarget
         && isRemoteFederationTarget(federationTarget)
-        && groupRootInstanceId
-        && groupRootInstanceId !== federationTarget.instanceId
+        ? federationTarget.instanceId
+        : undefined;
+      const parentThreadInstanceId =
+        groupRootInstanceId
+        && groupRootInstanceId !== childOwnerInstanceId
           ? groupRootInstanceId
           : undefined;
       const executionMode = parent.executionMode ?? "default";
@@ -7025,6 +7029,24 @@ export function useThreadNavigation(
       const successfullyUnlinkedPinnedKeys = new Set<string>();
       for (const thread of threadsToUnlink) {
         try {
+          if (
+            thread.federation?.derivedFromMountedParent
+            && !readRendererFederationTarget()
+          ) {
+            if (!desktopApi?.addRemoteThreadPin) {
+              throw new Error(
+                "Desktop bridge cannot preserve this derived remote child.",
+              );
+            }
+            // Derived children ride along with a mounted parent and have no
+            // viewer-side pin row of their own. Persist one before clearing the
+            // owner relationship or the next refresh would drop the child.
+            await desktopApi.addRemoteThreadPin({
+              ref: thread.federation.ref,
+              instanceLabel: thread.federation.instanceLabel,
+              summary: thread,
+            });
+          }
           await setThreadParentRequest({
             backend: thread.source,
             federationTarget: thread.federation?.ref.target ??
@@ -7063,7 +7085,7 @@ export function useThreadNavigation(
       }
       await refresh();
     },
-    [refresh, reorderThreadPinsRequest, setThreadParentRequest],
+    [desktopApi, refresh, reorderThreadPinsRequest, setThreadParentRequest],
   );
 
   const updateSubthreadOrder = useCallback(
