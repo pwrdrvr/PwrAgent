@@ -1320,23 +1320,49 @@ export class GitDirectoryService {
         });
       }
 
-      const storage = await this.resolveStorage();
-      const worktreePath = await computeWorktreePath({
-        backend: launchpad.backend,
-        codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
-        repoRoot,
-        storage,
-        homeDir: this.homeDir,
-      });
       try {
-        await mkdir(path.dirname(worktreePath), { recursive: true });
-        await this.runGitCommand(
+        const storage = await this.resolveStorage();
+        const worktreePath = await computeWorktreePath({
+          backend: launchpad.backend,
+          codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
           repoRoot,
-          ["worktree", "add", worktreePath, baseBranch],
-          this.gitEnv,
-        );
+          storage,
+          homeDir: this.homeDir,
+        });
+        try {
+          await mkdir(path.dirname(worktreePath), { recursive: true });
+          await this.runGitCommand(
+            repoRoot,
+            ["worktree", "add", worktreePath, baseBranch],
+            this.gitEnv,
+          );
+        } catch (error) {
+          await pruneEmptyWorktreeParents(worktreePath);
+          throw error;
+        }
+
+        return {
+          cwd: worktreePath,
+          repositoryPath: repoRoot,
+          rollback: async () => {
+            await removeWorktreeAndPrune({
+              gitEnv: this.gitEnv,
+              repoRoot,
+              runGit: this.runGitCommand,
+              worktreePath,
+            });
+            if (detachedSourceWorktreePath) {
+              await restoreDetachedWorktreeBranch({
+                branchName: baseBranch,
+                gitEnv: this.gitEnv,
+                runGit: this.runGitCommand,
+                worktreePath: detachedSourceWorktreePath,
+              });
+            }
+          },
+          workMode: "worktree",
+        };
       } catch (error) {
-        await pruneEmptyWorktreeParents(worktreePath);
         if (detachedSourceWorktreePath) {
           await restoreDetachedWorktreeBranch({
             branchName: baseBranch,
@@ -1347,28 +1373,6 @@ export class GitDirectoryService {
         }
         throw error;
       }
-
-      return {
-        cwd: worktreePath,
-        repositoryPath: repoRoot,
-        rollback: async () => {
-          await removeWorktreeAndPrune({
-            gitEnv: this.gitEnv,
-            repoRoot,
-            runGit: this.runGitCommand,
-            worktreePath,
-          });
-          if (detachedSourceWorktreePath) {
-            await restoreDetachedWorktreeBranch({
-              branchName: baseBranch,
-              gitEnv: this.gitEnv,
-              runGit: this.runGitCommand,
-              worktreePath: detachedSourceWorktreePath,
-            });
-          }
-        },
-        workMode: "worktree",
-      };
     }
 
     const storage = await this.resolveStorage();

@@ -996,6 +996,48 @@ describe("GitDirectoryService", () => {
     expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("release");
   });
 
+  it("restores an excluded source branch when worktree reservation is exhausted", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const sourceWorktree = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "pwragent-exhausted-transfer-source-")),
+      "fixture",
+    );
+    cleanupPaths.push(path.dirname(sourceWorktree));
+    runGit(repoDir, ["worktree", "add", sourceWorktree, "release"]);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const fixedTimestamp = 1730000000000;
+
+    for (let reservation = 0; reservation <= 10; reservation += 1) {
+      await computeWorktreePath({
+        repoRoot: repoDir,
+        storage: "in-repo",
+        timestamp: fixedTimestamp,
+      });
+    }
+
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(fixedTimestamp);
+    try {
+      await expect(
+        service.prepareLaunchpadWorkspace({
+          directoryKind: "directory",
+          directoryLabel: "FixtureRepo",
+          directoryPath: repoDir,
+          excludedWorktreePaths: [sourceWorktree],
+          workMode: "worktree",
+          branchName: "release",
+          worktreeBranchMode: "attached",
+        }),
+      ).rejects.toThrow("Unable to allocate a unique worktree path");
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(runGit(sourceWorktree, ["branch", "--show-current"])).toBe("release");
+  });
+
   it("rolls back a detached destination worktree", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
