@@ -316,6 +316,7 @@ export function syncHotCpuProfilersFromSettings(
 }
 
 export function createMainWindow(options?: {
+  onShown?: () => void;
   startupCpuProfiler?: {
     attachWindow: (window: BrowserWindow) => void;
   };
@@ -385,6 +386,14 @@ export function createMainWindow(options?: {
       ],
     }
   });
+
+  // Register before renderer navigation can reach ready-to-show and call
+  // window.show(). The initial boot watchdog depends on this signal, and
+  // attaching its listener after createMainWindow returns can miss Electron's
+  // synchronous "show" event.
+  if (options?.onShown) {
+    window.once("show", options.onShown);
+  }
 
   if (isDevelopment) {
     mainLog.info("creating window", {
