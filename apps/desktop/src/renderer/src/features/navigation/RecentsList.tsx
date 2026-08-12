@@ -17,6 +17,7 @@ import {
   useDropIndicatorController,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
+import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 import {
   getSubthreadDisclosureCount,
   isSubthreadSectionCollapsed,
@@ -122,6 +123,10 @@ export function RecentsList(props: RecentsListProps) {
     const children = sortSubthreadSummaries(parent, childrenByParentKey.get(parentKey) ?? []);
     const nativeSubAgentCount = parent.codexNativeSubAgents?.length ?? 0;
     const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
+    const canManageSubthreads = threadSupportsFederationCapability(
+      parent,
+      "thread_grouping",
+    );
     if (
       (children.length === 0 && nativeSubAgentCount === 0)
       || subthreadsCollapsed
@@ -146,7 +151,11 @@ export function RecentsList(props: RecentsListProps) {
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
-              draggable={children.length > 1 && Boolean(props.onUpdateSubthreadOrder)}
+              draggable={
+                canManageSubthreads
+                && children.length > 1
+                && Boolean(props.onUpdateSubthreadOrder)
+              }
               includeLinkedDirectories
               nested
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
@@ -284,7 +293,9 @@ export function RecentsList(props: RecentsListProps) {
           thinkingThreadKeys={props.thinkingThreadKeys}
           thread={thread}
           onToggleSubthreads={
-            subthreadCount > 0 && props.onSetSubthreadsCollapsed
+            subthreadCount > 0
+              && threadSupportsFederationCapability(thread, "thread_grouping")
+              && props.onSetSubthreadsCollapsed
               ? () =>
                   void props.onSetSubthreadsCollapsed!(
                     thread,

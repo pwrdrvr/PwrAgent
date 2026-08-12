@@ -40,6 +40,7 @@ import {
   useDropIndicatorController,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
+import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   beginNativeDragInteraction,
@@ -1128,7 +1129,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
         buildThreadIdentityKey(child.source, child.id),
       );
       const reorderable =
-        children.length > 1 && Boolean(props.onUpdateSubthreadOrder);
+        threadSupportsFederationCapability(parent, "thread_grouping")
+        && children.length > 1
+        && Boolean(props.onUpdateSubthreadOrder);
       return (
         <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`}>
           {children.map((child) => {
@@ -1296,7 +1299,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
             thread={thread}
             threadPinState="unpinned"
             onToggleSubthreads={
-              subthreadCount > 0 && props.onSetSubthreadsCollapsed
+              subthreadCount > 0
+                && threadSupportsFederationCapability(thread, "thread_grouping")
+                && props.onSetSubthreadsCollapsed
                 ? () =>
                     void props.onSetSubthreadsCollapsed!(
                       thread,
@@ -1632,7 +1637,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           thread={thread}
                           threadPinState="pinned"
                               onToggleSubthreads={
-                                subthreadCount > 0 && props.onSetSubthreadsCollapsed
+                                subthreadCount > 0
+                                  && threadSupportsFederationCapability(
+                                    thread,
+                                    "thread_grouping",
+                                  )
+                                  && props.onSetSubthreadsCollapsed
                                   ? () =>
                                       void props.onSetSubthreadsCollapsed!(
                                         thread,

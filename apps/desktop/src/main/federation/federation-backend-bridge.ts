@@ -362,8 +362,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.mountRemoteChild]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadParent]: "thread_navigation",
-  [FEDERATION_BACKEND_METHODS.updateSubthreadOrder]: "thread_navigation",
-  [FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.updateSubthreadOrder]: "thread_grouping",
+  [FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed]: "thread_grouping",
   // PR detach cancels pending auto-dispatch work and auto-dispatch arms
   // automatic repair turns, so both sit with the turn-control grants
   // (like archiveThread) rather than the browse-level navigation grants.

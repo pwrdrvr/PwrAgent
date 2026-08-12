@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -38,6 +41,13 @@ import {
   setDesktopOverlayStoreForTests,
 } from "../app-server/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { StateDb } from "../state/state-db";
+import {
+  measureSqliteWrites,
+  resetSqliteWriteMetrics,
+  SQLITE_WRITE_METRICS_ENV,
+} from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import {
   FEDERATION_PEER_UNAVAILABLE_ERROR_CODE,
@@ -678,7 +688,12 @@ describe("DesktopFederationRuntime", () => {
 
   it("mounts a remote parent when accepting a cross-instance child", async () => {
     await disposeDesktopFederationRuntime();
-    const stateDb = openInMemoryStateDb();
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const tempDir = mkdtempSync(path.join(
+      os.tmpdir(),
+      "pwragent-federated-parent-mount-",
+    ));
+    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
     const overlayStore = new SqliteOverlayStore(stateDb);
     setDesktopOverlayStoreForTests(overlayStore);
     const runtime = getDesktopFederationRuntime();
@@ -773,23 +788,34 @@ describe("DesktopFederationRuntime", () => {
         ref: existingRemoteRef,
         pinnedRank: "1024",
       });
-      await runtime.localBackend().materializeDirectoryLaunchpad({
-        // Inline subthread composers use a synthetic launchpad key rather
-        // than the materialized directory summary key. The launchpad path is
-        // the authoritative bridge back to the directory whose collapsed
-        // state determines whether the companion parent must be pinned.
-        directoryKey: "subthread:codex:parent:same-worktree",
-        parentThreadId: "parent",
-        parentThreadBackend: "codex",
-        parentThreadInstanceId: "parent-peer",
-        launchpad: {
+      resetSqliteWriteMetrics();
+      const { writes } = await measureSqliteWrites(async () => {
+        await runtime.localBackend().materializeDirectoryLaunchpad({
+          // Inline subthread composers use a synthetic launchpad key rather
+          // than the materialized directory summary key. The launchpad path is
+          // the authoritative bridge back to the directory whose collapsed
+          // state determines whether the companion parent must be pinned.
           directoryKey: "subthread:codex:parent:same-worktree",
-          directoryKind: "directory",
-          directoryLabel: "Repo",
-          directoryPath: "/repo",
-        },
-      } as never, {
-        sourceInstanceId: "parent-peer",
+          parentThreadId: "parent",
+          parentThreadBackend: "codex",
+          parentThreadInstanceId: "parent-peer",
+          launchpad: {
+            directoryKey: "subthread:codex:parent:same-worktree",
+            directoryKind: "directory",
+            directoryLabel: "Repo",
+            directoryPath: "/repo",
+          },
+        } as never, {
+          sourceInstanceId: "parent-peer",
+        });
+      });
+      expectSqliteWriteBudget({
+        note:
+          "materialize one cross-instance child, mount its companion parent, "
+          + "persist the route, and add a viewer rank because Directory "
+          + "Threads is collapsed while Pins is active",
+        scenario: "federated-child-materialization-with-parent-mount",
+        writes,
       });
 
       expect(materialize).toHaveBeenCalledTimes(1);
@@ -865,6 +891,8 @@ describe("DesktopFederationRuntime", () => {
       settings.mockRestore();
       resetDesktopOverlayStoreForTests();
       stateDb.close();
+      rmSync(tempDir, { recursive: true, force: true });
+      delete process.env[SQLITE_WRITE_METRICS_ENV];
       await disposeDesktopFederationRuntime();
     }
   });

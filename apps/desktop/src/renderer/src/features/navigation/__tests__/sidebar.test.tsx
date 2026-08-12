@@ -988,6 +988,55 @@ describe("Sidebar", () => {
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(sharedThread, true);
   });
 
+  it("does not expose sub-thread disclosure controls for an older remote peer", () => {
+    const remoteParent: NavigationThreadSummary = {
+      ...sharedThread,
+      federation: {
+        capabilities: ["thread_navigation"],
+        instanceLabel: "Older Mac",
+        peerStatus: "connected",
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "older-peer" },
+          threadId: sharedThread.id,
+        },
+      },
+    };
+    const childThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-review",
+      title: "Adversarial review",
+      parentThreadId: remoteParent.id,
+    };
+    const onSetSubthreadsCollapsed = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[childThread, remoteParent]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[childThread, remoteParent]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetSubthreadsCollapsed={onSetSubthreadsCollapsed}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Collapse sub-threads for Cross-project cleanup",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Adversarial review" }),
+    ).toBeInTheDocument();
+  });
+
   it("groups a Codex child under its pinned ACP parent in Inbox", () => {
     const parentThread: NavigationThreadSummary = {
       ...sharedThread,

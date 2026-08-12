@@ -38,6 +38,80 @@ describe("federation backend bridge", () => {
     );
   });
 
+  it("rejects grouping RPCs from a legacy thread-navigation peer", async () => {
+    const backend = {
+      updateSubthreadOrder: vi.fn(),
+      setSubthreadsCollapsed: vi.fn(),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "legacy_viewer",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    for (const [id, method, params] of [
+      [
+        "order",
+        FEDERATION_BACKEND_METHODS.updateSubthreadOrder,
+        {
+          backend: "codex",
+          parentThreadId: "thread-parent",
+          threadIds: ["thread-child"],
+        },
+      ],
+      [
+        "collapse",
+        FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed,
+        {
+          backend: "codex",
+          parentThreadId: "thread-parent",
+          collapsed: true,
+        },
+      ],
+    ] as const) {
+      await router.routeEnvelope({
+        sourcePeerId: "legacy_viewer",
+        envelope: {
+          id,
+          kind: "request",
+          method,
+          params,
+          protocolVersion: 1,
+          sourceInstanceId: "legacy_viewer",
+          targetInstanceId: "owner_one",
+          createdAt: 1_000,
+        },
+      });
+    }
+
+    expect(backend.updateSubthreadOrder).not.toHaveBeenCalled();
+    expect(backend.setSubthreadsCollapsed).not.toHaveBeenCalled();
+    expect(replies).toMatchObject([
+      {
+        kind: "error",
+        requestId: "order",
+        error: {
+          code: "capability_denied",
+          message: expect.stringContaining("thread_grouping"),
+        },
+      },
+      {
+        kind: "error",
+        requestId: "collapse",
+        error: {
+          code: "capability_denied",
+          message: expect.stringContaining("thread_grouping"),
+        },
+      },
+    ]);
+  });
+
   it("preserves encoded ACP navigation keys on the protocol-v1 wire", async () => {
     const backend = {
       getNavigationSnapshot: vi.fn(async () => ({
@@ -1452,12 +1526,12 @@ describe("federation backend bridge", () => {
       FEDERATION_BACKEND_METHOD_CAPABILITIES[
         FEDERATION_BACKEND_METHODS.updateSubthreadOrder
       ],
-    ).toBe("thread_navigation");
+    ).toBe("thread_grouping");
     expect(
       FEDERATION_BACKEND_METHOD_CAPABILITIES[
         FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed
       ],
-    ).toBe("thread_navigation");
+    ).toBe("thread_grouping");
   });
 
   it("routes PR detach over RPC with turn_control authorization", async () => {

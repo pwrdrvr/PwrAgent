@@ -3744,6 +3744,7 @@ describe("useThreadNavigation", () => {
       inbox: { inInbox: false },
       subthreadOrder: ["thread-local-child"],
       federation: {
+        capabilities: ["thread_navigation", "thread_grouping"],
         ref: {
           backend: "codex",
           target: rootTarget,
@@ -3859,6 +3860,68 @@ describe("useThreadNavigation", () => {
         parentThreadId: "thread-root",
       }),
     );
+  });
+
+  it("does not route grouping mutations to a legacy remote peer", async () => {
+    const target = {
+      scope: "remote" as const,
+      instanceId: "legacy-owner",
+    };
+    const remoteParent: NavigationThreadSummary = {
+      id: "thread-root",
+      title: "Legacy remote root",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      subthreadOrder: ["thread-a", "thread-b"],
+      subthreadsCollapsed: false,
+      federation: {
+        capabilities: ["thread_navigation"],
+        instanceLabel: "Legacy Mac",
+        ref: {
+          backend: "codex",
+          target,
+          threadId: "thread-root",
+        },
+      },
+    };
+    const updateSubthreadOrder = vi.fn();
+    const setSubthreadsCollapsed = vi.fn();
+    const desktopApi = {
+      getNavigationSnapshot: vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [remoteParent],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })),
+      onAgentEvent: () => () => undefined,
+      updateSubthreadOrder,
+      setSubthreadsCollapsed,
+    } as unknown as DesktopApi;
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.updateSubthreadOrder(remoteParent, [
+        "thread-b",
+        "thread-a",
+      ]);
+      await result.current.setSubthreadsCollapsed(remoteParent, true);
+    });
+
+    expect(updateSubthreadOrder).not.toHaveBeenCalled();
+    expect(setSubthreadsCollapsed).not.toHaveBeenCalled();
+    expect(result.current.threads[0]).toMatchObject({
+      subthreadOrder: ["thread-a", "thread-b"],
+      subthreadsCollapsed: false,
+    });
   });
 
   it("pins unlinked siblings together immediately above their pinned parent", async () => {
@@ -10915,6 +10978,138 @@ describe("useThreadNavigation", () => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
       expect(result.current.threads[0]?.updatedAt).toBe(2_000);
     });
+  });
+
+  it("applies remote relationship events only to mounted rows from that peer", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const localParent: NavigationThreadSummary = {
+      id: "shared-parent",
+      title: "Local parent",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      subthreadOrder: ["local-child"],
+      subthreadsCollapsed: false,
+    };
+    const remoteParent: NavigationThreadSummary = {
+      ...localParent,
+      title: "Remote parent",
+      federation: {
+        capabilities: ["thread_navigation", "thread_grouping"],
+        instanceLabel: "Remote Mac",
+        ref: {
+          backend: "codex",
+          target: federationTarget,
+          threadId: localParent.id,
+        },
+      },
+    };
+    const localChild: NavigationThreadSummary = {
+      ...localParent,
+      id: "shared-child",
+      title: "Local child",
+      subthreadOrder: undefined,
+      subthreadsCollapsed: undefined,
+    };
+    const remoteChild: NavigationThreadSummary = {
+      ...localChild,
+      title: "Remote child",
+      federation: {
+        capabilities: ["thread_navigation", "thread_grouping"],
+        instanceLabel: "Remote Mac",
+        ref: {
+          backend: "codex",
+          target: federationTarget,
+          threadId: localChild.id,
+        },
+      },
+    };
+    const desktopApi = {
+      getNavigationSnapshot: vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [localParent, remoteParent, localChild, remoteChild],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      })),
+      onAgentEvent: (
+        callback: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0],
+      ) => {
+        agentEventHandler = callback;
+        return () => {
+          agentEventHandler = undefined;
+        };
+      },
+    } as unknown as DesktopApi;
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(4));
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "thread/subthreadOrder/updated",
+          params: {
+            parentThreadId: "shared-parent",
+            threadIds: ["remote-child"],
+          },
+        },
+      } as never);
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "thread/subthreadsCollapsed/updated",
+          params: {
+            parentThreadId: "shared-parent",
+            collapsed: true,
+          },
+        },
+      } as never);
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "thread/parent/set",
+          params: {
+            threadId: "shared-child",
+            parentThreadId: "shared-parent",
+            parentThreadBackend: "codex",
+          },
+        },
+      } as never);
+    });
+
+    const localRows = result.current.threads.filter((thread) => !thread.federation);
+    const remoteRows = result.current.threads.filter((thread) => thread.federation);
+    expect(localRows.find((thread) => thread.id === "shared-parent")).toMatchObject({
+      subthreadOrder: ["local-child"],
+      subthreadsCollapsed: false,
+    });
+    expect(localRows.find((thread) => thread.id === "shared-child"))
+      .not.toHaveProperty("parentThreadId");
+    expect(remoteRows.find((thread) => thread.id === "shared-parent")).toMatchObject({
+      subthreadOrder: ["remote-child"],
+      subthreadsCollapsed: true,
+    });
+    expect(remoteRows.find((thread) => thread.id === "shared-child"))
+      .toMatchObject({
+        parentThreadId: "shared-parent",
+        parentThreadBackend: "codex",
+      });
   });
 
   describe("pickAndRegisterDirectory (issue #223)", () => {

@@ -61,6 +61,7 @@ import {
   agentEventMatchesThread,
   agentEventThreadIdentityKey,
   federationTargetsEqual,
+  threadSupportsFederationCapability,
   threadSummaryIdentityKey,
 } from "./federated-thread-events";
 import {
@@ -1192,6 +1193,7 @@ function updateThreadParentInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     parentThreadId?: string;
     parentThreadBackend?: AppServerBackendKind;
@@ -1205,6 +1207,14 @@ function updateThreadParentInSnapshot(
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+    if (
+      !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
       return thread;
     }
     if (
@@ -1310,6 +1320,7 @@ function updateSubthreadOrderInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     parentThreadId: string;
     threadIds: string[];
   },
@@ -1321,6 +1332,14 @@ function updateSubthreadOrderInSnapshot(
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.parentThreadId) {
+      return thread;
+    }
+    if (
+      !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
       return thread;
     }
     if (JSON.stringify(thread.subthreadOrder ?? []) === JSON.stringify(params.threadIds)) {
@@ -1337,6 +1356,7 @@ function updateSubthreadsCollapsedInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     parentThreadId: string;
     collapsed: boolean;
   },
@@ -1348,6 +1368,14 @@ function updateSubthreadsCollapsedInSnapshot(
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.parentThreadId) {
+      return thread;
+    }
+    if (
+      !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
       return thread;
     }
     if (thread.subthreadsCollapsed === params.collapsed) {
@@ -3676,7 +3704,11 @@ export function useThreadNavigation(
           || method === "thread/status/changed"
           || method === "turn/cancelled"
           || method === "turn/completed"
-          || method === "turn/failed");
+          || method === "turn/failed"
+          || method === "thread/parent/set"
+          || method === "thread/parent/cleared"
+          || method === "thread/subthreadOrder/updated"
+          || method === "thread/subthreadsCollapsed/updated");
       if (
         !remoteThreadStatePassthrough
         && !federationTargetsEqual(event.federationTarget, windowTarget)
@@ -4318,6 +4350,7 @@ export function useThreadNavigation(
           ...current,
           response: updateThreadParentInSnapshot(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             parentThreadId,
             parentThreadBackend,
@@ -4336,6 +4369,7 @@ export function useThreadNavigation(
           ...current,
           response: updateThreadParentInSnapshot(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             parentThreadId: undefined,
             parentThreadBackend: undefined,
@@ -4354,6 +4388,7 @@ export function useThreadNavigation(
           ...current,
           response: updateSubthreadOrderInSnapshot(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             parentThreadId,
             threadIds,
           }),
@@ -4370,6 +4405,7 @@ export function useThreadNavigation(
           ...current,
           response: updateSubthreadsCollapsedInSnapshot(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             parentThreadId,
             collapsed,
           }),
@@ -5125,6 +5161,15 @@ export function useThreadNavigation(
       );
       const rootKey = buildThreadIdentityKey(parentBackend, rootThreadId);
       const root = threadByKey.get(rootKey);
+      if (
+        federationTarget
+        && (
+          !root
+          || !threadSupportsFederationCapability(root, "thread_grouping")
+        )
+      ) {
+        return;
+      }
       const currentChildIds = sortSubthreadSummaries(
         root ?? { subthreadOrder: undefined },
         snapshot.threads.filter(
@@ -5141,6 +5186,7 @@ export function useThreadNavigation(
         ...current,
         response: updateSubthreadOrderInSnapshot(current.response, {
           backend: parentBackend,
+          federationTarget,
           parentThreadId: rootThreadId,
           threadIds: nextOrder,
         }),
@@ -5161,6 +5207,7 @@ export function useThreadNavigation(
             ...current,
             response: updateSubthreadOrderInSnapshot(current.response, {
               backend: result.backend,
+              federationTarget,
               parentThreadId: result.parentThreadId,
               threadIds: result.threadIds,
             }),
@@ -5175,6 +5222,7 @@ export function useThreadNavigation(
           ...current,
           response: updateSubthreadsCollapsedInSnapshot(current.response, {
             backend: parentBackend,
+            federationTarget,
             parentThreadId: rootThreadId,
             collapsed: false,
           }),
@@ -6931,11 +6979,14 @@ export function useThreadNavigation(
       if (!setThreadParentRequest) {
         return;
       }
+      const federationTarget = thread.federation?.ref.target
+        ?? readRendererFederationTarget();
 
       setState((current) => ({
         ...current,
         response: updateThreadParentInSnapshot(current.response, {
           backend: thread.source,
+          federationTarget,
           threadId: thread.id,
           parentThreadId,
           parentThreadBackend,
@@ -6945,8 +6996,7 @@ export function useThreadNavigation(
       try {
         const result = await setThreadParentRequest({
           backend: thread.source,
-          federationTarget: thread.federation?.ref.target ??
-            readRendererFederationTarget(),
+          federationTarget,
           threadId: thread.id,
           parentThreadId,
           parentThreadBackend,
@@ -6955,6 +7005,7 @@ export function useThreadNavigation(
           ...current,
           response: updateThreadParentInSnapshot(current.response, {
             backend: result.backend,
+            federationTarget,
             threadId: result.threadId,
             parentThreadId: result.parentThreadId,
             parentThreadBackend: result.parentThreadBackend,
@@ -7033,6 +7084,8 @@ export function useThreadNavigation(
           threadsToUnlink.reduce(
             (response, thread) => updateThreadParentInSnapshot(response, {
               backend: thread.source,
+              federationTarget: thread.federation?.ref.target
+                ?? readRendererFederationTarget(),
               threadId: thread.id,
               parentThreadId: undefined,
             }),
@@ -7109,14 +7162,20 @@ export function useThreadNavigation(
       parent: NavigationThreadSummary,
       threadIds: string[],
     ): Promise<void> => {
-      if (!updateSubthreadOrderRequest) {
+      if (
+        !updateSubthreadOrderRequest
+        || !threadSupportsFederationCapability(parent, "thread_grouping")
+      ) {
         return;
       }
+      const federationTarget = parent.federation?.ref.target
+        ?? readRendererFederationTarget();
 
       setState((current) => ({
         ...current,
         response: updateSubthreadOrderInSnapshot(current.response, {
           backend: parent.source,
+          federationTarget,
           parentThreadId: parent.id,
           threadIds,
         }),
@@ -7125,8 +7184,7 @@ export function useThreadNavigation(
       try {
         const result = await updateSubthreadOrderRequest({
           backend: parent.source,
-          federationTarget: parent.federation?.ref.target ??
-            readRendererFederationTarget(),
+          federationTarget,
           parentThreadId: parent.id,
           threadIds,
         });
@@ -7134,6 +7192,7 @@ export function useThreadNavigation(
           ...current,
           response: updateSubthreadOrderInSnapshot(current.response, {
             backend: result.backend,
+            federationTarget,
             parentThreadId: result.parentThreadId,
             threadIds: result.threadIds,
           }),
@@ -7150,14 +7209,20 @@ export function useThreadNavigation(
       parent: NavigationThreadSummary,
       collapsed: boolean,
     ): Promise<void> => {
-      if (!setSubthreadsCollapsedRequest) {
+      if (
+        !setSubthreadsCollapsedRequest
+        || !threadSupportsFederationCapability(parent, "thread_grouping")
+      ) {
         return;
       }
+      const federationTarget = parent.federation?.ref.target
+        ?? readRendererFederationTarget();
 
       setState((current) => ({
         ...current,
         response: updateSubthreadsCollapsedInSnapshot(current.response, {
           backend: parent.source,
+          federationTarget,
           parentThreadId: parent.id,
           collapsed,
         }),
@@ -7166,8 +7231,7 @@ export function useThreadNavigation(
       try {
         const result = await setSubthreadsCollapsedRequest({
           backend: parent.source,
-          federationTarget: parent.federation?.ref.target ??
-            readRendererFederationTarget(),
+          federationTarget,
           parentThreadId: parent.id,
           collapsed,
         });
@@ -7175,6 +7239,7 @@ export function useThreadNavigation(
           ...current,
           response: updateSubthreadsCollapsedInSnapshot(current.response, {
             backend: result.backend,
+            federationTarget,
             parentThreadId: result.parentThreadId,
             collapsed: result.collapsed,
           }),

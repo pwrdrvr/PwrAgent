@@ -370,6 +370,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
   "navigation_snapshot_deltas",
+  "thread_grouping",
   "thread_detail",
   "turn_control",
   "scheduled_actions",
