@@ -116,8 +116,9 @@ export function readAcpWebSearch(
     readString(record, "toolCallId") ??
     readString(record, "tool_call_id");
   const outputId = readString(rawOutput ?? {}, "id");
+  const actionType = readString(action ?? {}, "type");
   const isGrokWebSearchOutput =
-    readString(action ?? {}, "type") === "search"
+    (actionType === "search" || actionType === "find_in_page")
     && [toolCallId, outputId].some((id) => id?.startsWith("ws_"));
   const isWebSearch =
     variant === "WebSearch"
@@ -130,8 +131,15 @@ export function readAcpWebSearch(
 
   const query =
     readString(action ?? {}, "query") ??
+    readString(action ?? {}, "pattern") ??
     readString(rawInput ?? {}, "query");
-  const rawSources = Array.isArray(action?.sources) ? action.sources : [];
+  const actionUrl = readString(action ?? {}, "url");
+  const rawSources = [
+    ...(Array.isArray(action?.sources) ? action.sources : []),
+    ...(actionType === "find_in_page" && actionUrl
+      ? [{ url: actionUrl }]
+      : []),
+  ];
   const sources = rawSources.flatMap((value): AcpWebSearch["sources"] => {
     const source = asRecord(value);
     if (!source) {
@@ -158,25 +166,36 @@ export function readAcpWebFetchUrl(
   record: Record<string, unknown>,
 ): string | undefined {
   const rawInput = asRecord(record.rawInput);
+  const rawOutput = asRecord(record.rawOutput);
+  const action = asRecord(rawOutput?.action);
   const metadata = readAcpToolMetadata(record);
   const variant = readString(rawInput ?? {}, "variant");
   const metadataName = readString(metadata ?? {}, "name");
   const metadataKind = readString(metadata ?? {}, "kind");
   const kind = readString(record, "kind");
   const title = readString(record, "title");
+  const toolCallId =
+    readString(record, "toolCallId") ??
+    readString(record, "tool_call_id");
+  const outputId = readString(rawOutput ?? {}, "id");
+  const isGrokOpenPage =
+    readString(action ?? {}, "type") === "open_page"
+    && [toolCallId, outputId].some((id) => id?.startsWith("ws_"));
   const isWebFetch =
     variant?.toLowerCase() === "webfetch"
     || metadataName === "web_fetch"
     || metadataKind === "web_fetch"
     || kind === "fetch"
     || /^web_fetch$/i.test(title ?? "")
-    || /^fetch:\s+/i.test(title ?? "");
+    || /^fetch:\s+/i.test(title ?? "")
+    || isGrokOpenPage;
   if (!isWebFetch) {
     return undefined;
   }
 
   return (
     readString(rawInput ?? {}, "url") ??
+    readString(action ?? {}, "url") ??
     readString(asRecord(metadata?.input) ?? {}, "url") ??
     /^fetch:\s+(.+)$/i.exec(title ?? "")?.[1]?.trim()
   );

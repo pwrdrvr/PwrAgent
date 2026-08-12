@@ -1048,12 +1048,20 @@ export class AcpAgentClient {
       && toolCallId !== undefined
       && activeTurn?.knownToolCallIds.has(toolCallId) === true;
     let assistantMessageItemId: string | undefined;
-    if (shouldTrackAssistantTextUpdate && activeTurn && text) {
-      const phase: AppServerTranscriptPhase =
-        updateKind === "agent_thought_chunk" ? "commentary" : "final";
+    const assistantTextPhase: AppServerTranscriptPhase =
+      updateKind === "agent_thought_chunk" ? "commentary" : "final";
+    const continuesActiveAssistantMessage =
+      activeTurn?.activeAssistantMessageItemId !== undefined
+      && activeTurn.activeAssistantMessagePhase === assistantTextPhase;
+    if (
+      shouldTrackAssistantTextUpdate
+      && activeTurn
+      && text
+      && (text.trim() || continuesActiveAssistantMessage)
+    ) {
       assistantMessageItemId = assistantMessageItemIdForUpdate({
         activeTurn,
-        phase,
+        phase: assistantTextPhase,
         update,
       });
       if (updateKind === "agent_message_chunk") {
