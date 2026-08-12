@@ -89,6 +89,45 @@ describe("sqlite write metrics", () => {
     expect(metrics?.commits).toBe(1);
   });
 
+  it("holds each completed questionnaire transcript record to one commit", async () => {
+    // This path runs once per completed questionnaire, never per streamed
+    // event. At 100 questionnaires/day, one commit each is 100 commits/day;
+    // the measured WAL below keeps the corresponding disk cost reviewable.
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.appendQuestionnaireActivity({
+        backend: "codex",
+        threadId: "questionnaire-thread",
+        activity: {
+          id: "questionnaire:request-1",
+          requestId: "request-1",
+          threadId: "questionnaire-thread",
+          turnId: "turn-1",
+          itemId: "input-1",
+          status: "submitted",
+          createdAt: 1_800_000_000_000,
+          updatedAt: 1_800_000_000_000,
+          questions: [
+            {
+              id: "food",
+              header: "Food",
+              question: "What should breakfast feature?",
+              isOther: true,
+            },
+          ],
+          answers: {
+            food: { answers: ["Waffles"] },
+          },
+        },
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note: "persist one completed questionnaire transcript summary",
+      scenario: "completed-questionnaire-transcript",
+      writes,
+    });
+  });
+
   it("keeps the transaction variants callable and counted", () => {
     // better-sqlite3 hangs .default/.deferred/.immediate/.exclusive off the
     // callable it returns, and they are not enumerable. The first version of

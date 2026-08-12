@@ -1763,7 +1763,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("coalesces repeated turn lifecycle notifications into one navigation refresh", async () => {
+  it("coalesces transcript-affecting notifications into one navigation refresh", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
@@ -1815,7 +1815,7 @@ describe("useThreadNavigation", () => {
 
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
 
-    const terminalNotifications: AgentEvent["notification"][] = [
+    const refreshNotifications: AgentEvent["notification"][] = [
       {
         method: "turn/completed",
         params: {
@@ -1853,10 +1853,17 @@ describe("useThreadNavigation", () => {
           },
         },
       },
+      {
+        method: "thread/questionnaireActivity/updated",
+        params: {
+          threadId: "thread-1",
+          requestId: "request-1",
+        },
+      },
     ];
 
     await act(async () => {
-      for (const notification of terminalNotifications) {
+      for (const notification of refreshNotifications) {
         for (const listener of listeners) {
           listener({
             backend: "codex",
