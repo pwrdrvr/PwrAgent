@@ -498,11 +498,8 @@ export function MessagingSettings(props: {
 
       <MessagingRoutesSettings
         agentRouteToolUpdateMode={managerToolUpdateMode.value}
-        agentRouteToolUpdateModeSource={sourceBadge(managerToolUpdateMode)}
         configuredPlatforms={configuredRoutePlatforms}
         desktopApi={props.desktopApi}
-        saving={props.saving}
-        onAgentRouteToolUpdateModeChange={props.onManagerToolUpdateModeChange}
         onOpenThread={props.onOpenThread}
       />
 
@@ -1360,8 +1357,8 @@ export function MessagingSettings(props: {
           <ToggleField
             checked={slack.liveWorkingCards.value}
             disabled={props.saving}
-            label="Live Working Cards"
-            sub="Shows Working Updates as one live Slack task card per turn. Off by default."
+            label="Live Working Updates card"
+            sub="Shows Working Updates in one Slack task card per turn when Slack stream APIs are available; otherwise uses text updates."
             source={sourceBadge(slack.liveWorkingCards)}
             onChange={(liveWorkingCards) => {
               void props.onSaveSlack({

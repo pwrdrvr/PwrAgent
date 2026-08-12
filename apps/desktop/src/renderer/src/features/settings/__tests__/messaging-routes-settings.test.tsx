@@ -209,34 +209,7 @@ describe("MessagingRoutesSettings", () => {
     expect(screen.getByText("Issue 13056")).toBeInTheDocument();
     expect(screen.getAllByText("Codex")).toHaveLength(2);
     expect(screen.getByText("3 active")).toBeInTheDocument();
-    expect(screen.getAllByText("Working Updates: Default (None)")).toHaveLength(2);
-  });
-
-  it("repeats the Agent-route Working Updates default in Routes", async () => {
-    const api = buildDesktopApi();
-    const onModeChange = vi.fn();
-
-    render(
-      <MessagingRoutesProvider desktopApi={api.desktopApi}>
-        <MessagingRoutesSettings
-          agentRouteToolUpdateMode="show_none"
-          desktopApi={api.desktopApi}
-          onAgentRouteToolUpdateModeChange={onModeChange}
-        />
-      </MessagingRoutesProvider>,
-    );
-
-    const group = await screen.findByRole("radiogroup", {
-      name: "Agent route Working Updates",
-    });
-    expect(group).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Show None" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-
-    fireEvent.click(screen.getByRole("radio", { name: "Show Some" }));
-    expect(onModeChange).toHaveBeenCalledWith("show_some");
+    expect(screen.queryByText(/Updates override:/)).not.toBeInTheDocument();
   });
 
   it("sets and clears a per-route Working Updates override", async () => {
@@ -256,11 +229,27 @@ describe("MessagingRoutesSettings", () => {
       </MessagingRoutesProvider>,
     );
 
-    expect(await screen.findByText("Working Updates: More")).toBeInTheDocument();
+    expect(await screen.findByText("Updates override: Show More")).toHaveClass(
+      "messaging-route-row__provider-chip",
+    );
+    expect(
+      screen.getByRole("button", {
+        name: /Working Updates override Show More/,
+      }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "Change" })[0]!);
     expect(screen.getByLabelText("Route Working Updates")).toHaveValue(
       "show_more",
     );
+    expect(screen.getByLabelText("Route Working Updates")).toHaveDisplayValue(
+      "Show More",
+    );
+    expect(screen.getByRole("option", { name: "Show Less" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", {
+        name: "Use manager-agent default (Show None)",
+      }),
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Route Working Updates"), {
       target: { value: "show_all" },

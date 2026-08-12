@@ -169,13 +169,18 @@ export type SlackApi = {
   botsInfo?(params: { bot: string }): Promise<{ name?: string } | undefined>;
 };
 
-export type SlackStreamChunk = {
-  details?: string;
-  id: string;
-  status: "pending" | "in_progress" | "complete" | "error";
-  title: string;
-  type: "task_update";
-};
+export type SlackStreamChunk =
+  | {
+      details?: string;
+      id: string;
+      status: "pending" | "in_progress" | "complete" | "error";
+      title: string;
+      type: "task_update";
+    }
+  | {
+      markdown_text: string;
+      type: "markdown_text";
+    };
 
 export type SlackUserListPage = {
   members?: SlackUserListMember[];
@@ -2074,13 +2079,25 @@ export class SlackAdapter implements SlackProviderAdapter {
   private workingCardChunks(
     intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
   ): SlackStreamChunk[] {
-    const chunks = intent.card.tasks.map((task): SlackStreamChunk => ({
-      type: "task_update",
-      id: clampSlackTaskField(task.id),
-      title: clampSlackTaskField(task.title),
-      status: task.status === "cancelled" ? "error" : task.status,
-      ...(task.detail ? { details: clampSlackTaskField(task.detail) } : {}),
-    }));
+    const chunks = intent.card.tasks.map((task): SlackStreamChunk => {
+      const details = [
+        task.status === "cancelled" && !task.detail ? "Cancelled" : undefined,
+        task.detail,
+      ].filter(Boolean).join(" · ");
+      return {
+        type: "task_update",
+        id: clampSlackTaskField(task.id),
+        title: clampSlackTaskField(task.title),
+        status: task.status === "cancelled" ? "complete" : task.status,
+        ...(details ? { details: clampSlackTaskField(details) } : {}),
+      };
+    });
+    if (intent.card.phase === "waiting") {
+      chunks.unshift({
+        type: "markdown_text",
+        markdown_text: "*Waiting for your input*",
+      });
+    }
     if (intent.card.isFinal && intent.card.phase === "failed") {
       chunks.push({
         type: "task_update",

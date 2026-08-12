@@ -19,6 +19,7 @@ import {
   type MessagingCapabilityProfile,
 } from "@pwragent/messaging-interface";
 import {
+  formatToolActivityDuration,
   formatToolActivityLine,
   type MessagingToolActivity,
 } from "./messaging-tool-activity.js";
@@ -188,6 +189,30 @@ export function buildWorkingCardIntent(params: {
     id: `${params.id}:fallback`,
   });
   const fallbackPart = fallback.parts[0];
+  const tasks = params.activities.map((activity) => {
+    const detail = workingCardTaskDetail(activity);
+    return {
+      id: activity.id,
+      status: activity.status === "failed"
+        ? "error" as const
+        : activity.status === "cancelled"
+          ? "cancelled" as const
+          : "complete" as const,
+      title: activity.title,
+      ...(detail ? { detail } : {}),
+    };
+  });
+  if (params.omittedTaskCount && params.omittedTaskCount > 0 && tasks[0]) {
+    tasks[0] = {
+      ...tasks[0],
+      detail: [
+        `${params.omittedTaskCount} earlier step${
+          params.omittedTaskCount === 1 ? "" : "s"
+        }`,
+        tasks[0].detail,
+      ].filter(Boolean).join(" · "),
+    };
+  }
   return {
     id: params.id,
     kind: "working_card",
@@ -202,28 +227,20 @@ export function buildWorkingCardIntent(params: {
       key: params.key,
       phase: "working",
       sequence: params.sequence,
-      tasks: [
-        ...(params.omittedTaskCount && params.omittedTaskCount > 0
-          ? [{
-              id: `${params.key}:earlier`,
-              status: "complete" as const,
-              title: `Earlier: ${params.omittedTaskCount} tool${
-                params.omittedTaskCount === 1 ? "" : "s"
-              }`,
-            }]
-          : []),
-        ...params.activities.map((activity) => ({
-          id: activity.id,
-          status: activity.status === "failed"
-            ? "error" as const
-            : activity.status === "cancelled"
-              ? "cancelled" as const
-              : "complete" as const,
-          title: formatToolActivityLine(activity),
-        })),
-      ],
+      tasks,
     },
   };
+}
+
+function workingCardTaskDetail(
+  activity: MessagingToolActivity,
+): string | undefined {
+  return [
+    activity.status === "cancelled" ? "Cancelled" : undefined,
+    activity.durationMs !== undefined
+      ? formatToolActivityDuration(activity.durationMs)
+      : undefined,
+  ].filter(Boolean).join(" · ") || undefined;
 }
 
 export function buildConfirmationIntent(params: {

@@ -122,7 +122,7 @@ controller owns the dial policy and emits only admitted, redacted tasks with a
 stable `key` and monotonic `sequence`. Adapters must discard stale sequences.
 Slack renders the intent with Thinking Steps (`chat.startStream`,
 `chat.appendStream`, and `chat.stopStream`) when a thread target is available;
-stream state stays in memory. Slack Live Working Cards are opt-in through
+stream state stays in memory. Slack Live Working Updates cards are opt-in through
 `messaging.slack.live_working_cards`; an absent setting currently means off and
 must remain absent during unrelated config writes so a future default change
 can apply to untouched profiles. If native streaming is disabled or
@@ -141,8 +141,12 @@ ordinary message delivery. A platform 429 extends the affected bucket from
 `Retry-After`; it is not permission to discard a terminal stop.
 
 An open native card replaces classic tool-update posts for those activities.
-Task titles and details must be clamped to provider limits and must never add
-raw command output or secrets. Waiting and terminal phases clear transient
+Task titles use the already-redacted activity title, while duration and other
+secondary context belong in task details; both fields must be clamped to
+provider limits and must never add raw command output or secrets. Because Slack
+has no cancelled task status, cancelled tasks close neutrally with cancellation
+called out in their details instead of rendering as errors. Waiting phases add
+a visible stream headline and waiting and terminal phases clear transient
 working indicators; the final assistant message remains authoritative.
 Adapters return a retractable surface as soon as a native card is queued so
 turn cancellation and terminal private-response routing can cancel pending

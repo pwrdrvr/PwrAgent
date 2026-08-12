@@ -114,8 +114,18 @@ export function formatToolActivityLine(activity: MessagingToolActivity): string 
       : activity.status === "cancelled"
         ? `Cancelled: ${activity.title}`
         : activity.title,
-    activity.durationMs !== undefined ? ` (${formatDuration(activity.durationMs)})` : "",
+    activity.durationMs !== undefined
+      ? ` (${formatToolActivityDuration(activity.durationMs)})`
+      : "",
   ].join("");
+}
+
+export function formatToolActivityDuration(durationMs: number): string {
+  if (durationMs < 1_000) {
+    return `${durationMs}ms`;
+  }
+  const seconds = durationMs / 1_000;
+  return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
 }
 
 function isRecognizedToolItemType(itemType: string): boolean {
@@ -408,14 +418,6 @@ function normalizeTimestamp(value: number | undefined): number | undefined {
     return undefined;
   }
   return value < 10_000_000_000 ? value * 1000 : value;
-}
-
-function formatDuration(durationMs: number): string {
-  if (durationMs < 1_000) {
-    return `${durationMs}ms`;
-  }
-  const seconds = durationMs / 1_000;
-  return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
 }
 
 function truncateTitle(title: string, limit = 72): string {

@@ -88,7 +88,8 @@ describe("tool-update renderer prose handling", () => {
       id: "cancelled-1",
       kind: "tool",
       status: "cancelled",
-      title: "Cancelled deployment",
+      title: "Deploy production",
+      durationMs: 1_200,
     };
     const latest = tool("latest-1", "Ran focused tests");
     const intent = buildWorkingCardIntent({
@@ -104,11 +105,15 @@ describe("tool-update renderer prose handling", () => {
     });
 
     expect(intent.card.tasks).toEqual([
-      expect.objectContaining({ status: "complete", title: "Earlier: 3 tools" }),
-      expect.objectContaining({ id: "cancelled-1", status: "cancelled" }),
+      expect.objectContaining({
+        detail: "3 earlier steps · Cancelled · 1.2s",
+        id: "cancelled-1",
+        status: "cancelled",
+        title: "Deploy production",
+      }),
       expect.objectContaining({ id: "latest-1", status: "complete" }),
     ]);
     expect(intent.fallbackText).toContain("Ran focused tests");
-    expect(intent.fallbackText).not.toContain("Cancelled deployment");
+    expect(intent.fallbackText).not.toContain("Deploy production");
   });
 });

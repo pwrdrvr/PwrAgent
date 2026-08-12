@@ -3,6 +3,7 @@ import {
   SlackAdapter,
   SlackSocketModeConnection,
   type SlackApi,
+  type SlackStreamChunk,
   type SlackSocketClient,
 } from "../slack-adapter.ts";
 import type { SlackHomeView } from "../slack-home.ts";
@@ -4153,6 +4154,57 @@ describe("SlackAdapter", () => {
     expect(appendedStreams).toHaveLength(1);
     expect(stoppedStreams).toHaveLength(1);
     expect(JSON.stringify(startedStreams[0])).not.toContain("x".repeat(257));
+  });
+
+  it("renders waiting visibly and closes cancelled tasks without an error state", async () => {
+    const appendedStreams: unknown[] = [];
+    const startedStreams: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ appendedStreams, startedStreams }),
+      socketClient: fakeSocket(),
+    });
+    const first = slackWorkingCardIntent(1);
+    if (first.kind !== "working_card") throw new Error("expected working card");
+    first.card.tasks = [{
+      detail: "Cancelled · 1.2s",
+      id: "task-cancelled",
+      status: "cancelled",
+      title: "Deploy production",
+    }];
+    const waiting = {
+      ...first,
+      id: "working-card-waiting",
+      card: {
+        ...first.card,
+        phase: "waiting" as const,
+        sequence: 2,
+      },
+    };
+
+    await adapter.deliver(first);
+    await adapter.deliver(waiting);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const startedChunks = (startedStreams[0] as {
+      chunks: SlackStreamChunk[];
+    }).chunks;
+    expect(startedChunks).toContainEqual(expect.objectContaining({
+      details: "Cancelled · 1.2s",
+      status: "complete",
+      title: "Deploy production",
+      type: "task_update",
+    }));
+    const appendedChunks = (appendedStreams[0] as {
+      chunks: SlackStreamChunk[];
+    }).chunks;
+    expect(appendedChunks).toContainEqual({
+      markdown_text: "*Waiting for your input*",
+      type: "markdown_text",
+    });
   });
 
   it("falls back to the classic text Working Update without stream APIs", async () => {
