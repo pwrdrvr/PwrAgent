@@ -32,6 +32,40 @@ const TEST_OTHER_USER_ID = "1480556454498009356";
 const TEST_AUTHORIZED_GUILD_IDS = [{ id: TEST_GUILD_ID, displayName: "" }];
 
 describe("discord adapter", () => {
+  it("does not open the gateway after a stop during command reconciliation", async () => {
+    let resolveCommands!: (value: DiscordApplicationCommand[]) => void;
+    const pendingCommands = new Promise<DiscordApplicationCommand[]>((resolve) => {
+      resolveCommands = resolve;
+    });
+    const listApplicationCommands = vi.fn(async () => await pendingCommands);
+    const gateway: DiscordGatewayConnection = {
+      close: vi.fn(async () => undefined),
+      onEvent: vi.fn(() => () => undefined),
+      start: vi.fn(async () => undefined),
+    };
+    const adapter = new DiscordAdapter({
+      api: createApi({ listApplicationCommands }),
+      config: {
+        applicationId: TEST_CHANNEL_ID,
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+    });
+
+    const startPromise = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(listApplicationCommands).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+    resolveCommands([]);
+    await startPromise;
+
+    expect(gateway.start).not.toHaveBeenCalled();
+    expect(gateway.close).toHaveBeenCalledTimes(2);
+  });
+
   it("declares backend-owned scheduling as Discord application commands", () => {
     expect(DISCORD_APPLICATION_COMMANDS.map((command) => command.name)).toEqual([
       "resume",

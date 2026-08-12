@@ -161,6 +161,36 @@ function fakeSocket(): SlackSocketClient & {
 }
 
 describe("SlackAdapter", () => {
+  it("detaches socket listeners when startup is stopped before connecting", async () => {
+    let rejectStart!: (reason?: unknown) => void;
+    const pendingStart = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const socket: SlackSocketClient = {
+      disconnect: vi.fn(async () => undefined),
+      off: vi.fn(),
+      on: vi.fn(),
+      start: vi.fn(async () => await pendingStart),
+    };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+    });
+
+    const startPromise = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(socket.start).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+
+    expect(socket.off).toHaveBeenCalledTimes(3);
+    expect(socket.disconnect).toHaveBeenCalledTimes(1);
+    rejectStart(new Error("socket rejected after stop"));
+    await expect(startPromise).rejects.toThrow("socket rejected after stop");
+  });
+
   it("declares Slack capabilities", () => {
     const adapter = new SlackAdapter({
       config: baseConfig,

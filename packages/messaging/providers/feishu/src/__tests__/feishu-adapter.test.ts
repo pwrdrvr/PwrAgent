@@ -109,6 +109,37 @@ describe("FeishuAdapter", () => {
     vi.unstubAllGlobals();
   });
 
+  it("closes a persistent connection while startup is still pending", async () => {
+    let rejectStart!: (reason?: unknown) => void;
+    const pendingStart = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const close = vi.fn();
+    const startConnection = vi.fn(async () => await pendingStart);
+    const { inboundMode: _inboundMode, ...persistentConfig } = baseConfig;
+    const adapter = new FeishuAdapter({
+      config: persistentConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      wsClientFactory: () => ({
+        close,
+        start: startConnection,
+      }),
+    });
+
+    const startPromise = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(startConnection).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+
+    expect(close).toHaveBeenCalledWith({ force: true });
+    rejectStart(new Error("persistent connection rejected after stop"));
+    await expect(startPromise).rejects.toThrow(
+      "persistent connection rejected after stop",
+    );
+  });
+
   it("declares Feishu capabilities", () => {
     const adapter = new FeishuAdapter({
       config: baseConfig,

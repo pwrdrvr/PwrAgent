@@ -202,6 +202,7 @@ export class LineAdapter implements LineProviderAdapter {
   private listener: LineInboundListener | undefined;
   private botUserId: string | undefined;
   private started = false;
+  private lifecycleGeneration = 0;
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
 
   constructor(options: LineAdapterOptions) {
@@ -253,6 +254,7 @@ export class LineAdapter implements LineProviderAdapter {
 
   async start(listener: LineInboundListener): Promise<void> {
     if (this.started) return;
+    const lifecycleGeneration = ++this.lifecycleGeneration;
     this.listener = listener;
     if (!this.botUserId && this.api) {
       try {
@@ -264,6 +266,10 @@ export class LineAdapter implements LineProviderAdapter {
         });
       }
     }
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+      return;
+    }
     const bindAddress = bindAddressFromCallbackUrl(this.config.callbackBaseUrl);
     await new Promise<void>((resolve, reject) => {
       this.server.once("error", reject);
@@ -272,6 +278,10 @@ export class LineAdapter implements LineProviderAdapter {
         resolve();
       });
     });
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+      return;
+    }
     this.started = true;
     this.logger.info?.("line webhook listener started", {
       host: bindAddress.host,
@@ -283,15 +293,20 @@ export class LineAdapter implements LineProviderAdapter {
   }
 
   async stop(): Promise<void> {
-    if (!this.started) return;
-    await new Promise<void>((resolve, reject) => {
-      this.server.close((error) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
-    this.listener = undefined;
-    this.started = false;
+    this.lifecycleGeneration += 1;
+    try {
+      if (this.server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          this.server.close((error) => {
+            if (error) reject(error);
+            else resolve();
+          });
+        });
+      }
+    } finally {
+      this.listener = undefined;
+      this.started = false;
+    }
   }
 
   onInboundRejected(listener: MessagingInboundRejectedListener): () => void {

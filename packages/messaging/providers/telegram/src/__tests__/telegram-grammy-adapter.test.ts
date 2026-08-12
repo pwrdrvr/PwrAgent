@@ -164,6 +164,46 @@ describe("adaptGrammyBot", () => {
   });
 });
 
+describe("TelegramAdapter lifecycle", () => {
+  it("does not continue webhook startup after a stop during identity lookup", async () => {
+    let resolveGetMe!: (value: {
+      id: number;
+      is_bot: true;
+      username: string;
+    }) => void;
+    const pendingGetMe = new Promise<{
+      id: number;
+      is_bot: true;
+      username: string;
+    }>((resolve) => {
+      resolveGetMe = resolve;
+    });
+    const api = fakeTelegramApi();
+    api.getMe = vi.fn(async () => await pendingGetMe);
+    api.getWebhookInfo = vi.fn(async () => ({ url: "" }));
+    const adapter = new TelegramAdapter({
+      api,
+      config: {
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      pollOnStart: false,
+      store: fakeCallbackStore(),
+    });
+
+    const startPromise = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(api.getMe).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+    resolveGetMe({ id: 123, is_bot: true, username: "TestBot" });
+    await startPromise;
+
+    expect(api.getWebhookInfo).not.toHaveBeenCalled();
+  });
+});
+
 describe("TelegramAdapter callback persistence", () => {
   it("sends every assistant image", async () => {
     const api = fakeTelegramApi();

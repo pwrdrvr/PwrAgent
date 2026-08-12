@@ -339,6 +339,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private typingSignalSequence = 0;
   private typingSignals = new Map<string, DiscordTypingSignal>();
   private unsubscribeGateway?: () => void;
+  private lifecycleGeneration = 0;
 
   constructor(options: DiscordAdapterOptions) {
     this.options = options;
@@ -387,15 +388,24 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
+    const lifecycleGeneration = ++this.lifecycleGeneration;
     await this.reconcileApplicationCommands();
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+      return;
+    }
     this.listener = listener;
     this.unsubscribeGateway = this.gateway.onEvent(async (event) => {
       await this.handleGatewayEvent(event);
     });
     await this.gateway.start();
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+    }
   }
 
   async stop(): Promise<void> {
+    this.lifecycleGeneration += 1;
     this.stopTypingSignals();
     this.unsubscribeGateway?.();
     this.unsubscribeGateway = undefined;
