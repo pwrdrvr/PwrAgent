@@ -1778,6 +1778,7 @@ function createKimiAcpRegistry(options?: {
   gitDirectoryService?: unknown;
   gitWorkspaceHandoffService?: unknown;
   runtimeCapabilities?: BackendAcpRuntimeCapabilities;
+  createScratchProjectDirectory?: () => Promise<string>;
   acpWorktreeRepositoryResolver?: (
     cwd: string,
   ) => Promise<LinkedDirectorySummary | undefined>;
@@ -1855,6 +1856,9 @@ function createKimiAcpRegistry(options?: {
     gitWorkspaceHandoffService:
       options?.gitWorkspaceHandoffService as never,
     acpWorktreeRepositoryResolver: options?.acpWorktreeRepositoryResolver,
+    createScratchProjectDirectory:
+      options?.createScratchProjectDirectory
+      ?? (async () => "/Users/test/.pwragent/projects/acp-scratch"),
   });
   return {
     acpBackendId,
@@ -9500,6 +9504,32 @@ command = "pnpm grok"
     expectPwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools, [
       "create_monitor_delegation",
     ]);
+
+    await registry.close();
+  });
+
+  it("creates a scratch workspace for ACP thread creation when cwd is omitted", async () => {
+    const scratchPath =
+      "/Users/test/.pwragent/projects/2026-08-10-a1b2c3";
+    const { acpBackendId, acpClient, registry } = createKimiAcpRegistry({
+      createScratchProjectDirectory: async () => scratchPath,
+    });
+
+    const response = await registry.startThread({
+      backend: acpBackendId,
+    });
+
+    expect(response).toEqual({
+      backend: acpBackendId,
+      threadId: "kimi-session-1",
+      executionMode: "default",
+    });
+    expect(acpClient.startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: scratchPath,
+        executionMode: "default",
+      }),
+    );
 
     await registry.close();
   });
