@@ -209,7 +209,12 @@ accidental.
   of that turn, so a thread moves at most twice per turn no matter how loud the
   turn is. The second move is the one exception, and it is a setting:
   `general.attention_promote_on_turn_end` (default on) gives a finished turn one
-  last trip to the top so freshly completed work surfaces for review. Ranks are
+  last trip to the top so freshly completed work surfaces for review. That
+  covers a turn this window watched run *and* one it only learned about
+  afterwards — a messaging- or peer-driven turn can start and finish inside a
+  single poll interval, so an idle member whose `updatedAt` advanced counts as a
+  finished turn too. A live turn can never take that path, which is what keeps
+  it from becoming a back door to update-driven churn. Ranks are
   a monotonic counter, not a clock — no `Date.now()` in a render path and no
   ties to break — and they are scoped to current lens membership, so a thread
   that leaves and returns is fresh activity and re-enters at the top. The

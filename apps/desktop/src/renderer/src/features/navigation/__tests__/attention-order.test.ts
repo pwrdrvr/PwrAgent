@@ -134,6 +134,71 @@ describe("reconcileAttentionOrder", () => {
     expect(run.ids).toEqual(["b", "a"]);
   });
 
+  it("promotes an existing member whose turn ran entirely between snapshots", () => {
+    // A turn driven from messaging, a federated peer, or an automation is only
+    // visible through `threadStatus` in the polled snapshot, and a short one
+    // fits inside a single poll interval. The renderer sees no live state at
+    // all — just an already-unread thread whose `updatedAt` moved. Without
+    // this, it keeps its stale rank and stays buried under threads that have
+    // had no new work.
+    let run = step(createAttentionOrderState(), [
+      idleThread("a"),
+      idleThread("b"),
+      idleThread("c"),
+    ]);
+    expect(run.ids).toEqual(["a", "b", "c"]);
+
+    run = step(run.state, [
+      thread("c", { threadStatus: "idle", updatedAt: 99 }),
+      idleThread("a"),
+      idleThread("b"),
+    ]);
+    expect(run.ids).toEqual(["c", "a", "b"]);
+
+    // The same `updatedAt` observed again is not a second turn.
+    run = step(run.state, [
+      thread("c", { threadStatus: "idle", updatedAt: 99 }),
+      idleThread("a"),
+      idleThread("b"),
+    ]);
+    expect(run.ids).toEqual(["c", "a", "b"]);
+  });
+
+  it("leaves an unobserved turn parked when promotion is off", () => {
+    let run = step(
+      createAttentionOrderState(),
+      [idleThread("a"), idleThread("b")],
+      { promoteOnTurnEnd: false },
+    );
+    expect(run.ids).toEqual(["a", "b"]);
+
+    run = step(
+      run.state,
+      [thread("b", { threadStatus: "idle", updatedAt: 99 }), idleThread("a")],
+      { promoteOnTurnEnd: false },
+    );
+    expect(run.ids).toEqual(["a", "b"]);
+  });
+
+  it("never re-ranks a live turn however far its updatedAt runs", () => {
+    // The after-the-fact promotion must not become a back door to the
+    // update-driven churn the ranks exist to remove. A streaming turn is
+    // active, and an active thread's rank is frozen.
+    let run = step(createAttentionOrderState(), [
+      activeThread("a"),
+      activeThread("b"),
+    ]);
+    expect(run.ids).toEqual(["a", "b"]);
+
+    for (const tick of [10, 20, 30]) {
+      run = step(run.state, [
+        thread("b", { threadStatus: "active", updatedAt: tick }),
+        thread("a", { threadStatus: "active", updatedAt: tick }),
+      ]);
+      expect(run.ids).toEqual(["a", "b"]);
+    }
+  });
+
   it("promotes a thread that has just joined the lens", () => {
     let run = step(createAttentionOrderState(), [
       idleThread("a"),
