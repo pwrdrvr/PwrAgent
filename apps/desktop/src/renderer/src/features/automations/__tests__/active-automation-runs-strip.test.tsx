@@ -119,7 +119,13 @@ describe("ActiveAutomationRunsStrip", () => {
     render(<ActiveAutomationRunsStrip desktopApi={desktopApi} thread={thread} />);
 
     expect(await screen.findByText("Failed automations")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Why?" }));
+    // Named for the automation, not just "Why?" — several failed rows would
+    // otherwise be indistinguishable to a screen reader.
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Why? Open the failed run for Search Bots",
+      }),
+    );
     expect(desktopApi.openAutomationRunWindow).toHaveBeenCalledWith(
       expect.objectContaining({ automationId: "a1", runId: "run-9" }),
     );

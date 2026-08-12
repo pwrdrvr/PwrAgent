@@ -24,8 +24,12 @@ function isRunningAutomation(automation: AutomationDetail): boolean {
  * every run with its cost and transcript. What belongs in the operator's
  * eyeline is only what is happening now or what broke.
  *
- * Reads the same per-thread automation list the rail panel uses — no extra
- * IPC, and it refreshes on the run events that hook already subscribes to.
+ * Reads the same per-thread automation list the rail panel uses, through the
+ * same hook and the same run events. Note that this does add IPC the rail did
+ * not: the rail panel only mounts while its tab is open, and this is mounted
+ * for every thread — so `listAutomations` (which sums today's cost across
+ * retained runs) now runs on every automation event rather than only while
+ * someone is looking at the Automations tab.
  */
 export function ActiveAutomationRunsStrip(props: {
   desktopApi?: DesktopApi;
@@ -115,6 +119,10 @@ export function ActiveAutomationRunsStrip(props: {
               {failedRow && automation.lastRunId
                 && props.desktopApi?.openAutomationRunWindow ? (
                 <button
+                  // "Why?" alone tells a screen reader nothing, and gives
+                  // several failed rows the same name. Keeps the visible text
+                  // as a prefix so speech input still matches what is drawn.
+                  aria-label={`Why? Open the failed run for ${automation.name}`}
                   className="live-strip__item-action"
                   type="button"
                   onClick={() =>

@@ -111,11 +111,17 @@ export function formatAutomationRunRuntime(
  * A table cell can only show so much, and CSS truncation would drop the tail
  * — which is the half that says which repo this is. Callers keep the full
  * path in a title attribute.
+ *
+ * Splits on both separators and rebuilds with the one the path actually uses:
+ * a Windows cwd is the case that needs this most, and matching only `/` left
+ * it full-length for the ellipsis to eat the repo name off the end — exactly
+ * the failure this exists to prevent.
  */
 export function formatWorkspacePathLabel(cwd: string): string {
-  const segments = cwd.split("/").filter((segment) => segment.length > 0);
+  const separator = cwd.includes("\\") ? "\\" : "/";
+  const segments = cwd.split(/[\\/]/).filter((segment) => segment.length > 0);
   if (segments.length <= 2) return cwd;
-  return `…/${segments.slice(-2).join("/")}`;
+  return `…${separator}${segments.slice(-2).join(separator)}`;
 }
 
 function formatTokenCount(count: number): string {
