@@ -824,6 +824,10 @@ describe("AcpBackendAdapter", () => {
       status: "completed",
     };
     transport.emitSessionUpdate(session.sessionId, completedToolUpdate);
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "\n" },
+    });
     for (const [index, text] of [
       "So ",
       "the ",
