@@ -5694,11 +5694,10 @@ describe("Sidebar thread pinning Move items", () => {
     threadKeys,
   });
 
-  it("moves a pin across backends — pin order is global, not per-backend", async () => {
-    // Pin order is global across backends (mirrors directory pinning). The
-    // top global pin can Move Down past another backend's pins, producing an
-    // interleaved cross-backend order. This is exactly the behavior the old
-    // per-backend slice blocked.
+  it("moves a colliding remote pin above a newer local pin", async () => {
+    // A local auto-pin used to reuse a viewer-owned remote rank. Recency then
+    // put the newer local row first, but Move Up must still submit one global
+    // order that places the remote row above it.
     const onReorderThreadPins = vi.fn(async () => undefined);
     const codexTop = {
       ...sharedThread,
@@ -5706,13 +5705,25 @@ describe("Sidebar thread pinning Move items", () => {
       title: "Codex top pin",
       source: "codex" as const,
       pinnedRank: "1024",
+      updatedAt: 2_000,
     };
     const grokMiddle = {
       ...sharedThread,
       id: "grok-middle",
       title: "Grok middle pin",
       source: "acp:grok" as const,
-      pinnedRank: "2048",
+      pinnedRank: "1024",
+      updatedAt: 1_000,
+      federation: {
+        ref: {
+          backend: "acp:grok" as const,
+          target: { scope: "remote" as const, instanceId: "peer-laptop" },
+          threadId: "grok-middle",
+        },
+        instanceLabel: "Laptop",
+        peerStatus: "connected" as const,
+        capabilities: [],
+      },
     };
     const grokBottom = {
       ...sharedThread,
@@ -5749,24 +5760,21 @@ describe("Sidebar thread pinning Move items", () => {
       />,
     );
 
-    // Codex's pin is the GLOBAL top (rank 1024). Move Up is disabled (nothing
-    // above it), but Move Down is enabled and crosses into grok's pins.
-    const codexRow = screen
-      .getByRole("button", { name: /Codex top pin/i })
+    const remoteRow = screen
+      .getByRole("button", { name: /Grok middle pin/i })
       .closest(".thread-row-shell") as HTMLElement;
     fireEvent.click(
-      codexRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
+      remoteRow.querySelector(".thread-row__overflow-button") as HTMLButtonElement,
     );
 
     const moveUp = await screen.findByRole("menuitem", { name: /Move Up/i });
     const moveDown = await screen.findByRole("menuitem", {
       name: /Move Down/i,
     });
-    expect(moveUp).toBeDisabled();
+    expect(moveUp).toBeEnabled();
     expect(moveDown).toBeEnabled();
 
-    fireEvent.click(moveDown);
-    // Global, interleaved new order: grok-middle now above the codex pin.
+    fireEvent.click(moveUp);
     expect(onReorderThreadPins).toHaveBeenCalledWith([
       "acp:grok:grok-middle",
       "codex:codex-top",
