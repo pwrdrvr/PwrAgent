@@ -525,7 +525,11 @@ if (win) {
   const builtApp = findWindowsUnpackedDir(dist);
 
   step("verify packaged asar contents");
-  runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);
+  runChecked(
+    "node",
+    [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp],
+    { env: { PWRAGENT_ASAR_MODULE_ROOT: stageDir } },
+  );
 
   step("write Windows checksums");
   const checksumPath = writeWindowsChecksums(dist);
