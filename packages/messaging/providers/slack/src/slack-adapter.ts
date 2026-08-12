@@ -2263,6 +2263,14 @@ export class SlackAdapter implements SlackProviderAdapter {
     const channelId = surfaceState?.channelId ?? auditChannel?.conversation.id;
     if (!channelId) return undefined;
     const sourceRelative = intent.delivery?.sourceRelative;
+    // Slack requires every stream to reply to the user message that prompted
+    // it. Channel-root Agent Route requests are not themselves thread
+    // conversations, so their inbound message timestamp lives in the opaque
+    // source surface rather than channel.parentId. Use that timestamp only for
+    // Working Cards; ordinary and final replies keep their existing placement.
+    const workingCardAnchorTs = intent.kind === "working_card"
+      ? surfaceState?.ts
+      : undefined;
     const threadTs =
       sourceRelative === "source_channel"
         ? undefined
@@ -2270,6 +2278,7 @@ export class SlackAdapter implements SlackProviderAdapter {
           ? surfaceState?.threadTs ?? surfaceState?.ts ?? auditChannel?.conversation.parentId
           : surfaceState?.threadTs
             ?? auditChannel?.conversation.parentId
+            ?? workingCardAnchorTs
             ?? (auditChannel?.conversation.kind === "thread"
               ? auditChannel.conversation.parentId
               : undefined);

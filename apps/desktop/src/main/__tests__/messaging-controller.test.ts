@@ -1807,6 +1807,69 @@ describe("MessagingController", () => {
     expect(JSON.stringify(harness.delivered)).toContain("find the thread");
   });
 
+  it("anchors Slack Agent Route working cards to the inbound channel message", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Signals Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      channel: "slack",
+      navigation,
+      toolUpdateDefaultMode: "show_none",
+    });
+    const channel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SIGNALS",
+        kind: "channel" as const,
+        title: "p-search-signals-project",
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    const routingState = {
+      opaque: {
+        channelId: "C012SIGNALS",
+        teamId: "T012WORKSPACE",
+        ts: "1700000000.000099",
+      },
+    };
+    await seedConversationDefaultAgent(
+      harness.store,
+      channel,
+      "codex",
+      "show_some",
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("check the latest signals", {
+        botMention: true,
+        channel,
+        routingState,
+      }),
+    );
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent(
+      buildToolCompletedEvent("tool-1", "check automation run"),
+    );
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "working_card",
+        targetSurface: {
+          channel: "slack",
+          id: "event-text",
+          state: routingState,
+        },
+      }),
+    );
+  });
+
   it("routes an accepted every-message topic to its default Agent without binding it", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {

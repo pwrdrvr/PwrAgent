@@ -4156,6 +4156,55 @@ describe("SlackAdapter", () => {
     expect(JSON.stringify(startedStreams[0])).not.toContain("x".repeat(257));
   });
 
+  it("anchors a channel-root Agent Route card to its inbound user message", async () => {
+    const startedStreams: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ startedStreams }),
+      socketClient: fakeSocket(),
+    });
+    const intent = slackWorkingCardIntent(1);
+    if (intent.kind !== "working_card") throw new Error("expected working card");
+    intent.audit = {
+      ...intent.audit!,
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "channel",
+          workspaceId: "T012ABCDEF0",
+        },
+      },
+    };
+    intent.targetSurface = {
+      channel: "slack",
+      id: "slack-inbound-1",
+      state: {
+        opaque: {
+          channelId: "C012ABCDEF0",
+          teamId: "T012ABCDEF0",
+          ts: "1700000000.000099",
+        },
+      },
+    };
+
+    await expect(adapter.deliver(intent)).resolves.toMatchObject({
+      outcome: "presented",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(startedStreams).toEqual([
+      expect.objectContaining({
+        channel: "C012ABCDEF0",
+        recipientTeamId: "T012ABCDEF0",
+        recipientUserId: "U012ABCDEF0",
+        threadTs: "1700000000.000099",
+      }),
+    ]);
+  });
+
   it("renders waiting visibly and closes cancelled tasks without an error state", async () => {
     const appendedStreams: unknown[] = [];
     const startedStreams: unknown[] = [];

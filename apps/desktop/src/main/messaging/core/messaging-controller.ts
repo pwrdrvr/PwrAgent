@@ -15701,7 +15701,11 @@ export class MessagingController {
       sequence: state.sequence,
     });
     card.card.phase = "waiting";
-    await this.deliver(card, binding);
+    await this.deliver(
+      card,
+      binding,
+      this.agentMessagingOriginEvent(binding, turnId),
+    );
     await this.deliver(buildActivityIntent({
       activity: "typing",
       bindingId: binding.id,
@@ -16002,25 +16006,30 @@ export class MessagingController {
     const guardedIsCancelled = () =>
       isTaskMonitorCancelled() || cancellation.isCancelled();
     const deliveryPromise = (async (): Promise<MessagingDeliveryResult> => {
-      const result = await this.deliver(intent, binding, undefined, {
-        isCancelled: guardedIsCancelled,
-        whenCancelled: cancellation.whenCancelled,
-        onCancelledDelivery: async (cancelledResult) => {
-          if (
-            cancelledResult.surface
-            && isVisibleAssistantStreamDelivery(cancelledResult)
-          ) {
-            const dismissed = await this.dismissTerminalPrivateResponseSurface(
-              binding,
-              delivery.turnId,
-              cancelledResult.surface,
-            );
-            if (!dismissed) {
-              this.workingUpdateCancellationFailures.add(cancellationKey);
+      const result = await this.deliver(
+        intent,
+        binding,
+        this.agentMessagingOriginEvent(binding, delivery.turnId),
+        {
+          isCancelled: guardedIsCancelled,
+          whenCancelled: cancellation.whenCancelled,
+          onCancelledDelivery: async (cancelledResult) => {
+            if (
+              cancelledResult.surface
+              && isVisibleAssistantStreamDelivery(cancelledResult)
+            ) {
+              const dismissed = await this.dismissTerminalPrivateResponseSurface(
+                binding,
+                delivery.turnId,
+                cancelledResult.surface,
+              );
+              if (!dismissed) {
+                this.workingUpdateCancellationFailures.add(cancellationKey);
+              }
             }
-          }
+          },
         },
-      });
+      );
       if (
         !guardedIsCancelled()
         && result.surface
@@ -16108,8 +16117,21 @@ export class MessagingController {
     });
     intent.card.phase = phase;
     intent.card.isFinal = true;
-    await this.deliver(intent, binding);
+    await this.deliver(
+      intent,
+      binding,
+      this.agentMessagingOriginEvent(binding, turnId),
+    );
     this.workingCards.delete(key);
+  }
+
+  private agentMessagingOriginEvent(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): MessagingInboundEvent | undefined {
+    return this.activeAgentMessagingOriginsByTurnKey.get(
+      agentMessagingTurnKey(binding.backend, binding.threadId, turnId),
+    )?.event;
   }
 
   private filterUndeliveredProseActivities(
