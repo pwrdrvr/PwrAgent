@@ -64,6 +64,7 @@ import {
   readRendererFederationTarget,
 } from "./lib/federation-window";
 import { useFederationPeerConnectivity } from "./lib/useFederationPeerConnectivity";
+import { useFederationHealth } from "./lib/useFederationHealth";
 import { useFederationThreadEventSubscriptions } from "./lib/useFederationThreadEventSubscriptions";
 import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
 import { federationTargetsEqual } from "./lib/federated-thread-events";
@@ -338,19 +339,18 @@ function DesktopAppShell(props: {
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
-  const [newThreadFederationTargets, setNewThreadFederationTargets] = useState<
-    Array<{ instanceId: string; label: string }>
-  >([]);
-  const refreshNewThreadFederationTargets = useCallback(async (): Promise<void> => {
-    if (
-      readRendererFederationTarget()
-      || !desktopApi?.openFederationWindow
-      || !desktopApi.readFederationHealth
-    ) {
-      setNewThreadFederationTargets([]);
-      return;
+  const {
+    health: liveFederationHealth,
+    refresh: refreshFederationHealth,
+  } = useFederationHealth({
+    desktopApi,
+    enabled: !readRendererFederationTarget(),
+  });
+  const newThreadFederationTargets = useMemo(() => {
+    const health = liveFederationHealth;
+    if (!health || !desktopApi?.openFederationWindow) {
+      return [];
     }
-    const { health } = await desktopApi.readFederationHealth({});
     const visibleInstances = [
       ...health.peers,
       ...(health.localLabel
@@ -360,31 +360,25 @@ function DesktopAppShell(props: {
           }]
         : []),
     ];
-    setNewThreadFederationTargets(
-      health.peers
-        .filter(
-          (peer) =>
-            peer.status === "connected"
-            && !peer.revokedAt
-            && peer.capabilities.includes("remote_window")
-            && peer.capabilities.includes("thread_navigation"),
-        )
-        .map((peer) => ({
-          instanceId: peer.id,
-          label: formatFederationPeerDisplayLabel(peer, visibleInstances),
-        })),
-    );
-  }, [desktopApi]);
+    return health.peers
+      .filter(
+        (peer) =>
+          peer.status === "connected"
+          && !peer.revokedAt
+          && peer.capabilities.includes("remote_window")
+          && peer.capabilities.includes("thread_navigation")
+          && peer.capabilities.includes("environment_actions"),
+      )
+      .map((peer) => ({
+        instanceId: peer.id,
+        label: formatFederationPeerDisplayLabel(peer, visibleInstances),
+      }));
+  }, [desktopApi?.openFederationWindow, liveFederationHealth]);
   useEffect(() => {
-    void refreshNewThreadFederationTargets().catch(() => {
-      setNewThreadFederationTargets([]);
-    });
     return desktopApi?.onWindowFocus?.(() => {
-      void refreshNewThreadFederationTargets().catch(() => {
-        setNewThreadFederationTargets([]);
-      });
+      refreshFederationHealth();
     });
-  }, [desktopApi, refreshNewThreadFederationTargets]);
+  }, [desktopApi, refreshFederationHealth]);
   const resumePrAutoDispatchBudget = useCallback(() => {
     void desktopApi?.resumePrAutoDispatchBudget?.()
       .then((status) => {
@@ -1440,6 +1434,24 @@ function DesktopAppShell(props: {
     }
     await navigation.addProjectDirectory();
   };
+  const createThreadOnFederationTarget = async (
+    instanceId: string,
+  ): Promise<void> => {
+    try {
+      await desktopApi?.openFederationWindow?.({
+        target: { scope: "remote", instanceId },
+        initialLaunchpad: true,
+      });
+    } catch (error) {
+      showAppNotice({
+        id: `new-thread-federation-target:${instanceId}`,
+        title: "Could not open new thread",
+        message: error instanceof Error ? error.message : String(error),
+        tone: "error",
+        transientSlot: "new-thread-federation-target",
+      });
+    }
+  };
   const mastheadActions = {
     addingProjectDirectory: navigation.pickingDirectory,
     automationsActive: mainView === "automations",
@@ -1447,6 +1459,7 @@ function DesktopAppShell(props: {
     threadSearchActive: mainView === "search",
     creatingThread: Boolean(navigation.creatingThread),
     newThreadDirectoryLabel: navigation.newThreadDirectoryLabel,
+    newThreadFederationTargets,
     onAddProjectDirectory: readRendererFederationTarget()
       ? undefined
       : addProjectDirectory,
@@ -1468,6 +1481,7 @@ function DesktopAppShell(props: {
       setMainView("thread");
       await navigation.createThread(undefined, "default", { forceWorkspace: true });
     },
+    onCreateThreadOnFederationTarget: createThreadOnFederationTarget,
   };
   // The Star Map is a whole-federation surface owned by the primary window;
   // federation remote-viewer windows never render its toggle.
@@ -1909,22 +1923,7 @@ function DesktopAppShell(props: {
             });
           }}
           newThreadFederationTargets={newThreadFederationTargets}
-          onCreateThreadOnFederationTarget={async (instanceId) => {
-            try {
-              await desktopApi?.openFederationWindow?.({
-                target: { scope: "remote", instanceId },
-                initialLaunchpad: true,
-              });
-            } catch (error) {
-              showAppNotice({
-                id: `new-thread-federation-target:${instanceId}`,
-                title: "Could not open new thread",
-                message: error instanceof Error ? error.message : String(error),
-                tone: "error",
-                transientSlot: "new-thread-federation-target",
-              });
-            }
-          }}
+          onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
           onAddProjectDirectory={readRendererFederationTarget()
             ? undefined
             : addProjectDirectory}

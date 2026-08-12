@@ -42,6 +42,10 @@ export function AppTitleBar(props: {
     addingProjectDirectory?: boolean;
     automationsActive: boolean;
     newThreadDirectoryLabel?: string;
+    newThreadFederationTargets?: readonly {
+      instanceId: string;
+      label: string;
+    }[];
     settingsActive: boolean;
     creatingThread: boolean;
     onAddProjectDirectory?: () => void | Promise<void>;
@@ -49,6 +53,9 @@ export function AppTitleBar(props: {
     onOpenSettings: () => void;
     onCreateThread: () => void | Promise<void>;
     onCreateThreadWithoutDirectory?: () => void | Promise<void>;
+    onCreateThreadOnFederationTarget?: (
+      instanceId: string,
+    ) => void | Promise<void>;
   };
 }): ReactElement | null {
   const isWindows = getDesktopApi()?.platform === "win32";
@@ -103,6 +110,10 @@ export function AppTitleBar(props: {
               onCreateThreadWithoutDirectory={
                 actions.onCreateThreadWithoutDirectory
               }
+              onCreateThreadOnTarget={
+                actions.onCreateThreadOnFederationTarget
+              }
+              remoteTargets={actions.newThreadFederationTargets}
             />
           </div>
         ) : null}
