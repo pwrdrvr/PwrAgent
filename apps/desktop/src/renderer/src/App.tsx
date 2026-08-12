@@ -470,7 +470,8 @@ function DesktopAppShell(props: {
       }
     });
   }, [desktopApi]);
-  // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
+  // `instant` is for callers that are about to hide the sidebar (a ⌘K landing
+  // peek):
   // a smooth scroll is animated over several frames, and hiding the sidebar
   // mid-animation abandons it wherever it got to. An instant scroll lands in one
   // frame, and Chromium keeps the offset across `display: none` — so the row is
@@ -499,14 +500,18 @@ function DesktopAppShell(props: {
   // writeConfig call is fire-and-forget; a failed write just means the
   // preference isn't remembered next launch.
   const writeConfig = settings.writeConfig;
-  // Thread-list quick search (⌘K anywhere, ⌘F while the sidebar is focused).
-  // Owns its own open state and the sidebar peek it needs to render.
+  // Thread-jump palette (⌘K anywhere, ⌘F while the sidebar is focused). Owns
+  // its own open state and the sidebar peek a jump's landing scroll needs.
   const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
   const endSidebarPeek = threadJump.endPeek;
+  const toggleGlobalThreadSearch = () => {
+    threadJump.closeJump();
+    setMainView((current) => current === "search" ? "thread" : "search");
+  };
   const setSidebarHiddenPersisted = useCallback(
     (next: boolean) => {
       // An explicit toggle (⌘B, the chips) is the operator stating a preference,
-      // so it ends any quick-search peek in flight.
+      // so it ends any jump-landing peek in flight.
       endSidebarPeek();
       setSidebarHidden(next);
       void writeConfig({ ui: { sidebarHidden: next } });
@@ -697,7 +702,7 @@ function DesktopAppShell(props: {
   // ⌘⇧F / ⌃⇧F opens the global thread search screen; ⌘F is the focus-sensitive
   // context find; ⌘K always lands on the thread-list quick search.
   useFindHotkeys({
-    onOpenSearch: () => setMainView(mainView === "search" ? "thread" : "search"),
+    onOpenSearch: toggleGlobalThreadSearch,
     onFind: () => {
       // The thread-list quick search claims ⌘F while the sidebar is focused;
       // anywhere else ⌘F finds within the open thread. Focus decides — which is
@@ -970,7 +975,7 @@ function DesktopAppShell(props: {
       setMainView("settings");
     },
     onToggleThreadSearch: () => {
-      setMainView(mainView === "search" ? "thread" : "search");
+      toggleGlobalThreadSearch();
     },
     onCreateThread: async () => {
       setMainView("thread");
@@ -1335,7 +1340,7 @@ function DesktopAppShell(props: {
             setMainView("automations");
           }}
           onOpenThreadSearch={() => {
-            setMainView(mainView === "search" ? "thread" : "search");
+            toggleGlobalThreadSearch();
           }}
           onOpenLaunchpad={async (directory, preferredBackend) => {
             setMainView("thread");
@@ -1352,8 +1357,8 @@ function DesktopAppShell(props: {
           }}
           threadJumpOpen={threadJump.open}
           onThreadJumpOpenChange={(open) => {
-            // Every close (Escape, outside click, picking a thread) goes through
-            // closeJump so a peeked-open sidebar goes back to hidden.
+            // Every close (Escape, scrim click, picking a thread) goes through
+            // closeJump, so the toggle state cannot drift from the surface.
             if (open) {
               threadJump.openJump();
               return;
@@ -1364,14 +1369,14 @@ function DesktopAppShell(props: {
             setMainView("thread");
             navigation.selectThread(thread);
             // Reveal on the next frame, once the new selection has rendered.
-            // Do it even when the sidebar is only peeked open (⌘K over a hidden
-            // sidebar) — the popup is closing and taking the sidebar with it,
-            // but the scroll offset survives, so bringing the sidebar back later
-            // shows the thread we jumped to instead of stranding it off-screen.
-            // That reveal must be instant: an animated scroll wouldn't finish
-            // before the sidebar hides.
-            const instant = threadJump.isPeeking();
-            requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
+            // If the sidebar is hidden (⌘B), peek it open for this landing only:
+            // scrollIntoView needs a laid-out row, and Chromium preserves the
+            // resulting offset after the sidebar returns to display: none.
+            const instant = threadJump.beginRevealPeek();
+            requestAnimationFrame(() => {
+              revealSelectedThreadInList({ instant });
+              threadJump.completePeekRestore();
+            });
           }}
           onArchiveThread={navigation.archiveThread}
           onRenameThread={navigation.renameThread}

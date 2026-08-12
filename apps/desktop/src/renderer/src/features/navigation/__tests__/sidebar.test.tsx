@@ -529,6 +529,7 @@ describe("Sidebar", () => {
   });
 
   it("shows masthead action tooltips and preserves button handlers", async () => {
+    const onOpenThreadSearch = vi.fn();
     const onOpenAutomations = vi.fn();
     const onOpenSettings = vi.fn();
     const onCreateThread = vi.fn(async () => undefined);
@@ -547,12 +548,23 @@ describe("Sidebar", () => {
         threads={[sharedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={onCreateThread}
+        onOpenThreadSearch={onOpenThreadSearch}
         onOpenAutomations={onOpenAutomations}
         onOpenLaunchpad={async () => undefined}
         onOpenSettings={onOpenSettings}
         onSelectThread={() => undefined}
       />
     );
+
+    const searchButton = screen.getByRole("button", { name: "Search threads" });
+    fireEvent.mouseEnter(searchButton);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Quick Thread List Search  (Ctrl+K)\nOpen Search All  (Ctrl+Shift+F)\nContext Search  (Ctrl+F) — Thread List in sidebar, Thread Chat elsewhere",
+    );
+    fireEvent.mouseLeave(searchButton);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    fireEvent.click(searchButton);
+    expect(onOpenThreadSearch).toHaveBeenCalledTimes(1);
 
     const automationsButton = screen.getByRole("button", { name: "Open automations" });
     fireEvent.mouseEnter(automationsButton);
