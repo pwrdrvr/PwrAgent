@@ -1275,6 +1275,27 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps the directory pin boundary neutral in both densities", () => {
+    expect(
+      extractRuleBody(css, ".sidebar-list,\n.directory-groups"),
+    ).toContain("gap: 4px;");
+    expect(
+      extractRuleBody(css, ".directory-row__pin-drop-boundary"),
+    ).toContain("margin-block: -4px;");
+    expect(
+      extractRuleBody(
+        css,
+        ':root[data-density="compact"] .directory-row__pin-drop-boundary',
+      ),
+    ).toContain("margin-block: -2px;");
+    expect(
+      extractRuleBody(
+        css,
+        ':root[data-density="compact"] .sidebar-list,\n:root[data-density="compact"] .directory-groups',
+      ),
+    ).toContain("gap: 2px;");
+  });
+
   it("aligns the sidebar masthead and lanes to one shared inset system", () => {
     // Regression guard. The thread/directory lanes bleed to the rail walls
     // and re-inset to `--sidebar-lane-inset`, while the masthead chrome
