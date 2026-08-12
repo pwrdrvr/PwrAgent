@@ -60,6 +60,45 @@ function readRawAcpSessionPayload(
 }
 
 describe("AcpAgentClient", () => {
+  it("tracks non-turn RPCs until their transport requests settle", async () => {
+    const sessionResponse = createDeferred<unknown>();
+    const runtimeOptionResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/new": sessionResponse.promise,
+      "session/set_model": runtimeOptionResponse.promise,
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    expect(client.hasActiveOperations()).toBe(false);
+
+    const session = client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      mcpServers: "none",
+    });
+    expect(client.hasActiveOperations()).toBe(true);
+    sessionResponse.resolve({ sessionId: "session-1" });
+    await expect(session).resolves.toMatchObject({ sessionId: "session-1" });
+    expect(client.hasActiveOperations()).toBe(false);
+
+    const runtimeOption = client.setRuntimeOption({
+      sessionId: "session-1",
+      source: "model",
+      optionId: "model",
+      value: "gemini-2.5-pro",
+    });
+    expect(client.hasActiveOperations()).toBe(true);
+    runtimeOptionResponse.resolve({});
+    await runtimeOption;
+    expect(client.hasActiveOperations()).toBe(false);
+  });
+
   it("initializes, starts sessions, sends prompts, and normalizes updates", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({
