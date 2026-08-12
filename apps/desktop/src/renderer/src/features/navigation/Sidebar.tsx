@@ -296,14 +296,23 @@ const browseModeTooltips = {
 } satisfies Record<BrowseMode, string>;
 
 /**
- * The Drafts tab's count, for the tooltip and the accessible name. Worded like
- * the lens's empty state ("No unsent replies.") rather than "drafts" — a
- * launchpad draft is equally unsent but has no thread row, so neither line may
- * claim the lens covers it.
+ * The Drafts tab's count, for the tooltip and the accessible name.
+ *
+ * Counts *threads*, not drafts, and says so: a launchpad draft is equally
+ * unsent but belongs to a directory rather than a thread, so this lens cannot
+ * show it and the count must not imply it did.
+ *
+ * Deliberately does NOT contain the word "reply" — the wording the visible
+ * empty state uses. Playwright's `getByLabel` is a substring match and 31 specs
+ * drive the composer with `getByLabel("Reply")`, so a singular "1 unsent reply"
+ * on this tab turned every one of them into a strict-mode violation the moment
+ * a thread had a draft. Same trap the unsent-draft chip hit; see "E2E Locator
+ * Hygiene Around Global Chrome" in apps/desktop/AGENTS.md.
  */
 function formatDraftThreadCount(count: number): string {
-  if (count === 0) return "No unsent replies";
-  return `${count} unsent ${count === 1 ? "reply" : "replies"}`;
+  if (count === 0) return "No threads with unsent drafts";
+  if (count === 1) return "1 thread with an unsent draft";
+  return `${count} threads with unsent drafts`;
 }
 
 function formatThreadCount(count: number): string {
@@ -2665,9 +2674,9 @@ function LensTab(props: {
   /** Undefined on lenses that don't count (Updated/Created are "everything"). */
   count?: number;
   /**
-   * The count spelled out ("2 unsent replies"), for the accessible name and
-   * the tooltip. Given even when `count` is 0 — the badge vanishing is only
-   * readable if you can see the row, so the zero still gets announced.
+   * The count spelled out ("2 threads with unsent drafts"), for the accessible
+   * name and the tooltip. Given even when `count` is 0 — the badge vanishing
+   * is only readable if you can see the row, so the zero still gets announced.
    */
   countLabel?: string;
   tooltipText: string;

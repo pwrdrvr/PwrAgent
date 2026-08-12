@@ -742,7 +742,7 @@ describe("Sidebar", () => {
       "Attention, 0 active threads, 1 thread to review",
       // Drafts announces its emptiness even though it shows no badge: the
       // vanishing count is only readable if you can see the row.
-      "Drafts, No unsent replies",
+      "Drafts, No threads with unsent drafts",
       "Updated",
       "Created",
       "Directories",
@@ -2610,11 +2610,11 @@ describe("Sidebar", () => {
       fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Drafts,/ }));
       expect((await screen.findByRole("tooltip")).textContent).toBe(
         "Drafts — threads with a reply you started and never sent"
-          + "\n1 unsent reply",
+          + "\n1 thread with an unsent draft",
       );
     });
 
-    it("counts the unsent replies on its tab", () => {
+    it("counts the drafted threads on its tab", () => {
       const secondDraftThread = {
         ...sharedThread,
         id: "second-thread-with-draft",
@@ -2645,8 +2645,18 @@ describe("Sidebar", () => {
         />,
       );
 
-      const tab = screen.getByRole("tab", { name: "Drafts, 2 unsent replies" });
+      const tab = screen.getByRole("tab", {
+        name: "Drafts, 2 threads with unsent drafts",
+      });
       expect(tab.querySelector(".lens-switch__count")).toHaveTextContent("2");
+      // The label must never contain "reply": `getByLabel` is a substring
+      // match in Playwright, and 31 specs drive the composer with
+      // `getByLabel("Reply")` — a tab that matches makes every one of them a
+      // strict-mode violation as soon as a thread has a draft. Desktop E2E is
+      // the only suite that catches it (Testing Library matches names
+      // exactly), so guard the wording here where it costs nothing. See
+      // "E2E Locator Hygiene Around Global Chrome" in apps/desktop/AGENTS.md.
+      expect(tab.getAttribute("aria-label")).not.toMatch(/reply/i);
     });
 
     it("drops the count entirely when nothing is half-written", () => {
@@ -2671,7 +2681,9 @@ describe("Sidebar", () => {
 
       // No badge at all — not a greyed "0". An absent count is how this lens
       // says "no drafts"; a zero would be one more number to read past.
-      const tab = screen.getByRole("tab", { name: "Drafts, No unsent replies" });
+      const tab = screen.getByRole("tab", {
+        name: "Drafts, No threads with unsent drafts",
+      });
       expect(tab.querySelector(".lens-switch__count")).toBeNull();
     });
 
