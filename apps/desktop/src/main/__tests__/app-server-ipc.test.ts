@@ -2188,28 +2188,23 @@ describe("app server ipc", () => {
     });
   });
 
-  it("keeps renderer delta transport opt-in at the navigation IPC boundary", async () => {
+  it("keeps delta transport opt-in with shared renderer revisions", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
-    const once = vi.fn();
-    const event = {
-      sender: {
-        id: 42,
-        once,
-      },
-    };
+    const firstRenderer = { sender: { id: 42 } };
+    const secondRenderer = { sender: { id: 43 } };
     registerAppServerIpcHandlers();
     const handler = handlers.get(NAVIGATION_SNAPSHOT_CHANNEL);
 
-    const first = await handler?.(event, {
+    const first = await handler?.(firstRenderer, {
       transport: { protocol: 1 },
     }) as { kind: string; revision: string };
-    const second = await handler?.(event, {
+    const second = await handler?.(secondRenderer, {
       transport: {
         protocol: 1,
         baseRevision: first.revision,
       },
     }) as { kind: string; revision: string };
-    const third = await handler?.(event, {
+    const third = await handler?.(firstRenderer, {
       transport: {
         protocol: 1,
         baseRevision: second.revision,
@@ -2225,8 +2220,6 @@ describe("app server ipc", () => {
       kind: "unchanged",
       revision: second.revision,
     });
-    expect(once).toHaveBeenCalledWith("destroyed", expect.any(Function));
-    expect(once).toHaveBeenCalledTimes(1);
   });
 
   it("removes a viewer-side remote pin when the owner proves it is archived", async () => {
