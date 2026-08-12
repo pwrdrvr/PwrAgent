@@ -89,6 +89,10 @@ function createSnapshot(
         value: true,
         source: "default",
       },
+      attentionPromoteOnTurnEnd: {
+        value: true,
+        source: "default",
+      },
       developerMode: {
         value: false,
         source: "default",
@@ -715,6 +719,23 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           confirmQuitWithInProgressThreads: false,
+        },
+      });
+    });
+    expect(
+      screen.getByRole("switch", {
+        name: "Move a thread to the top when its turn finishes",
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Move a thread to the top when its turn finishes",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          attentionPromoteOnTurnEnd: false,
         },
       });
     });

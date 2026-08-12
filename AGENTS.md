@@ -196,11 +196,25 @@ accidental.
   switch. The tabs are icon-only; the lens name lives in `aria-label` and the
   tooltip.
 - Attention is the work-queue lens: threads with a live turn or waiting to be
-  reviewed, in recent-activity order. Its tab is two indicators with counts
+  reviewed. Its tab is two indicators with counts
   (scanner + in-progress, cookie + unread) rather than an icon, and each goes
   grey at zero so the tab reads as "nothing running, nothing unread" without
   being opened. A zero is shown, never hidden — a vanishing count makes an
   idle tab look like a broken one.
+- **Attention orders by turn, not by activity.** Every other lens is a pure
+  sort over `updatedAt` / `createdAt`; this one is not, because `updatedAt`
+  moves on every streamed item, sub-agent invocation, and tool result, and a
+  queue that re-sorts under the pointer while two turns run is unusable. Each
+  member holds a rank minted when its turn *starts* and left alone for the rest
+  of that turn, so a thread moves at most twice per turn no matter how loud the
+  turn is. The second move is the one exception, and it is a setting:
+  `general.attention_promote_on_turn_end` (default on) gives a finished turn one
+  last trip to the top so freshly completed work surfaces for review. Ranks are
+  a monotonic counter, not a clock — no `Date.now()` in a render path and no
+  ties to break — and they are scoped to current lens membership, so a thread
+  that leaves and returns is fresh activity and re-enters at the top. The
+  reducer and the reasoning live in
+  [attention-order.ts](apps/desktop/src/renderer/src/features/navigation/attention-order.ts).
 - Drafts is the second state lens: threads holding unsent composer text, in
   recent-activity order. A draft belongs to whoever typed it — it is stored in
   that machine's `composer_draft_latest` table, re-hydrated on the next launch,

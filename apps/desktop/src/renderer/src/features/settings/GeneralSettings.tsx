@@ -123,6 +123,7 @@ export function GeneralSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
+  onAttentionPromoteOnTurnEndChange: (value: boolean) => Promise<void>;
   onPdfAnalysisEnabledChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
@@ -147,6 +148,8 @@ export function GeneralSettings(props: {
     props.snapshot.imageUploads.pastedImageMaxPatches;
   const confirmQuitWithInProgressThreads =
     props.snapshot.general.confirmQuitWithInProgressThreads;
+  const attentionPromoteOnTurnEnd =
+    props.snapshot.general.attentionPromoteOnTurnEnd;
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const updateChannel = props.snapshot.updates.channel;
@@ -309,6 +312,30 @@ export function GeneralSettings(props: {
           </div>
         </SettingsSection>
       ) : null}
+
+      <SettingsSection
+        eyebrow="General"
+        title="Attention lens"
+        chip={sourceBadge(attentionPromoteOnTurnEnd)}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Move a thread to the top when its turn finishes"
+            sub="Attention ranks threads by when their current turn started, so streaming output, sub-agents, and tool results never re-sort the queue mid-turn. Turn this off to keep a thread parked where its turn started until the next one begins."
+            source={sourceBadge(attentionPromoteOnTurnEnd)}
+            control={
+              <SettingsSwitch
+                checked={attentionPromoteOnTurnEnd.value}
+                disabled={props.saving}
+                label="Move a thread to the top when its turn finishes"
+                onChange={(next) => {
+                  void props.onAttentionPromoteOnTurnEndChange(next);
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
 
       <SettingsSection
         eyebrow="General"

@@ -85,6 +85,7 @@ type StoredChatReplyComposer =
 export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
+    attentionPromoteOnTurnEnd?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
@@ -614,6 +615,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "confirm_quit_with_in_progress_threads"],
       patch.general.confirmQuitWithInProgressThreads,
+    );
+  }
+  if (patch.general?.attentionPromoteOnTurnEnd !== undefined) {
+    set(
+      ["general", "attention_promote_on_turn_end"],
+      patch.general.attentionPromoteOnTurnEnd,
     );
   }
   if (patch.general?.pdfAnalysisEnabled !== undefined) {
@@ -1524,6 +1531,9 @@ function normalizeDesktopConfig(
       confirmQuitWithInProgressThreads: readBoolean(
         general?.confirm_quit_with_in_progress_threads,
       ),
+      attentionPromoteOnTurnEnd: readBoolean(
+        general?.attention_promote_on_turn_end,
+      ),
       pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
       hotCpuProfilingEnabled: readBoolean(general?.hot_cpu_profiling_enabled),
@@ -1860,6 +1870,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     config.general?.hotCpuProfilingHeapSnapshotLimit;
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
+  const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const appearance = config.general?.appearance;
@@ -1875,6 +1886,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingCaptureHeapSnapshot !== undefined ||
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
+    attentionPromoteOnTurnEnd !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     appearanceDefined ||
@@ -1909,6 +1921,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     if (confirmQuitWithInProgressThreads !== undefined) {
       pruned.general.confirmQuitWithInProgressThreads =
         confirmQuitWithInProgressThreads;
+    }
+    if (attentionPromoteOnTurnEnd !== undefined) {
+      pruned.general.attentionPromoteOnTurnEnd = attentionPromoteOnTurnEnd;
     }
     if (pdfAnalysisEnabled !== undefined) {
       pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;

@@ -368,6 +368,12 @@ export type DesktopAppearanceSnapshot = {
 export type DesktopGeneralSettingsSnapshot = {
   confirmQuitWithInProgressThreads: DesktopSettingsValue<boolean>;
   /**
+   * Attention-lens ordering is pinned to the start of a thread's turn so a
+   * streaming turn cannot re-sort the queue under the operator. This controls
+   * the one exception: whether a finished turn earns one last move to the top.
+   */
+  attentionPromoteOnTurnEnd: DesktopSettingsValue<boolean>;
+  /**
    * Prefer PwrAgent's bounded, visual PDF analysis flow over handing a raw
    * local PDF reference to the model.
    */
@@ -883,6 +889,7 @@ export type DesktopSettingsSnapshot = {
 export type DesktopSettingsConfigPatch = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
+    attentionPromoteOnTurnEnd?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;

@@ -68,6 +68,7 @@ import {
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
+import { useAttentionOrderedThreads } from "./attention-order";
 import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
 import {
@@ -93,6 +94,12 @@ type SidebarProps = {
   error?: string;
   inboxThreads?: NavigationThreadSummary[];
   recentThreads?: NavigationThreadSummary[];
+  /**
+   * Give a thread one last move to the top of the Attention lens when its turn
+   * finishes. Defaults on, matching the settings default, so a Sidebar rendered
+   * before the settings snapshot arrives does not flip order once it lands.
+   */
+  attentionPromoteOnTurnEnd?: boolean;
   /** A snapshot exists even if its latest refresh failed. */
   loaded?: boolean;
   loading: boolean;
@@ -428,16 +435,23 @@ export function Sidebar(props: SidebarProps) {
   const updatedOrderThreads = props.inboxThreads ?? props.threads;
   /**
    * The Attention lens: everything with a live turn or waiting to be
-   * reviewed, in most-recently-updated order (the same order the Updated lens
-   * uses) so the freshest work sits at the top of the queue.
+   * reviewed. Membership comes off the most-recently-updated order, but the
+   * rows are then ranked per turn rather than per update — see
+   * `attention-order.ts` for why a work queue must not re-sort itself while a
+   * turn streams.
    */
-  const attentionThreads = useMemo(
+  const attentionMembers = useMemo(
     () =>
       updatedOrderThreads.filter((thread) =>
         isThreadNeedingAttention(thread, props.thinkingThreadKeys),
       ),
     [props.thinkingThreadKeys, updatedOrderThreads],
   );
+  const attentionThreads = useAttentionOrderedThreads({
+    promoteOnTurnEnd: props.attentionPromoteOnTurnEnd ?? true,
+    threads: attentionMembers,
+    thinkingThreadKeys: props.thinkingThreadKeys,
+  });
   /**
    * The Drafts lens: everything holding unsent composer text, in the same
    * most-recently-updated order Attention uses. Filtered from the very map the

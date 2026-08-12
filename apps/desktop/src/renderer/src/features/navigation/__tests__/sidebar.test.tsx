@@ -2343,6 +2343,52 @@ describe("Sidebar", () => {
       ]);
     });
 
+    it("holds row order while live turns keep re-sorting the snapshot", () => {
+      // The snapshot arrives in most-recently-updated order, and a running
+      // turn rewrites `updatedAt` on every streamed item, so the incoming
+      // order flips constantly while two turns are live. The lens ranks by
+      // turn instead — see attention-order.ts — so the rows must not move.
+      const secondActiveThread = {
+        ...activeThread,
+        id: "thread-active-2",
+        title: "Second active thread",
+      };
+      const props = {
+        backends,
+        browseMode: "attention" as const,
+        createThreadError: undefined,
+        directories,
+        launchpadError: undefined,
+        loading: false,
+        creatingThread: undefined,
+        selectedItemKey: undefined,
+        onBrowseModeChange: () => undefined,
+        onCreateThread: async () => undefined,
+        onOpenLaunchpad: async () => undefined,
+        onSelectThread: () => undefined,
+      };
+      const attentionRowTitles = () => {
+        const browseSection = screen.getByRole("region", {
+          name: "Thread browser",
+        });
+        return within(browseSection as HTMLElement)
+          .getAllByRole("button", {
+            name: /Active thread|Second active thread/i,
+          })
+          .map((row) => (row.textContent?.includes("Second") ? "second" : "first"));
+      };
+
+      const ordered = [activeThread, secondActiveThread];
+      const { rerender } = render(
+        <Sidebar {...props} inboxThreads={ordered} threads={ordered} />,
+      );
+      expect(attentionRowTitles()).toEqual(["first", "second"]);
+
+      const reordered = [secondActiveThread, activeThread];
+      rerender(<Sidebar {...props} inboxThreads={reordered} threads={reordered} />);
+      expect(attentionRowTitles()).toEqual(["first", "second"]);
+    });
+
     it("reports both counts on the tab and switches to the lens", () => {
       const onBrowseModeChange = vi.fn();
       renderAttention("inbox", onBrowseModeChange);

@@ -663,6 +663,38 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveConfirmQuitWithInProgressThreads()).toBe(false);
   });
 
+  it("defaults the Attention end-of-turn promotion on and persists overrides", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.general.attentionPromoteOnTurnEnd).toEqual({
+      value: true,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      general: {
+        attentionPromoteOnTurnEnd: false,
+      },
+    });
+
+    const saved = fs.readFileSync(configPath, "utf8");
+    expect(saved).toContain("[general]");
+    expect(saved).toContain("attention_promote_on_turn_end = false");
+    expect(
+      (await service.readSettings()).general.attentionPromoteOnTurnEnd,
+    ).toEqual({
+      value: false,
+      source: "config",
+    });
+  });
+
   it("round-trips appearance through writeConfigPatch + readSettings + readBootstrapAppearance", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
