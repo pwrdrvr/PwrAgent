@@ -177,6 +177,10 @@ const releaseScript = readFileSync(releaseScriptPath, "utf8");
 const releaseWorkflow = readFileSync(releaseWorkflowPath, "utf8");
 const trustedSigningSetup = readFileSync(trustedSigningSetupPath, "utf8");
 const windowsArchiveScript = readFileSync(windowsArchiveScriptPath, "utf8");
+const asarVerifier = readFileSync(
+  resolve(repoRoot, "apps/desktop/scripts/verify-asar-contents.mjs"),
+  "utf8",
+);
 const desktopReleaseRunbook = readFileSync(desktopReleaseRunbookPath, "utf8");
 
 const desktopScripts = desktopPackage.scripts || {};
@@ -379,6 +383,7 @@ if (releaseScript.includes("--win cannot be combined with --sign-stage-only")) {
 for (const expected of [
   "--config.node-linker=hoisted",
   "signStageOnly && win",
+  "PWRAGENT_ASAR_MODULE_ROOT: stageDir",
 ]) {
   if (!releaseScript.includes(expected)) {
     fail(`apps/desktop/scripts/release.mjs must contain ${JSON.stringify(expected)} for Windows signing input isolation`);
@@ -394,6 +399,9 @@ for (const expected of [
   if (!windowsArchiveScript.includes(expected)) {
     fail(`${windowsArchiveScriptPath} must contain ${JSON.stringify(expected)} for Windows signing input isolation`);
   }
+}
+if (!asarVerifier.includes("PWRAGENT_ASAR_MODULE_ROOT")) {
+  fail("apps/desktop/scripts/verify-asar-contents.mjs must accept the staged ASAR module root");
 }
 for (const credential of [
   "vars.WIN_AZURE_SIGN_PUBLISHER_NAME",

@@ -142,8 +142,10 @@ seven job definitions (the Linux package job fans out across two architectures):
    `windows-signing` environment. It does not check out source or install
    project dependencies/lifecycle scripts. It verifies and expands the exact
    prepared archive, installs `TrustedSigning`, and runs `release.mjs --win
-   --sign-stage-only --no-publish --require-signing`. The Azure service-principal
-   secrets are injected only into this signing-aware packaging step.
+   --sign-stage-only --no-publish --require-signing`. The post-package ASAR
+   verifier resolves from the staged toolchain, not the workspace. The Azure
+   service-principal secrets are injected only into this signing-aware packaging
+   step.
 6. `Publish Linux DEB artifacts`, which waits for the macOS publish job so the
    GitHub Release exists, combines both Linux architecture artifacts, generates
    `SHA256SUMS`, and uploads the `.deb` files plus checksums to the same
