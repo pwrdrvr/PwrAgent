@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.1-prerelease.2 - 2026-08-12
+
+- Windows Installer - Fixed the protected Azure signing pipeline to explicitly install and verify its signing tool before packaging, while keeping source preparation outside the credentials-bearing job.
+- Provider Onboarding - Improved discovery and setup guidance for Codex, Gemini, Kimi, Qwen, and Grok across macOS, Linux, and Windows.
+- Windows Agent Launches - Made Codex and ACP command shims launch reliably on Windows, including paths and arguments containing shell metacharacters.
+- ACP Git Branches - Adopt branch changes only for the completed turn, preventing delayed provider events from clearing newer work.
+- Composer Drafts - Reduced draft-journal write frequency and preserved recoverable drafts more reliably across continuous edits, app changes, and failed saves.
+
 ## v1.0.1-prerelease.1 - 2026-08-11
 
 - Windows Installer - Added Azure Artifact Signing for the Windows NSIS installer. Release builds now fail rather than silently producing an unsigned installer; the signed installer remains a workflow artifact for this first validation run.
