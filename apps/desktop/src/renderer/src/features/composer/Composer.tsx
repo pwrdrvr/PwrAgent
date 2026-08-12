@@ -2037,6 +2037,17 @@ type LaunchpadBranchOption = {
   current?: boolean;
   /** The repository's default branch (origin/HEAD, or main/master/...). */
   isDefault?: boolean;
+  /**
+   * Display text for rows whose `name` is a sentinel rather than a branch
+   * (the handoff dialog's `"HEAD"` → "Detached HEAD"). Falls back to `name`.
+   */
+  label?: string;
+  /**
+   * Hold the row above the recency-ordered list no matter what is selected.
+   * A sentinel row has no commit date, so recency ordering would drop it in
+   * an arbitrary spot once the operator picks a real branch.
+   */
+  pinned?: boolean;
 };
 
 /**
@@ -2069,10 +2080,11 @@ function BranchPicker(props: {
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
 
   const normalizedQuery = query.trim().toLowerCase();
-  // Pin the anchor branches — the one you'll branch off (selected), the repo
-  // default, and the checked-out branch — to the top, deduped in that
-  // priority order. Everything else follows in recency order. When the three
-  // anchors are the same branch (the common case) this is a single pinned row.
+  // Pin the anchor branches — caller-pinned sentinels, the one you'll branch
+  // off (selected), the repo default, and the checked-out branch — to the top,
+  // deduped in that priority order. Everything else follows in recency order.
+  // When the three anchors are the same branch (the common case) this is a
+  // single pinned row.
   const { pinnedOptions, restOptions } = useMemo(() => {
     const byName = new Map(props.options.map((option) => [option.name, option]));
     const pinnedNames = new Set<string>();
@@ -2083,6 +2095,11 @@ function BranchPicker(props: {
         pinned.push(option);
       }
     };
+    for (const option of props.options) {
+      if (option.pinned) {
+        addPin(option);
+      }
+    }
     addPin(byName.get(props.value));
     addPin(props.options.find((option) => option.isDefault));
     addPin(props.options.find((option) => option.current));
@@ -2091,7 +2108,9 @@ function BranchPicker(props: {
   }, [props.options, props.value]);
 
   const matchesQuery = (option: LaunchpadBranchOption): boolean =>
-    !normalizedQuery || option.name.toLowerCase().includes(normalizedQuery);
+    !normalizedQuery
+    || option.name.toLowerCase().includes(normalizedQuery)
+    || Boolean(option.label?.toLowerCase().includes(normalizedQuery));
   const visiblePinned = pinnedOptions.filter(matchesQuery);
   const visibleRest = restOptions.filter(matchesQuery);
   const flatVisible = [...visiblePinned, ...visibleRest];
@@ -2182,7 +2201,7 @@ function BranchPicker(props: {
     const relativeTime = formatBranchRelativeTime(option.lastCommitAt, nowMs);
     return (
       <button
-        aria-label={option.name}
+        aria-label={option.label ?? option.name}
         aria-selected={isSelected}
         className={[
           "branch-picker__option",
@@ -2203,7 +2222,9 @@ function BranchPicker(props: {
         <span aria-hidden="true" className="branch-picker__option-icon">
           <BranchIcon size={12} />
         </span>
-        <span className="branch-picker__option-name">{option.name}</span>
+        <span className="branch-picker__option-name">
+          {option.label ?? option.name}
+        </span>
         {option.current ? (
           <span
             aria-hidden="true"
@@ -2265,7 +2286,7 @@ function BranchPicker(props: {
           <BranchIcon size={13} />
         </span>
         <span className="composer-dropdown__label">
-          {selectedOption?.name ?? props.value}
+          {selectedOption?.label ?? selectedOption?.name ?? props.value}
         </span>
         <span aria-hidden="true" className="composer-dropdown__chevron">
           ⌄
@@ -2303,7 +2324,10 @@ function BranchPicker(props: {
             </div>
           ) : null}
           <div
-            aria-label={props.ariaLabel}
+            // Not bare `ariaLabel` — that name belongs to the trigger, and
+            // duplicating it makes every by-name query ambiguous while the
+            // menu is open. Mirrors ReviewBranchPicker.
+            aria-label={`${props.ariaLabel} options`}
             className="branch-picker__list"
             id={listboxId}
             role="listbox"
@@ -9301,10 +9325,15 @@ export function Composer(props: ComposerProps) {
       : props.directory?.gitStatus?.currentBranch ??
         props.thread?.observedGitBranch ??
         props.thread?.gitBranch;
-  const branchOptions = getLeaveLocalBranchOptions({
-    currentBranch: sourceBranch,
-    directory: props.directory,
-  });
+  const leaveLocalBranchOptions = useMemo(
+    () =>
+      buildLeaveLocalBranchPickerOptions({
+        currentBranch: sourceBranch,
+        directory: props.directory,
+      }),
+    [sourceBranch, props.directory],
+  );
+  const branchOptions = leaveLocalBranchOptions.map((option) => option.name);
   const canHandoffThreadWorkspace = Boolean(
     props.thread &&
       threadWorkspace &&
@@ -10016,22 +10045,17 @@ export function Composer(props: ComposerProps) {
                     </button>
                   </div>
                   {localHandoffStrategy === "move-branch" ? (
-                    <label className="workspace-handoff-dialog__field">
-                      Leave current checkout on
-                      <select
-                        aria-label="Leave current checkout on"
-                        className="composer__select"
-                        disabled={handoffSubmitting || branchOptions.length === 0}
+                    <div className="workspace-handoff-dialog__field">
+                      <span aria-hidden="true">Leave current checkout on</span>
+                      <BranchPicker
+                        ariaLabel="Leave current checkout on"
+                        className="branch-picker--dialog"
+                        disabled={handoffSubmitting}
+                        options={leaveLocalBranchOptions}
                         value={leaveLocalBranch}
-                        onChange={(event) => setLeaveLocalBranch(event.target.value)}
-                      >
-                        {branchOptions.map((branch) => (
-                          <option key={branch} value={branch}>
-                            {formatLeaveLocalBranchOption(branch)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        onChange={setLeaveLocalBranch}
+                      />
+                    </div>
                   ) : null}
                   {localHandoffStrategy === "new-branch" ? (
                     <label className="workspace-handoff-dialog__field">
@@ -13119,6 +13143,36 @@ function getLeaveLocalBranchOptions(params: {
   return ["HEAD", ...new Set(ordered)];
 }
 
-function formatLeaveLocalBranchOption(branch: string): string {
-  return branch === "HEAD" ? "Detached HEAD" : branch;
+/**
+ * Options for the handoff dialog's "leave current checkout on" picker.
+ *
+ * `getLeaveLocalBranchOptions` decides *which* refs are offered — it already
+ * drops the branch being moved and (via `handoffBranches`) anything another
+ * worktree holds. This only enriches those names with the recency and
+ * default-branch metadata the picker renders, so the two stay in sync.
+ *
+ * The leading `"HEAD"` sentinel is a checkout state rather than a branch, so
+ * it carries a display label and stays pinned above the recency list.
+ */
+function buildLeaveLocalBranchPickerOptions(params: {
+  currentBranch?: string;
+  directory?: NavigationDirectorySummary;
+}): LaunchpadBranchOption[] {
+  const details = params.directory?.gitStatus?.branchDetails ?? [];
+  const detailByName = new Map(details.map((detail) => [detail.name, detail]));
+  const defaultBranch = params.directory?.gitStatus?.defaultBranch;
+  return getLeaveLocalBranchOptions(params).map((name) => {
+    if (name === "HEAD") {
+      return { name, label: "Detached HEAD", pinned: true };
+    }
+    const detail = detailByName.get(name);
+    return {
+      name,
+      lastCommitAt: detail?.lastCommitAt,
+      // Only reachable on the `branches` fallback path — `handoffBranches`
+      // has already filtered in-use branches out.
+      inUse: detail?.inUse,
+      isDefault: defaultBranch ? name === defaultBranch : false,
+    };
+  });
 }

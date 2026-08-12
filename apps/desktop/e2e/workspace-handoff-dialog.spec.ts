@@ -43,7 +43,11 @@ test("centers the local-to-worktree handoff dialog in the window", async () => {
     await expect(dialog).toContainText("main");
 
     await dialog.getByRole("radio", { name: /Handoff Current Branch/ }).click();
-    await expect(dialog.getByLabel("Leave current checkout on")).toHaveValue("HEAD");
+    // `exact` matters: the branch picker's listbox is labelled
+    // "Leave current checkout on options", and getByLabel matches substrings.
+    await expect(
+      dialog.getByLabel("Leave current checkout on", { exact: true }),
+    ).toHaveAttribute("data-value", "HEAD");
 
     await dialog.getByRole("radio", { name: /Handoff to New Branch/ }).click();
     await expect(dialog.getByLabel("New branch name")).toHaveValue(
