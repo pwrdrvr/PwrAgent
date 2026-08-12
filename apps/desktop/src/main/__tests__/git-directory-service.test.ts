@@ -1261,6 +1261,73 @@ describe("GitDirectoryService", () => {
     expect(path.basename(path.dirname(second))).toMatch(/-2$/);
   });
 
+  it("reserves distinct paths for concurrent allocations in the same millisecond", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const fixedTimestamp = 1730000000000;
+
+    const [first, second] = await Promise.all([
+      computeWorktreePath({
+        repoRoot: repoDir,
+        storage: "in-repo",
+        timestamp: fixedTimestamp,
+      }),
+      computeWorktreePath({
+        repoRoot: repoDir,
+        storage: "in-repo",
+        timestamp: fixedTimestamp,
+      }),
+    ]);
+
+    expect(first).not.toBe(second);
+    expect(path.basename(first)).toBe(path.basename(second));
+    expect(
+      [path.basename(path.dirname(first)), path.basename(path.dirname(second))].sort(),
+    ).toEqual([
+      fixedTimestamp.toString(36),
+      `${fixedTimestamp.toString(36)}-2`,
+    ]);
+  });
+
+  it("creates distinct worktrees for concurrent launchpads in the same millisecond", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1730000000000);
+
+    try {
+      const [first, second] = await Promise.all([
+        service.prepareLaunchpadWorkspace({
+          directoryKind: "directory",
+          directoryLabel: "FixtureRepo",
+          directoryPath: repoDir,
+          workMode: "worktree",
+          branchName: "main",
+        }),
+        service.prepareLaunchpadWorkspace({
+          directoryKind: "directory",
+          directoryLabel: "FixtureRepo",
+          directoryPath: repoDir,
+          workMode: "worktree",
+          branchName: "main",
+        }),
+      ]);
+
+      expect(first.workMode).toBe("worktree");
+      expect(second.workMode).toBe("worktree");
+      expect(first.cwd).toBeDefined();
+      expect(second.cwd).toBeDefined();
+      expect(first.cwd).not.toBe(second.cwd);
+      expect(runGit(first.cwd!, ["rev-parse", "HEAD"])).toBe(
+        runGit(second.cwd!, ["rev-parse", "HEAD"]),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("removes the worktree and prunes the empty hash parent on cleanup", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
