@@ -13,6 +13,7 @@ import { getIntegratedTerminalQuitSnapshot } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
 import {
+  focusActiveQuitConfirmationDialog,
   showQuitConfirmationDialog,
   type QuitBlockerItem,
   type QuitConfirmationDialogResult,
@@ -55,6 +56,11 @@ export type QuitManagerDependencies = {
     items?: QuitBlockerItem[];
     parent?: BrowserWindow | null;
   }) => Promise<QuitConfirmationDialogResult>;
+  /**
+   * Raise the confirmation prompt that is already open. Returns false when
+   * there is nothing to raise. See the `promptPromise` branch in `requestQuit`.
+   */
+  focusPendingConfirmation?: () => boolean;
   getConfirmationEnabled: () => boolean;
   getFocusedWindow?: () => BrowserWindow | null;
   getQuitBlockers: () => QuitBlockerSnapshot;
@@ -122,6 +128,18 @@ export function createQuitManager(
       if (options.performQuit) {
         pendingPerformQuit = options.performQuit;
       }
+      // Asking again has to do *something*. Any deliberate interaction with the
+      // prompt — a click, a scroll, a keystroke — cancels its countdown for
+      // good and clears the main-process ceiling with it, so from that point the
+      // only thing that ever settles this quit is the user answering the dialog.
+      // It is a small frameless window that can end up behind the main window or
+      // on another Space, and a repeat request that silently returns this
+      // pending promise reads as an app that refuses to quit. Raise it instead.
+      const raised = dependencies.focusPendingConfirmation?.() ?? false;
+      dependencies.log.info?.("quit requested while confirmation is open", {
+        raisedConfirmation: raised,
+        source: options.source,
+      });
       return await promptPromise;
     }
 
@@ -289,6 +307,7 @@ function splitQuitThreadKey(threadKey: string): {
 const quitLog = getMainLogger("pwragent:quit");
 
 export const appQuitManager = createQuitManager({
+  focusPendingConfirmation: () => focusActiveQuitConfirmationDialog(),
   getConfirmationEnabled: () =>
     getDesktopSettingsService().resolveConfirmQuitWithInProgressThreads(),
   getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
