@@ -42,9 +42,14 @@ if (!existsSync(asarPath)) {
   process.exit(1);
 }
 
-// @electron/asar is a transitive dependency of electron-builder, so it resolves
-// from the desktop package's node_modules without an extra install step.
-const require = createRequire(import.meta.url);
+// @electron/asar is a transitive dependency of electron-builder. The protected
+// Windows signing job receives a self-contained staged toolchain rather than
+// the workspace node_modules, so allow release.mjs to resolve from that stage
+// without reinstalling dependencies around signing credentials.
+const asarModuleRoot = process.env.PWRAGENT_ASAR_MODULE_ROOT?.trim();
+const require = asarModuleRoot
+  ? createRequire(resolve(asarModuleRoot, "package.json"))
+  : createRequire(import.meta.url);
 const asar = require("@electron/asar");
 const listing = normalizeAsarListing(
   asar.listPackage(asarPath, { isPack: false }),
