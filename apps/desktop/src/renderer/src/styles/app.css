@@ -698,6 +698,13 @@ textarea,
   background: var(--border-subtle);
 }
 
+.new-thread-menu__section-label {
+  padding: 4px 10px 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 /* macOS floats the traffic lights over the cluster's left. Match the sidebar
    masthead's wordmark offset exactly — its 16px sidebar gutter + 80px
    stoplight reservation — so the wordmark sits in the same spot whether the

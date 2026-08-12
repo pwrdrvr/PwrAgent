@@ -211,6 +211,7 @@ export function registerFederationIpcHandlers(): void {
       }
       const window = createFederationWindow({
         peer,
+        ...(request.initialLaunchpad ? { initialLaunchpad: true } : {}),
         initialThread: request.initialThread
           ? {
               backend: request.initialThread.backend,

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FederationLoadStatus } from "@pwragent/shared";
-import { FEDERATION_READ_INSTANCE_LOAD_CHANNEL } from "../../shared/ipc";
+import {
+  FEDERATION_OPEN_WINDOW_CHANNEL,
+  FEDERATION_READ_INSTANCE_LOAD_CHANNEL,
+} from "../../shared/ipc";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 
@@ -23,6 +26,7 @@ const runtime = {
   connectedPeerTargets: vi.fn(),
   remoteBackend: vi.fn(),
 };
+const createFederationWindow = vi.hoisted(() => vi.fn());
 
 vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => runtime,
@@ -31,7 +35,7 @@ vi.mock("../federation/federation-tailscale", () => ({
   getFederationTailscaleService: () => ({}),
 }));
 vi.mock("../federation/federation-window", () => ({
-  createFederationWindow: vi.fn(),
+  createFederationWindow,
 }));
 
 const localLoad: FederationLoadStatus = {
@@ -69,6 +73,7 @@ describe("federation read-instance-load ipc", () => {
       .mockReturnValue({ getLoadStatus: async () => localLoad });
     runtime.connectedPeerTargets.mockReset().mockReturnValue([]);
     runtime.remoteBackend.mockReset();
+    createFederationWindow.mockReset().mockReturnValue({ id: 7 });
   });
 
   it("samples locally when no instance id is given", async () => {
@@ -152,5 +157,32 @@ describe("federation read-instance-load ipc", () => {
       invokeReadInstanceLoad({ instanceId: "not a valid id!" }),
     ).rejects.toThrow("Invalid federation instance id");
     expect(runtime.health).not.toHaveBeenCalled();
+  });
+
+  it("opens a connected instance directly into its new-thread launchpad", async () => {
+    const peer = {
+      target: { scope: "remote" as const, instanceId: "pwr_studio" },
+      label: "Studio Mac / work",
+      capabilities: ["remote_window", "thread_navigation"],
+    };
+    runtime.connectedPeerTargets.mockReturnValue([peer]);
+    const { registerFederationIpcHandlers } = await import("../ipc/federation");
+    registerFederationIpcHandlers();
+
+    await expect(
+      handlers.get(FEDERATION_OPEN_WINDOW_CHANNEL)!({}, {
+        target: peer.target,
+        initialLaunchpad: true,
+      }),
+    ).resolves.toEqual({
+      opened: true,
+      windowId: 7,
+      target: peer.target,
+    });
+    expect(createFederationWindow).toHaveBeenCalledWith({
+      peer,
+      initialLaunchpad: true,
+      initialThread: undefined,
+    });
   });
 });

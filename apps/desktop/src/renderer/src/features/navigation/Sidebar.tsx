@@ -141,6 +141,11 @@ type SidebarProps = {
   onBrowseModeChange: (browseMode: BrowseMode) => void;
   onCreateThread: () => Promise<void>;
   onCreateThreadWithoutDirectory?: () => Promise<void>;
+  onCreateThreadOnFederationTarget?: (instanceId: string) => Promise<void>;
+  newThreadFederationTargets?: readonly {
+    instanceId: string;
+    label: string;
+  }[];
   onAddProjectDirectory?: () => Promise<void>;
   addingProjectDirectory?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
@@ -1615,6 +1620,8 @@ export function Sidebar(props: SidebarProps) {
             onAddProjectDirectory={props.onAddProjectDirectory}
             onCreateThread={() => props.onCreateThread()}
             onCreateThreadWithoutDirectory={props.onCreateThreadWithoutDirectory}
+            onCreateThreadOnTarget={props.onCreateThreadOnFederationTarget}
+            remoteTargets={props.newThreadFederationTargets}
           />
         </div>
       </header>

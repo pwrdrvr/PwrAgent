@@ -15,6 +15,7 @@ import {
   buildThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
   parseThreadIdentityKey,
   type AppServerBackendKind,
@@ -337,6 +338,53 @@ function DesktopAppShell(props: {
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
+  const [newThreadFederationTargets, setNewThreadFederationTargets] = useState<
+    Array<{ instanceId: string; label: string }>
+  >([]);
+  const refreshNewThreadFederationTargets = useCallback(async (): Promise<void> => {
+    if (
+      readRendererFederationTarget()
+      || !desktopApi?.openFederationWindow
+      || !desktopApi.readFederationHealth
+    ) {
+      setNewThreadFederationTargets([]);
+      return;
+    }
+    const { health } = await desktopApi.readFederationHealth({});
+    const visibleInstances = [
+      ...health.peers,
+      ...(health.localLabel
+        ? [{
+            label: health.localLabel,
+            profileName: health.localProfileName,
+          }]
+        : []),
+    ];
+    setNewThreadFederationTargets(
+      health.peers
+        .filter(
+          (peer) =>
+            peer.status === "connected"
+            && !peer.revokedAt
+            && peer.capabilities.includes("remote_window")
+            && peer.capabilities.includes("thread_navigation"),
+        )
+        .map((peer) => ({
+          instanceId: peer.id,
+          label: formatFederationPeerDisplayLabel(peer, visibleInstances),
+        })),
+    );
+  }, [desktopApi]);
+  useEffect(() => {
+    void refreshNewThreadFederationTargets().catch(() => {
+      setNewThreadFederationTargets([]);
+    });
+    return desktopApi?.onWindowFocus?.(() => {
+      void refreshNewThreadFederationTargets().catch(() => {
+        setNewThreadFederationTargets([]);
+      });
+    });
+  }, [desktopApi, refreshNewThreadFederationTargets]);
   const resumePrAutoDispatchBudget = useCallback(() => {
     void desktopApi?.resumePrAutoDispatchBudget?.()
       .then((status) => {
@@ -1859,6 +1907,23 @@ function DesktopAppShell(props: {
             await navigation.createThread(undefined, "default", {
               forceWorkspace: true,
             });
+          }}
+          newThreadFederationTargets={newThreadFederationTargets}
+          onCreateThreadOnFederationTarget={async (instanceId) => {
+            try {
+              await desktopApi?.openFederationWindow?.({
+                target: { scope: "remote", instanceId },
+                initialLaunchpad: true,
+              });
+            } catch (error) {
+              showAppNotice({
+                id: `new-thread-federation-target:${instanceId}`,
+                title: "Could not open new thread",
+                message: error instanceof Error ? error.message : String(error),
+                tone: "error",
+                transientSlot: "new-thread-federation-target",
+              });
+            }
           }}
           onAddProjectDirectory={readRendererFederationTarget()
             ? undefined

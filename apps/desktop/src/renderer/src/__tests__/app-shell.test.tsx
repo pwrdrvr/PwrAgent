@@ -15,6 +15,7 @@ import type {
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
   NavigationSnapshot,
+  OpenFederationWindowRequest,
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
@@ -314,6 +315,69 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { level: 2, name: "Search" }),
     ).toBeInTheDocument();
+  });
+
+  it("starts a new thread on a selected federation machine and profile", async () => {
+    const openFederationWindow = vi.fn(async (request: OpenFederationWindowRequest) => ({
+      opened: true,
+      target: request.target,
+      windowId: 7,
+    }));
+    const readFederationHealth = vi.fn(async () => ({
+      health: {
+        enabled: true,
+        role: "gateway" as const,
+        status: "connected" as const,
+        instanceId: "local-instance",
+        localLabel: "Studio Mac",
+        localProfileName: "default",
+        peers: [
+          {
+            id: "studio-work",
+            label: "Studio Mac",
+            profileName: "work",
+            role: "client" as const,
+            status: "connected" as const,
+            capabilities: ["remote_window", "thread_navigation"] as const,
+          },
+        ],
+      },
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onWindowFocus: () => () => undefined,
+        openFederationWindow,
+        readFederationHealth,
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
+
+    const button = screen.getByRole("button", { name: "New thread" });
+    fireEvent.mouseEnter(button.parentElement as HTMLElement);
+    fireEvent.click(await screen.findByRole("menuitem", {
+      name: "New chat on Studio Mac / work",
+    }));
+
+    expect(openFederationWindow).toHaveBeenCalledWith({
+      target: { scope: "remote", instanceId: "studio-work" },
+      initialLaunchpad: true,
+    });
   });
 
   it("surfaces GitHub organization SAML enforcement as a sticky error toast", async () => {
