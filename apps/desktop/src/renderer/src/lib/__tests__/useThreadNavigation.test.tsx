@@ -904,7 +904,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("coalesces repeated turn lifecycle notifications into one navigation refresh", async () => {
+  it("coalesces transcript-affecting notifications into one navigation refresh", async () => {
     const listeners = new Set<(event: any) => void>();
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
@@ -957,7 +957,12 @@ describe("useThreadNavigation", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      for (const method of ["turn/completed", "turn/failed", "turn/cancelled"] as const) {
+      for (const method of [
+        "turn/completed",
+        "turn/failed",
+        "turn/cancelled",
+        "thread/questionnaireActivity/updated",
+      ] as const) {
         for (const listener of listeners) {
           listener({
             backend: "codex",

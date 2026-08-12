@@ -106,6 +106,13 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * visible across reconciliation and restart.
    */
   turnFailureLog?: ThreadTurnFailure[];
+  /**
+   * Per-thread questionnaire audit log. Persisted via the overlay store
+   * and rendered as synthetic "Previous work" transcript activity so
+   * request-user-input interactions stay visible even when the backend
+   * rollout omits them from durable transcript items.
+   */
+  questionnaireActivityLog?: ThreadQuestionnaireActivity[];
   optimisticUserMessage?: {
     text: string;
     imageParts?: AppServerThreadImagePart[];
@@ -1394,6 +1401,14 @@ export type ThreadOverlayState = {
    * a synthetic `turn-failed:<turnId>` transcript activity entry.
    */
   turnFailureLog?: ThreadTurnFailure[];
+  /**
+   * Per-thread questionnaire audit log. Persisted to the overlay store,
+   * capped at `MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES` (oldest-first
+   * eviction). Each entry records a request-user-input questionnaire and
+   * its terminal answer/cancel state so cross-surface input remains visible
+   * in the transcript after hydration.
+   */
+  questionnaireActivityLog?: ThreadQuestionnaireActivity[];
 };
 
 /**
@@ -1504,6 +1519,52 @@ export type ThreadTurnFailure = {
    * transcript entry timestamp so the warning lands where it happened.
    */
   occurredAt: number;
+};
+
+/**
+ * Maximum number of questionnaire interactions retained per thread.
+ * Kept separate from the other audit streams so a thread with many
+ * user-input turns does not evict permission or messaging history.
+ */
+export const MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES = 100;
+
+export type ThreadQuestionnaireActivityStatus =
+  | "pending"
+  | "submitted"
+  | "cancelled";
+
+export type ThreadQuestionnaireActivityQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret?: boolean;
+  options?: Array<{
+    label: string;
+    description?: string;
+  }>;
+};
+
+export type ThreadQuestionnaireActivityAnswer = {
+  answers: string[];
+};
+
+/**
+ * One entry in the per-thread questionnaire audit log. `requestId`
+ * is the durable deduplication key. Answers are already redacted for
+ * secret questions before they are persisted here.
+ */
+export type ThreadQuestionnaireActivity = {
+  id: string;
+  requestId: string;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+  itemId?: string;
+  status: ThreadQuestionnaireActivityStatus;
+  questions: ThreadQuestionnaireActivityQuestion[];
+  answers?: Record<string, ThreadQuestionnaireActivityAnswer | undefined>;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type ThreadBranchDriftPair = {

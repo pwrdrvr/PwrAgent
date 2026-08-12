@@ -123,7 +123,9 @@ import {
   type CancelThreadExecutionModeQueueResponse,
   type ThreadMessagingBindingTransition,
   type ThreadPermissionTransition,
+  type ThreadQuestionnaireActivity,
   type ThreadTurnFailure,
+  type AppServerToolRequestUserInputNotification,
   type ThreadAgentMetadata,
   type MessagingThreadBindingSummary,
   DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY,
@@ -1425,6 +1427,7 @@ function normalizePositivePullRequestNumber(value: unknown): number | undefined 
 }
 
 type PendingServerRequest = {
+  notification: AppServerPendingRequestNotification;
   resolve: (response: SubmitServerRequestRequest["response"]) => void;
   reject: (error: Error) => void;
 };
@@ -2222,6 +2225,66 @@ function buildHeadlessAutomationRequestCancelResponse(
   }
 
   return { decision: "cancel" };
+}
+
+function questionnaireAnswerHasValue(answer: unknown): boolean {
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) {
+    return false;
+  }
+
+  const values = (answer as { answers?: unknown }).answers;
+  return (
+    Array.isArray(values) &&
+    values.some((value) => typeof value === "string" && value.trim().length > 0)
+  );
+}
+
+function sanitizeQuestionnaireResponseForOverlay(params: {
+  activity: ThreadQuestionnaireActivity;
+  response: unknown;
+}): AppServerToolRequestUserInputResponse["answers"] {
+  if (
+    !params.response ||
+    typeof params.response !== "object" ||
+    Array.isArray(params.response)
+  ) {
+    return {};
+  }
+  const rawAnswers = (params.response as { answers?: unknown }).answers;
+  if (!rawAnswers || typeof rawAnswers !== "object" || Array.isArray(rawAnswers)) {
+    return {};
+  }
+
+  const secretQuestionIds = new Set(
+    params.activity.questions
+      .filter((question) => question.isSecret === true)
+      .map((question) => question.id),
+  );
+  const sanitized: AppServerToolRequestUserInputResponse["answers"] = {};
+  for (const [questionId, rawAnswer] of Object.entries(
+    rawAnswers as Record<string, unknown>,
+  )) {
+    if (!rawAnswer || typeof rawAnswer !== "object" || Array.isArray(rawAnswer)) {
+      sanitized[questionId] = undefined;
+      continue;
+    }
+    const values = (rawAnswer as { answers?: unknown }).answers;
+    if (!Array.isArray(values)) {
+      sanitized[questionId] = undefined;
+      continue;
+    }
+    const answers = values
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    sanitized[questionId] = {
+      answers:
+        secretQuestionIds.has(questionId) && answers.length > 0
+          ? ["[REDACTED]"]
+          : answers,
+    };
+  }
+  return sanitized;
 }
 
 function readStatusType(value: unknown): string | undefined {
@@ -11057,6 +11120,70 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async recordQuestionnaireActivity(params: {
+    backend: AppServerBackendKind;
+    notification: AppServerToolRequestUserInputNotification;
+    response: SubmitServerRequestRequest["response"];
+  }): Promise<boolean> {
+    const notificationParams = params.notification.params;
+    const questions = Array.isArray(notificationParams.questions)
+      ? notificationParams.questions
+      : [];
+    if (questions.length === 0) {
+      return false;
+    }
+    const now = Date.now();
+    const pendingActivity: ThreadQuestionnaireActivity = {
+      id: `questionnaire:${notificationParams.requestId}`,
+      requestId: notificationParams.requestId,
+      threadId: notificationParams.threadId,
+      turnId: notificationParams.turnId,
+      itemId: notificationParams.itemId,
+      status: "pending",
+      questions: questions.map((question) => ({
+        id: question.id,
+        header: question.header,
+        question: question.question,
+        isOther: question.isOther,
+        isSecret: question.isSecret,
+        options:
+          question.options?.map((option) => ({
+            label: option.label,
+            description: option.description,
+          })) ?? undefined,
+      })),
+      createdAt: now,
+      updatedAt: now,
+    };
+    const answers = sanitizeQuestionnaireResponseForOverlay({
+      activity: pendingActivity,
+      response: params.response,
+    });
+    const hasAnswers = Object.values(answers).some(questionnaireAnswerHasValue);
+    const activity: ThreadQuestionnaireActivity = {
+      ...pendingActivity,
+      status: hasAnswers ? "submitted" : "cancelled",
+      answers,
+    };
+
+    try {
+      await this.overlayStore.appendQuestionnaireActivity({
+        backend: params.backend,
+        threadId: notificationParams.threadId,
+        activity,
+      });
+      return true;
+    } catch (error) {
+      backendRegistryLog.error("failed to record questionnaire activity", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        requestId: notificationParams.requestId,
+        threadId: notificationParams.threadId,
+      });
+      return false;
+    }
+  }
+
   /**
    * Flush any queued permission-mode change for the given thread.
    * Called from two places:
@@ -11761,6 +11888,15 @@ export class DesktopBackendRegistry {
       throw new Error(`No pending server request found for ${params.requestId}`);
     }
 
+    const recordedQuestionnaire =
+      pending.notification.method === "item/tool/requestUserInput"
+        ? await this.recordQuestionnaireActivity({
+            backend: params.backend,
+            notification:
+              pending.notification as AppServerToolRequestUserInputNotification,
+            response: params.response,
+          })
+        : false;
     this.pendingServerRequests.delete(key);
     pending.resolve(params.response);
     await this.emit({
@@ -11774,6 +11910,18 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    if (recordedQuestionnaire) {
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/questionnaireActivity/updated",
+          params: {
+            threadId: params.threadId,
+            requestId: params.requestId,
+          },
+        },
+      });
+    }
 
     return {
       backend: params.backend,
@@ -11800,44 +11948,45 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       requestId,
     });
+    const notification: AppServerPendingRequestNotification = {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: params.threadId,
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+        ...(params.itemId ? { itemId: params.itemId } : {}),
+        requestId,
+        questions: [
+          {
+            id: HANDOFF_CWD_TRUST_QUESTION_ID,
+            header: "Trust directory",
+            question: `Trust ${normalizedCwd} and allow Default Access agent threads to read, write, and delete files in it?`,
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: HANDOFF_CWD_TRUST_APPROVE_LABEL,
+                description:
+                  "Trust this directory for future Default Access agent work.",
+              },
+              {
+                label: params.cancelLabel ?? "Cancel handoff",
+                description:
+                  params.cancelDescription ??
+                  "Do not add this directory or start the handoff.",
+              },
+            ],
+          },
+        ],
+      },
+    };
 
     const response = await new Promise<SubmitServerRequestRequest["response"]>(
       (resolve, reject) => {
-        this.pendingServerRequests.set(key, { resolve, reject });
+        this.pendingServerRequests.set(key, { notification, resolve, reject });
 
         void this.emit({
           backend: params.backend,
-          notification: {
-            method: "item/tool/requestUserInput",
-            params: {
-              threadId: params.threadId,
-              ...(params.turnId ? { turnId: params.turnId } : {}),
-              ...(params.itemId ? { itemId: params.itemId } : {}),
-              requestId,
-              questions: [
-                {
-                  id: HANDOFF_CWD_TRUST_QUESTION_ID,
-                  header: "Trust directory",
-                  question: `Trust ${normalizedCwd} and allow Default Access agent threads to read, write, and delete files in it?`,
-                  isOther: false,
-                  isSecret: false,
-                  options: [
-                    {
-                      label: HANDOFF_CWD_TRUST_APPROVE_LABEL,
-                      description:
-                        "Trust this directory for future Default Access agent work.",
-                    },
-                    {
-                      label: params.cancelLabel ?? "Cancel handoff",
-                      description:
-                        params.cancelDescription ??
-                        "Do not add this directory or start the handoff.",
-                    },
-                  ],
-                },
-              ],
-            },
-          },
+          notification,
         }).catch((error) => {
           backendRegistryLog.error(
             "failed to publish handoff cwd trust request; keeping request pending",
@@ -17935,7 +18084,7 @@ export class DesktopBackendRegistry {
     });
 
     return await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
-      this.pendingServerRequests.set(key, { resolve, reject });
+      this.pendingServerRequests.set(key, { notification: request, resolve, reject });
 
       void this.emit({
         backend,

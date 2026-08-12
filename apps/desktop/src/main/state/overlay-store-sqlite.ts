@@ -25,6 +25,7 @@ import type {
   ThreadToolInvocationSummary,
   ThreadPermissionTransition,
   ThreadPricingSummary,
+  ThreadQuestionnaireActivity,
   ThreadSubAgentSummary,
   ThreadTurnFailure,
   ThreadUsageLineRecord,
@@ -36,6 +37,7 @@ import {
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
   MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
+  MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
@@ -2278,6 +2280,38 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async appendQuestionnaireActivity(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    activity: ThreadQuestionnaireActivity;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const existing = current.questionnaireActivityLog ?? [];
+    if (existing.some((entry) => entry.requestId === params.activity.requestId)) {
+      return current;
+    }
+    const nextLog = [
+      ...existing,
+      params.activity,
+    ].sort((left, right) => left.createdAt - right.createdAt);
+    const trimmed =
+      nextLog.length > MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES
+        ? nextLog.slice(nextLog.length - MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES)
+        : nextLog;
+    const nextState: ThreadOverlayState = {
+      ...current,
+      questionnaireActivityLog: trimmed,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadModelSettings(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -3883,6 +3917,7 @@ export type OverlayStoreLike = Pick<
   | "appendPermissionTransition"
   | "appendMessagingBindingTransition"
   | "appendTurnFailure"
+  | "appendQuestionnaireActivity"
   | "getLaunchpadDefaults"
   | "setLaunchpadDefaults"
   | "getNavigationBrowseMode"

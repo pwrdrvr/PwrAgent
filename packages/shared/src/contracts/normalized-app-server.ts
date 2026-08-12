@@ -1091,6 +1091,13 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/questionnaireActivity/updated";
+      params: {
+        threadId: string;
+        requestId: string;
+      };
+    }
+  | {
       method: "thread/tokenUsage/updated";
       params: {
         threadId: string;
