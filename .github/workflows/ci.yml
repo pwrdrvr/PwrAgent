@@ -33,6 +33,7 @@ jobs:
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
           lookup-only: "true"
 
   lint:
@@ -49,6 +50,7 @@ jobs:
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: License metadata
         timeout-minutes: 10
@@ -102,6 +104,7 @@ jobs:
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: Build
         timeout-minutes: 10
@@ -121,6 +124,7 @@ jobs:
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: Install ripgrep
         uses: ./.github/actions/install-ripgrep
@@ -246,6 +250,7 @@ jobs:
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: Run desktop replay-backed Electron tests
         timeout-minutes: 10
@@ -314,6 +319,7 @@ jobs:
         timeout-minutes: 10
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: Install ripgrep
         if: steps.changes.outputs.relevant == 'true'
