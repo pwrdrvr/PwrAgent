@@ -357,9 +357,35 @@ jobs:
           node-version: 24.14.1
           working-directory: .
 
-      - name: Package Windows installer (unsigned, no publish)
+      - name: Prepare Windows installer signing input
         timeout-minutes: 25
-        run: node apps/desktop/scripts/release.mjs --win --no-publish
+        run: node apps/desktop/scripts/release.mjs --win --prepare-only
+
+      # Exercise the same archive boundary as the protected release job without
+      # granting this PR job signing credentials.
+      - name: Archive and expand Windows installer signing input
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "windows-installer-pr-input.tgz"
+          ./scripts/release/archive-windows-signing-input.ps1 -ArchivePath $archive
+          $input = Join-Path $env:RUNNER_TEMP "windows-installer-pr-input"
+          New-Item -ItemType Directory -Path $input -Force | Out-Null
+          Push-Location $input
+          & tar.exe -xzf $archive
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to expand Windows installer signing input (exit code $LASTEXITCODE)."
+          }
+          Pop-Location
+
+      - name: Package Windows installer from prepared input (unsigned, no publish)
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          $input = Join-Path $env:RUNNER_TEMP "windows-installer-pr-input"
+          Push-Location $input
+          node apps/desktop/scripts/release.mjs --win --sign-stage-only --no-publish
+          Pop-Location
 
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v7
@@ -368,9 +394,9 @@ jobs:
         with:
           name: windows-installer-pr
           path: |
-            apps/desktop/release-stage/dist/*.exe
-            apps/desktop/release-stage/dist/*.exe.blockmap
-            apps/desktop/release-stage/dist/SHA256SUMS
+            ${{ runner.temp }}/windows-installer-pr-input/apps/desktop/release-stage/dist/*.exe
+            ${{ runner.temp }}/windows-installer-pr-input/apps/desktop/release-stage/dist/*.exe.blockmap
+            ${{ runner.temp }}/windows-installer-pr-input/apps/desktop/release-stage/dist/SHA256SUMS
           retention-days: 7
 
   desktop-e2e:

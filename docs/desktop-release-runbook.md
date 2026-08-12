@@ -133,15 +133,19 @@ seven job definitions (the Linux package job fans out across two architectures):
    --no-publish`, verifies the packaged ASAR, writes a stable download alias,
    and uploads the `.deb` files as short-retention workflow artifacts.
 4. `Prepare Windows signing input`, running on Windows without an environment
-   or signing credentials. It builds and deploys the Windows release stage,
-   archives that stage plus the already-resolved electron-builder toolchain,
-   records the archive SHA-256 as a job output, and uploads the archive.
+   or signing credentials. It builds a self-contained, hoisted Windows release
+   stage that includes the electron-builder toolchain, archives that stage and
+   the small signing scripts without workspace `node_modules` links, records
+   the archive SHA-256 as a job output, and uploads the archive. This avoids
+   Windows tar recursively following pnpm workspace junctions.
 5. `Sign and package Windows installer`, gated by the protected
    `windows-signing` environment. It does not check out source or install
    project dependencies/lifecycle scripts. It verifies and expands the exact
    prepared archive, installs `TrustedSigning`, and runs `release.mjs --win
-   --sign-stage-only --no-publish --require-signing`. The Azure service-principal
-   secrets are injected only into this signing-aware packaging step.
+   --sign-stage-only --no-publish --require-signing`. The post-package ASAR
+   verifier resolves from the staged toolchain, not the workspace. The Azure
+   service-principal secrets are injected only into this signing-aware packaging
+   step.
 6. `Publish Linux DEB artifacts`, which waits for the macOS publish job so the
    GitHub Release exists, combines both Linux architecture artifacts, generates
    `SHA256SUMS`, and uploads the `.deb` files plus checksums to the same
