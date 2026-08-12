@@ -3143,10 +3143,10 @@ textarea,
      lane inset. See `--sidebar-masthead-pull` on `.sidebar`. */
   width: calc(100% - 2 * var(--sidebar-masthead-pull));
   margin-inline: var(--sidebar-masthead-pull);
-  /* Five tabs, four of which are a single 16px icon. The Attention tab
-     carries two indicator + count pairs, so it is the only one whose content
-     can outgrow an equal share — `min-content` floors every track at its own
-     content width and lets Attention take what it needs before the icon tabs
+  /* Five tabs: three are a single 16px icon, Drafts is an icon plus a count
+     when it has one, and Attention carries two indicator + count pairs.
+     `min-content` floors every track at its own content width, so the two
+     that can outgrow an equal share take what they need before the icon tabs
      divide the surplus. NOT interchangeable with `auto`:
      `.lens-switch__button` sets overflow: hidden, which zeroes a grid item's
      automatic minimum size, so minmax(auto, 1fr) would resolve the floor to 0
@@ -3155,11 +3155,14 @@ textarea,
 
      At the 280px sidebar minimum (a 264px container, see
      `--sidebar-masthead-pull`) Attention floors at ~74px with two-digit
-     counts. What the four icon tabs then divide is arithmetic, not a
+     counts. What the four remaining tabs then divide is arithmetic, not a
      measurement: 264 − 4px padding − 4 × 1px gap = 256, less Attention's 74,
      is ~45px each — comfortably above the 28px an icon tab can shrink to
-     (16px glyph + 2 × 6px padding). The container query below is what keeps
-     that true past two digits. */
+     (16px glyph + 2 × 6px padding). A three-digit Drafts count floors that tab
+     at ~50px (16 + 4px gap + ~18px of 10px mono digits + 12px padding), which
+     comes out of the surplus and still leaves the three icon tabs ~44px each.
+     The container query below is what keeps that true past two digits on
+     Attention. */
   grid-template-columns: repeat(5, minmax(min-content, 1fr));
   gap: 2px;
   padding: 3px;
@@ -3221,6 +3224,21 @@ textarea,
   flex: 0 0 auto;
   align-items: center;
   gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The Drafts tab's count. Same mono, size and tabular figures as the Attention
+   readouts so the row reads as one control — but no colour of its own: it
+   inherits the tab's, which means it picks up the accent only while the lens
+   is active. There is no zero state to style; the count is absent at zero
+   (LensTab), which is what makes "no number" mean "no drafts". */
+.lens-switch__count {
+  /* Never the thing that gives — a half-eaten count reads as a different
+     number, so the icon shrinks before the digits do. */
+  flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;

@@ -740,7 +740,9 @@ describe("Sidebar", () => {
     // the whole name — a tab that loses its aria-label announces as unlabeled.
     expect(lensTabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
       "Attention, 0 active threads, 1 thread to review",
-      "Drafts",
+      // Drafts announces its emptiness even though it shows no badge: the
+      // vanishing count is only readable if you can see the row.
+      "Drafts, No unsent replies",
       "Updated",
       "Created",
       "Directories",
@@ -2596,19 +2598,81 @@ describe("Sidebar", () => {
       const onBrowseModeChange = vi.fn();
       renderDrafts("inbox", onBrowseModeChange);
 
-      const tab = screen.getByRole("tab", { name: "Drafts" });
+      const tab = screen.getByRole("tab", { name: /^Drafts,/ });
       expect(tab).toHaveAttribute("aria-selected", "false");
       fireEvent.click(tab);
       expect(onBrowseModeChange).toHaveBeenCalledWith("drafts");
     });
 
-    it("explains the lens in its tooltip", async () => {
+    it("explains the lens in its tooltip, including the count", async () => {
       renderDrafts();
 
-      fireEvent.mouseEnter(screen.getByRole("tab", { name: "Drafts" }));
+      fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Drafts,/ }));
       expect((await screen.findByRole("tooltip")).textContent).toBe(
-        "Drafts — threads with a reply you started and never sent",
+        "Drafts — threads with a reply you started and never sent"
+          + "\n1 unsent reply",
       );
+    });
+
+    it("counts the unsent replies on its tab", () => {
+      const secondDraftThread = {
+        ...sharedThread,
+        id: "second-thread-with-draft",
+        title: "Second thread with a draft",
+        inbox: { inInbox: false },
+      };
+
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          createThreadError={undefined}
+          directories={directories}
+          draftThreadKeys={{
+            ...draftThreadKeys,
+            [`${secondDraftThread.source}:${secondDraftThread.id}`]: true,
+          }}
+          inboxThreads={[...allThreads, secondDraftThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={[...allThreads, secondDraftThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      const tab = screen.getByRole("tab", { name: "Drafts, 2 unsent replies" });
+      expect(tab.querySelector(".lens-switch__count")).toHaveTextContent("2");
+    });
+
+    it("drops the count entirely when nothing is half-written", () => {
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={allThreads}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={allThreads}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      // No badge at all — not a greyed "0". An absent count is how this lens
+      // says "no drafts"; a zero would be one more number to read past.
+      const tab = screen.getByRole("tab", { name: "Drafts, No unsent replies" });
+      expect(tab.querySelector(".lens-switch__count")).toBeNull();
     });
 
     it("shows an empty state when nothing is half-written", () => {
