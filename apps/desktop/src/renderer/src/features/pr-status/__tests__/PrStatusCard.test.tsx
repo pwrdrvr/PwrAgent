@@ -215,6 +215,82 @@ describe("PrStatusCard", () => {
   });
 });
 
+describe("PrStatusCard branch", () => {
+  it("exposes the branch to assistive tech as one unbroken string", () => {
+    // Flex items are blockified, so the two visual halves surface as SEPARATE
+    // accessibility nodes and get announced as two branch names. Asserting
+    // `textContent` on the row would not catch that — it concatenates whatever
+    // spans exist regardless of box structure. What has to hold is that the
+    // split is hidden and exactly one node carries the whole name.
+    const container = renderCard(basePr({
+      headRefName: "claude/agent/backport-pr-status-hover-1.0",
+    }));
+
+    expect(container.querySelector(".pr-status-card__branch-name"))
+      .toHaveAttribute("aria-hidden", "true");
+    expect(text(container, ".pr-status-card__branch-full"))
+      .toBe("claude/agent/backport-pr-status-hover-1.0");
+  });
+
+  it("splits so the ellipsis falls in the middle, not at either end", () => {
+    // Branches on one thread share a prefix and often a suffix convention, so
+    // the discriminating characters live at both ends. The head span is the
+    // only one CSS lets shrink, which is what puts the ellipsis between them.
+    const container = renderCard(basePr({
+      headRefName: "claude/agent/backport-pr-status-hover-1.0",
+    }));
+
+    expect(text(container, ".pr-status-card__branch-head"))
+      .toBe("claude/agent/backport-pr-stat");
+    expect(text(container, ".pr-status-card__branch-tail")).toBe("us-hover-1.0");
+  });
+
+  it("never hands the non-truncating tail more than half a short name", () => {
+    // The tail is `flex: 0 0 auto` — it cannot shrink, so a fixed 12 characters
+    // on a short branch would leave nothing for the head to give up.
+    const container = renderCard(basePr({ headRefName: "main" }));
+
+    expect(text(container, ".pr-status-card__branch-head")).toBe("ma");
+    expect(text(container, ".pr-status-card__branch-tail")).toBe("in");
+  });
+
+  it("splits on grapheme clusters, not code points", () => {
+    // macOS normalizes filenames to NFD and a loose git ref IS a file, so this
+    // name really does arrive with `a` + a separate U+0300. A code-point split
+    // lands between them: the head loses the accent (`déja`) and the tail opens
+    // with a bare combining mark that renders on the ellipsis.
+    const container = renderCard(basePr({
+      headRefName: "chore/déjà-vu-dedupe".normalize("NFD"),
+    }));
+
+    expect(text(container, ".pr-status-card__branch-head"))
+      .toBe("chore/déjà".normalize("NFD"));
+    expect(text(container, ".pr-status-card__branch-tail")).toBe("-vu-dedupe");
+
+    cleanup();
+
+    // Same tear, ZWJ flavor: a code-point split leaves the tail leading with a
+    // zero-width joiner and the head holding a lone body part.
+    const zwj = renderCard(basePr({ headRefName: "fix/family-👨‍👩‍👧-avatar" }));
+
+    expect(text(zwj, ".pr-status-card__branch-head")).toBe("fix/family");
+    expect(text(zwj, ".pr-status-card__branch-tail")).toBe("-👨‍👩‍👧-avatar");
+  });
+
+  it("omits the row when no provider reported a head branch", () => {
+    // Same rule as every other section: absent is "not known", and the card has
+    // to look finished without it.
+    const container = renderCard(basePr({ headRefName: "   " }));
+    expect(container.querySelector(".pr-status-card__branch")).toBeNull();
+
+    cleanup();
+
+    expect(
+      renderCard(basePr()).querySelector(".pr-status-card__branch"),
+    ).toBeNull();
+  });
+});
+
 describe("PrStatusCard counts", () => {
   it("groups digits and matches the noun to the count", () => {
     const plural = renderCard(basePr({ changedFiles: 1204, commitCount: 2 }));
