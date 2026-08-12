@@ -14,7 +14,10 @@ import type {
 } from "@pwragent/shared";
 import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { computeWorktreePath } from "./git-directory-service";
+import {
+  computeWorktreePath,
+  releaseWorktreePathReservation,
+} from "./git-directory-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 
 const execFileAsync = promisify(execFile);
@@ -34,6 +37,14 @@ function toForwardSlashesOptional(
   value: string | undefined,
 ): string | undefined {
   return value === undefined ? undefined : toForwardSlashes(value);
+}
+
+async function releaseReservationAndRethrow(
+  targetPath: string,
+  error: unknown,
+): Promise<never> {
+  await releaseWorktreePathReservation(targetPath);
+  throw error;
 }
 
 function normalizeHandoffResponseIdentifiers(
@@ -465,21 +476,25 @@ export class GitWorkspaceHandoffService {
       gitEnv: this.gitEnv,
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
-    });
+    }).catch((error) => releaseReservationAndRethrow(targetPath, error));
     await runGit(
       context.sourcePath,
       leaveLocalDetached
         ? ["switch", "--detach", context.headSha]
         : ["switch", leaveLocalBranch],
       this.gitEnv,
-    );
-
+    ).catch((error) => releaseReservationAndRethrow(targetPath, error));
     await mkdir(path.dirname(targetPath), { recursive: true });
-    await runGit(
-      context.repositoryPath,
-      ["worktree", "add", targetPath, context.branch],
-      this.gitEnv,
-    );
+    try {
+      await runGit(
+        context.repositoryPath,
+        ["worktree", "add", targetPath, context.branch],
+        this.gitEnv,
+      );
+    } catch (error) {
+      await releaseWorktreePathReservation(targetPath);
+      throw error;
+    }
     const appliedSourceStash = await applyVerifyAndDropStash(
       targetPath,
       sourceStash,
@@ -542,17 +557,22 @@ export class GitWorkspaceHandoffService {
       gitEnv: this.gitEnv,
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
-    });
+    }).catch((error) => releaseReservationAndRethrow(targetPath, error));
     if (!sourceStash) {
       warnings.push("No dirty non-ignored changes were available to move.");
     }
 
     await mkdir(path.dirname(targetPath), { recursive: true });
-    await runGit(
-      context.repositoryPath,
-      ["worktree", "add", "-b", newBranchName, targetPath, baseSha],
-      this.gitEnv,
-    );
+    try {
+      await runGit(
+        context.repositoryPath,
+        ["worktree", "add", "-b", newBranchName, targetPath, baseSha],
+        this.gitEnv,
+      );
+    } catch (error) {
+      await releaseWorktreePathReservation(targetPath);
+      throw error;
+    }
     const appliedSourceStash = await applyVerifyAndDropStash(
       targetPath,
       sourceStash,
@@ -604,17 +624,22 @@ export class GitWorkspaceHandoffService {
       gitEnv: this.gitEnv,
       path: context.sourcePath,
       message: this.buildStashMessage(context, "source"),
-    });
+    }).catch((error) => releaseReservationAndRethrow(targetPath, error));
     if (!sourceStash) {
       warnings.push("No dirty non-ignored changes were available to move.");
     }
 
     await mkdir(path.dirname(targetPath), { recursive: true });
-    await runGit(
-      context.repositoryPath,
-      ["worktree", "add", "--detach", targetPath, baseSha],
-      this.gitEnv,
-    );
+    try {
+      await runGit(
+        context.repositoryPath,
+        ["worktree", "add", "--detach", targetPath, baseSha],
+        this.gitEnv,
+      );
+    } catch (error) {
+      await releaseWorktreePathReservation(targetPath);
+      throw error;
+    }
     const appliedSourceStash = await applyVerifyAndDropStash(
       targetPath,
       sourceStash,
