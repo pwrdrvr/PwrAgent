@@ -60,7 +60,10 @@ function readRawAcpSessionPayload(
 
 describe("AcpAgentClient", () => {
   it("initializes, starts sessions, sends prompts, and normalizes updates", async () => {
-    const transport = new FakeAcpAgentTransport();
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
     const sessionUpdates: string[] = [];
     const client = new AcpAgentClient({
       backendId: "acp:codex-acp",
@@ -73,19 +76,24 @@ describe("AcpAgentClient", () => {
     });
 
     await client.initialize();
+    expect(client.hasActiveTurns()).toBe(false);
     const session = await client.startSession({
       cwd: "/repo",
       executionMode: "default",
       title: "Test ACP",
     });
-    const prompt = await client.prompt({
+    const promptPromise = client.prompt({
       sessionId: session.sessionId,
       prompt: "hello",
     });
+    expect(client.hasActiveTurns()).toBe(true);
     transport.emitSessionUpdate(session.sessionId, {
       kind: "agent_message_chunk",
       content: "Done",
     });
+    promptResponse.resolve({ turnId: "turn-1" });
+    const prompt = await promptPromise;
+    expect(client.hasActiveTurns()).toBe(false);
 
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
@@ -191,6 +199,7 @@ describe("AcpAgentClient", () => {
       prompt: "hello",
       turnId: "turn-1",
     });
+    expect(client.hasActiveTurns()).toBe(true);
     transport.emitSessionUpdate(session.sessionId, {
       session_update: "agent_message_chunk",
       content: { type: "text", text: "Kimi says hi." },
@@ -206,6 +215,7 @@ describe("AcpAgentClient", () => {
     });
 
     expect(sessionUpdates).toContain("agent_message_chunk");
+    expect(client.hasActiveTurns()).toBe(false);
     expect(transport.requests[2]?.timeoutMs).toBe(60 * 60_000);
   });
 

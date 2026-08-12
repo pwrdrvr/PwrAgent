@@ -518,7 +518,7 @@ function acpAgentSettingsEntry(params: {
   };
 }
 
-function installedAcpAgentSettingsEntry(
+export function installedAcpAgentSettingsEntry(
   record: AcpInstalledAgentRecord,
   registryAgent?: AcpRegistryAgent,
 ): AcpAgentSettingsEntry {
