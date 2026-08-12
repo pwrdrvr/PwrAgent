@@ -172,7 +172,8 @@ export class AcpSessionReplayNormalizer {
 
   apply(update: AcpSessionUpdate): AppServerThreadReplay {
     const kind = readKind(update.update);
-    const createdAt = update.receivedAt ?? Date.now();
+    const createdAt =
+      readAcpUpdateTimestamp(update.update) ?? update.receivedAt ?? Date.now();
     if (
       kind === "agent_thought_chunk" &&
       this.options.surfaceThoughtsAsMessages === false
@@ -659,6 +660,63 @@ export function readAcpTopicTitle(
   const fallbackMatch = /^Update topic to:\s*(.+)$/iu.exec(title);
   const topic = (quotedMatch?.[1] ?? fallbackMatch?.[1])?.trim();
   return topic || undefined;
+}
+
+/**
+ * ACP has no required per-update timestamp field, but several providers add
+ * one as an extension. Prefer it to local receipt time when it is a real Unix
+ * timestamp so a provider's historical session replay keeps its chronology.
+ */
+export function readAcpUpdateTimestamp(
+  update: Record<string, unknown>,
+): number | undefined {
+  for (const record of [update, asRecord(update._meta)]) {
+    if (!record) {
+      continue;
+    }
+    for (const key of [
+      "agentTimestampMs",
+      "agent_timestamp_ms",
+      "createdAt",
+      "created_at",
+      "occurredAt",
+      "occurred_at",
+      "timestamp",
+    ]) {
+      const timestamp = parseAcpUpdateTimestamp(record[key]);
+      if (timestamp !== undefined) {
+        return timestamp;
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseAcpUpdateTimestamp(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return normalizeAcpUpdateTimestamp(value);
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return normalizeAcpUpdateTimestamp(numeric);
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizeAcpUpdateTimestamp(value: number): number | undefined {
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  // Seconds are common in CLI extension payloads; internally PwrAgent uses
+  // epoch milliseconds. Refuse small counters/durations that are not dates.
+  if (value >= 946_684_800 && value < 10_000_000_000) {
+    return Math.trunc(value * 1_000);
+  }
+  return value >= 946_684_800_000 ? Math.trunc(value) : undefined;
 }
 
 function readString(

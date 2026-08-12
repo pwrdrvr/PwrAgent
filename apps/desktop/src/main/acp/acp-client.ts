@@ -13,15 +13,16 @@ import type {
 } from "@pwragent/shared";
 import {
   AcpSessionReplayNormalizer,
+  isAcpUserBoilerplateMessage,
   isGrokTransientUpdateKind,
   readAcpContentText,
   readAcpToolCallId,
   readAcpTopicTitle,
+  readAcpUpdateTimestamp,
   shouldSurfaceAcpThoughtsAsMessages,
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
 import {
-  acpRuntimeSupportsSessionHistoryReplay,
   acpRuntimeSupportsSessionLoad,
   acpSessionRuntimeStateFromResponse,
   acpSessionRuntimeStateFromUpdate,
@@ -130,7 +131,17 @@ type AcpActiveTurn = {
 };
 
 type AcpSessionLoadState = {
+  lastTimestampedTranscriptAt?: number;
+  replayedTranscript: boolean;
   suppressTranscriptReplay: boolean;
+};
+
+type AcpSessionLoadReplay = {
+  lastTimestampedTranscriptAt?: number;
+};
+
+type AcpSessionMetadataUpdateOptions = {
+  touchActivity?: boolean;
 };
 
 type AcpSuppressedControlPrompt = {
@@ -154,6 +165,7 @@ export type AcpAgentClientOptions = {
   now?: () => number;
   onSessionUpdate?: (event: {
     assistantMessageItemId?: string;
+    fromSessionLoad?: boolean;
     sessionId: string;
     replay: AppServerThreadReplay;
     title?: string;
@@ -166,11 +178,13 @@ export type AcpAgentClientOptions = {
     error: unknown;
   }) => Promise<void> | void;
   onRuntimeCapabilities?: (event: {
+    fromSessionLoad?: boolean;
     sessionId?: string;
     runtimeCapabilities: BackendAcpRuntimeCapabilities;
     runtimeState?: BackendAcpSessionRuntimeState;
   }) => Promise<void> | void;
   onSessionRuntimeStateChange?: (event: {
+    fromSessionLoad?: boolean;
     sessionId: string;
     runtimeState: BackendAcpSessionRuntimeState;
   }) => Promise<void> | void;
@@ -197,6 +211,7 @@ export class AcpAgentClient {
     AcpSuppressedControlPrompt
   >();
   private readonly loadingSessions = new Map<string, AcpSessionLoadState>();
+  private readonly sessionLoadReplays = new Map<string, AcpSessionLoadReplay>();
   private readonly agentSessionIdsByAppSessionId = new Map<string, string>();
   private readonly appSessionIdsByAgentSessionId = new Map<string, string>();
   private readonly now: () => number;
@@ -435,13 +450,50 @@ export class AcpAgentClient {
   }
 
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
-    this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
+    const storedMetadata =
+      this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
+      metadata;
+    if (this.supportsSessionLoad() && this.isSessionLoaded(storedMetadata)) {
+      const replay = this.normalizers.get(metadata.sessionId)?.replay();
+      if (replay && (replay.entries.length > 0 || replay.messages.length > 0)) {
+        return this.replayForSessionMetadata(storedMetadata);
+      }
+    }
+    this.options.store.upsertSession(metadata);
     const localHistory = this.hydrateSessionFromHistory(metadata);
+    const fallbackNormalizer = this.normalizers.get(metadata.sessionId);
+    const hydratedMetadata =
+      this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
+      metadata;
     if (this.supportsSessionLoad()) {
-      await this.ensureSession(metadata, {
-        suppressTranscriptReplay: localHistory.isComplete,
+      const protocolSessionId = this.protocolSessionIdFor(metadata.sessionId);
+      this.sessionLoadReplays.delete(protocolSessionId);
+      // Give session/load a clean normalizer only when the fallback already
+      // holds a complete transcript. An incomplete fallback still contributes
+      // timestamps that providers such as Kimi do not send, so it must merge
+      // with the incoming replay instead.
+      if (localHistory.isComplete) {
+        this.normalizers.delete(metadata.sessionId);
+      }
+      await this.ensureSession(hydratedMetadata, {
+        suppressTranscriptReplay: false,
       });
+      const sessionLoadReplay = this.sessionLoadReplays.get(protocolSessionId);
+      if (
+        sessionLoadReplay?.lastTimestampedTranscriptAt !== undefined ||
+        (!localHistory.isComplete && sessionLoadReplay)
+      ) {
+        return this.replayForSessionMetadata(
+          this.options.store.getSession(
+            this.options.backendId,
+            metadata.sessionId,
+          ) ?? metadata,
+        );
+      }
+      if (fallbackNormalizer) {
+        this.normalizers.set(metadata.sessionId, fallbackNormalizer);
+      }
     }
     return this.replayForSessionMetadata(
       this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
@@ -457,17 +509,12 @@ export class AcpAgentClient {
     metadata: AcpSessionMetadata,
     options: { suppressTranscriptReplay?: boolean } = {},
   ): Promise<void> {
-    this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
-    if (!this.supportsSessionLoad()) {
+    if (this.supportsSessionLoad() && this.isSessionLoaded(metadata)) {
       return;
     }
-    const cwd = metadata.cwd ?? process.cwd();
-    const protocolSessionId = protocolSessionIdForMetadata(metadata);
-    if (
-      this.loadedSessionCwds.has(protocolSessionId) &&
-      this.loadedSessionCwds.get(protocolSessionId) === cwd
-    ) {
+    this.options.store.upsertSession(metadata);
+    if (!this.supportsSessionLoad()) {
       return;
     }
     await this.loadSessionFromAgent(metadata, options);
@@ -739,10 +786,17 @@ export class AcpAgentClient {
     return this.normalizerFor(sessionId).replay();
   }
 
+  didSessionLoadReplayHistory(sessionId: string): boolean {
+    return this.sessionLoadReplays.has(this.protocolSessionIdFor(sessionId));
+  }
+
   private applySessionUpdate(params: Record<string, unknown>): void {
     const protocolSessionId =
       typeof params.sessionId === "string" ? params.sessionId : undefined;
-    const update = asRecord(params.update);
+    const update = withAcpSessionUpdateEnvelopeMetadata(
+      asRecord(params.update),
+      asRecord(params._meta),
+    );
     if (!protocolSessionId || !update) {
       return;
     }
@@ -777,36 +831,86 @@ export class AcpAgentClient {
     }
     const sessionId = this.appSessionIdFor(protocolSessionId);
     const receivedAt = this.now();
+    const activityAt = readAcpUpdateTimestamp(update) ?? receivedAt;
+    const loadState = this.loadingSessions.get(protocolSessionId);
+    const isExplicitSessionReplay = isAcpSessionReplayUpdate(update);
+    const fromSessionLoad = loadState !== undefined || isExplicitSessionReplay;
     const activeTurn = this.activeTurns.get(sessionId);
     const updateKind = readUpdateKind(update);
-    const runtimeState = acpSessionRuntimeStateFromUpdate(update, receivedAt);
+    if (isProviderTranscriptReplayUpdate(update)) {
+      if (loadState) {
+        loadState.replayedTranscript = true;
+        if (readAcpUpdateTimestamp(update) !== undefined) {
+          loadState.lastTimestampedTranscriptAt = Math.max(
+            loadState.lastTimestampedTranscriptAt ?? 0,
+            activityAt,
+          );
+        }
+      } else if (isExplicitSessionReplay) {
+        const existing = this.sessionLoadReplays.get(protocolSessionId);
+        this.sessionLoadReplays.set(protocolSessionId, {
+          ...(existing ?? {}),
+          ...(readAcpUpdateTimestamp(update) !== undefined
+            ? {
+                lastTimestampedTranscriptAt: Math.max(
+                  existing?.lastTimestampedTranscriptAt ?? 0,
+                  activityAt,
+                ),
+              }
+            : {}),
+        });
+      }
+    }
+    const runtimeState = acpSessionRuntimeStateFromUpdate(update, activityAt);
     if (runtimeState) {
-      this.updateSessionRuntimeState(sessionId, runtimeState);
+      this.updateSessionRuntimeState(sessionId, runtimeState, {
+        touchActivity: !fromSessionLoad,
+      });
       void Promise.resolve(
-        this.options.onSessionRuntimeStateChange?.({ sessionId, runtimeState }),
+        this.options.onSessionRuntimeStateChange?.({
+          ...(fromSessionLoad ? { fromSessionLoad: true } : {}),
+          sessionId,
+          runtimeState,
+        }),
       ).catch(() => undefined);
       return;
     }
-    const loadState = this.loadingSessions.get(protocolSessionId);
     if (loadState?.suppressTranscriptReplay && isTranscriptReplayUpdate(update)) {
       return;
     }
     if (updateKind === "available_commands_update") {
-      this.updateSessionAvailableCommands(sessionId, update, receivedAt);
+      this.updateSessionAvailableCommands(sessionId, update, activityAt, {
+        // Providers refresh command capabilities during and immediately after
+        // session/load. Capability metadata is not conversation activity,
+        // even when a late notification no longer carries replay provenance.
+        touchActivity: false,
+      });
     }
     if (updateKind === "turn_started") {
-      this.updateSessionStatus(sessionId, "active");
+      this.updateSessionStatus(sessionId, "active", activityAt, {
+        touchActivity: !fromSessionLoad,
+      });
     } else if (
       updateKind === "turn_finished" ||
-      updateKind === "pwragent_turn_failed"
+      updateKind === "pwragent_turn_failed" ||
+      (updateKind === "turn_completed" && activeTurn === undefined)
     ) {
-      this.updateSessionStatus(sessionId, "idle");
+      this.updateSessionStatus(sessionId, "idle", activityAt, {
+        touchActivity: !fromSessionLoad,
+      });
     }
-    const title = this.updateSessionTitleFromAcpUpdate(sessionId, update, receivedAt);
+    const title = this.updateSessionTitleFromAcpUpdate(
+      sessionId,
+      update,
+      activityAt,
+      { touchActivity: !fromSessionLoad },
+    );
     if (isConversationHistoryUpdate(update)) {
-      this.markSessionHasConversationHistory(sessionId, receivedAt);
+      this.markSessionHasConversationHistory(sessionId, activityAt, {
+        touchActivity: !fromSessionLoad,
+      });
     }
-    if (!loadState) {
+    if (!fromSessionLoad) {
       this.appendHistoryUpdate(sessionId, receivedAt, update);
     }
     const isAssistantTextUpdate =
@@ -857,6 +961,7 @@ export class AcpAgentClient {
     } satisfies AcpSessionUpdate);
     void this.notifySessionUpdate({
       assistantMessageItemId,
+      ...(fromSessionLoad ? { fromSessionLoad: true } : {}),
       sessionId,
       replay,
       title,
@@ -989,6 +1094,7 @@ export class AcpAgentClient {
   private markSessionHasConversationHistory(
     sessionId: string,
     receivedAt: number,
+    options: AcpSessionMetadataUpdateOptions = {},
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (!metadata || metadata.hasConversationHistory) {
@@ -997,7 +1103,10 @@ export class AcpAgentClient {
     this.options.store.upsertSession({
       ...metadata,
       hasConversationHistory: true,
-      updatedAt: Math.max(metadata.updatedAt, receivedAt),
+      updatedAt:
+        options.touchActivity === false
+          ? metadata.updatedAt
+          : Math.max(metadata.updatedAt, receivedAt),
     });
   }
 
@@ -1005,6 +1114,7 @@ export class AcpAgentClient {
     sessionId: string,
     update: Record<string, unknown>,
     receivedAt: number,
+    options: AcpSessionMetadataUpdateOptions = {},
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (!metadata) {
@@ -1016,7 +1126,10 @@ export class AcpAgentClient {
         update,
         this.options.backendId,
       ),
-      updatedAt: Math.max(metadata.updatedAt, receivedAt),
+      updatedAt:
+        options.touchActivity === false
+          ? metadata.updatedAt
+          : Math.max(metadata.updatedAt, receivedAt),
     });
   }
 
@@ -1037,6 +1150,7 @@ export class AcpAgentClient {
   }
 
   private notifyRuntimeCapabilities(event: {
+    fromSessionLoad?: boolean;
     sessionId?: string;
     runtimeCapabilities?: BackendAcpRuntimeCapabilities;
     runtimeState?: BackendAcpSessionRuntimeState;
@@ -1046,6 +1160,7 @@ export class AcpAgentClient {
     }
     void Promise.resolve(
       this.options.onRuntimeCapabilities?.({
+        ...(event.fromSessionLoad ? { fromSessionLoad: true } : {}),
         sessionId: event.sessionId,
         runtimeCapabilities: event.runtimeCapabilities,
         runtimeState: event.runtimeState,
@@ -1056,6 +1171,7 @@ export class AcpAgentClient {
   private updateSessionRuntimeState(
     sessionId: string,
     runtimeState: BackendAcpSessionRuntimeState,
+    options: AcpSessionMetadataUpdateOptions = {},
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (!metadata) {
@@ -1064,12 +1180,16 @@ export class AcpAgentClient {
     this.options.store.upsertSession({
       ...metadata,
       acpRuntime: mergeAcpRuntimeState(metadata.acpRuntime, runtimeState),
-      updatedAt: Math.max(metadata.updatedAt, runtimeState.updatedAt ?? this.now()),
+      updatedAt:
+        options.touchActivity === false
+          ? metadata.updatedAt
+          : Math.max(metadata.updatedAt, runtimeState.updatedAt ?? this.now()),
     });
   }
 
   private async notifySessionUpdate(event: {
     assistantMessageItemId?: string;
+    fromSessionLoad?: boolean;
     sessionId: string;
     replay: AppServerThreadReplay;
     title?: string;
@@ -1094,9 +1214,11 @@ export class AcpAgentClient {
       cwd,
       sessionId: metadata.sessionId,
     });
-    this.loadingSessions.set(protocolSessionId, {
+    const loadState: AcpSessionLoadState = {
+      replayedTranscript: false,
       suppressTranscriptReplay: options.suppressTranscriptReplay === true,
-    });
+    };
+    this.loadingSessions.set(protocolSessionId, loadState);
     let result: unknown;
     try {
       result = await this.options.transport.request("session/load", {
@@ -1106,6 +1228,16 @@ export class AcpAgentClient {
       });
     } finally {
       this.loadingSessions.delete(protocolSessionId);
+      if (loadState.replayedTranscript) {
+        this.sessionLoadReplays.set(protocolSessionId, {
+          ...(loadState.lastTimestampedTranscriptAt !== undefined
+            ? {
+                lastTimestampedTranscriptAt:
+                  loadState.lastTimestampedTranscriptAt,
+              }
+            : {}),
+        });
+      }
     }
     const runtimeCapabilities = this.captureRuntimeCapabilities({
       source: "session-load",
@@ -1114,15 +1246,19 @@ export class AcpAgentClient {
     await Promise.resolve(mcpRegistration.bindThread?.(metadata.sessionId));
     const runtimeState = acpSessionRuntimeStateFromResponse(result, this.now());
     if (runtimeState) {
-      this.updateSessionRuntimeState(metadata.sessionId, runtimeState);
+      this.updateSessionRuntimeState(metadata.sessionId, runtimeState, {
+        touchActivity: false,
+      });
       void Promise.resolve(
         this.options.onSessionRuntimeStateChange?.({
+          fromSessionLoad: true,
           sessionId: metadata.sessionId,
           runtimeState,
         }),
       ).catch(() => undefined);
     }
     this.notifyRuntimeCapabilities({
+      fromSessionLoad: true,
       sessionId: metadata.sessionId,
       runtimeCapabilities,
       runtimeState,
@@ -1133,6 +1269,15 @@ export class AcpAgentClient {
 
   private supportsSessionLoad(): boolean {
     return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
+  }
+
+  private isSessionLoaded(metadata: AcpSessionMetadata): boolean {
+    const cwd = metadata.cwd ?? process.cwd();
+    const protocolSessionId = protocolSessionIdForMetadata(metadata);
+    return (
+      this.loadedSessionCwds.has(protocolSessionId) &&
+      this.loadedSessionCwds.get(protocolSessionId) === cwd
+    );
   }
 
   private async buildMcpServers(params: {
@@ -1216,7 +1361,14 @@ export class AcpAgentClient {
     receivedAt: number,
     update: Record<string, unknown>,
   ): void {
-    if (acpRuntimeSupportsSessionHistoryReplay(this.runtimeCapabilities)) {
+    const verifiedReplay = this.sessionLoadReplays.get(
+      this.protocolSessionIdFor(sessionId),
+    );
+    // Keep a durable fallback until this exact session has successfully
+    // replayed timestamped provider history. An advertised capability alone
+    // cannot prove that session/load returned usable transcript history, and
+    // providers such as Kimi still need the local timestamps they omit.
+    if (verifiedReplay?.lastTimestampedTranscriptAt !== undefined) {
       return;
     }
     this.options.rolloutStore?.appendUpdate({
@@ -1230,6 +1382,8 @@ export class AcpAgentClient {
   private updateSessionStatus(
     sessionId: string,
     status: AcpSessionMetadata["status"],
+    receivedAt = this.now(),
+    options: AcpSessionMetadataUpdateOptions = {},
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (!metadata) {
@@ -1238,7 +1392,10 @@ export class AcpAgentClient {
     this.options.store.upsertSession({
       ...metadata,
       status,
-      updatedAt: Math.max(metadata.updatedAt, this.now()),
+      updatedAt:
+        options.touchActivity === false
+          ? metadata.updatedAt
+          : Math.max(metadata.updatedAt, receivedAt),
     });
   }
 
@@ -1246,6 +1403,7 @@ export class AcpAgentClient {
     sessionId: string,
     update: Record<string, unknown>,
     receivedAt: number,
+    options: AcpSessionMetadataUpdateOptions = {},
   ): string | undefined {
     const title = readAcpTopicTitle(update);
     if (!title) {
@@ -1267,7 +1425,10 @@ export class AcpAgentClient {
       ...metadata,
       title,
       titleSource: "derived",
-      updatedAt: Math.max(metadata.updatedAt, receivedAt),
+      updatedAt:
+        options.touchActivity === false
+          ? metadata.updatedAt
+          : Math.max(metadata.updatedAt, receivedAt),
     });
     return title;
   }
@@ -1296,10 +1457,44 @@ function protocolSessionIdForMetadata(metadata: AcpSessionMetadata): string {
   return metadata.agentSessionId ?? metadata.sessionId;
 }
 
+function withAcpSessionUpdateEnvelopeMetadata(
+  update: Record<string, unknown> | undefined,
+  envelopeMeta: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!update || !envelopeMeta) {
+    return update;
+  }
+  const updateMeta = asRecord(update._meta);
+  return {
+    ...update,
+    _meta: {
+      ...envelopeMeta,
+      ...updateMeta,
+    },
+  };
+}
+
 function readUpdateKind(update: Record<string, unknown>): string | undefined {
   const kind =
     update.sessionUpdate ?? update.session_update ?? update.kind ?? update.type;
   return typeof kind === "string" ? kind : undefined;
+}
+
+function isAcpSessionReplayUpdate(update: Record<string, unknown>): boolean {
+  const meta = asRecord(update._meta);
+  return meta?.isReplay === true || meta?.is_replay === true;
+}
+
+function isProviderTranscriptReplayUpdate(
+  update: Record<string, unknown>,
+): boolean {
+  if (!isTranscriptReplayUpdate(update)) {
+    return false;
+  }
+  return (
+    readUpdateKind(update) !== "user_message_chunk" ||
+    !isAcpUserBoilerplateMessage(readUpdateText(update))
+  );
 }
 
 function isConversationHistoryUpdate(update: Record<string, unknown>): boolean {
@@ -1321,6 +1516,7 @@ function isTranscriptReplayUpdate(update: Record<string, unknown>): boolean {
     kind === "tool_call_update" ||
     kind === "file" ||
     kind === "terminal" ||
+    kind === "turn_completed" ||
     kind === "turn_finished" ||
     kind === "pwragent_turn_failed"
   );
