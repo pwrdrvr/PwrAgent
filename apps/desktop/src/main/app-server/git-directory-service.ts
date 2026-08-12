@@ -1,4 +1,4 @@
-import { access, mkdir, realpath, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rmdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
@@ -170,15 +170,6 @@ function codexHomeWorktreesRoot(options: {
   );
 }
 
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await access(target);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function normalizeFilesystemPath(target: string): Promise<string> {
   return realpath(target).catch(() => path.resolve(target));
 }
@@ -193,6 +184,12 @@ async function pruneEmptyWorktreeParents(worktreePath: string): Promise<void> {
   } catch {
     // Parent is non-empty or already gone; either is fine.
   }
+}
+
+export async function releaseWorktreePathReservation(
+  worktreePath: string,
+): Promise<void> {
+  await pruneEmptyWorktreeParents(worktreePath);
 }
 
 async function removeWorktreeAndPrune(params: {
@@ -223,13 +220,27 @@ export async function computeWorktreePath(params: {
     homeDir: params.homeDir,
   });
   const projectName = path.basename(path.resolve(params.repoRoot)) || "project";
-  const baseHash = (params.timestamp ?? Date.now()).toString(36);
+  const baseTimestamp = params.timestamp ?? Date.now();
+  await mkdir(root, { recursive: true });
 
-  for (let attempt = 0; attempt < 32; attempt += 1) {
-    const hash = attempt === 0 ? baseHash : `${baseHash}-${attempt + 1}`;
-    const candidate = path.join(root, hash, projectName);
-    if (!(await pathExists(candidate))) {
-      return candidate;
+  for (
+    let timestampIncrement = 0;
+    timestampIncrement <= 10;
+    timestampIncrement += 1
+  ) {
+    const hash = (baseTimestamp + timestampIncrement).toString(36);
+    const hashParent = path.join(root, hash);
+    try {
+      // Reserving the hash directory makes path allocation atomic across
+      // concurrent calls and separate PwrAgent processes. Git accepts the
+      // still-missing project directory beneath this empty parent.
+      await mkdir(hashParent);
+      return path.join(hashParent, projectName);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        continue;
+      }
+      throw error;
     }
   }
 
@@ -1148,21 +1159,48 @@ export class GitDirectoryService {
         });
       }
 
-      const storage = await this.resolveStorage();
-      const worktreePath = await computeWorktreePath({
-        backend: launchpad.backend,
-        codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
-        repoRoot,
-        storage,
-        homeDir: this.homeDir,
-      });
       try {
-        await mkdir(path.dirname(worktreePath), { recursive: true });
-        await this.runGitCommand(
+        const storage = await this.resolveStorage();
+        const worktreePath = await computeWorktreePath({
+          backend: launchpad.backend,
+          codexHome: launchpad.backend === "codex" ? this.codexHome : undefined,
           repoRoot,
-          ["worktree", "add", worktreePath, baseBranch],
-          this.gitEnv,
-        );
+          storage,
+          homeDir: this.homeDir,
+        });
+        try {
+          await mkdir(path.dirname(worktreePath), { recursive: true });
+          await this.runGitCommand(
+            repoRoot,
+            ["worktree", "add", worktreePath, baseBranch],
+            this.gitEnv,
+          );
+        } catch (error) {
+          await pruneEmptyWorktreeParents(worktreePath);
+          throw error;
+        }
+
+        return {
+          cwd: worktreePath,
+          repositoryPath: repoRoot,
+          rollback: async () => {
+            await removeWorktreeAndPrune({
+              gitEnv: this.gitEnv,
+              repoRoot,
+              runGit: this.runGitCommand,
+              worktreePath,
+            });
+            if (detachedSourceWorktreePath) {
+              await restoreDetachedWorktreeBranch({
+                branchName: baseBranch,
+                gitEnv: this.gitEnv,
+                runGit: this.runGitCommand,
+                worktreePath: detachedSourceWorktreePath,
+              });
+            }
+          },
+          workMode: "worktree",
+        };
       } catch (error) {
         if (detachedSourceWorktreePath) {
           await restoreDetachedWorktreeBranch({
@@ -1174,28 +1212,6 @@ export class GitDirectoryService {
         }
         throw error;
       }
-
-      return {
-        cwd: worktreePath,
-        repositoryPath: repoRoot,
-        rollback: async () => {
-          await removeWorktreeAndPrune({
-            gitEnv: this.gitEnv,
-            repoRoot,
-            runGit: this.runGitCommand,
-            worktreePath,
-          });
-          if (detachedSourceWorktreePath) {
-            await restoreDetachedWorktreeBranch({
-              branchName: baseBranch,
-              gitEnv: this.gitEnv,
-              runGit: this.runGitCommand,
-              worktreePath: detachedSourceWorktreePath,
-            });
-          }
-        },
-        workMode: "worktree",
-      };
     }
 
     const storage = await this.resolveStorage();
@@ -1207,11 +1223,16 @@ export class GitDirectoryService {
       homeDir: this.homeDir,
     });
     await mkdir(path.dirname(worktreePath), { recursive: true });
-    await this.runGitCommand(
-      repoRoot,
-      ["worktree", "add", "--detach", worktreePath, baseBranch],
-      this.gitEnv,
-    );
+    try {
+      await this.runGitCommand(
+        repoRoot,
+        ["worktree", "add", "--detach", worktreePath, baseBranch],
+        this.gitEnv,
+      );
+    } catch (error) {
+      await pruneEmptyWorktreeParents(worktreePath);
+      throw error;
+    }
 
     return {
       cwd: worktreePath,
