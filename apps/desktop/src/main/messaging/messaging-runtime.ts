@@ -190,6 +190,31 @@ type RunningMessagingAuthorization = {
   actorIdSet: Set<string>;
 };
 
+type PendingAdapterStart = {
+  cancel(reason: string): void;
+};
+
+type AdapterStartOutcome = "cancelled" | "failed" | "started";
+
+class AdapterStartCancelledError extends Error {
+  constructor(
+    message: string,
+    readonly startInvoked = true,
+  ) {
+    super(message);
+    this.name = "AdapterStartCancelledError";
+  }
+}
+
+class AdapterStartTimeoutError extends Error {
+  constructor(channel: MessagingChannelKind, timeoutMs: number) {
+    super(
+      `${channel} adapter startup did not complete within ${formatDuration(timeoutMs)}.`,
+    );
+    this.name = "AdapterStartTimeoutError";
+  }
+}
+
 const messagingLog = getMainLogger("pwragent:messaging");
 const PAIRING_INSTANCE_ID = "default";
 const DEFAULT_PAIRING_TTL_MS = 5 * 60 * 1000;
@@ -201,6 +226,16 @@ const PAIRING_TOKEN_ALPHABET =
 const RATE_LIMIT_HEALTH_BUFFER_MS = 2_000;
 const DELIVERY_BUDGET_WARNING_TTL_MS = 30_000;
 const DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS = 30_000;
+const DEFAULT_ADAPTER_START_TIMEOUT_MS = 90_000;
+const FAILED_START_STOP_TIMEOUT_MS = 3_000;
+const CONFIGURABLE_MESSAGING_CHANNELS = [
+  "discord",
+  "feishu",
+  "line",
+  "mattermost",
+  "slack",
+  "telegram",
+] as const satisfies readonly MessagingChannelKind[];
 
 export type MessagingPairingChangedEvent = {
   at: number;
@@ -310,6 +345,15 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private readonly platformStatusListeners = new Set<
     (event: MessagingPlatformStatusEvent) => void
   >();
+  private readonly pendingAdapterStarts = new Map<
+    MessagingChannelKind,
+    PendingAdapterStart
+  >();
+  private readonly pendingAdapterStartCancellationReasons = new Map<
+    MessagingChannelKind,
+    string
+  >();
+  private pendingAdapterStopReason?: string;
   private lifecycleQueue: Promise<void> = Promise.resolve();
   /**
    * Listeners notified whenever any controller mutates a binding
@@ -331,10 +375,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       config: DesktopMessagingConfig | DesktopMessagingConfigLoader;
       automationInboundHandler?: MessagingAutomationInboundHandler;
       automationInboundMatches?: MessagingAutomationInboundMatcher;
+      adapterStartTimeoutMs?: number;
     },
   ) {}
 
   async start(): Promise<void> {
+    this.pendingAdapterStopReason = undefined;
+    this.pendingAdapterStartCancellationReasons.clear();
     await this.enqueueLifecycle(async () => {
       const config = await this.loadConfig({ logStartupEligibility: true });
       await this.applyConfigNow(config);
@@ -342,6 +389,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   async stop(): Promise<void> {
+    const reason = "Messaging was stopped while adapter startup was still pending.";
+    this.pendingAdapterStopReason = reason;
+    this.cancelPendingAdapterStarts(reason);
     await this.enqueueLifecycle(async () => {
       await this.stopNow();
     });
@@ -400,6 +450,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     config: DesktopMessagingConfig,
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
+    this.updatePendingAdapterStartIntent(config);
     await this.enqueueLifecycle(async () => {
       await this.applyConfigNow(config, options);
     });
@@ -492,22 +543,25 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     const startResults = await Promise.all(
       [...nextAdapters.entries()].map(async ([channel, adapter]) => {
         if (this.runningAdapters.has(channel)) {
-          return { channel, started: false, unchanged: true };
+          return { channel, unchanged: true };
         }
 
-        const started = await this.startRunningAdapter({
+        const outcome = await this.startRunningAdapter({
           adapter,
           config,
           store,
         });
-        return { channel, started, unchanged: false };
+        return { channel, outcome, unchanged: false };
       }),
     );
     const startedChannels = startResults
-      .filter((result) => result.started)
+      .filter((result) => !result.unchanged && result.outcome === "started")
       .map((result) => result.channel);
     const failedChannels = startResults
-      .filter((result) => !result.unchanged && !result.started)
+      .filter((result) => !result.unchanged && result.outcome === "failed")
+      .map((result) => result.channel);
+    const cancelledChannels = startResults
+      .filter((result) => !result.unchanged && result.outcome === "cancelled")
       .map((result) => result.channel);
 
     this.syncRunningAdapterLists();
@@ -523,9 +577,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       startedChannels.length > 0
       || stoppedChannels.length > 0
       || failedChannels.length > 0
+      || cancelledChannels.length > 0
       || hotUpdatedChannels.length > 0
     ) {
       messagingLog.info("messaging runtime config applied", {
+        cancelled: cancelledChannels.length > 0 ? cancelledChannels : undefined,
         hotUpdated: hotUpdatedChannels.length > 0 ? hotUpdatedChannels : undefined,
         started: startedChannels.length > 0 ? startedChannels : undefined,
         stopped: stoppedChannels.length > 0 ? stoppedChannels : undefined,
@@ -927,6 +983,35 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     await run;
   }
 
+  private cancelPendingAdapterStarts(reason: string): void {
+    for (const pending of this.pendingAdapterStarts.values()) {
+      pending.cancel(reason);
+    }
+  }
+
+  private updatePendingAdapterStartIntent(
+    config: DesktopMessagingConfig,
+  ): void {
+    if (config.enabled === false) {
+      const reason =
+        "Messaging was disabled while adapter startup was still pending.";
+      this.pendingAdapterStopReason = reason;
+      this.cancelPendingAdapterStarts(reason);
+      return;
+    }
+
+    this.pendingAdapterStopReason = undefined;
+    for (const channel of CONFIGURABLE_MESSAGING_CHANNELS) {
+      if (messagingChannelConfig(config, channel)) {
+        this.pendingAdapterStartCancellationReasons.delete(channel);
+        continue;
+      }
+      const reason = `${channel} was disabled while adapter startup was still pending.`;
+      this.pendingAdapterStartCancellationReasons.set(channel, reason);
+      this.pendingAdapterStarts.get(channel)?.cancel(reason);
+    }
+  }
+
   private async shouldDropAmbientSharedMessage(params: {
     channel: MessagingChannelKind;
     event: MessagingInboundEvent;
@@ -987,7 +1072,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     adapter: DesktopMessagingAdapter;
     config: DesktopMessagingConfig;
     store: MessagingStoreLike;
-  }): Promise<boolean> {
+  }): Promise<AdapterStartOutcome> {
     const { adapter, config, store } = params;
     const authorizedActorIds = [...adapter.authorizedActorIds];
     const authorization: RunningMessagingAuthorization = {
@@ -1080,7 +1165,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         });
       });
       this.setPlatformHealth(adapter.channel, "unknown");
-      await adapter.start?.(async (event) => {
+      await this.startAdapterWithDeadline(adapter, async (event) => {
         // Activity ping fires on every inbound, before authorization checks.
         this.emitPlatformActivity(adapter.channel);
         if (await this.handlePairingInbound(adapter, event)) {
@@ -1142,22 +1227,28 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         // Best effort cleanup after startup failure.
       }
       controller.dispose();
-      try {
-        await adapter.stop?.();
-      } catch (stopError) {
-        messagingLog.warn(`${adapter.channel}: adapter stop after failed start threw`, {
+      const cancelled = error instanceof AdapterStartCancelledError;
+      if (cancelled) {
+        messagingLog.info(`${adapter.channel}: adapter startup cancelled`, {
           channel: adapter.channel,
-          error: stopError instanceof Error ? stopError.message : String(stopError),
+          reason: error.message,
+        });
+        this.setPlatformHealth(adapter.channel, "suspended", {
+          reason: error.message,
+        });
+      } else {
+        messagingLog.error(`${adapter.channel}: failed to start adapter`, {
+          channel: adapter.channel,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.setPlatformHealth(adapter.channel, "errored", {
+          reason: error instanceof Error ? error.message : String(error),
         });
       }
-      messagingLog.error(`${adapter.channel}: failed to start adapter`, {
-        channel: adapter.channel,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.setPlatformHealth(adapter.channel, "errored", {
-        reason: error instanceof Error ? error.message : String(error),
-      });
-      return false;
+      if (!(error instanceof AdapterStartCancelledError && !error.startInvoked)) {
+        await this.stopAdapterAfterFailedStart(adapter);
+      }
+      return cancelled ? "cancelled" : "failed";
     }
 
     const unsubscribeRuntimeError = adapter.onRuntimeError?.((reason) => {
@@ -1203,7 +1294,100 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     messagingLog.info(`${adapter.channel}: adapter started successfully`, {
       channel: adapter.channel,
     });
-    return true;
+    return "started";
+  }
+
+  private async startAdapterWithDeadline(
+    adapter: DesktopMessagingAdapter,
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void> {
+    const timeoutMs = Math.max(
+      1,
+      this.options.adapterStartTimeoutMs ?? DEFAULT_ADAPTER_START_TIMEOUT_MS,
+    );
+    let cancel: ((reason: string) => void) | undefined;
+    let cancelled = false;
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      cancel = (reason) => {
+        if (cancelled) return;
+        cancelled = true;
+        reject(new AdapterStartCancelledError(reason));
+      };
+    });
+    const pending: PendingAdapterStart = {
+      cancel: (reason) => cancel?.(reason),
+    };
+    this.pendingAdapterStarts.set(adapter.channel, pending);
+    const queuedCancellationReason = this.pendingAdapterStopReason
+      ?? this.pendingAdapterStartCancellationReasons.get(adapter.channel);
+    if (queuedCancellationReason) {
+      this.pendingAdapterStarts.delete(adapter.channel);
+      throw new AdapterStartCancelledError(queuedCancellationReason, false);
+    }
+
+    const startPromise = Promise.resolve().then(async () => {
+      await adapter.start?.(listener);
+    });
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new AdapterStartTimeoutError(adapter.channel, timeoutMs));
+      }, timeoutMs);
+      if (timeoutHandle.unref) timeoutHandle.unref();
+    });
+
+    try {
+      await Promise.race([startPromise, cancellation, timeout]);
+    } catch (error) {
+      if (
+        error instanceof AdapterStartCancelledError
+        || error instanceof AdapterStartTimeoutError
+      ) {
+        void startPromise.then(
+          async () => this.stopAdapterAfterLateStart(adapter),
+          async () => this.stopAdapterAfterLateStart(adapter),
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutHandle);
+      if (this.pendingAdapterStarts.get(adapter.channel) === pending) {
+        this.pendingAdapterStarts.delete(adapter.channel);
+      }
+    }
+  }
+
+  private async stopAdapterAfterFailedStart(
+    adapter: DesktopMessagingAdapter,
+  ): Promise<void> {
+    try {
+      await promiseWithTimeout(
+        Promise.resolve().then(async () => adapter.stop?.()),
+        FAILED_START_STOP_TIMEOUT_MS,
+        `${adapter.channel} adapter cleanup after failed startup`,
+      );
+    } catch (stopError) {
+      messagingLog.warn(`${adapter.channel}: adapter stop after failed start threw`, {
+        channel: adapter.channel,
+        error: stopError instanceof Error ? stopError.message : String(stopError),
+      });
+    }
+  }
+
+  private async stopAdapterAfterLateStart(
+    adapter: DesktopMessagingAdapter,
+  ): Promise<void> {
+    try {
+      await adapter.stop?.();
+      messagingLog.info(`${adapter.channel}: stopped adapter after late startup`, {
+        channel: adapter.channel,
+      });
+    } catch (error) {
+      messagingLog.warn(`${adapter.channel}: adapter stop after late start threw`, {
+        channel: adapter.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async hotApplyRunningAdapter(
@@ -2344,6 +2528,57 @@ function degradationKey(
   id: string,
 ): string {
   return `${platform}:${kind}:${id}`;
+}
+
+function messagingChannelConfig(
+  config: DesktopMessagingConfig,
+  channel: MessagingChannelKind,
+): unknown {
+  switch (channel) {
+    case "discord":
+      return config.discord;
+    case "feishu":
+      return config.feishu;
+    case "line":
+      return config.line;
+    case "mattermost":
+      return config.mattermost;
+    case "slack":
+      return config.slack;
+    case "telegram":
+      return config.telegram;
+    default:
+      return undefined;
+  }
+}
+
+async function promiseWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  operation: string,
+): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(
+        new Error(`${operation} did not complete within ${formatDuration(timeoutMs)}.`),
+      );
+    }, timeoutMs);
+    if (timeoutHandle.unref) timeoutHandle.unref();
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs % 1000 === 0) {
+    const seconds = durationMs / 1000;
+    return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+  }
+  return `${durationMs} ms`;
 }
 
 function streamingResponsesDefaultForChannel(

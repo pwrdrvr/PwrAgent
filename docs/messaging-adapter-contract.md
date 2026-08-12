@@ -60,6 +60,21 @@ authorized bot messages as ordinary `text` or `media` events with
 provider alerts such as Slack posts from monitoring bots without looping on
 PwrAgent's own replies.
 
+## Lifecycle
+
+`stop()` is valid as soon as `start()` has been invoked, not only after the
+adapter reports a fully started state. It must close or detach every resource
+created by a partial start, including callback servers, SDK listeners,
+websockets, gateway clients, and polling loops. A stop that arrives during an
+awaited identity or connection step must also prevent later startup steps from
+opening new external resources.
+
+Startup cleanup is idempotent. The desktop runtime may call `stop()` once when
+cancellation or a deadline wins and again after the original `start()` promise
+settles, whether that promise resolves or rejects. Providers must therefore not
+gate cleanup solely on a final `started` flag, and repeated cleanup must not
+leave listeners or connections behind.
+
 ## Opaque State
 
 Adapters own routing and surface state. PwrAgent may persist and echo

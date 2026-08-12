@@ -995,6 +995,61 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
+  it("times out a stuck adapter start and reports an error without blocking other adapters", async () => {
+    await prepareRuntimeStore();
+    const stuckStart = createDeferred<void>();
+    const stuckAdapter = createAdapter("discord", {
+      start: vi.fn(async () => {
+        await stuckStart.promise;
+      }),
+    });
+    const workingAdapter = createAdapter("telegram");
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: () => [stuckAdapter, workingAdapter],
+      adapterStartTimeoutMs: 1,
+      backendBridge: createBackendBridge(),
+      config: {
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    }));
+
+    await runtime.start();
+
+    expect(stuckAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.getPlatformStatuses()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: "discord",
+          health: "errored",
+          reason: "discord adapter startup did not complete within 1 ms.",
+        }),
+        expect.objectContaining({
+          platform: "telegram",
+          health: "enabled",
+        }),
+      ]),
+    );
+    expect(messagingLog.info).toHaveBeenCalledWith(
+      "messaging runtime config applied",
+      expect.objectContaining({
+        started: ["telegram"],
+        failed: ["discord"],
+      }),
+    );
+  });
+
   it("starts adapters in parallel and reports pending adapters as loading", async () => {
     await prepareRuntimeStore();
     const telegramStart = createDeferred<void>();
@@ -1039,6 +1094,9 @@ describe("DesktopMessagingRuntime", () => {
         health: "unknown",
       }),
     );
+    await waitFor(() => runtime.getPlatformStatuses().some(
+      (status) => status.platform === "discord" && status.health === "enabled",
+    ));
     expect(runtime.getPlatformStatuses()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1095,14 +1153,9 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
-  it("serializes stop requests behind pending startup", async () => {
+  it("skips adapter startup when a stop request arrives before adapters register", async () => {
     await prepareRuntimeStore();
-    const telegramStart = createDeferred<void>();
     const slowTelegramAdapter = createAdapter("telegram");
-    slowTelegramAdapter.start.mockImplementation(async (listener) => {
-      slowTelegramAdapter.listener = listener;
-      await telegramStart.promise;
-    });
     const workingDiscordAdapter = createAdapter("discord");
     const { DesktopMessagingRuntime: Runtime } = await import(
       "../messaging/messaging-runtime"
@@ -1125,19 +1178,13 @@ describe("DesktopMessagingRuntime", () => {
     });
 
     const startPromise = runtime.start();
-    await flushMicrotasks();
     const stopPromise = runtime.stop();
-    await flushMicrotasks();
-
-    expect(slowTelegramAdapter.start).toHaveBeenCalledTimes(1);
-    expect(workingDiscordAdapter.start).toHaveBeenCalledTimes(1);
-    expect(slowTelegramAdapter.stop).not.toHaveBeenCalled();
-
-    telegramStart.resolve();
     await Promise.all([startPromise, stopPromise]);
 
-    expect(slowTelegramAdapter.stop).toHaveBeenCalledTimes(1);
-    expect(workingDiscordAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(slowTelegramAdapter.start).not.toHaveBeenCalled();
+    expect(workingDiscordAdapter.start).not.toHaveBeenCalled();
+    expect(slowTelegramAdapter.stop).not.toHaveBeenCalled();
+    expect(workingDiscordAdapter.stop).not.toHaveBeenCalled();
     expect(runtime.isEnabled()).toBe(false);
     expect(runtime.getPlatformStatuses()).toEqual(
       expect.arrayContaining([
@@ -1150,6 +1197,117 @@ describe("DesktopMessagingRuntime", () => {
           health: "suspended",
         }),
       ]),
+    );
+  });
+
+  it("cleans up again when a cancelled adapter start rejects late", async () => {
+    await prepareRuntimeStore();
+    const discordStart = createDeferred<void>();
+    const discordAdapter = createAdapter("discord", {
+      start: vi.fn(async () => {
+        await discordStart.promise;
+      }),
+    });
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) =>
+      config.discord ? [discordAdapter] : []
+    );
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    }));
+
+    const startPromise = runtime.start();
+    await waitFor(() => discordAdapter.start.mock.calls.length === 1);
+    const applyPromise = runtime.applyConfig({});
+    await Promise.all([startPromise, applyPromise]);
+
+    expect(discordAdapter.stop).toHaveBeenCalledTimes(1);
+    discordStart.reject(new Error("login rejected after cancellation"));
+    await waitFor(() => discordAdapter.stop.mock.calls.length === 2);
+    expect(messagingLog.info).toHaveBeenCalledWith(
+      "discord: stopped adapter after late startup",
+      { channel: "discord" },
+    );
+  });
+
+  it("cancels a pending adapter start when that platform is disabled", async () => {
+    await prepareRuntimeStore();
+    const discordStart = createDeferred<void>();
+    const discordAdapter = createAdapter("discord");
+    discordAdapter.start.mockImplementation(async (listener) => {
+      discordAdapter.listener = listener;
+      await discordStart.promise;
+    });
+    const telegramAdapter = createAdapter("telegram");
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) => [
+      ...(config.discord ? [discordAdapter] : []),
+      ...(config.telegram ? [telegramAdapter] : []),
+    ]);
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    }));
+
+    const startPromise = runtime.start();
+    await waitFor(() => discordAdapter.start.mock.calls.length === 1);
+    const applyPromise = runtime.applyConfig({
+      telegram: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    });
+    await Promise.all([startPromise, applyPromise]);
+
+    expect(discordAdapter.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.getPlatformStatuses()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: "discord",
+          health: "suspended",
+          reason: "discord was disabled while adapter startup was still pending.",
+        }),
+        expect.objectContaining({
+          platform: "telegram",
+          health: "enabled",
+        }),
+      ]),
+    );
+    expect(messagingLog.info).toHaveBeenCalledWith(
+      "discord: adapter startup cancelled",
+      expect.objectContaining({ channel: "discord" }),
+    );
+
+    discordStart.resolve();
+    await waitFor(() => discordAdapter.stop.mock.calls.length === 2);
+    expect(messagingLog.info).toHaveBeenCalledWith(
+      "discord: stopped adapter after late startup",
+      { channel: "discord" },
     );
   });
 
