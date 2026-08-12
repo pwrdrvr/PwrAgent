@@ -4867,6 +4867,22 @@ textarea,
   white-space: nowrap;
 }
 
+/* The whole branch name, for assistive tech only. The visual halves above are
+   `aria-hidden` because flex blockifies them into two separate a11y nodes, so
+   the name would otherwise be announced split mid-word. Absolute positioning
+   keeps this out of the flex flow entirely. */
+.pr-status-card__branch-full {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
 .pr-status-card__status {
   display: flex;
   align-items: baseline;
