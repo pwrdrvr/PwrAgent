@@ -109,7 +109,6 @@ import type {
   MessagingSurfaceIntent,
   MessagingTopicCleanupProposalItem,
   MessagingTopicCleanupProposalRecord,
-  MessagingWorkingCardIntent,
 } from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
@@ -310,12 +309,6 @@ type MessagingTurnProseState = {
 
 export type MessagingWorkingCardState = {
   activities: Map<string, MessagingToolActivity>;
-  /**
-   * Last hint chosen from the dial. Remembered so a refresh that carries no
-   * dial delivery of its own — an in-progress step, a waiting headline — keeps
-   * the card in the layout the operator's mode selected.
-   */
-  displayHint: MessagingWorkingCardIntent["card"]["displayHint"];
   omittedTaskCount: number;
   sequence: number;
 };
@@ -15682,59 +15675,6 @@ export class MessagingController {
     }
   }
 
-  private ensureWorkingCardState(key: string): MessagingWorkingCardState {
-    let state = this.workingCards.get(key);
-    if (!state) {
-      state = {
-        activities: new Map(),
-        displayHint: "plan",
-        omittedTaskCount: 0,
-        sequence: 0,
-      };
-      rememberWorkingCardState(this.workingCards, key, state);
-    }
-    return state;
-  }
-
-  /**
-   * Show a tool as running on an already-open working card. Returns without
-   * delivering when no card exists for the turn: the dial has not produced one
-   * yet (or is set to None), and a started step must not be the thing that
-   * opens a card the operator did not ask for.
-   */
-  private async refreshWorkingCardWithStartedActivity(
-    binding: MessagingBindingRecord,
-    turnId: string,
-    activity: MessagingToolActivity,
-  ): Promise<void> {
-    if (binding.channel.channel !== "slack") {
-      return;
-    }
-    const key = this.turnProseKey(binding.id, turnId);
-    const state = this.workingCards.get(key);
-    if (!state) {
-      return;
-    }
-    updateWorkingCardActivities(state, [activity]);
-    state.sequence += 1;
-    await this.deliver(
-      buildWorkingCardIntent({
-        activities: [...state.activities.values()],
-        bindingId: binding.id,
-        createdAt: this.now(),
-        displayHint: state.displayHint,
-        // No text fallback: a degraded card must not post "started" lines as
-        // messages, which is exactly the per-tool spam the dial exists to stop.
-        fallbackActivities: [],
-        id: this.newIntentId("working-card-started"),
-        key,
-        omittedTaskCount: state.omittedTaskCount,
-        sequence: state.sequence,
-      }),
-      binding,
-    );
-  }
-
   private async markWorkingCardWaiting(
     binding: MessagingBindingRecord,
   ): Promise<void> {
@@ -15753,7 +15693,7 @@ export class MessagingController {
       activities: [...state.activities.values()],
       bindingId: binding.id,
       createdAt: this.now(),
-      displayHint: state.displayHint,
+      displayHint: "plan",
       fallbackActivities: [],
       id: this.newIntentId("working-card-waiting"),
       key,
@@ -15864,16 +15804,6 @@ export class MessagingController {
       return;
     }
     if (this.isAutomationTurnEvent(event, binding, activeTurnId)) {
-      return;
-    }
-
-    if (activity.status === "started") {
-      // Deliberately bypasses the dial. A started tool is not a Working Update
-      // — it reports no outcome — so it must never batch into a text message or
-      // consume the policy's budget. It only refreshes a card that the dial has
-      // already opened for this turn, which keeps None silent and means the
-      // live spinner costs nothing on surfaces that render text.
-      await this.refreshWorkingCardWithStartedActivity(binding, turnId, activity);
       return;
     }
 
@@ -16127,19 +16057,22 @@ export class MessagingController {
     activities: MessagingToolActivity[],
   ): MessagingSurfaceIntent {
     const key = this.turnProseKey(bindingId, delivery.turnId);
-    const state = this.ensureWorkingCardState(key);
-    state.displayHint = delivery.mode === "show_all"
-      ? "timeline"
-      : delivery.mode === "show_less"
-        ? "dense"
-        : "plan";
+    let state = this.workingCards.get(key);
+    if (!state) {
+      state = { activities: new Map(), omittedTaskCount: 0, sequence: 0 };
+      rememberWorkingCardState(this.workingCards, key, state);
+    }
     updateWorkingCardActivities(state, activities);
     state.sequence += 1;
     return buildWorkingCardIntent({
       activities: [...state.activities.values()],
       bindingId,
       createdAt: this.now(),
-      displayHint: state.displayHint,
+      displayHint: delivery.mode === "show_all"
+        ? "timeline"
+        : delivery.mode === "show_less"
+          ? "dense"
+          : "plan",
       fallbackActivities: activities,
       id: this.newIntentId("working-card"),
       key,
@@ -16163,16 +16096,10 @@ export class MessagingController {
     }
     state.sequence += 1;
     const intent = buildWorkingCardIntent({
-      // A step still in progress when the turn ends never reports an outcome
-      // of its own. Settle it here so the stopped stream cannot keep a live
-      // spinner: a finished turn completes it, a failed one cancels it.
-      activities: settleStartedActivities(
-        [...state.activities.values()],
-        phase === "failed" ? "cancelled" : "completed",
-      ),
+      activities: [...state.activities.values()],
       bindingId: binding.id,
       createdAt: this.now(),
-      displayHint: state.displayHint,
+      displayHint: "plan",
       fallbackActivities: [],
       id: this.newIntentId("working-card-final"),
       key,
@@ -20155,14 +20082,6 @@ export function updateWorkingCardActivities(
     }
     state.activities.set(activity.id, activity);
   }
-}
-
-export function settleStartedActivities(
-  activities: readonly MessagingToolActivity[],
-  status: "completed" | "cancelled",
-): MessagingToolActivity[] {
-  return activities.map((activity) =>
-    activity.status === "started" ? { ...activity, status } : activity);
 }
 
 export function rememberWorkingCardState(

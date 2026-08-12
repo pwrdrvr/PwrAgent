@@ -51,7 +51,6 @@ import {
   MessagingController,
   messagingDeliveryPriority,
   rememberWorkingCardState,
-  settleStartedActivities,
   shouldConsumeDeliveryBudget,
   updateWorkingCardActivities,
   type MessagingControllerOptions,
@@ -15125,7 +15124,6 @@ describe("MessagingController", () => {
   it("bounds accumulated working-card tasks and collapses the oldest entries", () => {
     const state = {
       activities: new Map(),
-      displayHint: "plan" as const,
       omittedTaskCount: 0,
       sequence: 0,
     };
@@ -15144,47 +15142,10 @@ describe("MessagingController", () => {
     expect(state.omittedTaskCount).toBe(2);
   });
 
-  it("replaces a started activity in place when the tool completes", () => {
-    const state = {
-      activities: new Map(),
-      displayHint: "plan" as const,
-      omittedTaskCount: 0,
-      sequence: 0,
-    };
-    updateWorkingCardActivities(state, [
-      { id: "tool-1", kind: "tool", status: "started", title: "Ran tool" },
-      { id: "tool-2", kind: "tool", status: "started", title: "Other tool" },
-    ]);
-    updateWorkingCardActivities(state, [
-      { id: "tool-1", kind: "tool", status: "completed", title: "Ran tool" },
-    ]);
-
-    // Same key updates the row without moving it behind tool-2.
-    expect([...state.activities.keys()]).toEqual(["tool-1", "tool-2"]);
-    expect(state.activities.get("tool-1")?.status).toBe("completed");
-    expect(state.omittedTaskCount).toBe(0);
-  });
-
-  it("settles steps still running when the turn reaches a terminal phase", () => {
-    const activities = [
-      { id: "done", kind: "tool" as const, status: "completed" as const, title: "Done" },
-      { id: "running", kind: "tool" as const, status: "started" as const, title: "Running" },
-      { id: "broke", kind: "tool" as const, status: "failed" as const, title: "Broke" },
-    ];
-
-    expect(settleStartedActivities(activities, "completed").map((a) => a.status))
-      .toEqual(["completed", "completed", "failed"]);
-    // A failed turn cannot claim the in-flight step succeeded.
-    expect(settleStartedActivities(activities, "cancelled").map((a) => a.status))
-      .toEqual(["completed", "cancelled", "failed"]);
-    expect(activities[1]?.status).toBe("started");
-  });
-
   it("bounds per-turn working-card state when terminal events are missing", () => {
     const states = new Map();
     const state = () => ({
       activities: new Map(),
-      displayHint: "plan" as const,
       omittedTaskCount: 0,
       sequence: 0,
     });
@@ -16326,83 +16287,6 @@ describe("MessagingController", () => {
     expect(cards).toHaveLength(2);
     expect(cards[0]?.card).toMatchObject({ isFinal: false, phase: "working" });
     expect(cards[1]?.card).toMatchObject({ isFinal: true, phase: "completed" });
-  });
-
-  it("shows a running tool on an open Slack card without sending text", async () => {
-    const harness = await createHarness({
-      channel: "slack",
-      toolUpdateDefaultMode: "show_all",
-    });
-    await harness.store.upsertBinding({
-      id: "binding-slack-running",
-      authorizedActorIds: ["user-1"],
-      backend: "codex",
-      channel: {
-        channel: "slack",
-        conversation: {
-          id: "C012RUNNING",
-          kind: "thread",
-          parentId: "1700000000.000001",
-          workspaceId: "T012WORKSPACE",
-        },
-      },
-      createdAt: 1000,
-      routingState: {
-        opaque: {
-          channelId: "C012RUNNING",
-          threadTs: "1700000000.000001",
-        },
-      },
-      targetKind: "thread",
-      threadId: "thread-1",
-      updatedAt: 1000,
-    });
-
-    const toolEvent = (
-      method: "item/started" | "item/completed",
-      item: { id: string; type: string } & Record<string, unknown>,
-    ): AgentEvent => ({
-      backend: "codex",
-      notification: {
-        method,
-        params: { threadId: "thread-1", turnId: "turn-1", item },
-      },
-    } satisfies AgentEvent);
-
-    // A start with no card open yet must not create one — the dial owns that.
-    await harness.controller.handleBackendEvent(toolEvent("item/started", {
-      id: "tool-1",
-      type: "commandExecution",
-      command: "rg --files",
-    }));
-    expect(harness.delivered.filter((i) => i.kind === "working_card")).toEqual([]);
-
-    await harness.controller.handleBackendEvent(toolEvent("item/completed", {
-      id: "tool-1",
-      type: "commandExecution",
-      command: "rg --files",
-      durationMs: 900,
-    }));
-    harness.delivered.length = 0;
-
-    await harness.controller.handleBackendEvent(toolEvent("item/started", {
-      id: "tool-2",
-      type: "commandExecution",
-      command: "npm test",
-    }));
-
-    const cards = harness.delivered.filter(
-      (intent): intent is Extract<MessagingSurfaceIntent, { kind: "working_card" }> =>
-        intent.kind === "working_card",
-    );
-    expect(cards).toHaveLength(1);
-    expect(cards[0]?.card.tasks).toEqual([
-      expect.objectContaining({ id: "tool-1", status: "complete" }),
-      expect.objectContaining({ id: "tool-2", status: "in_progress" }),
-    ]);
-    // The start bypasses the dial entirely: no batched text, no fallback text.
-    expect(cards[0]?.fallbackText).toBe("");
-    expect(harness.delivered.filter((i) => i.kind === "message")).toEqual([]);
   });
 
   it("discards a coalesced monitor heartbeat when the monitor completes", async () => {

@@ -197,9 +197,7 @@ export function buildWorkingCardIntent(params: {
         ? "error" as const
         : activity.status === "cancelled"
           ? "cancelled" as const
-          : activity.status === "started"
-            ? "in_progress" as const
-            : "complete" as const,
+          : "complete" as const,
       title: activity.title,
       ...(detail ? { detail } : {}),
     };
