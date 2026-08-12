@@ -151,7 +151,8 @@ seven job definitions (the Linux package job fans out across two architectures):
    Linux packages, and the signed Windows installer. Only then does it create
    the GitHub Release (as `Pre-release` for prerelease tags and normal/Latest
    for stable tags), upload every platform's assets, and generate Linux
-   `SHA256SUMS`.
+   `SHA256SUMS`. The Windows package checksum manifest is uploaded as
+   `PwrAgent-windows-SHA256SUMS` so GitHub Release assets have unique names.
 7. `Publish release notes`, which waits for successful all-platform asset
    publishing, extracts the matching `CHANGELOG.md` section, updates the
    GitHub Release body, and fails the workflow if the body still reads back as

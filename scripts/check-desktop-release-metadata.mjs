@@ -405,12 +405,14 @@ for (const expected of [
   "Checkout repository",
   "Download macOS release artifacts",
   "Download Windows installer artifact",
+  "Name Windows checksum manifest",
   "Create release and publish all platform assets",
   "gh release create",
   "--verify-tag",
   "--prerelease",
   "--latest",
   "windows-dist/*",
+  "PwrAgent-windows-SHA256SUMS",
 ]) {
   assertWorkflowJobContainsText(
     releaseWorkflow,
@@ -419,6 +421,13 @@ for (const expected of [
     expected,
   );
 }
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "publish-release-assets",
+  "Name Windows checksum manifest",
+  "Create release and publish all platform assets",
+);
 assertWorkflowJobContainsText(
   releaseWorkflow,
   ".github/workflows/release.yml",

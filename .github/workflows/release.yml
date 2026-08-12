@@ -363,6 +363,12 @@ jobs:
           test "${#debs[@]}" -eq 4
           sha256sum "${debs[@]}" > SHA256SUMS
 
+      # The Windows package stage also writes SHA256SUMS. Keep the stable Linux
+      # alias for its documented download URL while giving the Windows manifest
+      # a platform-specific asset name; GitHub Releases rejects duplicate names.
+      - name: Name Windows checksum manifest
+        run: mv windows-dist/SHA256SUMS windows-dist/PwrAgent-windows-SHA256SUMS
+
       - name: Create release and publish all platform assets
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
