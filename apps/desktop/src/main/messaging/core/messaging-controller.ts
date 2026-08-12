@@ -306,6 +306,12 @@ type MessagingTurnProseState = {
   latest?: { activityId: string; text: string };
   deliveredIds: Set<string>;
 };
+
+export type MessagingWorkingCardState = {
+  activities: Map<string, MessagingToolActivity>;
+  omittedTaskCount: number;
+  sequence: number;
+};
 const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
 const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
   "You are an Agent thread created from messaging. Keep shared context for the attached messaging surfaces and use available Agent tools when they are relevant.";
@@ -920,7 +926,7 @@ export class MessagingController {
   private readonly turnProse = new Map<string, MessagingTurnProseState>();
   private readonly workingCards = new Map<
     string,
-    { activities: Map<string, MessagingToolActivity>; sequence: number }
+    MessagingWorkingCardState
   >();
   private readonly completedTaskMonitorTurns = new Set<string>();
   private readonly turnAdmission: MessagingTurnAdmission;
@@ -15677,8 +15683,10 @@ export class MessagingController {
       bindingId: binding.id,
       createdAt: this.now(),
       displayHint: "plan",
+      fallbackActivities: [],
       id: this.newIntentId("working-card-waiting"),
       key,
+      omittedTaskCount: state.omittedTaskCount,
       sequence: state.sequence,
     });
     card.card.phase = "waiting";
@@ -16040,12 +16048,10 @@ export class MessagingController {
     const key = this.turnProseKey(bindingId, delivery.turnId);
     let state = this.workingCards.get(key);
     if (!state) {
-      state = { activities: new Map(), sequence: 0 };
+      state = { activities: new Map(), omittedTaskCount: 0, sequence: 0 };
       this.workingCards.set(key, state);
     }
-    for (const activity of activities) {
-      state.activities.set(activity.id, activity);
-    }
+    updateWorkingCardActivities(state, activities);
     state.sequence += 1;
     return buildWorkingCardIntent({
       activities: [...state.activities.values()],
@@ -16056,8 +16062,10 @@ export class MessagingController {
         : delivery.mode === "show_less"
           ? "dense"
           : "plan",
+      fallbackActivities: activities,
       id: this.newIntentId("working-card"),
       key,
+      omittedTaskCount: state.omittedTaskCount,
       sequence: state.sequence,
     });
   }
@@ -16081,8 +16089,10 @@ export class MessagingController {
       bindingId: binding.id,
       createdAt: this.now(),
       displayHint: "plan",
+      fallbackActivities: [],
       id: this.newIntentId("working-card-final"),
       key,
+      omittedTaskCount: state.omittedTaskCount,
       sequence: state.sequence,
     });
     intent.card.phase = phase;
@@ -20006,7 +20016,7 @@ export function messagingDeliveryPriority(
     case "stream_update":
       return intent.stream.isFinal ? "final_turn" : "stream_partial";
     case "working_card":
-      return "tool_progress";
+      return intent.card.isFinal ? "final_turn" : "tool_progress";
     case "message":
       if (intent.id.startsWith("assistant-resume-repost-important")) {
         return "user_command";
@@ -20040,6 +20050,26 @@ export function messagingDeliveryPriority(
     case "confirmation":
     case "error":
       return "user_command";
+  }
+}
+
+export function updateWorkingCardActivities(
+  state: MessagingWorkingCardState,
+  activities: readonly MessagingToolActivity[],
+  maxVisibleTasks = 12,
+): void {
+  for (const activity of activities) {
+    if (
+      !state.activities.has(activity.id)
+      && state.activities.size >= maxVisibleTasks
+    ) {
+      const oldestId = state.activities.keys().next().value;
+      if (oldestId !== undefined) {
+        state.activities.delete(oldestId);
+        state.omittedTaskCount += 1;
+      }
+    }
+    state.activities.set(activity.id, activity);
   }
 }
 

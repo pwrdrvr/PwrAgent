@@ -283,6 +283,7 @@ function createSnapshot(
       },
       slack: {
         enabled: { value: false, source: "default" },
+        liveWorkingCards: { value: false, source: "default" },
         responseMode: { value: "mention_only", source: "default" },
         streamingResponses: { value: false, source: "default" },
         botToken: { configured: false, source: "unset", writable: true },

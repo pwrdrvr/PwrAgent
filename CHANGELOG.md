@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Messaging - Render Slack Working Updates as one live Thinking Steps task card per turn, with sequenced updates, terminal/waiting state handling, and text fallback when Slack streaming is unavailable.
+- Messaging - Add opt-in Slack Live Working Cards that render Working Updates as one rate-aware Thinking Steps task card per turn, with ordered/coalesced stream calls, terminal/waiting state handling, cancellation, and classic text fallback when native streaming is off or unavailable.
 
 ## v1.1.0-beta.1 - 2026-08-09
 

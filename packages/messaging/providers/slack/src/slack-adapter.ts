@@ -34,6 +34,7 @@ import type {
   MessagingManagedConversationRightsResult,
   MessagingPrivateConversationResolveRequest,
   MessagingPrivateConversationResolveResult,
+  MessagingRateLimitBucket,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
@@ -43,6 +44,7 @@ import type {
 import {
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
+  MessagingRateLimitGate,
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
   SLACK_DM_ACCESS_MODE_DEFAULT,
@@ -87,6 +89,13 @@ const SLACK_DIRECTORY_PAGE_SIZE = 200;
 // Bounds a very large workspace: 10 pages x 200 = 2,000 people, past which a
 // name search is the wrong interaction anyway.
 const SLACK_DIRECTORY_MAX_PAGES = 10;
+const SLACK_WORKING_CARD_TOMBSTONE_MAX = 200;
+const SLACK_WORKING_CARD_RETRY_MS = 3_000;
+const SLACK_WORKING_CARD_BUCKETS = {
+  start: { method: "chat.startStream", limit: 20 },
+  append: { method: "chat.appendStream", limit: 100 },
+  stop: { method: "chat.stopStream", limit: 20 },
+} as const;
 
 export type SlackProviderLogger = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
@@ -295,6 +304,29 @@ type SlackSurfaceOpaqueState = {
   messageTimestamps?: string[];
   threadTs?: string;
   ts?: string;
+  workingCardKey?: string;
+};
+
+type SlackWorkingCardMethod = keyof typeof SLACK_WORKING_CARD_BUCKETS;
+
+type SlackWorkingCardTarget = {
+  channelId: string;
+  channelRef: MessagingChannelRef;
+  threadTs: string;
+};
+
+type SlackWorkingCardQueueState = {
+  cancelled: boolean;
+  fallbackSurface?: MessagingSurfaceRef;
+  latest: Extract<MessagingSurfaceIntent, { kind: "working_card" }>;
+  lastDeliveredSequence: number;
+  nativeUnavailable?: boolean;
+  nonRateFailureCount: number;
+  pumping: boolean;
+  retryMethod?: SlackWorkingCardMethod;
+  retryTimer?: ReturnType<typeof setTimeout>;
+  target: SlackWorkingCardTarget;
+  ts?: string;
 };
 
 type SlackInboundListener = (event: MessagingInboundEvent) => Promise<void>;
@@ -472,14 +504,14 @@ export class SlackAdapter implements SlackProviderAdapter {
       text: string;
     }>
   >();
-  private readonly workingCardStreams = new Map<
-    string,
-    { channelId: string; sequence: number; ts: string }
-  >();
+  private readonly workingCardStreams = new Map<string, SlackWorkingCardQueueState>();
+  private readonly workingCardTombstones = new Map<string, number>();
+  private readonly workingCardRateLimits: MessagingRateLimitGate;
   private botAccount: string | undefined;
   private botAccountDetail: string | undefined;
   private botId: string | undefined;
   private botUserId: string | undefined;
+  private workspaceId: string | undefined;
   private assistantThreadStatusDisabled = false;
   private conversationInfoLookupDisabled = false;
   private threadInfoLookupDisabled = false;
@@ -491,6 +523,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.config = options.config;
     this.logger = options.logger ?? {};
     this.now = options.now ?? Date.now;
+    this.workingCardRateLimits = new MessagingRateLimitGate(this.now);
     this.callbackHandleStore = options.callbackHandleStore;
     this.authorizedActorIdsValue = options.config.authorizedActorIds.map(
       (actor) => actor.id,
@@ -583,6 +616,12 @@ export class SlackAdapter implements SlackProviderAdapter {
   async updateRenderingPreferences(
     update: MessagingAdapterRenderingPreferencesUpdate,
   ): Promise<void> {
+    if (update.liveWorkingCards !== undefined) {
+      this.config.liveWorkingCards = update.liveWorkingCards;
+      if (!update.liveWorkingCards) {
+        await this.cancelAllWorkingCards();
+      }
+    }
     if (update.streamingResponses !== undefined) {
       this.config.streamingResponses = update.streamingResponses;
     }
@@ -603,6 +642,18 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+    if (intent.kind === "working_card" && this.config.liveWorkingCards === true) {
+      const target = this.resolveTarget(intent);
+      if (
+        target?.threadTs
+        && this.api.startStream
+        && this.api.appendStream
+        && this.api.stopStream
+      ) {
+        return undefined;
+      }
+      return target ? this.rateLimitScopeForTarget(target) : undefined;
+    }
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
@@ -615,6 +666,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.botUserId = auth.user_id;
     this.botAccount = auth.user ?? auth.user_id;
     this.botAccountDetail = auth.team ?? hostFromUrl(auth.url) ?? auth.team_id;
+    this.workspaceId = auth.team_id;
 
     if (this.config.inboundMode === "events") {
       throw new Error("Slack Events API mode is not implemented yet; use Socket Mode");
@@ -636,6 +688,13 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   async stop(): Promise<void> {
+    for (const state of this.workingCardStreams.values()) {
+      state.cancelled = true;
+      if (state.retryTimer) clearTimeout(state.retryTimer);
+    }
+    this.workingCardStreams.clear();
+    this.workingCardTombstones.clear();
+    this.workingCardRateLimits.clear();
     if (!this.started) return;
     this.socketClient?.off?.("slack_event", this.handleSlackEvent);
     this.socketClient?.off?.("interactive", this.handleInteractive);
@@ -1383,6 +1442,50 @@ export class SlackAdapter implements SlackProviderAdapter {
     intent: Extract<MessagingSurfaceIntent, { kind: "dismiss" }>,
   ): Promise<MessagingDeliveryResult> {
     const target = readSlackSurfaceState(intent.targetSurface);
+    if (target?.workingCardKey) {
+      const state = this.workingCardStreams.get(target.workingCardKey);
+      if (state) {
+        state.cancelled = true;
+        if (state.retryTimer) clearTimeout(state.retryTimer);
+        this.workingCardStreams.delete(target.workingCardKey);
+        this.recordWorkingCardTombstone(
+          target.workingCardKey,
+          state.latest.card.sequence,
+        );
+        const fallbackState = readSlackSurfaceState(state.fallbackSurface);
+        const deleteTarget = state.ts
+          ? { channelId: state.target.channelId, ts: state.ts }
+          : fallbackState?.channelId && fallbackState.ts
+            ? { channelId: fallbackState.channelId, ts: fallbackState.ts }
+            : undefined;
+        if (deleteTarget) {
+          try {
+            await this.api.deleteMessage({
+              channel: deleteTarget.channelId,
+              ts: deleteTarget.ts,
+            });
+          } catch (error) {
+            const rateLimit = this.emitRateLimitFromError(
+              error,
+              state.target,
+              { retryable: true },
+            );
+            return {
+              outcome: "failed",
+              channel: this.channel,
+              deliveredAt: this.now(),
+              errorMessage: error instanceof Error ? error.message : String(error),
+              ...(rateLimit ? { rateLimit } : {}),
+            };
+          }
+        }
+      }
+      return {
+        outcome: "dismissed",
+        channel: this.channel,
+        deliveredAt: this.now(),
+      };
+    }
     const messageTimestamps = target?.messageTimestamps?.length
       ? target.messageTimestamps
       : target?.ts
@@ -1697,10 +1800,26 @@ export class SlackAdapter implements SlackProviderAdapter {
     intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
   ): Promise<MessagingDeliveryResult> {
     const deliveredAt = this.now();
+    if (this.config.liveWorkingCards !== true) {
+      return await this.deliverWorkingCardFallback(intent);
+    }
     const target = this.resolveTarget(intent);
-    const current = this.workingCardStreams.get(intent.card.key);
-    if (current && intent.card.sequence <= current.sequence) {
+    const terminalSequence = this.workingCardTombstones.get(intent.card.key);
+    if (terminalSequence !== undefined && intent.card.sequence <= terminalSequence) {
       return { outcome: "discarded", channel: this.channel, deliveredAt };
+    }
+    const current = this.workingCardStreams.get(intent.card.key);
+    if (current && intent.card.sequence <= current.latest.card.sequence) {
+      return { outcome: "discarded", channel: this.channel, deliveredAt };
+    }
+    if (current?.nativeUnavailable) {
+      current.latest = intent;
+      if (intent.card.isFinal) {
+        this.workingCardStreams.delete(intent.card.key);
+        this.recordWorkingCardTombstone(intent.card.key, intent.card.sequence);
+        return { outcome: "discarded", channel: this.channel, deliveredAt };
+      }
+      return await this.deliverWorkingCardFallback(intent);
     }
     if (
       !target?.threadTs
@@ -1710,6 +1829,214 @@ export class SlackAdapter implements SlackProviderAdapter {
     ) {
       return await this.deliverWorkingCardFallback(intent);
     }
+    const workingTarget: SlackWorkingCardTarget = {
+      channelId: target.channelId,
+      channelRef: target.channelRef,
+      threadTs: target.threadTs,
+    };
+    const state: SlackWorkingCardQueueState = current ?? {
+      cancelled: false,
+      latest: intent,
+      lastDeliveredSequence: 0,
+      nonRateFailureCount: 0,
+      pumping: false,
+      target: workingTarget,
+    };
+    if (!current) {
+      this.workingCardStreams.set(intent.card.key, state);
+    } else {
+      state.latest = intent;
+      state.nonRateFailureCount = 0;
+      if (intent.card.isFinal && state.retryMethod === "append" && state.retryTimer) {
+        clearTimeout(state.retryTimer);
+        state.retryTimer = undefined;
+        state.retryMethod = undefined;
+      }
+    }
+    this.startWorkingCardPump(intent.card.key, state);
+    return {
+      outcome: current ? "updated" : "presented",
+      channel: this.channel,
+      deliveredAt,
+      surface: this.workingCardSurface(intent.card.key, state),
+    };
+  }
+
+  private startWorkingCardPump(
+    key: string,
+    state: SlackWorkingCardQueueState,
+  ): void {
+    if (state.pumping || state.cancelled || state.retryTimer) return;
+    void this.pumpWorkingCard(key, state).catch((error) => {
+      this.logger.error?.("Slack Thinking Steps queue failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private async pumpWorkingCard(
+    key: string,
+    state: SlackWorkingCardQueueState,
+  ): Promise<void> {
+    if (state.pumping || state.cancelled) return;
+    state.pumping = true;
+    try {
+      while (
+        !state.cancelled
+        && this.workingCardStreams.get(key) === state
+      ) {
+        const intent = state.latest;
+        const method: SlackWorkingCardMethod = !state.ts
+          ? "start"
+          : intent.card.isFinal
+            ? "stop"
+            : "append";
+        if (
+          method === "append"
+          && intent.card.sequence <= state.lastDeliveredSequence
+        ) {
+          return;
+        }
+        const bucket = this.workingCardBucket(method, state.target);
+        const admission = this.workingCardRateLimits.admit(bucket);
+        if (!admission.admitted) {
+          this.scheduleWorkingCardPump(
+            key,
+            state,
+            Math.max(0, admission.retryAt - this.now()),
+            method,
+          );
+          return;
+        }
+        try {
+          if (method === "start") {
+            const result = await this.api.startStream!({
+              channel: state.target.channelId,
+              chunks: this.workingCardChunks(intent),
+              taskDisplayMode: intent.card.displayHint,
+              threadTs: state.target.threadTs,
+              ...(intent.audit?.actor.platformUserId
+                ? { recipientUserId: intent.audit.actor.platformUserId }
+                : {}),
+              ...(state.target.channelRef.conversation.workspaceId
+                ? {
+                    recipientTeamId:
+                      state.target.channelRef.conversation.workspaceId,
+                  }
+                : {}),
+            });
+            if (!result.ts) {
+              throw new Error("Slack chat.startStream returned no timestamp");
+            }
+            if (state.cancelled) {
+              try {
+                await this.api.deleteMessage({
+                  channel: state.target.channelId,
+                  ts: result.ts,
+                });
+              } catch (error) {
+                this.logger.warn?.("Slack cancelled Thinking Steps card could not be removed", {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+              return;
+            }
+            state.ts = result.ts;
+            state.lastDeliveredSequence = intent.card.sequence;
+            state.nonRateFailureCount = 0;
+            continue;
+          }
+          if (method === "append") {
+            await this.api.appendStream!({
+              channel: state.target.channelId,
+              chunks: this.workingCardChunks(intent),
+              ts: state.ts!,
+            });
+            state.lastDeliveredSequence = intent.card.sequence;
+            state.nonRateFailureCount = 0;
+            continue;
+          }
+          await this.api.stopStream!({
+            channel: state.target.channelId,
+            chunks: this.workingCardChunks(intent),
+            ts: state.ts!,
+          });
+          this.workingCardStreams.delete(key);
+          this.recordWorkingCardTombstone(key, intent.card.sequence);
+          return;
+        } catch (error) {
+          if (state.cancelled) return;
+          const retryAfterMs = retryAfterMsFromError(error);
+          if (retryAfterMs !== undefined) {
+            this.workingCardRateLimits.recordRateLimit(bucket.id, retryAfterMs);
+            this.emitWorkingCardRateLimit(error, bucket, state.target, retryAfterMs);
+            this.scheduleWorkingCardPump(key, state, retryAfterMs, method);
+            return;
+          }
+          state.nonRateFailureCount += 1;
+          if (method === "start") {
+            this.logger.warn?.(
+              "Slack Thinking Steps stream unavailable; using text Working Update",
+              { error: error instanceof Error ? error.message : String(error) },
+            );
+            const fallback = await this.deliverWorkingCardFallback(intent);
+            state.fallbackSurface = fallback.surface;
+            state.lastDeliveredSequence = intent.card.sequence;
+            state.nativeUnavailable = true;
+            return;
+          }
+          this.logger.warn?.("Slack Thinking Steps stream call failed; preserving open card", {
+            error: error instanceof Error ? error.message : String(error),
+            method: SLACK_WORKING_CARD_BUCKETS[method].method,
+          });
+          if (state.nonRateFailureCount === 1) {
+            this.scheduleWorkingCardPump(
+              key,
+              state,
+              SLACK_WORKING_CARD_RETRY_MS,
+              method,
+            );
+          }
+          return;
+        }
+      }
+    } finally {
+      state.pumping = false;
+      if (
+        !state.cancelled
+        && !state.nativeUnavailable
+        && !state.retryTimer
+        && state.nonRateFailureCount < 2
+        && this.workingCardStreams.get(key) === state
+        && (
+          !state.ts
+          || state.latest.card.isFinal
+          || state.latest.card.sequence > state.lastDeliveredSequence
+        )
+      ) {
+        this.startWorkingCardPump(key, state);
+      }
+    }
+  }
+
+  private scheduleWorkingCardPump(
+    key: string,
+    state: SlackWorkingCardQueueState,
+    delayMs: number,
+    method: SlackWorkingCardMethod,
+  ): void {
+    if (state.cancelled || state.retryTimer) return;
+    state.retryMethod = method;
+    state.retryTimer = setTimeout(() => {
+      state.retryTimer = undefined;
+      state.retryMethod = undefined;
+      this.startWorkingCardPump(key, state);
+    }, delayMs);
+  }
+
+  private workingCardChunks(
+    intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
+  ): SlackStreamChunk[] {
     const chunks = intent.card.tasks.map((task): SlackStreamChunk => ({
       type: "task_update",
       id: clampSlackTaskField(task.id),
@@ -1717,54 +2044,116 @@ export class SlackAdapter implements SlackProviderAdapter {
       status: task.status === "cancelled" ? "error" : task.status,
       ...(task.detail ? { details: clampSlackTaskField(task.detail) } : {}),
     }));
-    try {
-      if (!current) {
-        const result = await this.api.startStream({
-          channel: target.channelId,
-          chunks,
-          taskDisplayMode: intent.card.displayHint,
-          threadTs: target.threadTs,
-          ...(intent.audit?.actor.platformUserId
-            ? { recipientUserId: intent.audit.actor.platformUserId }
-            : {}),
-          ...(target.channelRef.conversation.workspaceId
-            ? { recipientTeamId: target.channelRef.conversation.workspaceId }
-            : {}),
-        });
-        if (!result.ts) {
-          throw new Error("Slack chat.startStream returned no timestamp");
-        }
-        this.workingCardStreams.set(intent.card.key, {
-          channelId: target.channelId,
-          sequence: intent.card.sequence,
-          ts: result.ts,
-        });
-        if (intent.card.isFinal) {
-          await this.api.stopStream({ channel: target.channelId, ts: result.ts });
-          this.workingCardStreams.delete(intent.card.key);
-        }
-        return { outcome: "presented", channel: this.channel, deliveredAt };
-      }
-      if (intent.card.isFinal) {
-        await this.api.stopStream({ channel: current.channelId, chunks, ts: current.ts });
-        this.workingCardStreams.delete(intent.card.key);
-      } else {
-        await this.api.appendStream({ channel: current.channelId, chunks, ts: current.ts });
-        current.sequence = intent.card.sequence;
-      }
-      return { outcome: "updated", channel: this.channel, deliveredAt };
-    } catch (error) {
-      this.workingCardStreams.delete(intent.card.key);
-      this.logger.warn?.("Slack Thinking Steps stream unavailable; using text Working Update", {
-        error: error instanceof Error ? error.message : String(error),
+    if (intent.card.isFinal && intent.card.phase === "failed") {
+      chunks.push({
+        type: "task_update",
+        id: clampSlackTaskField(`${intent.card.key}:terminal`),
+        status: "error",
+        title: "Turn failed",
       });
-      return await this.deliverWorkingCardFallback(intent);
     }
+    return chunks;
+  }
+
+  private workingCardBucket(
+    method: SlackWorkingCardMethod,
+    target: SlackWorkingCardTarget,
+  ): MessagingRateLimitBucket {
+    const definition = SLACK_WORKING_CARD_BUCKETS[method];
+    const workspaceId =
+      this.workspaceId
+      ?? target.channelRef.conversation.workspaceId
+      ?? this.botAccountDetail
+      ?? "configured-workspace";
+    return {
+      id: `slack:workspace:${workspaceId}:${definition.method}`,
+      intervalMs: 60_000,
+      limit: definition.limit,
+      minIntervalMs: 1_000,
+    };
+  }
+
+  private emitWorkingCardRateLimit(
+    error: unknown,
+    bucket: MessagingRateLimitBucket,
+    target: SlackWorkingCardTarget,
+    retryAfterMs: number,
+  ): void {
+    this.emitRateLimit({
+      scope: {
+        platform: this.channel,
+        id: bucket.id,
+        kind: "workspace",
+        label: `Slack ${bucket.id.split(":").at(-1) ?? "stream"}`,
+        budget: { limit: bucket.limit, intervalMs: bucket.intervalMs },
+        parentId: this.rateLimitScopeForTarget(target).id,
+      },
+      retryAfterMs,
+      message: error instanceof Error ? error.message : String(error),
+      observedAt: this.now(),
+      retryable: false,
+    });
+  }
+
+  private workingCardSurface(
+    key: string,
+    state: SlackWorkingCardQueueState,
+  ): MessagingSurfaceRef {
+    return {
+      channel: this.channel,
+      id: `working-card:${key}`,
+      state: {
+        opaque: {
+          channelId: state.target.channelId,
+          threadTs: state.target.threadTs,
+          workingCardKey: key,
+          ...(state.ts ? { ts: state.ts } : {}),
+        },
+      },
+    };
+  }
+
+  private recordWorkingCardTombstone(key: string, sequence: number): void {
+    this.workingCardTombstones.delete(key);
+    this.workingCardTombstones.set(key, sequence);
+    while (this.workingCardTombstones.size > SLACK_WORKING_CARD_TOMBSTONE_MAX) {
+      const oldest = this.workingCardTombstones.keys().next().value;
+      if (oldest === undefined) break;
+      this.workingCardTombstones.delete(oldest);
+    }
+  }
+
+  private async cancelAllWorkingCards(): Promise<void> {
+    const removals: Promise<void>[] = [];
+    for (const [key, state] of this.workingCardStreams) {
+      state.cancelled = true;
+      if (state.retryTimer) clearTimeout(state.retryTimer);
+      this.recordWorkingCardTombstone(key, state.latest.card.sequence);
+      if (state.ts) {
+        removals.push(
+          this.api.deleteMessage({ channel: state.target.channelId, ts: state.ts })
+            .catch((error) => {
+              this.logger.warn?.("Slack disabled Thinking Steps card could not be removed", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }),
+        );
+      }
+    }
+    this.workingCardStreams.clear();
+    await Promise.all(removals);
   }
 
   private async deliverWorkingCardFallback(
     intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
   ): Promise<MessagingDeliveryResult> {
+    if (intent.card.isFinal) {
+      return {
+        outcome: "discarded",
+        channel: this.channel,
+        deliveredAt: this.now(),
+      };
+    }
     return await this.deliver({
       ...intent,
       kind: "message",
@@ -3155,6 +3544,9 @@ function readSlackOpaqueState(
     ...(typeof record.teamId === "string" ? { teamId: record.teamId } : {}),
     ...(typeof record.threadTs === "string" ? { threadTs: record.threadTs } : {}),
     ...(typeof record.ts === "string" ? { ts: record.ts } : {}),
+    ...(typeof record.workingCardKey === "string"
+      ? { workingCardKey: record.workingCardKey }
+      : {}),
   };
 }
 
@@ -3427,10 +3819,13 @@ function slackTimestampToMs(ts: string | undefined): number | undefined {
 }
 
 function retryAfterMsFromError(error: unknown): number | undefined {
+  const explicitMilliseconds = readNumberProperty(error, "retryAfterMs");
+  if (explicitMilliseconds !== undefined) {
+    return Math.ceil(explicitMilliseconds);
+  }
   const retryAfter =
-    readNumberProperty(error, "retryAfter") ??
-    readNumberProperty(error, "retry_after") ??
-    readNumberProperty(error, "retryAfterMs");
+    readNumberProperty(error, "retryAfter")
+    ?? readNumberProperty(error, "retry_after");
   if (retryAfter !== undefined) {
     return retryAfter > 1_000 ? Math.ceil(retryAfter) : Math.ceil(retryAfter * 1000);
   }

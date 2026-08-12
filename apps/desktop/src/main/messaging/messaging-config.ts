@@ -272,6 +272,7 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     groupDmAccessMode: "authorization",
     enabled: "connection",
     inboundMode: "connection",
+    liveWorkingCards: "rendering",
     registerSlashCommands: "connection",
     responseMode: "authorization",
     signingSecret: "connection",
@@ -633,6 +634,7 @@ export function loadDesktopMessagingConfig(
             ...(slackSigningSecret ? { signingSecret: slackSigningSecret } : {}),
             ...(slackWorkspaceUrl ? { workspaceUrl: slackWorkspaceUrl } : {}),
             inboundMode: slackInboundMode,
+            liveWorkingCards: false,
             ...(slackSlashCommandPrefix !== undefined
               ? { slashCommandPrefix: slackSlashCommandPrefix }
               : {}),
@@ -1034,6 +1036,7 @@ export async function loadDesktopMessagingConfigFromSettings(
             ...(slackSigningSecret ? { signingSecret: slackSigningSecret } : {}),
             ...(slackWorkspaceUrl ? { workspaceUrl: slackWorkspaceUrl } : {}),
             inboundMode: slackInboundMode,
+            liveWorkingCards: snapshot.messaging.slack.liveWorkingCards.value,
             ...(slackSlashCommandPrefix !== undefined
               ? { slashCommandPrefix: slackSlashCommandPrefix }
               : {}),
@@ -1276,6 +1279,7 @@ export function redactDesktopMessagingConfig(
           signingSecret: config.slack.signingSecret ? "[REDACTED]" : undefined,
           workspaceUrl: config.slack.workspaceUrl,
           inboundMode: config.slack.inboundMode ?? "socket",
+          liveWorkingCards: config.slack.liveWorkingCards ?? false,
           slashCommandPrefix: config.slack.slashCommandPrefix ?? "[default]",
           registerSlashCommands: config.slack.registerSlashCommands ?? false,
           streamingResponses: config.slack.streamingResponses ?? false,
@@ -1517,7 +1521,10 @@ function renderingPreferencesForChannelConfig(
     case "mattermost":
       return { streamingResponses: config.mattermost?.streamingResponses };
     case "slack":
-      return { streamingResponses: config.slack?.streamingResponses };
+      return {
+        liveWorkingCards: config.slack?.liveWorkingCards,
+        streamingResponses: config.slack?.streamingResponses,
+      };
     case "feishu":
       return { streamingResponses: config.feishu?.streamingResponses };
     case "line":

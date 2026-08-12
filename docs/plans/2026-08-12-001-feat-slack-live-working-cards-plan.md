@@ -294,10 +294,16 @@ no thread_ts, channel without recipient identity):
 - Prefer appendStream (Tier 4) over chat.update for in-flight ticks
 - Coalesce controller-side first (existing windows); then adapter min-interval
   (~500–1000ms) for appends
-- Respect existing delivery budget + Slow Mode: working_card is low priority vs
-  final answer / approvals
-- On 429: Cool Off; drop intermediate card ticks; keep final stopStream attempt
-  once
+- Keep native stream calls in provider-owned, workspace/method buckets that are
+  orthogonal to the ordinary visible-message budget. `startStream`,
+  `appendStream`, and `stopStream` do not consume each other's quota.
+- Maintain one ordered queue per mounted card. Start is a barrier, waiting
+  intermediate snapshots coalesce to latest, and terminal stop remains queued
+  until its method bucket admits it.
+- Queue processing must be non-blocking to the controller so final answers,
+  approvals, and questionnaires bypass a jammed live-card lane.
+- On 429: honor `Retry-After` for that method bucket; drop superseded
+  intermediate ticks, but retain and retry the terminal stop.
 - Do not count setStatus against the same message budget as posts if Slack
   treats it separately; still throttle status text churn (update status string
   only on phase change)
@@ -336,11 +342,14 @@ no thread_ts, channel without recipient identity):
 | Item | Persist? |
 | --- | --- |
 | Dial preference (`toolUpdateMode`) | Yes (existing) |
+| Slack Live Working Cards opt-in | Yes, optional TOML field; absent defaults off |
 | Live stream ts / open stream id | **No** (memory only) |
 | Working card sequence | Memory only |
 | Delivery audit for final messages | Existing delivery records |
 
-No schema migration required for v1 if preferences stay the same.
+No database migration is required. Unrelated config writes must not materialize
+`live_working_cards = false`; absence remains meaningful so changing the
+default later moves untouched profiles together.
 
 ## Concrete implementation plan
 

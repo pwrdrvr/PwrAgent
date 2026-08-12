@@ -28,6 +28,7 @@ export type SlackMessagingConfig = {
   channel: "slack";
   enabled?: boolean;
   inboundMode?: SlackInboundMode;
+  liveWorkingCards?: boolean;
   registerSlashCommands?: boolean;
   responseMode?: MessagingResponseMode;
   signingSecret?: string;

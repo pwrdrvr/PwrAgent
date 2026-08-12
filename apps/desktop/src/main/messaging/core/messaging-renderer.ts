@@ -175,12 +175,14 @@ export function buildWorkingCardIntent(params: {
   bindingId: string;
   createdAt: number;
   displayHint: MessagingWorkingCardIntent["card"]["displayHint"];
+  fallbackActivities?: MessagingToolActivity[];
   id: string;
   key: string;
+  omittedTaskCount?: number;
   sequence: number;
 }): MessagingWorkingCardIntent {
   const fallback = buildToolUpdateBatchMessageIntent({
-    activities: params.activities,
+    activities: params.fallbackActivities ?? params.activities,
     bindingId: params.bindingId,
     createdAt: params.createdAt,
     id: `${params.id}:fallback`,
@@ -200,11 +202,26 @@ export function buildWorkingCardIntent(params: {
       key: params.key,
       phase: "working",
       sequence: params.sequence,
-      tasks: params.activities.map((activity) => ({
-        id: activity.id,
-        status: activity.status === "failed" ? "error" : "complete",
-        title: formatToolActivityLine(activity),
-      })),
+      tasks: [
+        ...(params.omittedTaskCount && params.omittedTaskCount > 0
+          ? [{
+              id: `${params.key}:earlier`,
+              status: "complete" as const,
+              title: `Earlier: ${params.omittedTaskCount} tool${
+                params.omittedTaskCount === 1 ? "" : "s"
+              }`,
+            }]
+          : []),
+        ...params.activities.map((activity) => ({
+          id: activity.id,
+          status: activity.status === "failed"
+            ? "error" as const
+            : activity.status === "cancelled"
+              ? "cancelled" as const
+              : "complete" as const,
+          title: formatToolActivityLine(activity),
+        })),
+      ],
     },
   };
 }

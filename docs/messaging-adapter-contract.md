@@ -107,14 +107,32 @@ controller owns the dial policy and emits only admitted, redacted tasks with a
 stable `key` and monotonic `sequence`. Adapters must discard stale sequences.
 Slack renders the intent with Thinking Steps (`chat.startStream`,
 `chat.appendStream`, and `chat.stopStream`) when a thread target is available;
-stream state stays in memory. If native streaming is unavailable, the adapter
-delivers `fallbackText` as the existing Working Update. Providers without a
-native live-card surface continue to use that text fallback.
+stream state stays in memory. Slack Live Working Cards are opt-in through
+`messaging.slack.live_working_cards`; an absent setting currently means off and
+must remain absent during unrelated config writes so a future default change
+can apply to untouched profiles. If native streaming is disabled or
+unavailable, the adapter delivers `fallbackText` as the existing Working
+Update. Providers without a native live-card surface continue to use that text
+fallback.
+
+Provider-native live surfaces may have API budgets orthogonal to ordinary
+message delivery. Adapters may use `MessagingRateLimitGate` to account for
+multiple workspace/method buckets independently. Slack maintains ordered,
+per-card queues over workspace-wide `chat.startStream`, `chat.appendStream`,
+and `chat.stopStream` buckets: start is a barrier, intermediate snapshots are
+coalesced while waiting, and terminal stop remains queued until admitted.
+These queues must not block approval, questionnaire, final-answer, or other
+ordinary message delivery. A platform 429 extends the affected bucket from
+`Retry-After`; it is not permission to discard a terminal stop.
 
 An open native card replaces classic tool-update posts for those activities.
 Task titles and details must be clamped to provider limits and must never add
 raw command output or secrets. Waiting and terminal phases clear transient
 working indicators; the final assistant message remains authoritative.
+Adapters return a retractable surface as soon as a native card is queued so
+turn cancellation and terminal private-response routing can cancel pending
+work or remove an already-mounted card. Completed keys retain a bounded
+sequence tombstone so delayed events cannot reopen a terminal card.
 
 - chunk long messages according to platform limits
 - preserve inline code and fenced code when supported

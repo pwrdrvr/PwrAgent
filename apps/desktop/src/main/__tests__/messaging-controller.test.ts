@@ -51,6 +51,7 @@ import {
   MessagingController,
   messagingDeliveryPriority,
   shouldConsumeDeliveryBudget,
+  updateWorkingCardActivities,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
 import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
@@ -15084,6 +15085,55 @@ describe("MessagingController", () => {
       "user_command",
     );
     expect(messagingDeliveryPriority(finalAssistant)).toBe("final_turn");
+  });
+
+  it("reserves final-turn delivery priority for terminal working cards", () => {
+    const workingCard = {
+      id: "working-card-1",
+      kind: "working_card",
+      createdAt: 1_000,
+      card: {
+        displayHint: "plan",
+        isFinal: false,
+        key: "binding-1\0turn-1",
+        phase: "working",
+        sequence: 1,
+        tasks: [],
+      },
+    } satisfies MessagingSurfaceIntent;
+
+    expect(messagingDeliveryPriority(workingCard)).toBe("tool_progress");
+    expect(messagingDeliveryPriority({
+      ...workingCard,
+      id: "working-card-final-1",
+      card: {
+        ...workingCard.card,
+        isFinal: true,
+        phase: "completed",
+        sequence: 2,
+      },
+    })).toBe("final_turn");
+  });
+
+  it("bounds accumulated working-card tasks and collapses the oldest entries", () => {
+    const state = {
+      activities: new Map(),
+      omittedTaskCount: 0,
+      sequence: 0,
+    };
+    for (let index = 1; index <= 14; index += 1) {
+      updateWorkingCardActivities(state, [{
+        id: `tool-${index}`,
+        kind: "tool",
+        status: "completed",
+        title: `Ran tool ${index}`,
+      }]);
+    }
+
+    expect([...state.activities.keys()]).toEqual(
+      Array.from({ length: 12 }, (_, index) => `tool-${index + 3}`),
+    );
+    expect(state.omittedTaskCount).toBe(2);
   });
 
   it("treats user-initiated status renders as user command budget traffic", () => {

@@ -1145,6 +1145,36 @@ describe("DesktopSettingsService", () => {
     ]);
   });
 
+  it("defaults Slack Live Working Cards off without persisting the default", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.messaging.slack.liveWorkingCards).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      messaging: { slack: { workspaceUrl: "https://example.slack.com" } },
+    });
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain(
+      "live_working_cards",
+    );
+
+    await service.writeConfigPatch({
+      messaging: { slack: { liveWorkingCards: true } },
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "live_working_cards = true",
+    );
+  });
+
   it("migrates legacy authorized user arrays when the list is next saved", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

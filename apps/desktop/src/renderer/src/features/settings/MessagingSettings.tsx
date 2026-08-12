@@ -1354,6 +1354,22 @@ export function MessagingSettings(props: {
             />
           </div>
           <ToggleField
+            checked={slack.liveWorkingCards.value}
+            disabled={props.saving}
+            label="Live Working Cards"
+            sub="Shows Working Updates as one live Slack task card per turn. Off by default."
+            source={sourceBadge(slack.liveWorkingCards)}
+            onChange={(liveWorkingCards) => {
+              void props.onSaveSlack({
+                ...slack,
+                liveWorkingCards: {
+                  ...slack.liveWorkingCards,
+                  value: liveWorkingCards,
+                },
+              });
+            }}
+          />
+          <ToggleField
             checked={slack.streamingResponses.value}
             disabled={props.saving}
             label="Streaming responses"

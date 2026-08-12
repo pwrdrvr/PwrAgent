@@ -734,6 +734,7 @@ export type DesktopSettingsSnapshot = {
     };
     slack: {
       enabled: DesktopSettingsValue<boolean>;
+      liveWorkingCards: DesktopSettingsValue<boolean>;
       responseMode: DesktopSettingsValue<DesktopMessagingResponseMode>;
       streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
@@ -991,6 +992,7 @@ export type DesktopSettingsConfigPatch = {
     };
     slack?: {
       enabled?: boolean;
+      liveWorkingCards?: boolean;
       responseMode?: DesktopMessagingResponseMode;
       streamingResponses?: boolean;
       workspaceUrl?: string;

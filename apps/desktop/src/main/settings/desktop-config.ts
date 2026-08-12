@@ -193,6 +193,7 @@ export type DesktopSettingsConfig = {
     };
     slack?: {
       enabled?: boolean;
+      liveWorkingCards?: boolean;
       responseMode?: DesktopMessagingResponseMode;
       streamingResponses?: boolean;
       workspaceUrl?: string;
@@ -1149,6 +1150,9 @@ export function desktopSettingsPatchToEdits(
   if (slack?.enabled !== undefined) {
     set(["messaging", "slack", "enabled"], slack.enabled);
   }
+  if (slack?.liveWorkingCards !== undefined) {
+    set(["messaging", "slack", "live_working_cards"], slack.liveWorkingCards);
+  }
   if (slack?.responseMode !== undefined) {
     set(["messaging", "slack", "response_mode"], slack.responseMode);
   }
@@ -1704,6 +1708,7 @@ function normalizeDesktopConfig(
       },
       slack: {
         enabled: readBoolean(slack?.enabled),
+        liveWorkingCards: readBoolean(slack?.live_working_cards),
         responseMode: readMessagingResponseMode(slack?.response_mode),
         streamingResponses: readBoolean(slack?.streaming_responses),
         workspaceUrl: readString(slack?.workspace_url),

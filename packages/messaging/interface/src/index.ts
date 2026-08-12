@@ -26,6 +26,11 @@ export {
 } from "./text-splitting";
 export { evictStaleStreamAnchors } from "./stream-anchors";
 export {
+  MessagingRateLimitGate,
+  type MessagingRateLimitAdmission,
+  type MessagingRateLimitBucket,
+} from "./rate-limit-gate";
+export {
   MESSAGING_COMMAND_CATALOG,
   MESSAGING_HELP_ACTION_COMMANDS,
   matchMessagingCommandVerb,
@@ -400,6 +405,7 @@ export type MessagingConversationResponseMode = {
 };
 
 export type MessagingAdapterRenderingPreferencesUpdate = {
+  liveWorkingCards?: boolean;
   streamingResponses?: boolean;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
 };
