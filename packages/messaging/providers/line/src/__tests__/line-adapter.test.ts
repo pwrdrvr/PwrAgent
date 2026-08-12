@@ -19,6 +19,43 @@ describe("LineAdapter", () => {
     adapters.length = 0;
   });
 
+  it("does not bind a webhook after startup is stopped during identity lookup", async () => {
+    const port = await getFreePort();
+    let resolveBotInfo!: (value: {
+      displayName?: string;
+      userId: string;
+    }) => void;
+    const pendingBotInfo = new Promise<{
+      displayName?: string;
+      userId: string;
+    }>((resolve) => {
+      resolveBotInfo = resolve;
+    });
+    const api = createApi();
+    api.getBotInfo = vi.fn(async () => await pendingBotInfo);
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` }),
+    });
+    adapters.push(adapter);
+
+    const startPromise = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(api.getBotInfo).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+    resolveBotInfo({ userId: "Uffffffffffffffffffffffffffffffff" });
+    await startPromise;
+
+    const probe = createServer();
+    await new Promise<void>((resolve, reject) => {
+      probe.once("error", reject);
+      probe.listen(port, "127.0.0.1", () => resolve());
+    });
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+  });
+
   it("verifies X-Line-Signature before processing webhook bodies", () => {
     const body = Buffer.from(JSON.stringify({ events: [] }));
     const signature = createHmac("sha256", "secret").update(body).digest("base64");

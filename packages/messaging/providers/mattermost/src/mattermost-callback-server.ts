@@ -435,7 +435,7 @@ export function createMattermostCallbackServer(
       if (server) {
         return;
       }
-      server = createServer((req, res) => {
+      const current = createServer((req, res) => {
         handleRequest(req, res).catch((error) => {
           config.logger.error("mattermost callback request crashed", {
             error: error instanceof Error ? error.message : String(error),
@@ -447,6 +447,7 @@ export function createMattermostCallbackServer(
           }
         });
       });
+      server = current;
       await new Promise<void>((resolve, reject) => {
         const errorHandler = (error: Error): void => {
           config.logger.error("mattermost callback listener failed to bind", {
@@ -455,9 +456,9 @@ export function createMattermostCallbackServer(
           });
           reject(error);
         };
-        server!.once("error", errorHandler);
-        server!.listen(config.port, "127.0.0.1", () => {
-          server!.off("error", errorHandler);
+        current.once("error", errorHandler);
+        current.listen(config.port, "127.0.0.1", () => {
+          current.off("error", errorHandler);
           config.logger.info?.("mattermost callback listener bound", {
             port: config.port,
             host: "127.0.0.1",
