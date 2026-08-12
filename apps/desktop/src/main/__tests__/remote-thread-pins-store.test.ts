@@ -243,11 +243,15 @@ describe("SqliteOverlayStore — remote thread pins", () => {
     expect(listed[0].pinnedVia).toBe("companion");
   });
 
-  it("reorders mixed local and remote pins atomically from the full order", async () => {
+  it("reorders colliding local and remote pins atomically from the full order", async () => {
     await store.addRemoteThreadPin({
       ref: ref("remote-1"),
       summary: summary({ id: "remote-1" }),
       instanceLabel: "Laptop",
+    });
+    await store.setRemoteThreadLocalPin({
+      ref: ref("remote-1"),
+      pinnedRank: "9999",
     });
     await store.setThreadPin({
       backend: "codex",
