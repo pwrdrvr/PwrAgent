@@ -10,6 +10,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import {
   DiscordAdapter,
+  DiscordJsGatewayConnection,
   stripDiscordBotMention,
   type DiscordApi,
   type DiscordGatewayConnection,
@@ -32,6 +33,81 @@ const TEST_OTHER_USER_ID = "1480556454498009356";
 const TEST_AUTHORIZED_GUILD_IDS = [{ id: TEST_GUILD_ID, displayName: "" }];
 
 describe("discord adapter", () => {
+  it("cancels gateway discovery before a stopped login can connect", async () => {
+    let resolveGateway!: (value: unknown) => void;
+    const pendingGateway = new Promise<unknown>((resolve) => {
+      resolveGateway = resolve;
+    });
+    const connect = vi.fn();
+    const getGateway = vi.fn(async () => await pendingGateway);
+    const rest = { get: getGateway };
+    const client = {
+      destroy: vi.fn(async () => undefined),
+      login: vi.fn(async () => {
+        await rest.get();
+        connect();
+        return "token";
+      }),
+      on: vi.fn(),
+      removeAllListeners: vi.fn(),
+      rest,
+    };
+    const gateway = new DiscordJsGatewayConnection(
+      {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      client as never,
+    );
+
+    const startPromise = gateway.start();
+    await vi.waitFor(() => {
+      expect(getGateway).toHaveBeenCalledTimes(1);
+    });
+    await gateway.close();
+    resolveGateway({ url: "wss://gateway.example.test" });
+
+    await expect(startPromise).rejects.toThrow(
+      "Discord gateway startup was cancelled.",
+    );
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("does not open the gateway after a stop during command reconciliation", async () => {
+    let resolveCommands!: (value: DiscordApplicationCommand[]) => void;
+    const pendingCommands = new Promise<DiscordApplicationCommand[]>((resolve) => {
+      resolveCommands = resolve;
+    });
+    const listApplicationCommands = vi.fn(async () => await pendingCommands);
+    const gateway: DiscordGatewayConnection = {
+      close: vi.fn(async () => undefined),
+      onEvent: vi.fn(() => () => undefined),
+      start: vi.fn(async () => undefined),
+    };
+    const adapter = new DiscordAdapter({
+      api: createApi({ listApplicationCommands }),
+      config: {
+        applicationId: TEST_CHANNEL_ID,
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+    });
+
+    const startPromise = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(listApplicationCommands).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+    resolveCommands([]);
+    await startPromise;
+
+    expect(gateway.start).not.toHaveBeenCalled();
+    expect(gateway.close).toHaveBeenCalledTimes(2);
+  });
+
   it("declares Monitor as a desired Discord application command", () => {
     expect(DISCORD_APPLICATION_COMMANDS.map((command) => command.name)).toEqual([
       "resume",

@@ -544,6 +544,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     store?: MessagingCallbackHandleStore;
   };
   private startPromise?: Promise<void>;
+  private lifecycleGeneration = 0;
   /**
    * `true` once `stop()` has been called; suppresses the runtime-error
    * fan-out for the polling-loop rejection that grammy raises as part
@@ -627,6 +628,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
+    const lifecycleGeneration = ++this.lifecycleGeneration;
     this.listener = listener;
 
     this.registerBotErrorHandler();
@@ -653,6 +655,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         error: errorMessage(error),
       });
     }
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+      return;
+    }
 
     try {
       await this.bot.api.getWebhookInfo();
@@ -664,9 +670,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       });
       throw error;
     }
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+      return;
+    }
     await this.bot.api.deleteWebhook({
       drop_pending_updates: false,
     });
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+      return;
+    }
     await this.bot.api.setMyCommands({
       commands: [
         {
@@ -691,6 +705,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         },
       ],
     });
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.stop();
+      return;
+    }
 
     if (this.options.pollOnStart !== false) {
       this.startPromise = this.bot.start?.({
@@ -736,6 +754,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   async stop(): Promise<void> {
+    this.lifecycleGeneration += 1;
     this.stopping = true;
     this.stopTypingSignals();
     try {

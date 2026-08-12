@@ -1153,14 +1153,9 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
-  it("preserves a stop request that arrives before adapters register", async () => {
+  it("skips adapter startup when a stop request arrives before adapters register", async () => {
     await prepareRuntimeStore();
-    const telegramStart = createDeferred<void>();
     const slowTelegramAdapter = createAdapter("telegram");
-    slowTelegramAdapter.start.mockImplementation(async (listener) => {
-      slowTelegramAdapter.listener = listener;
-      await telegramStart.promise;
-    });
     const workingDiscordAdapter = createAdapter("discord");
     const { DesktopMessagingRuntime: Runtime } = await import(
       "../messaging/messaging-runtime"
@@ -1186,12 +1181,10 @@ describe("DesktopMessagingRuntime", () => {
     const stopPromise = runtime.stop();
     await Promise.all([startPromise, stopPromise]);
 
-    expect(slowTelegramAdapter.start).toHaveBeenCalledTimes(1);
-    expect(workingDiscordAdapter.start).toHaveBeenCalledTimes(1);
-    expect(slowTelegramAdapter.stop).toHaveBeenCalledTimes(1);
-    // The fast adapter settles after cancellation wins the race, so it gets
-    // both immediate failed-start cleanup and the late-start zombie guard.
-    expect(workingDiscordAdapter.stop).toHaveBeenCalledTimes(2);
+    expect(slowTelegramAdapter.start).not.toHaveBeenCalled();
+    expect(workingDiscordAdapter.start).not.toHaveBeenCalled();
+    expect(slowTelegramAdapter.stop).not.toHaveBeenCalled();
+    expect(workingDiscordAdapter.stop).not.toHaveBeenCalled();
     expect(runtime.isEnabled()).toBe(false);
     expect(runtime.getPlatformStatuses()).toEqual(
       expect.arrayContaining([
@@ -1204,6 +1197,46 @@ describe("DesktopMessagingRuntime", () => {
           health: "suspended",
         }),
       ]),
+    );
+  });
+
+  it("cleans up again when a cancelled adapter start rejects late", async () => {
+    await prepareRuntimeStore();
+    const discordStart = createDeferred<void>();
+    const discordAdapter = createAdapter("discord", {
+      start: vi.fn(async () => {
+        await discordStart.promise;
+      }),
+    });
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) =>
+      config.discord ? [discordAdapter] : []
+    );
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        discord: {
+          channel: "discord",
+          botToken: "discord-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    }));
+
+    const startPromise = runtime.start();
+    await waitFor(() => discordAdapter.start.mock.calls.length === 1);
+    const applyPromise = runtime.applyConfig({});
+    await Promise.all([startPromise, applyPromise]);
+
+    expect(discordAdapter.stop).toHaveBeenCalledTimes(1);
+    discordStart.reject(new Error("login rejected after cancellation"));
+    await waitFor(() => discordAdapter.stop.mock.calls.length === 2);
+    expect(messagingLog.info).toHaveBeenCalledWith(
+      "discord: stopped adapter after late startup",
+      { channel: "discord" },
     );
   });
 
@@ -1241,6 +1274,7 @@ describe("DesktopMessagingRuntime", () => {
     }));
 
     const startPromise = runtime.start();
+    await waitFor(() => discordAdapter.start.mock.calls.length === 1);
     const applyPromise = runtime.applyConfig({
       telegram: {
         channel: "telegram",
