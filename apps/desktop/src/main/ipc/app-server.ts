@@ -6179,6 +6179,55 @@ class DesktopAppServerService {
   async setThreadParent(
     request: SetThreadParentRequest,
   ): Promise<SetThreadParentResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      const federationRuntime = getDesktopFederationRuntime();
+      const response = await federationRuntime
+        .remoteBackend(federationTarget)
+        .setThreadParent(ownerRequest);
+      try {
+        const pins = await this.getOverlayStore().listRemoteThreadPins();
+        const pin = pins.find(
+          (candidate) =>
+            candidate.ref.backend === response.backend
+            && candidate.ref.threadId === response.threadId
+            && isRemoteFederationTarget(candidate.ref.target)
+            && candidate.ref.target.instanceId === federationTarget.instanceId,
+        );
+        if (pin?.summary) {
+          const summary = { ...pin.summary };
+          if (response.parentThreadId) {
+            summary.parentThreadId = response.parentThreadId;
+            summary.parentThreadBackend = response.parentThreadBackend;
+            summary.parentThreadInstanceId = response.parentThreadInstanceId;
+          } else {
+            delete summary.parentThreadId;
+            delete summary.parentThreadBackend;
+            delete summary.parentThreadInstanceId;
+          }
+          await this.getOverlayStore().updateRemoteThreadPinSnapshots([{
+            ref: pin.ref,
+            summary,
+            instanceLabel: pin.instanceLabel,
+          }]);
+        }
+      } catch (error) {
+        // The relationship mutation already committed on the owner. Keep that
+        // success authoritative even if this viewer's cached pin cannot patch.
+        appServerLog.warn("Remote parent change cache update failed.", {
+          error: error instanceof Error ? error.message : String(error),
+          instanceId: federationTarget.instanceId,
+          threadId: response.threadId,
+        });
+      }
+      federationRuntime.remoteThreadSummaries().invalidate(
+        federationTarget.instanceId,
+      );
+      return response;
+    }
     const backend = request.backend ?? "codex";
     const overlay = await this.getOverlayStore().setThreadParent({
       backend,
@@ -6228,6 +6277,15 @@ class DesktopAppServerService {
   async updateSubthreadOrder(
     request: UpdateSubthreadOrderRequest,
   ): Promise<UpdateSubthreadOrderResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .updateSubthreadOrder(ownerRequest);
+    }
     const backend = request.backend ?? "codex";
     const threadIds = await this.getOverlayStore().updateSubthreadOrder({
       backend,
@@ -6258,6 +6316,15 @@ class DesktopAppServerService {
   async setSubthreadsCollapsed(
     request: SetSubthreadsCollapsedRequest,
   ): Promise<SetSubthreadsCollapsedResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setSubthreadsCollapsed(ownerRequest);
+    }
     const backend = request.backend ?? "codex";
     const overlay = await this.getOverlayStore().setSubthreadsCollapsed({
       backend,
@@ -6479,6 +6546,7 @@ class DesktopAppServerService {
         ...localResponse,
         launchpad: {
           ...localResponse.launchpad,
+          federationTarget,
           directoryKind:
             ownerResponse?.launchpad.directoryKind ?? request.directoryKind,
           directoryLabel:

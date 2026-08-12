@@ -25,6 +25,7 @@ import type {
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
   FederationCapability,
+  FederationInstanceId,
   FederatedThreadRef,
   FederationLoadStatus,
   FederationRequestEnvelope,
@@ -113,6 +114,8 @@ import type {
   SetThreadModelSettingsResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
+  SetSubthreadsCollapsedRequest,
+  SetSubthreadsCollapsedResponse,
   SteerTurnRequest,
   SteerTurnResponse,
   StartTurnRequest,
@@ -129,6 +132,8 @@ import type {
   SubmitServerRequestResponse,
   TrustCodexProjectRequest,
   TrustCodexProjectResponse,
+  UpdateSubthreadOrderRequest,
+  UpdateSubthreadOrderResponse,
   UpdateScheduledThreadActionRequest,
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
@@ -264,6 +269,8 @@ export const FEDERATION_BACKEND_METHODS = {
   reorderThreadPins: "backend.reorderThreadPins",
   mountRemoteChild: "backend.mountRemoteChild",
   setThreadParent: "backend.setThreadParent",
+  updateSubthreadOrder: "backend.updateSubthreadOrder",
+  setSubthreadsCollapsed: "backend.setSubthreadsCollapsed",
   detachThreadPullRequest: "backend.detachThreadPullRequest",
   setThreadPrAutoDispatch: "backend.setThreadPrAutoDispatch",
   cancelThreadPrAutoDispatch: "backend.cancelThreadPrAutoDispatch",
@@ -355,6 +362,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.mountRemoteChild]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadParent]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.updateSubthreadOrder]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed]: "thread_navigation",
   // PR detach cancels pending auto-dispatch work and auto-dispatch arms
   // automatic repair turns, so both sit with the turn-control grants
   // (like archiveThread) rather than the browse-level navigation grants.
@@ -471,6 +480,12 @@ export type FederationBackendOperations = {
   setThreadParent(
     request: SetThreadParentRequest,
   ): Promise<SetThreadParentResponse>;
+  updateSubthreadOrder(
+    request: UpdateSubthreadOrderRequest,
+  ): Promise<UpdateSubthreadOrderResponse>;
+  setSubthreadsCollapsed(
+    request: SetSubthreadsCollapsedRequest,
+  ): Promise<SetSubthreadsCollapsedResponse>;
   detachThreadPullRequest(
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse>;
@@ -591,7 +606,9 @@ export type FederationBackendOperations = {
   ): Promise<GetWorktreeUnpublishedCommitDiffResponse>;
   materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: MaterializeDirectoryLaunchpadOptions,
+    options?: MaterializeDirectoryLaunchpadOptions & {
+      sourceInstanceId?: FederationInstanceId;
+    },
   ): Promise<MaterializeDirectoryLaunchpadResponse>;
   handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
@@ -800,6 +817,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.setThreadParent(
         envelope.params as SetThreadParentRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.updateSubthreadOrder,
+    async (envelope) =>
+      await params.backend.updateSubthreadOrder(
+        envelope.params as UpdateSubthreadOrderRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed,
+    async (envelope) =>
+      await params.backend.setSubthreadsCollapsed(
+        envelope.params as SetSubthreadsCollapsedRequest,
       ),
   );
   params.router.registerHandler(
@@ -1151,6 +1182,7 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.materializeDirectoryLaunchpad(
         envelope.params as MaterializeDirectoryLaunchpadRequest,
         {
+          sourceInstanceId: envelope.sourceInstanceId,
           onCodexEnvironmentSetupProgress: (event) => {
             params.onEnvironmentSetupProgress?.(
               event,
@@ -1358,6 +1390,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetThreadParentResponse> {
     return await this.rpc.request<SetThreadParentResponse>({
       method: FEDERATION_BACKEND_METHODS.setThreadParent,
+      params: request,
+    });
+  }
+
+  async updateSubthreadOrder(
+    request: UpdateSubthreadOrderRequest,
+  ): Promise<UpdateSubthreadOrderResponse> {
+    return await this.rpc.request<UpdateSubthreadOrderResponse>({
+      method: FEDERATION_BACKEND_METHODS.updateSubthreadOrder,
+      params: request,
+    });
+  }
+
+  async setSubthreadsCollapsed(
+    request: SetSubthreadsCollapsedRequest,
+  ): Promise<SetSubthreadsCollapsedResponse> {
+    return await this.rpc.request<SetSubthreadsCollapsedResponse>({
+      method: FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed,
       params: request,
     });
   }

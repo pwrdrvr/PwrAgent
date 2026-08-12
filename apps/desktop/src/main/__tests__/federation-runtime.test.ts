@@ -18,13 +18,21 @@ import {
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
   buildFederatedThreadRef,
+  buildThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
 } from "@pwragent/shared";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
 } from "../federation/federation-backend-bridge";
-import { DesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  DesktopFederationRuntime,
+  disposeDesktopFederationRuntime,
+  getDesktopFederationRuntime,
+} from "../federation/federation-runtime";
+import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import * as desktopSettingsSingleton from "../settings/desktop-settings-singleton";
 import {
   resetDesktopOverlayStoreForTests,
   setDesktopOverlayStoreForTests,
@@ -665,6 +673,137 @@ describe("DesktopFederationRuntime", () => {
     } finally {
       resetDesktopOverlayStoreForTests();
       stateDb.close();
+    }
+  });
+
+  it("mounts a remote parent when accepting a cross-instance child", async () => {
+    await disposeDesktopFederationRuntime();
+    const stateDb = openInMemoryStateDb();
+    const overlayStore = new SqliteOverlayStore(stateDb);
+    setDesktopOverlayStoreForTests(overlayStore);
+    const runtime = getDesktopFederationRuntime();
+    const settings = vi.spyOn(
+      desktopSettingsSingleton,
+      "getDesktopSettingsService",
+    ).mockReturnValue(new Proxy({}, {
+      get: (_target, property) =>
+        property === "resolveCodexCommandPreference"
+        || property === "resolveCodexSpawnEnv"
+          ? () => undefined
+          : () => false,
+    }) as never);
+    const registry = getDesktopBackendRegistry();
+    const parentSummary = {
+      source: "codex" as const,
+      id: "parent",
+      title: "Remote parent",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      pinnedRank: "1024",
+    };
+    const materializeResponse = {
+      backend: "codex" as const,
+      threadId: "child",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    };
+    const materialize = vi.spyOn(registry, "materializeDirectoryLaunchpad")
+      .mockResolvedValue(materializeResponse as never);
+    const publish = vi.spyOn(registry, "publishLocalEvent")
+      .mockResolvedValue(undefined);
+    const navigationSnapshot = vi.spyOn(
+      DesktopMessagingBackendBridge.prototype,
+      "getNavigationSnapshot",
+    ).mockResolvedValue({
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      browseMode: "directories",
+      directories: [
+        {
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [buildThreadIdentityKey("codex", "child")],
+          directoryThreadsCollapsed: true,
+        },
+      ],
+      threads: [
+        {
+          source: "codex",
+          id: "existing-pin",
+          title: "Existing pin",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "active" },
+          pinnedRank: "1024",
+        },
+      ],
+      launchpadDefaults: {} as never,
+      federationPeers: [],
+    } as never);
+    vi.spyOn(runtime, "health").mockResolvedValue({
+      instanceId: "child-peer",
+    } as never);
+    const threadFromPeer = vi.spyOn(
+      runtime.remoteThreadSummaries(),
+      "threadFromPeer",
+    ).mockResolvedValue(parentSummary);
+
+    try {
+      await runtime.localBackend().materializeDirectoryLaunchpad({
+        directoryKey: "directory:/repo",
+        parentThreadId: "parent",
+        parentThreadBackend: "codex",
+        parentThreadInstanceId: "parent-peer",
+        launchpad: {
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+        },
+      } as never, {
+        sourceInstanceId: "parent-peer",
+      });
+
+      expect(materialize).toHaveBeenCalledTimes(1);
+      expect(threadFromPeer).toHaveBeenCalledWith({
+        target: { scope: "remote", instanceId: "parent-peer" },
+        backend: "codex",
+        threadId: "parent",
+      });
+      const [pin] = await overlayStore.listRemoteThreadPins();
+      expect(pin).toMatchObject({
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "parent-peer" },
+          threadId: "parent",
+        },
+        pinnedVia: "companion",
+        summary: parentSummary,
+      });
+      expect(pin?.localPinnedRank).toBeTruthy();
+      expect(publish).toHaveBeenCalledWith({
+        backend: "codex",
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: {
+            instanceId: "parent-peer",
+            threadId: "parent",
+            pinned: true,
+          },
+        },
+      });
+    } finally {
+      materialize.mockRestore();
+      publish.mockRestore();
+      navigationSnapshot.mockRestore();
+      settings.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      stateDb.close();
+      await disposeDesktopFederationRuntime();
     }
   });
 
@@ -2022,6 +2161,10 @@ describe("DesktopFederationRuntime", () => {
 
   it.each([
     "thread/status/changed",
+    "thread/parent/cleared",
+    "thread/parent/set",
+    "thread/subthreadOrder/updated",
+    "thread/subthreadsCollapsed/updated",
     "turn/cancelled",
     "turn/completed",
     "turn/failed",
@@ -2115,7 +2258,6 @@ describe("DesktopFederationRuntime", () => {
 
     expect(invalidated).toEqual([]);
   });
-
   it("subscribes Cmd+K snapshot peers to navigation updates for the cache TTL", async () => {
     vi.useFakeTimers();
     const sent: FederationProtocolEnvelope[] = [];

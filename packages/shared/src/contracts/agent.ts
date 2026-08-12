@@ -785,6 +785,7 @@ export type EnsureDirectoryLaunchpadRequest = {
   currentBranch?: string;
   parentThreadId?: string;
   parentThreadBackend?: AppServerBackendKind;
+  parentThreadInstanceId?: FederationInstanceId;
   parentThreadTitle?: string;
   preferredBackend?: AppServerBackendKind;
   registeredAt?: number;
@@ -821,8 +822,10 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "messagingToolUpdateMode"
       | "workMode"
       | "branchName"
+      | "federationTarget"
       | "parentThreadId"
       | "parentThreadBackend"
+      | "parentThreadInstanceId"
       | "parentThreadTitle"
       | "codexEnvironmentId"
       | "codexEnvironmentExecutionTarget"

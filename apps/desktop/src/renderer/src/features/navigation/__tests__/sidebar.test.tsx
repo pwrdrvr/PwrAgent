@@ -1335,6 +1335,84 @@ describe("Sidebar", () => {
     ).toBeNull();
   });
 
+  it("offers owner-routed actions for a connected remote child", () => {
+    const remoteBackends: BackendSummary[] = [{
+      ...backends[0]!,
+      capabilities: {
+        ...backends[0]!.capabilities,
+        forkThread: true,
+      },
+    }];
+    const remoteChild: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-remote-child",
+      title: "Remote child",
+      inbox: { inInbox: false },
+      parentThreadId: "thread-local-parent",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "local-instance",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-mini" },
+          threadId: "thread-remote-child",
+        },
+        instanceLabel: "Mac Mini",
+        peerStatus: "connected",
+        capabilities: [
+          "environment_actions",
+          "launchpad_metadata",
+          "thread_navigation",
+          "turn_control",
+        ],
+      },
+    };
+    render(
+      <Sidebar
+        backends={remoteBackends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[remoteChild]}
+        loading={false}
+        selectedItemKey="codex:thread-remote-child"
+        threads={[remoteChild]}
+        onArchiveThread={async () => undefined}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onForkThread={async () => undefined}
+        onMarkThreadUnread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onRenameThread={async () => undefined}
+        onSelectThread={() => undefined}
+        onUnlinkThreads={async () => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Remote child" }),
+    );
+
+    expect(screen.getByRole("menuitem", {
+      name: "Sub-thread in Same Worktree",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Fork into Same Worktree",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Unlink from Parent",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Rename Thread",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Mark Unread",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Archive Thread",
+    })).toBeInTheDocument();
+  });
+
   it("closes its context menu when another renderer menu opens", () => {
     render(
       <Sidebar

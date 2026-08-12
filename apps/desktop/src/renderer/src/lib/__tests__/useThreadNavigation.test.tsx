@@ -10,6 +10,7 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
+  NavigationThreadSummary,
   PrSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
@@ -3710,6 +3711,156 @@ describe("useThreadNavigation", () => {
     expect(updateSubthreadOrder.mock.calls[0]![0]).toMatchObject({
       parentThreadId: "thread-root",
       threadIds: ["thread-a", "thread-fork", "thread-b"],
+    });
+  });
+
+  it("pins unlinked siblings together immediately above their pinned parent", async () => {
+    const pinnedBefore = {
+      id: "thread-before",
+      title: "Pinned before",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      pinnedRank: "1024",
+    };
+    const parent = {
+      ...pinnedBefore,
+      id: "thread-parent",
+      title: "Pinned parent",
+      pinnedRank: "2048",
+      subthreadOrder: ["thread-child-a", "thread-child-b"],
+      federation: {
+        ref: {
+          backend: "codex" as const,
+          target: { scope: "remote" as const, instanceId: "parent-owner" },
+          threadId: "thread-parent",
+        },
+        instanceLabel: "Parent Mac",
+      },
+    };
+    const childA = {
+      ...pinnedBefore,
+      id: "thread-child-a",
+      title: "Child A",
+      pinnedRank: undefined,
+      parentThreadId: "thread-parent",
+      parentThreadBackend: "codex" as const,
+      parentThreadInstanceId: "parent-owner",
+    };
+    const childB = { ...childA, id: "thread-child-b", title: "Child B" };
+    const snapshot = {
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [pinnedBefore, parent, childA, childB],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    };
+    const setThreadParent = vi.fn(async (request: { threadId: string }) => ({
+      backend: "codex" as const,
+      threadId: request.threadId,
+    }));
+    const reorderThreadPins = vi.fn(async () => ({
+      pinnedRanks: {
+        "codex:thread-before": "1024",
+        "codex:thread-child-a": "2048",
+        "codex:thread-child-b": "3072",
+        "codex:thread-parent": "4096",
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot: vi.fn(async () => snapshot),
+      onAgentEvent: () => () => undefined,
+      reorderThreadPins,
+      setThreadParent,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(4));
+
+    await act(async () => {
+      await result.current.unlinkThreads([childB, childA]);
+    });
+
+    expect(setThreadParent.mock.calls.map(([request]) => request)).toEqual([
+      { backend: "codex", federationTarget: undefined, threadId: "thread-child-b" },
+      { backend: "codex", federationTarget: undefined, threadId: "thread-child-a" },
+    ]);
+    expect(reorderThreadPins).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      threadKeys: [
+        "codex:thread-before",
+        "codex:thread-child-a",
+        "codex:thread-child-b",
+        "codex:thread-parent",
+      ],
+    });
+  });
+
+  it("routes remote-child unlinking to its owner", async () => {
+    const remoteTarget = {
+      scope: "remote" as const,
+      instanceId: "child-owner",
+    };
+    const parent = {
+      id: "thread-parent",
+      title: "Local parent",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      pinnedRank: "1024",
+    };
+    const child: NavigationThreadSummary = {
+      ...parent,
+      id: "thread-child",
+      title: "Remote child",
+      pinnedRank: undefined,
+      parentThreadId: "thread-parent",
+      parentThreadBackend: "codex",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: remoteTarget,
+          threadId: "thread-child",
+        },
+        instanceLabel: "Child Mac",
+      },
+    };
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [parent, child],
+      directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    };
+    const setThreadParent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-child",
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot: vi.fn(async () => snapshot),
+      onAgentEvent: () => () => undefined,
+      reorderThreadPins: vi.fn(async () => ({ pinnedRanks: {} })),
+      setThreadParent,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.unlinkThreads([child]);
+    });
+
+    expect(setThreadParent).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget: remoteTarget,
+      threadId: "thread-child",
     });
   });
 

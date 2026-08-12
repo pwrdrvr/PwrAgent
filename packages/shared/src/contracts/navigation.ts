@@ -737,6 +737,8 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   prAutoDispatchEnabled?: boolean;
   workMode: LaunchpadWorkMode;
   branchName?: string;
+  /** Instance that owns the thread this viewer-side launchpad will create. */
+  federationTarget?: FederationTarget;
   parentThreadId?: string;
   parentThreadBackend?: AppServerBackendKind;
   parentThreadInstanceId?: FederationInstanceId;
@@ -1481,6 +1483,7 @@ export type ReorderThreadPinsResponse = {
 };
 
 export type SetThreadParentRequest = {
+  federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier | null;
@@ -1497,6 +1500,7 @@ export type SetThreadParentResponse = {
 };
 
 export type UpdateSubthreadOrderRequest = {
+  federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   parentThreadId: ThreadIdentifier;
   threadIds: ThreadIdentifier[];
@@ -1509,6 +1513,7 @@ export type UpdateSubthreadOrderResponse = {
 };
 
 export type SetSubthreadsCollapsedRequest = {
+  federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   parentThreadId: ThreadIdentifier;
   collapsed: boolean;

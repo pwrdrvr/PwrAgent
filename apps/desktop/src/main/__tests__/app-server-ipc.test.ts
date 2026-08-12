@@ -17,6 +17,7 @@ import type {
   RenameThreadRequest,
   RestoreWorktreeRequest,
   RestoreThreadRequest,
+  SetThreadParentRequest,
   ThreadGitWorkingState,
 } from "@pwragent/shared";
 
@@ -51,6 +52,13 @@ const federationMock = vi.hoisted(() => {
       backend: request.backend ?? "codex",
       threadId: request.threadId,
       reactions: ["✋", "👀"],
+    })),
+    setThreadParent: vi.fn(async (request: SetThreadParentRequest) => ({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      parentThreadId: request.parentThreadId ?? undefined,
+      parentThreadBackend: request.parentThreadBackend ?? undefined,
+      parentThreadInstanceId: request.parentThreadInstanceId ?? undefined,
     })),
     renameThread: vi.fn(async (request: RenameThreadRequest) => ({
       backend: request.backend,
@@ -88,6 +96,7 @@ const federationMock = vi.hoisted(() => {
     searchForJump: vi.fn(async () => ({ results: [] })),
     threadFromPeer: vi.fn(async (): Promise<unknown> => undefined),
     rememberThreadNames: vi.fn(),
+    invalidate: vi.fn(),
   };
   return {
     remoteBackend,
@@ -981,6 +990,7 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.archiveThread.mockClear();
     federationMock.remoteBackend.markThreadSeen.mockClear();
     federationMock.remoteBackend.setThreadReaction.mockClear();
+    federationMock.remoteBackend.setThreadParent.mockClear();
     federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
     federationMock.remoteBackend.ensureDirectoryLaunchpad.mockReset();
     federationMock.remoteBackend.listRecentFileReferences.mockReset();
@@ -994,6 +1004,10 @@ describe("app server ipc", () => {
     federationMock.runtime.hydrateThreadMessageOrigins.mockClear();
     federationMock.runtime.remoteNavigationSnapshot.mockReset();
     federationMock.runtime.ungroupRemoteChildrenOfArchivedThread.mockClear();
+    federationMock.remoteThreadSummaries.invalidate.mockClear();
+    listRemoteThreadPins.mockReset();
+    listRemoteThreadPins.mockResolvedValue([]);
+    updateRemoteThreadPinSnapshots.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
     getThreadTranscriptImageRoots.mockClear();
@@ -3603,6 +3617,73 @@ describe("app server ipc", () => {
       backend: "codex",
       threadId: "thread-remote",
       renamedAt: 6_000,
+    });
+  });
+
+  it("routes remote unlinking to the owner and refreshes the mounted pin", async () => {
+    const { NAVIGATION_SET_THREAD_PARENT_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "child-owner",
+    };
+    const ref = {
+      backend: "codex" as const,
+      target: federationTarget,
+      threadId: "thread-child",
+    };
+    listRemoteThreadPins.mockResolvedValueOnce([{
+      ref,
+      instanceLabel: "Child Mac",
+      pinnedVia: "child",
+      addedAt: 1_000,
+      summary: {
+        source: "codex",
+        id: "thread-child",
+        title: "Remote child",
+        titleSource: "explicit",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+        parentThreadId: "thread-parent",
+        parentThreadBackend: "codex",
+        parentThreadInstanceId: "parent-owner",
+      },
+    }]);
+
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_SET_THREAD_PARENT_CHANNEL)?.(
+      {},
+      {
+        backend: "codex",
+        federationTarget,
+        threadId: "thread-child",
+      } satisfies SetThreadParentRequest,
+    );
+
+    expect(federationMock.remoteBackend.setThreadParent).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-child",
+    });
+    expect(updateRemoteThreadPinSnapshots).toHaveBeenCalledWith([{
+      ref,
+      instanceLabel: "Child Mac",
+      summary: expect.not.objectContaining({
+        parentThreadId: expect.anything(),
+        parentThreadBackend: expect.anything(),
+        parentThreadInstanceId: expect.anything(),
+      }),
+    }]);
+    expect(federationMock.remoteThreadSummaries.invalidate).toHaveBeenCalledWith(
+      "child-owner",
+    );
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-child",
+      parentThreadId: undefined,
+      parentThreadBackend: undefined,
+      parentThreadInstanceId: undefined,
     });
   });
 
