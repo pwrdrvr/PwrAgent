@@ -5318,6 +5318,100 @@ describe("MessagingController", () => {
     });
   });
 
+  it("reuses one status surface when initial and automatic renders race", async () => {
+    const statusIntents: Array<
+      Extract<MessagingSurfaceIntent, { kind: "status" }>
+    > = [];
+    let resolveFirstStatusDeliveryStarted: (() => void) | undefined;
+    const firstStatusDeliveryStarted = new Promise<void>((resolve) => {
+      resolveFirstStatusDeliveryStarted = resolve;
+    });
+    let firstStatusDelivery = true;
+    const harness = await createHarness({
+      deliver: async (intent) => {
+        if (intent.kind !== "status") {
+          return {
+            channel: "slack",
+            deliveredAt: 1000,
+            outcome: "presented",
+          };
+        }
+        statusIntents.push(intent);
+        if (firstStatusDelivery) {
+          firstStatusDelivery = false;
+          resolveFirstStatusDeliveryStarted?.();
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        }
+        const surface = intent.targetSurface ?? {
+          channel: "slack" as const,
+          id: "status-surface-1",
+        };
+        return {
+          channel: "slack",
+          deliveredAt: 1000,
+          outcome: intent.targetSurface ? "updated" as const : "presented" as const,
+          surface,
+        };
+      },
+    });
+    const event = buildTextEvent("delegate this", {
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "1786469165.289979",
+          kind: "thread",
+          parentId: "C05RKSBL1QF",
+          parentTitle: "giphy-services",
+        },
+      },
+    });
+    await harness.store.upsertBinding({
+      id: "binding:slack:thread:1786469165.289979:C05RKSBL1QF:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    const initialStatus = harness.controller.handleInboundEvent({
+      ...buildCommandEvent("/status"),
+      channel: event.channel,
+    });
+    await firstStatusDeliveryStarted;
+    await Promise.all([
+      initialStatus,
+      ...[
+        "Renamed title",
+        "Final title",
+      ].map(async (threadName) => {
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "thread/name/updated",
+            params: {
+              threadId: "thread-1",
+              threadName,
+            },
+          },
+        });
+      }),
+    ]);
+
+    expect(statusIntents.map((intent) => intent.delivery?.mode)).toEqual([
+      "present",
+      "update",
+      "update",
+    ]);
+    expect(statusIntents.map((intent) => intent.targetSurface?.id)).toEqual([
+      undefined,
+      "status-surface-1",
+      "status-surface-1",
+    ]);
+  });
+
   it("refreshes the status card when a bound thread is renamed", async () => {
     const harness = await createHarness();
     await bindThread(harness);
