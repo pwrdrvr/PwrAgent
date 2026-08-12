@@ -83,13 +83,13 @@ jobs:
           retention-days: 7
 
   sign:
-    name: Sign, notarize, publish
+    name: Sign, notarize, package macOS
     runs-on: macos-15
     needs: prepare
     timeout-minutes: 60
     environment: apple-signing
     permissions:
-      contents: write # publish releases to the same repo
+      contents: read
       id-token: none
     steps:
       - name: Download signing input
@@ -111,7 +111,7 @@ jobs:
       - name: Expand signing input
         run: tar -xzf .release-input/desktop-release-signing-input.tgz
 
-      - name: Sign, notarize, publish
+      - name: Sign, notarize, package macOS
         env:
           # Code signing (Developer ID Application: PwrDrvr LLC, T44CNHC4UH).
           # Store these in the apple-signing GitHub Environment, not as repo secrets.
@@ -127,30 +127,20 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: T44CNHC4UH
 
-          # Publish to the existing private pwrdrvr/PwrAgent repo.
-          # Phase 1 (solo dogfooding). Phase 2 channel migration is in
-          # docs/desktop-distribution-phase-2-runbook.md.
-          GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
-        run: node apps/desktop/scripts/release.mjs --sign-stage-only
+        run: node apps/desktop/scripts/release.mjs --sign-stage-only --no-publish
 
-      - name: Publish stable-name DMG alias
-        env:
-          GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      - name: Prepare stable-name DMG alias
         run: |
           set -euo pipefail
           cd apps/desktop/release-stage/dist
           versioned=$(ls PwrAgent-*-universal.dmg | head -n 1)
           cp "$versioned" PwrAgent.dmg
-          gh release upload "$RELEASE_TAG" \
-            PwrAgent.dmg \
-            --repo pwrdrvr/PwrAgent \
-            --clobber
 
-      - name: Upload release artifacts (debug retention)
+      # This is the macOS release payload consumed by publish-release-assets.
+      # It is intentionally not a best-effort debug upload: publishing must
+      # wait until every signed platform payload is available.
+      - name: Upload macOS release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        if: ${{ !cancelled() }}
-        continue-on-error: true
         with:
           name: desktop-release-artifacts
           path: |
@@ -328,17 +318,36 @@ jobs:
             apps/desktop/release-stage/dist/SHA256SUMS
           retention-days: 7
 
-  linux-publish:
-    name: Publish Linux DEB artifacts
+  publish-release-assets:
+    name: Publish release assets
     runs-on: ubuntu-24.04
     needs:
       - linux-package
       - sign
+      - windows-sign
     timeout-minutes: 15
     permissions:
       contents: write
       id-token: none
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Download macOS release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-release-artifacts
+          path: mac-dist
+
+      - name: Download Windows installer artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-installer
+          path: windows-dist
+
       - name: Download Linux package artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -354,26 +363,52 @@ jobs:
           test "${#debs[@]}" -eq 4
           sha256sum "${debs[@]}" > SHA256SUMS
 
-      - name: Publish Linux release assets
+      - name: Create release and publish all platform assets
         env:
           GH_TOKEN: ${{ secrets.RELEASES_PAT || github.token }}
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          cd linux-dist
-          gh release upload "$RELEASE_TAG" \
-            *.deb \
-            SHA256SUMS \
-            --repo pwrdrvr/PwrAgent \
-            --clobber
+          RELEASE_TAG="${RELEASE_TAG:?}"
+          notes="$RUNNER_TEMP/RELEASE_NOTES.md"
 
-      - name: Upload Linux artifacts (debug retention)
+          node scripts/extract-release-notes.mjs \
+            --tag "$RELEASE_TAG" \
+            --out "$notes"
+
+          if [ ! -s "$notes" ]; then
+            echo "::error::No CHANGELOG.md notes found for $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+          release_args=(
+            "$RELEASE_TAG"
+            --repo pwrdrvr/PwrAgent
+            --verify-tag
+            --title "$RELEASE_TAG"
+            --notes-file "$notes"
+          )
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            release_args+=(--prerelease)
+          else
+            release_args+=(--latest)
+          fi
+
+          gh release create "${release_args[@]}" \
+            mac-dist/* \
+            windows-dist/* \
+            linux-dist/*.deb \
+            linux-dist/SHA256SUMS
+
+      - name: Upload assembled release artifacts (debug retention)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ !cancelled() }}
         continue-on-error: true
         with:
-          name: linux-release-artifacts
+          name: release-publish-artifacts
           path: |
+            mac-dist/*
+            windows-dist/*
             linux-dist/*.deb
             linux-dist/SHA256SUMS
           retention-days: 30
@@ -382,8 +417,7 @@ jobs:
     name: Publish release notes
     runs-on: ubuntu-24.04
     needs:
-      - sign
-      - linux-publish
+      - publish-release-assets
     timeout-minutes: 10
     permissions:
       contents: write

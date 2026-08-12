@@ -122,11 +122,12 @@ seven job definitions (the Linux package job fans out across two architectures):
    `id-token: none`, no Apple secrets, and checkout credentials disabled. It
    installs dependencies, runs release metadata checks, typecheck, tests, and
    `apps/desktop/scripts/release.mjs --prepare-only`.
-2. `Sign, notarize, publish`, gated by the protected `apple-signing`
-   environment, with `contents: write` and explicit `id-token: none`. It does
+2. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
+   environment, with `contents: read` and explicit `id-token: none`. It does
    not check out the repository or run dependency installation/postinstall
    scripts. It downloads the prepared artifact, verifies its SHA-256 digest,
-   expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only`
+   expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only
+   --no-publish`
    with the environment-scoped Apple secrets.
 3. `Package Linux DEB`, running on native Ubuntu x64 and arm64 GitHub-hosted
    runners. Each job runs `apps/desktop/scripts/release.mjs --linux
@@ -146,12 +147,13 @@ seven job definitions (the Linux package job fans out across two architectures):
    verifier resolves from the staged toolchain, not the workspace. The Azure
    service-principal secrets are injected only into this signing-aware packaging
    step.
-6. `Publish Linux DEB artifacts`, which waits for the macOS publish job so the
-   GitHub Release exists, combines both Linux architecture artifacts, generates
-   `SHA256SUMS`, and uploads the `.deb` files plus checksums to the same
-   release.
-7. `Publish release notes`, which waits for successful macOS and Linux release
-   asset publishing, extracts the matching `CHANGELOG.md` section, updates the
+6. `Publish release assets`, which waits for successful macOS signing, both
+   Linux packages, and the signed Windows installer. Only then does it create
+   the GitHub Release (as `Pre-release` for prerelease tags and normal/Latest
+   for stable tags), upload every platform's assets, and generate Linux
+   `SHA256SUMS`.
+7. `Publish release notes`, which waits for successful all-platform asset
+   publishing, extracts the matching `CHANGELOG.md` section, updates the
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
 
@@ -174,15 +176,20 @@ The macOS environment-gated signing job:
    package version: versions with a prerelease suffix such as `-beta.41` are
    born as GitHub `Pre-release`, while stable versions are born as normal
    releases.
-4. Runs `electron-builder --mac --universal --publish always` from the
+4. Runs `electron-builder --mac --universal --publish never` from the
    downloaded artifact, without invoking `pnpm install`, `npx`, or dependency
    lifecycle scripts. `electron-builder` signs every
    helper bundle individually, signs the main `.app`, submits to Apple's
    notarization service via `notarytool`, staples the ticket, builds the DMG
-   and universal updater ZIP, generates `latest-mac.yml`, and uploads
-   everything to a GitHub Release on `pwrdrvr/PwrAgent`.
-5. Uploads the stable-name `PwrAgent.dmg` alias for landing-page download
-   links.
+   and universal updater ZIP, and generates `latest-mac.yml` without creating
+   a GitHub Release.
+5. Prepares the stable-name `PwrAgent.dmg` alias and transfers the signed
+   macOS assets to the all-platform publishing job.
+
+The all-platform publishing job creates the GitHub Release only after the
+signed macOS, Windows, and Linux payloads are all available. It uploads the
+signed Windows installer alongside the macOS and Linux assets; a failed or
+unapproved Windows signing job therefore cannot leave a partial public release.
 
 The Windows jobs use the same trust boundary with a platform-specific final
 step. The no-secret job prepares the stage on Windows, because its native
@@ -197,16 +204,16 @@ coverage.
 
 Cycle time target: ≤ 12 minutes.
 
-Do not approve the `apple-signing` environment unless the tag, commit, and
-metadata are the intended release. Do not create the GitHub Release manually
-before the build succeeds. A manually created release appears before
-signing/notarization finishes. The current flow lets electron-builder create or
-update the release from the successful CI build, then the workflow replaces the
-generated/empty notes with the matching `CHANGELOG.md` content after release
-assets are published. The release is not complete at the `apple-signing`
+Do not approve the `apple-signing` or `windows-signing` environment unless the
+tag, commit, and metadata are the intended release. Do not create the GitHub
+Release manually before the build succeeds. A manually created release appears
+before all required platform builds have completed. The workflow creates the
+release only after it has received the signed macOS and Windows payloads plus
+both Linux packages, then the release-notes job verifies and writes the
+matching `CHANGELOG.md` content. The release is not complete at either signing
 approval gate: after approval, continue watching the run through `Publish
 release notes`, then verify the final GitHub Release body is non-empty. If a
-monitor or handoff stops at the approval gate, resume after approval rather than
+monitor or handoff stops at an approval gate, resume after approval rather than
 treating the release as done.
 Prerelease-tagged versions such as `v1.0.0-beta.41` must be born as GitHub
 `Pre-release`, not edited afterward. Stable versions such as `v1.0.0` are born
