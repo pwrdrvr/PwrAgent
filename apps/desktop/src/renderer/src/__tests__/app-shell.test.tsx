@@ -791,6 +791,10 @@ describe("App", () => {
           value: true,
           source: "default",
         },
+        attentionPromoteOnTurnEnd: {
+          value: true,
+          source: "default",
+        },
         developerMode: {
           value: false,
           source: "default",

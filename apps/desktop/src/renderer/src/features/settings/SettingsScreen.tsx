@@ -380,6 +380,13 @@ function SettingsSectionBody(props: {
             general: { confirmQuitWithInProgressThreads },
           });
         }}
+        onAttentionPromoteOnTurnEndChange={async (
+          attentionPromoteOnTurnEnd: boolean,
+        ) => {
+          await props.settings.writeConfig({
+            general: { attentionPromoteOnTurnEnd },
+          });
+        }}
         onPdfAnalysisEnabledChange={async (pdfAnalysisEnabled) => {
           await props.settings.writeConfig({
             general: { pdfAnalysisEnabled },

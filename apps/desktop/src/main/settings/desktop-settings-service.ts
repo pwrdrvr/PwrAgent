@@ -597,6 +597,13 @@ export class DesktopSettingsService {
           config.general?.confirmQuitWithInProgressThreads,
           true,
         ),
+        // Default on: with the Attention lens ranked by turn start, leaving
+        // this off would park a long-running turn below a short one that
+        // started later, which reads oddly for a review queue.
+        attentionPromoteOnTurnEnd: this.resolveConfigBoolean(
+          config.general?.attentionPromoteOnTurnEnd,
+          true,
+        ),
         pdfAnalysisEnabled: this.resolveConfigBoolean(
           config.general?.pdfAnalysisEnabled,
           true,

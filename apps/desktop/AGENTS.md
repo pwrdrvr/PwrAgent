@@ -47,6 +47,11 @@ summary.
   cookie, only replying does. See "Current Product Direction" in the
   [repo-root `AGENTS.md`](../../AGENTS.md) for why that rule is lens-scoped
   rather than global.
+- Attention rows are ranked per turn, not per update
+  ([attention-order.ts](src/renderer/src/features/navigation/attention-order.ts)).
+  Do not re-sort the lens by `updatedAt` — that is the bug the ranks exist to
+  fix. New signals that should move a row need a transition in the reducer, not
+  a tiebreaker in the sort.
 - User-curated Pins live as a scrollable section at the top of each directory
   in the Directories lens. Inbox and Recents are pure sort orders and do not
   float pins.

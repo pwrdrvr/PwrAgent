@@ -1820,6 +1820,9 @@ function DesktopAppShell(props: {
           error={navigation.error}
           inboxThreads={navigation.inboxThreads}
           recentThreads={navigation.recentThreads}
+          attentionPromoteOnTurnEnd={
+            settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true
+          }
           archiveThreadError={navigation.archiveThreadError}
           renameThreadError={navigation.renameThreadError}
           runtimeIdentity={runtimeIdentity}
