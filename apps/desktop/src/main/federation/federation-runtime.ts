@@ -2610,6 +2610,7 @@ export class DesktopFederationRuntime {
         this.ptyService?.notifyPeerDisconnected(peerId);
       }
       this.clearRemoteNavigationTransportForPeer(peerId);
+      this.ownedNavigationSnapshotTransport?.clearClient(peerId);
       this.publishPeerStatus(
         peerId,
         peer.status === "revoked" ? "revoked" : "disconnected",
@@ -3019,6 +3020,7 @@ export class DesktopFederationRuntime {
           }
         } else if (previous?.status === "connected") {
           this.ptyService?.notifyPeerDisconnected(peer.id);
+          this.ownedNavigationSnapshotTransport?.clearClient(peer.id);
         }
         previousPeers.delete(peer.id);
       }
@@ -3036,6 +3038,7 @@ export class DesktopFederationRuntime {
       if (previousPeers.get(peerId)?.status === "connected") {
         this.ptyService?.notifyPeerDisconnected(peerId);
       }
+      this.ownedNavigationSnapshotTransport?.clearClient(peerId);
       this.publishPeerStatus(
         peerId,
         "disconnected",

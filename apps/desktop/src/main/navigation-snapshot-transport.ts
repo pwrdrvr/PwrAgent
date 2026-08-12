@@ -17,6 +17,23 @@ type CachedNavigationSnapshot = {
   snapshot: NavigationSnapshot;
 };
 
+const DEFAULT_MAX_CLIENTS = 64;
+const DEFAULT_MAX_SCOPES_PER_CLIENT = 8;
+
+type NavigationSnapshotTransportOptions = {
+  maxClients?: number;
+  maxScopesPerClient?: number;
+};
+
+function positiveIntegerOrDefault(
+  value: number | undefined,
+  fallback: number,
+): number {
+  return value !== undefined && Number.isInteger(value) && value > 0
+    ? value
+    : fallback;
+}
+
 function threadKey(thread: NavigationThreadSummary): string {
   return buildThreadIdentityKey(thread.source, thread.id);
 }
@@ -163,10 +180,23 @@ function buildDelta(params: {
  */
 export class NavigationSnapshotTransport {
   private nextRevision = 0;
+  private readonly maxClients: number;
+  private readonly maxScopesPerClient: number;
   private readonly snapshotsByClient = new Map<
     string | number,
     Map<string, CachedNavigationSnapshot>
   >();
+
+  constructor(options: NavigationSnapshotTransportOptions = {}) {
+    this.maxClients = positiveIntegerOrDefault(
+      options.maxClients,
+      DEFAULT_MAX_CLIENTS,
+    );
+    this.maxScopesPerClient = positiveIntegerOrDefault(
+      options.maxScopesPerClient,
+      DEFAULT_MAX_SCOPES_PER_CLIENT,
+    );
+  }
 
   clearRenderer(rendererId: number): void {
     this.clearClient(rendererId);
@@ -180,6 +210,42 @@ export class NavigationSnapshotTransport {
     this.snapshotsByClient.clear();
   }
 
+  private snapshotsForClient(
+    clientId: string | number,
+  ): Map<string, CachedNavigationSnapshot> {
+    const existing = this.snapshotsByClient.get(clientId);
+    if (existing) {
+      // Map insertion order is the LRU order. Reinsert on access so an active
+      // renderer or Federation peer survives pressure from newer clients.
+      this.snapshotsByClient.delete(clientId);
+      this.snapshotsByClient.set(clientId, existing);
+      return existing;
+    }
+
+    while (this.snapshotsByClient.size >= this.maxClients) {
+      const oldestClientId = this.snapshotsByClient.keys().next().value;
+      if (oldestClientId === undefined) break;
+      this.snapshotsByClient.delete(oldestClientId);
+    }
+    const created = new Map<string, CachedNavigationSnapshot>();
+    this.snapshotsByClient.set(clientId, created);
+    return created;
+  }
+
+  private cacheSnapshot(
+    clientSnapshots: Map<string, CachedNavigationSnapshot>,
+    scopeKey: string,
+    cached: CachedNavigationSnapshot,
+  ): void {
+    clientSnapshots.delete(scopeKey);
+    clientSnapshots.set(scopeKey, cached);
+    while (clientSnapshots.size > this.maxScopesPerClient) {
+      const oldestScopeKey = clientSnapshots.keys().next().value;
+      if (oldestScopeKey === undefined) break;
+      clientSnapshots.delete(oldestScopeKey);
+    }
+  }
+
   encode(params: {
     baseRevision?: string;
     clientId: string | number;
@@ -188,10 +254,12 @@ export class NavigationSnapshotTransport {
   }): NavigationSnapshotTransportResponse {
     const clientId = params.clientId;
     const scopeKey = buildNavigationSnapshotTransportScopeKey(params.request);
-    const clientSnapshots =
-      this.snapshotsByClient.get(clientId) ?? new Map();
-    this.snapshotsByClient.set(clientId, clientSnapshots);
+    const clientSnapshots = this.snapshotsForClient(clientId);
     const cached = clientSnapshots.get(scopeKey);
+    if (cached) {
+      clientSnapshots.delete(scopeKey);
+      clientSnapshots.set(scopeKey, cached);
+    }
 
     if (
       !cached
@@ -203,7 +271,7 @@ export class NavigationSnapshotTransport {
       )
     ) {
       const revision = String(++this.nextRevision);
-      clientSnapshots.set(scopeKey, {
+      this.cacheSnapshot(clientSnapshots, scopeKey, {
         revision,
         snapshot: params.snapshot,
       });
@@ -224,7 +292,7 @@ export class NavigationSnapshotTransport {
       revision,
     });
     if (!delta) {
-      clientSnapshots.set(scopeKey, {
+      this.cacheSnapshot(clientSnapshots, scopeKey, {
         revision: cached.revision,
         snapshot: params.snapshot,
       });
@@ -235,7 +303,7 @@ export class NavigationSnapshotTransport {
     }
 
     this.nextRevision += 1;
-    clientSnapshots.set(scopeKey, {
+    this.cacheSnapshot(clientSnapshots, scopeKey, {
       revision,
       snapshot: params.snapshot,
     });

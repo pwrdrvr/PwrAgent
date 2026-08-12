@@ -193,4 +193,80 @@ describe("NavigationSnapshotTransport", () => {
       revision: activeRecent.revision,
     });
   });
+
+  it("evicts the least recently used scope when a client exceeds its cap", () => {
+    const transport = new NavigationSnapshotTransport({
+      maxScopesPerClient: 2,
+    });
+    const snapshot = buildSnapshot([buildThread(1)]);
+    const first = transport.encode({
+      clientId: "federation:viewer",
+      request: { filter: "first" },
+      snapshot,
+    });
+    const second = transport.encode({
+      clientId: "federation:viewer",
+      request: { filter: "second" },
+      snapshot,
+    });
+    if (first.kind !== "full" || second.kind !== "full") {
+      throw new Error("Expected full baselines");
+    }
+
+    expect(transport.encode({
+      baseRevision: first.revision,
+      clientId: "federation:viewer",
+      request: { filter: "first" },
+      snapshot,
+    }).kind).toBe("unchanged");
+    transport.encode({
+      clientId: "federation:viewer",
+      request: { filter: "third" },
+      snapshot,
+    });
+
+    expect(transport.encode({
+      baseRevision: second.revision,
+      clientId: "federation:viewer",
+      request: { filter: "second" },
+      snapshot,
+    }).kind).toBe("full");
+  });
+
+  it("evicts the least recently used client when the transport exceeds its cap", () => {
+    const transport = new NavigationSnapshotTransport({ maxClients: 2 });
+    const snapshot = buildSnapshot([buildThread(1)]);
+    const first = transport.encode({
+      clientId: "federation:first",
+      request: {},
+      snapshot,
+    });
+    const second = transport.encode({
+      clientId: "federation:second",
+      request: {},
+      snapshot,
+    });
+    if (first.kind !== "full" || second.kind !== "full") {
+      throw new Error("Expected full baselines");
+    }
+
+    expect(transport.encode({
+      baseRevision: first.revision,
+      clientId: "federation:first",
+      request: {},
+      snapshot,
+    }).kind).toBe("unchanged");
+    transport.encode({
+      clientId: "federation:third",
+      request: {},
+      snapshot,
+    });
+
+    expect(transport.encode({
+      baseRevision: second.revision,
+      clientId: "federation:second",
+      request: {},
+      snapshot,
+    }).kind).toBe("full");
+  });
 });

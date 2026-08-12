@@ -84,6 +84,9 @@ type RuntimeHarness = {
     }) => void,
   ) => () => void;
   remotePeerDirectory: Map<FederationInstanceId, unknown>;
+  ownedNavigationSnapshotTransport?: {
+    clearClient: (clientId: string | number) => void;
+  };
   ptyService?: {
     notifyPeerConnected: (peerId: FederationInstanceId) => void;
     notifyPeerDisconnected: (peerId: FederationInstanceId) => void;
@@ -785,8 +788,12 @@ describe("DesktopFederationRuntime", () => {
   it("propagates advertised viewer disconnects and reconnects to remote PTY sessions", () => {
     const connected: FederationInstanceId[] = [];
     const disconnected: FederationInstanceId[] = [];
+    const clearedNavigationClients: Array<string | number> = [];
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "owner_one";
+    runtime.ownedNavigationSnapshotTransport = {
+      clearClient: (clientId) => clearedNavigationClients.push(clientId),
+    };
     runtime.ptyService = {
       notifyPeerConnected: (peerId) => connected.push(peerId),
       notifyPeerDisconnected: (peerId) => disconnected.push(peerId),
@@ -823,12 +830,17 @@ describe("DesktopFederationRuntime", () => {
     expect(connected).toEqual(["viewer_one", "viewer_one"]);
     runtime.applyPeerDirectory(directory("peers-4"));
     expect(disconnected).toEqual(["viewer_one", "viewer_one"]);
+    expect(clearedNavigationClients).toEqual(["viewer_one", "viewer_one"]);
   });
 
   it("disconnects every relayed PTY viewer when the upstream gateway closes", () => {
     const disconnected: FederationInstanceId[] = [];
+    const clearedNavigationClients: Array<string | number> = [];
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "owner_one";
+    runtime.ownedNavigationSnapshotTransport = {
+      clearClient: (clientId) => clearedNavigationClients.push(clientId),
+    };
     runtime.ptyService = {
       notifyPeerConnected: () => undefined,
       notifyPeerDisconnected: (peerId) => disconnected.push(peerId),
@@ -844,6 +856,7 @@ describe("DesktopFederationRuntime", () => {
     runtime.disconnectAdvertisedPeers("Gateway disconnected.");
 
     expect(disconnected).toEqual(["viewer_one"]);
+    expect(clearedNavigationClients).toEqual(["viewer_one"]);
   });
 
   it("records a successful client session and preserves its timing", () => {
