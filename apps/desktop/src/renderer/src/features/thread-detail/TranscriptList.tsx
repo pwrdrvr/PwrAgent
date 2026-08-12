@@ -25,6 +25,7 @@ import type {
   PendingRequestApprovalFileContext,
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
+  ThreadQuestionnaireActivity,
   ThreadTurnFailure,
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
@@ -35,6 +36,7 @@ import {
 import { injectAutomationCards } from "./automation-card-entries";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
+import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
 import { injectTurnFailures } from "./turn-failure-entries";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
@@ -96,6 +98,7 @@ type TranscriptListProps = {
   pagination?: AppServerThreadReplayPagination;
   permissionTransitions?: ThreadPermissionTransition[];
   messagingBindingTransitions?: ThreadMessagingBindingTransition[];
+  questionnaireActivities?: ThreadQuestionnaireActivity[];
   turnFailures?: ThreadTurnFailure[];
   restoredViewport?: TranscriptViewport;
   reglueRequestKey?: number;
@@ -693,12 +696,15 @@ export function TranscriptList(props: TranscriptListProps) {
       insertPendingEntry(entries, pendingEntry);
     }
     return injectTurnFailures(
-      injectAutomationCards(
-        injectMessagingBindingTransitions(
-          injectPermissionTransitions(entries, props.permissionTransitions),
-          props.messagingBindingTransitions,
+      injectQuestionnaireActivities(
+        injectAutomationCards(
+          injectMessagingBindingTransitions(
+            injectPermissionTransitions(entries, props.permissionTransitions),
+            props.messagingBindingTransitions,
+          ),
+          automationCards,
         ),
-        automationCards,
+        props.questionnaireActivities,
       ),
       props.turnFailures,
     );
@@ -712,6 +718,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingPlanEntry,
     props.messagingBindingTransitions,
     props.permissionTransitions,
+    props.questionnaireActivities,
     props.turnFailures,
   ]);
   const pendingApprovalContext = useMemo(
