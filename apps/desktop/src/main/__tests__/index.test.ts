@@ -161,6 +161,7 @@ const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
 const registerMcpConnectionIpcHandlersMock = vi.fn();
 const disposeMcpConnectionIpcHandlersMock = vi.fn();
+const startPwrSnapConnectionServiceMock = vi.fn<() => Promise<void>>();
 const closePwrSnapConnectionServiceMock = vi.fn<() => Promise<void>>();
 const registerMessagingRbacIpcHandlersMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
@@ -570,6 +571,7 @@ vi.mock("../ipc/mcp-connections", () => ({
 
 vi.mock("../mcp-connections/pwrsnap-connection-service", () => ({
   getPwrSnapConnectionService: vi.fn(() => ({
+    start: startPwrSnapConnectionServiceMock,
     close: closePwrSnapConnectionServiceMock,
   })),
 }));
@@ -720,6 +722,8 @@ describe("bootstrapApp", () => {
     prewarmWindowsJobWrapperMock.mockResolvedValue();
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
+    startPwrSnapConnectionServiceMock.mockReset();
+    startPwrSnapConnectionServiceMock.mockResolvedValue();
     federationRuntimeRestartMock.mockReset();
     federationRuntimeRestartMock.mockResolvedValue();
     disposeDesktopFederationRuntimeMock.mockReset();
