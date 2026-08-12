@@ -80,9 +80,17 @@ export class FakeAcpAgentTransport implements AcpJsonRpcTransport {
     this.closeCount += 1;
   }
 
-  emitSessionUpdate(sessionId: string, update: Record<string, unknown>): void {
+  emitSessionUpdate(
+    sessionId: string,
+    update: Record<string, unknown>,
+    envelopeMeta?: Record<string, unknown>,
+  ): void {
     for (const listener of this.listeners) {
-      listener("session/update", { sessionId, update });
+      listener("session/update", {
+        sessionId,
+        update,
+        ...(envelopeMeta ? { _meta: envelopeMeta } : {}),
+      });
     }
   }
 
