@@ -76,6 +76,8 @@ describe("AcpAgentClient", () => {
 
     await client.initialize();
     expect(client.hasActiveOperations()).toBe(false);
+    expect(client.hasOwnedSessions()).toBe(false);
+    expect(client.ownsSession("session-1")).toBe(false);
 
     const session = client.startSession({
       cwd: "/repo",
@@ -86,6 +88,8 @@ describe("AcpAgentClient", () => {
     sessionResponse.resolve({ sessionId: "session-1" });
     await expect(session).resolves.toMatchObject({ sessionId: "session-1" });
     expect(client.hasActiveOperations()).toBe(false);
+    expect(client.hasOwnedSessions()).toBe(true);
+    expect(client.ownsSession("session-1")).toBe(true);
 
     const runtimeOption = client.setRuntimeOption({
       sessionId: "session-1",
@@ -97,6 +101,10 @@ describe("AcpAgentClient", () => {
     runtimeOptionResponse.resolve({});
     await runtimeOption;
     expect(client.hasActiveOperations()).toBe(false);
+
+    await client.dispose();
+    expect(client.hasOwnedSessions()).toBe(false);
+    expect(client.ownsSession("session-1")).toBe(false);
   });
 
   it("initializes, starts sessions, sends prompts, and normalizes updates", async () => {

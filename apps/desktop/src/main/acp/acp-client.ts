@@ -319,6 +319,14 @@ export class AcpAgentClient {
     return this.activeOperations > 0;
   }
 
+  ownsSession(sessionId: string): boolean {
+    return this.agentSessionIdsByAppSessionId.has(sessionId);
+  }
+
+  hasOwnedSessions(): boolean {
+    return this.agentSessionIdsByAppSessionId.size > 0;
+  }
+
   // Count the whole public operation, including setup before the transport
   // request and state updates after it, so launch replacement cannot dispose
   // this client at either edge of an in-flight RPC.
