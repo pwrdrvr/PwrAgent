@@ -9,6 +9,7 @@ import type {
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { runGitCommand } from "./git-executable";
 
 const execFileAsync = promisify(execFile);
 
@@ -60,11 +61,20 @@ type WorktreeArchiveServiceOptions = {
 async function runGit(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    ownProcessTree?: boolean;
+  } = {},
 ): Promise<GitResult> {
-  return await execFileAsync("git", args, {
-    cwd,
-    env: buildPwrAgentChildProcessEnv(process.env, options.env),
+  const env = buildPwrAgentChildProcessEnv(process.env, options.env);
+  if (process.platform === "win32" && options.ownProcessTree) {
+    return await runGitCommand(cwd, args, {
+      env,
+      ownProcessTree: true,
+    });
+  }
+  return await execFileAsync("git", ["-C", cwd, ...args], {
+    env,
     maxBuffer: 1024 * 1024 * 10,
   });
 }
@@ -180,7 +190,14 @@ export class WorktreeArchiveService {
     });
     const snapshotRef = snapshotRefForBackend(params.backend, worktreePath);
     await this.runGit(repositoryPath, ["update-ref", snapshotRef, snapshotCommit]);
-    await this.runGit(repositoryPath, ["worktree", "remove", "--force", worktreePath]);
+    await this.runGit(
+      repositoryPath,
+      ["worktree", "remove", "--force", worktreePath],
+      // Git for Windows can hand work to another git.exe after the launcher
+      // exits. Own that complete process tree atomically and do not report the
+      // archive complete until the Job's active-process count reaches zero.
+      { ownProcessTree: true },
+    );
 
     const archivedAt = params.now ?? Date.now();
     return {
@@ -416,13 +433,17 @@ export class WorktreeArchiveService {
   private async runGit(
     cwd: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv } = {},
+    options: {
+      env?: NodeJS.ProcessEnv;
+      ownProcessTree?: boolean;
+    } = {},
   ): Promise<GitResult> {
     return await runGit(cwd, args, {
       env: {
         ...this.gitEnv,
         ...options.env,
       },
+      ownProcessTree: options.ownProcessTree,
     });
   }
 }
