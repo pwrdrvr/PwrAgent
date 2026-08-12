@@ -14,6 +14,10 @@ const trustedSigningSetupPath = resolve(
   repoRoot,
   "scripts/release/install-trusted-signing.ps1",
 );
+const windowsArchiveScriptPath = resolve(
+  repoRoot,
+  "scripts/release/archive-windows-signing-input.ps1",
+);
 const desktopReleaseRunbookPath = resolve(repoRoot, "docs/desktop-release-runbook.md");
 const changelogPath = resolve(repoRoot, "CHANGELOG.md");
 
@@ -172,6 +176,7 @@ const ciWorkflow = readFileSync(ciWorkflowPath, "utf8");
 const releaseScript = readFileSync(releaseScriptPath, "utf8");
 const releaseWorkflow = readFileSync(releaseWorkflowPath, "utf8");
 const trustedSigningSetup = readFileSync(trustedSigningSetupPath, "utf8");
+const windowsArchiveScript = readFileSync(windowsArchiveScriptPath, "utf8");
 const desktopReleaseRunbook = readFileSync(desktopReleaseRunbookPath, "utf8");
 
 const desktopScripts = desktopPackage.scripts || {};
@@ -224,7 +229,9 @@ for (const expected of [
 for (const expected of [
   "releases/**",
   "ci:windows-package",
-  "--win --no-publish",
+  "--win --prepare-only",
+  "--win --sign-stage-only --no-publish",
+  "archive-windows-signing-input.ps1",
 ]) {
   if (!ciWorkflow.includes(expected)) {
     fail(`.github/workflows/ci.yml must contain ${JSON.stringify(expected)}`);
@@ -299,6 +306,7 @@ for (const expected of [
   "signing-input-sha256: ${{ steps.archive.outputs.sha256 }}",
   "Archive Windows signing input",
   "Upload Windows signing input",
+  "archive-windows-signing-input.ps1",
 ]) {
   assertWorkflowJobContainsText(
     releaseWorkflow,
@@ -312,6 +320,8 @@ for (const unexpected of [
   "secrets.",
   "      - name: Install TrustedSigning",
   "--require-signing",
+  "apps/desktop/node_modules",
+  "            \"node_modules\"",
 ]) {
   assertWorkflowJobExcludesText(
     releaseWorkflow,
@@ -365,6 +375,25 @@ assertWorkflowJobOrdersText(
 );
 if (releaseScript.includes("--win cannot be combined with --sign-stage-only")) {
   fail("apps/desktop/scripts/release.mjs must allow --win with --sign-stage-only");
+}
+for (const expected of [
+  "--config.node-linker=hoisted",
+  "signStageOnly && win",
+]) {
+  if (!releaseScript.includes(expected)) {
+    fail(`apps/desktop/scripts/release.mjs must contain ${JSON.stringify(expected)} for Windows signing input isolation`);
+  }
+}
+for (const expected of [
+  "apps/desktop/release-stage/node_modules/.pnpm/node_modules",
+  "apps/desktop/release-stage",
+  "apps/desktop/scripts/release.mjs",
+  "scripts/release/install-trusted-signing.ps1",
+  "tar.exe -czf",
+]) {
+  if (!windowsArchiveScript.includes(expected)) {
+    fail(`${windowsArchiveScriptPath} must contain ${JSON.stringify(expected)} for Windows signing input isolation`);
+  }
 }
 for (const credential of [
   "vars.WIN_AZURE_SIGN_PUBLISHER_NAME",

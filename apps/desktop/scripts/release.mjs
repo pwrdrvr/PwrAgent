@@ -173,7 +173,12 @@ function resolveWindowsAzureSigning() {
 }
 
 function electronBuilderCli() {
-  const cli = join(desktopRoot, "node_modules", "electron-builder", "cli.js");
+  // Windows signing receives a self-contained, hoisted release-stage archive
+  // instead of the workspace's pnpm symlink graph. Its signing job must not
+  // install dependencies, so use the staged electron-builder toolchain there.
+  const cli = signStageOnly && win
+    ? join(stageDir, "node_modules", "electron-builder", "cli.js")
+    : join(desktopRoot, "node_modules", "electron-builder", "cli.js");
   if (!existsSync(cli)) {
     throw new Error(`electron-builder CLI is missing at ${cli}; signing jobs must use the prepared release artifact`);
   }
@@ -401,17 +406,25 @@ if (!signStageOnly) {
   step("electron-vite build");
   runChecked("pnpm", ["--filter", "@pwragent/desktop", "build"], { cwd: repoRoot });
 
-  // 3. Materialize a self-contained, flat node_modules under stage.
-  step("pnpm deploy --prod -> release-stage");
+  // 3. Materialize the release stage. Windows must include electron-builder in
+  // the staged tree: its protected signing job receives only this tree, and
+  // Windows tar follows pnpm's workspace junctions when the workspace
+  // node_modules directories are archived. A hoisted deploy avoids that
+  // junction graph while leaving package-manager work outside the credential
+  // boundary.
+  const deployArgs = ["deploy", "--filter", "@pwragent/desktop", "--legacy"];
+  if (win) {
+    deployArgs.push("--config.node-linker=hoisted");
+  } else {
+    deployArgs.push("--prod");
+  }
+  deployArgs.push(stageDir);
+  step(`pnpm ${win ? "deploy (hoisted)" : "deploy --prod"} -> release-stage`);
   if (existsSync(stageDir)) {
     rmSync(stageDir, { recursive: true, force: true });
   }
   mkdirSync(stageDir, { recursive: true });
-  runChecked(
-    "pnpm",
-    ["deploy", "--filter", "@pwragent/desktop", "--prod", "--legacy", stageDir],
-    { cwd: repoRoot },
-  );
+  runChecked("pnpm", deployArgs, { cwd: repoRoot });
   patchStageDependencyManifests();
 
   // 4. Copy the build output, notices, changelog, and electron-builder inputs into the stage so

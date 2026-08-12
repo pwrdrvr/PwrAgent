@@ -244,22 +244,7 @@ jobs:
         shell: pwsh
         run: |
           $archive = Join-Path $env:RUNNER_TEMP "windows-release-signing-input.tgz"
-          $paths = @(
-            "package.json",
-            "pnpm-lock.yaml",
-            "pnpm-workspace.yaml",
-            "apps/desktop/release-stage",
-            "apps/desktop/scripts/release.mjs",
-            "apps/desktop/scripts/verify-asar-contents.mjs",
-            "apps/desktop/scripts/asar-entry-paths.mjs",
-            "apps/desktop/node_modules",
-            "scripts/release/install-trusted-signing.ps1",
-            "node_modules"
-          )
-          & tar.exe -czf $archive @paths
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to archive Windows signing input (exit code $LASTEXITCODE)."
-          }
+          ./scripts/release/archive-windows-signing-input.ps1 -ArchivePath $archive
           $sha256 = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
           "sha256=$sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "$sha256  windows-release-signing-input.tgz" |
