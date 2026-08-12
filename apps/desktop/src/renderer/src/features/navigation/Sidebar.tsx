@@ -295,6 +295,26 @@ const browseModeTooltips = {
   directories: "Directories — threads grouped by linked Git directory",
 } satisfies Record<BrowseMode, string>;
 
+/**
+ * The Drafts tab's count, for the tooltip and the accessible name.
+ *
+ * Counts *threads*, not drafts, and says so: a launchpad draft is equally
+ * unsent but belongs to a directory rather than a thread, so this lens cannot
+ * show it and the count must not imply it did.
+ *
+ * Deliberately does NOT contain the word "reply" — the wording the visible
+ * empty state uses. Playwright's `getByLabel` is a substring match and 31 specs
+ * drive the composer with `getByLabel("Reply")`, so a singular "1 unsent reply"
+ * on this tab turned every one of them into a strict-mode violation the moment
+ * a thread had a draft. Same trap the unsent-draft chip hit; see "E2E Locator
+ * Hygiene Around Global Chrome" in apps/desktop/AGENTS.md.
+ */
+function formatDraftThreadCount(count: number): string {
+  if (count === 0) return "No threads with unsent drafts";
+  if (count === 1) return "1 thread with an unsent draft";
+  return `${count} threads with unsent drafts`;
+}
+
 function formatThreadCount(count: number): string {
   return `${count} ${count === 1 ? "Thread" : "Threads"}`;
 }
@@ -1658,6 +1678,16 @@ export function Sidebar(props: SidebarProps) {
                 key={mode}
                 mode={mode}
                 active={props.browseMode === mode}
+                // Counted off the very list the lens renders, so the badge and
+                // the rows can't disagree. Only Drafts counts: Updated and
+                // Created hold every thread, and Directories is a different
+                // unit — numbers there would say nothing you'd act on.
+                count={mode === "drafts" ? draftThreads.length : undefined}
+                countLabel={
+                  mode === "drafts"
+                    ? formatDraftThreadCount(draftThreads.length)
+                    : undefined
+                }
                 tooltipText={browseModeTooltips[mode]}
                 onSelect={() => props.onBrowseModeChange(mode)}
               />
@@ -2629,14 +2659,37 @@ function AttentionLensTab(props: {
   );
 }
 
+/**
+ * An icon lens tab, optionally carrying a count.
+ *
+ * The count disappears at zero rather than greying out — the opposite of
+ * `AttentionLensTab`, deliberately. Attention reports state, so "0 · 0" is the
+ * answer it exists to give and has to stay legible. These lenses just hold a
+ * list: an empty one has nothing to say, and a lens row of zeros is noise you
+ * learn to stop reading. Absence is the signal — no number means none.
+ */
 function LensTab(props: {
   mode: Exclude<BrowseMode, "attention">;
   active: boolean;
+  /** Undefined on lenses that don't count (Updated/Created are "everything"). */
+  count?: number;
+  /**
+   * The count spelled out ("2 threads with unsent drafts"), for the accessible
+   * name and the tooltip. Given even when `count` is 0 — the badge vanishing
+   * is only readable if you can see the row, so the zero still gets announced.
+   */
+  countLabel?: string;
   tooltipText: string;
   onSelect: () => void;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const Icon = browseModeIcons[props.mode];
+  const label = props.countLabel
+    ? `${browseModeLabels[props.mode]}, ${props.countLabel}`
+    : browseModeLabels[props.mode];
+  const tooltipText = props.countLabel
+    ? [props.tooltipText, props.countLabel].join("\n")
+    : props.tooltipText;
 
   return (
     <>
@@ -2648,7 +2701,7 @@ function LensTab(props: {
         role="tab"
         // The tab renders an icon and no visible text, so aria-label is the
         // whole accessible name.
-        aria-label={browseModeLabels[props.mode]}
+        aria-label={label}
         aria-selected={props.active}
         className={`lens-switch__button${props.active ? " is-active" : ""}`}
         type="button"
@@ -2657,11 +2710,18 @@ function LensTab(props: {
           tooltip.hide();
           props.onSelect();
         }}
-        onFocus={(event) => tooltip.show(event.currentTarget, props.tooltipText)}
-        onMouseEnter={(event) => tooltip.show(event.currentTarget, props.tooltipText)}
+        onFocus={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
         onMouseLeave={tooltip.hide}
       >
         <Icon size={16} />
+        {props.count !== undefined && props.count > 0 ? (
+          // aria-hidden: the number is already in the tab's aria-label, and a
+          // bare "3" read after the lens name is worse than the phrase.
+          <span aria-hidden="true" className="lens-switch__count">
+            {props.count}
+          </span>
+        ) : null}
       </button>
       {tooltip.tooltipNode}
     </>

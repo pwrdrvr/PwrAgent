@@ -740,7 +740,9 @@ describe("Sidebar", () => {
     // the whole name — a tab that loses its aria-label announces as unlabeled.
     expect(lensTabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
       "Attention, 0 active threads, 1 thread to review",
-      "Drafts",
+      // Drafts announces its emptiness even though it shows no badge: the
+      // vanishing count is only readable if you can see the row.
+      "Drafts, No threads with unsent drafts",
       "Updated",
       "Created",
       "Directories",
@@ -2596,19 +2598,107 @@ describe("Sidebar", () => {
       const onBrowseModeChange = vi.fn();
       renderDrafts("inbox", onBrowseModeChange);
 
-      const tab = screen.getByRole("tab", { name: "Drafts" });
+      const tab = screen.getByRole("tab", { name: /^Drafts,/ });
       expect(tab).toHaveAttribute("aria-selected", "false");
       fireEvent.click(tab);
       expect(onBrowseModeChange).toHaveBeenCalledWith("drafts");
     });
 
-    it("explains the lens in its tooltip", async () => {
+    it("explains the lens in its tooltip, including the count", async () => {
       renderDrafts();
 
-      fireEvent.mouseEnter(screen.getByRole("tab", { name: "Drafts" }));
+      fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Drafts,/ }));
       expect((await screen.findByRole("tooltip")).textContent).toBe(
-        "Drafts — threads with a reply you started and never sent",
+        "Drafts — threads with a reply you started and never sent"
+          + "\n1 thread with an unsent draft",
       );
+    });
+
+    it("counts the drafted threads on its tab", () => {
+      const secondDraftThread = {
+        ...sharedThread,
+        id: "second-thread-with-draft",
+        title: "Second thread with a draft",
+        inbox: { inInbox: false },
+      };
+
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          createThreadError={undefined}
+          directories={directories}
+          draftThreadKeys={{
+            ...draftThreadKeys,
+            [`${secondDraftThread.source}:${secondDraftThread.id}`]: true,
+          }}
+          inboxThreads={[...allThreads, secondDraftThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={[...allThreads, secondDraftThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      const tab = screen.getByRole("tab", {
+        name: "Drafts, 2 threads with unsent drafts",
+      });
+      expect(tab.querySelector(".lens-switch__count")).toHaveTextContent("2");
+    });
+
+    // The label must never contain "reply": `getByLabel` is a substring match
+    // in Playwright, and 31 specs across 23 files drive the composer with
+    // `getByLabel("Reply")` — a tab that matches makes every one of them a
+    // strict-mode violation as soon as a thread has a draft. Desktop E2E is
+    // the only suite that catches it (Testing Library matches names exactly),
+    // so guard the wording here, where it costs nothing. See "E2E Locator
+    // Hygiene Around Global Chrome" in apps/desktop/AGENTS.md.
+    //
+    // Asserted at ONE draft, not two: "replies" contains no "reply", so the
+    // plural can never trip the substring match. The singular is the whole
+    // hazard — "1 unsent reply" is the exact label that broke E2E — and a
+    // guard sitting on the plural would have watched it ship.
+    it('keeps "reply" out of the tab label at the singular count', () => {
+      renderDrafts();
+
+      // Matched loosely on purpose: pinning the exact string here would make a
+      // reworded label fail on the lookup, and the reader would never see
+      // which rule the new wording broke.
+      const tab = screen.getByRole("tab", { name: /^Drafts,/ });
+      expect(tab.getAttribute("aria-label")).not.toMatch(/reply/i);
+    });
+
+    it("drops the count entirely when nothing is half-written", () => {
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={allThreads}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={allThreads}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      // No badge at all — not a greyed "0". An absent count is how this lens
+      // says "no drafts"; a zero would be one more number to read past.
+      const tab = screen.getByRole("tab", {
+        name: "Drafts, No threads with unsent drafts",
+      });
+      expect(tab.querySelector(".lens-switch__count")).toBeNull();
     });
 
     it("shows an empty state when nothing is half-written", () => {
