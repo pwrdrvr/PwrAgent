@@ -1,4 +1,5 @@
 import type { PrSummary } from "@pwragent/shared";
+import { BranchIcon } from "../../icons";
 import { DiffStat } from "../../lib/DiffStat";
 import { formatRunningDurationMs } from "../../lib/format-duration";
 import {
@@ -44,6 +45,7 @@ export function PrStatusCard(props: {
   const dotState = resolveDotState(pr, props.withStatusPills === true);
   const changes = readPrChanges(pr);
   const timeline = readPrTimeline(pr, now);
+  const branch = readPrBranch(pr);
 
   return (
     <>
@@ -55,6 +57,19 @@ export function PrStatusCard(props: {
       <div className="pr-status-card__identity">
         {`${pr.org}/${pr.repo}#${pr.number}`}
       </div>
+      {branch ? (
+        <div className="pr-status-card__branch">
+          <BranchIcon
+            aria-hidden="true"
+            className="pr-status-card__branch-icon"
+            size={11}
+          />
+          <span className="pr-status-card__branch-name">
+            <span className="pr-status-card__branch-head">{branch.head}</span>
+            <span className="pr-status-card__branch-tail">{branch.tail}</span>
+          </span>
+        </div>
+      ) : null}
       <div className="pr-status-card__status">
         <span
           aria-hidden="true"
@@ -116,6 +131,47 @@ function resolveDotState(pr: PrSummary, withStatusPills: boolean): string {
     return "conflicting";
   }
   return chipState;
+}
+
+/**
+ * How many trailing characters the branch row keeps when the name is too long
+ * for one line. Twelve is enough to carry a trailing `-1.0` / short-sha style
+ * discriminator plus the word before it, and — at the card's 11px mono — short
+ * enough that the fixed tail can never outgrow the 244px content column.
+ */
+const BRANCH_TAIL_CHARS = 12;
+
+type PrBranch = { head: string; tail: string };
+
+/**
+ * Split the head branch for the CSS middle-truncation trick: only the `head`
+ * span flexes, so the browser drops its ellipsis where the two halves meet
+ * instead of at one end.
+ *
+ * Middle rather than either end is the whole point. Branch names on a thread
+ * share BOTH a prefix (`claude/`, `agent/`) and, often, a suffix convention —
+ * so start- or end-truncation can render two different branches identically,
+ * which is exactly the confusion this row exists to remove.
+ *
+ * Splitting by code point rather than code unit keeps an astral character in a
+ * branch name from being cut into lone surrogates.
+ */
+function readPrBranch(pr: PrSummary): PrBranch | undefined {
+  const branch = pr.headRefName?.trim();
+  if (!branch) {
+    return undefined;
+  }
+  const chars = [...branch];
+  // The tail never truncates, so never hand it more than half the name — on a
+  // short branch a fixed 12 would swallow the whole string.
+  const tailLength = Math.min(BRANCH_TAIL_CHARS, Math.floor(chars.length / 2));
+  if (tailLength <= 0) {
+    return { head: branch, tail: "" };
+  }
+  return {
+    head: chars.slice(0, chars.length - tailLength).join(""),
+    tail: chars.slice(chars.length - tailLength).join(""),
+  };
 }
 
 type PrChanges = {

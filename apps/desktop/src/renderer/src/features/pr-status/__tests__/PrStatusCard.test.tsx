@@ -215,6 +215,62 @@ describe("PrStatusCard", () => {
   });
 });
 
+describe("PrStatusCard branch", () => {
+  it("renders the head branch as one unbroken accessible string", () => {
+    // The two spans are a truncation mechanism, not two facts: everything that
+    // reads text — assistive tech, copy/paste, this assertion — must still see
+    // the branch name whole.
+    const container = renderCard(basePr({
+      headRefName: "claude/agent/backport-pr-status-hover-1.0",
+    }));
+
+    expect(text(container, ".pr-status-card__branch"))
+      .toBe("claude/agent/backport-pr-status-hover-1.0");
+  });
+
+  it("splits so the ellipsis falls in the middle, not at either end", () => {
+    // Branches on one thread share a prefix and often a suffix convention, so
+    // the discriminating characters live at both ends. The head span is the
+    // only one CSS lets shrink, which is what puts the ellipsis between them.
+    const container = renderCard(basePr({
+      headRefName: "claude/agent/backport-pr-status-hover-1.0",
+    }));
+
+    expect(text(container, ".pr-status-card__branch-head"))
+      .toBe("claude/agent/backport-pr-stat");
+    expect(text(container, ".pr-status-card__branch-tail")).toBe("us-hover-1.0");
+  });
+
+  it("never hands the non-truncating tail more than half a short name", () => {
+    // The tail is `flex: 0 0 auto` — it cannot shrink, so a fixed 12 characters
+    // on a short branch would leave nothing for the head to give up.
+    const container = renderCard(basePr({ headRefName: "main" }));
+
+    expect(text(container, ".pr-status-card__branch-head")).toBe("ma");
+    expect(text(container, ".pr-status-card__branch-tail")).toBe("in");
+  });
+
+  it("splits on code points so an astral character survives", () => {
+    const container = renderCard(basePr({ headRefName: "feat/ship-it-🚀-now" }));
+
+    expect(text(container, ".pr-status-card__branch")).toBe("feat/ship-it-🚀-now");
+    expect(text(container, ".pr-status-card__branch-tail")).toBe("-it-🚀-now");
+  });
+
+  it("omits the row when no provider reported a head branch", () => {
+    // Same rule as every other section: absent is "not known", and the card has
+    // to look finished without it.
+    const container = renderCard(basePr({ headRefName: "   " }));
+    expect(container.querySelector(".pr-status-card__branch")).toBeNull();
+
+    cleanup();
+
+    expect(
+      renderCard(basePr()).querySelector(".pr-status-card__branch"),
+    ).toBeNull();
+  });
+});
+
 describe("PrStatusCard counts", () => {
   it("groups digits and matches the noun to the count", () => {
     const plural = renderCard(basePr({ changedFiles: 1204, commitCount: 2 }));
