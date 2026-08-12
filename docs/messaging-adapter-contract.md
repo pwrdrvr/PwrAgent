@@ -145,7 +145,17 @@ Task titles use the already-redacted activity title, while duration and other
 secondary context belong in task details; both fields must be clamped to
 provider limits and must never add raw command output or secrets. Because Slack
 has no cancelled task status, cancelled tasks close neutrally with cancellation
-called out in their details instead of rendering as errors. Waiting phases add
+called out in their details instead of rendering as errors.
+
+A tool that has started but not finished is reported as an `in_progress` task
+so the card shows what is running now rather than a list of finished steps.
+Started activities deliberately bypass the Working Updates dial: they carry no
+outcome, so they never batch into text messages, never consume policy budget,
+and never open a card the dial has not already opened — None stays silent, and
+surfaces that render text are unaffected. A started task carries no duration,
+updates its row in place when the same item completes, and is settled by the
+terminal render (completed on success, cancelled on failure) so a stopped
+stream cannot keep a live indicator. Waiting phases add
 a visible stream headline and waiting and terminal phases clear transient
 working indicators; the final assistant message remains authoritative.
 Adapters return a retractable surface as soon as a native card is queued so

@@ -116,4 +116,30 @@ describe("tool-update renderer prose handling", () => {
     expect(intent.fallbackText).toContain("Ran focused tests");
     expect(intent.fallbackText).not.toContain("Deploy production");
   });
+
+  it("renders a started activity as an in-progress task with no duration", () => {
+    const running: MessagingToolActivity = {
+      id: "running-1",
+      kind: "command",
+      status: "started",
+      title: "rg --files",
+    };
+    const intent = buildWorkingCardIntent({
+      activities: [tool("done-1", "Read config"), running],
+      bindingId: "b1",
+      createdAt: 1,
+      displayHint: "plan",
+      fallbackActivities: [],
+      id: "working-2",
+      key: "b1\0turn-1",
+      sequence: 2,
+    });
+
+    expect(intent.card.tasks).toEqual([
+      expect.objectContaining({ id: "done-1", status: "complete" }),
+      { id: "running-1", status: "in_progress", title: "rg --files" },
+    ]);
+    // No fallback activities: a degraded card must not post "started" as text.
+    expect(intent.fallbackText).toBe("");
+  });
 });

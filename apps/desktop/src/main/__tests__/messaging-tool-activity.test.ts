@@ -27,6 +27,36 @@ describe("messaging tool activity", () => {
     expect(formatToolActivityLine(activity!)).toBe("npm view dive (1.2s)");
   });
 
+  it("summarizes a started item as started, ignoring its in_progress status", () => {
+    const activity = summarizeToolActivityFromBackendEvent(
+      buildStartedItem({
+        id: "tool-1",
+        type: "commandExecution",
+        command: "/bin/zsh -lc 'npm view dive'",
+        status: "in_progress",
+      }),
+    );
+
+    // Same id as the later item/completed event, so the card updates the row
+    // in place instead of appending a duplicate.
+    expect(activity).toMatchObject({
+      id: "tool-1",
+      kind: "command",
+      status: "started",
+      title: "npm view dive",
+    });
+    expect(activity?.durationMs).toBeUndefined();
+    expect(formatToolActivityLine(activity!)).toBe("npm view dive");
+  });
+
+  it("ignores lifecycle events that are neither started nor completed", () => {
+    const event = buildCompletedItem({ id: "t", type: "commandExecution" });
+    expect(summarizeToolActivityFromBackendEvent({
+      ...event,
+      notification: { ...event.notification, method: "item/updated" },
+    } as AgentEvent)).toBeUndefined();
+  });
+
   it("keeps Codex command action summaries stable", () => {
     const activity = summarizeToolActivityFromBackendEvent(
       buildCompletedItem({
@@ -290,6 +320,14 @@ describe("messaging tool activity", () => {
     expect(activity?.title).not.toContain("abc123");
   });
 });
+
+function buildStartedItem(item: Record<string, unknown>): AgentEvent {
+  const event = buildCompletedItem(item);
+  return {
+    ...event,
+    notification: { ...event.notification, method: "item/started" },
+  } as AgentEvent;
+}
 
 function buildCompletedItem(item: Record<string, unknown>): AgentEvent {
   return {

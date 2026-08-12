@@ -8,7 +8,16 @@ import {
   safeCommandTitle as safeRedactedCommandTitle,
 } from "../../util/redact-command-text";
 
-export type MessagingToolActivityStatus = "completed" | "failed" | "cancelled";
+/**
+ * `started` is a *live* status: it only ever reaches surfaces that render a
+ * single updating card (today, Slack working cards), never the text Working
+ * Updates batches, which stay terminal-only so a tool is reported once.
+ */
+export type MessagingToolActivityStatus =
+  | "started"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export type MessagingToolActivityKind =
   | "command"
@@ -30,7 +39,8 @@ export type MessagingToolActivity = {
 export function summarizeToolActivityFromBackendEvent(
   event: AgentEvent,
 ): MessagingToolActivity | undefined {
-  if (event.notification.method !== "item/completed") {
+  const method = event.notification.method;
+  if (method !== "item/completed" && method !== "item/started") {
     return undefined;
   }
 
@@ -53,8 +63,12 @@ export function summarizeToolActivityFromBackendEvent(
     readString(item, "itemId") ??
     readString(item, "item_id") ??
     `${event.backend}:${String(params.turnId ?? "turn")}:${itemType}`;
-  const status = normalizeToolStatus(item);
-  const durationMs = readDurationMs(item);
+  // A started item carries no outcome and no duration yet; its own `status`
+  // field ("in_progress") must not be read through `normalizeToolStatus`,
+  // which would fall through to "completed".
+  const started = method === "item/started";
+  const status = started ? "started" : normalizeToolStatus(item);
+  const durationMs = started ? undefined : readDurationMs(item);
 
   if (itemType === "commandexecution") {
     return {
