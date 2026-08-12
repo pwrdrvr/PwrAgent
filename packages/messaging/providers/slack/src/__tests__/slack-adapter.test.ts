@@ -4176,6 +4176,74 @@ describe("SlackAdapter", () => {
     });
   });
 
+  it("does not post empty waiting or terminal text fallbacks", async () => {
+    const posted: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted }),
+      socketClient: fakeSocket(),
+    });
+    const waiting = slackWorkingCardIntent(2);
+    if (waiting.kind !== "working_card") throw new Error("expected working card");
+    waiting.card.phase = "waiting";
+    waiting.fallbackText = "";
+
+    await expect(adapter.deliver(waiting)).resolves.toMatchObject({
+      outcome: "discarded",
+    });
+    await expect(adapter.deliver({
+      ...waiting,
+      id: "working-card-terminal-fallback",
+      card: {
+        ...waiting.card,
+        isFinal: true,
+        phase: "completed",
+        sequence: 3,
+      },
+    })).resolves.toMatchObject({ outcome: "discarded" });
+    expect(posted).toEqual([]);
+  });
+
+  it("moves native-degraded cards back onto the channel budget", async () => {
+    const posted: unknown[] = [];
+    const api = fakeApi({ posted });
+    api.startStream = async () => {
+      throw new Error("missing_scope");
+    };
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const first = slackWorkingCardIntent(1, { key: "degraded-turn" });
+
+    expect(adapter.resolveDeliveryScope(first)).toBeUndefined();
+    await adapter.deliver(first);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(posted).toHaveLength(1);
+
+    const second = slackWorkingCardIntent(2, { key: "degraded-turn" });
+    expect(adapter.resolveDeliveryScope(second)).toMatchObject({
+      id: "slack:channel:C012ABCDEF0",
+      budget: { limit: 30, intervalMs: 60_000, reserved: 5 },
+    });
+    await expect(adapter.deliver(second)).resolves.toMatchObject({
+      outcome: "presented",
+    });
+    expect(posted).toHaveLength(2);
+
+    await adapter.deliver(slackWorkingCardIntent(1, { key: "second-degraded-turn" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(posted).toHaveLength(2);
+  });
+
   it("returns a retractable surface and cancels an open working card", async () => {
     const deleted: Array<{ channel: string; ts: string }> = [];
     const adapter = new SlackAdapter({

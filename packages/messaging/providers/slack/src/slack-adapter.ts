@@ -644,6 +644,10 @@ export class SlackAdapter implements SlackProviderAdapter {
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
     if (intent.kind === "working_card" && this.config.liveWorkingCards === true) {
       const target = this.resolveTarget(intent);
+      const state = this.workingCardStreams.get(intent.card.key);
+      if (state?.nativeUnavailable) {
+        return target ? this.rateLimitScopeForTarget(target) : undefined;
+      }
       if (
         target?.threadTs
         && this.api.startStream
@@ -1979,7 +1983,9 @@ export class SlackAdapter implements SlackProviderAdapter {
               "Slack Thinking Steps stream unavailable; using text Working Update",
               { error: error instanceof Error ? error.message : String(error) },
             );
-            const fallback = await this.deliverWorkingCardFallback(intent);
+            const fallback = await this.deliverWorkingCardFallback(intent, {
+              controllerBudgeted: false,
+            });
             state.fallbackSurface = fallback.surface;
             state.lastDeliveredSequence = intent.card.sequence;
             state.nativeUnavailable = true;
@@ -2146,13 +2152,43 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private async deliverWorkingCardFallback(
     intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
+    options: { controllerBudgeted?: boolean } = {},
   ): Promise<MessagingDeliveryResult> {
-    if (intent.card.isFinal) {
+    const fallbackText = intent.fallbackText?.trim();
+    if (intent.card.isFinal || !fallbackText) {
       return {
         outcome: "discarded",
         channel: this.channel,
         deliveredAt: this.now(),
       };
+    }
+    const target = this.resolveTarget(intent);
+    if (!target) {
+      return {
+        outcome: "failed",
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: "Slack delivery target is missing",
+      };
+    }
+    if (options.controllerBudgeted === false) {
+      const scope = this.rateLimitScopeForTarget(target);
+      const admission = this.workingCardRateLimits.admit({
+        id: `${scope.id}:working-card-fallback`,
+        intervalMs: scope.budget?.intervalMs ?? 60_000,
+        // The first fallback happens asynchronously after controller
+        // admission, so it gets one emergency write per channel/minute.
+        // Later updates expose the degraded state through resolveDeliveryScope
+        // and return to the controller's ordinary channel budget.
+        limit: 1,
+      });
+      if (!admission.admitted) {
+        return {
+          outcome: "discarded",
+          channel: this.channel,
+          deliveredAt: this.now(),
+        };
+      }
     }
     return await this.deliver({
       ...intent,
@@ -2160,7 +2196,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       role: "system",
       parts: [{
         type: "text",
-        text: intent.fallbackText ?? "Working update",
+        text: fallbackText,
         markdown: "light",
       }],
     });

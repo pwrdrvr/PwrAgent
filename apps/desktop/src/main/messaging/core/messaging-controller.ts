@@ -1654,6 +1654,7 @@ export class MessagingController {
           clear: true,
           turnId: eventTurnId,
         });
+        await this.finalizeWorkingCard(binding, eventTurnId, "completed");
         this.clearTurnProse(binding.id, eventTurnId);
       }
       if (
@@ -15670,13 +15671,13 @@ export class MessagingController {
     if (binding.channel.channel !== "slack") {
       return;
     }
-    const entry = [...this.workingCards.entries()].find(([key]) =>
-      key.startsWith(`${binding.id}\0`)
-    );
-    if (!entry) {
+    const turnId = this.getActiveTurn(binding)?.turnId;
+    if (!turnId) {
       return;
     }
-    const [key, state] = entry;
+    const key = this.turnProseKey(binding.id, turnId);
+    const state = this.workingCards.get(key);
+    if (!state) return;
     state.sequence += 1;
     const card = buildWorkingCardIntent({
       activities: [...state.activities.values()],
@@ -16049,7 +16050,7 @@ export class MessagingController {
     let state = this.workingCards.get(key);
     if (!state) {
       state = { activities: new Map(), omittedTaskCount: 0, sequence: 0 };
-      this.workingCards.set(key, state);
+      rememberWorkingCardState(this.workingCards, key, state);
     }
     updateWorkingCardActivities(state, activities);
     state.sequence += 1;
@@ -20071,6 +20072,23 @@ export function updateWorkingCardActivities(
     }
     state.activities.set(activity.id, activity);
   }
+}
+
+export function rememberWorkingCardState(
+  states: Map<string, MessagingWorkingCardState>,
+  key: string,
+  state: MessagingWorkingCardState,
+  maxStates = MAX_TRACKED_TURN_PROSE,
+): string[] {
+  states.set(key, state);
+  const evicted: string[] = [];
+  while (states.size > maxStates) {
+    const oldest = states.keys().next().value;
+    if (oldest === undefined) break;
+    states.delete(oldest);
+    evicted.push(oldest);
+  }
+  return evicted;
 }
 
 function isUserInitiatedDeliveryEvent(
