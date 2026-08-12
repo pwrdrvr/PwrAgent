@@ -317,6 +317,57 @@ describe("useDurableComposerDraftStore", () => {
       expect(saveComposerDraft).toHaveBeenCalledTimes(2);
     });
 
+    it("does not let a stale save re-mark a cleared draft as durable", async () => {
+      vi.useFakeTimers();
+      let resolveFirstSave: (() => void) | undefined;
+      const saveComposerDraft = vi.fn<
+        NonNullable<DesktopApi["saveComposerDraft"]>
+      >(
+        (request) => new Promise((resolve) => {
+          resolveFirstSave = () => resolve({ draft: request.draft });
+        }),
+      );
+      const clearComposerDraft = vi.fn<
+        NonNullable<DesktopApi["clearComposerDraft"]>
+      >(async ({ scopeKey }) => ({ scopeKey }));
+      const desktopApi = {
+        clearComposerDraft,
+        saveComposerDraft,
+      } as Partial<DesktopApi> as DesktopApi;
+      const { result } = renderHook(() =>
+        useDurableComposerDraftStore(useComposerDraftStore(), desktopApi),
+      );
+      const scopeKey = "thread:codex:thread-1";
+      const snapshot = buildSnapshot("Restore this draft after submission fails.");
+
+      act(() => {
+        result.current.set(scopeKey, snapshot);
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(saveComposerDraft).toHaveBeenCalledOnce();
+      expect(resolveFirstSave).toBeDefined();
+
+      act(() => {
+        result.current.delete(scopeKey);
+      });
+      expect(clearComposerDraft).toHaveBeenCalledWith({ scopeKey });
+
+      await act(async () => {
+        resolveFirstSave!();
+        await Promise.resolve();
+      });
+      saveComposerDraft.mockImplementation(
+        async (request) => ({ draft: request.draft }),
+      );
+
+      await act(async () => {
+        result.current.set(scopeKey, snapshot);
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(saveComposerDraft).toHaveBeenCalledTimes(2);
+    });
+
     it("flushes pending work when the window loses focus", () => {
       // The unmount cleanup is a React lifecycle hook, and a renderer being
       // torn down (window closed, app quit) does not run it. Blur lands well

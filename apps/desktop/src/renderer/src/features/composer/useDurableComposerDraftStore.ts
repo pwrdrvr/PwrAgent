@@ -62,6 +62,10 @@ export function useDurableComposerDraftStore(
   // "edited" half of the rule: opening a thread and leaving, or any other
   // re-save of identical content, must not cost a write.
   const persistedHashRef = useRef(new Map<string, string>());
+  // A clear invalidates every save that started before it. Without this
+  // generation guard, a stale async completion can put the cleared hash back
+  // and suppress persistence when the composer restores the same snapshot.
+  const clearGenerationRef = useRef(new Map<string, number>());
   const localRecoveryCandidatesRef = useRef<LocalRecoveryCandidate[]>([]);
   const localRecoverySequenceRef = useRef(0);
   const [hydrationVersion, setHydrationVersion] = useState(0);
@@ -102,6 +106,7 @@ export function useDurableComposerDraftStore(
         "unsent",
         createdAtRef,
       );
+      const clearGeneration = clearGenerationRef.current.get(scopeKey) ?? 0;
       if (shouldRecordHistory(pending.snapshot, "unsent")) {
         rememberLocalRecoveryCandidate(record);
       }
@@ -111,6 +116,11 @@ export function useDurableComposerDraftStore(
           recordHistory: shouldRecordHistory(pending.snapshot, "unsent"),
         })
         .then((response) => {
+          if (
+            (clearGenerationRef.current.get(scopeKey) ?? 0) !== clearGeneration
+          ) {
+            return;
+          }
           // This map describes what is ACTUALLY durable, not what was merely
           // attempted. Leaving the old hash in place on failure lets a later
           // unchanged composer flush retry instead of suppressing the save.
@@ -215,6 +225,10 @@ export function useDurableComposerDraftStore(
       ...baseStore,
       hydrationVersion,
       delete: (scopeKey) => {
+        clearGenerationRef.current.set(
+          scopeKey,
+          (clearGenerationRef.current.get(scopeKey) ?? 0) + 1,
+        );
         baseStore.delete(scopeKey);
         createdAtRef.current.delete(scopeKey);
         persistedHashRef.current.delete(scopeKey);
