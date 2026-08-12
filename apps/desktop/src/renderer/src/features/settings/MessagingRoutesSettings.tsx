@@ -486,7 +486,7 @@ function DefaultAgentRow(props: {
                 className="chip chip--backend messaging-route-row__provider-chip"
                 title={`Working Updates override: ${toolUpdateOverride}`}
               >
-                Updates override: {toolUpdateOverride}
+                Updates: {toolUpdateOverride}
               </span>
             ) : null}
             {!props.route.target.available

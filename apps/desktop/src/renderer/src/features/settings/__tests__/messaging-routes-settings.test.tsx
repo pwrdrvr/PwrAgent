@@ -209,7 +209,9 @@ describe("MessagingRoutesSettings", () => {
     expect(screen.getByText("Issue 13056")).toBeInTheDocument();
     expect(screen.getAllByText("Codex")).toHaveLength(2);
     expect(screen.getByText("3 active")).toBeInTheDocument();
-    expect(screen.queryByText(/Updates override:/)).not.toBeInTheDocument();
+    // Routes that inherit the default carry no chip at all — the marker is
+    // for the exception, not for repeating the profile default on every row.
+    expect(screen.queryByText(/^Updates:/)).not.toBeInTheDocument();
   });
 
   it("sets and clears a per-route Working Updates override", async () => {
@@ -229,7 +231,9 @@ describe("MessagingRoutesSettings", () => {
       </MessagingRoutesProvider>,
     );
 
-    expect(await screen.findByText("Updates override: Show More")).toHaveClass(
+    // Kept short so the chip survives the narrow target column; the full
+    // phrase stays in the row's aria-label and the chip's title.
+    expect(await screen.findByText("Updates: Show More")).toHaveClass(
       "messaging-route-row__provider-chip",
     );
     expect(
