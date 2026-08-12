@@ -17,12 +17,17 @@ type CachedNavigationSnapshot = {
   snapshot: NavigationSnapshot;
 };
 
-const DEFAULT_MAX_CLIENTS = 64;
-const DEFAULT_MAX_SCOPES_PER_CLIENT = 8;
+type CachedNavigationScope = {
+  changes: NavigationSnapshotTransportDelta[];
+  current: CachedNavigationSnapshot;
+};
+
+const DEFAULT_MAX_SCOPES = 8;
+const DEFAULT_MAX_CHANGES_PER_SCOPE = 4;
 
 type NavigationSnapshotTransportOptions = {
-  maxClients?: number;
-  maxScopesPerClient?: number;
+  maxChangesPerScope?: number;
+  maxScopes?: number;
 };
 
 function positiveIntegerOrDefault(
@@ -174,139 +179,150 @@ function buildDelta(params: {
 }
 
 /**
- * Per-client revision cache shared by the Electron IPC and Federation RPC
- * boundaries. Snapshot producers still build complete snapshots; clients
- * that opt into protocol 1 receive deltas at the serialization boundary.
+ * Bounded shared revision history for navigation snapshot scopes. Clients own
+ * their materialized snapshots and send only their last revision; the server
+ * retains no per-client state. If a revision falls out of history, the caller
+ * receives a fresh full baseline.
  */
 export class NavigationSnapshotTransport {
   private nextRevision = 0;
-  private readonly maxClients: number;
-  private readonly maxScopesPerClient: number;
-  private readonly snapshotsByClient = new Map<
-    string | number,
-    Map<string, CachedNavigationSnapshot>
-  >();
+  private readonly maxChangesPerScope: number;
+  private readonly maxScopes: number;
+  private readonly scopes = new Map<string, CachedNavigationScope>();
 
   constructor(options: NavigationSnapshotTransportOptions = {}) {
-    this.maxClients = positiveIntegerOrDefault(
-      options.maxClients,
-      DEFAULT_MAX_CLIENTS,
+    this.maxChangesPerScope = positiveIntegerOrDefault(
+      options.maxChangesPerScope,
+      DEFAULT_MAX_CHANGES_PER_SCOPE,
     );
-    this.maxScopesPerClient = positiveIntegerOrDefault(
-      options.maxScopesPerClient,
-      DEFAULT_MAX_SCOPES_PER_CLIENT,
+    this.maxScopes = positiveIntegerOrDefault(
+      options.maxScopes,
+      DEFAULT_MAX_SCOPES,
     );
-  }
-
-  clearRenderer(rendererId: number): void {
-    this.clearClient(rendererId);
-  }
-
-  clearClient(clientId: string | number): void {
-    this.snapshotsByClient.delete(clientId);
   }
 
   clear(): void {
-    this.snapshotsByClient.clear();
+    this.scopes.clear();
   }
 
-  private snapshotsForClient(
-    clientId: string | number,
-  ): Map<string, CachedNavigationSnapshot> {
-    const existing = this.snapshotsByClient.get(clientId);
-    if (existing) {
-      // Map insertion order is the LRU order. Reinsert on access so an active
-      // renderer or Federation peer survives pressure from newer clients.
-      this.snapshotsByClient.delete(clientId);
-      this.snapshotsByClient.set(clientId, existing);
-      return existing;
-    }
-
-    while (this.snapshotsByClient.size >= this.maxClients) {
-      const oldestClientId = this.snapshotsByClient.keys().next().value;
-      if (oldestClientId === undefined) break;
-      this.snapshotsByClient.delete(oldestClientId);
-    }
-    const created = new Map<string, CachedNavigationSnapshot>();
-    this.snapshotsByClient.set(clientId, created);
-    return created;
-  }
-
-  private cacheSnapshot(
-    clientSnapshots: Map<string, CachedNavigationSnapshot>,
-    scopeKey: string,
-    cached: CachedNavigationSnapshot,
-  ): void {
-    clientSnapshots.delete(scopeKey);
-    clientSnapshots.set(scopeKey, cached);
-    while (clientSnapshots.size > this.maxScopesPerClient) {
-      const oldestScopeKey = clientSnapshots.keys().next().value;
+  private cacheScope(scopeKey: string, scope: CachedNavigationScope): void {
+    this.scopes.delete(scopeKey);
+    this.scopes.set(scopeKey, scope);
+    while (this.scopes.size > this.maxScopes) {
+      const oldestScopeKey = this.scopes.keys().next().value;
       if (oldestScopeKey === undefined) break;
-      clientSnapshots.delete(oldestScopeKey);
+      this.scopes.delete(oldestScopeKey);
     }
+  }
+
+  private full(
+    scope: CachedNavigationScope,
+  ): NavigationSnapshotTransportResponse {
+    return {
+      kind: "full",
+      revision: scope.current.revision,
+      snapshot: { ...scope.current.snapshot, unchanged: false },
+    };
+  }
+
+  private responseSince(
+    scope: CachedNavigationScope,
+    baseRevision: string | undefined,
+  ): NavigationSnapshotTransportResponse {
+    if (!baseRevision) return this.full(scope);
+    if (baseRevision === scope.current.revision) {
+      return {
+        kind: "unchanged",
+        revision: scope.current.revision,
+      };
+    }
+    const start = scope.changes.findIndex(
+      (change) => change.baseRevision === baseRevision,
+    );
+    if (start < 0) return this.full(scope);
+    const changes = scope.changes.slice(start);
+    for (let index = 1; index < changes.length; index += 1) {
+      if (changes[index]!.baseRevision !== changes[index - 1]!.revision) {
+        return this.full(scope);
+      }
+    }
+    if (changes.at(-1)?.revision !== scope.current.revision) {
+      return this.full(scope);
+    }
+    if (changes.length === 1) return changes[0]!;
+    return {
+      kind: "changes",
+      baseRevision,
+      revision: scope.current.revision,
+      changes,
+    };
   }
 
   encode(params: {
     baseRevision?: string;
-    clientId: string | number;
     request: GetNavigationSnapshotRequest;
     snapshot: NavigationSnapshot;
   }): NavigationSnapshotTransportResponse {
-    const clientId = params.clientId;
     const scopeKey = buildNavigationSnapshotTransportScopeKey(params.request);
-    const clientSnapshots = this.snapshotsForClient(clientId);
-    const cached = clientSnapshots.get(scopeKey);
-    if (cached) {
-      clientSnapshots.delete(scopeKey);
-      clientSnapshots.set(scopeKey, cached);
+    let scope = this.scopes.get(scopeKey);
+    if (!scope) {
+      scope = {
+        changes: [],
+        current: {
+          revision: String(++this.nextRevision),
+          snapshot: params.snapshot,
+        },
+      };
+      this.cacheScope(scopeKey, scope);
+      return this.full(scope);
     }
 
+    if (params.snapshot.fetchedAt < scope.current.snapshot.fetchedAt) {
+      this.cacheScope(scopeKey, scope);
+      return this.responseSince(scope, params.baseRevision);
+    }
     if (
-      !cached
-      || params.baseRevision !== cached.revision
-      || params.snapshot.backend !== cached.snapshot.backend
+      params.snapshot.backend !== scope.current.snapshot.backend
       || !isDeepStrictEqual(
         params.snapshot.federationTarget,
-        cached.snapshot.federationTarget,
+        scope.current.snapshot.federationTarget,
       )
     ) {
-      const revision = String(++this.nextRevision);
-      this.cacheSnapshot(clientSnapshots, scopeKey, {
-        revision,
-        snapshot: params.snapshot,
-      });
-      return {
-        kind: "full",
-        revision,
-        // `unchanged` is global overlay-store history, not proof that this
-        // renderer already owns the baseline. A recovery full must apply.
-        snapshot: { ...params.snapshot, unchanged: false },
+      scope = {
+        changes: [],
+        current: {
+          revision: String(++this.nextRevision),
+          snapshot: params.snapshot,
+        },
       };
+      this.cacheScope(scopeKey, scope);
+      return this.full(scope);
     }
 
     const revision = String(this.nextRevision + 1);
     const delta = buildDelta({
-      baseRevision: cached.revision,
+      baseRevision: scope.current.revision,
       current: params.snapshot,
-      previous: cached.snapshot,
+      previous: scope.current.snapshot,
       revision,
     });
-    if (!delta) {
-      this.cacheSnapshot(clientSnapshots, scopeKey, {
-        revision: cached.revision,
+    if (delta) {
+      this.nextRevision += 1;
+      scope.changes.push(delta);
+      if (scope.changes.length > this.maxChangesPerScope) {
+        scope.changes.splice(
+          0,
+          scope.changes.length - this.maxChangesPerScope,
+        );
+      }
+      scope.current = {
+        revision,
         snapshot: params.snapshot,
-      });
-      return {
-        kind: "unchanged",
-        revision: cached.revision,
       };
+    } else {
+      scope.current.snapshot = params.snapshot;
     }
-
-    this.nextRevision += 1;
-    this.cacheSnapshot(clientSnapshots, scopeKey, {
-      revision,
-      snapshot: params.snapshot,
-    });
-    return delta;
+    this.cacheScope(scopeKey, scope);
+    return this.responseSince(scope, params.baseRevision);
   }
 }

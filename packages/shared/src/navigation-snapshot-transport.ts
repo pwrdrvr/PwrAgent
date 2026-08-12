@@ -123,5 +123,20 @@ export function applyNavigationSnapshotTransportResponse(
         }
       : undefined;
   }
+  if (response.kind === "changes") {
+    if (
+      !previous
+      || response.baseRevision !== previous.revision
+      || response.changes.length === 0
+    ) {
+      return undefined;
+    }
+    let current: NavigationSnapshotTransportState | undefined = previous;
+    for (const change of response.changes) {
+      current = current ? applyDelta(current, change) : undefined;
+      if (!current) return undefined;
+    }
+    return current.revision === response.revision ? current : undefined;
+  }
   return previous ? applyDelta(previous, response) : undefined;
 }

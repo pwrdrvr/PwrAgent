@@ -7189,7 +7189,6 @@ const GIT_MUTATION_COMMAND =
 
 const appServerService = new DesktopAppServerService();
 const navigationSnapshotTransport = new NavigationSnapshotTransport();
-const navigationSnapshotTransportCleanupSenderIds = new Set<number>();
 
 /** Sender ids that already have a destroyed-listener reaping their PR focus. */
 const prPollingFocusCleanupSenderIds = new Set<number>();
@@ -7440,7 +7439,7 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_SNAPSHOT_CHANNEL,
     async (
-      event,
+      _event,
       request?:
         | GetNavigationSnapshotRequest
         | GetNavigationSnapshotTransportRequest,
@@ -7461,17 +7460,8 @@ export function registerAppServerIpcHandlers(): void {
           const snapshot = await appServerService.getNavigationSnapshot(
             snapshotRequest,
           );
-          const rendererId = event.sender.id;
-          if (!navigationSnapshotTransportCleanupSenderIds.has(rendererId)) {
-            navigationSnapshotTransportCleanupSenderIds.add(rendererId);
-            event.sender.once("destroyed", () => {
-              navigationSnapshotTransport.clearRenderer(rendererId);
-              navigationSnapshotTransportCleanupSenderIds.delete(rendererId);
-            });
-          }
           return navigationSnapshotTransport.encode({
             baseRevision: transport.baseRevision,
-            clientId: rendererId,
             request: snapshotRequest,
             snapshot,
           });
@@ -8135,7 +8125,6 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
   navigationSnapshotTransport.clear();
-  navigationSnapshotTransportCleanupSenderIds.clear();
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);

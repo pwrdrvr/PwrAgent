@@ -135,13 +135,19 @@ describe("federation backend bridge", () => {
       capabilities: ["thread_navigation"],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
+    router.registerConnection({
+      peerId: "viewer_two",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
     registerFederationBackendHandlers({ router, backend });
     const request = async (
       id: string,
       baseRevision?: string,
+      peerId = "viewer_one",
     ): Promise<NavigationSnapshotTransportResponse> => {
       await router.routeEnvelope({
-        sourcePeerId: "viewer_one",
+        sourcePeerId: peerId,
         envelope: {
           id,
           kind: "request",
@@ -153,7 +159,7 @@ describe("federation backend bridge", () => {
             },
           },
           protocolVersion: 1,
-          sourceInstanceId: "viewer_one",
+          sourceInstanceId: peerId,
           targetInstanceId: "owner_one",
           createdAt: 1_000,
         },
@@ -164,7 +170,11 @@ describe("federation backend bridge", () => {
 
     const full = await request("navigation-full");
     if (full.kind !== "full") throw new Error("Expected a full baseline");
-    const unchanged = await request("navigation-unchanged", full.revision);
+    const unchanged = await request(
+      "navigation-unchanged",
+      full.revision,
+      "viewer_two",
+    );
 
     expect(unchanged).toEqual({
       kind: "unchanged",

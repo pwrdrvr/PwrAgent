@@ -649,7 +649,6 @@ export function registerFederationBackendHandlers(params: {
       );
       return navigationSnapshotTransport.encode({
         baseRevision: transport.baseRevision,
-        clientId: envelope.sourceInstanceId,
         request: snapshotRequest,
         snapshot,
       });

@@ -82,6 +82,9 @@ and prior revision. Peers that do not advertise the capability retain the
 protocol-v1 full-snapshot contract. Snapshot production remains full on the
 owner—the optimization applies at the Federation serialization boundary and
 avoids retransmitting and reconstructing unchanged thread rows on the wire.
+The owner keeps bounded shared change history per semantic request scope, not
+per-peer snapshot state. A revision older than that history receives a new full
+baseline, matching list-then-watch recovery semantics.
 
 ### Event subscriptions
 

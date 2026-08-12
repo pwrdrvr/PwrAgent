@@ -1247,8 +1247,8 @@ export type GetNavigationSnapshotTransportRequest =
   };
 
 /**
- * Stable per-client cache scope. `forceRefresh` is a scheduling hint and does
- * not change the semantic snapshot population.
+ * Stable shared revision-history scope. `forceRefresh` is a scheduling hint
+ * and does not change the semantic snapshot population.
  */
 export function buildNavigationSnapshotTransportScopeKey(
   request: GetNavigationSnapshotRequest,
@@ -1292,10 +1292,18 @@ export type NavigationSnapshotTransportDelta = {
   launchpadDefaults?: NavigationLaunchpadDefaults;
 };
 
+export type NavigationSnapshotTransportChanges = {
+  kind: "changes";
+  baseRevision: string;
+  revision: string;
+  changes: NavigationSnapshotTransportDelta[];
+};
+
 export type NavigationSnapshotTransportResponse =
   | NavigationSnapshotTransportFull
   | NavigationSnapshotTransportUnchanged
-  | NavigationSnapshotTransportDelta;
+  | NavigationSnapshotTransportDelta
+  | NavigationSnapshotTransportChanges;
 
 export type SetNavigationBrowseModeRequest = {
   browseMode: NavigationBrowseMode;

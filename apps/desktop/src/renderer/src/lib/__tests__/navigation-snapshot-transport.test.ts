@@ -117,4 +117,45 @@ describe("applyNavigationSnapshotTransportResponse", () => {
     expect(applyNavigationSnapshotTransportResponse(initial, delta)).toBeUndefined();
     expect(applyNavigationSnapshotTransportResponse(undefined, delta)).toBeUndefined();
   });
+
+  it("applies a shared sequence of changes from the requested revision", () => {
+    const initial = applyNavigationSnapshotTransportResponse(
+      undefined,
+      buildFull(),
+    );
+    const one = buildThread("one");
+    const key = buildThreadIdentityKey(one.source, one.id);
+    const updated = applyNavigationSnapshotTransportResponse(initial, {
+      kind: "changes",
+      baseRevision: "1",
+      revision: "3",
+      changes: [
+        {
+          kind: "delta",
+          baseRevision: "1",
+          revision: "2",
+          fetchedAt: 2,
+          removedThreadKeys: [],
+          upsertedThreads: [{ ...one, title: "Second" }],
+          removedDirectoryKeys: [],
+          upsertedDirectories: [],
+        },
+        {
+          kind: "delta",
+          baseRevision: "2",
+          revision: "3",
+          fetchedAt: 3,
+          removedThreadKeys: [],
+          upsertedThreads: [{ ...one, title: "Third" }],
+          removedDirectoryKeys: [],
+          upsertedDirectories: [],
+          removedInboxThreadKeys: [key],
+        },
+      ],
+    });
+
+    expect(updated?.revision).toBe("3");
+    expect(updated?.snapshot.threads[0]?.title).toBe("Third");
+    expect(updated?.snapshot.inboxThreadKeys).not.toContain(key);
+  });
 });
