@@ -2371,6 +2371,167 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("keeps non-loadable sessions on their owner while new sessions use a replacement client", async () => {
+    const backendId = "acp:kimi" as AcpBackendId;
+    const firstAgent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      activeCommand: "/path/kimi",
+      launchDescriptor: {
+        backendId,
+        registryId: "kimi",
+        distributionKind: "local",
+        command: "/path/kimi",
+        args: ["acp"],
+        env: {},
+      },
+    };
+    const overrideAgent: AcpInstalledAgentRecord = {
+      ...firstAgent,
+      activeCommand: "/override/kimi",
+      launchDescriptor: {
+        ...firstAgent.launchDescriptor!,
+        command: "/override/kimi",
+      },
+    };
+    let discovered = firstAgent;
+    const firstDispose = vi.fn(async () => undefined);
+    const firstClient = {
+      dispose: firstDispose,
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      hasRetainableSessions: () => true,
+      initialize: vi.fn(async () => undefined),
+      ownsSession: (sessionId: string) => sessionId === "session-1",
+      supportsSessionLoad: () => false,
+    };
+    const secondOwnedSessions = new Set<string>();
+    const secondDispose = vi.fn(async () => undefined);
+    const secondClient = {
+      dispose: secondDispose,
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      hasRetainableSessions: () => secondOwnedSessions.size > 0,
+      initialize: vi.fn(async () => undefined),
+      ownsSession: (sessionId: string) => secondOwnedSessions.has(sessionId),
+      supportsSessionLoad: () => false,
+      startSession: vi.fn(async () => {
+        secondOwnedSessions.add("session-2");
+        return { sessionId: "session-2" };
+      }),
+    };
+    const createAcpClient = vi
+      .fn()
+      .mockReturnValueOnce(firstClient)
+      .mockReturnValueOnce(secondClient);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: null,
+      captureStores: [],
+      createAcpClient: createAcpClient as never,
+      discoverLocalAcpAgents: async () => [discovered],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
+    discovered = overrideAgent;
+    adapter.invalidateLocalAgentDiscovery();
+
+    await expect(
+      adapter.getClientForSession(backendId, "session-1"),
+    ).resolves.toBe(firstClient);
+    expect(firstDispose).not.toHaveBeenCalled();
+    await expect(adapter.getClient(backendId)).resolves.toBe(secondClient);
+    expect(createAcpClient).toHaveBeenNthCalledWith(2, overrideAgent);
+
+    await secondClient.startSession();
+    await expect(
+      adapter.getClientForSession(backendId, "session-2"),
+    ).resolves.toBe(secondClient);
+
+    await adapter.close();
+    await adapter.close();
+    expect(firstDispose).toHaveBeenCalledOnce();
+    expect(secondDispose).toHaveBeenCalledOnce();
+  });
+
+  it("replaces the owner of a loadable session after launch identity changes", async () => {
+    const backendId = "acp:gemini" as AcpBackendId;
+    const firstAgent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      activeCommand: "/path/gemini",
+      launchDescriptor: {
+        backendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: "/path/gemini",
+        args: ["--acp", "--skip-trust"],
+        env: {},
+      },
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        agentCapabilities: {
+          loadSession: true,
+        },
+      },
+    };
+    const overrideAgent: AcpInstalledAgentRecord = {
+      ...firstAgent,
+      activeCommand: "/override/gemini",
+      launchDescriptor: {
+        ...firstAgent.launchDescriptor!,
+        command: "/override/gemini",
+      },
+    };
+    let discovered = firstAgent;
+    const firstDispose = vi.fn(async () => undefined);
+    const firstClient = {
+      dispose: firstDispose,
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      hasRetainableSessions: () => true,
+      initialize: vi.fn(async () => undefined),
+      ownsSession: (sessionId: string) => sessionId === "session-1",
+      supportsSessionLoad: () => true,
+    };
+    const secondDispose = vi.fn(async () => undefined);
+    const secondClient = {
+      dispose: secondDispose,
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      hasRetainableSessions: () => false,
+      initialize: vi.fn(async () => undefined),
+      ownsSession: () => false,
+      supportsSessionLoad: () => true,
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: null,
+      captureStores: [],
+      createAcpClient: vi
+        .fn()
+        .mockReturnValueOnce(firstClient)
+        .mockReturnValueOnce(secondClient) as never,
+      discoverLocalAcpAgents: async () => [discovered],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
+    discovered = overrideAgent;
+    adapter.invalidateLocalAgentDiscovery();
+
+    await expect(
+      adapter.getClientForSession(backendId, "session-1"),
+    ).resolves.toBe(secondClient);
+    expect(firstDispose).toHaveBeenCalledOnce();
+
+    await adapter.close();
+    expect(secondDispose).toHaveBeenCalledOnce();
+  });
+
   it("keeps a stale client alive until its active turn finishes", async () => {
     const backendId = "acp:gemini" as AcpBackendId;
     const firstAgent: AcpInstalledAgentRecord = {

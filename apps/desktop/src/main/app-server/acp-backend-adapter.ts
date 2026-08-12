@@ -128,9 +128,12 @@ export type AcpRuntimeClient = Pick<
       | "didSessionLoadReplayHistory"
       | "hasActiveOperations"
       | "hasActiveTurns"
+      | "hasRetainableSessions"
+      | "ownsSession"
       | "readProviderStatus"
       | "sendControlPrompt"
       | "setRuntimeOption"
+      | "supportsSessionLoad"
     >
   >;
 
@@ -148,6 +151,7 @@ type AcpClientEntry = {
   client: AcpRuntimeClient;
   launchIdentity: string;
   promise: Promise<AcpRuntimeClient>;
+  supportsSessionLoad: boolean;
   disposePromise?: Promise<void>;
 };
 
@@ -871,6 +875,13 @@ export class AcpBackendAdapter {
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
   private readonly acpClients = new Map<AcpBackendId, AcpClientEntry>();
+  // A non-loadable ACP session belongs to the process that created it. Launch
+  // selection may replace the current client, but these owners must remain
+  // addressable until adapter shutdown so later turns keep using that process.
+  private readonly retainedAcpClients = new Map<
+    AcpBackendId,
+    Set<AcpClientEntry>
+  >();
   private readonly acpClientResolutions = new Map<
     AcpBackendId,
     Promise<AcpRuntimeClient>
@@ -1205,8 +1216,9 @@ export class AcpBackendAdapter {
     sessionId: string,
   ): Promise<AppServerThreadReplay> {
     const session = this.getSession(backend, sessionId);
-    const cachedClient = await this.acpClients
-      .get(backend)
+    const cachedClient = await (
+      this.findSessionOwner(backend, sessionId) ?? this.acpClients.get(backend)
+    )
       ?.promise.catch(() => undefined);
     if (cachedClient) {
       const replay = cachedClient.readReplay(sessionId);
@@ -1332,6 +1344,29 @@ export class AcpBackendAdapter {
     }
   }
 
+  async getClientForSession(
+    backend: AcpBackendId,
+    sessionId: string,
+  ): Promise<AcpRuntimeClient> {
+    let current: AcpRuntimeClient;
+    try {
+      current = await this.getClient(backend);
+    } catch (error) {
+      // A broken replacement path must not strand a session whose original
+      // process is still alive. New sessions still observe the launch failure.
+      const owner = this.findSessionOwner(backend, sessionId);
+      if (owner) {
+        return await owner.promise;
+      }
+      throw error;
+    }
+    if (current.ownsSession?.(sessionId) === true) {
+      return current;
+    }
+    const owner = this.findSessionOwner(backend, sessionId);
+    return owner ? await owner.promise : current;
+  }
+
   private async resolveClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
     const agent = await this.resolveInstalledAgent(backend);
     if (this.closed) {
@@ -1353,7 +1388,18 @@ export class AcpBackendAdapter {
         return await cached.promise;
       }
       this.acpClients.delete(backend);
-      await this.disposeAcpClient(cached);
+      const supportsSessionLoad =
+        cached.client.supportsSessionLoad?.() ?? cached.supportsSessionLoad;
+      if (
+        !supportsSessionLoad
+        && cached.client.hasRetainableSessions?.() === true
+      ) {
+        // Replace the launch target without replacing ownership of sessions
+        // that the new process has no protocol method to recover.
+        this.retainAcpClient(backend, cached);
+      } else {
+        await this.disposeAcpClient(cached);
+      }
       if (this.closed) {
         throw new Error("ACP backend adapter is closed");
       }
@@ -1364,6 +1410,9 @@ export class AcpBackendAdapter {
       client,
       launchIdentity,
       promise: Promise.resolve(client),
+      supportsSessionLoad: acpRuntimeSupportsSessionLoad(
+        agent.runtimeCapabilities,
+      ),
     };
     entry.promise = (async () => {
       await client.initialize();
@@ -1686,8 +1735,16 @@ export class AcpBackendAdapter {
       return await this.closePromise;
     }
     this.closed = true;
-    const acpClients = [...this.acpClients.entries()];
+    const acpClients = [
+      ...this.acpClients.entries(),
+      ...[...this.retainedAcpClients.entries()].flatMap(([backend, entries]) =>
+        [...entries].map(
+          (entry): [AcpBackendId, AcpClientEntry] => [backend, entry],
+        ),
+      ),
+    ];
     this.acpClients.clear();
+    this.retainedAcpClients.clear();
     this.acpClientResolutions.clear();
     this.liveNotificationFingerprints.clear();
     this.providerStatuses.clear();
@@ -1753,6 +1810,28 @@ export class AcpBackendAdapter {
   private disposeAcpClient(entry: AcpClientEntry): Promise<void> {
     entry.disposePromise ??= Promise.resolve().then(() => entry.client.dispose());
     return entry.disposePromise;
+  }
+
+  private retainAcpClient(
+    backend: AcpBackendId,
+    entry: AcpClientEntry,
+  ): void {
+    const retained = this.retainedAcpClients.get(backend) ?? new Set();
+    retained.add(entry);
+    this.retainedAcpClients.set(backend, retained);
+  }
+
+  private findSessionOwner(
+    backend: AcpBackendId,
+    sessionId: string,
+  ): AcpClientEntry | undefined {
+    const current = this.acpClients.get(backend);
+    if (current?.client.ownsSession?.(sessionId) === true) {
+      return current;
+    }
+    return [...(this.retainedAcpClients.get(backend) ?? [])].find(
+      (entry) => entry.client.ownsSession?.(sessionId) === true,
+    );
   }
 
   private shouldEmitLiveToolNotification(
