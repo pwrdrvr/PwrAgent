@@ -320,9 +320,10 @@ function describeThread(
 ): ThreadDescription {
   const description: ThreadDescription = {};
   const exactPrNumber = parsePrNumberQuery(query);
-  const pr = exactPrNumber !== null
+  const exactPr = exactPrNumber !== null
     ? (thread.prs ?? []).find((candidate) => candidate.number === exactPrNumber)
-    : (thread.prs ?? [])[0];
+    : undefined;
+  const pr = exactPr ?? (thread.prs ?? [])[0];
   if (pr) {
     description.pr = `#${pr.number}`;
   }

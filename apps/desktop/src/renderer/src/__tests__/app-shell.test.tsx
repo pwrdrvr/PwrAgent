@@ -206,6 +206,61 @@ describe("App", () => {
     expect(getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
+  it("dismisses quick thread search before opening global search", async () => {
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+      },
+    });
+
+    render(<App />);
+
+    fireEvent.keyDown(window, {
+      metaKey: true,
+      code: "KeyK",
+      key: "k",
+    });
+    const quickSearch = await screen.findByRole("dialog", {
+      name: "Jump to thread",
+    });
+    fireEvent.change(
+      within(quickSearch).getByRole("textbox", { name: "Jump to thread" }),
+      { target: { value: "something" } },
+    );
+
+    fireEvent.keyDown(window, {
+      metaKey: true,
+      shiftKey: true,
+      code: "KeyF",
+      key: "F",
+    });
+
+    expect(
+      screen.queryByRole("dialog", { name: "Jump to thread" }),
+    ).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Search" }),
+    ).toBeInTheDocument();
+  });
+
   it("surfaces Codex config warnings and can trust the indicated project", async () => {
     const agentEventListeners = new Set<(event: AgentEvent) => void>();
     const trustCodexProject = vi.fn(

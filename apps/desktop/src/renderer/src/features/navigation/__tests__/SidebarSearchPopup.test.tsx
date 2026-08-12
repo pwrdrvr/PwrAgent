@@ -66,7 +66,7 @@ describe("SidebarSearchPopup", () => {
     expect(screen.getByLabelText("Agent thread")).toHaveTextContent("Agent");
   });
 
-  it("prioritizes the exact PR and renders local metadata columns", () => {
+  it("prioritizes exact PRs and describes numeric substring matches", () => {
     const exact = localThread({
       id: "exact",
       title: "Stacked PRs",
@@ -111,6 +111,8 @@ describe("SidebarSearchPopup", () => {
     expect(rows[0]).toHaveTextContent("#49");
     expect(rows[0]).toHaveTextContent("agent/backports/preserve-identifying-leaf");
     expect(rows[0]).toHaveTextContent("PwrGit");
+    expect(rows[1]).toHaveTextContent("Newer substring");
+    expect(rows[1]).toHaveTextContent("#349");
   });
 
   it("portals a modal dialog out of whatever mounted it", () => {

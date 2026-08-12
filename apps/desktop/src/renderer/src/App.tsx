@@ -504,6 +504,10 @@ function DesktopAppShell(props: {
   // its own open state and the sidebar peek a jump's landing scroll needs.
   const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
   const endSidebarPeek = threadJump.endPeek;
+  const toggleGlobalThreadSearch = () => {
+    threadJump.closeJump();
+    setMainView((current) => current === "search" ? "thread" : "search");
+  };
   const setSidebarHiddenPersisted = useCallback(
     (next: boolean) => {
       // An explicit toggle (⌘B, the chips) is the operator stating a preference,
@@ -698,7 +702,7 @@ function DesktopAppShell(props: {
   // ⌘⇧F / ⌃⇧F opens the global thread search screen; ⌘F is the focus-sensitive
   // context find; ⌘K always lands on the thread-list quick search.
   useFindHotkeys({
-    onOpenSearch: () => setMainView(mainView === "search" ? "thread" : "search"),
+    onOpenSearch: toggleGlobalThreadSearch,
     onFind: () => {
       // The thread-list quick search claims ⌘F while the sidebar is focused;
       // anywhere else ⌘F finds within the open thread. Focus decides — which is
@@ -971,7 +975,7 @@ function DesktopAppShell(props: {
       setMainView("settings");
     },
     onToggleThreadSearch: () => {
-      setMainView(mainView === "search" ? "thread" : "search");
+      toggleGlobalThreadSearch();
     },
     onCreateThread: async () => {
       setMainView("thread");
@@ -1336,7 +1340,7 @@ function DesktopAppShell(props: {
             setMainView("automations");
           }}
           onOpenThreadSearch={() => {
-            setMainView(mainView === "search" ? "thread" : "search");
+            toggleGlobalThreadSearch();
           }}
           onOpenLaunchpad={async (directory, preferredBackend) => {
             setMainView("thread");
