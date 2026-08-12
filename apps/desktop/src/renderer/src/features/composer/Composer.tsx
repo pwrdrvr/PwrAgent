@@ -2075,6 +2075,7 @@ function BranchPicker(props: {
   const [activeIndex, setActiveIndex] = useState(0);
   const [menuShift, setMenuShift] = useState(0);
   const listboxId = useId();
+  const selectedLabelId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
@@ -2271,6 +2272,11 @@ function BranchPicker(props: {
     >
       <button
         aria-controls={open ? listboxId : undefined}
+        // `aria-label` is the field name and overrides the button's content in
+        // the accessible-name computation, so without this the selected branch
+        // is never announced — the native <select> this replaced did announce
+        // its value. Describes rather than renames so by-name queries hold.
+        aria-describedby={selectedLabelId}
         aria-expanded={open}
         aria-haspopup="listbox"
         aria-label={props.ariaLabel}
@@ -2285,7 +2291,7 @@ function BranchPicker(props: {
         <span aria-hidden="true" className="composer-dropdown__icon">
           <BranchIcon size={13} />
         </span>
-        <span className="composer-dropdown__label">
+        <span className="composer-dropdown__label" id={selectedLabelId}>
           {selectedOption?.label ?? selectedOption?.name ?? props.value}
         </span>
         <span aria-hidden="true" className="composer-dropdown__chevron">

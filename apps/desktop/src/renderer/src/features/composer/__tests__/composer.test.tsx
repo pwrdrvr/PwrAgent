@@ -12883,6 +12883,9 @@ describe("Composer", () => {
     const leaveOn = screen.getByLabelText("Leave current checkout on");
     expect(leaveOn).toHaveAttribute("data-value", "HEAD");
     expect(leaveOn).toHaveTextContent("Detached HEAD");
+    // The aria-label names the field and suppresses the button's content, so
+    // the selection has to reach assistive tech as a description instead.
+    expect(leaveOn).toHaveAccessibleDescription("Detached HEAD");
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
