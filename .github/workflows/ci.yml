@@ -359,11 +359,12 @@ jobs:
         timeout-minutes: 10
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@e19a1a140ed1851a536fcc2cc116e9d3df6b0ce9 # v1.2.0
+        uses: pwrdrvr/configure-nodejs@e1bd1cc1494a20f0ee91dae622b0d2523b6fb53c # v1.4.0
         timeout-minutes: 15
         with:
           node-version: 24.14.1
           working-directory: .
+          cache-electron: "true"
 
       - name: Prepare Windows installer signing input
         timeout-minutes: 25
