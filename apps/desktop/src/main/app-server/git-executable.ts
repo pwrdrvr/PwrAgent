@@ -1,7 +1,9 @@
 import { execFile as execFileCallback } from "node:child_process";
+import path from "node:path";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitCandidateInputs } from "../settings/git-discovery";
+import { wrapCommandInWindowsJob } from "../windows-job-wrapper";
 
 const execFile = promisify(execFileCallback);
 
@@ -56,6 +58,34 @@ async function canRunGit(
   }
 }
 
+async function resolveWindowsJobExecutable(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  if (path.win32.isAbsolute(command)) {
+    return command;
+  }
+
+  const systemRoot = Object.entries(env).find(
+    ([key]) => key.toUpperCase() === "SYSTEMROOT",
+  )?.[1];
+  const where = systemRoot
+    ? path.win32.join(systemRoot, "System32", "where.exe")
+    : "where.exe";
+  const { stdout } = await execFile(where, [command], {
+    encoding: "utf8",
+    env,
+  });
+  const resolved = stdout
+    .split(/\r?\n/)
+    .map((candidate) => candidate.trim())
+    .find((candidate) => path.win32.isAbsolute(candidate));
+  if (!resolved) {
+    throw new Error(`Unable to resolve an absolute executable path for ${command}.`);
+  }
+  return resolved;
+}
+
 export async function resolveGitExecutable(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
@@ -92,19 +122,46 @@ export async function resolveGitExecutable(
 export async function runGitCommand(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    ownProcessTree?: boolean;
+  } = {},
 ): Promise<{
   stdout: string;
   stderr: string;
 }> {
   const env = buildPwrAgentChildProcessEnv(options.env ?? process.env);
   const git = await resolveGitExecutable(env);
-  const { stdout, stderr } = await execFile(git, ["-C", cwd, ...args], {
-    encoding: "utf8",
+  const gitArgs = ["-C", cwd, ...args];
+  const jobExecutable =
+    process.platform === "win32" && options.ownProcessTree
+      ? await resolveWindowsJobExecutable(git, env)
+      : git;
+  const windowsJobLaunch =
+    process.platform === "win32" && options.ownProcessTree
+      ? wrapCommandInWindowsJob({
+          args: gitArgs,
+          command: jobExecutable,
+          env,
+        })
+      : undefined;
+  const launch = windowsJobLaunch ?? {
+    args: gitArgs,
+    command: git,
     env,
-  });
-  return {
-    stdout: stdout.trim(),
-    stderr: (stderr ?? "").trim(),
   };
+
+  try {
+    const { stdout, stderr } = await execFile(launch.command, launch.args, {
+      encoding: "utf8",
+      env: launch.env,
+      maxBuffer: 1024 * 1024 * 10,
+    });
+    return {
+      stdout: stdout.trim(),
+      stderr: (stderr ?? "").trim(),
+    };
+  } finally {
+    windowsJobLaunch?.cleanup();
+  }
 }
