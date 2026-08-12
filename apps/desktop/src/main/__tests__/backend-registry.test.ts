@@ -6710,7 +6710,7 @@ describe("DesktopBackendRegistry", () => {
       },
       // Viewer-owned remote ranks live outside the local thread overlay but
       // participate in the same user-curated order.
-      remotePinnedRanks: ["2048"],
+      remotePinnedRanks: ["2048", "3072"],
     });
     const codexClient = new MockBackendClient({
       threads: [
@@ -6764,21 +6764,21 @@ describe("DesktopBackendRegistry", () => {
     expect(response).toMatchObject({
       backend: "codex",
       threadId: "thread-1",
-      pinnedRank: "3072",
+      pinnedRank: "4096",
     });
     await expect(
       overlayStore.getThreadOverlayState({
         backend: "codex",
         threadId: "thread-1",
       }),
-    ).resolves.toMatchObject({ pinnedRank: "3072" });
+    ).resolves.toMatchObject({ pinnedRank: "4096" });
     expect(events).toContainEqual({
       backend: "codex",
       notification: {
         method: "thread/pin/added",
         params: {
           threadId: "thread-1",
-          pinnedRank: "3072",
+          pinnedRank: "4096",
         },
       },
     });
