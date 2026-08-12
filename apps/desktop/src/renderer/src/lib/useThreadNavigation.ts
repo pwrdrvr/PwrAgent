@@ -2889,6 +2889,7 @@ export function useThreadNavigation(
   const markThreadSeen = desktopApi?.markThreadSeen;
   const forkThreadRequest = desktopApi?.forkThread;
   const archiveThreadRequest = desktopApi?.archiveThread;
+  const removeRemoteThreadPinRequest = desktopApi?.removeRemoteThreadPin;
   const archiveWorktreeRequest = desktopApi?.archiveWorktree;
   const restoreWorktreeRequest = desktopApi?.restoreWorktree;
   const handoffThreadWorkspaceRequest = desktopApi?.handoffThreadWorkspace;
@@ -6555,6 +6556,14 @@ export function useThreadNavigation(
           if (cleanupNotice) {
             setArchiveThreadNotice(cleanupNotice);
           }
+          if (target.federation?.ref && removeRemoteThreadPinRequest) {
+            // Archiving succeeds on the owner, but viewer-owned remote pins
+            // are deliberately local state. Remove that cached mount too or
+            // the next refresh resurrects the archived row from its snapshot.
+            await removeRemoteThreadPinRequest({
+              ref: target.federation.ref,
+            });
+          }
         }
         await refresh();
       } catch (error) {
@@ -6565,7 +6574,14 @@ export function useThreadNavigation(
         await refresh(threadKey, undefined, true);
       }
     },
-    [archiveThreadRequest, optimisticThread, refresh, state.response, threads]
+    [
+      archiveThreadRequest,
+      optimisticThread,
+      refresh,
+      removeRemoteThreadPinRequest,
+      state.response,
+      threads,
+    ]
   );
 
   const archiveWorktree = useCallback(

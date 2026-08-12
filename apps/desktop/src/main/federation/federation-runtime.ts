@@ -4520,8 +4520,20 @@ async function mountRemoteParentForLocalChild(
     .getNavigationSnapshot({});
   const launchpadDirectoryKey =
     request.launchpad?.directoryKey ?? request.directoryKey;
+  const launchpadDirectoryPath = request.launchpad?.directoryPath?.trim();
+  const normalizedLaunchpadDirectoryPath = launchpadDirectoryPath
+    ? path.resolve(launchpadDirectoryPath)
+    : undefined;
   const childDirectory = snapshot.directories.find(
     (directory) => directory.key === launchpadDirectoryKey,
+  ) ?? (
+    normalizedLaunchpadDirectoryPath
+      ? snapshot.directories.find(
+          (directory) =>
+            directory.path
+            && path.resolve(directory.path) === normalizedLaunchpadDirectoryPath,
+        )
+      : undefined
   );
   const localRanks = await overlayStore.listPinnedThreadOverlayRanks();
   const remotePins = await overlayStore.listRemoteThreadPins();

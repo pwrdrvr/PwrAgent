@@ -774,12 +774,16 @@ describe("DesktopFederationRuntime", () => {
         pinnedRank: "1024",
       });
       await runtime.localBackend().materializeDirectoryLaunchpad({
-        directoryKey: "directory:/repo",
+        // Inline subthread composers use a synthetic launchpad key rather
+        // than the materialized directory summary key. The launchpad path is
+        // the authoritative bridge back to the directory whose collapsed
+        // state determines whether the companion parent must be pinned.
+        directoryKey: "subthread:codex:parent:same-worktree",
         parentThreadId: "parent",
         parentThreadBackend: "codex",
         parentThreadInstanceId: "parent-peer",
         launchpad: {
-          directoryKey: "directory:/repo",
+          directoryKey: "subthread:codex:parent:same-worktree",
           directoryKind: "directory",
           directoryLabel: "Repo",
           directoryPath: "/repo",

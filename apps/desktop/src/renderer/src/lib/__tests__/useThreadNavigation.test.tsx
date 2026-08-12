@@ -2688,10 +2688,12 @@ describe("useThreadNavigation", () => {
       archivedAt: 2_000,
       cleanup: [],
     }));
+    const removeRemoteThreadPin = vi.fn(async () => ({ removed: true }));
     const desktopApi: DesktopApi = {
       archiveThread,
       getNavigationSnapshot,
       onAgentEvent: () => () => undefined,
+      removeRemoteThreadPin,
     };
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
@@ -2706,6 +2708,13 @@ describe("useThreadNavigation", () => {
       backend: "codex",
       threadId: "thread-remote",
       federationTarget,
+    });
+    expect(removeRemoteThreadPin).toHaveBeenCalledWith({
+      ref: {
+        backend: "codex",
+        target: federationTarget,
+        threadId: "thread-remote",
+      },
     });
   });
 
