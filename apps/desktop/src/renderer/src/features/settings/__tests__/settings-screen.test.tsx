@@ -11,6 +11,7 @@ import {
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  AcpAgentSettingsEntry,
   AppServerListThreadsResponse,
   AppServerThreadSummary,
   BackendSummary,
@@ -439,7 +440,7 @@ function createArchivedSnapshot(
 }
 
 describe("SettingsScreen", () => {
-  it("renders cached provider models while refreshing the catalog", async () => {
+  it("renders cached provider models and locks ACP paths while refreshing the catalog", async () => {
     const cachedBackends: BackendSummary[] = [
       {
         kind: "codex",
@@ -476,11 +477,38 @@ describe("SettingsScreen", () => {
     const listBackends = vi.fn(
       async () => await new Promise<never>(() => undefined),
     );
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1000,
+      entries: [
+        {
+          backendId: "acp:grok",
+          registryId: "grok",
+          name: "Grok",
+          authors: ["xAI"],
+          distributionKind: "local",
+          distributionSource: "/usr/bin/grok",
+          installable: false,
+          installed: true,
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          activeCommand: "/usr/bin/grok",
+          instances: [
+            { command: "/usr/bin/grok", version: "1.0.0", source: "path" },
+            {
+              command: "/opt/homebrew/bin/grok",
+              version: "0.9.0",
+              source: "path",
+            },
+          ],
+        } satisfies AcpAgentSettingsEntry,
+      ],
+    }));
 
     render(
       <SettingsScreen
         cachedBackends={cachedBackends}
-        desktopApi={{ listBackends }}
+        desktopApi={{ listAcpAgents, listBackends }}
         initialSection="models"
         settings={createSettingsState()}
         onClose={() => undefined}
@@ -500,6 +528,37 @@ describe("SettingsScreen", () => {
         includeUnavailable: true,
         refreshModels: true,
       });
+    });
+    await waitFor(() => expect(listAcpAgents).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("Grok manual path")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(
+      within(screen.getByLabelText("Grok installs")).getByRole("button", {
+        name: "Use",
+      }),
+    ).toBeDisabled();
+  });
+
+  it("locks catalog refresh while settings are saving", async () => {
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: 1000,
+      backends: [],
+    }));
+    const settings = createSettingsState();
+    settings.saving = true;
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends }}
+        initialSection="models"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Refresh models" }))
+        .toBeDisabled();
     });
   });
 

@@ -126,6 +126,7 @@ export type AcpRuntimeClient = Pick<
     Pick<
       AcpAgentClient,
       | "didSessionLoadReplayHistory"
+      | "hasActiveOperations"
       | "hasActiveTurns"
       | "readProviderStatus"
       | "sendControlPrompt"
@@ -884,6 +885,7 @@ export class AcpBackendAdapter {
   private closePromise?: Promise<void>;
   private readonly closeTimeoutMs: number;
   private readonly liveTurnUsage = new Map<string, AcpLiveTurnUsage>();
+  private localAcpAgentsRevision = 0;
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
 
   constructor(options: AcpBackendAdapterOptions) {
@@ -1111,6 +1113,7 @@ export class AcpBackendAdapter {
   }
 
   invalidateLocalAgentDiscovery(): void {
+    this.localAcpAgentsRevision += 1;
     this.localAcpAgentsPromise = undefined;
   }
 
@@ -1340,10 +1343,13 @@ export class AcpBackendAdapter {
       return await cached.promise;
     }
     if (cached) {
-      // One ACP client owns every live turn for this backend. Keep routing
-      // control and session operations to that process until its last turn
-      // reaches a terminal state; the next idle lookup adopts the new path.
-      if (cached.client.hasActiveTurns?.() === true) {
+      // One ACP client owns every live turn and RPC for this backend. Keep
+      // routing to that process until its last operation reaches a terminal
+      // state; the next idle lookup adopts the new path.
+      if (
+        cached.client.hasActiveTurns?.() === true
+        || cached.client.hasActiveOperations?.() === true
+      ) {
         return await cached.promise;
       }
       this.acpClients.delete(backend);
@@ -1597,7 +1603,22 @@ export class AcpBackendAdapter {
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
-    const discoveredAgents = (await this.readLocalAgentsOnce())
+    while (true) {
+      const discovery = await this.readLocalAgentsOnce();
+      if (discovery.revision !== this.localAcpAgentsRevision) {
+        continue;
+      }
+      // Keep the revision check and all consumption synchronous. An
+      // invalidation queued after discovery settles must run before this
+      // point or after stale results have been fully merged and persisted.
+      return this.mergeAndPersistDiscoveredAgents(discovery.agents);
+    }
+  }
+
+  private mergeAndPersistDiscoveredAgents(
+    agents: AcpInstalledAgentRecord[],
+  ): AcpInstalledAgentRecord[] {
+    const discoveredAgents = agents
       .map(normalizeInstalledAcpAgent)
       .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
     // Discovery probes are asynchronous and can overlap runtime-capability or
@@ -1764,14 +1785,21 @@ export class AcpBackendAdapter {
     }
   }
 
-  private async readLocalAgentsOnce(): Promise<AcpInstalledAgentRecord[]> {
+  private async readLocalAgentsOnce(): Promise<{
+    agents: AcpInstalledAgentRecord[];
+    revision: number;
+  }> {
+    const revision = this.localAcpAgentsRevision;
     this.localAcpAgentsPromise ??= this.discoverLocalAcpAgents().catch((error) => {
       acpBackendAdapterLog.debug("local_acp_discovery_failed", {
         error: error instanceof Error ? error.message : String(error),
       });
       return [];
     });
-    return await this.localAcpAgentsPromise;
+    return {
+      agents: await this.localAcpAgentsPromise,
+      revision,
+    };
   }
 
   private createDefaultClient(agent: AcpInstalledAgentRecord): AcpRuntimeClient {

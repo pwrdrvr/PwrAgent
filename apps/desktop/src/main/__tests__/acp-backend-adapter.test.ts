@@ -2442,6 +2442,227 @@ describe("AcpBackendAdapter", () => {
     expect(secondDispose).toHaveBeenCalledOnce();
   });
 
+  it("keeps a stale client alive until its non-turn RPCs finish", async () => {
+    const backendId = "acp:gemini" as AcpBackendId;
+    const firstAgent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      activeCommand: "/path/gemini",
+      launchDescriptor: {
+        backendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: "/path/gemini",
+        args: ["--acp", "--skip-trust"],
+        env: {},
+      },
+    };
+    const overrideAgent: AcpInstalledAgentRecord = {
+      ...firstAgent,
+      activeCommand: "/override/gemini",
+      launchDescriptor: {
+        ...firstAgent.launchDescriptor!,
+        command: "/override/gemini",
+      },
+    };
+    let discovered = firstAgent;
+    let activeOperations = 0;
+    let finishSession!: () => void;
+    let finishRuntimeOption!: () => void;
+    const firstDispose = vi.fn(async () => undefined);
+    const firstClient = {
+      dispose: firstDispose,
+      hasActiveOperations: () => activeOperations > 0,
+      hasActiveTurns: () => false,
+      initialize: vi.fn(async () => undefined),
+      startSession: vi.fn(() => {
+        activeOperations += 1;
+        return new Promise<void>((resolve) => {
+          finishSession = resolve;
+        }).finally(() => {
+          activeOperations -= 1;
+        });
+      }),
+      setRuntimeOption: vi.fn(() => {
+        activeOperations += 1;
+        return new Promise<void>((resolve) => {
+          finishRuntimeOption = resolve;
+        }).finally(() => {
+          activeOperations -= 1;
+        });
+      }),
+    };
+    const secondClient = {
+      dispose: vi.fn(async () => undefined),
+      hasActiveOperations: () => false,
+      hasActiveTurns: () => false,
+      initialize: vi.fn(async () => undefined),
+    };
+    const createAcpClient = vi
+      .fn()
+      .mockReturnValueOnce(firstClient)
+      .mockReturnValueOnce(secondClient);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: null,
+      captureStores: [],
+      createAcpClient: createAcpClient as never,
+      discoverLocalAcpAgents: async () => [discovered],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
+    const session = firstClient.startSession();
+    const runtimeOption = firstClient.setRuntimeOption();
+    discovered = overrideAgent;
+    adapter.invalidateLocalAgentDiscovery();
+
+    await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
+    expect(firstDispose).not.toHaveBeenCalled();
+
+    finishSession();
+    await session;
+    await expect(adapter.getClient(backendId)).resolves.toBe(firstClient);
+    expect(firstDispose).not.toHaveBeenCalled();
+
+    finishRuntimeOption();
+    await runtimeOption;
+    await expect(adapter.getClient(backendId)).resolves.toBe(secondClient);
+    expect(firstDispose).toHaveBeenCalledOnce();
+
+    await adapter.close();
+  });
+
+  it("restarts invalidated discovery before returning or persisting results", async () => {
+    const staleAgent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      activeCommand: "/stale/gemini",
+      launchDescriptor: {
+        backendId: "acp:gemini" as AcpBackendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: "/stale/gemini",
+        args: ["--acp", "--skip-trust"],
+        env: {},
+      },
+    };
+    const currentAgent: AcpInstalledAgentRecord = {
+      ...staleAgent,
+      activeCommand: "/current/gemini",
+      launchDescriptor: {
+        ...staleAgent.launchDescriptor!,
+        command: "/current/gemini",
+      },
+    };
+    const discoveries: Array<{
+      resolve: (agents: AcpInstalledAgentRecord[]) => void;
+      promise: Promise<AcpInstalledAgentRecord[]>;
+    }> = [];
+    const discoverLocalAcpAgents = vi.fn(() => {
+      let resolve!: (agents: AcpInstalledAgentRecord[]) => void;
+      const promise = new Promise<AcpInstalledAgentRecord[]>((done) => {
+        resolve = done;
+      });
+      discoveries.push({ promise, resolve });
+      return promise;
+    });
+    const upsertInstalledAgent = vi.fn();
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => undefined,
+        listInstalledAgents: () => [],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      discoverLocalAcpAgents,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const preInvalidationListing = adapter.listAvailableAgents();
+    await vi.waitFor(() => expect(discoveries).toHaveLength(1));
+    adapter.invalidateLocalAgentDiscovery();
+    const postInvalidationListing = adapter.listAvailableAgents();
+    await vi.waitFor(() => expect(discoveries).toHaveLength(2));
+
+    discoveries[0]!.resolve([staleAgent]);
+    await Promise.resolve();
+    expect(upsertInstalledAgent).not.toHaveBeenCalled();
+
+    discoveries[1]!.resolve([currentAgent]);
+    await expect(preInvalidationListing).resolves.toEqual([currentAgent]);
+    await expect(postInvalidationListing).resolves.toEqual([currentAgent]);
+    expect(upsertInstalledAgent).toHaveBeenCalled();
+    expect(upsertInstalledAgent).not.toHaveBeenCalledWith(staleAgent);
+    for (const [persisted] of upsertInstalledAgent.mock.calls) {
+      expect(persisted).toEqual(currentAgent);
+    }
+
+    await adapter.close();
+  });
+
+  it("rechecks discovery after invalidation queued behind its completion", async () => {
+    const staleAgent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      activeCommand: "/stale/gemini",
+      launchDescriptor: {
+        backendId: "acp:gemini" as AcpBackendId,
+        registryId: "gemini",
+        distributionKind: "local",
+        command: "/stale/gemini",
+        args: ["--acp", "--skip-trust"],
+        env: {},
+      },
+    };
+    const currentAgent: AcpInstalledAgentRecord = {
+      ...staleAgent,
+      activeCommand: "/current/gemini",
+      launchDescriptor: {
+        ...staleAgent.launchDescriptor!,
+        command: "/current/gemini",
+      },
+    };
+    const discoveries: Array<{
+      resolve: (agents: AcpInstalledAgentRecord[]) => void;
+      promise: Promise<AcpInstalledAgentRecord[]>;
+    }> = [];
+    const discoverLocalAcpAgents = vi.fn(() => {
+      let resolve!: (agents: AcpInstalledAgentRecord[]) => void;
+      const promise = new Promise<AcpInstalledAgentRecord[]>((done) => {
+        resolve = done;
+      });
+      discoveries.push({ promise, resolve });
+      return promise;
+    });
+    const upsertInstalledAgent = vi.fn();
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => undefined,
+        listInstalledAgents: () => [],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      discoverLocalAcpAgents,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const listing = adapter.listAvailableAgents();
+    await vi.waitFor(() => expect(discoveries).toHaveLength(1));
+    discoveries[0]!.resolve([staleAgent]);
+    await Promise.resolve();
+    queueMicrotask(() => adapter.invalidateLocalAgentDiscovery());
+
+    await vi.waitFor(() => expect(discoveries).toHaveLength(2));
+    expect(upsertInstalledAgent).not.toHaveBeenCalled();
+    discoveries[1]!.resolve([currentAgent]);
+
+    await expect(listing).resolves.toEqual([currentAgent]);
+    expect(upsertInstalledAgent).toHaveBeenCalledOnce();
+    expect(upsertInstalledAgent).toHaveBeenCalledWith(currentAgent);
+
+    await adapter.close();
+  });
+
   it("merges discovery with agent metadata written while discovery was pending", async () => {
     const backendId = "acp:gemini" as AcpBackendId;
     const launchDescriptor = {

@@ -48,6 +48,7 @@ function enabledSnapshotFor(
  * siblings of the Codex section inside one "Backends & credentials" stack.
  */
 export function AcpAgentsSettings(props: {
+  catalogRefreshing?: boolean;
   desktopApi?: DesktopApi;
   saving?: boolean;
   snapshot?: DesktopSettingsSnapshot;
@@ -123,7 +124,7 @@ export function AcpAgentsSettings(props: {
           cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
           enabled={enabledSnapshotFor(props.snapshot, entry.registryId)}
           saving={props.saving}
-          refreshing={refreshing || loading}
+          refreshing={refreshing || loading || props.catalogRefreshing}
           onCliPathChange={
             props.onCliPathChange
               ? async (registryId, cliPath) => {

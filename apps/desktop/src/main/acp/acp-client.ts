@@ -220,6 +220,7 @@ export class AcpAgentClient {
   private unsubscribeRequest?: () => void;
   private runtimeCapabilities?: BackendAcpRuntimeCapabilities;
   private readonly surfaceThoughtsAsMessages: boolean;
+  private activeOperations = 0;
 
   constructor(private readonly options: AcpAgentClientOptions) {
     this.now = options.now ?? Date.now;
@@ -297,6 +298,22 @@ export class AcpAgentClient {
     return this.activeTurns.size > 0;
   }
 
+  hasActiveOperations(): boolean {
+    return this.activeOperations > 0;
+  }
+
+  // Count the whole public operation, including setup before the transport
+  // request and state updates after it, so launch replacement cannot dispose
+  // this client at either edge of an in-flight RPC.
+  private async withOperation<T>(operation: () => Promise<T>): Promise<T> {
+    this.activeOperations += 1;
+    try {
+      return await operation();
+    } finally {
+      this.activeOperations -= 1;
+    }
+  }
+
   async dispose(): Promise<void> {
     this.options.rolloutStore?.flushAll?.();
     this.unsubscribe?.();
@@ -310,6 +327,14 @@ export class AcpAgentClient {
   }
 
   async readProviderStatus(): Promise<AcpProviderStatus | undefined> {
+    return await this.withOperation(
+      async () => await this.readProviderStatusOperation(),
+    );
+  }
+
+  private async readProviderStatusOperation(): Promise<
+    AcpProviderStatus | undefined
+  > {
     if (this.options.backendId !== "acp:grok") {
       return undefined;
     }
@@ -335,6 +360,14 @@ export class AcpAgentClient {
     mcpServers?: "default" | "none";
     sessionMeta?: Record<string, unknown>;
   }): Promise<AcpSessionMetadata> {
+    return await this.withOperation(
+      async () => await this.startSessionOperation(params),
+    );
+  }
+
+  private async startSessionOperation(
+    params: Parameters<AcpAgentClient["startSession"]>[0],
+  ): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
     const mcpRegistration =
       params.mcpServers === "none"
@@ -454,6 +487,14 @@ export class AcpAgentClient {
   }
 
   async loadSession(metadata: AcpSessionMetadata): Promise<AppServerThreadReplay> {
+    return await this.withOperation(
+      async () => await this.loadSessionOperation(metadata),
+    );
+  }
+
+  private async loadSessionOperation(
+    metadata: AcpSessionMetadata,
+  ): Promise<AppServerThreadReplay> {
     this.rememberSessionIds(metadata);
     const storedMetadata =
       this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
@@ -506,12 +547,21 @@ export class AcpAgentClient {
   }
 
   async refreshSession(metadata: AcpSessionMetadata): Promise<void> {
-    await this.ensureSession(metadata);
+    await this.withOperation(async () => await this.ensureSession(metadata));
   }
 
   async ensureSession(
     metadata: AcpSessionMetadata,
     options: { suppressTranscriptReplay?: boolean } = {},
+  ): Promise<void> {
+    await this.withOperation(
+      async () => await this.ensureSessionOperation(metadata, options),
+    );
+  }
+
+  private async ensureSessionOperation(
+    metadata: AcpSessionMetadata,
+    options: { suppressTranscriptReplay?: boolean },
   ): Promise<void> {
     this.rememberSessionIds(metadata);
     if (this.supportsSessionLoad() && this.isSessionLoaded(metadata)) {
@@ -596,6 +646,12 @@ export class AcpAgentClient {
   }
 
   async cancelSession(sessionId: string): Promise<void> {
+    await this.withOperation(
+      async () => await this.cancelSessionOperation(sessionId),
+    );
+  }
+
+  private async cancelSessionOperation(sessionId: string): Promise<void> {
     if (!this.options.transport.notify) {
       throw new Error("ACP transport does not support notifications");
     }
@@ -605,6 +661,19 @@ export class AcpAgentClient {
   }
 
   async sendControlPrompt(params: {
+    sessionId: string;
+    prompt: string;
+  }): Promise<{
+    text: string;
+    model?: string;
+    tokenUsage?: AcpSuppressedControlPrompt["tokenUsage"];
+  }> {
+    return await this.withOperation(
+      async () => await this.sendControlPromptOperation(params),
+    );
+  }
+
+  private async sendControlPromptOperation(params: {
     sessionId: string;
     prompt: string;
   }): Promise<{
@@ -647,6 +716,18 @@ export class AcpAgentClient {
   }
 
   async setRuntimeOption(params: {
+    sessionId: string;
+    source: BackendAcpRuntimeOptionSource;
+    optionId: string;
+    value: string;
+    reasoningEffort?: string;
+  }): Promise<BackendAcpSessionRuntimeState | undefined> {
+    return await this.withOperation(
+      async () => await this.setRuntimeOptionOperation(params),
+    );
+  }
+
+  private async setRuntimeOptionOperation(params: {
     sessionId: string;
     source: BackendAcpRuntimeOptionSource;
     optionId: string;
