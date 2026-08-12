@@ -445,6 +445,19 @@ function AutomationTableRow(props: {
           />
         </div>
       </article>
+      {/* An ARIA table may only own rows and rowgroups, so the panels this row
+          expands into live in a detail row of their own rather than sitting
+          loose inside the group. The group still exists for sticky
+          containment; this keeps that structural need from making the table
+          semantics invalid. */}
+      {replayOpen || props.expanded ? (
+        <div className="automations-table__detail" role="row">
+          <div
+            aria-colindex={1}
+            aria-colspan={5}
+            className="automations-table__detail-cell"
+            role="cell"
+          >
       {replayOpen ? (
         <div className="automations-table__replay">
           <p className="automations-table__replay-lead">
@@ -515,6 +528,9 @@ function AutomationTableRow(props: {
           capHeight={props.hasRowsBelow}
           desktopApi={props.desktopApi}
         />
+      ) : null}
+          </div>
+        </div>
       ) : null}
     </div>
   );

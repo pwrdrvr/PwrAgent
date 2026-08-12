@@ -483,6 +483,42 @@ describe("row runtime and actions", () => {
     ).toBeNull();
   });
 
+  it("keeps the expanded panels inside a row, so the table owns only rows", async () => {
+    const view = render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [automation] })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [automationRun] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[thread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Show run history for Check email",
+      }),
+    );
+
+    // An ARIA table may only own rows and rowgroups. The group exists for
+    // sticky containment, so the panels it expands into need a row of their
+    // own rather than sitting loose beside the automation's row.
+    const group = view.container.querySelector(".automations-table__group");
+    for (const child of Array.from(group?.children ?? [])) {
+      expect(child.getAttribute("role")).toBe("row");
+    }
+    const detail = view.container.querySelector(".automations-table__detail");
+    expect(detail?.children).toHaveLength(1);
+    expect(detail?.firstElementChild?.getAttribute("role")).toBe("cell");
+    expect(
+      detail?.querySelector(".automations-table__history"),
+    ).not.toBeNull();
+  });
+
   it("keeps other rows open when one more is expanded", async () => {
     const second: AutomationDetail = { ...automation, id: "a2", name: "Second" };
     const view = render(

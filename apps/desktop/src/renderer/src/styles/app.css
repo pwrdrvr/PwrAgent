@@ -6626,6 +6626,15 @@ textarea,
   flex-direction: column;
 }
 
+/* The expanded panels' row/cell wrappers. They exist for ARIA — a table may
+   only own rows — so they add semantics and no layout of their own. */
+.automations-table__detail,
+.automations-table__detail-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
 .automations-table__header,
 .automations-table__row {
   display: grid;

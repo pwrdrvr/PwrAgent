@@ -1140,14 +1140,6 @@ export type ListAutomationRunsResponse = {
   runs: AutomationRunSummary[];
 };
 
-export type ListAutomationCardsRequest = AutomationAgentAssignment & {
-  limit?: number;
-};
-
-export type ListAutomationCardsResponse = {
-  cards: AutomationTimelineCard[];
-};
-
 export type GetAutomationRunArtifactRequest = {
   runId: string;
 };
