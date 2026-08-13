@@ -2953,8 +2953,10 @@ function DensityMissionControlPreview() {
   return (
     <div className="onboarding-wizard__mini">
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc is-active">
-        <span className="onboarding-wizard__mini-title">PwrAgent - Release</span>
-        <MiniPinChip />
+        <span className="onboarding-wizard__mini-heading">
+          <span className="onboarding-wizard__mini-title">PwrAgent - Release</span>
+          <MiniPinChip />
+        </span>
         <span className="onboarding-wizard__mini-time">2h</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>
@@ -2963,8 +2965,10 @@ function DensityMissionControlPreview() {
         </div>
       </div>
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
-        <span className="onboarding-wizard__mini-title">PwrSnap - Release</span>
-        <MiniPinChip />
+        <span className="onboarding-wizard__mini-heading">
+          <span className="onboarding-wizard__mini-title">PwrSnap - Release</span>
+          <MiniPinChip />
+        </span>
         <span className="onboarding-wizard__mini-time">May 7</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>
@@ -2973,8 +2977,10 @@ function DensityMissionControlPreview() {
         </div>
       </div>
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
-        <span className="onboarding-wizard__mini-title">Text Mode for Button Platforms</span>
-        <MiniPinChip />
+        <span className="onboarding-wizard__mini-heading">
+          <span className="onboarding-wizard__mini-title">Text Mode for Button Platforms</span>
+          <MiniPinChip />
+        </span>
         <span className="onboarding-wizard__mini-time">2d</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>
@@ -2985,9 +2991,11 @@ function DensityMissionControlPreview() {
         </div>
       </div>
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
-        <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">Automation scheduling system</span>
-        <MiniPinChip />
+        <span className="onboarding-wizard__mini-heading">
+          <span className="onboarding-wizard__mini-cookie" />
+          <span className="onboarding-wizard__mini-title">Automation scheduling system</span>
+          <MiniPinChip />
+        </span>
         <span className="onboarding-wizard__mini-time">2d</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>

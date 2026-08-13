@@ -18550,8 +18550,21 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 4px 8px;
   padding: 8px 8px 9px;
 }
+.onboarding-wizard__mini-row--mc .onboarding-wizard__mini-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  grid-column: 1;
+  grid-row: 1;
+}
+.onboarding-wizard__mini-row--mc .onboarding-wizard__mini-time {
+  grid-column: 2;
+  grid-row: 1;
+}
 .onboarding-wizard__mini-row--mc .onboarding-wizard__mini-meta {
   grid-column: 1 / -1;
+  grid-row: 2;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
