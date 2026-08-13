@@ -385,7 +385,8 @@ for (const expected of [
   "--verify-tag",
   "--prerelease",
   "--latest",
-  "windows-dist/*",
+  "windows-dist/*.exe",
+  "windows-dist/*.exe.blockmap",
 ]) {
   assertWorkflowJobContainsText(
     releaseWorkflow,
@@ -394,6 +395,12 @@ for (const expected of [
     expected,
   );
 }
+assertWorkflowJobExcludesText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "publish-release-assets",
+  "windows-dist/* \\",
+);
 assertWorkflowJobContainsText(
   releaseWorkflow,
   ".github/workflows/release.yml",

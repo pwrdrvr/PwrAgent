@@ -188,8 +188,10 @@ The macOS environment-gated signing job:
 
 The all-platform publishing job creates the GitHub Release only after the
 signed macOS, Windows, and Linux payloads are all available. It uploads the
-signed Windows installer alongside the macOS and Linux assets; a failed or
-unapproved Windows signing job therefore cannot leave a partial public release.
+signed Windows installer and its blockmap alongside the macOS and Linux assets.
+Its single public `SHA256SUMS` file covers the Linux packages, avoiding a
+duplicate Windows artifact checksum name; a failed or unapproved Windows
+signing job therefore cannot leave a partial public release.
 
 The Windows jobs use the same trust boundary with a platform-specific final
 step. The no-secret job prepares the stage on Windows, because its native

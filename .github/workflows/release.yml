@@ -400,7 +400,8 @@ jobs:
 
           gh release create "${release_args[@]}" \
             mac-dist/* \
-            windows-dist/* \
+            windows-dist/*.exe \
+            windows-dist/*.exe.blockmap \
             linux-dist/*.deb \
             linux-dist/SHA256SUMS
 
