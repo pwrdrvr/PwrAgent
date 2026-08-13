@@ -467,6 +467,22 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "turn/started",
 ]);
 
+/**
+ * Live events patch renderer state, but pinned remote rows also come from a
+ * cached owner snapshot. Turn boundaries can advance `updatedAt` while that
+ * cache still holds the pre-turn value, leaving a previously hydrated
+ * transcript convinced it is current. Invalidate only at lifecycle
+ * boundaries — never for streamed transcript items — so the next pinned-row
+ * refresh catches up without turning every token into a snapshot fetch.
+ */
+const REMOTE_THREAD_SUMMARY_LIFECYCLE_METHODS = new Set<string>([
+  "thread/status/changed",
+  "turn/cancelled",
+  "turn/completed",
+  "turn/failed",
+  "turn/started",
+]);
+
 export function federationEventClassForMethod(
   method: string,
 ): FederationEventClass {
@@ -3912,6 +3928,9 @@ export class DesktopFederationRuntime {
       event.notification.method === "thread/pullRequests/updated"
       || event.notification.method === "thread/reactions/updated"
       || event.notification.method === "thread/name/updated"
+      || REMOTE_THREAD_SUMMARY_LIFECYCLE_METHODS.has(
+        event.notification.method,
+      )
     ) {
       this.remoteThreadSummaryCache?.invalidate(sourceInstanceId);
     }

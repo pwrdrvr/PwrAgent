@@ -10514,6 +10514,88 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads[1]?.reactions).toEqual(["✋", "👀"]);
   });
 
+  it("refreshes pinned remote summaries when a peer turn completes", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    let updatedAt = 1_000;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+      threads: [
+        {
+          id: "remote-thread",
+          title: "Pinned remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          updatedAt,
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "remote-thread",
+            },
+          },
+        },
+      ],
+    }));
+    const desktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (
+        callback: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0],
+      ) => {
+        agentEventHandler = callback;
+        return () => {
+          agentEventHandler = undefined;
+        };
+      },
+    } as unknown as DesktopApi;
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.updatedAt).toBe(1_000);
+    });
+
+    updatedAt = 2_000;
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "remote-thread",
+            turnId: "remote-turn",
+            turn: {
+              id: "remote-turn",
+              status: "completed",
+              output: [{ type: "text", text: "Remote final answer." }],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(result.current.threads[0]?.updatedAt).toBe(2_000);
+    });
+  });
+
   describe("pickAndRegisterDirectory (issue #223)", () => {
     const launchpadDefaults = {
       backend: "codex" as const,

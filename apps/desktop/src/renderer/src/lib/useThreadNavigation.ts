@@ -3645,9 +3645,9 @@ export function useThreadNavigation(
       const method = event.notification.method as string;
       // A peer's row-state events carry its own remote target, which never
       // matches the main window's absent target — yet this window
-      // hosts that peer's threads as viewer-side remote pins. Let PR and
-      // reaction updates past the target filter and into their origin-scoped
-      // appliers below.
+      // hosts that peer's threads as viewer-side remote pins. Let row-state
+      // and lifecycle updates past the target filter and into their
+      // origin-scoped appliers below.
       //
       // Safe against duelling monitors: the main process drops a peer
       // observation for any PR this instance monitors itself, so whatever
@@ -3659,7 +3659,11 @@ export function useThreadNavigation(
         && Boolean(event.federationTarget)
         && (method === "pullRequest/status/updated"
           || method === "thread/pullRequests/updated"
-          || method === "thread/reactions/updated");
+          || method === "thread/reactions/updated"
+          || method === "thread/status/changed"
+          || method === "turn/cancelled"
+          || method === "turn/completed"
+          || method === "turn/failed");
       if (
         !remoteThreadStatePassthrough
         && !federationTargetsEqual(event.federationTarget, windowTarget)
