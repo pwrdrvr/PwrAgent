@@ -603,6 +603,47 @@ describe("SqliteMessagingStore", () => {
       ]);
   });
 
+  it("inherits a parent channel conversation default in a child thread", async () => {
+    const store = await createStore();
+    const parentChannel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SEARCH",
+        kind: "channel" as const,
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    const threadChannel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SEARCH",
+        kind: "thread" as const,
+        parentId: "1786655046.300089",
+        parentConversationId: "C012SEARCH",
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "parent-channel-default",
+        scope: { kind: "conversation", channel: parentChannel },
+        target: {
+          kind: "agent",
+          backend: "codex",
+          threadId: "parent-channel-agent",
+        },
+      }),
+    );
+
+    await expect(store.findActiveDefaultAgentAssignmentsForChannel(threadChannel))
+      .resolves.toMatchObject([
+        {
+          id: "parent-channel-default",
+          target: { threadId: "parent-channel-agent" },
+        },
+      ]);
+  });
+
   it("enforces one active assignment per scope in the database", async () => {
     const store = await createStore();
     await store.upsertDefaultAgentAssignment(buildDefaultAgentAssignment());
