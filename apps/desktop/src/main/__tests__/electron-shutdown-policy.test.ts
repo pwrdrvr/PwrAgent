@@ -10,6 +10,7 @@ import {
   ElectronShutdownCircuitOpenError,
   executeElectronClose,
   finalizeElectronFixtureTeardown,
+  memoizeElectronClose,
   recordElectronShutdownCircuit,
   SLOW_ELECTRON_CLOSE_THRESHOLD_MS,
   type ElectronShutdownCircuitState,
@@ -85,6 +86,19 @@ describe("Electron shutdown policy", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("records one close result when a launch is closed repeatedly", async () => {
+    let closes = 0;
+    const summary = trippedSummary();
+    const closeOnce = memoizeElectronClose(async () => {
+      closes += 1;
+      return summary;
+    });
+
+    await expect(closeOnce()).resolves.toBe(summary);
+    await expect(closeOnce()).resolves.toBe(summary);
+    expect(closes).toBe(1);
   });
 
   it("force-kills only after the bounded graceful close and then waits for reaping", async () => {

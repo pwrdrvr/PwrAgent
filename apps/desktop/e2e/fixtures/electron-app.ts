@@ -45,6 +45,7 @@ import {
   ElectronShutdownCircuitOpenError,
   executeElectronClose,
   finalizeElectronFixtureTeardown,
+  memoizeElectronClose,
   observedOverallShutdownDuration,
   recordElectronShutdownCircuit,
   type ElectronCloseExecution,
@@ -461,6 +462,14 @@ async function finishElectronLaunch(args: {
     seedConfigPath,
     suppressOnboarding,
   } = args;
+  const closeApplicationOnce = memoizeElectronClose(async () =>
+    await closeElectronApplication(electronApp, {
+      circuitEnabled,
+      circuitStateFile,
+      diagnosticsFile,
+      launchId,
+    }),
+  );
   const window = await electronApp.firstWindow();
 
   await waitForRendererReady({
@@ -525,12 +534,7 @@ async function finishElectronLaunch(args: {
       }, requestParams);
     },
     closeApplication: async () => {
-      const summary = await closeElectronApplication(electronApp, {
-        circuitEnabled,
-        circuitStateFile,
-        diagnosticsFile,
-        launchId,
-      });
+      const summary = await closeApplicationOnce();
       if (summary.circuit.tripped) {
         throw new ElectronShutdownCircuitOpenError();
       }
@@ -562,13 +566,7 @@ async function finishElectronLaunch(args: {
 
   async function teardown(): Promise<void> {
     await finalizeElectronFixtureTeardown({
-      closeApplication: async () =>
-        await closeElectronApplication(electronApp, {
-          circuitEnabled,
-          circuitStateFile,
-          diagnosticsFile,
-          launchId,
-        }),
+      closeApplication: closeApplicationOnce,
       // The wizard's graduation path can spawn a detached child Electron
       // process for the operator's chosen profile. Sweep it only after the
       // Playwright-owned tree has completed its bounded graceful/forced close.

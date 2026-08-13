@@ -16,6 +16,8 @@ export const E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV =
   "PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER";
 export const E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV =
   "PWRAGENT_E2E_SHUTDOWN_CIRCUIT_STATE_FILE";
+export const ELECTRON_SHUTDOWN_CIRCUIT_ERROR_NAME =
+  "ElectronShutdownCircuitOpenError";
 
 /**
  * A healthy replay-backed app normally closes well below the renderer's own
@@ -83,6 +85,16 @@ export type ElectronShutdownSummary = {
   };
   circuit: ElectronShutdownCircuitDecision;
 };
+
+export function memoizeElectronClose(
+  closeApplication: () => Promise<ElectronShutdownSummary>,
+): () => Promise<ElectronShutdownSummary> {
+  let closePromise: Promise<ElectronShutdownSummary> | undefined;
+  return () => {
+    closePromise ??= closeApplication();
+    return closePromise;
+  };
+}
 
 type ElectronCloseActions = {
   forceKillTree(): Promise<void>;
@@ -302,7 +314,7 @@ export class ElectronShutdownCircuitOpenError extends Error {
         "Recycle the cold runner guest before retrying.",
       ].join(" "),
     );
-    this.name = "ElectronShutdownCircuitOpenError";
+    this.name = ELECTRON_SHUTDOWN_CIRCUIT_ERROR_NAME;
   }
 }
 
