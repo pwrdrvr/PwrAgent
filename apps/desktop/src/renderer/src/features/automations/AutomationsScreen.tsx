@@ -114,8 +114,10 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
             Pwr<span className="settings-nav__brand-accent">Agent</span>
           </p>
         </header>
+        {/* Same arrow glyph as Settings' Exit row — a bare "<" read as a
+            stray character next to the real ← one screen over. */}
         <button className="settings-nav__exit" type="button" onClick={props.onClose}>
-          <span aria-hidden="true">&lt;</span> Exit Automations
+          <span aria-hidden="true">←</span> Exit Automations
         </button>
         <button
           className="settings-nav__new"
@@ -140,7 +142,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
           <div className="settings-titlebar__breadcrumb">
             <span className="settings-titlebar__eyebrow">Automations</span>
             <span aria-hidden="true" className="settings-titlebar__separator">
-              &gt;
+              ›
             </span>
             <span className="settings-titlebar__current">All Automations</span>
           </div>

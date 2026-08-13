@@ -6514,10 +6514,14 @@ textarea,
   flex: 1;
   flex-direction: column;
   gap: 14px;
-  /* No top padding: it is inside the scrollport, so rows would slide through
-     it and show above the sticky column header. The toolbar carries that
-     space instead, and scrolls away with the rest of the page. */
-  padding: 0 20px 20px;
+  /* Horizontal and bottom padding match `.settings-content` so the two
+     screens inset their content from the window edge identically.
+     No top padding, though: it is inside the scrollport, so rows would slide
+     through it and show above the sticky column header. The toolbar carries
+     that 20px instead, and scrolls away with the rest of the page. (Settings
+     solves the same problem the other way, cancelling its own top padding
+     with `--settings-section-sticky-top: -20px`.) */
+  padding: 0 24px 24px;
   overflow: auto;
 }
 
@@ -7157,6 +7161,11 @@ textarea,
    operator's eye already is when the screen opens (they arrived via the left
    rail) — a full-accent button across the empty canvas made the create action
    the farthest thing from the pointer. Only the plus carries accent. */
+/* Automations-only row, directly under Exit. The nav's 4px flex gap plus the
+   Exit row's 4px bottom margin left only 8px above this and 16px below it,
+   so two rows of identical size, weight, and color read as one clump with a
+   hole under them. 4px top and bottom puts both gaps at 12px — the same
+   Exit-to-next-thing rhythm Settings has. */
 .settings-nav__new {
   display: inline-flex;
   width: 100%;
@@ -7164,7 +7173,7 @@ textarea,
   appearance: none;
   cursor: pointer;
   gap: 6px;
-  margin: 0 0 8px;
+  margin: 4px 0;
   padding: 6px 12px;
   border: none;
   border-radius: 6px;

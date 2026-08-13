@@ -342,6 +342,37 @@ describe("AutomationsScreen", () => {
   });
 });
 
+describe("nav chrome parity with Settings", () => {
+  it("uses the same Exit row and breadcrumb glyphs Settings uses", async () => {
+    render(
+      <AutomationsScreen
+        desktopApi={
+          {
+            listAutomations: vi.fn(async () => ({ automations: [] })),
+            listAutomationRuns: vi.fn(async () => ({ runs: [] })),
+            onAgentEvent: () => () => undefined,
+          } as unknown as DesktopApi
+        }
+        threads={[]}
+        onClose={() => undefined}
+      />,
+    );
+
+    // Settings' contract test pins "← Exit Settings"; this is the same row on
+    // the other screen and drifted to a bare "<", which read as a stray
+    // character rather than an arrow.
+    const exit = await screen.findByRole("button", { name: /Exit Automations/i });
+    expect(exit).toHaveClass("settings-nav__exit");
+    expect(exit.closest(".settings-nav")).not.toBeNull();
+    expect(exit.textContent).toBe("← Exit Automations");
+
+    // Settings' breadcrumb uses "›"; this one used ">".
+    expect(
+      document.querySelector(".settings-titlebar__separator")?.textContent?.trim(),
+    ).toBe("›");
+  });
+});
+
 describe("row runtime and actions", () => {
   it("states the execution profile so a risky automation is spottable", async () => {
     const risky: AutomationDetail = {
