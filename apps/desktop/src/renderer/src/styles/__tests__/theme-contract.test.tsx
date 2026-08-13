@@ -339,6 +339,18 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps thread context menus clickable over draggable empty thread panes", () => {
+    const contextMenuRule = extractRuleBody(css, ".thread-context-menu");
+
+    expect(contextMenuRule).toContain("-webkit-app-region: no-drag;");
+  });
+
+  it("keeps Settings clickable over draggable empty thread panes", () => {
+    const settingsLayerRule = extractRuleBody(css, ".app-shell__settings-layer");
+
+    expect(settingsLayerRule).toContain("-webkit-app-region: no-drag;");
+  });
+
   it("keeps thread migration project headers sticky inside the project list", () => {
     const projectHeaderRule = extractRuleBody(
       css,
