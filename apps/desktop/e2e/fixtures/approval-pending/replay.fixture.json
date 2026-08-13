@@ -129,10 +129,23 @@
         "params": {
           "threadId": "thread-approval-pending",
           "turnId": "turn-approval-2",
-          "itemId": "call-npm-view-dive",
+          "itemId": "call-windows-agent-discovery",
           "requestId": "approval-request-1",
-          "reason": "Do you want to allow network access so I can query npm metadata for the `dive` package?",
-          "command": "/bin/zsh -lc 'npm view dive'"
+          "reason": "Do you want to allow a read-only agent instruction discovery command outside the sandbox?",
+          "command": "Get-ChildItem -Force | Select-Object Name,Mode; Get-ChildItem -Recurse -Filter AGENTS.md -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName",
+          "availableDecisions": [
+            "accept",
+            {
+              "acceptWithExecpolicyAmendment": {
+                "execpolicy_amendment": [
+                  "C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\\pwsh.exe",
+                  "-Command",
+                  "Get-ChildItem -Force | Select-Object Name,Mode; Get-ChildItem -Recurse -Filter AGENTS.md -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName"
+                ]
+              }
+            },
+            "cancel"
+          ]
         }
       }
     },

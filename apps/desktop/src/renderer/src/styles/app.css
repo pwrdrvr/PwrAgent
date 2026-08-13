@@ -11428,6 +11428,40 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: normal;
 }
 
+.transcript-request__action--detailed {
+  flex: 0 0 100%;
+  width: 100%;
+  height: auto;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  overflow: hidden;
+  padding: 7px 10px;
+  text-align: left;
+}
+
+.transcript-request__action-label {
+  line-height: 1.2;
+}
+
+.transcript-request__action-detail {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-request__action--detailed:hover:not([disabled])
+  .transcript-request__action-detail {
+  color: var(--text-primary);
+}
+
 .transcript-questionnaire__prompt,
 .transcript-mcp__prompt {
   display: flex;
