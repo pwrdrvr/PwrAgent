@@ -267,6 +267,24 @@ describe("createMainWindow", () => {
     expect(browserWindowState.setWindowOpenHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the main window and its resize minimums inside the cursor display work area", async () => {
+    getDisplayNearestPointMock.mockReturnValue({
+      workArea: { x: 0, y: 0, width: 1152, height: 696 },
+    });
+
+    const { createMainWindow } = await import("../window");
+    createMainWindow();
+
+    expect(browserWindowState.options).toMatchObject({
+      x: 0,
+      y: 0,
+      width: 1152,
+      height: 696,
+      minWidth: 960,
+      minHeight: 640,
+    });
+  });
+
   it("registers the main window for messaging push-event channels", async () => {
     const { createMainWindow } = await import("../window");
     const { debugListRegisteredWindows } = await import("../window-channels");

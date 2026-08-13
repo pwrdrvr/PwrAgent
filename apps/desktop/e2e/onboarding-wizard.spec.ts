@@ -210,6 +210,41 @@ test.describe("Onboarding wizard", () => {
         }),
       ).toBeVisible();
 
+      const geometry = await app.electronApp.evaluate(
+        ({ BrowserWindow, screen }) => {
+          const mainWindow = BrowserWindow.getAllWindows()[0];
+          if (!mainWindow) {
+            throw new Error("Expected the onboarding BrowserWindow");
+          }
+          const bounds = mainWindow.getBounds();
+          return {
+            bounds,
+            workArea: screen.getDisplayMatching(bounds).workArea,
+          };
+        },
+      );
+      expect(geometry.bounds.x).toBeGreaterThanOrEqual(geometry.workArea.x);
+      expect(geometry.bounds.y).toBeGreaterThanOrEqual(geometry.workArea.y);
+      expect(geometry.bounds.x + geometry.bounds.width).toBeLessThanOrEqual(
+        geometry.workArea.x + geometry.workArea.width,
+      );
+      expect(geometry.bounds.y + geometry.bounds.height).toBeLessThanOrEqual(
+        geometry.workArea.y + geometry.workArea.height,
+      );
+
+      const wizard = await app.window.locator(".onboarding-wizard").boundingBox();
+      const viewport = await app.window.evaluate(() => ({
+        height: globalThis.innerHeight,
+        width: globalThis.innerWidth,
+      }));
+      expect(wizard).not.toBeNull();
+      expect(
+        Math.abs((wizard!.x + wizard!.width / 2) - viewport.width / 2),
+      ).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs((wizard!.y + wizard!.height / 2) - viewport.height / 2),
+      ).toBeLessThanOrEqual(1);
+
       const getStarted = app.window.getByRole("button", { name: /Get started/i });
       await expect(getStarted).toBeVisible();
       await getStarted.click();
