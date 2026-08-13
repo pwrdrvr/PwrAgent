@@ -423,8 +423,77 @@ stop_matches() {
   done
 }
 
+stop_pid_list() {
+  local signal="$1"
+  shift
+  local pid
+
+  for pid in "$@"; do
+    log_line "$signal pid=$pid"
+    kill "-$signal" "$pid" 2>/dev/null || true
+  done
+}
+
+# Lease-backed Electron main processes only.
+#
+# `matching_dev_pids` deliberately also returns Electron's helper children and
+# its `pnpm dev` / electron-vite parent chain. That set is right for the final
+# sweep and wrong for the graceful signal: SIGTERMing the supervisor or the
+# renderer alongside the main process can tear the app down before its
+# before-quit phases run, which is the exact drain this close is waiting for.
+# Signal the app itself, let it exit on its own terms, then clean up the rest.
+managed_electron_main_pids() {
+  local instance_id pid cwd_hint heartbeat desired effective disabled
+
+  query_root_instances 2>/dev/null | while IFS=$'\t' read -r instance_id pid cwd_hint heartbeat desired effective disabled; do
+    [[ -n "$pid" ]] || continue
+    is_live_pid "$pid" && print -r -- "$pid"
+  done
+}
+
+# A SIGTERM'd app does not exit promptly. `installProcessShutdownHandlers`
+# (index.ts) calls allowImmediateQuit(), so SIGTERM deliberately SKIPS the quit
+# confirmation dialog and its countdown — that path is for Cmd-Q and window
+# close, not for us. What we wait on instead is the phased drain that follows:
+# disposeMainProcessResources runs before-quit phases bounded by
+# MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS (12s global; app-server alone may take 7.5s,
+# messaging and federation 4s each), plus renderer-window teardown at 2s. The
+# messaging and federation runtimes are stopped in those phases, so a SIGKILL
+# landing mid-drain strands the profile's leases and the next instance boots
+# with federation off, naming the dead PID as the holder.
+#
+# 30s covers the ~14s worst case with headroom. The former fixed `sleep 5`
+# could expire while the app-server phase was still draining and then SIGKILL a
+# healthy app that was shutting down correctly.
+readonly GRACEFUL_EXIT_TIMEOUT_SECONDS=30
+readonly GRACEFUL_EXIT_POLL_SECONDS=0.5
+# The supervisor chain has no drain of its own to protect; the daemon helper
+# already stops `pnpm dev` once the Electron instance it started exits, so this
+# is a short backstop for stragglers rather than a real wait.
+readonly SUPERVISOR_EXIT_TIMEOUT_SECONDS=10
+
+# wait_for_exit <timeout-seconds> <lister-command...>
+#
+# Polls until the lister prints nothing (every process gone) or the deadline
+# passes. Returns 0 when they exited, 1 on timeout. Polling rather than
+# sleeping the full budget means the common case — an idle app with nothing in
+# flight — returns in well under a second instead of always costing the worst
+# case.
+wait_for_exit() {
+  local timeout="$1"
+  shift
+  local deadline=$(( $(date +%s) + timeout ))
+
+  while true; do
+    [[ -z "$("$@")" ]] && return 0
+    (( $(date +%s) >= deadline )) && return 1
+    sleep "$GRACEFUL_EXIT_POLL_SECONDS"
+  done
+}
+
 close_app() {
-  local remaining removed_job=0
+  local removed_job=0 graceful=1 main_pid
+  local -a main_pids
 
   mkdir -p "${log_path:h}" || die "failed to create log directory: ${log_path:h}"
   log_line "close root=$root profile=$profile rootHash=$root_hash_value" >> "$log_path"
@@ -439,16 +508,47 @@ close_app() {
     return 0
   fi
 
-  stop_matches TERM >> "$log_path"
-  sleep 5
+  # Phase 1: signal the app itself and let it drain. Nothing else is signalled
+  # yet — killing the supervisor or a renderer here would cut the drain short.
+  main_pids=()
+  while IFS= read -r main_pid; do
+    [[ -n "$main_pid" ]] && main_pids+=("$main_pid")
+  done < <(managed_electron_main_pids)
 
-  remaining="$(matching_dev_pids)"
-  if [[ -n "$remaining" ]]; then
-    stop_matches KILL >> "$log_path"
+  if (( ${#main_pids} )); then
+    stop_pid_list TERM "${main_pids[@]}" >> "$log_path"
+    if ! wait_for_exit "$GRACEFUL_EXIT_TIMEOUT_SECONDS" managed_electron_main_pids; then
+      graceful=0
+      # Escalating is a real cost, not a tidy-up: SIGKILL skips the before-quit
+      # phases, so the profile's messaging and federation leases are never
+      # released and the next instance boots with federation off until the
+      # dead-owner grace expires. Say so rather than reporting a clean close.
+      log_line "graceful exit timed out after ${GRACEFUL_EXIT_TIMEOUT_SECONDS}s" >> "$log_path"
+      say "warning: $profile profile app did not exit within ${GRACEFUL_EXIT_TIMEOUT_SECONDS}s of SIGTERM"
+      say "warning: that is well past the 12s shutdown budget, so a before-quit phase is likely wedged — check $log_path for the last 'shutdown phase completed' line"
+      say "warning: escalating to SIGKILL, which skips lease release; the next instance may report federation off until the lease is reclaimed"
+    fi
+  fi
+
+  # Phase 2: the supervisor chain and any stragglers. Usually already gone —
+  # the daemon helper stops `pnpm dev` when its Electron instance exits.
+  if [[ -n "$(matching_dev_pids)" ]]; then
+    stop_matches TERM >> "$log_path"
+    if ! wait_for_exit "$SUPERVISOR_EXIT_TIMEOUT_SECONDS" matching_dev_pids; then
+      graceful=0
+      log_line "supervisor chain still alive after ${SUPERVISOR_EXIT_TIMEOUT_SECONDS}s; escalating to KILL" >> "$log_path"
+      say "warning: dev supervisor processes did not exit within ${SUPERVISOR_EXIT_TIMEOUT_SECONDS}s of SIGTERM"
+      stop_matches KILL >> "$log_path"
+    fi
   fi
 
   rm -f "$pid_file"
-  say "closed $profile profile app for $root"
+  if (( graceful )); then
+    say "closed $profile profile app for $root"
+    return 0
+  fi
+  say "force-closed $profile profile app for $root"
+  return 1
 }
 
 tail_log() {
@@ -564,6 +664,26 @@ run_self_test() {
   assert_failure "missing Electron main target is ambiguous" single_electron_window_target
   assert_failure "multiple Electron main targets are ambiguous" single_electron_window_target $'101\t/Users/example/Electron.app' $'202\t/Users/example/Electron.app'
   [[ "$root_hash_value" == "c976f17804e892f9" ]] || die "self-test failed: unexpected root hash $root_hash_value"
+
+  assert_success "wait_for_exit returns once nothing is left" \
+    wait_for_exit 5 print -r -- ""
+  assert_failure "wait_for_exit gives up on a process that never exits" \
+    wait_for_exit 1 print -r -- "424242"
+  # The budget has to outlast the app's own worst-case drain, or the wait
+  # expires mid-shutdown and SIGKILL strands the profile's leases.
+  # MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS is 12s and renderer teardown adds 2s.
+  (( GRACEFUL_EXIT_TIMEOUT_SECONDS >= 14 )) \
+    || die "self-test failed: graceful exit budget ${GRACEFUL_EXIT_TIMEOUT_SECONDS}s is under the 12s main-process shutdown drain plus 2s renderer teardown"
+  (( SUPERVISOR_EXIT_TIMEOUT_SECONDS > 0 )) \
+    || die "self-test failed: supervisor exit budget must be positive"
+  # The graceful signal must reach the app alone. If this ever starts emitting
+  # the parent chain or helper children the way matching_dev_pids does, the
+  # 30s wait would be waiting on a drain the same signal just cut short.
+  root="/nonexistent-root-for-self-test"
+  root_hash_value="$(compute_root_hash "$root")"
+  state_db="/nonexistent-state-db-for-self-test"
+  [[ -z "$(managed_electron_main_pids)" ]] \
+    || die "self-test failed: managed_electron_main_pids returned pids for an unknown checkout"
 
   say "self-test passed"
 }

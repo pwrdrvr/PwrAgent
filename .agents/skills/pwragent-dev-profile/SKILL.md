@@ -51,8 +51,39 @@ Verify that a previously started instance is still up:
    `Electron` display name, shared `com.github.Electron` bundle id, or installed
    `com.pwrdrvr.pwragent` app: those can select a sibling project, another
    checkout, or a packaged build that does not contain the code under test.
-4. Run `close` when the user only wants the dev-profile app stopped.
+4. Run `close` when the user only wants the dev-profile app stopped. Never
+   `kill` the Electron PID by hand — see "Closing the app" below.
 5. Relay the script output and the log path to the user. The default log is `.local/pwragent-dev-profile.log`.
+
+## Closing the app
+
+`close` signals the app's own process, **waits for it to actually exit**
+(polling until gone or 30 seconds pass), and only then cleans up the `pnpm dev`
+supervisor chain. Do not replace the wait with a fixed sleep, do not `kill` the
+Electron PID yourself, and do not collapse the two phases back into one signal
+to every matched pid — SIGTERMing the supervisor or a renderer alongside the
+main process cuts short the very drain the wait exists to protect.
+
+A SIGTERM'd app does not exit promptly. Note what SIGTERM does **not** do:
+`installProcessShutdownHandlers` in `index.ts` calls `allowImmediateQuit()`, so
+the signal path deliberately skips the quit-confirmation dialog and its
+10-second countdown. That countdown belongs to Cmd-Q and window close, not to
+this script.
+
+What the wait is for is the phased drain that follows.
+`disposeMainProcessResources` runs the before-quit phases under a 12-second
+global budget (`MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS`), and the app-server phase
+alone may take 7.5s, with messaging and federation at 4s each and renderer
+teardown adding 2s. **The messaging and federation runtimes are stopped in
+those phases**, so a SIGKILL landing mid-drain strands the profile's leases:
+the next instance boots with federation off, names the dead PID as the lease
+holder in Settings → Federation, and shows zero peers until the dead-owner
+grace expires. Any federation-dependent UI then renders its empty state and
+looks broken when it is not — observed on 2026-08-12 after a hand-rolled
+`kill` that did not wait.
+
+If the 30-second budget is exhausted, `close` escalates to SIGKILL but says
+loudly that it did, and warns that the next launch may report federation off.
 
 ## Script Notes
 
