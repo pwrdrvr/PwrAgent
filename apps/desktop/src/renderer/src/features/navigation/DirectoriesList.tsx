@@ -1660,7 +1660,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     });
                   }}
                 >
-                  <ChevronDownIcon size={12} />
+                  {/* Heavier stroke at a smaller size: at the icon library's
+                      1.75 default a 12px chevron read washed out next to the
+                      16px launchpad glyph, so the pair looked like two
+                      different treatments rather than one control. */}
+                  <ChevronDownIcon size={14} strokeWidth={2} />
                 </button>
               ) : null}
             </span>

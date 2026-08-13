@@ -5415,6 +5415,20 @@ textarea,
 .directory-row__launchpad-cluster {
   display: inline-flex;
   align-items: center;
+  border-radius: 6px;
+}
+
+/* Hovering either half tints the whole cluster and warms both glyphs, so the
+   pair reads as one control with two actions rather than two unrelated icons.
+   Deliberately weaker than the per-half hover below — the group tint says
+   "these belong together", the strong pill says "this is the one that fires". */
+.directory-row__launchpad-cluster:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.directory-row__launchpad-cluster:hover .directory-row__launchpad-button,
+.directory-row__launchpad-cluster:hover .directory-row__launchpad-targets-button {
+  color: var(--accent);
 }
 
 .directory-row__launchpad-targets-button {
@@ -5433,13 +5447,22 @@ textarea,
   line-height: 1;
 }
 
-.directory-row__launchpad-button:hover,
-.directory-row__launchpad-button:focus-visible,
-.directory-row__launchpad-targets-button:hover,
-.directory-row__launchpad-targets-button:focus-visible {
+/* The half actually under the pointer (or focused) takes the full accent-soft
+   pill. Cluster-scoped so it matches the group rule above at equal
+   specificity and wins the tie by coming later. */
+.directory-row__launchpad-cluster .directory-row__launchpad-button:hover,
+.directory-row__launchpad-cluster .directory-row__launchpad-button:focus-visible,
+.directory-row__launchpad-cluster .directory-row__launchpad-targets-button:hover,
+.directory-row__launchpad-cluster .directory-row__launchpad-targets-button:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-bright);
   outline: none;
+}
+
+/* An unsent draft outranks the group tint: hovering the chevron must not dim
+   the "you have a draft here" cue on its sibling. */
+.directory-row__launchpad-cluster:hover .directory-row__launchpad-button.has-draft {
+  color: var(--accent-bright);
 }
 
 .directory-row__launchpad-button.has-draft {
