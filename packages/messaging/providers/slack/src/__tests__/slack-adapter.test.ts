@@ -4124,7 +4124,12 @@ describe("SlackAdapter", () => {
         key: "slack-binding-1\0turn-1",
         phase: isFinal ? "completed" : "working",
         sequence,
-        tasks: [{ id: "task-1", title: "x".repeat(300), status: "complete" }],
+        tasks: Array.from({ length: sequence }, (_, index) => ({
+          detail: "0ms",
+          id: `task-${index + 1}`,
+          title: `Activity ${index + 1}: ${"x".repeat(300)}`,
+          status: "complete" as const,
+        })),
       },
       audit: {
         actor: { platformUserId: "U012ABCDEF0" },
@@ -4154,6 +4159,12 @@ describe("SlackAdapter", () => {
     expect(appendedStreams).toHaveLength(1);
     expect(stoppedStreams).toHaveLength(1);
     expect(JSON.stringify(startedStreams[0])).not.toContain("x".repeat(257));
+    expect((startedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
+      .toEqual([expect.objectContaining({ id: "task-1", details: "0ms" })]);
+    expect((appendedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
+      .toEqual([expect.objectContaining({ id: "task-2", details: "0ms" })]);
+    expect((stoppedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
+      .toEqual([expect.objectContaining({ id: "task-3", details: "0ms" })]);
   });
 
   it("anchors a channel-root Agent Route card to its inbound user message", async () => {

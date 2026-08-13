@@ -322,7 +322,12 @@ type SlackWorkingCardTarget = {
 
 type SlackWorkingCardQueueState = {
   cancelled: boolean;
+  deliveredTaskIds: Set<string>;
   fallbackSurface?: MessagingSurfaceRef;
+  lastDeliveredPhase?: Extract<
+    MessagingSurfaceIntent,
+    { kind: "working_card" }
+  >["card"]["phase"];
   latest: Extract<MessagingSurfaceIntent, { kind: "working_card" }>;
   lastDeliveredSequence: number;
   nativeUnavailable?: boolean;
@@ -1876,6 +1881,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
     const state: SlackWorkingCardQueueState = current ?? {
       cancelled: false,
+      deliveredTaskIds: new Set(),
       latest: intent,
       lastDeliveredSequence: 0,
       nonRateFailureCount: 0,
@@ -1937,6 +1943,11 @@ export class SlackAdapter implements SlackProviderAdapter {
         ) {
           return;
         }
+        const chunks = this.workingCardChunks(intent, state);
+        if (method === "append" && chunks.length === 0) {
+          this.recordWorkingCardSnapshot(state, intent);
+          continue;
+        }
         const bucket = this.workingCardBucket(method, state.target);
         const admission = this.workingCardRateLimits.admit(bucket);
         if (!admission.admitted) {
@@ -1952,7 +1963,7 @@ export class SlackAdapter implements SlackProviderAdapter {
           if (method === "start") {
             const result = await this.api.startStream!({
               channel: state.target.channelId,
-              chunks: this.workingCardChunks(intent),
+              chunks,
               taskDisplayMode: intent.card.displayHint,
               threadTs: state.target.threadTs,
               ...(intent.audit?.actor.platformUserId
@@ -1982,23 +1993,23 @@ export class SlackAdapter implements SlackProviderAdapter {
               return;
             }
             state.ts = result.ts;
-            state.lastDeliveredSequence = intent.card.sequence;
+            this.recordWorkingCardSnapshot(state, intent);
             state.nonRateFailureCount = 0;
             continue;
           }
           if (method === "append") {
             await this.api.appendStream!({
               channel: state.target.channelId,
-              chunks: this.workingCardChunks(intent),
+              chunks,
               ts: state.ts!,
             });
-            state.lastDeliveredSequence = intent.card.sequence;
+            this.recordWorkingCardSnapshot(state, intent);
             state.nonRateFailureCount = 0;
             continue;
           }
           await this.api.stopStream!({
             channel: state.target.channelId,
-            chunks: this.workingCardChunks(intent),
+            ...(chunks.length > 0 ? { chunks } : {}),
             ts: state.ts!,
           });
           this.workingCardStreams.delete(key);
@@ -2078,21 +2089,27 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private workingCardChunks(
     intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
+    state: SlackWorkingCardQueueState,
   ): SlackStreamChunk[] {
-    const chunks = intent.card.tasks.map((task): SlackStreamChunk => {
-      const details = [
-        task.status === "cancelled" && !task.detail ? "Cancelled" : undefined,
-        task.detail,
-      ].filter(Boolean).join(" · ");
-      return {
-        type: "task_update",
-        id: clampSlackTaskField(task.id),
-        title: clampSlackTaskField(task.title),
-        status: task.status === "cancelled" ? "complete" : task.status,
-        ...(details ? { details: clampSlackTaskField(details) } : {}),
-      };
-    });
-    if (intent.card.phase === "waiting") {
+    const chunks = intent.card.tasks
+      .filter((task) => !state.deliveredTaskIds.has(task.id))
+      .map((task): SlackStreamChunk => {
+        const details = [
+          task.status === "cancelled" && !task.detail ? "Cancelled" : undefined,
+          task.detail,
+        ].filter(Boolean).join(" · ");
+        return {
+          type: "task_update",
+          id: clampSlackTaskField(task.id),
+          title: clampSlackTaskField(task.title),
+          status: task.status === "cancelled" ? "complete" : task.status,
+          ...(details ? { details: clampSlackTaskField(details) } : {}),
+        };
+      });
+    if (
+      intent.card.phase === "waiting"
+      && state.lastDeliveredPhase !== "waiting"
+    ) {
       chunks.unshift({
         type: "markdown_text",
         markdown_text: "*Waiting for your input*",
@@ -2107,6 +2124,17 @@ export class SlackAdapter implements SlackProviderAdapter {
       });
     }
     return chunks;
+  }
+
+  private recordWorkingCardSnapshot(
+    state: SlackWorkingCardQueueState,
+    intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
+  ): void {
+    for (const task of intent.card.tasks) {
+      state.deliveredTaskIds.add(task.id);
+    }
+    state.lastDeliveredPhase = intent.card.phase;
+    state.lastDeliveredSequence = intent.card.sequence;
   }
 
   private workingCardBucket(
