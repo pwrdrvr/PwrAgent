@@ -502,6 +502,10 @@ test.describe("Onboarding wizard", () => {
   });
 
   test("requested-profile bootstrap relaunches that profile after Skip", async () => {
+    test.skip(
+      process.platform === "linux",
+      "Detached profile relaunch is not reliable under headless Xvfb; the IPC regression covers Linux.",
+    );
     test.setTimeout(60_000);
     const app = await launchWizard({ PWRAGENT_PROFILE: "test2" });
     try {
