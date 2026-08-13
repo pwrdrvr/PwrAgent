@@ -15,8 +15,10 @@ vi.mock("../features/diagnostics/RendererErrorBoundary", () => ({
 vi.mock("../lib/dev-performance-pruning", () => ({
   installDevPerformancePruning: () => ({ prune: () => 0, stop: () => undefined }),
 }));
+// Returns its uninstall closure, like the real one — the entry keeps that
+// value now and hands it to the HMR dispose hook.
 vi.mock("../lib/renderer-error-reporting", () => ({
-  installGlobalRendererErrorHandlers: () => undefined,
+  installGlobalRendererErrorHandlers: () => () => undefined,
 }));
 
 describe("renderer entry point", () => {

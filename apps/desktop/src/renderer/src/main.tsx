@@ -13,7 +13,7 @@ import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporti
 import { mountRendererRoot } from "./lib/renderer-root";
 import "./styles/app.css";
 
-installGlobalRendererErrorHandlers();
+const uninstallGlobalErrorHandlers = installGlobalRendererErrorHandlers();
 const performancePruning = import.meta.env.DEV
   ? installDevPerformancePruning()
   : undefined;
@@ -88,6 +88,13 @@ const unsubscribeFullscreen = desktopApi?.onWindowFullscreen?.(
 // `import.meta.hot` is undefined and the dispose registration is a
 // no-op — same listener, single lifetime.
 //
+// The global error handlers belong here for the same reason, and the cost
+// of leaving them out was visible: each re-evaluation added another
+// window `error` listener, so one uncaught error became one
+// `reportRendererError` round-trip per accumulated handler. A single pull
+// on 2026-08-13 walked one error up to nine duplicate reports in the main
+// log before the page reload reset the count.
+//
 // `import.meta.hot` is a Vite-injected dev-only property. We could pull
 // in `vite/client` triple-slash types globally, but that drags more
 // surface than we need; this single-site shape augmentation keeps the
@@ -99,6 +106,7 @@ const importMetaHot = (
 ).hot;
 if (importMetaHot) {
   importMetaHot.dispose(() => {
+    uninstallGlobalErrorHandlers();
     unsubscribeAppearance?.();
     unsubscribeFullscreen?.();
     performancePruning?.stop();
