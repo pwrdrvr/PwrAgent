@@ -266,7 +266,7 @@ export function ThreadRow(props: ThreadRowProps) {
         });
       }}
     >
-      {props.subthreadCount ? (
+      {props.subthreadCount && props.onToggleSubthreads ? (
         <button
           aria-expanded={!props.subthreadsCollapsed}
           aria-label={`${props.subthreadsCollapsed ? "Expand" : "Collapse"} sub-threads for ${props.thread.title}`}

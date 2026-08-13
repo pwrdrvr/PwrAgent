@@ -85,6 +85,7 @@ import {
   type RegisterDirectoryFromDiskResponse,
   type MarkThreadSeenRequest,
   type MarkThreadSeenResponse,
+  type NavigationDirectorySummary,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
   type NavigationThreadGitWorkingStateUpdatedNotification,
@@ -550,8 +551,9 @@ async function renderExplicitComposerPdfPreview(
  * when it identifies a linked directory; fallback preference is a local
  * checkout before a worktree, then linked-directory order.
  *
- * Remote threads whose project has no local counterpart stay ungrouped and
- * surface only in the Updated / Created lenses.
+ * Remote threads whose project has no local counterpart receive an
+ * unconfigured placeholder group. That keeps Cmd+K-mounted rows discoverable
+ * in the Directories lens until Add Directory registers a matching checkout.
  */
 /**
  * The single local directory group a remote thread belongs to, by project
@@ -579,21 +581,7 @@ function findRemoteHomeDirectoryIndex(
       }
     }
   });
-  const projectKey = thread.projectKey;
-  const linkedDirectories = thread.linkedDirectories ?? [];
-  const primaryProjectDirectory = projectKey
-    ? linkedDirectories.find((directory) =>
-        linkedDirectoryMatchesProjectKey(directory, projectKey)
-      )
-    : undefined;
-  const linkedByHomePreference = primaryProjectDirectory
-    ? [primaryProjectDirectory]
-    : [...linkedDirectories].sort((left, right) => {
-      if (left.kind !== right.kind) {
-        return left.kind === "worktree" ? 1 : -1;
-      }
-      return 0;
-    });
+  const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
   for (const linked of linkedByHomePreference) {
     const names = [linked.label, path.basename(linked.path)]
       .map((name) => (name ?? "").trim().toLowerCase())
@@ -606,6 +594,50 @@ function findRemoteHomeDirectoryIndex(
     }
   }
   return undefined;
+}
+
+function remoteLinkedDirectoriesByHomePreference(
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+): LinkedDirectorySummary[] {
+  const linkedDirectories = thread.linkedDirectories ?? [];
+  const projectKey = thread.projectKey;
+  const primaryProjectDirectory = projectKey
+    ? linkedDirectories.find((directory) =>
+        linkedDirectoryMatchesProjectKey(directory, projectKey)
+      )
+    : undefined;
+  if (primaryProjectDirectory) {
+    return [primaryProjectDirectory];
+  }
+
+  return [...linkedDirectories].sort((left, right) => {
+    if (left.kind !== right.kind) {
+      return left.kind === "worktree" ? 1 : -1;
+    }
+    return 0;
+  });
+}
+
+function remoteDirectoryPlaceholder(
+  thread: Pick<NavigationThreadSummary, "linkedDirectories" | "projectKey">,
+): NavigationDirectorySummary | undefined {
+  const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
+  if (!home) {
+    return undefined;
+  }
+  const label = home.label.trim() || path.basename(home.path).trim();
+  if (!label) {
+    return undefined;
+  }
+
+  return {
+    key: `unconfigured-directory:${encodeURIComponent(label.toLowerCase())}`,
+    kind: "directory",
+    label,
+    localAvailability: "unconfigured",
+    threadKeys: [],
+    needsAttentionCount: 0,
+  };
 }
 
 function linkedDirectoryMatchesProjectKey(
@@ -633,18 +665,28 @@ function attachRemoteThreadsToLocalDirectories(
   if (remoteThreads.length === 0) {
     return directories;
   }
+  const mergedDirectories = [...directories];
   const addedByDirectoryIndex = new Map<
     number,
     Array<{ threadKey: string; inInbox: boolean }>
   >();
   for (const thread of remoteThreads) {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    const homeIndex = findRemoteHomeDirectoryIndex(
-      directories,
+    let homeIndex = findRemoteHomeDirectoryIndex(
+      mergedDirectories,
       thread,
     );
     if (homeIndex === undefined) {
-      continue;
+      const placeholder = remoteDirectoryPlaceholder(thread);
+      if (!placeholder) {
+        continue;
+      }
+      homeIndex = mergedDirectories.findIndex(
+        (directory) => directory.key === placeholder.key,
+      );
+      if (homeIndex === -1) {
+        homeIndex = mergedDirectories.push(placeholder) - 1;
+      }
     }
     const added = addedByDirectoryIndex.get(homeIndex) ?? [];
     added.push({ threadKey, inInbox: Boolean(thread.inbox?.inInbox) });
@@ -653,7 +695,7 @@ function attachRemoteThreadsToLocalDirectories(
   if (addedByDirectoryIndex.size === 0) {
     return directories;
   }
-  return directories.map((directory, index) => {
+  return mergedDirectories.map((directory, index) => {
     const added = addedByDirectoryIndex
       .get(index)
       ?.filter((entry) => !directory.threadKeys.includes(entry.threadKey));
@@ -6179,6 +6221,55 @@ class DesktopAppServerService {
   async setThreadParent(
     request: SetThreadParentRequest,
   ): Promise<SetThreadParentResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      const federationRuntime = getDesktopFederationRuntime();
+      const response = await federationRuntime
+        .remoteBackend(federationTarget)
+        .setThreadParent(ownerRequest);
+      try {
+        const pins = await this.getOverlayStore().listRemoteThreadPins();
+        const pin = pins.find(
+          (candidate) =>
+            candidate.ref.backend === response.backend
+            && candidate.ref.threadId === response.threadId
+            && isRemoteFederationTarget(candidate.ref.target)
+            && candidate.ref.target.instanceId === federationTarget.instanceId,
+        );
+        if (pin?.summary) {
+          const summary = { ...pin.summary };
+          if (response.parentThreadId) {
+            summary.parentThreadId = response.parentThreadId;
+            summary.parentThreadBackend = response.parentThreadBackend;
+            summary.parentThreadInstanceId = response.parentThreadInstanceId;
+          } else {
+            delete summary.parentThreadId;
+            delete summary.parentThreadBackend;
+            delete summary.parentThreadInstanceId;
+          }
+          await this.getOverlayStore().updateRemoteThreadPinSnapshots([{
+            ref: pin.ref,
+            summary,
+            instanceLabel: pin.instanceLabel,
+          }]);
+        }
+      } catch (error) {
+        // The relationship mutation already committed on the owner. Keep that
+        // success authoritative even if this viewer's cached pin cannot patch.
+        appServerLog.warn("Remote parent change cache update failed.", {
+          error: error instanceof Error ? error.message : String(error),
+          instanceId: federationTarget.instanceId,
+          threadId: response.threadId,
+        });
+      }
+      federationRuntime.remoteThreadSummaries().invalidate(
+        federationTarget.instanceId,
+      );
+      return response;
+    }
     const backend = request.backend ?? "codex";
     const overlay = await this.getOverlayStore().setThreadParent({
       backend,
@@ -6228,6 +6319,15 @@ class DesktopAppServerService {
   async updateSubthreadOrder(
     request: UpdateSubthreadOrderRequest,
   ): Promise<UpdateSubthreadOrderResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .updateSubthreadOrder(ownerRequest);
+    }
     const backend = request.backend ?? "codex";
     const threadIds = await this.getOverlayStore().updateSubthreadOrder({
       backend,
@@ -6258,6 +6358,15 @@ class DesktopAppServerService {
   async setSubthreadsCollapsed(
     request: SetSubthreadsCollapsedRequest,
   ): Promise<SetSubthreadsCollapsedResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setSubthreadsCollapsed(ownerRequest);
+    }
     const backend = request.backend ?? "codex";
     const overlay = await this.getOverlayStore().setSubthreadsCollapsed({
       backend,
@@ -6479,6 +6588,7 @@ class DesktopAppServerService {
         ...localResponse,
         launchpad: {
           ...localResponse.launchpad,
+          federationTarget,
           directoryKind:
             ownerResponse?.launchpad.directoryKind ?? request.directoryKind,
           directoryLabel:

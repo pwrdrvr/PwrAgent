@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -18,18 +21,33 @@ import {
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
   buildFederatedThreadRef,
+  buildThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
 } from "@pwragent/shared";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
 } from "../federation/federation-backend-bridge";
-import { DesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  DesktopFederationRuntime,
+  disposeDesktopFederationRuntime,
+  getDesktopFederationRuntime,
+} from "../federation/federation-runtime";
+import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import * as desktopSettingsSingleton from "../settings/desktop-settings-singleton";
 import {
   resetDesktopOverlayStoreForTests,
   setDesktopOverlayStoreForTests,
 } from "../app-server/desktop-overlay-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { StateDb } from "../state/state-db";
+import {
+  measureSqliteWrites,
+  resetSqliteWriteMetrics,
+  SQLITE_WRITE_METRICS_ENV,
+} from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import {
   FEDERATION_PEER_UNAVAILABLE_ERROR_CODE,
@@ -665,6 +683,217 @@ describe("DesktopFederationRuntime", () => {
     } finally {
       resetDesktopOverlayStoreForTests();
       stateDb.close();
+    }
+  });
+
+  it("mounts a remote parent when accepting a cross-instance child", async () => {
+    await disposeDesktopFederationRuntime();
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const tempDir = mkdtempSync(path.join(
+      os.tmpdir(),
+      "pwragent-federated-parent-mount-",
+    ));
+    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    const overlayStore = new SqliteOverlayStore(stateDb);
+    setDesktopOverlayStoreForTests(overlayStore);
+    const runtime = getDesktopFederationRuntime();
+    const settings = vi.spyOn(
+      desktopSettingsSingleton,
+      "getDesktopSettingsService",
+    ).mockReturnValue(new Proxy({}, {
+      get: (_target, property) =>
+        property === "resolveCodexCommandPreference"
+        || property === "resolveCodexSpawnEnv"
+          ? () => undefined
+          : () => false,
+    }) as never);
+    const registry = getDesktopBackendRegistry();
+    const parentSummary = {
+      source: "codex" as const,
+      id: "parent",
+      title: "Remote parent",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      pinnedRank: "1024",
+    };
+    const materializeResponse = {
+      backend: "codex" as const,
+      threadId: "child",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    };
+    const materialize = vi.spyOn(registry, "materializeDirectoryLaunchpad")
+      .mockResolvedValue(materializeResponse as never);
+    const publish = vi.spyOn(registry, "publishLocalEvent")
+      .mockResolvedValue(undefined);
+    const navigationSnapshot = vi.spyOn(
+      DesktopMessagingBackendBridge.prototype,
+      "getNavigationSnapshot",
+    ).mockResolvedValue({
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      browseMode: "directories",
+      directories: [
+        {
+          key: "directory:/other",
+          kind: "directory",
+          label: "Other",
+          path: "/other",
+          threadKeys: [buildThreadIdentityKey("codex", "child")],
+          directoryThreadsCollapsed: false,
+        },
+        {
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [buildThreadIdentityKey("codex", "child")],
+          directoryThreadsCollapsed: true,
+        },
+      ],
+      threads: [],
+      launchpadDefaults: {} as never,
+      federationPeers: [],
+    } as never);
+    vi.spyOn(runtime, "health").mockResolvedValue({
+      instanceId: "child-peer",
+    } as never);
+    const threadFromPeer = vi.spyOn(
+      runtime.remoteThreadSummaries(),
+      "threadFromPeer",
+    ).mockResolvedValue(parentSummary);
+
+    try {
+      const existingRemoteRef = buildFederatedThreadRef({
+        backend: "codex",
+        instanceId: "other-peer",
+        threadId: "existing-pin",
+      });
+      await overlayStore.addRemoteThreadPin({
+        ref: existingRemoteRef,
+        instanceLabel: "Other Mac",
+        pinnedVia: "explicit",
+        summary: {
+          source: "codex",
+          id: "existing-pin",
+          title: "Existing remote pin",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      });
+      await overlayStore.setRemoteThreadLocalPin({
+        ref: existingRemoteRef,
+        pinnedRank: "1024",
+      });
+      resetSqliteWriteMetrics();
+      const { writes } = await measureSqliteWrites(async () => {
+        await runtime.localBackend().materializeDirectoryLaunchpad({
+          // Inline subthread composers use a synthetic launchpad key rather
+          // than the materialized directory summary key. The launchpad path is
+          // the authoritative bridge back to the directory whose collapsed
+          // state determines whether the companion parent must be pinned.
+          directoryKey: "subthread:codex:parent:same-worktree",
+          parentThreadId: "parent",
+          parentThreadBackend: "codex",
+          parentThreadInstanceId: "parent-peer",
+          launchpad: {
+            directoryKey: "subthread:codex:parent:same-worktree",
+            directoryKind: "directory",
+            directoryLabel: "Repo",
+            directoryPath: "/repo",
+          },
+        } as never, {
+          sourceInstanceId: "parent-peer",
+        });
+      });
+      expectSqliteWriteBudget({
+        note:
+          "materialize one cross-instance child, mount its companion parent, "
+          + "persist the route, and add a viewer rank because Directory "
+          + "Threads is collapsed while Pins is active",
+        scenario: "federated-child-materialization-with-parent-mount",
+        writes,
+      });
+
+      expect(materialize).toHaveBeenCalledTimes(1);
+      expect(threadFromPeer).toHaveBeenCalledWith({
+        target: { scope: "remote", instanceId: "parent-peer" },
+        backend: "codex",
+        threadId: "parent",
+      });
+      const pin = (await overlayStore.listRemoteThreadPins()).find(
+        (candidate) => candidate.ref.threadId === "parent",
+      );
+      expect(pin).toMatchObject({
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "parent-peer" },
+          threadId: "parent",
+        },
+        pinnedVia: "companion",
+        summary: parentSummary,
+      });
+      // The raw backend snapshot contains no viewer-owned remote pins. The
+      // visibility calculation still sees that Pins is active and appends
+      // after its existing rank without colliding.
+      expect(pin?.localPinnedRank).toBe("2048");
+
+      await overlayStore.addRemoteThreadPin({
+        ref: pin!.ref,
+        instanceLabel: "Parent Mac",
+        pinnedVia: "explicit",
+        summary: { ...parentSummary, title: "Older cached parent" },
+      });
+      await overlayStore.setRemoteThreadLocalPin({
+        ref: pin!.ref,
+        pinnedRank: "4096",
+      });
+      await runtime.localBackend().materializeDirectoryLaunchpad({
+        directoryKey: "directory:/repo",
+        parentThreadId: "parent",
+        parentThreadBackend: "codex",
+        parentThreadInstanceId: "parent-peer",
+        launchpad: {
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+        },
+      } as never, {
+        sourceInstanceId: "parent-peer",
+      });
+      const preserved = (await overlayStore.listRemoteThreadPins()).find(
+        (candidate) => candidate.ref.threadId === "parent",
+      );
+      expect(preserved).toMatchObject({
+        pinnedVia: "explicit",
+        localPinnedRank: "4096",
+        summary: parentSummary,
+      });
+      expect(publish).toHaveBeenCalledWith({
+        backend: "codex",
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: {
+            instanceId: "parent-peer",
+            threadId: "parent",
+            pinned: true,
+          },
+        },
+      });
+    } finally {
+      materialize.mockRestore();
+      publish.mockRestore();
+      navigationSnapshot.mockRestore();
+      settings.mockRestore();
+      resetDesktopOverlayStoreForTests();
+      stateDb.close();
+      rmSync(tempDir, { recursive: true, force: true });
+      delete process.env[SQLITE_WRITE_METRICS_ENV];
+      await disposeDesktopFederationRuntime();
     }
   });
 
@@ -2022,6 +2251,10 @@ describe("DesktopFederationRuntime", () => {
 
   it.each([
     "thread/status/changed",
+    "thread/parent/cleared",
+    "thread/parent/set",
+    "thread/subthreadOrder/updated",
+    "thread/subthreadsCollapsed/updated",
     "turn/cancelled",
     "turn/completed",
     "turn/failed",
@@ -2115,7 +2348,6 @@ describe("DesktopFederationRuntime", () => {
 
     expect(invalidated).toEqual([]);
   });
-
   it("subscribes Cmd+K snapshot peers to navigation updates for the cache TTL", async () => {
     vi.useFakeTimers();
     const sent: FederationProtocolEnvelope[] = [];

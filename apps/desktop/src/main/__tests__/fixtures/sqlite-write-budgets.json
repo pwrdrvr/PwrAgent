@@ -34,6 +34,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "federated-child-materialization-with-parent-mount": {
+    "commits": 3,
+    "note": "materialize one cross-instance child, mount its companion parent, persist the route, and add a viewer rank because Directory Threads is collapsed while Pins is active",
+    "observedWalBytes": 28840,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "federated-child-mount": {
     "commits": 2,
     "note": "persist one cross-instance child mount and its routing target",

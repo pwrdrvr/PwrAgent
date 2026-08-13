@@ -38,6 +38,80 @@ describe("federation backend bridge", () => {
     );
   });
 
+  it("rejects grouping RPCs from a legacy thread-navigation peer", async () => {
+    const backend = {
+      updateSubthreadOrder: vi.fn(),
+      setSubthreadsCollapsed: vi.fn(),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "legacy_viewer",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    for (const [id, method, params] of [
+      [
+        "order",
+        FEDERATION_BACKEND_METHODS.updateSubthreadOrder,
+        {
+          backend: "codex",
+          parentThreadId: "thread-parent",
+          threadIds: ["thread-child"],
+        },
+      ],
+      [
+        "collapse",
+        FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed,
+        {
+          backend: "codex",
+          parentThreadId: "thread-parent",
+          collapsed: true,
+        },
+      ],
+    ] as const) {
+      await router.routeEnvelope({
+        sourcePeerId: "legacy_viewer",
+        envelope: {
+          id,
+          kind: "request",
+          method,
+          params,
+          protocolVersion: 1,
+          sourceInstanceId: "legacy_viewer",
+          targetInstanceId: "owner_one",
+          createdAt: 1_000,
+        },
+      });
+    }
+
+    expect(backend.updateSubthreadOrder).not.toHaveBeenCalled();
+    expect(backend.setSubthreadsCollapsed).not.toHaveBeenCalled();
+    expect(replies).toMatchObject([
+      {
+        kind: "error",
+        requestId: "order",
+        error: {
+          code: "capability_denied",
+          message: expect.stringContaining("thread_grouping"),
+        },
+      },
+      {
+        kind: "error",
+        requestId: "collapse",
+        error: {
+          code: "capability_denied",
+          message: expect.stringContaining("thread_grouping"),
+        },
+      },
+    ]);
+  });
+
   it("preserves encoded ACP navigation keys on the protocol-v1 wire", async () => {
     const backend = {
       getNavigationSnapshot: vi.fn(async () => ({
@@ -1374,6 +1448,70 @@ describe("federation backend bridge", () => {
       backend: "codex",
       threadId: "thread-child",
     });
+
+    const orderPending = client.updateSubthreadOrder({
+      backend: "codex",
+      parentThreadId: "thread-root",
+      threadIds: ["thread-child", "thread-sibling"],
+    });
+    const orderRequest = sent.at(-1)!;
+    expect(orderRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.updateSubthreadOrder,
+      params: {
+        backend: "codex",
+        parentThreadId: "thread-root",
+        threadIds: ["thread-child", "thread-sibling"],
+      },
+    });
+    rpc.receiveEnvelope({
+      id: "response-order-children",
+      kind: "response",
+      requestId: orderRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_300,
+      result: {
+        backend: "codex",
+        parentThreadId: "thread-root",
+        threadIds: ["thread-child", "thread-sibling"],
+      },
+    });
+    await expect(orderPending).resolves.toMatchObject({
+      threadIds: ["thread-child", "thread-sibling"],
+    });
+
+    const collapsedPending = client.setSubthreadsCollapsed({
+      backend: "codex",
+      parentThreadId: "thread-root",
+      collapsed: false,
+    });
+    const collapsedRequest = sent.at(-1)!;
+    expect(collapsedRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed,
+      params: {
+        backend: "codex",
+        parentThreadId: "thread-root",
+        collapsed: false,
+      },
+    });
+    rpc.receiveEnvelope({
+      id: "response-expand-children",
+      kind: "response",
+      requestId: collapsedRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_400,
+      result: {
+        backend: "codex",
+        parentThreadId: "thread-root",
+        collapsed: false,
+      },
+    });
+    await expect(collapsedPending).resolves.toMatchObject({ collapsed: false });
     expect(
       FEDERATION_BACKEND_METHOD_CAPABILITIES[
         FEDERATION_BACKEND_METHODS.mountRemoteChild
@@ -1384,6 +1522,16 @@ describe("federation backend bridge", () => {
         FEDERATION_BACKEND_METHODS.setThreadParent
       ],
     ).toBe("thread_navigation");
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.updateSubthreadOrder
+      ],
+    ).toBe("thread_grouping");
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.setSubthreadsCollapsed
+      ],
+    ).toBe("thread_grouping");
   });
 
   it("routes PR detach over RPC with turn_control authorization", async () => {
@@ -2327,6 +2475,8 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
       mountRemoteChild: vi.fn(),
       setThreadParent: vi.fn(),
+      updateSubthreadOrder: vi.fn(),
+      setSubthreadsCollapsed: vi.fn(),
       detachThreadPullRequest: vi.fn(),
       setThreadPrAutoDispatch: vi.fn(),
       cancelThreadPrAutoDispatch: vi.fn(),
@@ -2710,6 +2860,8 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
         mountRemoteChild: vi.fn(),
         setThreadParent: vi.fn(),
+        updateSubthreadOrder: vi.fn(),
+        setSubthreadsCollapsed: vi.fn(),
         detachThreadPullRequest: vi.fn(),
         setThreadPrAutoDispatch: vi.fn(),
         cancelThreadPrAutoDispatch: vi.fn(),

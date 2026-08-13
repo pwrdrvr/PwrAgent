@@ -40,6 +40,7 @@ import {
   useDropIndicatorController,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
+import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   beginNativeDragInteraction,
@@ -196,9 +197,10 @@ const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: ExpandedDirectoryThreadRenderModel 
  * apart. See plan 2026-05-09-002 Unit K.
  */
 function isPinnableDirectoryKind(
-  directory: Pick<NavigationDirectorySummary, "kind">,
+  directory: Pick<NavigationDirectorySummary, "kind" | "localAvailability">,
 ): boolean {
-  return directory.kind === "directory" || directory.kind === "workspace";
+  return directory.localAvailability !== "unconfigured"
+    && (directory.kind === "directory" || directory.kind === "workspace");
 }
 
 /**
@@ -445,6 +447,9 @@ function DirectoryCount(props: {
 
 export function DirectoriesList(props: DirectoriesListProps) {
   const [expandedByKey, setExpandedByKey] = useState<Record<string, boolean>>({});
+  const unavailableDirectoryTooltip = useViewportTooltip({
+    className: "viewport-tooltip",
+  });
   // Per-directory "show all unpinned threads" toggle, keyed by directory.key.
   const [unpinnedExpandedByKey, setUnpinnedExpandedByKey] = useState<
     Record<string, boolean>
@@ -1067,6 +1072,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const renderDirectoryRow = (
     directory: NavigationDirectorySummary,
   ): ReactElement => {
+    const directoryUnconfigured =
+      directory.localAvailability === "unconfigured";
     const directoryPinned = isPinnedDirectory(directory);
     const directoryDraggable =
       directoryDragEnabled &&
@@ -1101,6 +1108,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     } = threadModel;
     const directorySummaryLabel = [
       directory.label,
+      directoryUnconfigured ? "not configured on this instance" : undefined,
       activeThreadCount > 0 ? formatActiveThreadCount(activeThreadCount) : undefined,
       reviewThreadCount > 0 ? formatReviewThreadCount(reviewThreadCount) : undefined,
     ]
@@ -1128,7 +1136,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
         buildThreadIdentityKey(child.source, child.id),
       );
       const reorderable =
-        children.length > 1 && Boolean(props.onUpdateSubthreadOrder);
+        threadSupportsFederationCapability(parent, "thread_grouping")
+        && children.length > 1
+        && Boolean(props.onUpdateSubthreadOrder);
       return (
         <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`}>
           {children.map((child) => {
@@ -1296,7 +1306,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
             thread={thread}
             threadPinState="unpinned"
             onToggleSubthreads={
-              subthreadCount > 0 && props.onSetSubthreadsCollapsed
+              subthreadCount > 0
+                && threadSupportsFederationCapability(thread, "thread_grouping")
+                && props.onSetSubthreadsCollapsed
                 ? () =>
                     void props.onSetSubthreadsCollapsed!(
                       thread,
@@ -1489,8 +1501,11 @@ export function DirectoriesList(props: DirectoriesListProps) {
             aria-pressed={selectedDirectory}
             className={`thread-row thread-row--compact directory-row__summary${
               selectedDirectory ? " is-selected" : ""
+            }${
+              directoryUnconfigured ? " directory-row__summary--unconfigured" : ""
             }`}
             type="button"
+            onBlur={directoryUnconfigured ? unavailableDirectoryTooltip.hide : undefined}
             onClick={(event) => {
               // Suppress the synthetic post-drop click that the
               // browser fires on the element under the mouse when
@@ -1536,6 +1551,25 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 });
               };
             })()}
+            onFocus={
+              directoryUnconfigured
+                ? (event) => unavailableDirectoryTooltip.show(
+                    event.currentTarget,
+                    "This project directory isn't configured on this instance. Use Add Directory to connect it.",
+                  )
+                : undefined
+            }
+            onMouseEnter={
+              directoryUnconfigured
+                ? (event) => unavailableDirectoryTooltip.show(
+                    event.currentTarget,
+                    "This project directory isn't configured on this instance. Use Add Directory to connect it.",
+                  )
+                : undefined
+            }
+            onMouseLeave={
+              directoryUnconfigured ? unavailableDirectoryTooltip.hide : undefined
+            }
           >
             <span className="directory-row__summary-main">
               <span
@@ -1580,18 +1614,20 @@ export function DirectoriesList(props: DirectoriesListProps) {
             </span>
           </button>
 
-          <button
-            aria-label={`Open new thread launchpad for ${directory.label}`}
-            className={`directory-row__launchpad-button${
-              hasPendingLaunchpadState(directory) ? " has-draft" : ""
-            }`}
-            type="button"
-            onClick={() => {
-              void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
-            }}
-          >
-            <NewThreadIcon size={16} />
-          </button>
+          {directoryUnconfigured ? null : (
+            <button
+              aria-label={`Open new thread launchpad for ${directory.label}`}
+              className={`directory-row__launchpad-button${
+                hasPendingLaunchpadState(directory) ? " has-draft" : ""
+              }`}
+              type="button"
+              onClick={() => {
+                void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
+              }}
+            >
+              <NewThreadIcon size={16} />
+            </button>
+          )}
         </div>
 
             {expanded ? (
@@ -1632,7 +1668,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           thread={thread}
                           threadPinState="pinned"
                               onToggleSubthreads={
-                                subthreadCount > 0 && props.onSetSubthreadsCollapsed
+                                subthreadCount > 0
+                                  && threadSupportsFederationCapability(
+                                    thread,
+                                    "thread_grouping",
+                                  )
+                                  && props.onSetSubthreadsCollapsed
                                   ? () =>
                                       void props.onSetSubthreadsCollapsed!(
                                         thread,
@@ -1695,11 +1736,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
                         aria-label={`${
                           directoryThreadsCollapsed ? "Show" : "Hide"
                         } directory threads for ${directory.label}`}
-                        disabled={!props.onSetDirectoryThreadsCollapsed}
+                        disabled={
+                          directoryUnconfigured
+                          || !props.onSetDirectoryThreadsCollapsed
+                        }
                         onClick={() => {
                           if (
-                            Date.now() - lastDirectoryThreadDropAtRef.current <
-                            POST_DRAG_CLICK_SUPPRESS_MS
+                            directoryUnconfigured
+                            || Date.now() - lastDirectoryThreadDropAtRef.current <
+                              POST_DRAG_CLICK_SUPPRESS_MS
                           ) {
                             return;
                           }
@@ -1823,6 +1868,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         </div>
       ) : null}
       {unpinnedDirectories.map(renderDirectoryRow)}
+      {unavailableDirectoryTooltip.tooltipNode}
     </div>
   );
 }

@@ -4,7 +4,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+import { generateFederationIdentityKeyPair } from "../src/main/federation/federation-identity";
+import { generateFederationNoiseStaticKeyPair } from "../src/main/federation/federation-noise";
+import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { launchElectronApp } from "./fixtures/electron-app";
 import {
   buildFakeAgentConfigToml,
@@ -153,6 +156,64 @@ async function reserveLoopbackPort(): Promise<number> {
     server.close((error) => error ? reject(error) : resolve());
   });
   return address.port;
+}
+
+async function restoreE2eFederationIdentity(params: {
+  identityPrivateKeyPem: string;
+  noiseStaticPrivateKeyBase64: string;
+  page: Page;
+  restartMode?: "client" | "gateway";
+}): Promise<void> {
+  await params.page.evaluate(
+    async ({ identityPrivateKeyPem, noiseStaticPrivateKeyBase64, restartMode }) => {
+      const api = (window as typeof window & {
+        pwragent?: {
+          replaceSettingsSecret?: (request: {
+            secret: string;
+            value: string;
+          }) => Promise<unknown>;
+          writeSettingsConfig?: (request: unknown) => Promise<unknown>;
+        };
+      }).pwragent;
+      if (!api?.replaceSettingsSecret || !api.writeSettingsConfig) {
+        throw new Error("Federation identity test APIs are unavailable");
+      }
+      await api.replaceSettingsSecret({
+        secret: "federationInstancePrivateKey",
+        value: identityPrivateKeyPem,
+      });
+      await api.replaceSettingsSecret({
+        secret: "federationNoiseStaticPrivateKey",
+        value: noiseStaticPrivateKeyBase64,
+      });
+      if (restartMode) {
+        await api.writeSettingsConfig({
+          patch: { federation: { mode: "disabled" } },
+        });
+        await api.writeSettingsConfig({
+          patch: { federation: { mode: restartMode } },
+        });
+      }
+    },
+    {
+      identityPrivateKeyPem: params.identityPrivateKeyPem,
+      noiseStaticPrivateKeyBase64: params.noiseStaticPrivateKeyBase64,
+      restartMode: params.restartMode,
+    },
+  );
+}
+
+function disableE2eFederationBeforeRelaunch(homeRoot: string): void {
+  applyDesktopSettingsPatch(
+    path.join(
+      homeRoot,
+      ".pwragent",
+      "profiles",
+      "default",
+      "config.toml",
+    ),
+    { federation: { mode: "disabled" } },
+  );
 }
 
 async function seedFixtureGitRepo(params: {
@@ -786,6 +847,438 @@ test.describe("federation remote window", () => {
       await gateway?.close();
       await fixture.cleanup();
       await rm(ownerPtyCwd, { force: true, recursive: true });
+    }
+  });
+
+  test("keeps a cross-instance child attached through restart, reconnect, unlink, and archive", async () => {
+    test.skip(
+      process.platform !== "darwin",
+      "The full process-restart lifecycle targets the macOS VM reproduction; cross-platform federation transport remains covered above.",
+    );
+    test.setTimeout(300_000);
+
+    const fixtureRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-federation-child-lifecycle-"),
+    );
+    const ownerRepo = path.join(fixtureRoot, "owner-repo");
+    const viewerRepo = path.join(fixtureRoot, "viewer-repo");
+    const federationPort = await reserveLoopbackPort();
+    const ownerIdentity = generateFederationIdentityKeyPair();
+    const ownerNoiseIdentity = generateFederationNoiseStaticKeyPair();
+    const viewerIdentity = generateFederationIdentityKeyPair();
+    const viewerNoiseIdentity = generateFederationNoiseStaticKeyPair();
+
+    await seedFixtureGitRepo({
+      repoDir: ownerRepo,
+      environmentSetupScript: ":",
+    });
+    await seedFixtureGitRepo({
+      repoDir: viewerRepo,
+      environmentSetupScript: ":",
+    });
+
+    let owner: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    let viewer: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    try {
+      owner = await launchElectronApp({
+        requiresReplayDriver: false,
+        secretStorage: "memory",
+        preLaunchHook: async (homeRoot) => {
+          const { executablePath: fakeKimiPath } =
+            await seedFakeKimiExecutable(homeRoot);
+          const { executablePath: fakeCodexPath } =
+            await seedFakeCodexExecutable({
+              homeRoot,
+              requestLogPath: path.join(fixtureRoot, "owner-codex.jsonl"),
+              launchMarkerPath: path.join(fixtureRoot, "owner-codex.launched"),
+            });
+          await seedInstalledKimiParent({
+            directoryPath: ownerRepo,
+            homeRoot,
+            fakeKimiPath,
+          });
+          const configPath = path.join(
+            homeRoot,
+            ".pwragent",
+            "profiles",
+            "default",
+            "config.toml",
+          );
+          await mkdir(path.dirname(configPath), { recursive: true });
+          await writeFile(
+            configPath,
+            buildFakeAgentConfigToml({
+              fakeKimiPath,
+              fakeCodexPath,
+              extraToml: [
+                "[federation]",
+                'mode = "gateway"',
+                'instance_label = "Child Lifecycle Owner"',
+                'listen_host = "127.0.0.1"',
+                `listen_port = ${federationPort}`,
+                `public_url = "ws://127.0.0.1:${federationPort}"`,
+                "",
+              ].join("\n"),
+            }),
+            "utf8",
+          );
+        },
+      });
+      await restoreE2eFederationIdentity({
+        identityPrivateKeyPem: ownerIdentity.privateKeyPem,
+        noiseStaticPrivateKeyBase64: ownerNoiseIdentity.privateKeyBase64,
+        page: owner.window,
+        restartMode: "gateway",
+      });
+
+      const invite = await owner.window.evaluate(async () => {
+        const api = (window as typeof window & {
+          pwragent?: {
+            generateFederationInvite?: () => Promise<{ invite: string }>;
+          };
+        }).pwragent;
+        if (!api?.generateFederationInvite) {
+          throw new Error("Owner invite API is unavailable");
+        }
+        return (await api.generateFederationInvite()).invite;
+      });
+
+      viewer = await launchElectronApp({
+        requiresReplayDriver: false,
+        secretStorage: "memory",
+        preLaunchHook: async (homeRoot) => {
+          const { executablePath: fakeKimiPath } =
+            await seedFakeKimiExecutable(homeRoot);
+          const { executablePath: fakeCodexPath } =
+            await seedFakeCodexExecutable({
+              homeRoot,
+              requestLogPath: path.join(fixtureRoot, "viewer-codex.jsonl"),
+              launchMarkerPath: path.join(fixtureRoot, "viewer-codex.launched"),
+            });
+          await seedInstalledKimiParent({
+            directoryPath: viewerRepo,
+            homeRoot,
+            fakeKimiPath,
+            sessionId: "viewer-pin-anchor",
+            title: "Viewer pin anchor",
+          });
+          const configPath = path.join(
+            homeRoot,
+            ".pwragent",
+            "profiles",
+            "default",
+            "config.toml",
+          );
+          await mkdir(path.dirname(configPath), { recursive: true });
+          await writeFile(
+            configPath,
+            buildFakeAgentConfigToml({ fakeKimiPath, fakeCodexPath }),
+            "utf8",
+          );
+        },
+      });
+      await restoreE2eFederationIdentity({
+        identityPrivateKeyPem: viewerIdentity.privateKeyPem,
+        noiseStaticPrivateKeyBase64: viewerNoiseIdentity.privateKeyBase64,
+        page: viewer.window,
+      });
+      await viewer.window.waitForTimeout(1_000);
+      await viewer.window.evaluate(async (encodedInvite) => {
+        const api = (window as typeof window & {
+          pwragent?: {
+            importFederationInvite?: (request: { invite: string }) => Promise<unknown>;
+          };
+        }).pwragent;
+        if (!api?.importFederationInvite) {
+          throw new Error("Viewer invite API is unavailable");
+        }
+        await api.importFederationInvite({ invite: encodedInvite });
+      }, invite);
+
+      await expect
+        .poll(
+          async () => await viewer!.window.evaluate(async () => {
+            const api = (window as typeof window & {
+              pwragent?: {
+                readFederationHealth?: () => Promise<{
+                  health: { instanceId?: string; status?: string };
+                }>;
+              };
+            }).pwragent;
+            const health = (await api?.readFederationHealth?.())?.health;
+            return health?.status === "connected" ? health.instanceId : undefined;
+          }),
+          { timeout: 30_000 },
+        )
+        .toBeTruthy();
+
+      const ownerInstanceId = await owner.window.evaluate(async () => {
+        const api = (window as typeof window & {
+          pwragent?: {
+            readFederationHealth?: () => Promise<{
+              health: { instanceId?: string };
+            }>;
+          };
+        }).pwragent;
+        return (await api?.readFederationHealth?.())?.health.instanceId;
+      });
+      const viewerInstanceId = await viewer.window.evaluate(async () => {
+        const api = (window as typeof window & {
+          pwragent?: {
+            readFederationHealth?: () => Promise<{
+              health: { instanceId?: string };
+            }>;
+          };
+        }).pwragent;
+        return (await api?.readFederationHealth?.())?.health.instanceId;
+      });
+      expect(ownerInstanceId).toBeTruthy();
+      expect(viewerInstanceId).toBeTruthy();
+
+      const viewerDirectoryKey = await viewer.window.evaluate(async (directoryPath) => {
+        const api = (window as typeof window & {
+          pwragent?: {
+            getNavigationSnapshot?: (request: unknown) => Promise<{
+              directories: Array<{ key: string; path?: string }>;
+            }>;
+            setDirectoryThreadsCollapsed?: (request: unknown) => Promise<unknown>;
+            setThreadPin?: (request: unknown) => Promise<unknown>;
+          };
+        }).pwragent;
+        if (
+          !api?.getNavigationSnapshot
+          || !api.setDirectoryThreadsCollapsed
+          || !api.setThreadPin
+        ) {
+          throw new Error("Viewer navigation APIs are unavailable");
+        }
+        const snapshot = await api.getNavigationSnapshot({ backend: "all" });
+        const directory = snapshot.directories.find(
+          (candidate) => candidate.path === directoryPath,
+        );
+        if (!directory) {
+          throw new Error(`Viewer directory was not materialized: ${directoryPath}`);
+        }
+        await api.setThreadPin({
+          backend: "acp:kimi",
+          threadId: "viewer-pin-anchor",
+          pinnedRank: "1024",
+        });
+        await api.setDirectoryThreadsCollapsed({
+          directoryKey: directory.key,
+          collapsed: true,
+        });
+        return directory.key;
+      }, viewerRepo);
+      expect(viewerDirectoryKey).toBeTruthy();
+
+      const child = await owner.window.evaluate(
+        async ({ directoryPath, parentInstanceId, targetInstanceId }) => {
+          const api = (window as typeof window & {
+            pwragent?: {
+              materializeDirectoryLaunchpad?: (request: unknown) => Promise<{
+                backend: string;
+                threadId: string;
+              }>;
+            };
+          }).pwragent;
+          if (!api?.materializeDirectoryLaunchpad) {
+            throw new Error("Owner materialization API is unavailable");
+          }
+          const now = Date.now();
+          return await api.materializeDirectoryLaunchpad({
+            directoryKey: "subthread:acp:kimi:federated-kimi-parent:same-worktree",
+            federationTarget: {
+              scope: "remote",
+              instanceId: targetInstanceId,
+            },
+            parentThreadId: "federated-kimi-parent",
+            parentThreadBackend: "acp:kimi",
+            parentThreadInstanceId: parentInstanceId,
+            launchpad: {
+              directoryKey: "subthread:acp:kimi:federated-kimi-parent:same-worktree",
+              directoryKind: "directory",
+              directoryLabel: "viewer-repo",
+              directoryPath,
+              backend: "acp:kimi",
+              executionMode: "default",
+              prompt: "",
+              workMode: "local",
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+        },
+        {
+          directoryPath: viewerRepo,
+          parentInstanceId: ownerInstanceId!,
+          targetInstanceId: viewerInstanceId!,
+        },
+      );
+
+      const readViewerRelationship = async () =>
+        await viewer!.window.evaluate(
+          async ({ childThreadId, parentInstanceId }) => {
+            const api = (window as typeof window & {
+              pwragent?: {
+                getNavigationSnapshot?: (request: unknown) => Promise<{
+                  threads: Array<{
+                    federation?: { ref?: { target?: { instanceId?: string } } };
+                    id: string;
+                    parentThreadBackend?: string;
+                    parentThreadId?: string;
+                    parentThreadInstanceId?: string;
+                    pinnedRank?: string;
+                    source: string;
+                    title: string;
+                  }>;
+                }>;
+              };
+            }).pwragent;
+            const snapshot = await api?.getNavigationSnapshot?.({ backend: "all" });
+            const childThread = snapshot?.threads.find(
+              (thread) => thread.source === "acp:kimi" && thread.id === childThreadId,
+            );
+            const parentThread = snapshot?.threads.find(
+              (thread) =>
+                thread.source === "acp:kimi"
+                && thread.id === "federated-kimi-parent"
+                && thread.federation?.ref?.target?.instanceId === parentInstanceId,
+            );
+            return { childThread, parentThread };
+          },
+          {
+            childThreadId: child.threadId,
+            parentInstanceId: ownerInstanceId!,
+          },
+        );
+
+      await expect
+        .poll(async () => JSON.stringify(await readViewerRelationship()))
+        .toContain(`"parentThreadInstanceId":"${ownerInstanceId}"`);
+      let relationship = await readViewerRelationship();
+      expect(relationship.childThread).toMatchObject({
+        parentThreadBackend: "acp:kimi",
+        parentThreadId: "federated-kimi-parent",
+        parentThreadInstanceId: ownerInstanceId,
+      });
+      expect(relationship.parentThread?.pinnedRank).toBeTruthy();
+
+      const viewerHomeRoot = viewer.homeRoot;
+      await viewer.electronApp.close();
+      // The E2E memory secret store intentionally does not survive process
+      // exit. Keep federation stopped during boot so a temporary regenerated
+      // identity cannot be rejected before the original keys are restored.
+      disableE2eFederationBeforeRelaunch(viewerHomeRoot);
+      viewer = await launchElectronApp({
+        homeRoot: viewerHomeRoot,
+        requiresReplayDriver: false,
+        secretStorage: "memory",
+      });
+      await restoreE2eFederationIdentity({
+        identityPrivateKeyPem: viewerIdentity.privateKeyPem,
+        noiseStaticPrivateKeyBase64: viewerNoiseIdentity.privateKeyBase64,
+        page: viewer.window,
+        restartMode: "client",
+      });
+      await expect
+        .poll(
+          async () => await viewer!.window.evaluate(async () => {
+            const api = (window as typeof window & {
+              pwragent?: {
+                readFederationHealth?: () => Promise<{
+                  health: { status?: string };
+                }>;
+              };
+            }).pwragent;
+            return (await api?.readFederationHealth?.())?.health.status;
+          }),
+          { timeout: 60_000 },
+        )
+        .toBe("connected");
+      await expect
+        .poll(
+          async () => (await readViewerRelationship()).childThread
+            ?.parentThreadInstanceId,
+          { timeout: 60_000 },
+        )
+        .toBe(ownerInstanceId);
+      relationship = await readViewerRelationship();
+      expect(relationship.parentThread?.pinnedRank).toBeTruthy();
+
+      const ownerHomeRoot = owner.homeRoot;
+      await owner.electronApp.close();
+      disableE2eFederationBeforeRelaunch(ownerHomeRoot);
+      const remoteParentRow = viewer.window.locator(".thread-row", {
+        has: viewer.window.locator(".thread-row__title", {
+          hasText: "Remote Kimi parent",
+        }),
+      });
+      await expect(remoteParentRow).toHaveClass(/is-remote-offline/, {
+        timeout: 60_000,
+      });
+
+      owner = await launchElectronApp({
+        homeRoot: ownerHomeRoot,
+        requiresReplayDriver: false,
+        secretStorage: "memory",
+      });
+      await restoreE2eFederationIdentity({
+        identityPrivateKeyPem: ownerIdentity.privateKeyPem,
+        noiseStaticPrivateKeyBase64: ownerNoiseIdentity.privateKeyBase64,
+        page: owner.window,
+        restartMode: "gateway",
+      });
+      await expect(remoteParentRow).not.toHaveClass(/is-remote-offline/, {
+        timeout: 90_000,
+      });
+
+      const remoteParentButton = viewer.window.getByRole("button", {
+        name: "Remote Kimi parent",
+        exact: true,
+      });
+      await remoteParentButton.click({ button: "right" });
+      await expect(
+        viewer.window.getByRole("menuitem", { name: "Rename Thread" }),
+      ).toBeVisible();
+      await expect(
+        viewer.window.getByRole("menuitem", { name: "Mark Unread" }),
+      ).toBeVisible();
+      await expect(
+        viewer.window.getByRole("menuitem", {
+          name: /Archive Thread Only/,
+        }),
+      ).toBeVisible();
+      await viewer.window.keyboard.press("Escape");
+
+      relationship = await readViewerRelationship();
+      const childTitle = relationship.childThread?.title;
+      expect(childTitle).toBeTruthy();
+      const childButton = viewer.window.getByRole("button", {
+        name: childTitle!,
+        exact: true,
+      });
+      await childButton.click({ button: "right" });
+      await viewer.window.getByRole("menuitem", { name: "Unlink from Parent" }).click();
+      await expect
+        .poll(async () => (await readViewerRelationship()).childThread)
+        .toMatchObject({ pinnedRank: expect.any(String) });
+      relationship = await readViewerRelationship();
+      expect(relationship.childThread?.parentThreadId).toBeUndefined();
+      expect(relationship.childThread?.parentThreadInstanceId).toBeUndefined();
+
+      await remoteParentButton.click({ button: "right" });
+      await viewer.window.getByRole("menuitem", {
+        name: "Archive Thread",
+        exact: true,
+      }).click();
+      await expect
+        .poll(async () => (await readViewerRelationship()).parentThread)
+        .toBeUndefined();
+    } finally {
+      await viewer?.close();
+      await owner?.close();
+      await rm(fixtureRoot, { force: true, recursive: true });
     }
   });
 

@@ -196,6 +196,9 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     parentThreadId?: string,
   ) => Promise<void>;
+  onUnlinkThreads?: (
+    threads: NavigationThreadSummary[],
+  ) => Promise<void>;
   onUpdateSubthreadOrder?: (
     parent: NavigationThreadSummary,
     threadIds: string[],
@@ -1018,6 +1021,10 @@ export function Sidebar(props: SidebarProps) {
 
   const unlinkSubthreadFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
+    if (props.onUnlinkThreads) {
+      void props.onUnlinkThreads([thread]);
+      return;
+    }
     void props.onSetThreadParent?.(thread, undefined);
   };
 
@@ -1183,9 +1190,15 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    void Promise.all(
-      threads.map((thread) => props.onSetThreadParent?.(thread, undefined)),
-    );
+    if (props.onUnlinkThreads) {
+      void props.onUnlinkThreads(threads);
+      return;
+    }
+    void (async () => {
+      for (const thread of threads) {
+        await props.onSetThreadParent?.(thread, undefined);
+      }
+    })();
   };
 
   const pinThreadsFromContextMenu = (
@@ -1257,10 +1270,8 @@ export function Sidebar(props: SidebarProps) {
 
   const contextMenuThreads = contextMenu?.threads ?? [];
   const contextMenuIsBulk = contextMenuThreads.length > 1;
-  // A remote-owned row pinned into the main window's list: local overlay
-  // actions (pin, archive, rename, sub-thread/fork) don't apply — the only
-  // management action is removing the viewer-side pin. Federation windows
-  // keep their existing behavior (every row there is remote).
+  // A remote-owned row pinned into the main window's list can be removed from
+  // this viewer independently of owner-routed thread actions.
   const contextMenuIsMainWindowRemoteRow = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
@@ -1272,20 +1283,31 @@ export function Sidebar(props: SidebarProps) {
     && !contextMenu?.thread.federation?.derivedFromMountedParent
     && props.onRemoveRemoteThreadPin,
   );
+  const contextMenuCanRouteRemoteCapability = (
+    capability: "environment_actions" | "launchpad_metadata" |
+      "thread_navigation" | "turn_control",
+  ): boolean =>
+    !contextMenuIsMainWindowRemoteRow
+    || Boolean(
+      contextMenu?.thread.federation?.peerStatus === "connected"
+      && contextMenu.thread.federation.capabilities?.includes(capability),
+    );
   const contextMenuCanRename =
-    contextMenu && !contextMenuIsBulk && !contextMenuIsMainWindowRemoteRow
+    contextMenu && !contextMenuIsBulk
       ? canRenameThread(contextMenu.thread)
+        && contextMenuCanRouteRemoteCapability("turn_control")
       : false;
   const contextMenuCanArchive =
-    contextMenu && !contextMenuIsBulk && !contextMenuIsMainWindowRemoteRow
+    contextMenu && !contextMenuIsBulk
       ? canArchiveThread(contextMenu.thread)
+        && contextMenuCanRouteRemoteCapability("turn_control")
       : false;
   const contextMenuCanMarkUnread = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
-      !contextMenuIsMainWindowRemoteRow &&
       !contextMenu.thread.inbox.inInbox &&
       contextMenu.thread.updatedAt !== undefined &&
+      contextMenuCanRouteRemoteCapability("thread_navigation") &&
       props.onMarkThreadUnread,
   );
   const contextMenuCanMarkRead = Boolean(
@@ -1329,23 +1351,24 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanCreateSubthread = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
-      !contextMenuIsMainWindowRemoteRow &&
       contextMenuHasWorkspace &&
+      contextMenuCanRouteRemoteCapability("launchpad_metadata") &&
+      contextMenuCanRouteRemoteCapability("environment_actions") &&
       props.onCreateSubthread,
   );
   const contextMenuCanFork = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
-      !contextMenuIsMainWindowRemoteRow &&
       contextMenu.thread.source === "codex" &&
       contextMenuHasWorkspace &&
+      contextMenuCanRouteRemoteCapability("turn_control") &&
       canForkThread(contextMenu.thread) &&
       props.onForkThread,
   );
   const contextMenuCanUnlinkSubthread = Boolean(
     contextMenuIsSubthread
-    && !contextMenuIsMainWindowRemoteRow
-    && props.onSetThreadParent,
+    && contextMenuCanRouteRemoteCapability("thread_navigation")
+    && (props.onUnlinkThreads || props.onSetThreadParent),
   );
   // Remote rows CAN pin here: the rank is viewer-owned (stored on the
   // remote_thread_pins row), so the owner's list never learns about it.
@@ -1426,7 +1449,8 @@ export function Sidebar(props: SidebarProps) {
     bulkCanPin &&
     (bulkPinnedThreads.length > 0 || bulkUnpinnedThreads.length > 0);
   const bulkHasManagementActions = Boolean(
-    (bulkUnlinkableThreads.length > 0 && props.onSetThreadParent) ||
+    (bulkUnlinkableThreads.length > 0
+      && (props.onUnlinkThreads || props.onSetThreadParent)) ||
       bulkArchivableThreads.length > 0,
   );
   const bulkThreadLinks = uniqueContextMenuValues(
@@ -1864,7 +1888,8 @@ export function Sidebar(props: SidebarProps) {
               ) : null}
               {bulkHasManagementActions ? (
                 <div className="thread-context-menu__section">
-                  {bulkUnlinkableThreads.length > 0 && props.onSetThreadParent ? (
+                  {bulkUnlinkableThreads.length > 0
+                    && (props.onUnlinkThreads || props.onSetThreadParent) ? (
                     <button
                       role="menuitem"
                       type="button"

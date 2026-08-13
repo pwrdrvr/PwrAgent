@@ -16033,6 +16033,9 @@ export class DesktopBackendRegistry {
         request.parentThreadId ?? normalizedExisting.parentThreadId;
       const requestParentThreadBackend =
         request.parentThreadBackend ?? normalizedExisting.parentThreadBackend;
+      const requestParentThreadInstanceId =
+        request.parentThreadInstanceId
+        ?? normalizedExisting.parentThreadInstanceId;
       const requestParentThreadTitle =
         request.parentThreadTitle ?? normalizedExisting.parentThreadTitle;
       const identityChanged =
@@ -16043,6 +16046,8 @@ export class DesktopBackendRegistry {
         request.parentThreadId !== undefined &&
         (normalizedExisting.parentThreadId !== request.parentThreadId ||
           normalizedExisting.parentThreadBackend !== request.parentThreadBackend ||
+          normalizedExisting.parentThreadInstanceId
+            !== request.parentThreadInstanceId ||
           normalizedExisting.parentThreadTitle !== request.parentThreadTitle);
 
       if (isEmptyDirectoryLaunchpadDraft(existing)) {
@@ -16064,6 +16069,7 @@ export class DesktopBackendRegistry {
           branchName: existing.branchName ?? request.currentBranch,
           parentThreadId: requestParentThreadId,
           parentThreadBackend: requestParentThreadBackend,
+          parentThreadInstanceId: requestParentThreadInstanceId,
           parentThreadTitle: requestParentThreadTitle,
           registeredAt,
           updatedAt: Date.now(),
@@ -16097,6 +16103,7 @@ export class DesktopBackendRegistry {
               directoryPath: request.directoryPath,
               parentThreadId: requestParentThreadId,
               parentThreadBackend: requestParentThreadBackend,
+              parentThreadInstanceId: requestParentThreadInstanceId,
               parentThreadTitle: requestParentThreadTitle,
               registeredAt,
               updatedAt: Date.now(),
@@ -16133,6 +16140,7 @@ export class DesktopBackendRegistry {
       branchName: request.currentBranch,
       parentThreadId: request.parentThreadId,
       parentThreadBackend: request.parentThreadBackend,
+      parentThreadInstanceId: request.parentThreadInstanceId,
       parentThreadTitle: request.parentThreadTitle,
       createdAt: Date.now(),
       updatedAt: Date.now(),

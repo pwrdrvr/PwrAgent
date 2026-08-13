@@ -1965,6 +1965,7 @@ function DesktopAppShell(props: {
           onSetThreadPin={navigation.setThreadPin}
           onReorderThreadPins={navigation.reorderThreadPins}
           onSetThreadParent={navigation.setThreadParent}
+          onUnlinkThreads={navigation.unlinkThreads}
           onUpdateSubthreadOrder={navigation.updateSubthreadOrder}
           onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
           onSetDirectoryPin={navigation.setDirectoryPin}

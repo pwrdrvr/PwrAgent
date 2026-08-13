@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  FederationCapability,
   FederationTarget,
   NavigationThreadSummary,
   ThreadIdentifier,
@@ -17,6 +18,14 @@ export function federationTargetsEqual(
     return !right || right.scope === "local";
   }
   return right?.scope === "remote" && right.instanceId === left.instanceId;
+}
+
+export function threadSupportsFederationCapability(
+  thread: NavigationThreadSummary,
+  capability: FederationCapability,
+): boolean {
+  return !thread.federation
+    || thread.federation.capabilities?.includes(capability) === true;
 }
 
 export function threadSummaryIdentityKey(thread: NavigationThreadSummary): string {

@@ -988,6 +988,55 @@ describe("Sidebar", () => {
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(sharedThread, true);
   });
 
+  it("does not expose sub-thread disclosure controls for an older remote peer", () => {
+    const remoteParent: NavigationThreadSummary = {
+      ...sharedThread,
+      federation: {
+        capabilities: ["thread_navigation"],
+        instanceLabel: "Older Mac",
+        peerStatus: "connected",
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "older-peer" },
+          threadId: sharedThread.id,
+        },
+      },
+    };
+    const childThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-review",
+      title: "Adversarial review",
+      parentThreadId: remoteParent.id,
+    };
+    const onSetSubthreadsCollapsed = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[childThread, remoteParent]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[childThread, remoteParent]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetSubthreadsCollapsed={onSetSubthreadsCollapsed}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Collapse sub-threads for Cross-project cleanup",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Adversarial review" }),
+    ).toBeInTheDocument();
+  });
+
   it("groups a Codex child under its pinned ACP parent in Inbox", () => {
     const parentThread: NavigationThreadSummary = {
       ...sharedThread,
@@ -1333,6 +1382,84 @@ describe("Sidebar", () => {
     expect(
       screen.queryByRole("menuitem", { name: "Unlink from Parent" }),
     ).toBeNull();
+  });
+
+  it("offers owner-routed actions for a connected remote child", () => {
+    const remoteBackends: BackendSummary[] = [{
+      ...backends[0]!,
+      capabilities: {
+        ...backends[0]!.capabilities,
+        forkThread: true,
+      },
+    }];
+    const remoteChild: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-remote-child",
+      title: "Remote child",
+      inbox: { inInbox: false },
+      parentThreadId: "thread-local-parent",
+      parentThreadBackend: "codex",
+      parentThreadInstanceId: "local-instance",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-mini" },
+          threadId: "thread-remote-child",
+        },
+        instanceLabel: "Mac Mini",
+        peerStatus: "connected",
+        capabilities: [
+          "environment_actions",
+          "launchpad_metadata",
+          "thread_navigation",
+          "turn_control",
+        ],
+      },
+    };
+    render(
+      <Sidebar
+        backends={remoteBackends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[remoteChild]}
+        loading={false}
+        selectedItemKey="codex:thread-remote-child"
+        threads={[remoteChild]}
+        onArchiveThread={async () => undefined}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onForkThread={async () => undefined}
+        onMarkThreadUnread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onRenameThread={async () => undefined}
+        onSelectThread={() => undefined}
+        onUnlinkThreads={async () => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Remote child" }),
+    );
+
+    expect(screen.getByRole("menuitem", {
+      name: "Sub-thread in Same Worktree",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Fork into Same Worktree",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Unlink from Parent",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Rename Thread",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Mark Unread",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Archive Thread",
+    })).toBeInTheDocument();
   });
 
   it("closes its context menu when another renderer menu opens", () => {
@@ -1908,6 +2035,49 @@ describe("Sidebar", () => {
     );
 
     expect(onOpenLaunchpad).toHaveBeenCalledWith(directories[0], undefined);
+  });
+
+  it("shows mounted projects that are not configured on this instance", async () => {
+    const unconfiguredDirectory: NavigationDirectorySummary = {
+      key: "unconfigured-directory:grok-build",
+      kind: "directory",
+      label: "grok-build",
+      localAvailability: "unconfigured",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[unconfiguredDirectory]}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const summary = screen.getByRole("button", {
+      name: /^grok-build, not configured on this instance/,
+    });
+    expect(summary).toHaveClass("directory-row__summary--unconfigured");
+    expect(screen.queryByRole("button", {
+      name: "Open new thread launchpad for grok-build",
+    })).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(summary);
+    expect(await screen.findByText(
+      "This project directory isn't configured on this instance. Use Add Directory to connect it.",
+    )).toBeInTheDocument();
   });
 
   it("does not highlight an opened-only launchpad as a pending draft", () => {

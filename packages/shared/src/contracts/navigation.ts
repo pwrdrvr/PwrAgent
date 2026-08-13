@@ -737,6 +737,8 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   prAutoDispatchEnabled?: boolean;
   workMode: LaunchpadWorkMode;
   branchName?: string;
+  /** Instance that owns the thread this viewer-side launchpad will create. */
+  federationTarget?: FederationTarget;
   parentThreadId?: string;
   parentThreadBackend?: AppServerBackendKind;
   parentThreadInstanceId?: FederationInstanceId;
@@ -844,6 +846,14 @@ export type NavigationDirectorySummary = {
   kind: DirectorySummaryKind;
   label: string;
   path?: string;
+  /**
+   * The row was derived from a mounted remote thread, but this viewer has not
+   * registered a matching local checkout yet. The Directories lens keeps the
+   * thread discoverable under this placeholder while suppressing actions that
+   * require a local path. Registering the project replaces the placeholder on
+   * the next snapshot.
+   */
+  localAvailability?: "unconfigured";
   threadKeys: string[];
   needsAttentionCount: number;
   latestUpdatedAt?: number;
@@ -1481,6 +1491,7 @@ export type ReorderThreadPinsResponse = {
 };
 
 export type SetThreadParentRequest = {
+  federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier | null;
@@ -1497,6 +1508,7 @@ export type SetThreadParentResponse = {
 };
 
 export type UpdateSubthreadOrderRequest = {
+  federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   parentThreadId: ThreadIdentifier;
   threadIds: ThreadIdentifier[];
@@ -1509,6 +1521,7 @@ export type UpdateSubthreadOrderResponse = {
 };
 
 export type SetSubthreadsCollapsedRequest = {
+  federationTarget?: FederationTarget;
   backend?: AppServerBackendKind;
   parentThreadId: ThreadIdentifier;
   collapsed: boolean;

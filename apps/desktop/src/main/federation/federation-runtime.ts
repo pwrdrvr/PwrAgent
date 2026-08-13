@@ -80,6 +80,7 @@ import {
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
   applyNavigationSnapshotTransportResponse,
+  buildAppendPinRank,
   buildFederatedThreadRef,
   buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
@@ -165,6 +166,8 @@ import {
   type SetThreadExecutionModeRequest,
   type SetThreadModelSettingsRequest,
   type SetThreadParentRequest,
+  type SetSubthreadsCollapsedRequest,
+  type SetSubthreadsCollapsedResponse,
   type StartReviewRequest,
   type StartThreadRequest,
   type SteerTurnRequest,
@@ -173,6 +176,8 @@ import {
   type StopCodexEnvironmentActionRequest,
   type StopSubAgentRequest,
   type TrustCodexProjectRequest,
+  type UpdateSubthreadOrderRequest,
+  type UpdateSubthreadOrderResponse,
   type UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
@@ -366,6 +371,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
   "navigation_snapshot_deltas",
+  "thread_grouping",
   "thread_detail",
   "turn_control",
   "scheduled_actions",
@@ -494,6 +500,10 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
  */
 const REMOTE_THREAD_SUMMARY_LIFECYCLE_METHODS = new Set<string>([
   "thread/status/changed",
+  "thread/parent/cleared",
+  "thread/parent/set",
+  "thread/subthreadOrder/updated",
+  "thread/subthreadsCollapsed/updated",
   "turn/cancelled",
   "turn/completed",
   "turn/failed",
@@ -4415,6 +4425,161 @@ async function resolveFederatedWorktreeGitReadContext(request: {
   return context;
 }
 
+/**
+ * A cross-instance child is not legible on its owning instance unless the
+ * remote parent is mounted beside it. Import that parent as part of accepting
+ * the child creation request, then mirror the normal created-thread visibility
+ * rule when the child's Directory Threads section is collapsed.
+ */
+async function mountRemoteParentForLocalChild(
+  request: MaterializeDirectoryLaunchpadRequest,
+  response: MaterializeDirectoryLaunchpadResponse,
+  sourceInstanceId?: FederationInstanceId,
+): Promise<void> {
+  const parentThreadId = request.parentThreadId?.trim();
+  const parentInstanceId = request.parentThreadInstanceId?.trim();
+  if (!parentThreadId || !parentInstanceId) {
+    return;
+  }
+  const runtime = getDesktopFederationRuntime();
+  const localInstanceId = (await runtime.health()).instanceId;
+  if (!localInstanceId || parentInstanceId === localInstanceId) {
+    return;
+  }
+  const parentBackend = request.parentThreadBackend ?? response.backend;
+  const target = {
+    scope: "remote" as const,
+    instanceId: parentInstanceId,
+  };
+  const parentSummary = await runtime.remoteThreadSummaries().threadFromPeer({
+    target,
+    backend: parentBackend,
+    threadId: parentThreadId,
+  });
+  if (!parentSummary && parentInstanceId !== sourceInstanceId) {
+    return;
+  }
+  const fallbackLinkedDirectory = response.linkedDirectory
+    ?? (
+      request.launchpad?.directoryPath
+      && request.launchpad.directoryKind !== "workspace"
+        ? {
+            id: `federated-parent:${request.launchpad.directoryKey}`,
+            label: request.launchpad.directoryLabel,
+            path: request.launchpad.directoryPath,
+            kind: response.workMode === "worktree"
+              ? "worktree" as const
+              : "local" as const,
+          }
+        : undefined
+    );
+  const fallbackParent: NavigationThreadSummary = {
+    source: parentBackend,
+    id: parentThreadId,
+    title: parentThreadId,
+    titleSource: "fallback",
+    linkedDirectories: fallbackLinkedDirectory
+      ? [fallbackLinkedDirectory]
+      : [],
+    inbox: { inInbox: false },
+  };
+  const summary = parentSummary ?? fallbackParent;
+  const ref = buildFederatedThreadRef({
+    backend: parentBackend,
+    instanceId: parentInstanceId,
+    threadId: parentThreadId,
+  });
+  const overlayStore = getDesktopOverlayStore();
+  const instanceLabel =
+    parentSummary?.federation?.instanceLabel ?? parentInstanceId;
+  const existingPins = await overlayStore.listRemoteThreadPins();
+  const existingPin = existingPins.find(
+    (pin) =>
+      pin.ref.backend === ref.backend
+      && pin.ref.threadId === ref.threadId
+      && isRemoteFederationTarget(pin.ref.target)
+      && pin.ref.target.instanceId === parentInstanceId,
+  );
+  if (existingPin) {
+    // Snapshot refreshes must not replace viewer-owned rank or provenance.
+    // In particular, creating another child cannot demote an explicit pin to
+    // a companion or remove it from the viewer's Pins section.
+    await overlayStore.updateRemoteThreadPinSnapshots([{
+      ref,
+      summary,
+      instanceLabel,
+    }]);
+  } else {
+    await overlayStore.addRemoteThreadPin({
+      ref,
+      summary,
+      instanceLabel,
+      pinnedVia: "companion",
+    });
+  }
+
+  const snapshot = await new DesktopMessagingBackendBridge()
+    .getNavigationSnapshot({});
+  const launchpadDirectoryKey =
+    request.launchpad?.directoryKey ?? request.directoryKey;
+  const launchpadDirectoryPath = request.launchpad?.directoryPath?.trim();
+  const normalizedLaunchpadDirectoryPath = launchpadDirectoryPath
+    ? path.resolve(launchpadDirectoryPath)
+    : undefined;
+  const childDirectory = snapshot.directories.find(
+    (directory) => directory.key === launchpadDirectoryKey,
+  ) ?? (
+    normalizedLaunchpadDirectoryPath
+      ? snapshot.directories.find(
+          (directory) =>
+            directory.path
+            && path.resolve(directory.path) === normalizedLaunchpadDirectoryPath,
+        )
+      : undefined
+  );
+  const localRanks = await overlayStore.listPinnedThreadOverlayRanks();
+  const remotePins = await overlayStore.listRemoteThreadPins();
+  const parentPin = remotePins.find(
+    (pin) =>
+      pin.ref.backend === ref.backend
+      && pin.ref.threadId === ref.threadId
+      && isRemoteFederationTarget(pin.ref.target)
+      && pin.ref.target.instanceId === parentInstanceId,
+  );
+  const hasPinnedTopLevelThread =
+    localRanks.some((entry) => !entry.parentThreadId)
+    || remotePins.some(
+      (pin) => pin.localPinnedRank && !pin.summary?.parentThreadId,
+    );
+  if (
+    childDirectory?.directoryThreadsCollapsed
+    && hasPinnedTopLevelThread
+    && !parentPin?.localPinnedRank
+  ) {
+    await overlayStore.setRemoteThreadLocalPin({
+      ref,
+      pinnedRank: buildAppendPinRank(
+        [
+          ...localRanks.map((entry) => entry.pinnedRank),
+          ...remotePins.map((pin) => pin.localPinnedRank),
+        ],
+      ),
+    });
+  }
+
+  await getDesktopBackendRegistry().publishLocalEvent({
+    backend: parentBackend,
+    notification: {
+      method: "navigation/remoteThreadPins/changed",
+      params: {
+        instanceId: parentInstanceId,
+        threadId: parentThreadId,
+        pinned: true,
+      },
+    },
+  });
+}
+
 function localBackendOperations(): FederationBackendOperations {
   return {
     async getNavigationSnapshot(request = {}): Promise<NavigationSnapshot> {
@@ -4664,6 +4829,57 @@ function localBackendOperations(): FederationBackendOperations {
         parentThreadId: overlay.parentThreadId,
         parentThreadBackend: overlay.parentThreadBackend,
         parentThreadInstanceId: overlay.parentThreadInstanceId,
+      };
+    },
+    async updateSubthreadOrder(
+      request: UpdateSubthreadOrderRequest,
+    ): Promise<UpdateSubthreadOrderResponse> {
+      const backend = request.backend ?? "codex";
+      const threadIds = await getDesktopOverlayStore().updateSubthreadOrder({
+        backend,
+        parentThreadId: request.parentThreadId,
+        threadIds: request.threadIds,
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "thread/subthreadOrder/updated",
+          params: {
+            parentThreadId: request.parentThreadId,
+            threadIds,
+          },
+        },
+      });
+      return {
+        backend,
+        parentThreadId: request.parentThreadId,
+        threadIds,
+      };
+    },
+    async setSubthreadsCollapsed(
+      request: SetSubthreadsCollapsedRequest,
+    ): Promise<SetSubthreadsCollapsedResponse> {
+      const backend = request.backend ?? "codex";
+      const overlay = await getDesktopOverlayStore().setSubthreadsCollapsed({
+        backend,
+        parentThreadId: request.parentThreadId,
+        collapsed: request.collapsed,
+      });
+      const collapsed = overlay.subthreadsCollapsed === true;
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "thread/subthreadsCollapsed/updated",
+          params: {
+            parentThreadId: request.parentThreadId,
+            collapsed,
+          },
+        },
+      });
+      return {
+        backend,
+        parentThreadId: request.parentThreadId,
+        collapsed,
       };
     },
     async archiveThread(request) {
@@ -4998,10 +5214,27 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async materializeDirectoryLaunchpad(
       request: MaterializeDirectoryLaunchpadRequest,
-      options?: MaterializeDirectoryLaunchpadOptions,
+      options?: MaterializeDirectoryLaunchpadOptions & {
+        sourceInstanceId?: FederationInstanceId;
+      },
     ): Promise<MaterializeDirectoryLaunchpadResponse> {
-      return await getDesktopBackendRegistry()
+      const response = await getDesktopBackendRegistry()
         .materializeDirectoryLaunchpad(request, options);
+      try {
+        await mountRemoteParentForLocalChild(
+          request,
+          response,
+          options?.sourceInstanceId,
+        );
+      } catch (error) {
+        log.warn("failed to mount remote parent for local child", {
+          error: error instanceof Error ? error.message : String(error),
+          parentInstanceId: request.parentThreadInstanceId,
+          parentThreadId: request.parentThreadId,
+          threadId: response.threadId,
+        });
+      }
+      return response;
     },
     async handoffThreadWorkspace(
       request: HandoffThreadWorkspaceRequest,
