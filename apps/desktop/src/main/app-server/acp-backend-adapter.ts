@@ -2022,7 +2022,13 @@ export class AcpBackendAdapter {
               shouldSurfaceAcpThoughtsAsMessages(agent.backendId)))
         ) {
           const delta = readAcpUpdateText(update);
-          if (delta) {
+          // The client deliberately leaves the item ID unset when a provider
+          // sends a whitespace-only chunk after a tool boundary. Do not revive
+          // that skipped chunk under the legacy fallback ID: doing so creates
+          // a blank live assistant card even though replay normalization drops
+          // the same artifact. Preserve whitespace only when it continues an
+          // already-active assistant item.
+          if (delta && (assistantMessageItemId || delta.trim())) {
             const phase =
               updateKind === "agent_thought_chunk" ? "commentary" : "final";
             await this.emit({

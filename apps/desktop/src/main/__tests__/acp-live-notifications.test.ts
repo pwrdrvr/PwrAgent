@@ -315,6 +315,84 @@ describe("acpToolUpdateNotifications", () => {
     ]);
   });
 
+  it("maps Grok open-page output to a concrete web fetch", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "ws_grok-open-1",
+        status: "completed",
+        title: "Web search:",
+        rawOutput: {
+          id: "ws_grok-open-1",
+          action: {
+            type: "open_page",
+            url: "https://api.slack.com/methods/chat.update",
+          },
+        },
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "ws_grok-open-1",
+            type: "commandExecution",
+            toolName: "web_fetch",
+            command:
+              'web_fetch(url="https://api.slack.com/methods/chat.update")',
+            commandActions: [
+              {
+                type: "read",
+                name: "Fetched https://api.slack.com/methods/chat.update",
+              },
+            ],
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("maps Grok find-in-page output to its pattern and page", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "ws_grok-find-1",
+        status: "completed",
+        title: "Web search:",
+        rawOutput: {
+          id: "ws_grok-find-1",
+          action: {
+            type: "find_in_page",
+            url: "https://api.slack.com/methods/chat.update",
+            pattern: "blocks",
+          },
+        },
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: {
+            id: "ws_grok-find-1",
+            type: "webSearch",
+            toolName: "search_web",
+            status: "completed",
+            arguments: { query: "blocks" },
+            sources: [{ url: "https://api.slack.com/methods/chat.update" }],
+          },
+        }),
+      }),
+    ]);
+  });
+
   it("does not classify a generic ACP search action as Grok web search", () => {
     const notifications = acpToolUpdateNotifications({
       threadId: "session-1",

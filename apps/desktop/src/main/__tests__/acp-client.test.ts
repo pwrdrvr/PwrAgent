@@ -3694,6 +3694,67 @@ describe("AcpAgentClient", () => {
     },
   );
 
+  it("does not allocate a live assistant item for whitespace after a tool", async () => {
+    const assistantMessageItemIds: Array<string | undefined> = [];
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1000,
+      onSessionUpdate: ({ assistantMessageItemId, update }) => {
+        if (update.sessionUpdate === "agent_message_chunk") {
+          assistantMessageItemIds.push(assistantMessageItemId);
+        }
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+      turnId: "turn-1",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Before the tool." },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "tool_call",
+      toolCallId: "read-1",
+      kind: "read",
+      title: "Read `README.md`",
+      status: "completed",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "\n" },
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "After the tool." },
+    });
+
+    expect(assistantMessageItemIds).toEqual([
+      "assistant:turn-1:0",
+      undefined,
+      "assistant:turn-1:1",
+    ]);
+    expect(
+      client
+        .readReplay(session.sessionId)
+        .messages.filter((message) => message.role === "assistant"),
+    ).toEqual([
+      expect.objectContaining({ role: "assistant", text: "Before the tool." }),
+      expect.objectContaining({ role: "assistant", text: "After the tool." }),
+    ]);
+  });
+
   it("strips legacy transcript updates when upserting stored sessions", () => {
     store.upsertSession({
       backendId: "acp:kimi",

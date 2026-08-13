@@ -190,7 +190,7 @@ export class AcpSessionReplayNormalizer {
         readContentText(update.update, "content") ??
         readString(update.update, "text") ??
         "";
-      if (text && !isModeUpdateMarker(text) && this.currentTurnId) {
+      if (text.trim() && !isModeUpdateMarker(text) && this.currentTurnId) {
         this.removeAgentWaitingActivity(this.currentTurnId);
       }
       if (kind === "agent_message_chunk") {
@@ -317,7 +317,11 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    if (!text || isModeUpdateMarker(text)) {
+    if (
+      !text
+      || isModeUpdateMarker(text)
+      || (!this.activeAssistantMessageId && !text.trim())
+    ) {
       return;
     }
     const id = this.assistantMessageIdForChunk(update);
@@ -369,7 +373,7 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    if (!text) {
+    if (!text || (!this.activeAssistantMessageId && !text.trim())) {
       return;
     }
     const id = this.assistantMessageIdForChunk(update);
@@ -1137,9 +1141,13 @@ function isGenericActivityLabel(value: string): boolean {
     "zsh",
     "execute",
     "read",
+    "read_file",
     "write",
     "search",
+    "web_search",
+    "x_search",
     "list",
+    "list_dir",
     "tool call",
     "tool_call",
     "tool call update",
