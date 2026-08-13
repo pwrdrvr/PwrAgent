@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import type {
   DesktopAppearanceDensity,
@@ -28,6 +30,26 @@ import {
   E2E_MEMORY_SECRET_STORAGE_ENV,
   SECRET_STORAGE_DISABLED_ENV,
 } from "../../src/main/settings/desktop-secret-store";
+import {
+  E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
+  E2E_SHUTDOWN_LAUNCH_ID_ENV,
+  readE2eShutdownPhaseEvents,
+} from "../../src/main/e2e-shutdown-diagnostics";
+import {
+  appendElectronShutdownSummary,
+  assertElectronShutdownCircuitClosed,
+  buildElectronShutdownSummary,
+  classifyElectronClose,
+  E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV,
+  E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV,
+  ElectronShutdownCircuitOpenError,
+  executeElectronClose,
+  finalizeElectronFixtureTeardown,
+  observedOverallShutdownDuration,
+  recordElectronShutdownCircuit,
+  type ElectronCloseExecution,
+  type ElectronShutdownSummary,
+} from "./electron-shutdown-policy";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -166,7 +188,15 @@ type LaunchResult = {
     executionMode?: ThreadExecutionMode;
     requestId: string;
   }) => Promise<void>;
+  closeApplication: () => Promise<void>;
   close: () => Promise<void>;
+};
+
+type ElectronCloseOptions = {
+  circuitEnabled?: boolean;
+  circuitStateFile?: string;
+  diagnosticsFile?: string;
+  launchId?: string;
 };
 
 type LaunchElectronAppParams = {
@@ -253,6 +283,17 @@ type LaunchElectronAppParams = {
 export async function launchElectronApp(
   params: LaunchElectronAppParams,
 ): Promise<LaunchResult> {
+  const circuitEnabled =
+    process.env[E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV] === "1";
+  const circuitStateFile =
+    process.env[E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV];
+  assertElectronShutdownCircuitClosed({
+    enabled: circuitEnabled,
+    stateFile: circuitStateFile,
+  });
+  const diagnosticsFile =
+    process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV];
+  const launchId = randomUUID();
   const homeRoot =
     params.homeRoot ??
     await mkdtemp(path.join(os.tmpdir(), "pwragent-desktop-e2e-home-"));
@@ -289,6 +330,12 @@ export async function launchElectronApp(
     } else {
       env[key] = value;
     }
+  }
+  env[E2E_SHUTDOWN_LAUNCH_ID_ENV] = launchId;
+  if (diagnosticsFile) {
+    env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] = diagnosticsFile;
+  } else {
+    delete env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV];
   }
   // Every desktop E2E runs an unsigned development Electron binary. On
   // macOS, allowing that binary to reach safeStorage can open a native
@@ -364,15 +411,24 @@ export async function launchElectronApp(
   // design.
   try {
     return await finishElectronLaunch({
+      circuitEnabled,
+      circuitStateFile,
+      diagnosticsFile,
       electronApp,
       env,
       homeRoot,
+      launchId,
       params,
       seedConfigPath,
       suppressOnboarding,
     });
   } catch (error) {
-    await closeElectronApplication(electronApp).catch(() => undefined);
+    await closeElectronApplication(electronApp, {
+      circuitEnabled,
+      circuitStateFile,
+      diagnosticsFile,
+      launchId,
+    }).catch(() => undefined);
     await killSpawnedProfileProcessesUnder(homeRoot).catch(() => undefined);
     // Deliberately NOT removing `homeRoot`: on a launch failure the
     // seeded config.toml and whatever profile state exists are the
@@ -382,17 +438,25 @@ export async function launchElectronApp(
 }
 
 async function finishElectronLaunch(args: {
+  circuitEnabled: boolean;
+  circuitStateFile?: string;
+  diagnosticsFile?: string;
   electronApp: ElectronApplication;
   env: Record<string, string>;
   homeRoot: string;
+  launchId: string;
   params: LaunchElectronAppParams;
   seedConfigPath: string;
   suppressOnboarding: boolean;
 }): Promise<LaunchResult> {
   const {
+    circuitEnabled,
+    circuitStateFile,
+    diagnosticsFile,
     electronApp,
     env,
     homeRoot,
+    launchId,
     params,
     seedConfigPath,
     suppressOnboarding,
@@ -460,6 +524,17 @@ async function finishElectronLaunch(args: {
         await globalThis.__PWRAGENT_REPLAY_DRIVER__?.respondToPendingRequest(value);
       }, requestParams);
     },
+    closeApplication: async () => {
+      const summary = await closeElectronApplication(electronApp, {
+        circuitEnabled,
+        circuitStateFile,
+        diagnosticsFile,
+        launchId,
+      });
+      if (summary.circuit.tripped) {
+        throw new ElectronShutdownCircuitOpenError();
+      }
+    },
     close: async () => {
       // Bound the whole teardown. `closeElectronApplication` is already
       // internally bounded, but the profile-process sweep and the `rm`
@@ -479,29 +554,31 @@ async function finishElectronLaunch(args: {
         // surfacing as an unhandled promise rejection mid-suite.
         running.catch(() => undefined);
         console.warn(
-          `[pwragent-e2e-teardown] teardown exceeded ${ELECTRON_TEARDOWN_TIMEOUT_MS}ms for homeRoot=${homeRoot}`,
+          `[pwragent-e2e-teardown] teardown exceeded ${ELECTRON_TEARDOWN_TIMEOUT_MS}ms`,
         );
       }
     },
   };
 
   async function teardown(): Promise<void> {
-    await closeElectronApplication(electronApp);
-    // The wizard's graduation path can spawn a detached child
-    // Electron process for the operator's chosen profile (see
-    // `openPwrAgentProfile` in `ipc/profiles.ts`). That child
-    // outlives the test's bootstrap Electron and keeps writing
-    // to `<homeRoot>/.pwragent/profiles/<name>/` (state.db
-    // heartbeats, Codex plugin clones, etc.). If we rm the
-    // tmpdir while the child is mid-write, rm races and ENOTEMPTYs.
-    //
-    // Find any live PwrAgent instances under this tmpdir via
-    // their runtime-instance heartbeat markers, kill them, then
-    // proceed with cleanup. Each marker file is a JSON blob
-    // containing the process's PID; the marker dir layout matches
-    // `startProfileRuntimeHeartbeat` in `main/profile.ts`.
-    await killSpawnedProfileProcessesUnder(homeRoot);
-    await rm(homeRoot, { recursive: true, force: true });
+    await finalizeElectronFixtureTeardown({
+      closeApplication: async () =>
+        await closeElectronApplication(electronApp, {
+          circuitEnabled,
+          circuitStateFile,
+          diagnosticsFile,
+          launchId,
+        }),
+      // The wizard's graduation path can spawn a detached child Electron
+      // process for the operator's chosen profile. Sweep it only after the
+      // Playwright-owned tree has completed its bounded graceful/forced close.
+      cleanupProfileProcesses: async () => {
+        await killSpawnedProfileProcessesUnder(homeRoot);
+      },
+      removeHomeRoot: async () => {
+        await rm(homeRoot, { recursive: true, force: true });
+      },
+    });
   }
 }
 
@@ -896,7 +973,8 @@ export function configureElectronE2eSecretStorageEnv(
  */
 export async function closeElectronApplication(
   electronApp: ElectronApplication,
-): Promise<void> {
+  options: ElectronCloseOptions = {},
+): Promise<ElectronShutdownSummary> {
   let child: ElectronChildProcess | undefined;
   try {
     child = electronApp.process();
@@ -905,44 +983,94 @@ export async function closeElectronApplication(
     // before the test reaches finally. Once Playwright has disposed its
     // Electron connection, process() throws while resolving the remote
     // object; there is no remaining process tree for this helper to close.
-    return;
+    return recordElectronCloseSummary(
+      alreadyExitedCloseExecution(),
+      options,
+    );
   }
   if (!child) {
     // Depending on the Playwright client version and disposal timing,
     // `process()` can return undefined rather than throw after the channel is
     // released. That has the same no-process-left-to-clean-up meaning.
-    return;
-  }
-  try {
-    await withTimeout(
-      electronApp.evaluate(({ app }) => {
-        app.quit();
-      }),
-      ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
-      "Electron quit evaluation timed out",
+    return recordElectronCloseSummary(
+      alreadyExitedCloseExecution(),
+      options,
     );
-  } catch {
-    // A healthy process commonly closes the Playwright connection before the
-    // evaluate round-trip resolves. A wedged process also lands here; the
-    // bounded close and process-tree fallback below distinguish the two.
   }
+  const execution = await executeElectronClose({
+    now: performance.now.bind(performance),
+    requestQuit: async () => {
+      await withTimeout(
+        electronApp.evaluate(({ app }) => {
+          app.quit();
+        }),
+        ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
+        "Electron quit evaluation timed out",
+      );
+    },
+    startClose: () => {
+      const closePromise = electronApp.close();
+      closePromise.catch(() => undefined);
+      return closePromise;
+    },
+    waitForGracefulClose: async (closePromise) => await waitForClose(
+      closePromise,
+      ELECTRON_CLOSE_TIMEOUT_MS,
+    ),
+    hasExited: () => hasExited(child),
+    forceKillTree: async () => {
+      await killProcessTree(child);
+    },
+    waitForForcedExit: async () => await waitForProcessExit(
+      child,
+      ELECTRON_FORCE_EXIT_TIMEOUT_MS,
+    ),
+    waitForPostKillClose: async (closePromise) => {
+      await waitForClose(closePromise, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
+    },
+  });
+  return recordElectronCloseSummary(execution, options);
+}
 
-  const closePromise = electronApp.close();
-  closePromise.catch(() => undefined);
-  const result = await waitForClose(
-    closePromise,
-    ELECTRON_CLOSE_TIMEOUT_MS,
-  );
-  if (hasExited(child)) {
-    return;
-  }
+function alreadyExitedCloseExecution(): ElectronCloseExecution {
+  return {
+    elapsedMs: 0,
+    forceExitOutcome: "not-needed",
+    forced: false,
+    gracefulCloseOutcome: "closed",
+    quitRequestOutcome: "completed",
+  };
+}
 
-  console.warn(
-    `[pwragent-e2e-teardown] graceful close failed (close=${result}, exited=${hasExited(child)}) — force-killing pid=${child.pid ?? "?"}`,
-  );
-  await killProcessTree(child);
-  await waitForProcessExit(child, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
-  await waitForClose(closePromise, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
+function recordElectronCloseSummary(
+  execution: ElectronCloseExecution,
+  options: ElectronCloseOptions,
+): ElectronShutdownSummary {
+  const diagnosticsFile = options.diagnosticsFile
+    ?? process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV];
+  const launchId = options.launchId ?? "untracked";
+  const events = readE2eShutdownPhaseEvents(diagnosticsFile, launchId);
+  const classification = classifyElectronClose({
+    ...execution,
+    shutdownElapsedMs: observedOverallShutdownDuration(events),
+  });
+  const circuit = recordElectronShutdownCircuit({
+    classification,
+    enabled: options.circuitEnabled
+      ?? process.env[E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV] === "1",
+    stateFile: options.circuitStateFile
+      ?? process.env[E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV],
+  });
+  const summary = buildElectronShutdownSummary({
+    circuit,
+    classification,
+    events,
+    execution,
+    launchId,
+  });
+  appendElectronShutdownSummary(diagnosticsFile, summary);
+  console.log(`[pwragent-e2e-shutdown] ${JSON.stringify(summary)}`);
+  return summary;
 }
 
 /**

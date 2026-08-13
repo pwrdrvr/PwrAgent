@@ -575,9 +575,12 @@ jobs:
         # Tart's AppleParavirtGPU can reset under Electron load. The early
         # PWRAGENT_E2E_DISABLE_GPU gate selects software rendering before
         # Electron initializes, while ordinary host E2E keeps GPU coverage.
+        # The shutdown circuit is macOS-lane-only: two consecutive closes at
+        # or above 4s (or requiring force-kill) stop this shard after cleanup.
         timeout-minutes: 20
         env:
           PWRAGENT_E2E_DISABLE_GPU: "1"
+          PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
         run: >-
           pnpm --filter @pwragent/desktop test:e2e
           --shard=${{ matrix.lane }}/2

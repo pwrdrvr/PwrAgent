@@ -33,16 +33,22 @@
 //
 // This does not diagnose the guest-level cause and deliberately does not
 // guess at one. It makes the condition cheap and legible.
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
+} from "../src/main/e2e-shutdown-diagnostics";
 import { describeCanaryFailure } from "./canary-report";
 import {
-  closeElectronApplication,
   DESKTOP_MAIN_ENTRY,
   launchElectronApp,
   withTimeout,
 } from "./fixtures/electron-app";
+import {
+  E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV,
+  resetElectronShutdownCircuit,
+} from "./fixtures/electron-shutdown-policy";
 
 const setupDir = path.dirname(fileURLToPath(import.meta.url));
 const SMOKE_FIXTURE = path.resolve(
@@ -60,6 +66,13 @@ const SMOKE_FIXTURE = path.resolve(
 const CANARY_TIMEOUT_MS = 60_000;
 
 export default async function globalSetup(): Promise<void> {
+  const diagnosticsFile = process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV];
+  if (diagnosticsFile) {
+    rmSync(diagnosticsFile, { force: true });
+  }
+  resetElectronShutdownCircuit(
+    process.env[E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV],
+  );
   if (!existsSync(DESKTOP_MAIN_ENTRY)) {
     // `playwright test` invoked without a build. The specs report that far
     // more clearly than a canary can, so stay out of the way.
@@ -78,7 +91,7 @@ export default async function globalSetup(): Promise<void> {
   void launching.then(
     (late) => {
       if (settled) {
-        void closeElectronApplication(late.electronApp).catch(() => undefined);
+        void late.close().catch(() => undefined);
       }
     },
     () => undefined,
@@ -110,9 +123,7 @@ export default async function globalSetup(): Promise<void> {
       // routinely does not resolve — the shared helper bounds each step and
       // force-kills the process tree, which is what every spec's `finally`
       // does. Awaiting a bare `close()` here is what hung a guest for an hour.
-      await closeElectronApplication(launched.electronApp).catch(
-        () => undefined,
-      );
+      await launched.close().catch(() => undefined);
     }
   }
 }

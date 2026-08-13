@@ -1,5 +1,12 @@
 import path from "node:path";
 import { defineConfig } from "@playwright/test";
+import {
+  E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
+} from "./src/main/e2e-shutdown-diagnostics";
+import {
+  E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV,
+  E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV,
+} from "./e2e/fixtures/electron-shutdown-policy";
 
 // Every E2E run reports how much the app made sqlite write. This is the only
 // harness that drives the real write path — the main-process unit suites mock
@@ -19,6 +26,20 @@ if (process.env.PWRAGENT_DEV_SQLITE_WRITE_METRICS !== "0") {
   );
 }
 
+process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] ??= path.join(
+  import.meta.dirname,
+  "test-results",
+  "electron-shutdown-diagnostics.jsonl",
+);
+process.env[E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV] ??= path.join(
+  import.meta.dirname,
+  "test-results",
+  "electron-shutdown-circuit.json",
+);
+
+const electronShutdownCircuitEnabled =
+  process.env[E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV] === "1";
+
 export default defineConfig({
   testDir: "./e2e",
   // One bounded Electron launch before the suite. A persistent CI guest can
@@ -31,6 +52,10 @@ export default defineConfig({
   globalTeardown: "./e2e/global-teardown.ts",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
+  // Once the macOS-only fixture circuit opens, its synthetic failure exhausts
+  // the normal retry and this stops the shard instead of enumerating every
+  // remaining test against a guest already proven unhealthy.
+  maxFailures: electronShutdownCircuitEnabled ? 1 : 0,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   outputDir: "./test-results",

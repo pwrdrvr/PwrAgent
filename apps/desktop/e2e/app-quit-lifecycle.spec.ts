@@ -42,7 +42,6 @@ type QuitOutcome = {
   exited: boolean;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
-  output: string;
 };
 
 /**
@@ -63,7 +62,6 @@ function requestQuit(electronApp: ElectronApplication): void {
 /** Wait for real process exit, bounded by the product's own shutdown ceiling. */
 async function awaitExit(
   electronApp: ElectronApplication,
-  captured: () => string,
 ): Promise<QuitOutcome> {
   const child = electronApp.process();
   const startedAt = Date.now();
@@ -91,32 +89,32 @@ async function awaitExit(
     exited: child.exitCode !== null || child.signalCode !== null,
     exitCode: child.exitCode,
     signalCode: child.signalCode,
-    output: captured(),
   };
-}
-
-/**
- * Mirror the main process's console transport into a buffer. electron-log
- * keeps its console transport enabled outside Vitest, so every `mainLog` line
- * the quit path emits ("quit in progress", "shutdown barrier completed", …)
- * shows up here — which is what turns a failure into a diagnosis instead of a
- * timeout.
- */
-function captureMainProcessOutput(electronApp: ElectronApplication): () => string {
-  const chunks: string[] = [];
-  const child = electronApp.process();
-  child.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk.toString()));
-  child.stderr?.on("data", (chunk: Buffer) => chunks.push(chunk.toString()));
-  return () => chunks.join("");
 }
 
 function describeOutcome(label: string, outcome: QuitOutcome): string {
   return [
     `${label} did not exit within ${QUIT_BUDGET_MS}ms after app.quit().`,
     `elapsedMs=${outcome.elapsedMs} exitCode=${String(outcome.exitCode)} signal=${String(outcome.signalCode)}`,
-    "--- main process output ---",
-    outcome.output.slice(-16_000),
+    "See the sanitized pwragent-e2e-shutdown JSON in the job log and Playwright artifact.",
   ].join("\n");
+}
+
+/** Observe one fixed acknowledgement without retaining or printing raw logs. */
+function watchMainProcessOutputFor(
+  electronApp: ElectronApplication,
+  expected: string,
+): () => boolean {
+  let matched = false;
+  let tail = "";
+  const inspect = (chunk: Buffer): void => {
+    tail = `${tail}${chunk.toString()}`.slice(-(expected.length * 2));
+    matched ||= tail.includes(expected);
+  };
+  const child = electronApp.process();
+  child.stdout?.on("data", inspect);
+  child.stderr?.on("data", inspect);
+  return () => matched;
 }
 
 test("exits the process when a profile-backed session is asked to quit", async () => {
@@ -125,11 +123,9 @@ test("exits the process when a profile-backed session is asked to quit", async (
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
   });
-  const captured = captureMainProcessOutput(app.electronApp);
-
   try {
     requestQuit(app.electronApp);
-    const outcome = await awaitExit(app.electronApp, captured);
+    const outcome = await awaitExit(app.electronApp);
     expect(outcome.exited, describeOutcome("profile-backed app", outcome)).toBe(
       true,
     );
@@ -158,7 +154,10 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
   });
-  const captured = captureMainProcessOutput(app.electronApp);
+  const repeatAcknowledged = watchMainProcessOutputFor(
+    app.electronApp,
+    "quit requested while confirmation is open",
+  );
 
   try {
     // The shared harness seeds confirmation OFF so specs close cleanly. This
@@ -217,8 +216,8 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
 
     requestQuit(app.electronApp);
     await expect
-      .poll(() => captured())
-      .toContain("quit requested while confirmation is open");
+      .poll(repeatAcknowledged)
+      .toBe(true);
     // The repeat request raises the existing prompt; it must not stack a second
     // dialog on top of it.
     expect(
@@ -228,7 +227,7 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
     // Answering it has to actually reach process exit — the countdown is gone,
     // so this is the only remaining path out.
     await dialog.locator("#quit").dispatchEvent("click");
-    const outcome = await awaitExit(app.electronApp, captured);
+    const outcome = await awaitExit(app.electronApp);
     expect(
       outcome.exited,
       describeOutcome("app with quit confirmation answered", outcome),
@@ -249,14 +248,13 @@ test("exits the process when the first-run wizard is asked to quit", async () =>
     suppressOnboarding: false,
     requiresReplayDriver: false,
   });
-  const captured = captureMainProcessOutput(app.electronApp);
 
   try {
     await expect(
       app.window.getByRole("heading", { name: /A few short choices/i }),
     ).toBeVisible();
     requestQuit(app.electronApp);
-    const outcome = await awaitExit(app.electronApp, captured);
+    const outcome = await awaitExit(app.electronApp);
     expect(outcome.exited, describeOutcome("first-run wizard app", outcome)).toBe(
       true,
     );
