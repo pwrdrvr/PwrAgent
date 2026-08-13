@@ -10,7 +10,11 @@ type FakeDialogWindow = {
   restored: number;
   closed: number;
   once: (event: string, handler: (...args: unknown[]) => void) => void;
-  webContents: { on: () => void; setWindowOpenHandler: () => void };
+  webContents: {
+    executeJavaScript: (script: string) => Promise<void>;
+    on: () => void;
+    setWindowOpenHandler: () => void;
+  };
   /** The data: URL the dialog loaded, so tests can read the page it built. */
   loadedUrl?: string;
   /** Stays pending unless a test settles it — the real load is async too. */
@@ -41,6 +45,7 @@ function createFakeDialogWindow(): FakeDialogWindow {
       window.listeners.set(event, handler);
     },
     webContents: {
+      executeJavaScript: vi.fn(async () => undefined),
       on: vi.fn(),
       setWindowOpenHandler: vi.fn(),
     },
@@ -282,6 +287,57 @@ describe("raising the open quit dialog", () => {
 
     window.listeners.get("closed")?.();
     await expect(pending).resolves.toBe("manual-cancel");
+  });
+
+  it("reports finished work before completing the quit", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = showQuitConfirmationDialog({
+        countdownSeconds: 10,
+        inProgressThreadCount: 0,
+        automationRunCount: 1,
+        terminalSessionCount: 0,
+        items: [
+          {
+            kind: "automation",
+            backend: "codex",
+            threadId: "agent-thread-1",
+            threadKey: "codex:agent-thread-1",
+            title: "Search Bots",
+            detail: "Started 8:29:31 PM",
+          },
+        ],
+        refresh: async () => ({
+          inProgressThreadCount: 0,
+          automationRunCount: 0,
+          terminalSessionCount: 0,
+          actionRunCount: 0,
+          items: [],
+        }),
+      });
+      const window = dialogWindows.at(-1)!;
+      window.listeners.get("ready-to-show")?.();
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(window.webContents.executeJavaScript).toHaveBeenCalledWith(
+        expect.stringContaining("All running work finished"),
+        true,
+      );
+      expect(decodeURIComponent(window.loadedUrl ?? "")).toContain(
+        "Wait for Work",
+      );
+      expect(decodeURIComponent(window.loadedUrl ?? "")).toContain(
+        "1 automation is running",
+      );
+      expect(decodeURIComponent(window.loadedUrl ?? "")).toContain(
+        "Search Bots",
+      );
+      await vi.advanceTimersByTimeAsync(1_250);
+      await expect(pending).resolves.toBe("work-completed");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

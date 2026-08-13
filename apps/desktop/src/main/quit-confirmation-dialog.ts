@@ -11,7 +11,8 @@ const quitDialogLog = getMainLogger("pwragent:quit-dialog");
 export type QuitConfirmationDialogResult =
   | "manual-confirm"
   | "manual-cancel"
-  | "countdown-expired";
+  | "countdown-expired"
+  | "work-completed";
 
 /**
  * One row in the dialog's "still running" list. Declared here rather than in
@@ -19,7 +20,7 @@ export type QuitConfirmationDialogResult =
  * be a dependency cycle.
  */
 export type QuitBlockerItem = {
-  kind: "turn" | "terminal" | "action";
+  kind: "turn" | "automation" | "terminal" | "action";
   backend: string;
   threadId: string;
   threadKey: string;
@@ -34,15 +35,27 @@ export type QuitBlockerItem = {
   title?: string;
   /** Secondary line — the owning peer, or an action's command and pid. */
   detail?: string;
+  /** Start time for live elapsed/completion reporting in the quit prompt. */
+  startedAt?: number;
 };
 
 export type QuitConfirmationDialogOptions = {
   countdownSeconds: number;
   inProgressThreadCount: number;
+  automationRunCount?: number;
   terminalSessionCount: number;
   actionRunCount?: number;
   items?: QuitBlockerItem[];
   parent?: BrowserWindow | null;
+  refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
+};
+
+export type QuitConfirmationDialogSnapshot = {
+  inProgressThreadCount: number;
+  automationRunCount: number;
+  terminalSessionCount: number;
+  actionRunCount: number;
+  items: QuitBlockerItem[];
 };
 
 /**
@@ -222,13 +235,63 @@ export async function showQuitConfirmationDialog(
   return await new Promise<QuitConfirmationDialogResult>((resolve) => {
     let settled = false;
     let hardCeiling: NodeJS.Timeout | undefined;
+    let refreshTimer: NodeJS.Timeout | undefined;
+    let completionTimer: NodeJS.Timeout | undefined;
+    let refreshInFlight = false;
+    let lastRefreshSignature = JSON.stringify({
+      inProgressThreadCount: options.inProgressThreadCount,
+      automationRunCount: options.automationRunCount ?? 0,
+      terminalSessionCount: options.terminalSessionCount,
+      actionRunCount: options.actionRunCount ?? 0,
+      items,
+    });
 
     const finish = (result: QuitConfirmationDialogResult): void => {
       if (settled) return;
       settled = true;
       if (hardCeiling) clearTimeout(hardCeiling);
+      if (refreshTimer) clearInterval(refreshTimer);
+      if (completionTimer) clearTimeout(completionTimer);
       releaseDialog();
       resolve(result);
+    };
+
+    const refreshDialog = async (): Promise<void> => {
+      if (!options.refresh || settled || refreshInFlight) return;
+      refreshInFlight = true;
+      try {
+        const snapshot = await options.refresh();
+        const signature = JSON.stringify(snapshot);
+        if (signature === lastRefreshSignature) return;
+        lastRefreshSignature = signature;
+        const payload = buildQuitDialogUpdatePayload(snapshot, navigationPrefix);
+        if (!window.isDestroyed()) {
+          void window.webContents.executeJavaScript(
+            `window.__pwragentUpdateQuitSnapshot?.(${serializeForJavaScript(payload)})`,
+            true,
+          ).catch(() => undefined);
+        }
+        if (payload.totalCount === 0) {
+          if (hardCeiling) {
+            clearTimeout(hardCeiling);
+            hardCeiling = undefined;
+          }
+          if (refreshTimer) {
+            clearInterval(refreshTimer);
+            refreshTimer = undefined;
+          }
+          completionTimer = setTimeout(
+            () => finish("work-completed"),
+            COMPLETION_REPORT_MS,
+          );
+        }
+      } catch (error) {
+        quitDialogLog.warn("quit confirmation refresh failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        refreshInFlight = false;
+      }
     };
 
     // This page interpolates model-generated thread titles and user-configured
@@ -297,6 +360,7 @@ export async function showQuitConfirmationDialog(
       buildQuitConfirmationHtml({
         countdownSeconds,
         inProgressThreadCount: options.inProgressThreadCount,
+        automationRunCount: options.automationRunCount ?? 0,
         terminalSessionCount: options.terminalSessionCount,
         actionRunCount: options.actionRunCount ?? 0,
         items,
@@ -325,6 +389,14 @@ export async function showQuitConfirmationDialog(
       active.ready = true;
       window.show();
       window.focus();
+      if (options.refresh) {
+        void refreshDialog();
+        refreshTimer = setInterval(
+          () => void refreshDialog(),
+          QUIT_REFRESH_INTERVAL_MS,
+        );
+        refreshTimer.unref?.();
+      }
     });
   }).catch((error: unknown) => {
     // An executor that throws would otherwise strand the shared handle on a
@@ -362,6 +434,8 @@ export function resolveQuitCountdownSeconds(
 /** The main-process ceiling must never beat the in-dialog cancel to the punch:
  *  a `countdown-cancel` fired in the final tick has to survive the round trip. */
 const HARD_CEILING_GRACE_MS = 1_500;
+const QUIT_REFRESH_INTERVAL_MS = 500;
+const COMPLETION_REPORT_MS = 1_250;
 
 function quitDialogHeight(itemCount: number): number {
   if (itemCount === 0) return DIALOG_BASE_HEIGHT;
@@ -375,6 +449,7 @@ const QUIT_ITEM_GROUPS: ReadonlyArray<{
   heading: string;
 }> = [
   { kind: "turn", heading: "Agent turns in progress" },
+  { kind: "automation", heading: "Automations in progress" },
   { kind: "terminal", heading: "Integrated terminals" },
   { kind: "action", heading: "Environment actions" },
 ];
@@ -459,6 +534,7 @@ function buildQuitItemListHtml(options: {
 export function buildQuitConfirmationHtml(options: {
   countdownSeconds: number;
   inProgressThreadCount: number;
+  automationRunCount?: number;
   terminalSessionCount: number;
   actionRunCount: number;
   items: QuitBlockerItem[];
@@ -468,11 +544,13 @@ export function buildQuitConfirmationHtml(options: {
 }): string {
   const countText = describeQuitBlockers({
     inProgressThreadCount: options.inProgressThreadCount,
+    automationRunCount: options.automationRunCount,
     terminalSessionCount: options.terminalSessionCount,
     actionRunCount: options.actionRunCount,
   });
   const interruptionText = describeQuitImpact({
     inProgressThreadCount: options.inProgressThreadCount,
+    automationRunCount: options.automationRunCount,
     terminalSessionCount: options.terminalSessionCount,
     actionRunCount: options.actionRunCount,
     hasItems: options.items.length > 0,
@@ -600,6 +678,9 @@ export function buildQuitConfirmationHtml(options: {
         border-color: var(--accent-border);
         background: var(--panel-hover);
       }
+      .row--finished {
+        opacity: 0.72;
+      }
       .row:focus-visible {
         outline: 2px solid var(--accent);
         outline-offset: 1px;
@@ -715,12 +796,13 @@ export function buildQuitConfirmationHtml(options: {
     </header>
     <main class="content">
       <h1>Quit PwrAgent?</h1>
-      <p>${escapeHtml(countText)}</p>
-      <p>${escapeHtml(interruptionText)}</p>
+      <p id="blocker-count">${escapeHtml(countText)}</p>
+      <p id="blocker-impact">${escapeHtml(interruptionText)}</p>
       ${listHtml}
       <p class="countdown" id="countdown"></p>
       <div class="actions">
         <button id="stay" class="secondary" type="button">Stay Open</button>
+        <button id="wait" class="secondary" type="button">Wait for Work</button>
         <button id="quit" class="primary" type="button" autofocus>Quit Now</button>
       </div>
     </main>
@@ -749,6 +831,43 @@ export function buildQuitConfirmationHtml(options: {
         countdown.textContent = "Auto-quit cancelled. Choose an option below.";
         send("countdown-cancel");
       }
+      window.__pwragentUpdateQuitSnapshot = (snapshot) => {
+        document.getElementById("blocker-count").textContent = snapshot.countText;
+        document.getElementById("blocker-impact").textContent = snapshot.impactText;
+        const currentList = document.getElementById("list");
+        if (snapshot.totalCount === 0) {
+          if (timer) {
+            clearInterval(timer);
+            timer = undefined;
+          }
+          const finishedAt = new Date().toLocaleTimeString([], {
+            hour: "numeric",
+            minute: "2-digit",
+            second: "2-digit",
+          });
+          for (const row of document.querySelectorAll(".row")) {
+            row.classList.add("row--finished");
+            let detail = row.querySelector(".row__detail");
+            if (!detail) {
+              detail = document.createElement("span");
+              detail.className = "row__detail";
+              row.append(detail);
+            }
+            detail.textContent = "Finished " + finishedAt;
+          }
+          countdown.textContent = "All running work finished. Quitting now...";
+          return;
+        }
+        if (snapshot.listHtml) {
+          if (currentList) {
+            currentList.outerHTML = snapshot.listHtml;
+          } else {
+            countdown.insertAdjacentHTML("beforebegin", snapshot.listHtml);
+          }
+        } else {
+          currentList?.remove();
+        }
+      };
       render();
       timer = setInterval(() => {
         remaining -= 1;
@@ -775,6 +894,10 @@ export function buildQuitConfirmationHtml(options: {
 
       document.getElementById("stay").addEventListener("click", () => send("manual-cancel"));
       document.getElementById("close").addEventListener("click", () => send("manual-cancel"));
+      document.getElementById("wait").addEventListener("click", () => {
+        cancelCountdown();
+        countdown.textContent = "Waiting for running work to finish...";
+      });
       document.getElementById("quit").addEventListener("click", () => send("manual-confirm"));
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape") send("manual-cancel");
@@ -789,8 +912,56 @@ export function buildQuitConfirmationHtml(options: {
 </html>`;
 }
 
+function buildQuitDialogUpdatePayload(
+  snapshot: QuitConfirmationDialogSnapshot,
+  navigationPrefix: string,
+): {
+  countText: string;
+  impactText: string;
+  listHtml: string;
+  totalCount: number;
+} {
+  const counts = {
+    inProgressThreadCount: snapshot.inProgressThreadCount,
+    automationRunCount: snapshot.automationRunCount,
+    terminalSessionCount: snapshot.terminalSessionCount,
+    actionRunCount: snapshot.actionRunCount,
+  };
+  const totalCount =
+    counts.inProgressThreadCount
+    + counts.automationRunCount
+    + counts.terminalSessionCount
+    + counts.actionRunCount;
+  return {
+    countText:
+      totalCount === 0
+        ? "All running work finished."
+        : describeQuitBlockers(counts),
+    impactText:
+      totalCount === 0
+        ? "PwrAgent can now quit without interrupting it."
+        : describeQuitImpact({
+            ...counts,
+            hasItems: snapshot.items.length > 0,
+          }),
+    listHtml: buildQuitItemListHtml({
+      items: snapshot.items,
+      navigationPrefix,
+    }),
+    totalCount,
+  };
+}
+
+function serializeForJavaScript(value: unknown): string {
+  return JSON.stringify(value)
+    .replaceAll("<", "\\u003c")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
+}
+
 function describeQuitBlockers(options: {
   inProgressThreadCount: number;
+  automationRunCount?: number;
   terminalSessionCount: number;
   actionRunCount: number;
 }): string {
@@ -799,6 +970,11 @@ function describeQuitBlockers(options: {
     parts.push("1 thread has an agent turn in progress");
   } else if (options.inProgressThreadCount > 1) {
     parts.push(`${options.inProgressThreadCount} threads have agent turns in progress`);
+  }
+  if (options.automationRunCount === 1) {
+    parts.push("1 automation is running");
+  } else if ((options.automationRunCount ?? 0) > 1) {
+    parts.push(`${options.automationRunCount} automations are running`);
   }
   if (options.terminalSessionCount === 1) {
     parts.push("1 integrated terminal is running");
@@ -822,6 +998,7 @@ function describeQuitBlockers(options: {
 
 function describeQuitImpact(options: {
   inProgressThreadCount: number;
+  automationRunCount?: number;
   terminalSessionCount: number;
   actionRunCount: number;
   hasItems: boolean;
@@ -829,6 +1006,9 @@ function describeQuitImpact(options: {
   const consequences: string[] = [];
   if (options.inProgressThreadCount > 0) {
     consequences.push("those turns will be interrupted");
+  }
+  if ((options.automationRunCount ?? 0) > 0) {
+    consequences.push("automation runs will be interrupted");
   }
   if (options.terminalSessionCount > 0) {
     consequences.push("terminal processes will be killed");

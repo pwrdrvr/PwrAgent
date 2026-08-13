@@ -455,9 +455,71 @@ describe("createQuitManager", () => {
       expect.objectContaining({ error: "app-server unavailable" }),
     );
   });
+
+  it("resumes automation dispatch when the operator stays open", async () => {
+    const { createQuitManager } = await import("../quit-manager");
+    const resumeDispatch = vi.fn(async () => undefined);
+    const quiesceAutomationDispatch = vi.fn(() => resumeDispatch);
+    const manager = createQuitManager({
+      confirm: vi.fn(async () => "manual-cancel" as const),
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () => ({
+        count: 1,
+        terminalSessionCount: 0,
+        terminalThreadKeys: [],
+        threadIds: [],
+        automationRunCount: 1,
+        actionRunCount: 0,
+        items: [],
+      }),
+      quiesceAutomationDispatch,
+      log: {},
+      performQuit: vi.fn(),
+    });
+
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(false);
+
+    expect(quiesceAutomationDispatch).toHaveBeenCalledTimes(1);
+    expect(resumeDispatch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("buildQuitBlockerSnapshot", () => {
+  it("collapses an ephemeral automation execution onto its named Agent run", async () => {
+    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+
+    const snapshot = buildQuitBlockerSnapshot({
+      inProgressThreads: {
+        count: 1,
+        threadIds: [],
+        automationRuns: [
+          {
+            agentThreadId: "agent-thread-1",
+            automationName: "Search Bots",
+            automationRunId: "automation-run:1",
+            backend: "codex",
+            startedAt: new Date("2026-08-12T20:29:31-04:00").getTime(),
+          },
+        ],
+      },
+      terminalSessions: { count: 0, threads: [] },
+    });
+
+    expect(snapshot.count).toBe(1);
+    expect(snapshot.threadIds).toEqual([]);
+    expect(snapshot.automationRunCount).toBe(1);
+    expect(snapshot.items).toEqual([
+      expect.objectContaining({
+        kind: "automation",
+        backend: "codex",
+        threadId: "agent-thread-1",
+        threadKey: "codex:agent-thread-1",
+        title: "Search Bots",
+        detail: expect.stringMatching(/^Started /),
+      }),
+    ]);
+  });
+
   it("turns every kind of running work into a linkable item", async () => {
     const { buildQuitBlockerSnapshot } = await import("../quit-manager");
 

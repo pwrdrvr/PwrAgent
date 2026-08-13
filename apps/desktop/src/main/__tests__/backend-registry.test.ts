@@ -21793,6 +21793,19 @@ command = "pnpm dev"
         },
       },
     ]);
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [],
+      automationRuns: [
+        {
+          agentThreadId: "agent-thread-1",
+          automationName: "Check email",
+          automationRunId: "run-1",
+          backend: "codex",
+          startedAt: expect.any(Number),
+        },
+      ],
+    });
 
     await codexClient.emit({
       method: "turn/completed",
@@ -21847,8 +21860,59 @@ command = "pnpm dev"
         },
       },
     ]);
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
 
     unsubscribe();
+    await registry.close();
+  });
+
+  it("reports duplicate executions of one automation run as one quit blocker", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startTurnResults: [
+        { threadId: "ephemeral-1", turnId: "turn-1" },
+        { threadId: "ephemeral-2", turnId: "turn-2" },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await Promise.all([
+      registry.startAutomationHeadlessTurn({
+        backend: "codex",
+        agentThreadId: "agent-thread-1",
+        automationName: "Search Bots",
+        automationRunId: "run-1",
+        input: [{ type: "text", text: "Run the task." }],
+      }),
+      registry.startAutomationHeadlessTurn({
+        backend: "codex",
+        agentThreadId: "agent-thread-1",
+        automationName: "Search Bots",
+        automationRunId: "run-1",
+        input: [{ type: "text", text: "Run the task." }],
+      }),
+    ]);
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [],
+      automationRuns: [
+        {
+          agentThreadId: "agent-thread-1",
+          automationName: "Search Bots",
+          automationRunId: "run-1",
+          backend: "codex",
+          startedAt: expect.any(Number),
+        },
+      ],
+    });
+
     await registry.close();
   });
 

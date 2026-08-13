@@ -61,8 +61,16 @@ export function throttleSkipMessage(droppedCount: number): string {
 export class AutomationScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  private dispatchPauseCount = 0;
   private readonly sessionStartedAt: number;
   private readonly coalesceWindows = new Map<string, InboundCoalesceWindow>();
+  /**
+   * A run can reach terminal state through both the captured assistant-final
+   * fast path and the later backend lifecycle notification. Those handlers may
+   * race while releasing the same automation lane. Claim the queued successor
+   * before its async submission so one durable run never launches twice.
+   */
+  private readonly startingPendingRunIds = new Set<string>();
 
   constructor(private readonly options: AutomationSchedulerOptions) {
     this.sessionStartedAt = this.now();
@@ -87,6 +95,28 @@ export class AutomationScheduler {
       this.clearTimer(open.timer);
     }
     this.coalesceWindows.clear();
+  }
+
+  /**
+   * Hold new launches while the operator decides whether to quit. Existing
+   * turns continue, and triggers still become durable queued runs so staying
+   * open can resume them without losing inbound work.
+   */
+  quiesceDispatch(): () => Promise<void> {
+    this.dispatchPauseCount += 1;
+    if (this.timer) {
+      this.clearTimer(this.timer);
+      this.timer = null;
+    }
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      this.dispatchPauseCount = Math.max(0, this.dispatchPauseCount - 1);
+      if (this.dispatchPauseCount > 0) return;
+      this.scheduleNextTimer();
+      await this.resumePendingRuns();
+    };
   }
 
   async evaluateDueAutomations(): Promise<void> {
@@ -568,6 +598,20 @@ export class AutomationScheduler {
     const run = this.options.store.getRun(params.runId);
     if (!run) return undefined;
 
+    if (this.dispatchPauseCount > 0) {
+      const queued = this.options.store.markRunQueued({
+        runId: run.id,
+        queueEntryId: run.queueEntryId ?? buildLaneQueueEntryId(run.id),
+        queuedAt: params.now,
+        now: params.now,
+      });
+      return buildLaneQueuedResult({
+        automation: params.automation,
+        run: queued ?? run,
+        position: 1,
+      });
+    }
+
     try {
       const gateResult = await this.runGateIfNeeded({
         automation: params.automation,
@@ -738,17 +782,33 @@ export class AutomationScheduler {
     automationId: string | undefined,
     now: number,
   ): Promise<void> {
-    if (!automationId) return;
+    if (!automationId || this.dispatchPauseCount > 0) return;
     const automation = this.options.store.getAutomation(automationId);
     if (!automation) return;
     const pending = this.options.store.findPendingRunForAutomation(automationId);
     if (!pending) return;
-    await this.submitRun({
-      automation,
-      runId: pending.id,
-      windows: pending.scheduledWindows,
-      now,
-    });
+    if (this.startingPendingRunIds.has(pending.id)) return;
+    this.startingPendingRunIds.add(pending.id);
+    try {
+      await this.submitRun({
+        automation,
+        runId: pending.id,
+        windows: pending.scheduledWindows,
+        now,
+      });
+    } finally {
+      this.startingPendingRunIds.delete(pending.id);
+    }
+  }
+
+  private async resumePendingRuns(): Promise<void> {
+    if (!this.running || this.dispatchPauseCount > 0) return;
+    const now = this.now();
+    for (const automation of this.options.store.listAutomations()) {
+      const active = this.options.store.findActiveRunForAutomation(automation.id);
+      if (active?.status === "running") continue;
+      await this.startNextPendingRun(automation.id, now);
+    }
   }
 
   private scheduleNextTimer(): void {
