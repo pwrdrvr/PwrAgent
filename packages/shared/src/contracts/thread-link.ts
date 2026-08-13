@@ -12,7 +12,7 @@ import type {
  * PwrAgent's in-app link scheme.
  *
  * ```
- * pwragent://thread/<threadId>[?backend=<kind>][&instanceId=<id>][&profile=<name>]
+ * pwragent://thread/<threadId>[?backend=<kind>][&instanceId=<id>][&messageId=<id>][&profile=<name>]
  * ```
  *
  * The scheme is NAVIGATION-ONLY and must stay that way. It never grows action
@@ -52,6 +52,12 @@ export type ThreadLinkRef = {
    */
   instanceId?: FederationInstanceId;
   /**
+   * Optional transcript message to reveal after opening the thread. This is
+   * still navigation-only: it identifies existing content and never causes an
+   * action in the target thread.
+   */
+  messageId?: string;
+  /**
    * Optional profile name. Only meaningful for links that travel outside the
    * app. A link naming a profile other than the running one reports the
    * mismatch rather than silently switching profiles.
@@ -79,6 +85,9 @@ export function buildThreadUrl(ref: ThreadLinkRef): string {
   }
   if (ref.instanceId) {
     query.push(`instanceId=${encodeURIComponent(ref.instanceId)}`);
+  }
+  if (ref.messageId) {
+    query.push(`messageId=${encodeURIComponent(ref.messageId)}`);
   }
   if (ref.profile) {
     query.push(`profile=${encodeURIComponent(ref.profile)}`);
@@ -123,6 +132,7 @@ export function parseThreadUrl(value: string): ThreadLinkRef | undefined {
   const params = parseQuery(query);
   const backend = params.get("backend");
   const instanceId = params.get("instanceId");
+  const messageId = params.get("messageId");
   const profile = params.get("profile");
 
   return {
@@ -130,6 +140,7 @@ export function parseThreadUrl(value: string): ThreadLinkRef | undefined {
     backend: backend && isAppServerBackendKind(backend) ? backend : undefined,
     instanceId:
       instanceId && isFederationInstanceId(instanceId) ? instanceId : undefined,
+    messageId: messageId && isThreadLinkId(messageId) ? messageId : undefined,
     profile: profile || undefined,
   };
 }

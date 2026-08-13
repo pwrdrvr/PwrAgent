@@ -436,6 +436,8 @@ export type ThreadReadMessageSummary = Pick<
   "id" | "role" | "origin" | "createdAt"
 > & {
   text: string;
+  messageUrl: string;
+  messageLink: string;
   truncated?: boolean;
 };
 
@@ -449,6 +451,8 @@ export type ThreadReadEntrySummary =
       createdAt?: number;
       phase?: "commentary" | "final";
       turn?: AppServerThreadTurnMetadata;
+      messageUrl: string;
+      messageLink: string;
       truncated?: boolean;
     }
   | {
@@ -505,6 +509,9 @@ export type ThreadReadResult = {
   threadId: ThreadIdentifier;
   instanceId?: FederationInstanceId;
   instanceLabel?: string;
+  title?: string;
+  threadUrl: string;
+  threadLink: string;
   limit: number;
   before?: string;
   maxCharsPerEntry: number;

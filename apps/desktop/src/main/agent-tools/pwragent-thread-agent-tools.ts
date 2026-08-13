@@ -131,7 +131,7 @@ function descriptionForOperation(
     case "search_threads":
       return "Search known PwrAgent threads. By default, metadata search includes connected peers. Content and advanced filters work only on the local instance. Omit query to list recent candidates. Use instanceId for one peer or includeRemote=false for local metadata only. Results can include pending handoffs and workspace moves. Do not retry a pending operation.";
     case "read_thread":
-      return "Read a bounded page of transcript and activity from another known PwrAgent thread. Use search_threads when threadId is unknown. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner.";
+      return "Read a bounded page of transcript and activity from another known PwrAgent thread. Use search_threads when threadId is unknown. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. Return threadLink or a messageLink verbatim when referring to what was read.";
     case "get_thread_status":
       return "Read compact status and metadata for a PwrAgent thread. Results include linked directories, repository groups, pull requests, PR automation, pending handoffs, and workspace moves. Omit backend and threadId for the current thread. Pass instanceId for a known remote thread. Follow prAutomation.guidance. If Auto-fix PR is active, do not poll CI or create a monitor.";
     case "attach_thread_pull_request":
