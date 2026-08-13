@@ -5910,14 +5910,21 @@ describe("Sidebar directory pinning", () => {
     expect(onOpenLaunchpad).toHaveBeenCalledTimes(1);
     expect(onCreateThreadOnFederationTarget).not.toHaveBeenCalled();
 
-    await clickElement(
-      screen.getByRole("button", {
-        name: "Choose a machine for a new thread in ProjectA",
-      }),
+    const chevron = screen.getByRole("button", {
+      name: "Start a new thread on another machine (from ProjectA)",
+    });
+    // The group hover treatment is gated on this modifier, so that it never
+    // applies to a lone launchpad button.
+    expect(chevron.parentElement).toHaveClass(
+      "directory-row__launchpad-cluster--split",
     );
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
+    await clickElement(chevron);
+    expect(chevron).toHaveAttribute("aria-expanded", "true");
     await clickElement(
       await screen.findByRole("menuitem", { name: "Studio Mac / work" }),
     );
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
 
     expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("studio-work");
     // Opening a remote launchpad is not also a local launchpad open.
@@ -5950,7 +5957,7 @@ describe("Sidebar directory pinning", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
-        name: "Choose a machine for a new thread in ProjectA",
+        name: "Start a new thread on another machine (from ProjectA)",
       }),
     ).not.toBeInTheDocument();
   });
@@ -5958,16 +5965,20 @@ describe("Sidebar directory pinning", () => {
   it("omits the chevron entirely when the federation offers no machines", () => {
     renderSidebar([projectADirectory], { newThreadFederationTargets: [] });
 
-    expect(
-      screen.getByRole("button", {
-        name: "Open new thread launchpad for ProjectA",
-      }),
-    ).toBeInTheDocument();
+    const launchpad = screen.getByRole("button", {
+      name: "Open new thread launchpad for ProjectA",
+    });
+    expect(launchpad).toBeInTheDocument();
     expect(
       screen.queryByRole("button", {
-        name: "Choose a machine for a new thread in ProjectA",
+        name: "Start a new thread on another machine (from ProjectA)",
       }),
     ).not.toBeInTheDocument();
+    // Without a second half there is no group to express, and the group tint
+    // would only composite under the button's own hover pill and darken it.
+    expect(launchpad.parentElement).not.toHaveClass(
+      "directory-row__launchpad-cluster--split",
+    );
   });
 
   it("opens a context menu offering Pin Directory on an unpinned row", async () => {

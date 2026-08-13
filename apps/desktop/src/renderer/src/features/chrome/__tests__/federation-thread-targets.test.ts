@@ -92,6 +92,27 @@ describe("buildFederationThreadTargets", () => {
     expect(targets.map((target) => target.instanceId)).toEqual(["b"]);
   });
 
+  it("breaks label ties by instance id so health order cannot reshuffle rows", () => {
+    // Same machine label, neither advertising a profile: the labels are equal,
+    // so without a tiebreak the order would follow health order and could flip
+    // between reads while the menu is open.
+    const forward = buildFederationThreadTargets(
+      health([
+        peer({ id: "b", label: "Studio Mac" }),
+        peer({ id: "a", label: "Studio Mac" }),
+      ]),
+    );
+    const reversed = buildFederationThreadTargets(
+      health([
+        peer({ id: "a", label: "Studio Mac" }),
+        peer({ id: "b", label: "Studio Mac" }),
+      ]),
+    );
+
+    expect(forward.map((target) => target.instanceId)).toEqual(["a", "b"]);
+    expect(reversed.map((target) => target.instanceId)).toEqual(["a", "b"]);
+  });
+
   it("keeps the profile suffix when a peer shares this machine's label", () => {
     const targets = buildFederationThreadTargets(
       health([peer({ id: "a", label: "Studio Mac", profileName: "default" })], {

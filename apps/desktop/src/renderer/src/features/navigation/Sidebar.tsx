@@ -408,6 +408,7 @@ export function Sidebar(props: SidebarProps) {
     | {
         requestedPosition: ThreadContextMenuPosition;
         position?: { x: number; y: number };
+        directoryKey: string;
         directoryLabel: string;
       }
     | undefined
@@ -846,6 +847,15 @@ export function Sidebar(props: SidebarProps) {
   }, [directoryContextMenu]);
 
   useEffect(() => {
+    if (federationThreadTargets.length === 0) {
+      // The menu is also gated on this at render time, so without clearing the
+      // state a peer reconnecting would pop the menu back open at its old
+      // anchor with no operator input.
+      setDirectoryTargetMenu(undefined);
+    }
+  }, [federationThreadTargets.length]);
+
+  useEffect(() => {
     if (!directoryTargetMenu) {
       return;
     }
@@ -1149,9 +1159,11 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     setContextMenu(undefined);
     setDirectoryContextMenu(undefined);
+    setProfileMenuOpen(false);
     setRenameThread(undefined);
     setDirectoryTargetMenu({
       requestedPosition: position,
+      directoryKey: directory.key,
       directoryLabel: directory.label,
     });
   };
@@ -1868,6 +1880,9 @@ export function Sidebar(props: SidebarProps) {
                   ? openDirectoryTargetMenu
                   : undefined
               }
+              openFederationTargetMenuDirectoryKey={
+                directoryTargetMenu?.directoryKey
+              }
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
               onRevealSelectedThreadComplete={
@@ -2443,7 +2458,7 @@ export function Sidebar(props: SidebarProps) {
           ref={directoryTargetMenuRef}
           className="new-thread-menu__card new-thread-menu__card--anchored"
           role="menu"
-          aria-label={`New thread targets for ${directoryTargetMenu.directoryLabel}`}
+          aria-label="Start a new thread on another machine"
           style={{
             left:
               directoryTargetMenu.position?.x ??

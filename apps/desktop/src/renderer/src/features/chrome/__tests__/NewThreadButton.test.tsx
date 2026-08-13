@@ -171,11 +171,15 @@ describe("NewThreadButton", () => {
         .parentElement as HTMLElement,
     );
 
+    // aria-disabled, not `disabled` — an unreachable machine has to stay
+    // focusable or keyboard users never learn it exists, which is the whole
+    // reason it is listed rather than filtered out.
     const offline = await screen.findByRole("menuitem", { name: /Studio Mac/ });
-    expect(offline).toBeDisabled();
+    expect(offline).toHaveAttribute("aria-disabled", "true");
+    expect(offline).not.toBeDisabled();
     expect(offline).toHaveTextContent("Offline");
     const unsupported = screen.getByRole("menuitem", { name: /Attic Mini/ });
-    expect(unsupported).toBeDisabled();
+    expect(unsupported).toHaveAttribute("aria-disabled", "true");
     expect(unsupported).toHaveTextContent("Unsupported");
 
     fireEvent.click(offline);

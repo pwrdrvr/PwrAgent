@@ -105,6 +105,8 @@ type DirectoriesListProps = {
     directory: NavigationDirectorySummary,
     position: { x: number; y: number; anchorTop?: number },
   ) => void;
+  /** Directory key whose federation target menu is currently open, if any. */
+  openFederationTargetMenuDirectoryKey?: string;
   onRevealSelectedThreadComplete?: (request: number) => void;
   onSelectThread: (
     thread: NavigationThreadSummary,
@@ -1627,7 +1629,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
           {/* Guarded as a unit: an unconfigured row has no local launchpad, so
               it gets no machine chevron either. */}
           {directoryUnconfigured ? null : (
-            <span className="directory-row__launchpad-cluster">
+            <span
+              className={`directory-row__launchpad-cluster${
+                props.onOpenFederationTargetMenu
+                  ? " directory-row__launchpad-cluster--split"
+                  : ""
+              }`}
+            >
               <button
                 aria-label={`Open new thread launchpad for ${directory.label}`}
                 className={`directory-row__launchpad-button${
@@ -1642,8 +1650,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
               </button>
               {props.onOpenFederationTargetMenu ? (
                 <button
-                  aria-label={`Choose a machine for a new thread in ${directory.label}`}
+                  // Deliberately not "...for a new thread in <directory>": the
+                  // selected machine opens its OWN launchpad with its own
+                  // projects, so the local directory does not scope the result.
+                  // It stays in the name only as row context, which also keeps
+                  // the name unique per row for locators.
+                  aria-label={`Start a new thread on another machine (from ${directory.label})`}
                   aria-haspopup="menu"
+                  aria-expanded={
+                    props.openFederationTargetMenuDirectoryKey === directory.key
+                  }
                   className="directory-row__launchpad-targets-button"
                   type="button"
                   onClick={(event) => {

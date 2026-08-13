@@ -393,7 +393,7 @@ describe("App", () => {
     // Federation already keeps such a peer visible with a disabled action.
     expect(
       await screen.findByRole("menuitem", { name: /Read-only peer/ }),
-    ).toBeDisabled();
+    ).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(await screen.findByRole("menuitem", {
       name: "Studio Mac / work",
     }));

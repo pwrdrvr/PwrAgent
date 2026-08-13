@@ -2,9 +2,12 @@ import { useId, type ReactElement } from "react";
 import {
   describeFederationThreadTargetAvailability,
   type FederationThreadTarget,
+  type FederationThreadTargetAvailability,
 } from "./federation-thread-targets";
 
-const AVAILABILITY_STATE_LABEL: Record<string, string> = {
+const AVAILABILITY_STATE_LABEL: Partial<
+  Record<FederationThreadTargetAvailability, string>
+> = {
   offline: "Offline",
   unsupported: "Unsupported",
 };
@@ -36,17 +39,28 @@ export function FederationTargetMenuSection(props: {
       </div>
       {props.targets.map((target) => {
         const stateLabel = AVAILABILITY_STATE_LABEL[target.availability];
+        const unavailable = target.availability !== "available";
         return (
           <button
             key={target.instanceId}
             type="button"
             role="menuitem"
             className="new-thread-menu__item new-thread-menu__item--target"
-            disabled={target.availability !== "available"}
+            // `aria-disabled`, not `disabled`: a disabled button leaves the tab
+            // order, and this menu has no arrow-key navigation, so the real
+            // `disabled` attribute would hide unreachable machines from
+            // keyboard and screen-reader users entirely — the opposite of why
+            // they are listed instead of filtered out.
+            aria-disabled={unavailable || undefined}
             title={describeFederationThreadTargetAvailability(
               target.availability,
             )}
-            onClick={() => props.onSelect(target.instanceId)}
+            onClick={() => {
+              if (unavailable) {
+                return;
+              }
+              props.onSelect(target.instanceId);
+            }}
           >
             <span
               aria-hidden="true"

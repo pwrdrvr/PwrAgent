@@ -692,9 +692,24 @@ textarea,
   outline: none;
 }
 
-.new-thread-menu__item:disabled {
+.new-thread-menu__item:disabled,
+.new-thread-menu__item[aria-disabled="true"] {
   color: var(--text-muted);
   cursor: default;
+}
+
+/* `aria-disabled` keeps the row focusable, so it still matches the accent
+   hover/focus rule above. Restate the muted treatment at higher specificity
+   so an unreachable machine never looks actionable — but keep a surface for
+   focus, or a keyboard user loses their place in the list. */
+.new-thread-menu__item[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.new-thread-menu__item[aria-disabled="true"]:focus-visible {
+  background: var(--surface-overlay-soft);
+  color: var(--text-muted);
 }
 
 .new-thread-menu__separator {
@@ -5421,13 +5436,19 @@ textarea,
 /* Hovering either half tints the whole cluster and warms both glyphs, so the
    pair reads as one control with two actions rather than two unrelated icons.
    Deliberately weaker than the per-half hover below — the group tint says
-   "these belong together", the strong pill says "this is the one that fires". */
-.directory-row__launchpad-cluster:hover {
+   "these belong together", the strong pill says "this is the one that fires".
+
+   Gated on the `--split` modifier, not on :has(): the cluster also wraps a
+   lone launchpad button on an install with no federation peers, where the
+   tint would just composite under the per-half pill and darken it for no
+   reason. A :has() prefix would also outrank the per-half rule below and
+   invert which half looks active. */
+.directory-row__launchpad-cluster--split:hover {
   background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
-.directory-row__launchpad-cluster:hover .directory-row__launchpad-button,
-.directory-row__launchpad-cluster:hover .directory-row__launchpad-targets-button {
+.directory-row__launchpad-cluster--split:hover .directory-row__launchpad-button,
+.directory-row__launchpad-cluster--split:hover .directory-row__launchpad-targets-button {
   color: var(--accent);
 }
 
@@ -5461,7 +5482,7 @@ textarea,
 
 /* An unsent draft outranks the group tint: hovering the chevron must not dim
    the "you have a draft here" cue on its sibling. */
-.directory-row__launchpad-cluster:hover .directory-row__launchpad-button.has-draft {
+.directory-row__launchpad-cluster--split:hover .directory-row__launchpad-button.has-draft {
   color: var(--accent-bright);
 }
 

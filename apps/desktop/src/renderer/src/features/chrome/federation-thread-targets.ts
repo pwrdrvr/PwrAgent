@@ -59,10 +59,10 @@ function resolveAvailability(
  * that reorders under the pointer turns a misclick into a thread created on
  * the wrong machine.
  *
- * Revoked peers are dropped — they are dead entries, not offline ones — but
- * they still count toward label disambiguation inside
- * `formatFederationPeerDisplayLabel`, alongside the local instance, so a peer
- * sharing this machine's label keeps its profile suffix.
+ * Revoked peers are dropped — they are dead entries, not offline ones. They
+ * are still passed to `formatFederationPeerDisplayLabel`, but only because it
+ * filters them out itself; what the local instance's presence in that list
+ * buys us is a peer sharing THIS machine's label keeping its profile suffix.
  */
 export function buildFederationThreadTargets(
   health: FederationHealthStatus | undefined,
@@ -83,7 +83,15 @@ export function buildFederationThreadTargets(
       label: formatFederationPeerDisplayLabel(peer, visibleInstances),
       availability: resolveAvailability(peer),
     }))
-    .sort((left, right) => left.label.localeCompare(right.label));
+    .sort(
+      (left, right) =>
+        left.label.localeCompare(right.label)
+        // Two peers can share a display label — same machine, neither
+        // advertising a profile. Without a tiebreak their order falls back to
+        // health order, which is exactly the under-the-pointer reshuffle this
+        // sort exists to prevent.
+        || left.instanceId.localeCompare(right.instanceId),
+    );
 }
 
 /** Tooltip/title text explaining a row the operator cannot click. */
