@@ -13372,6 +13372,71 @@ describe("Composer", () => {
     ).toHaveAttribute("aria-selected", "true");
   });
 
+  it("keeps the launchpad branch menu inside the composer settings row", () => {
+    const rect = (left: number, right: number): DOMRect => ({
+      bottom: 800,
+      height: 400,
+      left,
+      right,
+      top: 400,
+      width: right - left,
+      x: left,
+      y: 400,
+      toJSON: () => ({}),
+    });
+    const bounds = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function getBoundingClientRect(this: HTMLElement) {
+        if (this.classList.contains("composer__setup")) {
+          return rect(408, 996);
+        }
+        if (this.classList.contains("branch-picker__menu")) {
+          return rect(188, 628);
+        }
+        return rect(0, 0);
+      });
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "main",
+            branches: ["main", "releases/1.0"],
+            syncState: "untracked",
+          },
+        }}
+        launchpad={{
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        skills={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText("Base branch"));
+
+    expect(screen.getByRole("listbox").parentElement).toHaveStyle({
+      transform: "translateX(220px)",
+    });
+    bounds.mockRestore();
+  });
+
   it("shows a sticky toast when worktree branch status is unavailable", async () => {
     const onShowNotice = vi.fn();
     render(

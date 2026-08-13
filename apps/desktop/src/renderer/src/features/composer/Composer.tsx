@@ -2128,9 +2128,10 @@ function BranchPicker(props: {
   }, [open]);
 
   // The popover is anchored to the trigger, which sits near the right edge of
-  // the composer toolbar — keep it inside the viewport by nudging it back in
-  // when it would overflow either gutter. Runs before paint so there's no
-  // visible jump, and re-clamps on resize while open.
+  // the composer toolbar. In the launchpad, keep it inside the settings row so
+  // it cannot extend beneath the thread sidebar; dialog uses fall back to the
+  // viewport gutters. Runs before paint so there's no visible jump, and
+  // re-clamps on resize while open.
   useLayoutEffect(() => {
     if (!open) {
       setMenuShift(0);
@@ -2143,8 +2144,15 @@ function BranchPicker(props: {
       }
       const gutter = 12;
       const rect = menu.getBoundingClientRect();
-      const overflowRight = rect.right - (window.innerWidth - gutter);
-      const overflowLeft = gutter - rect.left;
+      const composerSetup = menu.closest<HTMLElement>(".composer__setup");
+      const composerBounds = composerSetup?.getBoundingClientRect();
+      const leftBoundary = Math.max(gutter, composerBounds?.left ?? gutter);
+      const rightBoundary = Math.min(
+        window.innerWidth - gutter,
+        composerBounds?.right ?? window.innerWidth - gutter,
+      );
+      const overflowRight = rect.right - rightBoundary;
+      const overflowLeft = leftBoundary - rect.left;
       setMenuShift((current) => {
         if (overflowRight > 0) {
           return current - overflowRight;
