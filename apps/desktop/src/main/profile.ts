@@ -500,7 +500,7 @@ export function ensureBootstrapProfileDir(options?: {
   const profileDir = resolveBootstrapProfileDir(options);
   const created = !fs.existsSync(profileDir);
   fs.mkdirSync(path.join(profileDir, "state"), { recursive: true });
-  writeInitialOnboardingMarker(path.join(profileDir, "config.toml"));
+  writeInitialBootstrapConfig(path.join(profileDir, "config.toml"));
   return { profileDir, created };
 }
 
@@ -545,6 +545,39 @@ function writeInitialOnboardingMarker(configPath: string): void {
     return;
   }
   fs.writeFileSync(configPath, "[onboarding]\ncompleted = false\n", "utf8");
+}
+
+/**
+ * Bootstrap is the only profile state where ACP providers start disabled.
+ * Existing and directly-created profiles retain the historical default-on
+ * behavior; wizard-created profiles inherit the explicit choices copied from
+ * this throwaway config at graduation.
+ */
+function writeInitialBootstrapConfig(configPath: string): void {
+  if (fs.existsSync(configPath)) {
+    return;
+  }
+  fs.writeFileSync(
+    configPath,
+    [
+      "[onboarding]",
+      "completed = false",
+      "",
+      "[acp_agents.gemini]",
+      "enabled = false",
+      "",
+      "[acp_agents.grok]",
+      "enabled = false",
+      "",
+      "[acp_agents.kimi]",
+      "enabled = false",
+      "",
+      "[acp_agents.qwen]",
+      "enabled = false",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
 }
 
 export function setDefaultProfileName(

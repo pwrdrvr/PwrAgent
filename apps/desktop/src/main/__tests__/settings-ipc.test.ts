@@ -857,9 +857,32 @@ describe("settings ipc", () => {
             entry.installed === false && entry.installStatus === "not-installed",
         ),
       ).toBe(true);
+      const discoveredOnly = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: true, probeCapabilities: false },
+      )) as { entries?: unknown[] } | undefined;
+      expect(discoveredOnly?.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            backendId: "acp:gemini",
+            installed: true,
+          }),
+        ]),
+      );
+      expect(
+        acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities,
+      ).not.toHaveBeenCalled();
+
+      const { applyDesktopSettingsPatch } = await import(
+        "../settings/desktop-config"
+      );
+      applyDesktopSettingsPatch(
+        path.join(tempRoot, ".bootstrap", "config.toml"),
+        { acpAgents: { gemini: { enabled: true } } },
+      );
       const refreshed = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
         {},
-        { refresh: true },
+        { refresh: true, force: true, registryIds: ["gemini"] },
       )) as { entries?: unknown[] } | undefined;
       expect(refreshed?.entries).toEqual(
         expect.arrayContaining([
@@ -892,6 +915,11 @@ describe("settings ipc", () => {
             "acp-discovery-workspace",
           ),
         }),
+      );
+      expect(
+        localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
+      ).toHaveBeenLastCalledWith(
+        expect.objectContaining({ enabledRegistryIds: ["gemini"] }),
       );
       expect(
         fs.existsSync(path.join(tempRoot, "profiles", "default")),

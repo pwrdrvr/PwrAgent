@@ -384,7 +384,7 @@ describe("PwrAgent profiles", () => {
       );
     });
 
-    it("ensureBootstrapProfileDir seeds an [onboarding] marker like a real profile", () => {
+    it("seeds onboarding with ACP providers disabled until the operator enables them", () => {
       const { env, root } = createRoot();
       const result = ensureBootstrapProfileDir({ env });
       expect(result.created).toBe(true);
@@ -397,6 +397,11 @@ describe("PwrAgent profiles", () => {
       // like a fresh real profile to the wizard's perspective.
       expect(contents).toContain("[onboarding]");
       expect(contents).toContain("completed = false");
+      expect(contents).toContain("[acp_agents.gemini]");
+      expect(contents).toContain("[acp_agents.grok]");
+      expect(contents).toContain("[acp_agents.kimi]");
+      expect(contents).toContain("[acp_agents.qwen]");
+      expect(contents.match(/enabled = false/g)).toHaveLength(4);
       expect(fs.existsSync(path.join(root, ".bootstrap", "state"))).toBe(true);
     });
 

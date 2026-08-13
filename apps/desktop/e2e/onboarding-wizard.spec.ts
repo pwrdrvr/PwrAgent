@@ -31,9 +31,14 @@ type FakeProviderName = (typeof fakeProviderNames)[number];
 
 function fakeProviderScript(): string {
   return `#!${process.execPath}
+const fs = require("node:fs");
 const path = require("node:path");
 const name = path.basename(process.argv[1]).replace(/\\.(?:cmd|c?js)$/i, "");
 const args = process.argv.slice(2);
+const execLog = process.env.PWRAGENT_E2E_PROVIDER_EXEC_LOG;
+if (execLog) {
+  fs.appendFileSync(execLog, JSON.stringify({ name, args }) + "\\n");
+}
 
 if (args.includes("--version")) {
   console.log(name + " 999.0.0");
@@ -125,6 +130,7 @@ async function launchWizardWithFakeProviders(
   const homeRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "pwragent-provider-discovery-e2e-"),
   );
+  const execLogPath = path.join(homeRoot, "provider-exec.jsonl");
   const customBin = path.join(homeRoot, ".bin");
   const commands =
     source === "path"
@@ -156,11 +162,12 @@ async function launchWizardWithFakeProviders(
       requiresReplayDriver: false,
       env: {
         PATH: discoveryPath,
+        PWRAGENT_E2E_PROVIDER_EXEC_LOG: execLogPath,
         PWRAGENT_CODEX_COMMAND: undefined,
         SHELL: process.platform === "darwin" ? "/bin/zsh" : "/bin/bash",
       },
     });
-    return { app, commands };
+    return { app, commands, execLogPath };
   } catch (error) {
     fs.rmSync(homeRoot, { recursive: true, force: true });
     throw error;
@@ -704,6 +711,37 @@ test.describe("Onboarding wizard", () => {
         ),
       ).toBeVisible();
       await expect(app.window.getByText(/xAI API key/i)).toHaveCount(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("entering AI Providers does not launch Gemini before explicit login", async () => {
+    test.skip(process.platform === "win32", "Unix executable discovery only");
+    const { app, execLogPath } = await launchWizardWithFakeProviders("path");
+    try {
+      await app.window.getByRole("button", { name: /Get started/i }).click();
+      await app.window.getByRole("button", { name: /^Continue/i }).click();
+      await expect(
+        app.window.getByRole("tab", { name: /Gemini CLI Installed/i }),
+      ).toBeVisible({ timeout: 20_000 });
+
+      const executions = fs
+        .readFileSync(execLogPath, "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as {
+          name: string;
+          args: string[];
+        });
+      expect(executions.some((execution) => execution.name === "gemini")).toBe(true);
+      expect(
+        executions.some(
+          (execution) =>
+            execution.name === "gemini" && execution.args.includes("--acp"),
+        ),
+      ).toBe(false);
     } finally {
       await app.close();
     }
