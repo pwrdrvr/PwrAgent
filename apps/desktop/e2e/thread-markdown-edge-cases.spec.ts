@@ -18,6 +18,18 @@ async function expectVisibleBlockGap(
   ).toBeGreaterThan(6);
 }
 
+async function pasteText(target: Locator, text: string): Promise<void> {
+  await target.evaluate((element, value) => {
+    const dataTransfer = new DataTransfer();
+    dataTransfer.setData("text/plain", value);
+    element.dispatchEvent(new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: dataTransfer,
+    }));
+  }, text);
+}
+
 test("renders markdown edge cases without breaking transcript boundaries", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
@@ -69,15 +81,10 @@ test("renders markdown edge cases without breaking transcript boundaries", async
       )
       .toBe("1");
 
-    await app.electronApp.evaluate(({ clipboard }) => {
-      clipboard.writeText("");
-    });
     await inlineCopyButton.click();
     await expect
-      .poll(async () =>
-        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
-      )
-      .toBe("inline code");
+      .poll(async () => await app.getClipboardSnapshot())
+      .toMatchObject({ text: "inline code" });
     await expect(inlineCopyButton).toHaveAccessibleName("Copied inline code");
 
     const markdownLiteralBlock = transcript.locator("pre code").filter({
@@ -104,24 +111,19 @@ test("renders markdown edge cases without breaking transcript boundaries", async
       transcript.locator(".transcript-message__paragraph", { hasText: "Regression test:" })
     ).toHaveCount(0);
 
-    await app.electronApp.evaluate(({ clipboard }) => {
-      clipboard.writeText("");
-    });
-
     await transcript
       .locator(".transcript-message__pre-wrap")
       .filter({ hasText: "Root cause:" })
       .getByRole("button", { name: "Copy code" })
       .click();
     await expect
-      .poll(async () =>
-        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
-      )
+      .poll(async () => (await app.getClipboardSnapshot())?.text)
       .toContain("8. Asserts `representedRecording` is the currently selected recording.");
 
     const reply = app.window.getByRole("textbox", { name: "Reply" });
     await reply.focus();
-    await app.window.keyboard.press(process.platform === "darwin" ? "Meta+V" : "Control+V");
+    const copiedCode = await app.getClipboardSnapshot();
+    await pasteText(reply, copiedCode?.text ?? "");
 
     const composerInput = app.window.getByTestId("composer-tiptap-input");
     const composerEditor = app.window.locator(".composer-tiptap-input__editor");
@@ -143,7 +145,7 @@ test("renders markdown edge cases without breaking transcript boundaries", async
     );
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /silently fell through and did nothing\.\n\nFix:\n\nIn `GGEditorOptionsViewController\.giphyButtonClicked\(_:\)`/,
+      /silently fell through and did nothing\.\n\nFix:\n\nIn `GGEditorOptionsViewController\.exampleButtonClicked\(_:\)`/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
@@ -151,7 +153,7 @@ test("renders markdown edge cases without breaking transcript boundaries", async
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /silently fell through and did nothing\.\n\nFix:\nIn `GGEditorOptionsViewController\.giphyButtonClicked\(_:\)`/,
+      /silently fell through and did nothing\.\n\nFix:\nIn `GGEditorOptionsViewController\.exampleButtonClicked\(_:\)`/,
     );
     await expectVisibleBlockGap(
       composerEditor.locator("> p", { hasText: /^Root cause:$/ }),
@@ -160,7 +162,7 @@ test("renders markdown edge cases without breaking transcript boundaries", async
     await expectVisibleBlockGap(
       composerEditor.locator("> p", { hasText: /^Fix:$/ }),
       composerEditor.locator("> p", {
-        hasText: /^In GGEditorOptionsViewController\.giphyButtonClicked/,
+        hasText: /^In GGEditorOptionsViewController\.exampleButtonClicked/,
       }),
     );
     await expect(composerEditor.locator("ol > li")).toHaveCount(8);

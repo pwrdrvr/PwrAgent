@@ -486,8 +486,8 @@ describe("App", () => {
         occurredAt: 123,
         target: {
           kind: "github-repository",
-          owner: "GIPHY",
-          repo: "giphy-services",
+          owner: "EXAMPLE",
+          repo: "example-services",
         },
       });
       samlListener?.({
@@ -504,7 +504,7 @@ describe("App", () => {
     expect(screen.getByText(/organization requires SAML SSO/)).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Repository: github.com/GIPHY/giphy-services · Branch: main",
+        "Repository: github.com/EXAMPLE/example-services · Branch: main",
       ),
     ).toBeInTheDocument();
 

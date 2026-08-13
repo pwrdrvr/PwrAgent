@@ -312,13 +312,13 @@ class MockTransport implements JsonRpcTransport {
                         id: "thread-recent",
                         name: "Recent search-product thread",
                         updatedAt: 1_776_200_000,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/huntharo/EXAMPLE/search-product",
                       },
                       {
                         id: "thread-borderline",
                         name: "Borderline search-product thread",
                         updatedAt: 1_772_510_658,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/huntharo/EXAMPLE/search-product",
                       },
                     ]
                   : [
@@ -326,13 +326,13 @@ class MockTransport implements JsonRpcTransport {
                         id: "thread-recent",
                         name: "Recent search-product thread",
                         updatedAt: 1_776_200_000,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/huntharo/EXAMPLE/search-product",
                       },
                       {
                         id: "thread-stale-created-order",
                         name: "Stale created-order thread",
                         updatedAt: 1_772_251_018,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/huntharo/EXAMPLE/search-product",
                       },
                     ]
             }
@@ -468,10 +468,10 @@ class MockTransport implements JsonRpcTransport {
                         id: "thread-projmgr",
                         name: "search-product ProjMgr",
                         updatedAt: 1_776_298_236,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/huntharo/EXAMPLE/search-product",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/search-product.git",
                         },
                       },
                       {
@@ -482,17 +482,17 @@ class MockTransport implements JsonRpcTransport {
                         path: "/tmp/missing-worktree-rollout.jsonl",
                         gitInfo: {
                           branch: "codex/plan-slidev-theme-extraction",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/search-product.git",
                         },
                       },
                       {
                         id: "thread-deck",
                         name: "Create Project Manager deck",
                         updatedAt: 1_776_019_529,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/huntharo/EXAMPLE/search-product",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/search-product.git",
                         },
                       },
                     ]
@@ -501,10 +501,10 @@ class MockTransport implements JsonRpcTransport {
                         id: "thread-projmgr",
                         name: "search-product ProjMgr",
                         updatedAt: 1_776_298_236,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/huntharo/EXAMPLE/search-product",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/search-product.git",
                         },
                       },
                       {
@@ -515,37 +515,37 @@ class MockTransport implements JsonRpcTransport {
                         path: "/tmp/missing-worktree-rollout.jsonl",
                         gitInfo: {
                           branch: "codex/plan-slidev-theme-extraction",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/search-product.git",
                         },
                       },
                       {
                         id: "thread-deck",
                         name: "Create Project Manager deck",
                         updatedAt: 1_776_019_529,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/huntharo/EXAMPLE/search-product",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/search-product.git",
                         },
                       },
                       {
                         id: "019cb1de-230c-71f1-a833-8880f2ea1a4a",
                         name: "is this thing on?",
                         updatedAt: 1_772_510_658,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/huntharo/EXAMPLE/search-product",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/search-product.git",
                         },
                       },
                       {
                         id: "019c9cc2-6ea3-7d40-817d-9590d9118bbd",
                         name: "Gather Reddit feedback screenshots",
                         updatedAt: 1_772_391_226,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/huntharo/EXAMPLE/search-product",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/search-product.git",
                         },
                       },
                     ]
@@ -1725,7 +1725,7 @@ describe("CodexAppServerClient", () => {
 
   it("contains a directory enrichment failure to the affected thread", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    const managedWorktree = "/Users/vitaliy/.codex/worktrees/a21d/giphy-services";
+    const managedWorktree = "/Users/vitaliy/.codex/worktrees/a21d/example-services";
     const localDirectory = "/Users/vitaliy/projects/healthy";
     const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => {
       if (projectKey === managedWorktree) {
@@ -1771,7 +1771,7 @@ describe("CodexAppServerClient", () => {
         linkedDirectories: [
           {
             id: managedWorktree,
-            label: "giphy-services",
+            label: "example-services",
             path: managedWorktree,
             worktreePath: managedWorktree,
             kind: "worktree",
@@ -2490,7 +2490,7 @@ describe("CodexAppServerClient", () => {
         ) => {
           if (args.includes("rev-parse")) {
             callback(null, {
-              stdout: "/Users/huntharo/GIPHY/search-product\n",
+              stdout: "/Users/huntharo/EXAMPLE/search-product\n",
               stderr: "",
             });
             return;
@@ -2498,7 +2498,7 @@ describe("CodexAppServerClient", () => {
 
           if (args.includes("worktree")) {
             callback(null, {
-              stdout: "worktree /Users/huntharo/GIPHY/search-product\n",
+              stdout: "worktree /Users/huntharo/EXAMPLE/search-product\n",
               stderr: "",
             });
             return;
@@ -2631,13 +2631,13 @@ describe("CodexAppServerClient", () => {
     const client = new CodexAppServerClient({
       command: "codex",
       threadDirectoryEnricher: async (projectKey) => {
-        if (projectKey === "/Users/huntharo/GIPHY/search-product") {
+        if (projectKey === "/Users/huntharo/EXAMPLE/search-product") {
           return {
             linkedDirectories: [
               {
-                id: "/Users/huntharo/GIPHY/search-product",
+                id: "/Users/huntharo/EXAMPLE/search-product",
                 label: "search-product",
-                path: "/Users/huntharo/GIPHY/search-product",
+                path: "/Users/huntharo/EXAMPLE/search-product",
                 kind: "local",
               },
             ],
@@ -2666,9 +2666,9 @@ describe("CodexAppServerClient", () => {
       projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
       linkedDirectories: [
         {
-          id: "/Users/huntharo/GIPHY/search-product",
+          id: "/Users/huntharo/EXAMPLE/search-product",
           label: "search-product",
-          path: "/Users/huntharo/GIPHY/search-product",
+          path: "/Users/huntharo/EXAMPLE/search-product",
           worktreePath: "/Users/huntharo/.codex/worktrees/be87/search-product",
           kind: "worktree",
         },
@@ -2787,9 +2787,9 @@ describe("CodexAppServerClient", () => {
         linkedDirectories: projectKey
           ? [
               {
-                id: "/Users/huntharo/GIPHY/search-product",
+                id: "/Users/huntharo/EXAMPLE/search-product",
                 label: "search-product",
-                path: "/Users/huntharo/GIPHY/search-product",
+                path: "/Users/huntharo/EXAMPLE/search-product",
                 worktreePath: projectKey,
                 kind: "worktree",
               },

@@ -49,18 +49,18 @@ function setComposerSelection(textbox: HTMLElement, index: number): void {
 }
 
 const copiedHandoffText = [
-  "We reproduced and fixed the \"Upload to GIPHY does nothing after clicking through several reel videos\" bug.",
+  "We reproduced and fixed the \"Upload to EXAMPLE does nothing after clicking through several reel videos\" bug.",
   "",
   "Root cause:",
   "",
-  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO GIPHY` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.giphyButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGGIPHYButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
+  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO EXAMPLE` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.exampleButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGEXAMPLEButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
   "",
   "Fix:",
   "",
-  "In `GGEditorOptionsViewController.giphyButtonClicked(_:)`, handle upload by command/title as well as object identity:",
+  "In `GGEditorOptionsViewController.exampleButtonClicked(_:)`, handle upload by command/title as well as object identity:",
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  "} else if button === uploadButton || button.titleText == \"UPLOAD TO EXAMPLE\" {",
   "    uploadButtonClicked()",
   "}",
   "```",
@@ -72,7 +72,7 @@ const copiedHandoffText = [
   "2. Adds them to `GGDataStore`.",
   "3. Opens `GGGIFCollectionWindowController`.",
   "4. Selects multiple reel items in sequence, reusing the existing editor.",
-  "5. Finds the visible editor `UPLOAD TO GIPHY` button.",
+  "5. Finds the visible editor `UPLOAD TO EXAMPLE` button.",
   "6. Sends mouseDown/mouseUp to that button.",
   "7. Asserts `editor.window?.attachedSheet?.windowController` is `GGUploadWindowController`.",
   "8. Asserts `representedRecording` is the currently selected recording.",
@@ -97,42 +97,42 @@ const canonicalCopiedHandoffText = copiedHandoffText
   .trimEnd();
 
 const handoffPrefixWithoutCodeBlock = [
-  "We reproduced and fixed the \"Upload to GIPHY does nothing after clicking through several reel videos\" bug.",
+  "We reproduced and fixed the \"Upload to EXAMPLE does nothing after clicking through several reel videos\" bug.",
   "",
   "Root cause:",
-  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO GIPHY` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.giphyButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGGIPHYButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
+  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO EXAMPLE` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.exampleButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGEXAMPLEButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
   "",
   "Fix:",
-  "In `GGEditorOptionsViewController.giphyButtonClicked(_:)`, handle upload by command/title as well as object identity:",
+  "In `GGEditorOptionsViewController.exampleButtonClicked(_:)`, handle upload by command/title as well as object identity:",
 ].join("\n");
 
 const handoffPrefixWithCodeBlock = [
   handoffPrefixWithoutCodeBlock,
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  "} else if button === uploadButton || button.titleText == \"UPLOAD TO EXAMPLE\" {",
   "    uploadButtonClicked()",
   "}",
   "```",
 ].join("\n");
 
 const canonicalHandoffPrefix = [
-  "We reproduced and fixed the \"Upload to GIPHY does nothing after clicking through several reel videos\" bug.",
+  "We reproduced and fixed the \"Upload to EXAMPLE does nothing after clicking through several reel videos\" bug.",
   "",
   "Root cause:",
   "",
-  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO GIPHY` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.giphyButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGGIPHYButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
+  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO EXAMPLE` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.exampleButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGEXAMPLEButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
   "",
   "Fix:",
   "",
-  "In `GGEditorOptionsViewController.giphyButtonClicked(_:)`, handle upload by command/title as well as object identity:",
+  "In `GGEditorOptionsViewController.exampleButtonClicked(_:)`, handle upload by command/title as well as object identity:",
 ].join("\n");
 
 const canonicalHandoffPrefixWithCodeBlock = [
   canonicalHandoffPrefix,
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+  "} else if button === uploadButton || button.titleText == \"UPLOAD TO EXAMPLE\" {",
   "    uploadButtonClicked()",
   "}",
   "```",
@@ -251,7 +251,7 @@ describe("ComposerTiptapInput", () => {
     const codeBlock = container.querySelector("pre code");
     expect(codeBlock?.textContent).toBe(
       [
-        "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
+        "} else if button === uploadButton || button.titleText == \"UPLOAD TO EXAMPLE\" {",
         "    uploadButtonClicked()",
         "}",
       ].join("\n")

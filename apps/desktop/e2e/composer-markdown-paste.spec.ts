@@ -296,13 +296,8 @@ test("a copied transcript table pastes and sends as Markdown source", async () =
 
     const reply = app.window.getByRole("textbox", { name: "Reply" });
     const composerInput = app.window.getByTestId("composer-tiptap-input");
-    await app.electronApp.evaluate(({ clipboard }, markdown) => {
-      clipboard.writeText(markdown);
-    }, TABLE_MARKDOWN);
     await reply.focus();
-    await app.window.keyboard.press(
-      process.platform === "darwin" ? "Meta+V" : "Control+V",
-    );
+    await pasteIntoReply(app.window, { text: TABLE_MARKDOWN });
     await expect(composerInput).toHaveAttribute("data-value", TABLE_MARKDOWN);
     await app.window.keyboard.press(
       process.platform === "darwin" ? "Meta+A" : "Control+A",
@@ -312,22 +307,16 @@ test("a copied transcript table pastes and sends as Markdown source", async () =
 
     await sourceMessage.getByRole("button", { name: "Copy message" }).click();
     await expect
-      .poll(async () =>
-        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
-      )
-      .toBe(TABLE_MARKDOWN);
-    const clipboardSnapshot = await app.electronApp.evaluate(({ clipboard }) => ({
-      formats: clipboard.availableFormats(),
-      html: clipboard.readHTML(),
-    }));
-    expect(clipboardSnapshot.formats).toContain("text/plain");
-    expect(clipboardSnapshot.formats).toContain("text/html");
-    expect(clipboardSnapshot.html).toContain("<table>");
+      .poll(async () => await app.getClipboardSnapshot())
+      .toMatchObject({ text: TABLE_MARKDOWN });
+    const clipboardSnapshot = await app.getClipboardSnapshot();
+    expect(clipboardSnapshot?.html).toContain("<table>");
 
     await reply.focus();
-    await app.window.keyboard.press(
-      process.platform === "darwin" ? "Meta+V" : "Control+V",
-    );
+    await pasteIntoReply(app.window, {
+      html: clipboardSnapshot?.html,
+      text: clipboardSnapshot?.text ?? "",
+    });
 
     await expect(composerInput).toHaveAttribute("data-value", TABLE_MARKDOWN);
     await expect(

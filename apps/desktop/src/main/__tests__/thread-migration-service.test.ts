@@ -195,13 +195,13 @@ describe("ThreadMigrationService", () => {
       listThreadsForMigration: vi.fn(async () => [
         makeSourceThread({
           id: "local-thread",
-          projectKey: "/Users/alice/GIPHY/giphy-bandwidth-saver",
+          projectKey: "/Users/alice/EXAMPLE/example-bandwidth-saver",
           title: "Local thread",
           linkedDirectories: [
             {
-              id: "/Users/alice/GIPHY/giphy-bandwidth-saver",
-              label: "giphy-bandwidth-saver",
-              path: "/Users/alice/GIPHY/giphy-bandwidth-saver",
+              id: "/Users/alice/EXAMPLE/example-bandwidth-saver",
+              label: "example-bandwidth-saver",
+              path: "/Users/alice/EXAMPLE/example-bandwidth-saver",
               kind: "local",
             },
           ],
@@ -209,15 +209,15 @@ describe("ThreadMigrationService", () => {
         makeSourceThread({
           id: "worktree-thread",
           projectKey:
-            "/Users/alice/.codex/profiles/work/worktrees/mph2i055/giphy-bandwidth-saver",
+            "/Users/alice/.codex/profiles/work/worktrees/mph2i055/example-bandwidth-saver",
           title: "Worktree thread",
           linkedDirectories: [
             {
-              id: "/Users/alice/GIPHY/giphy-bandwidth-saver",
-              label: "giphy-bandwidth-saver",
-              path: "/Users/alice/GIPHY/giphy-bandwidth-saver",
+              id: "/Users/alice/EXAMPLE/example-bandwidth-saver",
+              label: "example-bandwidth-saver",
+              path: "/Users/alice/EXAMPLE/example-bandwidth-saver",
               worktreePath:
-                "/Users/alice/.codex/profiles/work/worktrees/mph2i055/giphy-bandwidth-saver",
+                "/Users/alice/.codex/profiles/work/worktrees/mph2i055/example-bandwidth-saver",
               kind: "worktree",
             },
           ],
@@ -242,9 +242,9 @@ describe("ThreadMigrationService", () => {
 
     expect(response.projects).toHaveLength(1);
     expect(response.projects[0]).toMatchObject({
-      key: "directory:/Users/alice/GIPHY/giphy-bandwidth-saver",
-      label: "giphy-bandwidth-saver",
-      path: "/Users/alice/GIPHY/giphy-bandwidth-saver",
+      key: "directory:/Users/alice/EXAMPLE/example-bandwidth-saver",
+      label: "example-bandwidth-saver",
+      path: "/Users/alice/EXAMPLE/example-bandwidth-saver",
     });
     expect(response.projects[0]!.threads.map((thread) => thread.threadId)).toEqual(
       expect.arrayContaining(["local-thread", "worktree-thread"]),

@@ -401,7 +401,7 @@ describe("probeWorktreeWorkingState", () => {
       await writeFile(path.join(skillRoot, "SKILL.md"), "one\ntwo\n", "utf8");
       await writeFile(path.join(skillRoot, "agents", "openai.yaml"), "agent\n", "utf8");
       await writeFile(
-        path.join(skillRoot, "references", "giphy-jvm-memory.md"),
+        path.join(skillRoot, "references", "example-jvm-memory.md"),
         "alpha\nbeta\ngamma\n",
         "utf8",
       );
@@ -412,7 +412,7 @@ describe("probeWorktreeWorkingState", () => {
           return [
             ".codex/skills/diagnose-jvm-memory/SKILL.md",
             ".codex/skills/diagnose-jvm-memory/agents/openai.yaml",
-            ".codex/skills/diagnose-jvm-memory/references/giphy-jvm-memory.md",
+            ".codex/skills/diagnose-jvm-memory/references/example-jvm-memory.md",
           ].join("\0");
         }
         if (args[args.length - 1] === "remote") return "";

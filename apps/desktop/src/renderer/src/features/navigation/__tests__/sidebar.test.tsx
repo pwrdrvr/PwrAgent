@@ -169,10 +169,10 @@ const pullRequestThread: NavigationThreadSummary = {
     {
       provider: "github.com",
       number: 202,
-      org: "Giphy",
-      repo: "GifGrabber",
+      org: "ExampleOrg",
+      repo: "ExampleApp",
       state: "passing",
-      url: "https://github.com/Giphy/GifGrabber/pull/202",
+      url: "https://github.com/ExampleOrg/ExampleApp/pull/202",
     },
   ],
 };
@@ -5358,7 +5358,7 @@ describe("Sidebar", () => {
     );
 
     const prChip = screen.getByRole("button", {
-      name: "Open Giphy/GifGrabber#202 (ready for review · checks passing) in browser",
+      name: "Open ExampleOrg/ExampleApp#202 (ready for review · checks passing) in browser",
     });
     fireEvent.contextMenu(prChip, { clientX: 48, clientY: 64 });
     await clickElement(
@@ -5366,7 +5366,7 @@ describe("Sidebar", () => {
     );
 
     expect(copyText).toHaveBeenCalledWith(
-      "https://github.com/Giphy/GifGrabber/pull/202",
+      "https://github.com/ExampleOrg/ExampleApp/pull/202",
     );
     expect(onSelectThread).not.toHaveBeenCalled();
   });

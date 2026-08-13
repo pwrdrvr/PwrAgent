@@ -6,11 +6,11 @@ describe("buildPullRequestStatusKey", () => {
     expect(
       buildPullRequestStatusKey({
         provider: "GitHub.COM",
-        org: "Giphy",
-        repo: "GifGrabber",
+        org: "ExampleOrg",
+        repo: "ExampleApp",
         number: 255,
       }),
-    ).toBe("github.com/giphy/gifgrabber#255");
+    ).toBe("github.com/exampleorg/exampleapp#255");
   });
 
   it("defaults blank providers to github.com", () => {

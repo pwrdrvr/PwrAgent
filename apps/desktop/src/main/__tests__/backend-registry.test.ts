@@ -23968,7 +23968,7 @@ command = "pnpm dev"
       path.join(worktreePath, ".codex", "environments", "environment.toml"),
       `
 version = 1
-name = "GifGrabber"
+name = "ExampleApp"
 
 [setup]
 script = "printf setup"
@@ -23982,7 +23982,7 @@ command = "pnpm dev"
 
     const sourceRuntime: CodexThreadEnvironmentRuntime = {
       environmentId: "environment",
-      environmentName: "GifGrabber",
+      environmentName: "ExampleApp",
       executionTarget: "local",
       cwd: callerWorktreePath,
       setupStatus: "completed",
@@ -24189,7 +24189,7 @@ command = "pnpm dev"
       path.join(worktreePath, ".codex", "environments", "environment.toml"),
       `
 version = 1
-name = "GifGrabber"
+name = "ExampleApp"
 
 [setup]
 script = "printf setup"
@@ -24201,7 +24201,7 @@ script = "printf setup"
     const setupRelease = createDeferred<void>();
     const sourceRuntime: CodexThreadEnvironmentRuntime = {
       environmentId: "environment",
-      environmentName: "GifGrabber",
+      environmentName: "ExampleApp",
       executionTarget: "local",
       cwd: repoPath,
       setupStatus: "completed",
@@ -25807,7 +25807,7 @@ script = "printf setup"
     await mkdir(worktreePath, { recursive: true });
     const sourceRuntime: CodexThreadEnvironmentRuntime = {
       environmentId: "environment",
-      environmentName: "GifGrabber",
+      environmentName: "ExampleApp",
       executionTarget: "local",
       cwd: repoPath,
       setupStatus: "completed",
@@ -25922,7 +25922,7 @@ script = "printf setup"
     expect(codexClient.lastStartThreadParams?.cwd).toBe(worktreePath);
     expect(codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toMatchObject({
       environmentId: "environment",
-      environmentName: "GifGrabber",
+      environmentName: "ExampleApp",
       cwd: worktreePath,
       setupStatus: "failed",
       setupOutput: expect.stringContaining("is not available in the forked worktree"),
@@ -27491,7 +27491,7 @@ script = "printf setup"
           namespace: "pwragent",
           tool: "handoff_task",
           arguments: {
-            task: "Use /Users/huntharo/GIPHY/giphy-services from the prompt only.",
+            task: "Use /Users/huntharo/EXAMPLE/example-services from the prompt only.",
             title: "Prompt-only target",
             groupingMode: "subthread",
             workspaceMode: "none",
@@ -33577,7 +33577,7 @@ script = "printf setup"
         namespace: "pwragent_task_monitors",
         tool: "create_monitor_delegation",
         arguments: {
-          task: "Monitor exec session 89902 until ./scripts/verify-giphy-button-swift.sh exits.",
+          task: "Monitor exec session 89902 until ./scripts/verify-example-button-swift.sh exits.",
           monitorContext:
             "Poll write_stdin with session_id: 89902 and collect stdout/stderr.",
         },

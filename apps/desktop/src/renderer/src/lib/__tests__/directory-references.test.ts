@@ -25,16 +25,16 @@ function makeDirectory(
   };
 }
 
-const GIPHY = makeDirectory({
-  key: "dir:giphy-services",
-  label: "giphy-services",
-  path: `${HOME}/GIPHY/giphy-services`,
+const EXAMPLE = makeDirectory({
+  key: "dir:example-services",
+  label: "example-services",
+  path: `${HOME}/EXAMPLE/example-services`,
   latestUpdatedAt: 300,
 });
 const SEARCH = makeDirectory({
   key: "dir:search-product",
   label: "search-product",
-  path: `${HOME}/GIPHY/search-product`,
+  path: `${HOME}/EXAMPLE/search-product`,
   latestUpdatedAt: 200,
 });
 const PWRAGNT = makeDirectory({
@@ -69,9 +69,9 @@ describe("findDirectoryReferenceTrigger", () => {
   });
 
   it("allows path-ish query characters", () => {
-    const text = "see @~/GIPHY/search";
+    const text = "see @~/EXAMPLE/search";
     expect(findDirectoryReferenceTrigger(text, text.length)?.query).toBe(
-      "~/GIPHY/search",
+      "~/EXAMPLE/search",
     );
   });
 
@@ -86,12 +86,12 @@ describe("findDirectoryReferenceTrigger", () => {
 });
 
 describe("filterDirectoryReferenceCandidates", () => {
-  const directories = [PWRAGNT, SEARCH, GIPHY, UNLINKED];
+  const directories = [PWRAGNT, SEARCH, EXAMPLE, UNLINKED];
 
   it("returns referenceable directories most recently updated first", () => {
     expect(
       filterDirectoryReferenceCandidates(directories, "").map((d) => d.key),
-    ).toEqual([GIPHY.key, SEARCH.key, PWRAGNT.key]);
+    ).toEqual([EXAMPLE.key, SEARCH.key, PWRAGNT.key]);
   });
 
   it("filters by label", () => {
@@ -102,8 +102,8 @@ describe("filterDirectoryReferenceCandidates", () => {
 
   it("filters by path substring", () => {
     expect(
-      filterDirectoryReferenceCandidates(directories, "GIPHY/").map((d) => d.key),
-    ).toEqual([GIPHY.key, SEARCH.key]);
+      filterDirectoryReferenceCandidates(directories, "EXAMPLE/").map((d) => d.key),
+    ).toEqual([EXAMPLE.key, SEARCH.key]);
   });
 
   it("excludes unlinked pseudo-directories and path-less entries", () => {
@@ -163,7 +163,7 @@ describe("buildFileReferenceTooltip", () => {
 describe("buildDirectoryReferenceInsertText", () => {
   it("tildifies the directory path", () => {
     expect(buildDirectoryReferenceInsertText(SEARCH, HOME)).toBe(
-      "~/GIPHY/search-product",
+      "~/EXAMPLE/search-product",
     );
   });
 
@@ -178,15 +178,15 @@ describe("buildDirectoryReferenceMarkdown", () => {
   it("builds a bounded markdown link with the tilde path", () => {
     expect(
       buildDirectoryReferenceMarkdown(
-        { label: "search-product", path: `${HOME}/GIPHY/search-product` },
+        { label: "search-product", path: `${HOME}/EXAMPLE/search-product` },
         HOME,
       ),
-    ).toBe("[@search-product](~/GIPHY/search-product)");
+    ).toBe("[@search-product](~/EXAMPLE/search-product)");
   });
 
   it("stays scannable when text glues onto the link", () => {
     const markdown = buildDirectoryReferenceMarkdown(
-      { label: "search-product", path: `${HOME}/GIPHY/search-product` },
+      { label: "search-product", path: `${HOME}/EXAMPLE/search-product` },
       HOME,
     );
     expect(
@@ -208,8 +208,8 @@ describe("buildDirectoryReferenceMarkdown", () => {
   });
 
   it("leaves never-encoded destinations unchanged when decoding", () => {
-    expect(decodeMarkdownDestination("~/GIPHY/search-product")).toBe(
-      "~/GIPHY/search-product",
+    expect(decodeMarkdownDestination("~/EXAMPLE/search-product")).toBe(
+      "~/EXAMPLE/search-product",
     );
     expect(decodeMarkdownDestination("~/100%-legit")).toBe("~/100%-legit");
   });
@@ -225,12 +225,12 @@ describe("buildDirectoryReferenceMarkdown", () => {
 });
 
 describe("listReferencedDirectories", () => {
-  const directories = [GIPHY, SEARCH, PWRAGNT, UNLINKED];
+  const directories = [EXAMPLE, SEARCH, PWRAGNT, UNLINKED];
 
   it("finds a tilde-path reference", () => {
     expect(
       listReferencedDirectories(
-        "You might be able to see it in ~/GIPHY/search-product.",
+        "You might be able to see it in ~/EXAMPLE/search-product.",
         directories,
         { homeDir: HOME },
       ).map((d) => d.key),
@@ -250,17 +250,17 @@ describe("listReferencedDirectories", () => {
   it("resolves a deeper file path to its tracked repo", () => {
     expect(
       listReferencedDirectories(
-        "look at ~/GIPHY/giphy-services/build.sbt",
+        "look at ~/EXAMPLE/example-services/build.sbt",
         directories,
         { homeDir: HOME },
       ).map((d) => d.key),
-    ).toEqual([GIPHY.key]);
+    ).toEqual([EXAMPLE.key]);
   });
 
   it("does not match a sibling directory whose name extends the path", () => {
     expect(
       listReferencedDirectories(
-        "see ~/GIPHY/search-product-v2 for details",
+        "see ~/EXAMPLE/search-product-v2 for details",
         directories,
         { homeDir: HOME },
       ),
@@ -270,7 +270,7 @@ describe("listReferencedDirectories", () => {
   it("returns each directory once for repeated mentions", () => {
     expect(
       listReferencedDirectories(
-        "~/GIPHY/search-product and again ~/GIPHY/search-product",
+        "~/EXAMPLE/search-product and again ~/EXAMPLE/search-product",
         directories,
         { homeDir: HOME },
       ),
@@ -280,22 +280,22 @@ describe("listReferencedDirectories", () => {
   it("honors excludePaths for already-linked directories", () => {
     expect(
       listReferencedDirectories(
-        "work in ~/GIPHY/giphy-services and read ~/GIPHY/search-product",
+        "work in ~/EXAMPLE/example-services and read ~/EXAMPLE/search-product",
         directories,
-        { homeDir: HOME, excludePaths: [`${HOME}/GIPHY/giphy-services`] },
+        { homeDir: HOME, excludePaths: [`${HOME}/EXAMPLE/example-services`] },
       ).map((d) => d.key),
     ).toEqual([SEARCH.key]);
   });
 
   it("keeps only the deepest match for nested tracked repos", () => {
     const parent = makeDirectory({
-      key: "dir:giphy-root",
-      label: "GIPHY",
-      path: `${HOME}/GIPHY`,
+      key: "dir:example-root",
+      label: "EXAMPLE",
+      path: `${HOME}/EXAMPLE`,
     });
     expect(
       listReferencedDirectories(
-        "fetch ~/GIPHY/search-product",
+        "fetch ~/EXAMPLE/search-product",
         [...directories, parent],
         { homeDir: HOME },
       ).map((d) => d.key),
@@ -304,9 +304,9 @@ describe("listReferencedDirectories", () => {
 
   it("accepts punctuation boundaries after the path", () => {
     for (const draft of [
-      "(~/GIPHY/search-product)",
-      "~/GIPHY/search-product, then more",
-      "~/GIPHY/search-product? yes",
+      "(~/EXAMPLE/search-product)",
+      "~/EXAMPLE/search-product, then more",
+      "~/EXAMPLE/search-product? yes",
     ]) {
       expect(
         listReferencedDirectories(draft, directories, { homeDir: HOME }),

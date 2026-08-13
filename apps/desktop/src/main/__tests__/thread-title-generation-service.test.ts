@@ -124,7 +124,7 @@ describe("ThreadTitleGenerationService", () => {
       name: "accepts generated titles that omit GitHub PR references from quoted context",
       generatedTitle: "PR attachment API mismatch",
       userPrompt:
-        "> PRs created: > - #12998: https://github.com/Giphy/giphy-services/pull/12998 > - #12999 stacked on it: https://github.com/Giphy/giphy-services/pull/12999 Why could the agent not attach the PR to the thread?",
+        "> PRs created: > - #12998: https://github.com/ExampleOrg/example-services/pull/12998 > - #12999 stacked on it: https://github.com/ExampleOrg/example-services/pull/12999 Why could the agent not attach the PR to the thread?",
     },
     {
       name: "accepts first-turn handoff titles with non-ticket task markers",

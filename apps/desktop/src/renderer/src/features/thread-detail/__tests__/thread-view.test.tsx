@@ -536,11 +536,11 @@ describe("ThreadView", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
-    const giphyDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+    const exampleDirectory: NavigationDirectorySummary = {
+      key: "directory:/Users/huntharo/EXAMPLE/example-services",
       kind: "directory",
-      label: "giphy-services",
-      path: "/Users/huntharo/GIPHY/giphy-services",
+      label: "example-services",
+      path: "/Users/huntharo/EXAMPLE/example-services",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -586,13 +586,13 @@ describe("ThreadView", () => {
           onAgentEvent: () => () => undefined,
           startReview,
         }}
-        directories={[giphyDirectory, kubeDirectory]}
+        directories={[exampleDirectory, kubeDirectory]}
         loading={false}
         loadingMore={false}
         messageCount={1}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        selectedDirectory={giphyDirectory}
+        selectedDirectory={exampleDirectory}
         selectedThread={{
           id: "thread-1",
           title: "Build Search gRPC",
@@ -603,12 +603,12 @@ describe("ThreadView", () => {
           updatedAt: Date.now(),
           linkedDirectories: [
             {
-              id: "/Users/huntharo/GIPHY/giphy-services",
+              id: "/Users/huntharo/EXAMPLE/example-services",
               kind: "worktree",
-              label: "giphy-services",
-              path: "/Users/huntharo/GIPHY/giphy-services",
+              label: "example-services",
+              path: "/Users/huntharo/EXAMPLE/example-services",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/giphy-services",
+                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/example-services",
             },
             {
               id: "/Users/huntharo/infra/kube-manifests",
