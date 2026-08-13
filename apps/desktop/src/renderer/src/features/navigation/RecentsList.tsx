@@ -63,7 +63,7 @@ type RecentsListProps = {
   ) => Promise<void>;
   onSelectThread: (
     thread: NavigationThreadSummary,
-    event: MouseEvent<HTMLButtonElement>,
+    event: MouseEvent<HTMLElement>,
     selectionOrder: string[],
   ) => void;
   onRevealSelectedThreadComplete?: (request: number) => void;

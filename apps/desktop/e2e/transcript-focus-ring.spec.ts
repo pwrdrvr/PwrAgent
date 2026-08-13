@@ -92,9 +92,10 @@ test("keystroke after clicking the transcript draws no outline around it", async
   const app = await launchElectronApp({ fixturePath: fixture.fixturePath });
   try {
     const { window } = app;
-    await window
-      .locator(".thread-row__title", { hasText: "Focus ring thread" })
-      .click();
+    // The title is click-through since the transcript-gaps pass (pointer
+    // events fall to the open-thread overlay button), so target the
+    // button by its accessible name.
+    await window.getByRole("button", { name: "Focus ring thread" }).click();
     const body = window.getByText("Transcript body for the focus ring check.");
     await expect(body).toBeVisible();
 

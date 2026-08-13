@@ -608,7 +608,7 @@ export function Sidebar(props: SidebarProps) {
 
   const selectThreadFromList = (
     thread: NavigationThreadSummary,
-    event: ReactMouseEvent<HTMLButtonElement>,
+    event: ReactMouseEvent<HTMLElement>,
     selectionOrder: string[],
   ): void => {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);

@@ -18,17 +18,19 @@ import type { FederationThreadTarget } from "../../chrome/federation-thread-targ
 import { Sidebar } from "../Sidebar";
 
 /**
- * The whole row card for a thread, given its open-thread button.
+ * The whole row card for a thread, given any element inside it (the
+ * open-thread button, a title text node's span, a chip, …).
  *
- * The button is only the title line: the chip flow is its SIBLING inside
- * `.thread-row`, because chips carry buttons of their own and a button
- * inside a button is invalid (see ThreadRow). Assertions about chips have
- * to scope to the card, not to the button.
+ * The open-thread button is an EMPTY full-card overlay: the title line,
+ * chip flow, and status indicator are its SIBLINGS inside `.thread-row`,
+ * because they carry buttons of their own and a button inside a button
+ * is invalid (see ThreadRow). Assertions about a row's content have to
+ * scope to the card, not to the button.
  */
-function threadCard(openButton: HTMLElement): HTMLElement {
-  const card = openButton.closest(".thread-row");
+function threadCard(element: HTMLElement): HTMLElement {
+  const card = element.closest(".thread-row");
   if (!(card instanceof HTMLElement)) {
-    throw new Error("Expected the open-thread button to sit inside .thread-row");
+    throw new Error("Expected the element to sit inside .thread-row");
   }
   return card;
 }
@@ -2202,11 +2204,11 @@ describe("Sidebar", () => {
       name: /Cross-project cleanup/i,
     });
 
-    const thinkingIndicator = threadButton.querySelector('[data-thread-status="thinking"]');
+    const thinkingIndicator = threadCard(threadButton).querySelector('[data-thread-status="thinking"]');
     expect(thinkingIndicator).not.toBeNull();
     expect(thinkingIndicator).toHaveAttribute("aria-label", "Thinking");
     expect(thinkingIndicator).toHaveAttribute("title", "Thinking");
-    expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
+    expect(threadCard(threadButton).querySelector('[data-thread-status="unread"]')).toBeNull();
   });
 
   it("shows thinking from backend runtime status after renderer HMR", () => {
@@ -2239,7 +2241,7 @@ describe("Sidebar", () => {
     });
 
     expect(
-      threadButton.querySelector('[data-thread-status="thinking"]')
+      threadCard(threadButton).querySelector('[data-thread-status="thinking"]')
     ).not.toBeNull();
   });
 
@@ -2424,8 +2426,8 @@ describe("Sidebar", () => {
       name: /Cross-project cleanup/i,
     });
 
-    expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
-    expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
+    expect(threadCard(threadButton).querySelector('[data-thread-status="thinking"]')).toBeNull();
+    expect(threadCard(threadButton).querySelector('[data-thread-status="unread"]')).toBeNull();
   });
 
   it("shows an unread marker in recents for threads updated since they were seen", () => {
@@ -2453,13 +2455,13 @@ describe("Sidebar", () => {
       name: /Updated thread/i,
     });
 
-    expect(threadButton.querySelector('[data-thread-status="thinking"]')).toBeNull();
-    const unreadIndicator = threadButton.querySelector('[data-thread-status="unread"]');
+    expect(threadCard(threadButton).querySelector('[data-thread-status="thinking"]')).toBeNull();
+    const unreadIndicator = threadCard(threadButton).querySelector('[data-thread-status="unread"]');
     expect(unreadIndicator).not.toBeNull();
     expect(unreadIndicator).toHaveAttribute("aria-label", "Unread update");
     expect(unreadIndicator).toHaveAttribute("title", "Unread update");
     expect(
-      threadButton.querySelector('[data-thread-status="unread"] .thread-row__status-cookie')
+      threadCard(threadButton).querySelector('[data-thread-status="unread"] .thread-row__status-cookie')
     ).not.toBeNull();
     expect(unreadIndicator).not.toHaveTextContent("!");
   });
@@ -2517,7 +2519,7 @@ describe("Sidebar", () => {
       const rows = within(browseSection as HTMLElement).getAllByRole("button", {
         name: /Active thread|Unread thread|Idle thread/i,
       });
-      expect(rows.map((row) => row.textContent)).toEqual([
+      expect(rows.map((row) => threadCard(row).textContent)).toEqual([
         expect.stringContaining("Active thread"),
         expect.stringContaining("Unread thread"),
       ]);
@@ -2555,7 +2557,7 @@ describe("Sidebar", () => {
           .getAllByRole("button", {
             name: /Active thread|Second active thread/i,
           })
-          .map((row) => (row.textContent?.includes("Second") ? "second" : "first"));
+          .map((row) => (threadCard(row).textContent?.includes("Second") ? "second" : "first"));
       };
 
       const ordered = [activeThread, secondActiveThread];
@@ -2821,7 +2823,7 @@ describe("Sidebar", () => {
       const rows = within(browseSection as HTMLElement).getAllByRole("button", {
         name: /Thread with a draft|Thread without a draft/i,
       });
-      expect(rows.map((row) => row.textContent)).toEqual([
+      expect(rows.map((row) => threadCard(row).textContent)).toEqual([
         expect.stringContaining("Thread with a draft"),
       ]);
     });
@@ -3068,7 +3070,7 @@ describe("Sidebar", () => {
     const rows = within(browseSection as HTMLElement).getAllByRole("button", {
       name: /Updated later|Created later/i,
     });
-    expect(rows.map((row) => row.textContent)).toEqual([
+    expect(rows.map((row) => threadCard(row).textContent)).toEqual([
       expect.stringContaining("Created later"),
       expect.stringContaining("Updated later"),
     ]);
@@ -3671,7 +3673,7 @@ describe("Sidebar", () => {
     });
     // Created is a pure sort order: the pinned thread keeps the position the
     // caller's ordering gave it instead of floating to a pinned section.
-    expect(rows.map((row) => row.textContent)).toEqual([
+    expect(rows.map((row) => threadCard(row).textContent)).toEqual([
       expect.stringContaining("Cross-project cleanup"),
       expect.stringContaining("Updated thread"),
     ]);
@@ -3856,13 +3858,18 @@ describe("Sidebar", () => {
     const rows = within(directoryThreads).getAllByRole("button", {
       name: /Cross-project cleanup|Updated thread/i,
     });
-    expect(rows[0]).toHaveTextContent("Updated thread");
-    // Pinned state is the aria-hidden in-title marker since the 2026-08
-    // density pass (the old role="img" pin chip left the chip flow).
+    expect(threadCard(rows[0]!)).toHaveTextContent("Updated thread");
+    // Pinned state rides the title line as `.thread-row__heading-pin`
+    // since the 2026-08 density pass (the old role="img" pin chip left
+    // the chip flow). This render omits `onSetThreadPin`, so it gets the
+    // handler-less aria-hidden static variant; with a handler wired (as
+    // the live app always does) the same slot is a real "Unpin thread"
+    // button — see the transcript-gaps pin tests in
+    // thread-row-chips.test.tsx for that form.
     expect(
       threadCard(rows[0]!).querySelector(".thread-row__heading-pin"),
     ).not.toBeNull();
-    expect(rows[1]).toHaveTextContent("Cross-project cleanup");
+    expect(threadCard(rows[1]!)).toHaveTextContent("Cross-project cleanup");
     expect(
       threadCard(rows[1]!).querySelector(".thread-row__heading-pin"),
     ).toBeNull();
@@ -4997,9 +5004,8 @@ describe("Sidebar", () => {
       />
     );
 
-    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
-    expect(threadButton).not.toBeNull();
-    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    const threadRowCard = threadCard(screen.getByText("Cross-project cleanup"));
+    fireEvent.contextMenu(threadRowCard, { clientX: 12, clientY: 34 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
     const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
@@ -5052,9 +5058,8 @@ describe("Sidebar", () => {
       />
     );
 
-    const threadButton = screen.getByText("ACP session").closest("button");
-    expect(threadButton).not.toBeNull();
-    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    const threadRowCard = threadCard(screen.getByText("ACP session"));
+    fireEvent.contextMenu(threadRowCard, { clientX: 12, clientY: 34 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
     const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
@@ -5087,9 +5092,8 @@ describe("Sidebar", () => {
       />
     );
 
-    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
-    expect(threadButton).not.toBeNull();
-    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    const threadRowCard = threadCard(screen.getByText("Cross-project cleanup"));
+    fireEvent.contextMenu(threadRowCard, { clientX: 12, clientY: 34 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
     const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
@@ -5196,9 +5200,8 @@ describe("Sidebar", () => {
       />
     );
 
-    const threadButton = screen.getByText("Cross-project cleanup").closest("button");
-    expect(threadButton).not.toBeNull();
-    fireEvent.contextMenu(threadButton as HTMLElement, { clientX: 12, clientY: 34 });
+    const threadRowCard = threadCard(screen.getByText("Cross-project cleanup"));
+    fireEvent.contextMenu(threadRowCard, { clientX: 12, clientY: 34 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
 
     expect(screen.queryByRole("dialog", { name: "Archive Thread" })).not.toBeInTheDocument();

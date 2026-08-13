@@ -10,7 +10,7 @@ import type {
   DesktopAppearanceTheme,
   ThreadExecutionMode,
 } from "@pwragent/shared";
-import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
+import { _electron as electron, expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import {
   assertUnreachableProfileBootDecision,
   bootstrapProfileExists,
@@ -947,6 +947,70 @@ export function nextRendererViewportRequest(params: {
     request.height += params.attempt % 2 === 0 ? 1 : -1;
   }
   return request;
+}
+
+/**
+ * The `.thread-row` card that carries the named open-thread button.
+ *
+ * The open-thread control is an EMPTY overlay button whose SIBLINGS
+ * (title line, status indicator, chip flow) carry the row's visible
+ * content, so status/chip assertions must scope to the card, not the
+ * button. Anchor on `.thread-row` + `has:` rather than a bare
+ * `.locator("..")` hop: the hop encodes "the button's direct parent is
+ * the card", which the next DOM restructure silently breaks — and a
+ * `toHaveCount(0)` against a mis-resolved parent passes vacuously
+ * forever. (`federation-remote-window.spec.ts` established the idiom.)
+ */
+export function threadRowCard(
+  scope: Page | Locator,
+  name: string | RegExp,
+): Locator {
+  // The `has:` locator is evaluated RELATIVE to each `.thread-row`
+  // candidate, so it must carry no scoping prefix of its own: a
+  // scope-rooted inner locator (`scope.getByRole(...)`) would look for
+  // the scope element INSIDE each row and match nothing, and every
+  // assertion against the card would time out (or a `toHaveCount(0)`
+  // would pass vacuously). Root it at the page, whose selector chain
+  // is just the role engine.
+  const page =
+    typeof (scope as Locator).page === "function"
+      ? (scope as Locator).page()
+      : (scope as Page);
+  return scope
+    .locator(".thread-row")
+    .filter({ has: page.getByRole("button", { name }) });
+}
+
+/**
+ * Right-click a thread row to open its context menu.
+ *
+ * Do NOT right-click the open-thread button for this: on a PINNED row
+ * the in-title unpin button can sit exactly at the open button's
+ * center-x (it depends on title width), and since it is a SIBLING of
+ * the open button, Playwright's hit-target check reports "subtree
+ * intercepts pointer events" and times out — while the real app is
+ * fine, because contextmenu bubbles from any row element to the
+ * shell's onContextMenu. Clicking the CARD instead always passes the
+ * hit-target check (everything at the point is a card descendant).
+ * The fixed position keeps the point in the title band, above the chip
+ * flow, so a PR chip's own context menu can never swallow it.
+ */
+export async function rightClickThreadRow(
+  scope: Page | Locator,
+  name: string | RegExp,
+  options?: { exact?: boolean },
+): Promise<void> {
+  const page =
+    typeof (scope as Locator).page === "function"
+      ? (scope as Locator).page()
+      : (scope as Page);
+  const card = scope
+    .locator(".thread-row")
+    .filter({ has: page.getByRole("button", { name, exact: options?.exact }) });
+  await card.click({
+    button: "right",
+    position: { x: 40, y: 10 },
+  });
 }
 
 export function configureElectronE2eSecretStorageEnv(
