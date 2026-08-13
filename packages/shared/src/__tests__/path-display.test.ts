@@ -31,4 +31,19 @@ describe("formatPathRelativeToDirectories", () => {
       ),
     ).toBe("C:\\repo-other\\apps\\desktop\\src\\main.ts");
   });
+
+  it("uses Windows separators for protocol paths under a Windows directory", () => {
+    expect(
+      formatPathRelativeToDirectories(
+        "C:/repo/worktree/apps/desktop/src/main.ts",
+        ["C:\\repo\\worktree"],
+      ),
+    ).toBe("apps\\desktop\\src\\main.ts");
+    expect(
+      formatPathRelativeToDirectories(
+        "breakfasts/eggs/sunny-side-up.md",
+        ["C:\\repo\\worktree"],
+      ),
+    ).toBe("breakfasts\\eggs\\sunny-side-up.md");
+  });
 });

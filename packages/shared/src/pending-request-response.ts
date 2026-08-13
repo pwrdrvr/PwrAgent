@@ -261,6 +261,9 @@ function contentDiffForApproval(params: {
     lines.pop();
   }
   const hunkLineCount = lines.length;
+  if (hunkLineCount === 0) {
+    return undefined;
+  }
   const header =
     params.action === "add"
       ? [`--- /dev/null`, `+++ b/${path}`, `@@ -0,0 +1,${hunkLineCount} @@`]

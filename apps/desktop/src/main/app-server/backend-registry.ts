@@ -2171,8 +2171,8 @@ function readFileChangeApprovalFile(
   const content =
     readOptionalString(kind?.content) ?? readOptionalString(record.content);
   const diff =
-    buildFileChangeApprovalContentDiff({ action, content, filePath }) ??
-    directDiff;
+    directDiff ??
+    buildFileChangeApprovalContentDiff({ action, content, filePath });
   return {
     ...(action ? { action } : {}),
     ...(diff ? { diff } : {}),
@@ -2215,6 +2215,9 @@ function buildFileChangeApprovalContentDiff(params: {
     lines.pop();
   }
   const hunkLineCount = lines.length;
+  if (hunkLineCount === 0) {
+    return undefined;
+  }
   const displayPath = params.filePath.replace(/^\/+/, "") || "file";
   const header =
     params.action === "add"
