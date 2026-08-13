@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.1-prerelease.4 - 2026-08-13
+
+- Windows Installer - Fixed the protected Windows signing handoff so packaging excludes pnpm workspace links while retaining the ASAR-verification toolchain, enabling signed installer builds.
+- Release Publishing - GitHub Releases now wait for signed macOS and Windows installers plus both Linux packages, then publish all platform assets together. The final publisher now uploads only the Windows installer and blockmap, retaining one Linux checksum manifest and preventing duplicate-asset conflicts.
+- Pull Requests - Added a richer pull-request hover card, including the pull request’s head branch and useful at-a-glance status details.
+- ACP and Grok - Improved ACP launch selection, replay timing, scratch-workspace behavior, and Grok working updates.
+- Handoffs and Worktrees - Added searchable handoff branch picking, safer concurrent worktree paths, and more reliable Windows worktree cleanup.
+- Thread Experience - Added thread creation times to the info panel, persisted questionnaire activity, improved Markdown tables, and refined thread-jump, tooltip, and quit behavior.
+- Messaging and Reliability - Improved Slack mention detection, bounded adapter startup, serialized status rendering, and startup watchdog behavior.
+
 ## v1.0.1-prerelease.3 - 2026-08-13
 
 - Windows Installer - Fixed the protected Windows signing handoff so packaging excludes pnpm workspace links while retaining the ASAR-verification toolchain, enabling signed installer builds.
