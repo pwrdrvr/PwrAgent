@@ -1655,10 +1655,14 @@ function BranchPicker(props: {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [menuShift, setMenuShift] = useState(0);
+  const [menuWidthLimit, setMenuWidthLimit] = useState<number>();
   const listboxId = useId();
   const selectedLabelId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuShiftRef = useRef(0);
+  const menuWidthLimitRef = useRef<number | undefined>(undefined);
+  const naturalMenuWidthRef = useRef(0);
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
 
   const normalizedQuery = query.trim().toLowerCase();
@@ -1708,12 +1712,17 @@ function BranchPicker(props: {
   }, [open]);
 
   // The popover is anchored to the trigger, which sits near the right edge of
-  // the composer toolbar — keep it inside the viewport by nudging it back in
-  // when it would overflow either gutter. Runs before paint so there's no
-  // visible jump, and re-clamps on resize while open.
+  // the composer toolbar. In the launchpad, keep it inside the settings row so
+  // it cannot extend beneath the thread sidebar; dialog uses fall back to the
+  // viewport gutters. Runs before paint so there's no visible jump, and
+  // re-clamps on resize while open.
   useLayoutEffect(() => {
     if (!open) {
+      menuShiftRef.current = 0;
+      menuWidthLimitRef.current = undefined;
+      naturalMenuWidthRef.current = 0;
       setMenuShift(0);
+      setMenuWidthLimit(undefined);
       return;
     }
     const clamp = (): void => {
@@ -1723,17 +1732,44 @@ function BranchPicker(props: {
       }
       const gutter = 12;
       const rect = menu.getBoundingClientRect();
-      const overflowRight = rect.right - (window.innerWidth - gutter);
-      const overflowLeft = gutter - rect.left;
-      setMenuShift((current) => {
-        if (overflowRight > 0) {
-          return current - overflowRight;
-        }
-        if (overflowLeft > 0) {
-          return current + overflowLeft;
-        }
-        return current;
-      });
+      const composerSetup = menu.closest<HTMLElement>(".composer__setup");
+      const composerBounds = composerSetup?.getBoundingClientRect();
+      const leftBoundary = Math.max(gutter, composerBounds?.left ?? gutter);
+      const rightBoundary = Math.max(
+        leftBoundary,
+        Math.min(
+          window.innerWidth - gutter,
+          composerBounds?.right ?? window.innerWidth - gutter,
+        ),
+      );
+      const availableWidth = Math.max(0, rightBoundary - leftBoundary);
+      naturalMenuWidthRef.current = Math.max(
+        naturalMenuWidthRef.current,
+        rect.width,
+      );
+      const targetWidth = Math.min(
+        naturalMenuWidthRef.current,
+        availableWidth,
+      );
+      const nextWidthLimit =
+        targetWidth < naturalMenuWidthRef.current ? targetWidth : undefined;
+      const unshiftedRight = rect.right - menuShiftRef.current;
+      const unshiftedLeft = unshiftedRight - targetWidth;
+      const maxLeft = rightBoundary - targetWidth;
+      const targetLeft = Math.min(
+        Math.max(unshiftedLeft, leftBoundary),
+        maxLeft,
+      );
+      const nextShift = targetLeft - unshiftedLeft;
+
+      if (menuWidthLimitRef.current !== nextWidthLimit) {
+        menuWidthLimitRef.current = nextWidthLimit;
+        setMenuWidthLimit(nextWidthLimit);
+      }
+      if (menuShiftRef.current !== nextShift) {
+        menuShiftRef.current = nextShift;
+        setMenuShift(nextShift);
+      }
     };
     clamp();
     window.addEventListener("resize", clamp);
@@ -1884,7 +1920,19 @@ function BranchPicker(props: {
           className="branch-picker__menu"
           ref={menuRef}
           style={
-            menuShift ? { transform: `translateX(${menuShift}px)` } : undefined
+            menuShift || menuWidthLimit !== undefined
+              ? {
+                  ...(menuShift
+                    ? { transform: `translateX(${menuShift}px)` }
+                    : {}),
+                  ...(menuWidthLimit !== undefined
+                    ? {
+                        maxWidth: `${menuWidthLimit}px`,
+                        minWidth: `${menuWidthLimit}px`,
+                      }
+                    : {}),
+                }
+              : undefined
           }
         >
           <div className="branch-picker__search">
