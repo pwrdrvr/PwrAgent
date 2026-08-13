@@ -4505,6 +4505,37 @@ describe("Sidebar", () => {
       .not.toBeInTheDocument();
   });
 
+  it("marks an unread Attention thread read from the thread context menu", async () => {
+    const onMarkThreadsSeen = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="attention"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[updatedSinceSeenThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-updated"
+        threads={[updatedSinceSeenThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onMarkThreadsSeen={onMarkThreadsSeen}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    await clickElement(screen.getByRole("menuitem", { name: "Mark Read" }));
+
+    expect(onMarkThreadsSeen).toHaveBeenCalledWith([updatedSinceSeenThread]);
+    expect(screen.queryByRole("menuitem", { name: "Mark Read" }))
+      .not.toBeInTheDocument();
+  });
+
   it("omits Mark Unread for an already-unread thread", () => {
     render(
       <Sidebar
