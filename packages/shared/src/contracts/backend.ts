@@ -330,6 +330,18 @@ export type AcpAgentPreference = {
 export type ListAcpAgentSettingsRequest = {
   refresh?: boolean;
   /**
+   * Restrict local discovery and capability probing to these provider ids.
+   * Omit for every configured provider. Used by explicit onboarding login
+   * actions so starting Gemini never starts another CLI as a side effect.
+   */
+  registryIds?: string[];
+  /**
+   * When false, refresh executable paths and versions without launching an
+   * ACP runtime. Safe for background discovery surfaces such as onboarding,
+   * where an agent launch can begin an interactive browser login.
+   */
+  probeCapabilities?: boolean;
+  /**
    * Force a re-probe of every discovered agent's runtime capabilities,
    * bypassing the freshness window. The "Discover new" button sets this so a
    * user can always re-probe on demand. When omitted, a refresh only launches

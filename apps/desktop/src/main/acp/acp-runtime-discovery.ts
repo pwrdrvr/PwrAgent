@@ -25,6 +25,7 @@ export async function discoverAcpRuntimeCapabilities(
   options: {
     cwd: string;
     now?: () => number;
+    requestTimeoutMs?: number;
     transportFactory?: (agent: AcpInstalledAgentRecord) => AcpJsonRpcTransport;
   },
 ): Promise<AcpRuntimeDiscoveryResult> {
@@ -39,7 +40,8 @@ export async function discoverAcpRuntimeCapabilities(
     options.transportFactory?.(agent) ??
     new AcpStdioJsonRpcTransport({
       launchDescriptor: agent.launchDescriptor,
-      requestTimeoutMs: ACP_DISCOVERY_REQUEST_TIMEOUT_MS,
+      requestTimeoutMs:
+        options.requestTimeoutMs ?? ACP_DISCOVERY_REQUEST_TIMEOUT_MS,
     });
   const client = new AcpAgentClient({
     backendId: agent.backendId,

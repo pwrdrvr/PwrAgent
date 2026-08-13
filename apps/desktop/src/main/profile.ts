@@ -6,6 +6,11 @@ import {
   isCanonicalProfileName,
   normalizeProfileName,
 } from "@pwragent/shared";
+import {
+  applyTomlEdits,
+  parseTomlTables,
+  type TomlEdit,
+} from "./settings/toml-editor";
 
 export { normalizeProfileName };
 
@@ -517,7 +522,7 @@ export function ensureBootstrapProfileDir(options?: {
   const profileDir = resolveBootstrapProfileDir(options);
   const created = !fs.existsSync(profileDir);
   fs.mkdirSync(path.join(profileDir, "state"), { recursive: true });
-  writeInitialOnboardingMarker(path.join(profileDir, "config.toml"));
+  writeInitialBootstrapConfig(path.join(profileDir, "config.toml"));
   return { profileDir, created };
 }
 
@@ -562,6 +567,33 @@ function writeInitialOnboardingMarker(configPath: string): void {
     return;
   }
   fs.writeFileSync(configPath, "[onboarding]\ncompleted = false\n", "utf8");
+}
+
+/**
+ * Bootstrap is the only profile state where ACP providers start disabled.
+ * Existing and directly-created profiles retain the historical default-on
+ * behavior; wizard-created profiles inherit the explicit choices copied from
+ * this throwaway config at graduation.
+ */
+function writeInitialBootstrapConfig(configPath: string): void {
+  const source = fs.existsSync(configPath)
+    ? fs.readFileSync(configPath, "utf8")
+    : "[onboarding]\ncompleted = false\n";
+  const tables = parseTomlTables(source, configPath);
+  const edits: TomlEdit[] = ["gemini", "grok", "kimi", "qwen"].flatMap(
+    (registryId) =>
+      tables[`acp_agents.${registryId}`]?.enabled === undefined
+        ? [{
+            op: "set" as const,
+            path: ["acp_agents", registryId, "enabled"],
+            value: false,
+          }]
+        : [],
+  );
+  const next = applyTomlEdits(source, edits);
+  if (next !== source || !fs.existsSync(configPath)) {
+    fs.writeFileSync(configPath, next, "utf8");
+  }
 }
 
 export function setDefaultProfileName(
