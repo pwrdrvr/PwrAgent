@@ -1025,6 +1025,10 @@ export type ThreadViewProps = {
   findInitialQuery?: string;
   /** Turn id to load+scroll to when deep-linking a search match. */
   findTurnId?: string;
+  /** Message id to reveal after opening a transcript deep link. */
+  linkedMessageId?: string;
+  linkedMessageRequestKey?: number;
+  onLinkedMessageHandled?: () => void;
   /** Bumped on each ⌘F so an already-open bar pulls focus back to its field. */
   findFocusNonce?: number;
   onLoadOlder: () => Promise<void>;
@@ -3211,6 +3215,8 @@ export function ThreadView(props: ThreadViewProps) {
               fileViewerContext={fileViewerContext}
               loading={props.loading}
               loadingMore={props.loadingMore}
+              linkedMessageId={props.linkedMessageId}
+              linkedMessageRequestKey={props.linkedMessageRequestKey}
               pagination={visibleTranscriptPagination}
               parentThreadId={selectedThread!.id}
               // File-diff activity renders in the LiveWorkRail above
@@ -3241,6 +3247,7 @@ export function ThreadView(props: ThreadViewProps) {
               pendingUsageActivityEntry={pendingUsageActivityEntry}
               threadId={`${selectedThread!.source}:${selectedThread!.id}`}
               onLoadOlder={loadOlderTranscript}
+              onLinkedMessageHandled={props.onLinkedMessageHandled}
               onOpenImage={setExpandedImage}
               onExpandedActivityIdsChange={
                 props.onExpandedTranscriptActivityIdsChange

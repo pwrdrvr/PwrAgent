@@ -89,6 +89,8 @@ type TranscriptListProps = {
   expandedWorkPhaseGroupIds?: string[];
   loading: boolean;
   loadingMore: boolean;
+  linkedMessageId?: string;
+  linkedMessageRequestKey?: number;
   pendingActivityEntry?: AppServerThreadActivityEntry;
   pendingProtocolActivityEntry?: AppServerThreadActivityEntry;
   pendingUsageActivityEntry?: AppServerThreadActivityEntry;
@@ -127,6 +129,7 @@ type TranscriptListProps = {
   onPendingUserInputChange?: (state: PendingQuestionnaireState) => void;
   onSubmitPendingUserInput?: (state: PendingQuestionnaireState) => Promise<void>;
   onLoadOlder: () => Promise<void>;
+  onLinkedMessageHandled?: () => void;
 };
 
 type ScrollSnapshot = {
@@ -651,7 +654,10 @@ export function TranscriptList(props: TranscriptListProps) {
   const olderPageRequestGenerationRef = useRef(0);
   const lastUnderflowHistoryRequestRef = useRef<string | undefined>(undefined);
   const latestHydrationPendingRef = useRef(false);
+  const linkedMessageHistoryRequestRef = useRef<string | undefined>(undefined);
+  const handledLinkedMessageRequestRef = useRef<string | undefined>(undefined);
   const [olderPageRequestSettledKey, setOlderPageRequestSettledKey] = useState(0);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
   const shouldScrollToBottomRef = useRef(true);
   const isGluedToBottomRef = useRef(true);
   const [hasContentBelow, setHasContentBelow] = useState(false);
@@ -693,6 +699,9 @@ export function TranscriptList(props: TranscriptListProps) {
   );
   const loading = props.loading;
   const loadingMore = props.loadingMore;
+  const linkedMessageId = props.linkedMessageId;
+  const linkedMessageRequestKey = props.linkedMessageRequestKey;
+  const onLinkedMessageHandled = props.onLinkedMessageHandled;
   const onLoadOlder = props.onLoadOlder;
   useEffect(() => {
     olderPageRequestGenerationRef.current += 1;
@@ -1088,6 +1097,69 @@ export function TranscriptList(props: TranscriptListProps) {
   }, []);
 
   useEffect(() => {
+    if (!highlightedMessageId) {
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => {
+      setHighlightedMessageId((current) =>
+        current === highlightedMessageId ? undefined : current,
+      );
+    }, 2_400);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [highlightedMessageId]);
+
+  useEffect(() => {
+    const messageId = linkedMessageId;
+    if (!messageId) {
+      return;
+    }
+    const requestKey = `${linkedMessageRequestKey ?? 0}:${messageId}`;
+    if (handledLinkedMessageRequestRef.current === requestKey) {
+      return;
+    }
+    const target = [...(scrollContentRef.current?.querySelectorAll<HTMLElement>(
+      "[data-entry-id]",
+    ) ?? [])].find((entry) => entry.dataset.entryId === messageId);
+    if (target) {
+      handledLinkedMessageRequestRef.current = requestKey;
+      linkedMessageHistoryRequestRef.current = undefined;
+      disableBottomGlue();
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedMessageId(messageId);
+      onLinkedMessageHandled?.();
+      return;
+    }
+    if (
+      props.pagination?.hasPreviousPage
+      && !loading
+      && !loadingMore
+    ) {
+      const historyRequestKey = [
+        requestKey,
+        props.pagination.previousCursor ?? "",
+        props.entries[0]?.id ?? "",
+      ].join(":");
+      if (linkedMessageHistoryRequestRef.current !== historyRequestKey) {
+        linkedMessageHistoryRequestRef.current = historyRequestKey;
+        requestOlderPage();
+      }
+    }
+  }, [
+    disableBottomGlue,
+    props.entries,
+    linkedMessageId,
+    linkedMessageRequestKey,
+    loading,
+    loadingMore,
+    onLinkedMessageHandled,
+    props.pagination?.hasPreviousPage,
+    props.pagination?.previousCursor,
+    requestOlderPage,
+  ]);
+
+  useEffect(() => {
     if (props.loading && !hasTranscriptContent) {
       shouldScrollToBottomRef.current = true;
     }
@@ -1424,6 +1496,15 @@ export function TranscriptList(props: TranscriptListProps) {
                 key={entryKey}
                 className="transcript-list__item"
                 role="listitem"
+                data-entry-id={
+                  item.type === "workPhaseGroup" ? undefined : item.entry.id
+                }
+                data-linked-message={
+                  item.type !== "workPhaseGroup"
+                  && item.entry.id === highlightedMessageId
+                    ? "true"
+                    : undefined
+                }
                 data-turn-id={turnId || undefined}
                 data-turn-time={
                   typeof turnTime === "number" ? turnTime : undefined

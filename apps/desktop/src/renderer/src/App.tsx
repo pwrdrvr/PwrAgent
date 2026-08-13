@@ -286,6 +286,12 @@ function DesktopAppShell(props: {
     threadKey: string;
     turnId?: string;
   }>();
+  const [messageLinkRequest, setMessageLinkRequest] = useState<{
+    messageId: string;
+    nonce: number;
+    threadKey: string;
+  }>();
+  const messageLinkNonceRef = useRef(0);
   // Bumped on every ⌘F so an already-open find bar takes focus back.
   const [findFocusNonce, setFindFocusNonce] = useState(0);
   // Initial section for SettingsScreen — non-undefined when navigation
@@ -965,8 +971,16 @@ function DesktopAppShell(props: {
       instanceId?: FederationInstanceId;
       instanceLabel?: string;
       inThreadList?: boolean;
+      messageId?: string;
       threadId: string;
     }): void => {
+      setMessageLinkRequest(request.messageId
+        ? {
+            messageId: request.messageId,
+            nonce: ++messageLinkNonceRef.current,
+            threadKey: buildThreadIdentityKey(request.backend, request.threadId),
+          }
+        : undefined);
       if (request.instanceId) {
         const windowTarget = readRendererFederationTarget();
         if (windowTarget?.instanceId !== request.instanceId) {
@@ -1648,6 +1662,17 @@ function DesktopAppShell(props: {
     findInitialQuery: threadFindInitialQuery,
     findTurnId: threadFindTurnId,
     findFocusNonce,
+    linkedMessageId:
+      messageLinkRequest?.threadKey === navigation.selectedThreadKey
+        ? messageLinkRequest?.messageId
+        : undefined,
+    linkedMessageRequestKey:
+      messageLinkRequest?.threadKey === navigation.selectedThreadKey
+        ? messageLinkRequest?.nonce
+        : undefined,
+    onLinkedMessageHandled: () => {
+      setMessageLinkRequest(undefined);
+    },
     onFindOpenChange: (open: boolean) => {
       // The bar only ever calls this to close itself (Escape / ✕). Clear both
       // the manual toggle and any deep-link request so it stays closed.
