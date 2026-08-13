@@ -1165,7 +1165,7 @@ test.describe("federation remote window", () => {
       expect(relationship.parentThread?.pinnedRank).toBeTruthy();
 
       const viewerHomeRoot = viewer.homeRoot;
-      await viewer.electronApp.close();
+      await viewer.closeApplication();
       // The E2E memory secret store intentionally does not survive process
       // exit. Keep federation stopped during boot so a temporary regenerated
       // identity cannot be rejected before the original keys are restored.
@@ -1207,7 +1207,7 @@ test.describe("federation remote window", () => {
       expect(relationship.parentThread?.pinnedRank).toBeTruthy();
 
       const ownerHomeRoot = owner.homeRoot;
-      await owner.electronApp.close();
+      await owner.closeApplication();
       disableE2eFederationBeforeRelaunch(ownerHomeRoot);
       const remoteParentRow = viewer.window.locator(".thread-row", {
         has: viewer.window.locator(".thread-row__title", {

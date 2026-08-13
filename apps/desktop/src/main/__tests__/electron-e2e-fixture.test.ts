@@ -27,7 +27,10 @@ describe("Electron E2E fixture teardown", () => {
 
     await expect(
       closeElectronApplication(electronApp as never),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      classification: "healthy",
+      forceExitOutcome: "not-needed",
+    });
   });
 
   it("keeps keychain access disabled while enabling writable screenshot storage", () => {

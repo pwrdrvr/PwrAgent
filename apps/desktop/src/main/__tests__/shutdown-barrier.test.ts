@@ -6,10 +6,15 @@ describe("createShutdownBarrier", () => {
     vi.useFakeTimers();
     try {
       const logger = { info: vi.fn(), warn: vi.fn() };
+      const observer = {
+        phaseStarted: vi.fn(),
+        phaseFinished: vi.fn(),
+      };
       const secondPhase = vi.fn(async () => undefined);
       const runShutdown = createShutdownBarrier({
         globalTimeoutMs: 100,
         logger,
+        observer,
         phases: [
           {
             name: "resistant",
@@ -41,6 +46,14 @@ describe("createShutdownBarrier", () => {
         "shutdown phase timed-out",
         expect.objectContaining({ phase: "resistant", timeoutMs: 40 }),
       );
+      expect(observer.phaseStarted.mock.calls).toEqual([
+        ["resistant"],
+        ["cleanup"],
+      ]);
+      expect(observer.phaseFinished.mock.calls).toEqual([
+        [expect.objectContaining({ name: "resistant", outcome: "timed-out" })],
+        [expect.objectContaining({ name: "cleanup", outcome: "completed" })],
+      ]);
     } finally {
       vi.useRealTimers();
     }

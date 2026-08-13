@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, nativeImage, shell } from "electron";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
@@ -190,6 +191,12 @@ import {
   setUpdateInstallPreparationHandler,
 } from "./update-install-state";
 import { createShutdownBarrier } from "./shutdown-barrier";
+import {
+  createE2eShutdownDiagnosticsRecorder,
+  E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
+  E2E_SHUTDOWN_LAUNCH_ID_ENV,
+  type E2eShutdownPhase,
+} from "./e2e-shutdown-diagnostics";
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -205,6 +212,11 @@ const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
 const FEDERATION_SHUTDOWN_TIMEOUT_MS = 4_000;
 const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 7_500;
 const MCP_CONNECTION_SHUTDOWN_TIMEOUT_MS = 2_000;
+const e2eShutdownDiagnostics = createE2eShutdownDiagnosticsRecorder({
+  enabled: process.env.PWRAGENT_E2E === "1" && !app.isPackaged,
+  filePath: process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV],
+  launchId: process.env[E2E_SHUTDOWN_LAUNCH_ID_ENV],
+});
 
 // Tart's AppleParavirtGPU can reset under sustained Electron E2E load,
 // delaying WindowServer paints or rebooting the guest. This must run before
@@ -521,10 +533,17 @@ async function closeRendererWindowsBeforeResourceShutdown(
   source: string,
 ): Promise<void> {
   rendererWindowShutdownPromise ??= (async () => {
+    const startedAt = performance.now();
+    e2eShutdownDiagnostics.beginPhase("renderer-window");
     const windows = BrowserWindow.getAllWindows().filter(
       (window) => !window.isDestroyed(),
     );
     if (windows.length === 0) {
+      e2eShutdownDiagnostics.finishPhase(
+        "renderer-window",
+        "completed",
+        performance.now() - startedAt,
+      );
       return;
     }
 
@@ -602,6 +621,11 @@ async function closeRendererWindowsBeforeResourceShutdown(
       durationLimitMs: RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS,
       outcome,
     });
+    e2eShutdownDiagnostics.finishPhase(
+      "renderer-window",
+      outcome === "closed" ? "completed" : "timed-out",
+      performance.now() - startedAt,
+    );
   })();
   await rendererWindowShutdownPromise;
 }
@@ -609,6 +633,24 @@ async function closeRendererWindowsBeforeResourceShutdown(
 const runMainProcessShutdownBarrier = createShutdownBarrier({
   globalTimeoutMs: MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS,
   logger: mainLog,
+  observer: {
+    phaseStarted: (phase) => {
+      const diagnosticPhase = toE2eShutdownPhase(phase);
+      if (diagnosticPhase) {
+        e2eShutdownDiagnostics.beginPhase(diagnosticPhase);
+      }
+    },
+    phaseFinished: (outcome) => {
+      const diagnosticPhase = toE2eShutdownPhase(outcome.name);
+      if (diagnosticPhase) {
+        e2eShutdownDiagnostics.finishPhase(
+          diagnosticPhase,
+          outcome.outcome,
+          outcome.durationMs,
+        );
+      }
+    },
+  },
   phases: [
     {
       name: "messaging",
@@ -646,21 +688,42 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
 
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
-    // Electron emits before-quit while renderer windows are still live. Close
-    // them first so in-flight renderer work cannot cross the boundary where
-    // IPC handlers and their backing stores are disposed.
-    await closeRendererWindowsBeforeResourceShutdown(source);
-    disposeMainProcessResourcesSync({ releaseFederationLease: false });
-    await runMainProcessShutdownBarrier(source);
-    // Keep the scheduler subscribed until the app-server registry is closed.
-    // A queued registry entry can otherwise start after its durable lease was
-    // released, leaving the next process free to dispatch the same action.
-    disposeScheduledThreadActionService();
-    getExistingRuntimeLeaseManager()?.markExited();
-    disposeAppState();
-    mainProcessShutdownComplete = true;
+    e2eShutdownDiagnostics.beginOverall();
+    try {
+      // Electron emits before-quit while renderer windows are still live. Close
+      // them first so in-flight renderer work cannot cross the boundary where
+      // IPC handlers and their backing stores are disposed.
+      await closeRendererWindowsBeforeResourceShutdown(source);
+      disposeMainProcessResourcesSync({ releaseFederationLease: false });
+      await runMainProcessShutdownBarrier(source);
+      // Keep the scheduler subscribed until the app-server registry is closed.
+      // A queued registry entry can otherwise start after its durable lease was
+      // released, leaving the next process free to dispatch the same action.
+      disposeScheduledThreadActionService();
+      getExistingRuntimeLeaseManager()?.markExited();
+      disposeAppState();
+      mainProcessShutdownComplete = true;
+      e2eShutdownDiagnostics.finishOverall("completed");
+    } catch (error) {
+      e2eShutdownDiagnostics.finishOverall("failed");
+      throw error;
+    }
   })();
   await mainProcessShutdownPromise;
+}
+
+function toE2eShutdownPhase(
+  phase: string,
+): Exclude<E2eShutdownPhase, "overall" | "renderer-window"> | undefined {
+  switch (phase) {
+    case "messaging":
+    case "federation":
+    case "app-server":
+    case "mcp-connections":
+      return phase;
+    default:
+      return undefined;
+  }
 }
 
 async function prepareForUpdateInstallShutdown(): Promise<void> {

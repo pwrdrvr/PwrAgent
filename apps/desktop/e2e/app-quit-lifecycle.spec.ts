@@ -1,6 +1,12 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type ElectronApplication } from "@playwright/test";
+import {
+  expect,
+  test,
+  type ElectronApplication,
+  type Page,
+} from "@playwright/test";
+import { createBoundedOutputMatcher } from "./fixtures/bounded-output-matcher";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 /**
@@ -42,7 +48,6 @@ type QuitOutcome = {
   exited: boolean;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
-  output: string;
 };
 
 /**
@@ -63,7 +68,6 @@ function requestQuit(electronApp: ElectronApplication): void {
 /** Wait for real process exit, bounded by the product's own shutdown ceiling. */
 async function awaitExit(
   electronApp: ElectronApplication,
-  captured: () => string,
 ): Promise<QuitOutcome> {
   const child = electronApp.process();
   const startedAt = Date.now();
@@ -91,32 +95,47 @@ async function awaitExit(
     exited: child.exitCode !== null || child.signalCode !== null,
     exitCode: child.exitCode,
     signalCode: child.signalCode,
-    output: captured(),
   };
-}
-
-/**
- * Mirror the main process's console transport into a buffer. electron-log
- * keeps its console transport enabled outside Vitest, so every `mainLog` line
- * the quit path emits ("quit in progress", "shutdown barrier completed", …)
- * shows up here — which is what turns a failure into a diagnosis instead of a
- * timeout.
- */
-function captureMainProcessOutput(electronApp: ElectronApplication): () => string {
-  const chunks: string[] = [];
-  const child = electronApp.process();
-  child.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk.toString()));
-  child.stderr?.on("data", (chunk: Buffer) => chunks.push(chunk.toString()));
-  return () => chunks.join("");
 }
 
 function describeOutcome(label: string, outcome: QuitOutcome): string {
   return [
     `${label} did not exit within ${QUIT_BUDGET_MS}ms after app.quit().`,
     `elapsedMs=${outcome.elapsedMs} exitCode=${String(outcome.exitCode)} signal=${String(outcome.signalCode)}`,
-    "--- main process output ---",
-    outcome.output.slice(-16_000),
+    "See the sanitized pwragent-e2e-shutdown JSON in the job log and Playwright artifact.",
   ].join("\n");
+}
+
+/** Observe one fixed acknowledgement without retaining or printing raw logs. */
+function watchMainProcessOutputFor(
+  electronApp: ElectronApplication,
+  expected: string,
+): () => boolean {
+  const matcher = createBoundedOutputMatcher(expected);
+  const inspect = (chunk: Buffer): void => {
+    matcher.inspect(chunk.toString());
+  };
+  const child = electronApp.process();
+  child.stdout?.on("data", inspect);
+  child.stderr?.on("data", inspect);
+  return matcher.matched;
+}
+
+async function setQuitConfirmationEnabled(
+  page: Page,
+  enabled: boolean,
+): Promise<void> {
+  await page.evaluate(async (nextEnabled) => {
+    await (
+      window as unknown as {
+        pwragent: {
+          writeSettingsConfig: (request: unknown) => Promise<unknown>;
+        };
+      }
+    ).pwragent.writeSettingsConfig({
+      patch: { general: { confirmQuitWithInProgressThreads: nextEnabled } },
+    });
+  }, enabled);
 }
 
 test("exits the process when a profile-backed session is asked to quit", async () => {
@@ -125,11 +144,9 @@ test("exits the process when a profile-backed session is asked to quit", async (
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
   });
-  const captured = captureMainProcessOutput(app.electronApp);
-
   try {
     requestQuit(app.electronApp);
-    const outcome = await awaitExit(app.electronApp, captured);
+    const outcome = await awaitExit(app.electronApp);
     expect(outcome.exited, describeOutcome("profile-backed app", outcome)).toBe(
       true,
     );
@@ -158,22 +175,16 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
   });
-  const captured = captureMainProcessOutput(app.electronApp);
+  const repeatAcknowledged = watchMainProcessOutputFor(
+    app.electronApp,
+    "quit requested while confirmation is open",
+  );
+  let dialog: Page | undefined;
 
   try {
     // The shared harness seeds confirmation OFF so specs close cleanly. This
     // spec is about the confirmation, so turn it back on the way the app does.
-    await app.window.evaluate(async () => {
-      await (
-        window as unknown as {
-          pwragent: {
-            writeSettingsConfig: (request: unknown) => Promise<unknown>;
-          };
-        }
-      ).pwragent.writeSettingsConfig({
-        patch: { general: { confirmQuitWithInProgressThreads: true } },
-      });
-    });
+    await setQuitConfirmationEnabled(app.window, true);
 
     await app.window
       .getByRole("button", { name: /Replay smoke thread/i })
@@ -202,23 +213,24 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
 
     const dialogPromise = app.electronApp.waitForEvent("window");
     requestQuit(app.electronApp);
-    const dialog = await dialogPromise;
+    const activeDialog = await dialogPromise;
+    dialog = activeDialog;
     await expect(
-      dialog.getByRole("heading", { name: "Quit PwrAgent?" }),
+      activeDialog.getByRole("heading", { name: "Quit PwrAgent?" }),
     ).toBeVisible();
 
     // Stand in for the impatient operator's second Cmd+Q: a keystroke on the
     // dialog cancels the auto-quit permanently, so nothing but the dialog will
     // ever settle this request.
-    await dialog.keyboard.press("ArrowDown");
+    await activeDialog.keyboard.press("ArrowDown");
     await expect
-      .poll(async () => await dialog.locator("#countdown").innerText())
+      .poll(async () => await activeDialog.locator("#countdown").innerText())
       .toBe("Auto-quit cancelled. Choose an option below.");
 
     requestQuit(app.electronApp);
     await expect
-      .poll(() => captured())
-      .toContain("quit requested while confirmation is open");
+      .poll(repeatAcknowledged)
+      .toBe(true);
     // The repeat request raises the existing prompt; it must not stack a second
     // dialog on top of it.
     expect(
@@ -227,14 +239,24 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
 
     // Answering it has to actually reach process exit — the countdown is gone,
     // so this is the only remaining path out.
-    await dialog.locator("#quit").dispatchEvent("click");
-    const outcome = await awaitExit(app.electronApp, captured);
+    await activeDialog.locator("#quit").dispatchEvent("click");
+    const outcome = await awaitExit(app.electronApp);
     expect(
       outcome.exited,
       describeOutcome("app with quit confirmation answered", outcome),
     ).toBe(true);
     expect(outcome.signalCode).toBeNull();
   } finally {
+    // An assertion failure must not leave this spec's deliberately blocking
+    // prompt in front of fixture teardown. Restore the shared harness default,
+    // then answer an already-open prompt so cleanup remains graceful and a
+    // test failure cannot masquerade as repeated guest degradation.
+    await setQuitConfirmationEnabled(app.window, false).catch(() => undefined);
+    if (dialog && !dialog.isClosed()) {
+      await dialog.locator("#quit").dispatchEvent("click").catch(
+        () => undefined,
+      );
+    }
     await app.close();
   }
 });
@@ -249,14 +271,13 @@ test("exits the process when the first-run wizard is asked to quit", async () =>
     suppressOnboarding: false,
     requiresReplayDriver: false,
   });
-  const captured = captureMainProcessOutput(app.electronApp);
 
   try {
     await expect(
       app.window.getByRole("heading", { name: /A few short choices/i }),
     ).toBeVisible();
     requestQuit(app.electronApp);
-    const outcome = await awaitExit(app.electronApp, captured);
+    const outcome = await awaitExit(app.electronApp);
     expect(outcome.exited, describeOutcome("first-run wizard app", outcome)).toBe(
       true,
     );

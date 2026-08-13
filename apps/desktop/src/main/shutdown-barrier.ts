@@ -22,11 +22,17 @@ export type ShutdownSummary = {
   outcomes: ShutdownPhaseOutcome[];
 };
 
+export type ShutdownBarrierObserver = {
+  phaseStarted?(phase: string): void;
+  phaseFinished?(outcome: ShutdownPhaseOutcome): void;
+};
+
 export function createShutdownBarrier(options: {
   phases: ShutdownPhase[];
   globalTimeoutMs: number;
   logger: ShutdownBarrierLogger;
   now?: () => number;
+  observer?: ShutdownBarrierObserver;
 }): (source: string) => Promise<ShutdownSummary> {
   let shutdownPromise: Promise<ShutdownSummary> | undefined;
   return (source) => {
@@ -40,6 +46,7 @@ async function runShutdownPhases(options: {
   globalTimeoutMs: number;
   logger: ShutdownBarrierLogger;
   now?: () => number;
+  observer?: ShutdownBarrierObserver;
   source: string;
 }): Promise<ShutdownSummary> {
   const now = options.now ?? Date.now;
@@ -60,6 +67,7 @@ async function runShutdownPhases(options: {
         durationMs: 0,
       };
       outcomes.push(outcome);
+      options.observer?.phaseFinished?.(outcome);
       options.logger.warn("shutdown phase skipped after global deadline", {
         source: options.source,
         phase: phase.name,
@@ -69,6 +77,7 @@ async function runShutdownPhases(options: {
 
     const phaseStartedAt = now();
     const timeoutMs = Math.min(phase.timeoutMs, remainingMs);
+    options.observer?.phaseStarted?.(phase.name);
     const result = await runPhase(phase.run, timeoutMs);
     const outcome: ShutdownPhaseOutcome = {
       name: phase.name,
@@ -77,6 +86,7 @@ async function runShutdownPhases(options: {
       ...(result.error ? { error: result.error } : {}),
     };
     outcomes.push(outcome);
+    options.observer?.phaseFinished?.(outcome);
     const detail = {
       source: options.source,
       phase: phase.name,
