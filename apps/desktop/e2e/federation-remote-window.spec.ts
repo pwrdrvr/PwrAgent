@@ -1233,9 +1233,12 @@ test.describe("federation remote window", () => {
         timeout: 90_000,
       });
 
+      // Anchored regex, not `exact: true`: this test pins the parent, and
+      // a pinned row's accessible name is "<title>, pinned" — while the
+      // anchor still excludes the row's kebab/sub-thread labels that
+      // merely contain the title.
       const remoteParentButton = viewer.window.getByRole("button", {
-        name: "Remote Kimi parent",
-        exact: true,
+        name: /^Remote Kimi parent(, pinned)?$/,
       });
       await remoteParentButton.click({ button: "right" });
       await expect(

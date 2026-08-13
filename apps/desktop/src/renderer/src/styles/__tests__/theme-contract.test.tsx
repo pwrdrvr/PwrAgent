@@ -1281,24 +1281,15 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("keeps the directory pin boundary neutral in both densities", () => {
+    // Both densities share one 2px list gap since the 2026-08 inter-card
+    // spacing pass, so a single boundary compensation pairs with it — the
+    // boundary stays layout-neutral as long as these two values match.
     expect(
       extractRuleBody(css, ".sidebar-list,\n.directory-groups"),
-    ).toContain("gap: 4px;");
+    ).toContain("gap: 2px;");
     expect(
       extractRuleBody(css, ".directory-row__pin-drop-boundary"),
-    ).toContain("margin-block: -4px;");
-    expect(
-      extractRuleBody(
-        css,
-        ':root[data-density="compact"] .directory-row__pin-drop-boundary',
-      ),
     ).toContain("margin-block: -2px;");
-    expect(
-      extractRuleBody(
-        css,
-        ':root[data-density="compact"] .sidebar-list,\n:root[data-density="compact"] .directory-groups',
-      ),
-    ).toContain("gap: 2px;");
   });
 
   it("aligns the sidebar masthead and lanes to one shared inset system", () => {

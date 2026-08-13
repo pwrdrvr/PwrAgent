@@ -24,6 +24,7 @@ import type {
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsConfigPatch,
+  DesktopSidebarTextSize,
   DesktopUpdateChannel,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
@@ -31,12 +32,14 @@ import type {
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
+  DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   isDesktopAppearanceDensity,
   isDesktopAppearanceTheme,
+  isDesktopSidebarTextSize,
   isDesktopCodexProfileModel,
   isDesktopFederationMode,
   isFederationGatewayEndpointUrl,
@@ -98,6 +101,7 @@ export type DesktopSettingsConfig = {
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
+      sidebarTextSize?: DesktopSidebarTextSize;
     };
     codexProfileModel?: DesktopCodexProfileModel;
     messagingAcknowledgment?: DesktopMessagingAcknowledgment | null;
@@ -724,6 +728,23 @@ export function desktopSettingsPatchToEdits(
       set(
         ["general", "appearance", "density"],
         patch.general.appearance.density,
+      );
+    }
+  }
+
+  if (patch.general?.appearance?.sidebarTextSize !== undefined) {
+    if (
+      patch.general.appearance.sidebarTextSize
+        === DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT
+    ) {
+      edits.push({
+        op: "delete",
+        path: ["general", "appearance", "sidebar_text_size"],
+      });
+    } else {
+      set(
+        ["general", "appearance", "sidebar_text_size"],
+        patch.general.appearance.sidebarTextSize,
       );
     }
   }
@@ -1560,6 +1581,9 @@ function normalizeDesktopConfig(
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
         density: readAppearanceDensity(generalAppearance?.density),
+        sidebarTextSize: readSidebarTextSize(
+          generalAppearance?.sidebar_text_size,
+        ),
       },
       codexProfileModel: readCodexProfileModel(general?.codex_profile_model),
       messagingAcknowledgment: readMessagingAcknowledgment(
@@ -2201,6 +2225,14 @@ function readAppearanceDensity(
   value: TomlScalar | undefined,
 ): DesktopAppearanceDensity | undefined {
   return typeof value === "string" && isDesktopAppearanceDensity(value)
+    ? value
+    : undefined;
+}
+
+function readSidebarTextSize(
+  value: TomlScalar | undefined,
+): DesktopSidebarTextSize | undefined {
+  return typeof value === "string" && isDesktopSidebarTextSize(value)
     ? value
     : undefined;
 }

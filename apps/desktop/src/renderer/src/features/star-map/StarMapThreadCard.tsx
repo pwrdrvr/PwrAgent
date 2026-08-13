@@ -214,7 +214,6 @@ export function StarMapThreadCard(props: {
             // In the instance lenses the lane and the watermark already say
             // which machine this is; under the projects lens they do not.
             hideInstanceChip={!props.showInstanceChip}
-            hidePinChip
             chipVisibility={{
               provider: props.cardFields.provider,
               branch: props.cardFields.branch,

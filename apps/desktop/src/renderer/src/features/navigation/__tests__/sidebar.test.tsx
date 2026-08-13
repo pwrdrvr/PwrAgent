@@ -313,7 +313,7 @@ describe("Sidebar", () => {
     );
 
     expect(
-      threadCard(screen.getByRole("button", { name: "Cross-project cleanup" })),
+      threadCard(screen.getByRole("button", { name: /^Cross-project cleanup/ })),
     ).toHaveClass("is-remote-offline");
     expect(
       screen.queryByText("Error invoking remote method: peer is not connected"),
@@ -978,7 +978,7 @@ describe("Sidebar", () => {
     );
 
     expect(container.querySelector(".subthread-list")).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Cross-project cleanup" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Cross-project cleanup/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Adversarial review" })).toBeInTheDocument();
 
     fireEvent.click(
@@ -1264,7 +1264,7 @@ describe("Sidebar", () => {
       />,
     );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Cross-project cleanup/ }));
     expect(screen.queryByRole("menuitem", { name: "Sub-thread in Local" })).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }));
 
@@ -1480,7 +1480,7 @@ describe("Sidebar", () => {
       />,
     );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Cross-project cleanup/ }));
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
     fireEvent.contextMenu(document.body);
@@ -1542,7 +1542,7 @@ describe("Sidebar", () => {
       />,
     );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Cross-project cleanup/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Fork into New Worktree" }));
 
     expect(onForkThread).toHaveBeenCalledWith(sharedThread, "new-worktree");
@@ -1603,7 +1603,7 @@ describe("Sidebar", () => {
       />,
     );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Cross-project cleanup/ }));
 
     expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Fork into New Worktree" })).toBeNull();
@@ -1921,9 +1921,18 @@ describe("Sidebar", () => {
       }),
     );
 
-    expect(within(worktreeThreadRow).getByText("worktree")).toBeInTheDocument();
+    // Kind chips are icon-only since the 2026-08 density pass — the
+    // worktree/local word lives in the copyable chip's aria-label, not
+    // as visible chip text.
+    expect(
+      within(worktreeThreadRow).getByLabelText("Copy path for worktree PwrAgent"),
+    ).toBeInTheDocument();
+    expect(within(worktreeThreadRow).queryByText("worktree")).not.toBeInTheDocument();
     expect(within(worktreeThreadRow).queryByText("PwrAgent")).not.toBeInTheDocument();
-    expect(within(localThreadRow).getByText("local")).toBeInTheDocument();
+    expect(
+      within(localThreadRow).getByLabelText("Copy local path for PwrAgent"),
+    ).toBeInTheDocument();
+    expect(within(localThreadRow).queryByText("local")).not.toBeInTheDocument();
   });
 
   it("names every linked project in multi-directory rows", () => {
@@ -3256,7 +3265,7 @@ describe("Sidebar", () => {
     );
 
     const pinnedButton = screen.getByRole("button", {
-      name: "Pinned batch thread",
+      name: /^Pinned batch thread/,
     });
     const childButton = screen.getByRole("button", {
       name: "Child batch thread",
@@ -3509,7 +3518,7 @@ describe("Sidebar", () => {
     );
 
     fireEvent.contextMenu(
-      screen.getByRole("button", { name: "Cross-project cleanup" }),
+      screen.getByRole("button", { name: /^Cross-project cleanup/ }),
       { clientX: 48, clientY: 64 },
     );
 
@@ -3667,7 +3676,9 @@ describe("Sidebar", () => {
       expect.stringContaining("Updated thread"),
     ]);
     expect(
-      within(threadCard(rows[1]!)).getByRole("button", { name: "Unpin thread" }),
+      within(
+        rows[1]!.closest(".thread-row-shell") as HTMLElement,
+      ).getByRole("button", { name: "Unpin thread" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("separator", { name: "Unpinned threads" }),
@@ -3846,10 +3857,15 @@ describe("Sidebar", () => {
       name: /Cross-project cleanup|Updated thread/i,
     });
     expect(rows[0]).toHaveTextContent("Updated thread");
+    // Pinned state is the aria-hidden in-title marker since the 2026-08
+    // density pass (the old role="img" pin chip left the chip flow).
     expect(
-      within(threadCard(rows[0]!)).getByRole("img", { name: "Pinned" }),
-    ).toBeInTheDocument();
+      threadCard(rows[0]!).querySelector(".thread-row__heading-pin"),
+    ).not.toBeNull();
     expect(rows[1]).toHaveTextContent("Cross-project cleanup");
+    expect(
+      threadCard(rows[1]!).querySelector(".thread-row__heading-pin"),
+    ).toBeNull();
   });
 
   it("minimizes only unpinned directory threads and restores the sticky state", async () => {

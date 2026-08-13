@@ -1,6 +1,7 @@
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
+  DesktopSidebarTextSize,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
@@ -39,6 +40,7 @@ import {
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
+  DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
@@ -240,6 +242,7 @@ type DesktopSettingsServiceOptions = {
   onAppearanceChange?: (appearance: {
     theme: DesktopAppearanceTheme;
     density: DesktopAppearanceDensity;
+    sidebarTextSize: DesktopSidebarTextSize;
   }) => void;
 };
 
@@ -642,6 +645,9 @@ export class DesktopSettingsService {
           ),
           density: this.resolveAppearanceDensity(
             config.general?.appearance?.density,
+          ),
+          sidebarTextSize: this.resolveSidebarTextSize(
+            config.general?.appearance?.sidebarTextSize,
           ),
         },
         codexProfileModel: this.resolveCodexProfileModel(
@@ -1343,12 +1349,15 @@ export class DesktopSettingsService {
     if (
       appearancePatch
       && (appearancePatch.theme !== undefined
-        || appearancePatch.density !== undefined)
+        || appearancePatch.density !== undefined
+        || appearancePatch.sidebarTextSize !== undefined)
     ) {
       const next = this.readConfig().config.general?.appearance;
       this.options.onAppearanceChange?.({
         theme: next?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
         density: next?.density ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+        sidebarTextSize:
+          next?.sidebarTextSize ?? DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
       });
     }
     // Any successful write notifies generic listeners so main-process services
@@ -1951,6 +1960,15 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopAppearanceDensity> {
     return {
       value: configValue ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveSidebarTextSize(
+    configValue: DesktopSidebarTextSize | undefined,
+  ): DesktopSettingsValue<DesktopSidebarTextSize> {
+    return {
+      value: configValue ?? DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }

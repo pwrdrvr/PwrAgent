@@ -5,7 +5,6 @@ import {
   BranchIcon,
   DraftIcon,
   FolderIcon,
-  PinIcon,
   TerminalIcon,
   WorktreeIcon,
 } from "../../icons";
@@ -29,8 +28,6 @@ type ThreadMetaChipsProps = {
   /** A shell is alive for this thread — the row is how you find it again. */
   hasIntegratedTerminal?: boolean;
   hasInputRequest?: boolean;
-  /** Removes this top-level thread from the pinned section. */
-  onUnpin?: () => void;
   /**
    * When set, renders the "Scheduled" (future send time) or "Queued"
    * (waiting on the active turn) chip. Resolved upstream so a thread with
@@ -59,11 +56,15 @@ type ThreadMetaChipsProps = {
    */
   hideInstanceChip?: boolean;
   /**
-   * Suppresses the pinned marker. The Star Map is not the pinned section,
-   * so a pin chip there costs prime card space to say something the
-   * surface never acts on.
+   * PR chips, slotted into the flow right after the linked-directory
+   * chips and BEFORE the branch chip. The owner (ThreadRow) still
+   * renders them — this slot only fixes their position: provider +
+   * location are short fixed-width chips, PR chips are the actionable
+   * work product, and the branch is the longest, least-scanned string,
+   * so packing PRs before it keeps them on the first chip line instead
+   * of trailing the row.
    */
-  hidePinChip?: boolean;
+  prChips?: ReactNode;
   thread: NavigationThreadSummary;
 };
 
@@ -72,24 +73,17 @@ export function ThreadMetaChips({
   hasUnsentDraft = false,
   hasIntegratedTerminal = false,
   hasInputRequest = false,
-  onUnpin,
   queuedMessageState,
   includeLinkedDirectories = false,
   linkedDirectoryMode = "label",
   hideInstanceChip = false,
-  hidePinChip = false,
+  prChips,
   chipVisibility,
   thread,
 }: ThreadMetaChipsProps) {
   const showProvider = chipVisibility?.provider ?? true;
   const showBranch = chipVisibility?.branch ?? true;
   const maxLinkedDirectories = chipVisibility?.maxLinkedDirectories;
-  // Hover tooltip for the icon-only pin marker — sighted users get the
-  // "Pinned" label without the old text pill; screen readers get it from
-  // the marker's role="img" + aria-label. Uses the shared viewport
-  // tooltip (not a native `title`) so it escapes the sidebar's clipped
-  // scroll region, matching the copyable branch/path chips.
-  const pinTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const gitStateTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   // Sidebar rows are a clipped scroll region, so a native `title` gets
   // edge-clipped — the viewport tooltip is what the neighbouring chips use.
@@ -98,8 +92,6 @@ export function ThreadMetaChips({
   // the Star Map layer would paint over one anyway.
   const draftTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
-  const pinIsActionable = Boolean(onUnpin);
-  const pinTooltipText = pinIsActionable ? "Click to unpin" : "Pinned";
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
   const branchTooltip = useMemo(
@@ -163,6 +155,10 @@ export function ThreadMetaChips({
             ...new Map(
               thread.linkedDirectories.map((directory) => [
                 directory.kind,
+                // Icon-only: the worktree/local distinction is a glyph, not
+                // a word (2026-08 density pass — the literal "worktree"
+                // pill was the widest fixed chip on every row). The
+                // aria-label + copy tooltip still spell it out.
                 (
                   <CopyableThreadChip
                     aria-label={
@@ -171,14 +167,20 @@ export function ThreadMetaChips({
                         : `Copy local path for ${directory.label}`
                     }
                     key={`${thread.id}:${directory.kind}:location-kind`}
-                    className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
+                    className="thread-row__chip thread-row__chip--location path-copy-target tooltip-target"
                     value={
                       directory.kind === "worktree"
                         ? directory.worktreePath ?? directory.path
                         : directory.path
                     }
                   >
-                    {directory.kind}
+                    <span aria-hidden="true" className="thread-row__chip-icon">
+                      {directory.kind === "worktree" ? (
+                        <WorktreeIcon size={12} />
+                      ) : (
+                        <FolderIcon size={12} />
+                      )}
+                    </span>
                   </CopyableThreadChip>
                 ),
               ]),
@@ -251,7 +253,7 @@ export function ThreadMetaChips({
         <span
           aria-label="A message is scheduled to send"
           role="img"
-          className="thread-row__chip thread-row__chip--scheduled"
+          className="thread-row__chip thread-row__chip--scheduled thread-row__chip--persistent"
           title="A message is scheduled to send"
         >
           Scheduled
@@ -260,7 +262,7 @@ export function ThreadMetaChips({
         <span
           aria-label="A message is queued to send"
           role="img"
-          className="thread-row__chip thread-row__chip--queued"
+          className="thread-row__chip thread-row__chip--queued thread-row__chip--persistent"
           title="A message is queued to send"
         >
           Queued
@@ -282,7 +284,7 @@ export function ThreadMetaChips({
           // never be heard. Same reason the pin and terminal markers below
           // carry one.
           role="img"
-          className="thread-row__chip thread-row__chip--draft"
+          className="thread-row__chip thread-row__chip--draft thread-row__chip--persistent"
           data-thread-draft="unsent"
           onMouseEnter={(event) =>
             draftTooltip.show(
@@ -340,56 +342,7 @@ export function ThreadMetaChips({
         ? linkedDirectoryChips
         : linkedDirectoryChips.slice(0, maxLinkedDirectories)}
 
-      {thread.pinnedRank && !thread.parentThreadId && !hidePinChip ? (
-        <span
-          aria-label={pinIsActionable ? "Unpin thread" : "Pinned"}
-          role={pinIsActionable ? "button" : "img"}
-          tabIndex={pinIsActionable ? 0 : undefined}
-          className="thread-row__chip thread-row__chip--pin"
-          // Deliberately use click, rather than pointer-down: the browser only
-          // dispatches click here when the pointer is released over the pin.
-          // Moving off the marker before release therefore leaves it pinned.
-          onClick={
-            pinIsActionable
-              ? (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  pinTooltip.hide();
-                  onUnpin?.();
-                }
-              : undefined
-          }
-          onKeyDown={
-            pinIsActionable
-              ? (event) => {
-                  if (event.key !== "Enter" && event.key !== " ") {
-                    return;
-                  }
-
-                  event.preventDefault();
-                  event.stopPropagation();
-                  pinTooltip.hide();
-                  onUnpin?.();
-                }
-              : undefined
-          }
-          onMouseEnter={(event) =>
-            pinTooltip.show(event.currentTarget, pinTooltipText)
-          }
-          onMouseLeave={pinTooltip.hide}
-          onFocus={
-            pinIsActionable
-              ? (event) => pinTooltip.show(event.currentTarget, pinTooltipText)
-              : undefined
-          }
-          onBlur={pinIsActionable ? pinTooltip.hide : undefined}
-        >
-          <span aria-hidden="true" className="thread-row__chip-icon">
-            <PinIcon size={12} />
-          </span>
-        </span>
-      ) : null}
-      {pinTooltip.tooltipNode}
+      {prChips}
 
       {branchChip && showBranch ? (
         <CopyableThreadChip
@@ -455,7 +408,7 @@ export function ThreadMetaChips({
         <span
           aria-label={detachedUnpublishedTooltip}
           role="img"
-          className="thread-row__chip thread-row__chip--unpublished"
+          className="thread-row__chip thread-row__chip--unpublished thread-row__chip--persistent"
           onMouseEnter={(event) =>
             gitStateTooltip.show(event.currentTarget, detachedUnpublishedTooltip)
           }

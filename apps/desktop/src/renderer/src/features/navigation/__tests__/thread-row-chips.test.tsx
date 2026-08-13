@@ -244,7 +244,7 @@ describe("ThreadRow chip flow", () => {
     expect(onUnbindMessagingBinding).not.toHaveBeenCalled();
   });
 
-  it("unpins only when the pin click finishes on the marker", () => {
+  it("toggles the pin from the hover actions button without selecting the row", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const { onSelectThread } = renderRow({
       thread: {
@@ -255,17 +255,26 @@ describe("ThreadRow chip flow", () => {
       onSetThreadPin,
     });
 
+    // The pin left the chip flow in the 2026-08 density pass: pinned
+    // STATE is the aria-hidden in-title marker, and the toggle is a
+    // real button in the hover actions cluster beside the reaction +
+    // overflow buttons.
     const pin = screen.getByRole("button", { name: "Unpin thread" });
-    const rowButton = screen.getByRole("button", { name: /Chip flow thread/i });
-    expect(pin.tagName).toBe("SPAN");
-    expect(pin).toHaveClass("thread-row__chip--pin");
-
-    // The marker mutates on click, not press: releasing on the surrounding
-    // row after leaving the pin must leave the thread pinned.
-    fireEvent.mouseDown(pin);
-    fireEvent.mouseLeave(pin);
-    fireEvent.mouseUp(rowButton);
-    expect(onSetThreadPin).not.toHaveBeenCalled();
+    expect(pin.tagName).toBe("BUTTON");
+    expect(pin).toHaveClass("thread-row__pin-button");
+    expect(pin).toHaveAttribute("aria-pressed", "true");
+    // The pinned STATE stays in the row's accessible name (the in-title
+    // marker is aria-hidden and this toggle only exists when a pin
+    // handler is wired), so screen readers hear it wherever rows render.
+    expect(
+      screen.getByRole("button", { name: "Chip flow thread, pinned" }),
+    ).toBeInTheDocument();
+    expect(
+      document.querySelector(".thread-row__heading-pin"),
+    ).not.toBeNull();
+    expect(
+      document.querySelector(".thread-row__chip--pin"),
+    ).toBeNull();
 
     fireEvent.click(pin);
     expect(onSetThreadPin).toHaveBeenCalledWith(
@@ -273,6 +282,29 @@ describe("ThreadRow chip flow", () => {
       false,
     );
     expect(onSelectThread).not.toHaveBeenCalled();
+  });
+
+  it("pins an unpinned thread from the same actions button", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    renderRow({
+      thread: {
+        ...baseThread,
+        pinnedRank: undefined,
+        reactions: [],
+      },
+      onSetThreadPin,
+    });
+
+    const pin = screen.getByRole("button", { name: "Pin thread" });
+    expect(pin).toHaveAttribute("aria-pressed", "false");
+    // No pinned-state marker on an unpinned row.
+    expect(document.querySelector(".thread-row__heading-pin")).toBeNull();
+
+    fireEvent.click(pin);
+    expect(onSetThreadPin).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-chips" }),
+      true,
+    );
   });
 
   it("does not invoke onSelectThread when the add-reaction smiley is clicked", () => {
@@ -594,14 +626,19 @@ describe("ThreadRow chip flow", () => {
     // ThreadMetaChips internals.
     const indexOf = (selector: string): number =>
       chipNodes.findIndex((el) => el.matches(selector) || el.querySelector(selector) !== null);
-    const prIdx = indexOf(".thread-row__chip--pr, [data-pr-chip]");
+    const prIdx = indexOf(".pr-chip");
+    const branchIdx = indexOf(".thread-row__chip--mono");
     const bindingIdx = indexOf(".thread-row__chip--binding, .thread-row__chip-wrap");
     const reactionIdx = indexOf(".thread-row__chip--reaction");
-    // Each chip type that's present comes after the previous one. Messaging
-    // bindings sit before PR chips so fixed-width metadata packs first and
-    // the variable-count PR + reaction chips trail at the end.
-    if (bindingIdx >= 0 && prIdx >= 0) expect(bindingIdx).toBeLessThan(prIdx);
-    if (prIdx >= 0 && reactionIdx >= 0) expect(prIdx).toBeLessThan(reactionIdx);
+    // PR chips slot into the meta flow BEFORE the branch chip (2026-08
+    // density pass — the branch is the longest, least-scanned string, so
+    // the actionable PRs pack ahead of it); bindings and reactions still
+    // trail the meta flow.
+    if (prIdx >= 0 && branchIdx >= 0) expect(prIdx).toBeLessThan(branchIdx);
+    if (branchIdx >= 0 && bindingIdx >= 0) expect(branchIdx).toBeLessThan(bindingIdx);
+    if (bindingIdx >= 0 && reactionIdx >= 0) {
+      expect(bindingIdx).toBeLessThan(reactionIdx);
+    }
   });
 
   it("shows the PR title and status in the shared hover card", () => {

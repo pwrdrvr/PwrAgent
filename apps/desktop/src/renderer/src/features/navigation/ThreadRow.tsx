@@ -13,7 +13,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import { SmileyIcon } from "../../icons";
+import { PinIcon, SmileyIcon } from "../../icons";
 import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
@@ -297,7 +297,18 @@ export function ThreadRow(props: ThreadRowProps) {
             as `nested-interactive`. `.star-map-card-shell` uses the same
             shape for its kebab. */}
         <button
-          aria-label={props.thread.title}
+          // ", pinned" keeps the pinned state in the row's accessible
+          // name now that the old role="img" pin chip is gone — the
+          // in-title marker is aria-hidden (it sits inside this button,
+          // where an interactive replacement would be invalid), and the
+          // hover cluster's toggle only exists when a pin handler is
+          // wired. Screen readers hear the state wherever the row
+          // renders.
+          aria-label={
+            props.thread.pinnedRank && !props.thread.parentThreadId
+              ? `${props.thread.title}, pinned`
+              : props.thread.title
+          }
           aria-pressed={selected}
           className="thread-row__header thread-row__open"
           type="button"
@@ -329,20 +340,32 @@ export function ThreadRow(props: ThreadRowProps) {
           <span className="thread-row__heading">
             <ThreadRowStatus status={status} />
             <span className="thread-row__title">{props.thread.title}</span>
+            {/* Passive pinned-state marker on the title line (both
+                densities — the pin no longer spends a chip). Inside the
+                open-thread button, so no role/tabindex — a nested
+                interactive control would be invalid; the ACTIONABLE pin
+                toggle is the hover-revealed button in the actions
+                cluster, alongside the reaction + overflow buttons. */}
+            {props.thread.pinnedRank && !props.thread.parentThreadId ? (
+              <span aria-hidden="true" className="thread-row__heading-pin">
+                <PinIcon size={11} />
+              </span>
+            ) : null}
           </span>
           <span className="thread-row__time">
             {formatRelativeTime(props.thread.updatedAt)}
           </span>
         </button>
 
-        {/* Single ordered chip flow: meta (provider / location / pinned /
-            branch / drift) → messaging binding chips → PR chips →
-            reactions. Pinned rides with the meta chips so it never lands
-            alone on a wrapped row; PR chips + reactions stay last so the
-            fixed-width metadata packs first and single-chip orphan rows
-            are minimized. flex-wrap handles overflow naturally; the
-            hover-only add-reaction affordance is positioned outside the
-            flow so it cannot reserve a phantom wrapped row while hidden.
+        {/* Single ordered chip flow: meta (provider / location → PR chips
+            → branch / drift / git state) → messaging binding chips →
+            reactions. PR chips slot into the middle of the meta flow (see
+            ThreadMetaChips.prChips) so they pack right after the short
+            fixed-width chips instead of trailing the branch — the longest,
+            least-scanned string on the row. flex-wrap handles overflow
+            naturally; the hover-only add-reaction affordance is positioned
+            outside the flow so it cannot reserve a phantom wrapped row
+            while hidden.
 
             The container is `pointer-events: none` (see app.css) so the
             gaps between chips fall through to the open-thread overlay, so
@@ -367,17 +390,34 @@ export function ThreadRow(props: ThreadRowProps) {
             hasApprovalRequest={props.approvalRequestThreadKeys?.[threadKey] === true}
             hasIntegratedTerminal={props.terminalThreadKeys?.[threadKey] === true}
             hasInputRequest={props.inputRequestThreadKeys?.[threadKey] === true}
-            onUnpin={
-              onSetThreadPin
-                ? () => {
-                    void onSetThreadPin(props.thread, false);
-                  }
-                : undefined
-            }
             queuedMessageState={props.queuedMessageThreadKeys?.[threadKey]}
             hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
+            prChips={prs.map((pr) => (
+              <PrChip
+                key={pr.url}
+                pr={pr}
+                showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
+                onOpen={openPr}
+                onOpenContextMenu={
+                  props.onOpenPullRequestContextMenu
+                    ? (targetPr, position) =>
+                        props.onOpenPullRequestContextMenu!(
+                          props.thread,
+                          targetPr,
+                          position,
+                        )
+                    : undefined
+                }
+                onDetach={
+                  props.onDetachPullRequest
+                    ? (targetPr) =>
+                        props.onDetachPullRequest!(props.thread, targetPr)
+                    : undefined
+                }
+              />
+            ))}
             thread={props.thread}
           />
 
@@ -389,30 +429,6 @@ export function ThreadRow(props: ThreadRowProps) {
                 props.onUnbindMessagingBinding
                   ? (target) =>
                       void props.onUnbindMessagingBinding!(props.thread, target)
-                  : undefined
-              }
-            />
-          ))}
-
-          {prs.map((pr) => (
-            <PrChip
-              key={pr.url}
-              pr={pr}
-              showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
-              onOpen={openPr}
-              onOpenContextMenu={
-                props.onOpenPullRequestContextMenu
-                  ? (targetPr, position) =>
-                      props.onOpenPullRequestContextMenu!(
-                        props.thread,
-                        targetPr,
-                        position,
-                      )
-                  : undefined
-              }
-              onDetach={
-                props.onDetachPullRequest
-                  ? (targetPr) => props.onDetachPullRequest!(props.thread, targetPr)
                   : undefined
               }
             />
@@ -430,6 +446,31 @@ export function ThreadRow(props: ThreadRowProps) {
       </div>
 
       <div className="thread-row__actions">
+        {/* Hover-revealed pin toggle: pin an unpinned thread, unpin a
+            pinned one. Lives with the other row actions instead of in
+            the chip flow, so the pinned STATE costs no chip space (the
+            in-title marker carries it) and pinning gains a one-click
+            affordance it never had. Sub-threads cannot be pinned. */}
+        {onSetThreadPin && !props.thread.parentThreadId ? (
+          <button
+            aria-label={
+              props.thread.pinnedRank ? "Unpin thread" : "Pin thread"
+            }
+            aria-pressed={Boolean(props.thread.pinnedRank)}
+            className={`thread-row__pin-button${
+              props.thread.pinnedRank ? " is-pinned" : ""
+            }`}
+            title={props.thread.pinnedRank ? "Unpin thread" : "Pin thread"}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void onSetThreadPin(props.thread, !props.thread.pinnedRank);
+            }}
+          >
+            <PinIcon size={12} aria-hidden="true" />
+          </button>
+        ) : null}
+
         {canReact ? (
           <AddReactionChip
             anchorRef={addReactionRef}
@@ -488,7 +529,7 @@ function ReactionChip(props: { emoji: string; onToggle: () => void }) {
       role="button"
       tabIndex={0}
       aria-label={`Remove reaction ${emoji} from thread`}
-      className="thread-row__chip thread-row__chip--reaction"
+      className="thread-row__chip thread-row__chip--reaction thread-row__chip--persistent"
       onClick={handleActivate}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {

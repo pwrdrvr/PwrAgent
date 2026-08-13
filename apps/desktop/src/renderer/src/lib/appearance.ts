@@ -22,24 +22,30 @@
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
+  DesktopSidebarTextSize,
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
+  DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+  isDesktopSidebarTextSize,
 } from "@pwragent/shared";
 
 export type ThemePreference = DesktopAppearanceTheme;
 export type DensityPreference = DesktopAppearanceDensity;
+export type SidebarTextSizePreference = DesktopSidebarTextSize;
 export type ResolvedTheme = "dark" | "light";
 
 export type AppearancePreference = {
   theme: ThemePreference;
   density: DensityPreference;
+  sidebarTextSize: SidebarTextSizePreference;
 };
 
 export const DEFAULT_APPEARANCE: AppearancePreference = {
   theme: DESKTOP_APPEARANCE_THEME_DEFAULT,
   density: DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  sidebarTextSize: DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
 };
 
 /** Resolve `"system"` to either `"dark"` or `"light"` by querying the
@@ -64,6 +70,7 @@ export function resolveTheme(preference: ThemePreference): ResolvedTheme {
 export function applyAppearanceAttributes(
   resolvedTheme: ResolvedTheme,
   density: DensityPreference,
+  sidebarTextSize: SidebarTextSizePreference,
 ): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
@@ -76,6 +83,11 @@ export function applyAppearanceAttributes(
     root.setAttribute("data-density", "compact");
   } else {
     root.removeAttribute("data-density");
+  }
+  if (sidebarTextSize !== DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT) {
+    root.setAttribute("data-sidebar-text", sidebarTextSize);
+  } else {
+    root.removeAttribute("data-sidebar-text");
   }
 }
 
@@ -94,6 +106,7 @@ export function readBridgedAppearance(): AppearancePreference {
   return {
     theme: normalizeTheme(bridged?.theme),
     density: normalizeDensity(bridged?.density),
+    sidebarTextSize: normalizeSidebarTextSize(bridged?.sidebarTextSize),
   };
 }
 
@@ -107,4 +120,10 @@ function normalizeDensity(value: unknown): DensityPreference {
   return value === "compact" || value === "mission-control"
     ? value
     : DEFAULT_APPEARANCE.density;
+}
+
+function normalizeSidebarTextSize(value: unknown): SidebarTextSizePreference {
+  return typeof value === "string" && isDesktopSidebarTextSize(value)
+    ? value
+    : DEFAULT_APPEARANCE.sidebarTextSize;
 }

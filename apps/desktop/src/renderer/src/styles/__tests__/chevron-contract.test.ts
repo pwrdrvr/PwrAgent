@@ -8,8 +8,15 @@ import { describe, expect, it } from "vitest";
  * expand/collapse chevron must point RIGHT when collapsed (`rotate(-45deg)`)
  * and rotate 90deg to point DOWN when expanded (`rotate(45deg)`). The
  * direction lives entirely in CSS, so it can only be asserted here, not in
- * a render test. The sidebar thread-tree triangle is a deliberate FILLED
- * exception and is asserted separately.
+ * a render test.
+ *
+ * The SIDEBAR is a deliberate FILLED-triangle family, asserted separately:
+ * the thread-tree toggle, the directory header, and the directory-threads
+ * divider all draw the same solid caret (2026-08 density pass — the
+ * directory rows used to carry the unfilled language, which left the one
+ * navigation surface speaking two disclosure vocabularies). Filled =
+ * sidebar navigation tree, unfilled = inline content disclosure
+ * (transcript, settings, live-work rail).
  */
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
@@ -50,11 +57,6 @@ const INLINE_CHEVRONS: Array<{ name: string; collapsed: string; expanded: string
       '.transcript-work-phase-group__toggle[aria-expanded="true"] .transcript-work-phase-group__chevron',
   },
   {
-    name: "sidebar directory header",
-    collapsed: ".directory-row__chevron",
-    expanded: ".directory-row__chevron.is-open",
-  },
-  {
     name: "settings section header",
     collapsed: ".settings-panel--is-collapsed .settings-section__chevron::before",
     expanded: ".settings-section__chevron::before",
@@ -83,11 +85,12 @@ const NON_ARIA_STATE_CHEVRONS = INLINE_CHEVRONS.filter(
 );
 
 // The base element rule that paints each unfilled chevron's "V" shape.
+// (`.directory-row__chevron` left this list in the 2026-08 density pass —
+// it now belongs to the sidebar's filled-triangle family below.)
 const UNFILLED_BASE_RULES = [
   ".transcript-activity__chevron",
   ".transcript-work-phase-group__chevron",
   ".transcript-monitor-result__chevron",
-  ".directory-row__chevron",
   ".settings-section__chevron::before",
   ".live-work-rail__chevron",
 ];
@@ -267,11 +270,24 @@ describe("chevron disclosure direction contract", () => {
     expect(ruleBody(selector)).toMatch(/flex:\s*0 0 auto/);
   });
 
-  it("keeps the sidebar thread-tree as a deliberate FILLED-triangle exception", () => {
-    // Intentionally NOT the unfilled -45/45 language: filled = navigation
-    // tree, unfilled = inline content disclosure. A solid triangle via
-    // border-left that swings 0 -> 90deg.
-    expect(ruleBody(".thread-row__subthread-toggle::before")).toContain("border-left");
-    expect(ruleBody(".thread-row__subthread-toggle.is-open::before")).toContain("rotate(90deg)");
+  it("keeps the sidebar as one deliberate FILLED-triangle family", () => {
+    // Intentionally NOT the unfilled -45/45 language: filled = sidebar
+    // navigation tree, unfilled = inline content disclosure. A solid
+    // triangle via border-left that swings 0 -> 90deg — on the
+    // thread-tree toggle, the directory header, and the
+    // directory-threads divider alike, so the sidebar speaks a single
+    // disclosure vocabulary.
+    for (const [base, open] of [
+      [".thread-row__subthread-toggle::before", ".thread-row__subthread-toggle.is-open::before"],
+      [".directory-row__chevron", ".directory-row__chevron.is-open"],
+      [
+        ".directory-row__thread-divider-chevron",
+        ".directory-row__thread-divider-chevron.is-open",
+      ],
+    ] as const) {
+      expect(ruleBody(base), `${base} filled caret`).toContain("border-left");
+      expect(ruleBody(base), `${base} filled caret`).not.toContain("border-right");
+      expect(ruleBody(open), `${open} swing`).toContain("rotate(90deg)");
+    }
   });
 });

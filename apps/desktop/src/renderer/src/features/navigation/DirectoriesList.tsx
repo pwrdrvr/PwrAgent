@@ -30,7 +30,6 @@ import {
 } from "@pwragent/shared";
 import {
   ChevronDownIcon,
-  FolderIcon,
   NewThreadIcon,
   UnlinkedDotIcon,
   WorkspaceIcon,
@@ -1457,7 +1456,24 @@ export function DirectoriesList(props: DirectoriesListProps) {
         }
       >
         <div
-          className="directory-row__header"
+          // The modifier classes mirror booleans this render already
+          // computes, so the CSS that swaps the count block for the
+          // launchpad cluster can match plain classes instead of
+          // re-running :has() subtree scans on every header hover —
+          // and `--with-launchpad` scopes the hover fade so an
+          // unconfigured directory (which renders no cluster) never
+          // blanks its counts with nothing in their place.
+          className={`directory-row__header${
+            directoryUnconfigured ? "" : " directory-row__header--with-launchpad"
+          }${
+            props.onOpenFederationTargetMenu
+              ? " directory-row__header--split"
+              : ""
+          }${
+            !directoryUnconfigured && hasPendingLaunchpadState(directory)
+              ? " directory-row__header--has-draft"
+              : ""
+          }`}
           draggable={directoryDraggable}
           onDragStart={
             directoryDraggable
@@ -1588,17 +1604,24 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 aria-hidden="true"
                 className={`directory-row__chevron${expanded ? " is-open" : ""}`}
               />
-              <span aria-hidden="true" className="directory-row__icon">
-                {directory.kind === "workspace" ? (
-                  <WorkspaceIcon size={14} />
-                ) : directory.kind === "unlinked" ? (
-                  <UnlinkedDotIcon size={14} />
-                ) : (
-                  <FolderIcon size={14} />
-                )}
-              </span>
+              {/* Icon only where it distinguishes: a folder on EVERY plain
+                  directory row carried no information (2026-08 density
+                  pass), so ordinary directories lead with the chevron +
+                  label alone; workspace and unlinked rows keep their marks
+                  because those are the exceptions worth flagging. */}
+              {directory.kind === "workspace" || directory.kind === "unlinked" ? (
+                <span aria-hidden="true" className="directory-row__icon">
+                  {directory.kind === "workspace" ? (
+                    <WorkspaceIcon size={14} />
+                  ) : (
+                    <UnlinkedDotIcon size={14} />
+                  )}
+                </span>
+              ) : null}
               <span className="directory-row__title-wrap">
-                <span className="thread-row__title">{directory.label}</span>
+                <span className="thread-row__title directory-row__title">
+                  {directory.label}
+                </span>
               </span>
             </span>
 
