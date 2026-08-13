@@ -1710,6 +1710,102 @@ describe("DesktopFederationRuntime", () => {
     expect(invalidated).toEqual(["client_one"]);
   });
 
+  it.each([
+    "thread/status/changed",
+    "turn/cancelled",
+    "turn/completed",
+    "turn/failed",
+    "turn/started",
+  ])("invalidates cached remote summaries on %s", (method) => {
+    const invalidated: Array<string | undefined> = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(createConnection({
+      peerId: "client_one",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+    runtime.setEventSubscriptions("viewer", [{
+      sourceInstanceId: "client_one",
+      eventClasses: ["navigation"],
+    }]);
+    runtime.remoteThreadSummaryCache = {
+      invalidate: (instanceId) => invalidated.push(instanceId),
+    };
+
+    runtime.publishRemoteBackendEvent(
+      {
+        id: `event-${method}`,
+        kind: "notification",
+        method: FEDERATION_BACKEND_EVENT_METHOD,
+        params: {
+          backend: "codex",
+          notification: {
+            method,
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+            },
+          },
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 2_000,
+      },
+      "client_one",
+    );
+
+    expect(invalidated).toEqual(["client_one"]);
+  });
+
+  it("does not invalidate cached remote summaries for streamed transcript items", () => {
+    const invalidated: Array<string | undefined> = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(createConnection({
+      peerId: "client_one",
+      capabilities: ["thread_detail", "event_subscriptions"],
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+    runtime.setEventSubscriptions("viewer", [{
+      sourceInstanceId: "client_one",
+      eventClasses: ["transcript"],
+    }]);
+    runtime.remoteThreadSummaryCache = {
+      invalidate: (instanceId) => invalidated.push(instanceId),
+    };
+
+    runtime.publishRemoteBackendEvent(
+      {
+        id: "event-agent-message-delta",
+        kind: "notification",
+        method: FEDERATION_BACKEND_EVENT_METHOD,
+        params: {
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: {
+              delta: "hello",
+              itemId: "item-1",
+              threadId: "thread-1",
+              turnId: "turn-1",
+            },
+          },
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 2_000,
+      },
+      "client_one",
+    );
+
+    expect(invalidated).toEqual([]);
+  });
+
   it("subscribes Cmd+K snapshot peers to navigation updates for the cache TTL", async () => {
     vi.useFakeTimers();
     const sent: FederationProtocolEnvelope[] = [];
