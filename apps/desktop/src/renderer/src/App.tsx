@@ -15,7 +15,6 @@ import {
   buildThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
-  formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
   parseThreadIdentityKey,
   type AppServerBackendKind,
@@ -31,6 +30,7 @@ import {
 import { Sidebar } from "./features/navigation/Sidebar";
 import { useThreadJump } from "./features/navigation/useThreadJump";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
+import { buildFederationThreadTargets } from "./features/chrome/federation-thread-targets";
 import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
 import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
 import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
@@ -346,34 +346,13 @@ function DesktopAppShell(props: {
     desktopApi,
     enabled: !readRendererFederationTarget(),
   });
-  const newThreadFederationTargets = useMemo(() => {
-    const health = liveFederationHealth;
-    if (!health || !desktopApi?.openFederationWindow) {
-      return [];
-    }
-    const visibleInstances = [
-      ...health.peers,
-      ...(health.localLabel
-        ? [{
-            label: health.localLabel,
-            profileName: health.localProfileName,
-          }]
-        : []),
-    ];
-    return health.peers
-      .filter(
-        (peer) =>
-          peer.status === "connected"
-          && !peer.revokedAt
-          && peer.capabilities.includes("remote_window")
-          && peer.capabilities.includes("thread_navigation")
-          && peer.capabilities.includes("environment_actions"),
-      )
-      .map((peer) => ({
-        instanceId: peer.id,
-        label: formatFederationPeerDisplayLabel(peer, visibleInstances),
-      }));
-  }, [desktopApi?.openFederationWindow, liveFederationHealth]);
+  const newThreadFederationTargets = useMemo(
+    () =>
+      desktopApi?.openFederationWindow
+        ? buildFederationThreadTargets(liveFederationHealth)
+        : [],
+    [desktopApi?.openFederationWindow, liveFederationHealth],
+  );
   useEffect(() => {
     return desktopApi?.onWindowFocus?.(() => {
       refreshFederationHealth();

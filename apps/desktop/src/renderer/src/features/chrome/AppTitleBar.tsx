@@ -2,6 +2,7 @@ import type { ReactElement } from "react";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { FederationRemoteBadge } from "./FederationRemoteBadge";
+import type { FederationThreadTarget } from "./federation-thread-targets";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { AppMenuBar } from "./AppMenuBar";
 import { NewThreadButton } from "./NewThreadButton";
@@ -42,10 +43,7 @@ export function AppTitleBar(props: {
     addingProjectDirectory?: boolean;
     automationsActive: boolean;
     newThreadDirectoryLabel?: string;
-    newThreadFederationTargets?: readonly {
-      instanceId: string;
-      label: string;
-    }[];
+    newThreadFederationTargets?: readonly FederationThreadTarget[];
     settingsActive: boolean;
     creatingThread: boolean;
     onAddProjectDirectory?: () => void | Promise<void>;

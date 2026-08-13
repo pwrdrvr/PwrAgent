@@ -10,6 +10,7 @@ export { CelestialSunIcon } from "./celestial/CelestialSunIcon";
 export { CelestialTiltedRingedPlanetIcon } from "./celestial/CelestialTiltedRingedPlanetIcon";
 export { CalendarPlusIcon } from "./CalendarPlusIcon";
 export { CheckIcon } from "./CheckIcon";
+export { ChevronDownIcon } from "./ChevronDownIcon";
 export { ChevronLeftIcon } from "./ChevronLeftIcon";
 export { ChevronRightIcon } from "./ChevronRightIcon";
 export { ChevronUpIcon } from "./ChevronUpIcon";

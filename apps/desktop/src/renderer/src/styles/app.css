@@ -652,6 +652,11 @@ textarea,
 .new-thread-menu__card {
   min-width: 220px;
   max-width: min(320px, calc(100vw - 32px));
+  /* The federation section grows one row per enrolled machine, and the card
+     is anchored below the trigger with no flip, so an unbounded height runs
+     off the bottom of the window on a large federation. */
+  max-height: min(420px, calc(100vh - 96px));
+  overflow-y: auto;
   padding: 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -687,9 +692,24 @@ textarea,
   outline: none;
 }
 
-.new-thread-menu__item:disabled {
+.new-thread-menu__item:disabled,
+.new-thread-menu__item[aria-disabled="true"] {
   color: var(--text-muted);
   cursor: default;
+}
+
+/* `aria-disabled` keeps the row focusable, so it still matches the accent
+   hover/focus rule above. Restate the muted treatment at higher specificity
+   so an unreachable machine never looks actionable — but keep a surface for
+   focus, or a keyboard user loses their place in the list. */
+.new-thread-menu__item[aria-disabled="true"]:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.new-thread-menu__item[aria-disabled="true"]:focus-visible {
+  background: var(--surface-overlay-soft);
+  color: var(--text-muted);
 }
 
 .new-thread-menu__separator {
@@ -698,11 +718,64 @@ textarea,
   background: var(--border-subtle);
 }
 
+/* Matches `.project-picker__section` / `.branch-picker__eyebrow`, the app's
+   other in-popover group labels. Sentence case at --text-muted reads as a
+   disabled menu item rather than a heading. */
 .new-thread-menu__section-label {
-  padding: 4px 10px 2px;
+  padding: 6px 10px 4px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The directory-row split button opens this same card, but anchored to the
+   chevron rather than nested under the masthead trigger — the row lives
+   inside the scrolling thread list, which would clip an absolute child. */
+.new-thread-menu__card--anchored {
+  position: fixed;
+  z-index: 50;
+}
+
+.new-thread-menu__item--target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-thread-menu__target-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-ok);
+}
+
+/* Reachable-but-not-now and cannot-ever read differently: a filled grey dot
+   for a peer that will come back, a hollow one for a build that can't host
+   a thread until it is upgraded. */
+.new-thread-menu__target-dot[data-availability="offline"] {
+  background: var(--status-suspended);
+}
+
+.new-thread-menu__target-dot[data-availability="unsupported"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--status-suspended);
+}
+
+.new-thread-menu__target-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-thread-menu__target-state {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 /* macOS floats the traffic lights over the cluster's left. Match the sidebar
@@ -5131,10 +5204,13 @@ textarea,
   top: 0;
   z-index: 5;
   /* Gap between summary button and launchpad icon button. Tightened
-     from 8 → 4 — the icon button itself lost its border (no longer
-     reads as a separate "card" the way the framed 34px button did). */
+     8 → 4 when the icon button lost its border (no longer reads as a
+     separate "card" the way the framed 34px button did), then 4 → 2:
+     the count and the launchpad icon read as one cluster, and the real
+     distance between them is this plus the summary's right padding
+     plus the icon button's own 4px inset. */
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px;
+  gap: 2px;
   align-items: center;
   background: var(--bg-sidebar);
 }
@@ -5234,9 +5310,11 @@ textarea,
      than the comfortable touch target instead of 54px. */
   min-height: 32px;
   /* Lateral inset: 4px on the left sits before the disclosure chevron
-     and folder icon; 10px on the right gives the meta block (attention
-     count pill) breathing room from the selected-row border. */
-  padding: 4px 10px 4px 4px;
+     and folder icon; 6px on the right still clears the selected-row
+     border for the meta block (attention count pill) without stranding
+     the count away from the launchpad icon beside it. Was 10px, the
+     largest share of an 18px count-to-icon gap. */
+  padding: 4px 6px 4px 4px;
 }
 
 .directory-row__summary:focus,
@@ -5352,11 +5430,65 @@ textarea,
      additional margin needed here. */
 }
 
-.directory-row__launchpad-button:hover,
-.directory-row__launchpad-button:focus-visible {
+/* Split button: the icon keeps its one-click "new thread here" meaning and the
+   chevron adds the machine choice, so the common case stays a single click. */
+.directory-row__launchpad-cluster {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+}
+
+/* Hovering either half tints the whole cluster and warms both glyphs, so the
+   pair reads as one control with two actions rather than two unrelated icons.
+   Deliberately weaker than the per-half hover below — the group tint says
+   "these belong together", the strong pill says "this is the one that fires".
+
+   Gated on the `--split` modifier, not on :has(): the cluster also wraps a
+   lone launchpad button on an install with no federation peers, where the
+   tint would just composite under the per-half pill and darken it for no
+   reason. A :has() prefix would also outrank the per-half rule below and
+   invert which half looks active. */
+.directory-row__launchpad-cluster--split:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.directory-row__launchpad-cluster--split:hover .directory-row__launchpad-button,
+.directory-row__launchpad-cluster--split:hover .directory-row__launchpad-targets-button {
+  color: var(--accent);
+}
+
+.directory-row__launchpad-targets-button {
+  display: inline-flex;
+  width: 16px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  appearance: none;
+  cursor: pointer;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+/* The half actually under the pointer (or focused) takes the full accent-soft
+   pill. Cluster-scoped so it matches the group rule above at equal
+   specificity and wins the tie by coming later. */
+.directory-row__launchpad-cluster .directory-row__launchpad-button:hover,
+.directory-row__launchpad-cluster .directory-row__launchpad-button:focus-visible,
+.directory-row__launchpad-cluster .directory-row__launchpad-targets-button:hover,
+.directory-row__launchpad-cluster .directory-row__launchpad-targets-button:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-bright);
   outline: none;
+}
+
+/* An unsent draft outranks the group tint: hovering the chevron must not dim
+   the "you have a draft here" cue on its sibling. */
+.directory-row__launchpad-cluster--split:hover .directory-row__launchpad-button.has-draft {
+  color: var(--accent-bright);
 }
 
 .directory-row__launchpad-button.has-draft {

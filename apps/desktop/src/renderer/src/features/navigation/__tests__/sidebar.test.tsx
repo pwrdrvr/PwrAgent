@@ -14,6 +14,7 @@ import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
+import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
 import { Sidebar } from "../Sidebar";
 
 /**
@@ -5607,6 +5608,13 @@ describe("Sidebar directory pinning", () => {
       ) => Promise<void>;
       onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
       onRemoveDirectory?: (directory: NavigationDirectorySummary) => void;
+      onOpenLaunchpad?: (
+        directory: NavigationDirectorySummary,
+      ) => Promise<void>;
+      onCreateThreadOnFederationTarget?: (
+        instanceId: string,
+      ) => Promise<void>;
+      newThreadFederationTargets?: readonly FederationThreadTarget[];
     } = {},
   ): void {
     render(
@@ -5621,9 +5629,13 @@ describe("Sidebar directory pinning", () => {
         creatingThread={undefined}
         selectedItemKey={undefined}
         threads={[]}
+        newThreadFederationTargets={overrides.newThreadFederationTargets}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
-        onOpenLaunchpad={async () => undefined}
+        onCreateThreadOnFederationTarget={
+          overrides.onCreateThreadOnFederationTarget
+        }
+        onOpenLaunchpad={overrides.onOpenLaunchpad ?? (async () => undefined)}
         onSelectThread={() => undefined}
         onSetDirectoryPin={overrides.onSetDirectoryPin}
         onReorderDirectoryPins={overrides.onReorderDirectoryPins}
@@ -5871,6 +5883,102 @@ describe("Sidebar directory pinning", () => {
       pinnedB.key,
       pinnedA.key,
     ]);
+  });
+
+  it("keeps the directory launchpad button a single click and puts machines behind the chevron", async () => {
+    const onOpenLaunchpad = vi.fn(async () => undefined);
+    const onCreateThreadOnFederationTarget = vi.fn(async () => undefined);
+
+    renderSidebar([projectADirectory], {
+      onOpenLaunchpad,
+      onCreateThreadOnFederationTarget,
+      newThreadFederationTargets: [
+        {
+          availability: "available",
+          instanceId: "studio-work",
+          label: "Studio Mac / work",
+        },
+      ],
+    });
+
+    // The icon itself keeps its existing one-click meaning.
+    await clickElement(
+      screen.getByRole("button", {
+        name: "Open new thread launchpad for ProjectA",
+      }),
+    );
+    expect(onOpenLaunchpad).toHaveBeenCalledTimes(1);
+    expect(onCreateThreadOnFederationTarget).not.toHaveBeenCalled();
+
+    const chevron = screen.getByRole("button", {
+      name: "Start a new thread on another machine (from ProjectA)",
+    });
+    // The group hover treatment is gated on this modifier, so that it never
+    // applies to a lone launchpad button.
+    expect(chevron.parentElement).toHaveClass(
+      "directory-row__launchpad-cluster--split",
+    );
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
+    await clickElement(chevron);
+    expect(chevron).toHaveAttribute("aria-expanded", "true");
+    await clickElement(
+      await screen.findByRole("menuitem", { name: "Studio Mac / work" }),
+    );
+    expect(chevron).toHaveAttribute("aria-expanded", "false");
+
+    expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("studio-work");
+    // Opening a remote launchpad is not also a local launchpad open.
+    expect(onOpenLaunchpad).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the whole launchpad cluster on a directory this instance cannot host", () => {
+    // The unconfigured guard wraps icon AND chevron. Offering "new chat on
+    // <machine>" from a row with no local launchpad would reintroduce the
+    // affordance that guard exists to remove, and it is not directory-scoped
+    // anyway — it opens the peer's own launchpad.
+    renderSidebar(
+      [{ ...projectADirectory, localAvailability: "unconfigured" }],
+      {
+        newThreadFederationTargets: [
+          {
+            availability: "available",
+            instanceId: "studio-work",
+            label: "Studio Mac / work",
+          },
+        ],
+        onCreateThreadOnFederationTarget: async () => undefined,
+      },
+    );
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Open new thread launchpad for ProjectA",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Start a new thread on another machine (from ProjectA)",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("omits the chevron entirely when the federation offers no machines", () => {
+    renderSidebar([projectADirectory], { newThreadFederationTargets: [] });
+
+    const launchpad = screen.getByRole("button", {
+      name: "Open new thread launchpad for ProjectA",
+    });
+    expect(launchpad).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Start a new thread on another machine (from ProjectA)",
+      }),
+    ).not.toBeInTheDocument();
+    // Without a second half there is no group to express, and the group tint
+    // would only composite under the button's own hover pill and darken it.
+    expect(launchpad.parentElement).not.toHaveClass(
+      "directory-row__launchpad-cluster--split",
+    );
   });
 
   it("opens a context menu offering Pin Directory on an unpinned row", async () => {

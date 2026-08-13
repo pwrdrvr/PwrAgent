@@ -29,6 +29,7 @@ import {
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import {
+  ChevronDownIcon,
   FolderIcon,
   NewThreadIcon,
   UnlinkedDotIcon,
@@ -95,6 +96,17 @@ type DirectoriesListProps = {
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
+  /**
+   * Opens the "New chat on <machine>" menu for this row's launchpad button.
+   * Absent when the federation has no peers to offer, which is what keeps the
+   * split-button chevron from rendering on a single-instance install.
+   */
+  onOpenFederationTargetMenu?: (
+    directory: NavigationDirectorySummary,
+    position: { x: number; y: number; anchorTop?: number },
+  ) => void;
+  /** Directory key whose federation target menu is currently open, if any. */
+  openFederationTargetMenuDirectoryKey?: string;
   onRevealSelectedThreadComplete?: (request: number) => void;
   onSelectThread: (
     thread: NavigationThreadSummary,
@@ -1614,19 +1626,64 @@ export function DirectoriesList(props: DirectoriesListProps) {
             </span>
           </button>
 
+          {/* Guarded as a unit: an unconfigured row has no local launchpad, so
+              it gets no machine chevron either. */}
           {directoryUnconfigured ? null : (
-            <button
-              aria-label={`Open new thread launchpad for ${directory.label}`}
-              className={`directory-row__launchpad-button${
-                hasPendingLaunchpadState(directory) ? " has-draft" : ""
+            <span
+              className={`directory-row__launchpad-cluster${
+                props.onOpenFederationTargetMenu
+                  ? " directory-row__launchpad-cluster--split"
+                  : ""
               }`}
-              type="button"
-              onClick={() => {
-                void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
-              }}
             >
-              <NewThreadIcon size={16} />
-            </button>
+              <button
+                aria-label={`Open new thread launchpad for ${directory.label}`}
+                className={`directory-row__launchpad-button${
+                  hasPendingLaunchpadState(directory) ? " has-draft" : ""
+                }`}
+                type="button"
+                onClick={() => {
+                  void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
+                }}
+              >
+                <NewThreadIcon size={16} />
+              </button>
+              {props.onOpenFederationTargetMenu ? (
+                <button
+                  // Deliberately not "...for a new thread in <directory>": the
+                  // selected machine opens its OWN launchpad with its own
+                  // projects, so the local directory does not scope the result.
+                  // It stays in the name only as row context, which also keeps
+                  // the name unique per row for locators.
+                  aria-label={`Start a new thread on another machine (from ${directory.label})`}
+                  aria-haspopup="menu"
+                  aria-expanded={
+                    props.openFederationTargetMenuDirectoryKey === directory.key
+                  }
+                  className="directory-row__launchpad-targets-button"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    // `x` is the chevron's RIGHT edge; the sidebar right-aligns
+                    // the card to it once the card has been measured. The card's
+                    // width is a range (220–320px), so subtracting a guess here
+                    // would misplace it on the wider end.
+                    props.onOpenFederationTargetMenu?.(directory, {
+                      x: rect.right,
+                      y: rect.bottom + 4,
+                      anchorTop: rect.top,
+                    });
+                  }}
+                >
+                  {/* Heavier stroke at a smaller size: at the icon library's
+                      1.75 default a 12px chevron read washed out next to the
+                      16px launchpad glyph, so the pair looked like two
+                      different treatments rather than one control. */}
+                  <ChevronDownIcon size={14} strokeWidth={2} />
+                </button>
+              ) : null}
+            </span>
           )}
         </div>
 
