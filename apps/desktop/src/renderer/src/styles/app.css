@@ -5549,9 +5549,6 @@ textarea,
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
-  /* Electron's native drag-region map can otherwise let a draggable empty
-     thread pane swallow clicks where this fixed menu overlaps the pane. */
-  -webkit-app-region: no-drag;
 }
 
 .chip-context-menu {
@@ -5745,9 +5742,6 @@ textarea,
      the existing 188px nav + content grid; no outer gutter needed. */
   padding: 0;
   background: var(--bg-app);
-  /* Exclude the full overlay from a draggable empty thread pane beneath it.
-     `.settings-titlebar` opts the intended window-drag strip back in. */
-  -webkit-app-region: no-drag;
 }
 
 /* Search reuses the shared thread title bar (ThreadPlaceholderHeader) for its
@@ -24043,11 +24037,6 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 0 16px;
   width: 100%;
   box-sizing: border-box;
-  -webkit-app-region: drag;
-}
-
-.thread-empty-state * {
-  -webkit-app-region: drag;
 }
 
 .thread-empty-state__content {
