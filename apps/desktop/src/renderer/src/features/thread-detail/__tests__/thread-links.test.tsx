@@ -34,6 +34,7 @@ function renderWithLinks(
     onOpenRemoteViewer?: (request: {
       backend: AppServerBackendKind;
       instanceId: string;
+      messageId?: string;
       threadId: string;
     }) => void;
     onShowThread?: (request: { backend: AppServerBackendKind; threadId: string }) => void;
@@ -252,7 +253,8 @@ describe("thread links in transcript markdown", () => {
     const onShowThread = vi.fn();
     const onOpenRemoteViewer = vi.fn();
     renderWithLinks(
-      `See [Remote handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex&instanceId=pwr_harold)`,
+      `See [Remote handoff](pwragent://thread/${CHILD_THREAD_ID}`
+        + "?backend=codex&instanceId=pwr_harold&messageId=assistant-message-7)",
       {
         onOpenRemoteViewer,
         onShowThread,
@@ -267,6 +269,7 @@ describe("thread links in transcript markdown", () => {
     expect(onShowThread).toHaveBeenCalledWith({
       backend: "codex",
       instanceId: "pwr_harold",
+      messageId: "assistant-message-7",
       threadId: CHILD_THREAD_ID,
     });
     expect(onOpenRemoteViewer).not.toHaveBeenCalled();
@@ -278,6 +281,7 @@ describe("thread links in transcript markdown", () => {
     expect(onOpenRemoteViewer).toHaveBeenCalledWith({
       backend: "codex",
       instanceId: "pwr_harold",
+      messageId: "assistant-message-7",
       threadId: CHILD_THREAD_ID,
     });
     expect(onShowThread).toHaveBeenCalledTimes(1);

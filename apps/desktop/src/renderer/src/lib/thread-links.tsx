@@ -25,6 +25,7 @@ export type ResolvedThreadLink = {
   inThreadList?: boolean;
   instanceId?: FederationInstanceId;
   instanceLabel?: string;
+  messageId?: string;
   threadId: string;
   title: string;
   titleSource?: AppServerThreadTitleSource;
@@ -207,10 +208,16 @@ export function useLiveThreadLink(link: ResolvedThreadLink): ResolvedThreadLink 
     [link, links],
   );
 
-  return useSyncExternalStore(
+  const liveLink = useSyncExternalStore(
     subscribe,
     getSnapshot,
     () => link,
+  );
+  return useMemo(
+    () => link.messageId
+      ? { ...liveLink, messageId: link.messageId }
+      : liveLink,
+    [link.messageId, liveLink],
   );
 }
 
@@ -220,6 +227,7 @@ export function ThreadLinkProvider(props: {
     backend: AppServerBackendKind;
     instanceId: FederationInstanceId;
     instanceLabel?: string;
+    messageId?: string;
     threadId: string;
   }) => void;
   onShowThread: (request: {
@@ -227,6 +235,7 @@ export function ThreadLinkProvider(props: {
     instanceId?: FederationInstanceId;
     instanceLabel?: string;
     inThreadList?: boolean;
+    messageId?: string;
     threadId: string;
   }) => void;
   threads: NavigationThreadSummary[];
@@ -296,6 +305,7 @@ export function ThreadLinkProvider(props: {
           backend: link.backend,
           instanceId: link.instanceId,
           ...(link.instanceLabel ? { instanceLabel: link.instanceLabel } : {}),
+          ...(link.messageId ? { messageId: link.messageId } : {}),
           threadId: link.threadId,
         });
       },
@@ -317,6 +327,7 @@ export function ThreadLinkProvider(props: {
             return {
               backend: ref.backend,
               instanceId: ref.instanceId,
+              ...(ref.messageId ? { messageId: ref.messageId } : {}),
               threadId: ref.threadId,
               title: "",
             };
@@ -332,7 +343,13 @@ export function ThreadLinkProvider(props: {
         // The maps above are rebuilt only when membership changes, so their
         // metadata may predate a live rename. Resolve through the mutable store
         // before returning a value to one-shot consumers such as the composer.
-        return resolved ? metadataStore.getSnapshot(resolved) : undefined;
+        if (!resolved) {
+          return undefined;
+        }
+        const liveResolved = metadataStore.getSnapshot(resolved);
+        return ref.messageId
+          ? { ...liveResolved, messageId: ref.messageId }
+          : liveResolved;
       },
       show(link) {
         onShowThreadRef.current({
@@ -340,6 +357,7 @@ export function ThreadLinkProvider(props: {
           ...(link.instanceId ? { instanceId: link.instanceId } : {}),
           ...(link.instanceLabel ? { instanceLabel: link.instanceLabel } : {}),
           ...(link.instanceId && link.inThreadList ? { inThreadList: true } : {}),
+          ...(link.messageId ? { messageId: link.messageId } : {}),
           threadId: link.threadId,
         });
       },

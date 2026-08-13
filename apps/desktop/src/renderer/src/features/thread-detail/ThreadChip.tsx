@@ -40,8 +40,8 @@ export function ThreadChip(props: ThreadChipProps) {
     ? fallbackLabel
     : liveTitle || fallbackLabel || link.threadId;
   const tooltip = link.gitBranch
-    ? `${label}\n${link.gitBranch} — open thread`
-    : `${label}\nOpen thread`;
+    ? `${label}\n${link.gitBranch} — open thread${link.messageId ? " at message" : ""}`
+    : `${label}\nOpen thread${link.messageId ? " at message" : ""}`;
   const remoteInstanceLabel = link.instanceLabel ?? link.instanceId;
   const remoteViewerTooltip = remoteInstanceLabel
     ? `Open this thread in the remote viewer window for ${remoteInstanceLabel}`

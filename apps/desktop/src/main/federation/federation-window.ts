@@ -1,10 +1,10 @@
 import type {
-  AppServerBackendKind,
   FederationCapability,
   FederationRemoteTarget,
 } from "@pwragent/shared";
 import { getDesktopFederationRuntime } from "./federation-runtime";
 import { createMainWindow } from "../window";
+import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 
 export type FederationWindowPeer = {
   target: FederationRemoteTarget;
@@ -15,10 +15,7 @@ export type FederationWindowPeer = {
 export function createFederationWindow(options: {
   peer: FederationWindowPeer;
   initialLaunchpad?: boolean;
-  initialThread?: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  };
+  initialThread?: WindowShowThreadRequest;
 }): Electron.BrowserWindow {
   const { peer } = options;
   if (!peer.capabilities.includes("remote_window")) {

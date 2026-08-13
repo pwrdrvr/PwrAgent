@@ -24722,6 +24722,12 @@ export class DesktopBackendRegistry {
         ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
         threadId: turn.threadId,
       };
+      const messageId = turn.queueStatus === "queued"
+        ? undefined
+        : buildTurnUserMessageOriginId(turn.turnId);
+      const messageLinkRef = messageId
+        ? { ...threadLinkRef, messageId }
+        : undefined;
       return {
         ok: true,
         data: {
@@ -24742,6 +24748,16 @@ export class DesktopBackendRegistry {
             ...threadLinkRef,
             title: targetTitle,
           }),
+          ...(messageLinkRef
+            ? {
+                messageId,
+                messageUrl: buildThreadUrl(messageLinkRef),
+                messageLink: buildThreadMarkdownLink({
+                  ...messageLinkRef,
+                  title: targetTitle,
+                }),
+              }
+            : {}),
           settings,
         },
       };
@@ -28254,6 +28270,12 @@ export class DesktopBackendRegistry {
     try {
       const replay = response.replay;
       const status = response.threadStatus ?? replay.threadStatus;
+      const title = remote?.summary?.title ?? remote?.thread.title;
+      const threadLinkRef = {
+        backend: args.backend,
+        threadId,
+        ...(remote ? { instanceId: remote.instanceId } : {}),
+      };
       return {
         ok: true,
         data: {
@@ -28266,6 +28288,12 @@ export class DesktopBackendRegistry {
                   instanceLabel: remote.instanceLabel,
                 }
               : {}),
+            ...(title ? { title } : {}),
+            threadUrl: buildThreadUrl(threadLinkRef),
+            threadLink: buildThreadMarkdownLink({
+              ...threadLinkRef,
+              title,
+            }),
             limit,
             ...(before ? { before } : {}),
             maxCharsPerEntry,
@@ -28275,7 +28303,12 @@ export class DesktopBackendRegistry {
                   entries: replay.entries
                     .slice(0, limit)
                     .map((entry) =>
-                      toThreadReadEntrySummary(entry, maxCharsPerEntry),
+                      toThreadReadEntrySummary(
+                        entry,
+                        maxCharsPerEntry,
+                        threadLinkRef,
+                        title,
+                      ),
                     ),
                 }),
             ...(args.includeMessages === false
@@ -28284,7 +28317,12 @@ export class DesktopBackendRegistry {
                   messages: replay.messages
                     .slice(0, limit)
                     .map((message) =>
-                      toThreadReadMessageSummary(message, maxCharsPerEntry),
+                      toThreadReadMessageSummary(
+                        message,
+                        maxCharsPerEntry,
+                        threadLinkRef,
+                        title,
+                      ),
                     ),
                 }),
             ...(replay.lastUserMessage
@@ -29679,6 +29717,12 @@ const MAX_THREAD_INSPECTION_READ_ENTRY_CHARS = 20_000;
 function toThreadReadMessageSummary(
   message: AppServerThreadMessage,
   maxCharsPerEntry: number,
+  threadLinkRef: {
+    backend: AppServerBackendKind;
+    instanceId?: string;
+    threadId: string;
+  },
+  title?: string,
 ): ThreadReadMessageSummary {
   const text = truncateThreadInspectionTextWithFlag(
     message.text,
@@ -29690,6 +29734,7 @@ function toThreadReadMessageSummary(
     ...(message.origin ? { origin: message.origin } : {}),
     ...(message.createdAt !== undefined ? { createdAt: message.createdAt } : {}),
     text: text.value,
+    ...buildThreadMessageLinks(threadLinkRef, message.id, title),
     ...(text.truncated ? { truncated: true } : {}),
   };
 }
@@ -29697,6 +29742,12 @@ function toThreadReadMessageSummary(
 function toThreadReadEntrySummary(
   entry: AppServerThreadEntry,
   maxCharsPerEntry: number,
+  threadLinkRef: {
+    backend: AppServerBackendKind;
+    instanceId?: string;
+    threadId: string;
+  },
+  title?: string,
 ): ThreadReadEntrySummary {
   switch (entry.type) {
     case "message": {
@@ -29713,6 +29764,7 @@ function toThreadReadEntrySummary(
         ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
         ...(entry.phase ? { phase: entry.phase } : {}),
         ...(entry.turn ? { turn: entry.turn } : {}),
+        ...buildThreadMessageLinks(threadLinkRef, entry.id, title),
         ...(text.truncated ? { truncated: true } : {}),
       };
     }
@@ -29832,6 +29884,25 @@ function toThreadReadEntrySummary(
       };
     }
   }
+}
+
+function buildThreadMessageLinks(
+  threadLinkRef: {
+    backend: AppServerBackendKind;
+    instanceId?: string;
+    threadId: string;
+  },
+  messageId: string,
+  title?: string,
+): { messageUrl: string; messageLink: string } {
+  const messageLinkRef = { ...threadLinkRef, messageId };
+  return {
+    messageUrl: buildThreadUrl(messageLinkRef),
+    messageLink: buildThreadMarkdownLink({
+      ...messageLinkRef,
+      title,
+    }),
+  };
 }
 
 function isThreadMutationExecutionMode(

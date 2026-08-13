@@ -28347,6 +28347,11 @@ script = "printf setup"
       // bare uuid. It is told to reproduce `threadLink` verbatim.
       threadUrl: "pwragent://thread/target-thread?backend=codex",
       threadLink: "[target-thread](pwragent://thread/target-thread?backend=codex)",
+      messageId: "user:turn-1",
+      messageUrl:
+        "pwragent://thread/target-thread?backend=codex&messageId=user%3Aturn-1",
+      messageLink:
+        "[target-thread](pwragent://thread/target-thread?backend=codex&messageId=user%3Aturn-1)",
       settings: {
         executionMode: "full-access",
         model: "gpt-5.5",
@@ -32483,8 +32488,16 @@ script = "printf setup"
       threadId: "remote-thread",
       instanceId: "pwr_remote",
       instanceLabel: "Remote Mac",
+      title: "Remote collector",
+      threadUrl:
+        "pwragent://thread/remote-thread?backend=codex&instanceId=pwr_remote",
+      threadLink: expect.stringContaining("pwragent://thread/remote-thread"),
       status: "idle",
-      messages: [{ text: "Sanitized result" }],
+      messages: [{
+        text: "Sanitized result",
+        messageUrl: expect.stringContaining("messageId=remote-result"),
+        messageLink: expect.stringContaining("messageId=remote-result"),
+      }],
     });
     expect(federatedInspection).toHaveBeenCalledWith({
       backend: "codex",
@@ -32589,6 +32602,9 @@ script = "printf setup"
         threadId: "target-thread",
         limit: 5,
         maxCharsPerEntry: 200,
+        threadUrl: "pwragent://thread/target-thread?backend=codex",
+        threadLink:
+          "[target-thread](pwragent://thread/target-thread?backend=codex)",
         status: "idle",
         pagination: {
           supportsPagination: true,
@@ -32601,6 +32617,8 @@ script = "printf setup"
             id: "entry-user-1",
             role: "user",
             text: "Please inspect this thread.",
+            messageUrl: expect.stringContaining("messageId=entry-user-1"),
+            messageLink: expect.stringContaining("messageId=entry-user-1"),
           },
           {
             type: "activity",
@@ -32622,6 +32640,8 @@ script = "printf setup"
             id: "message-user-1",
             role: "user",
             text: "Please inspect this thread.",
+            messageUrl: expect.stringContaining("messageId=message-user-1"),
+            messageLink: expect.stringContaining("messageId=message-user-1"),
           },
         ],
       },

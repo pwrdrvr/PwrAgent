@@ -9,7 +9,11 @@ import type {
 import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
-import { TranscriptCommandOutput } from "./TranscriptCommandOutput";
+import {
+  isThreadReferenceToolDetail,
+  TranscriptCommandOutput,
+  TranscriptThreadToolActivity,
+} from "./TranscriptCommandOutput";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptDiff } from "./TranscriptDiff";
 import { TranscriptImage } from "./TranscriptImage";
@@ -47,6 +51,27 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
     props.entry.tone === "warning"
       ? "transcript-activity transcript-activity--warning"
       : "transcript-activity";
+
+  if (directDetail && isThreadReferenceToolDetail(directDetail)) {
+    return (
+      <TranscriptThreadToolActivity
+        applications={props.applications}
+        createdAt={props.entry.createdAt}
+        desktopApi={props.desktopApi}
+        detail={directDetail}
+        expanded={isExpanded}
+        fileViewerContext={props.fileViewerContext}
+        skills={props.skills}
+        onExpandedChange={(expanded) => {
+          if (props.expanded !== undefined) {
+            props.onExpandedChange?.(expanded);
+            return;
+          }
+          setUncontrolledExpanded(expanded);
+        }}
+      />
+    );
+  }
 
   return (
     <aside className={className}>
@@ -142,8 +167,12 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
       {directDetail && isExpanded ? (
         <div id={detailsId} className="transcript-activity__detail-body">
           <TranscriptCommandOutput
+            applications={props.applications}
+            desktopApi={props.desktopApi}
             detail={directDetail}
             directoryPaths={props.directoryPaths}
+            fileViewerContext={props.fileViewerContext}
+            skills={props.skills}
           />
         </div>
       ) : hasDetails && isExpanded ? (
@@ -240,8 +269,12 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                     {detail.fileDiff ? <TranscriptDiff detail={detail} /> : null}
                     {detail.command ? (
                       <TranscriptCommandOutput
+                        applications={props.applications}
+                        desktopApi={props.desktopApi}
                         detail={detail}
                         directoryPaths={props.directoryPaths}
+                        fileViewerContext={props.fileViewerContext}
+                        skills={props.skills}
                       />
                     ) : null}
                   </div>

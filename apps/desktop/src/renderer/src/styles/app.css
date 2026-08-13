@@ -13639,6 +13639,20 @@ textarea,
   display: contents;
 }
 
+.transcript-list__item[data-linked-message="true"] > * {
+  animation: linked-transcript-message 2400ms ease-out;
+}
+
+@keyframes linked-transcript-message {
+  0%, 28% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
 .transcript-list__scroll-bottom {
   position: absolute;
   left: 50%;
@@ -16213,6 +16227,94 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .transcript-activity--warning .transcript-activity__label {
   color: var(--accent-bright);
+}
+
+.transcript-thread-tool {
+  padding-top: 10px;
+}
+
+.transcript-thread-tool__header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.transcript-thread-tool__toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.transcript-thread-tool__toggle[aria-expanded="true"] .transcript-activity__chevron {
+  transform: rotate(45deg);
+}
+
+.transcript-thread-tool__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-thread-tool__action {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.transcript-thread-tool__meta {
+  display: inline-flex;
+  min-width: 0;
+  margin-left: auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.transcript-thread-tool__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 0 18px;
+}
+
+.transcript-thread-tool__message {
+  padding: 10px 12px;
+  border-left: 2px solid var(--border-strong);
+  background: var(--bg-panel);
+}
+
+.transcript-thread-tool__message > :last-child {
+  margin-bottom: 0;
+}
+
+.transcript-thread-tool__message-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.transcript-thread-tool__role,
+.transcript-thread-tool__empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.transcript-thread-tool__message-link {
+  min-height: 24px;
+  padding: 2px 6px;
+  font-size: 11px;
 }
 
 /* Inside the accent-framed card the toggle must sit ON the card's text

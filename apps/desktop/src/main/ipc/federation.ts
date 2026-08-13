@@ -215,6 +215,9 @@ export function registerFederationIpcHandlers(): void {
         initialThread: request.initialThread
           ? {
               backend: request.initialThread.backend,
+              ...(request.initialThread.messageId
+                ? { messageId: request.initialThread.messageId }
+                : {}),
               threadId: request.initialThread.threadId,
             }
           : undefined,

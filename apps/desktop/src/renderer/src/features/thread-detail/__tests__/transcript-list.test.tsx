@@ -4810,4 +4810,71 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });
+
+  it("scrolls a thread deep link to its message and marks it for emphasis", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const onLinkedMessageHandled = vi.fn();
+    render(
+      <TranscriptList
+        entries={[{
+          type: "message",
+          id: "message-to-reveal",
+          role: "assistant",
+          text: "Linked transcript message",
+        }]}
+        linkedMessageId="message-to-reveal"
+        linkedMessageRequestKey={7}
+        loading={false}
+        loadingMore={false}
+        threadId="codex:thread-1"
+        onLinkedMessageHandled={onLinkedMessageHandled}
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
+    expect(screen.getByRole("listitem")).toHaveAttribute(
+      "data-linked-message",
+      "true",
+    );
+    expect(onLinkedMessageHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads older transcript pages while resolving a message deep link", async () => {
+    const onLoadOlder = vi.fn(async () => undefined);
+    render(
+      <TranscriptList
+        entries={[{
+          type: "message",
+          id: "newer-message",
+          role: "assistant",
+          text: "Newer message",
+        }]}
+        linkedMessageId="older-message"
+        linkedMessageRequestKey={8}
+        loading={false}
+        loadingMore={false}
+        pagination={{
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "older-cursor",
+        }}
+        threadId="codex:thread-1"
+        onLoadOlder={onLoadOlder}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onLoadOlder).toHaveBeenCalledTimes(1);
+    });
+  });
 });

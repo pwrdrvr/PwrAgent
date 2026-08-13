@@ -14,16 +14,17 @@ describe("buildThreadUrl", () => {
     );
   });
 
-  it("carries backend, instance, and profile as query params", () => {
+  it("carries backend, instance, message, and profile as query params", () => {
     expect(
       buildThreadUrl({
         threadId: "019f5d79",
         backend: "codex",
         instanceId: "pwr_harold",
+        messageId: "user:turn-9",
         profile: "sstk",
       }),
     ).toBe(
-      "pwragent://thread/019f5d79?backend=codex&instanceId=pwr_harold&profile=sstk",
+      "pwragent://thread/019f5d79?backend=codex&instanceId=pwr_harold&messageId=user%3Aturn-9&profile=sstk",
     );
   });
 
@@ -44,6 +45,7 @@ describe("parseThreadUrl", () => {
       threadId: "019f5d79-a595-73f2-84d9-a0976762c303",
       backend: "codex",
       instanceId: "pwr_harold",
+      messageId: "message-17",
       profile: "sstk",
     } as const;
 
@@ -55,6 +57,7 @@ describe("parseThreadUrl", () => {
       threadId: "019f5d79",
       backend: undefined,
       instanceId: undefined,
+      messageId: undefined,
       profile: undefined,
     });
   });
@@ -65,6 +68,18 @@ describe("parseThreadUrl", () => {
         "pwragent://thread/019f5d79?backend=codex&instanceId=not%2Fa%2Fpeer",
       )?.instanceId,
     ).toBeUndefined();
+  });
+
+  it("drops an invalid message id without breaking thread navigation", () => {
+    expect(
+      parseThreadUrl(
+        "pwragent://thread/019f5d79?backend=codex&messageId=not%2Fa%2Fmessage",
+      ),
+    ).toMatchObject({
+      backend: "codex",
+      messageId: undefined,
+      threadId: "019f5d79",
+    });
   });
 
   it("drops a backend that is not a known kind rather than trusting it", () => {

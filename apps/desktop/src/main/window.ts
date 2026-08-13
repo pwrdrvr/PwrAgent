@@ -11,9 +11,9 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
-  AppServerBackendKind,
   FederationRemoteTarget,
 } from "@pwragent/shared";
+import type { WindowShowThreadRequest } from "../shared/window-show-thread";
 import { resolveHeapMonitorConfig } from "./diagnostics/heap-monitor-config";
 import { createHeapSession } from "./diagnostics/heap-session";
 import { resolveHotCpuProfileConfig } from "./diagnostics/hot-cpu-profile-config";
@@ -325,10 +325,7 @@ export function createMainWindow(options?: {
   federationLabel?: string;
   federationTarget?: FederationRemoteTarget;
   initialLaunchpad?: boolean;
-  initialThread?: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  };
+  initialThread?: WindowShowThreadRequest;
   startupCpuProfiler?: {
     attachWindow: (window: BrowserWindow) => void;
   };

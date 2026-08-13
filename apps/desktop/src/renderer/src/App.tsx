@@ -288,6 +288,12 @@ function DesktopAppShell(props: {
     threadKey: string;
     turnId?: string;
   }>();
+  const [messageLinkRequest, setMessageLinkRequest] = useState<{
+    messageId: string;
+    nonce: number;
+    threadKey: string;
+  }>();
+  const messageLinkNonceRef = useRef(0);
   // Bumped on every ⌘F so an already-open find bar takes focus back.
   const [findFocusNonce, setFindFocusNonce] = useState(0);
   // Initial section for SettingsScreen — non-undefined when navigation
@@ -958,6 +964,19 @@ function DesktopAppShell(props: {
   }, [mainView, navigation.selectedLaunchpad, navigation.selectedThreadKey]);
   const showThread = navigation.showThread;
   const selectDirectoryLaunchpad = navigation.selectDirectoryLaunchpad;
+  const queueMessageLinkRequest = useCallback((request: {
+    backend: AppServerBackendKind;
+    messageId?: string;
+    threadId: string;
+  }): void => {
+    setMessageLinkRequest(request.messageId
+      ? {
+          messageId: request.messageId,
+          nonce: ++messageLinkNonceRef.current,
+          threadKey: buildThreadIdentityKey(request.backend, request.threadId),
+        }
+      : undefined);
+  }, []);
   // A remote thread link joins the main window's local list before opening,
   // matching Cmd+K federated results. A separate chip action owns the
   // instance-wide remote viewer window, so an ordinary click stays here.
@@ -967,6 +986,7 @@ function DesktopAppShell(props: {
       instanceId?: FederationInstanceId;
       instanceLabel?: string;
       inThreadList?: boolean;
+      messageId?: string;
       threadId: string;
     }): void => {
       if (request.instanceId) {
@@ -984,12 +1004,14 @@ function DesktopAppShell(props: {
               target,
               initialThread: {
                 backend: request.backend,
+                ...(request.messageId ? { messageId: request.messageId } : {}),
                 target,
                 threadId: request.threadId,
               },
             });
             return;
           }
+          queueMessageLinkRequest(request);
           if (request.inThreadList) {
             setMainView("thread");
             void showThread({
@@ -1025,15 +1047,17 @@ function DesktopAppShell(props: {
           return;
         }
       }
+      queueMessageLinkRequest(request);
       setMainView("thread");
       void showThread({ backend: request.backend, threadId: request.threadId });
     },
-    [desktopApi, showThread],
+    [desktopApi, queueMessageLinkRequest, showThread],
   );
   const openRemoteViewerFromLink = useCallback(
     (request: {
       backend: AppServerBackendKind;
       instanceId: FederationInstanceId;
+      messageId?: string;
       threadId: string;
     }): void => {
       const target = {
@@ -1044,6 +1068,7 @@ function DesktopAppShell(props: {
         target,
         initialThread: {
           backend: request.backend,
+          ...(request.messageId ? { messageId: request.messageId } : {}),
           target,
           threadId: request.threadId,
         },
@@ -1340,10 +1365,11 @@ function DesktopAppShell(props: {
       return;
     }
     return desktopApi.onShowThreadRequested((request) => {
+      queueMessageLinkRequest(request);
       setMainView("thread");
       void navigation.showThread(request);
     });
-  }, [desktopApi, navigation]);
+  }, [desktopApi, navigation, queueMessageLinkRequest]);
   useEffect(() => {
     // Subscribe to Help → Replay Onboarding push from the menu. Forces
     // the wizard overlay open in "replay" mode — dismissal does NOT
@@ -1650,6 +1676,17 @@ function DesktopAppShell(props: {
     findInitialQuery: threadFindInitialQuery,
     findTurnId: threadFindTurnId,
     findFocusNonce,
+    linkedMessageId:
+      messageLinkRequest?.threadKey === navigation.selectedThreadKey
+        ? messageLinkRequest?.messageId
+        : undefined,
+    linkedMessageRequestKey:
+      messageLinkRequest?.threadKey === navigation.selectedThreadKey
+        ? messageLinkRequest?.nonce
+        : undefined,
+    onLinkedMessageHandled: () => {
+      setMessageLinkRequest(undefined);
+    },
     onFindOpenChange: (open: boolean) => {
       // The bar only ever calls this to close itself (Escape / ✕). Clear both
       // the manual toggle and any deep-link request so it stays closed.

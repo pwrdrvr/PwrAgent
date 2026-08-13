@@ -428,6 +428,12 @@ export type SendMessageToThreadResult = {
   threadUrl: string;
   /** Ready-made markdown link; see `HandoffTaskResult.threadLink`. */
   threadLink: string;
+  /** Provider-normalized id of the accepted user message, when sent now. */
+  messageId?: string;
+  /** Deep link that opens the target thread at the accepted message. */
+  messageUrl?: string;
+  /** Ready-made markdown form of `messageUrl`. */
+  messageLink?: string;
   settings: {
     executionMode?: ThreadExecutionMode;
     model?: string;
