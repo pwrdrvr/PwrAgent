@@ -251,34 +251,59 @@ export function useAutomationRunArtifact(
 
   useEffect(() => {
     let cancelled = false;
-    if (!runId || !desktopApi?.getAutomationRunArtifact) {
+    let requestSequence = 0;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const getRunArtifact = desktopApi?.getAutomationRunArtifact;
+    if (!runId || !getRunArtifact) {
       setArtifact(undefined);
       setRollout(undefined);
       setLoading(false);
       return;
     }
-    setLoading(true);
-    setError(undefined);
-    void desktopApi
-      .getAutomationRunArtifact({ runId })
-      .then((response) => {
-        if (!cancelled) {
+
+    const load = async (showLoading: boolean) => {
+      const sequence = ++requestSequence;
+      if (showLoading) setLoading(true);
+      setError(undefined);
+      try {
+        const response = await getRunArtifact({ runId });
+        if (!cancelled && sequence === requestSequence) {
           setArtifact(response.artifact);
           setRollout(response.rollout);
         }
-      })
-      .catch((candidate) => {
-        if (!cancelled) {
-          setError(formatAutomationError(candidate, "Automation artifact could not be loaded."));
+      } catch (candidate) {
+        if (!cancelled && sequence === requestSequence) {
+          setError(formatAutomationError(
+            candidate,
+            "Automation artifact could not be loaded.",
+          ));
         }
-      })
-      .finally(() => {
-        if (!cancelled) {
+      } finally {
+        if (!cancelled && sequence === requestSequence) {
           setLoading(false);
         }
-      });
+      }
+    };
+
+    void load(true);
+    const unsubscribe = desktopApi.onAgentEvent?.((event) => {
+      if (
+        event.notification.method !== "automation/run/transcript/updated"
+        && event.notification.method !== "automation/run/updated"
+      ) {
+        return;
+      }
+      if (event.notification.params.runId !== runId) return;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = undefined;
+        void load(false);
+      }, 100);
+    });
     return () => {
       cancelled = true;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      unsubscribe?.();
     };
   }, [desktopApi, runId]);
 

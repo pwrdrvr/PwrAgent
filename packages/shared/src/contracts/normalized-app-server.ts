@@ -1614,6 +1614,12 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "automation/run/transcript/updated";
+      params: {
+        runId: string;
+      };
+    }
+  | {
       method: "thread/turnQueue/updated";
       params: {
         threadId: string;

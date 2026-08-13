@@ -732,6 +732,49 @@ describe("DesktopAutomationService", () => {
         } as AgentEvent),
       ),
     );
+    expect(store.getRunArtifact(runNow.run.id)).toBeUndefined();
+    await expect(
+      service.getRunArtifact({ runId: runNow.run.id }),
+    ).resolves.toMatchObject({
+      artifact: {
+        runId: runNow.run.id,
+        status: "running",
+        transcriptEvents: expect.arrayContaining([
+          expect.objectContaining({ kind: "invocation" }),
+          expect.objectContaining({
+            kind: "assistant_final",
+            text: "Checking the inbox now.",
+          }),
+        ]),
+      },
+    });
+    const inspectionHandler = vi.mocked(registry.setAutomationInspectionHandler).mock
+      .calls.at(-1)?.[0];
+    expect(inspectionHandler).toBeDefined();
+    await expect(inspectionHandler!({
+      operation: "get_automation_run_artifact",
+      context: { backend: "codex", threadId: "thread-1" },
+      args: { runId: runNow.run.id },
+    })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        artifact: {
+          transcriptEvents: expect.arrayContaining([
+            expect.objectContaining({
+              kind: "assistant_final",
+              text: "Checking the inbox now.",
+            }),
+          ]),
+        },
+      },
+    });
+    expect(publishedEvents).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "automation/run/transcript/updated",
+        params: { runId: runNow.run.id },
+      },
+    });
     // Streaming deltas must not be persisted as transcript events (they showed
     // up as fragment "lifecycle" lines like "]}").
     await Promise.all(

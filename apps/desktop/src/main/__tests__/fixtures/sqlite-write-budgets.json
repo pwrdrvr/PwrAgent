@@ -1,8 +1,8 @@
 {
   "automation-run-transcript-burst": {
     "commits": 1,
-    "note": "50 completed tool items, one buffered automation artifact write",
-    "observedWalBytes": 28840,
+    "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
+    "observedWalBytes": 704520,
     "rowsChanged": 1,
     "statements": 1
   },

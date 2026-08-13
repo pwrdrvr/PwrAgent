@@ -366,7 +366,7 @@ describe("sqlite write metrics", () => {
     }
   });
 
-  it("holds a burst of automation transcript events to one artifact write", async () => {
+  it("holds a long automation transcript to one boundary artifact write", async () => {
     vi.useFakeTimers();
     const automationStore = new AutomationStore(stateDb);
     const registryListeners: Array<(event: AgentEvent) => void | Promise<void>> = [];
@@ -414,44 +414,47 @@ describe("sqlite write metrics", () => {
       const runNow = await service.runNow({ automationId: created.automation.id });
 
       const { writes } = await measureSqliteWrites(async () => {
-        // Completed tool items used to rewrite the growing artifact JSON once
-        // per item. Buffer the whole burst into one periodic durability flush.
-        // The five-minute safety window caps a continuously active run at 288
-        // commits/day: 28,840 measured WAL bytes * 288 = 8,305,920 bytes/day
-        // (about 7.9 MiB). Ordinary shorter runs flush once at turn completion.
-        for (let itemIndex = 0; itemIndex < 50; itemIndex += 1) {
-          await Promise.all(
-            registryListeners.map((listener) =>
-              listener({
-                backend: "codex",
-                notification: {
-                  method: "item/completed",
-                  params: {
-                    threadId: "headless-1",
-                    turnId: "turn-1",
-                    item: {
-                      id: `tool-${itemIndex}`,
-                      type: "mcpToolCall",
-                      toolName: `tool-${itemIndex}`,
+        // Fifty five-minute windows with fifty items each model a long-running,
+        // tool-heavy automation. Periodic whole-artifact rewrites would make
+        // WAL growth quadratic as every window rewrote all prior windows.
+        // One 2,500-item boundary write measures 704,520 WAL bytes; even ten
+        // such extreme runs/day stay linear at 7,045,200 bytes (about 6.7 MiB).
+        for (let windowIndex = 0; windowIndex < 50; windowIndex += 1) {
+          for (let itemIndex = 0; itemIndex < 50; itemIndex += 1) {
+            await Promise.all(
+              registryListeners.map((listener) =>
+                listener({
+                  backend: "codex",
+                  notification: {
+                    method: "item/completed",
+                    params: {
+                      threadId: "headless-1",
+                      turnId: "turn-1",
+                      item: {
+                        id: `tool-${windowIndex}-${itemIndex}`,
+                        type: "mcpToolCall",
+                        toolName: `tool-${windowIndex}-${itemIndex}`,
+                      },
                     },
                   },
-                },
-              } as unknown as AgentEvent),
-            ),
-          );
+                } as unknown as AgentEvent),
+              ),
+            );
+          }
+          await vi.advanceTimersByTimeAsync(5 * 60_000);
+          expect(automationStore.getRunArtifact(runNow.run.id)).toBeUndefined();
         }
-        expect(automationStore.getRunArtifact(runNow.run.id)).toBeUndefined();
-        await vi.advanceTimersByTimeAsync(5 * 60_000);
+        service.dispose();
       });
 
       expectSqliteWriteBudget({
-        note: "50 completed tool items, one buffered automation artifact write",
+        note: "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
         scenario: "automation-run-transcript-burst",
         writes,
       });
       expect(
         automationStore.getRunArtifact(runNow.run.id)?.transcriptEvents,
-      ).toHaveLength(50);
+      ).toHaveLength(2_500);
     } finally {
       service.dispose();
       vi.useRealTimers();

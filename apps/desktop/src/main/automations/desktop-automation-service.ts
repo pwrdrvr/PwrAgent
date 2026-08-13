@@ -82,14 +82,6 @@ const RUN_ACTOR_SCAN_LIMIT = 200;
  */
 const RUN_USAGE_FLUSH_INTERVAL_MS = 1_000;
 
-/**
- * Tool-completion events can arrive in large bursts. Keep their artifact
- * rewrites off the per-item path, then flush at run completion or periodically
- * for unusually long turns so a process crash loses at most one bounded
- * window of inspection detail.
- */
-const RUN_TRANSCRIPT_FLUSH_INTERVAL_MS = 5 * 60_000;
-
 let service: DesktopAutomationService | null = null;
 let storeOverride: AutomationStore | null = null;
 
@@ -147,7 +139,6 @@ export class DesktopAutomationService {
     string,
     Map<string, AutomationRunTranscriptEvent>
   >();
-  private pendingRunTranscriptTimer: NodeJS.Timeout | undefined;
 
   constructor(
     private readonly options: {
@@ -164,7 +155,9 @@ export class DesktopAutomationService {
       runner: new HeadlessAutomationRunner(options.registry),
       gateRunner: new ShellAutomationGateRunner(),
     });
-    this.inspectionBus = new AutomationInspectionBus(options.store);
+    this.inspectionBus = new AutomationInspectionBus(options.store, {
+      readRunArtifact: (runId) => this.readRunArtifactSnapshot(runId),
+    });
   }
 
   start(): void {
@@ -222,10 +215,6 @@ export class DesktopAutomationService {
     if (this.pendingRunUsageTimer) {
       clearTimeout(this.pendingRunUsageTimer);
       this.pendingRunUsageTimer = undefined;
-    }
-    if (this.pendingRunTranscriptTimer) {
-      clearTimeout(this.pendingRunTranscriptTimer);
-      this.pendingRunTranscriptTimer = undefined;
     }
     this.flushPendingRunTranscriptEvents();
     this.flushPendingRunUsage();
@@ -466,7 +455,7 @@ export class DesktopAutomationService {
     const automation = run
       ? this.options.store.getAutomation(run.automationId, { includeDeleted: true })
       : undefined;
-    const artifact = this.options.store.getRunArtifact(request.runId);
+    const artifact = this.readRunArtifactSnapshot(request.runId);
     const rollout =
       run?.backendThreadId && automation
         ? await this.readAutomationRunRollout({
@@ -1208,6 +1197,15 @@ export class DesktopAutomationService {
       turnId,
     });
     this.bufferRunTranscriptEvent(run.id, transcriptEvent);
+    await this.options.registry.publishLocalEvent({
+      backend: event.backend,
+      notification: {
+        method: "automation/run/transcript/updated",
+        params: {
+          runId: run.id,
+        },
+      },
+    });
     if (transcriptEvent.kind !== "assistant_final" || !transcriptEvent.text?.trim()) {
       return;
     }
@@ -1254,13 +1252,40 @@ export class DesktopAutomationService {
     const pending = this.pendingRunTranscriptEvents.get(runId) ?? new Map();
     pending.set(event.id, event);
     this.pendingRunTranscriptEvents.set(runId, pending);
-    if (this.pendingRunTranscriptTimer) return;
-    const timer = setTimeout(() => {
-      this.pendingRunTranscriptTimer = undefined;
-      this.flushPendingRunTranscriptEvents();
-    }, RUN_TRANSCRIPT_FLUSH_INTERVAL_MS);
-    timer.unref?.();
-    this.pendingRunTranscriptTimer = timer;
+  }
+
+  private readRunArtifactSnapshot(
+    runId: string,
+  ): GetAutomationRunArtifactResponse["artifact"] {
+    const persisted = this.options.store.getRunArtifact(runId);
+    const pending = this.pendingRunTranscriptEvents.get(runId);
+    if (!pending || pending.size === 0) return persisted;
+    const run = this.options.store.getRun(runId);
+    if (!run) return persisted;
+    const events = [...pending.values()];
+    const latestEventAt = Math.max(...events.map((event) => event.at));
+    const automation = persisted
+      ? undefined
+      : this.options.store.getAutomation(run.automationId, { includeDeleted: true });
+    const baseEvents =
+      persisted?.transcriptEvents
+      ?? buildRunArtifactTranscript({ automation, run });
+    return {
+      runId,
+      automationId: run.automationId,
+      status: run.status,
+      finalText: persisted?.finalText,
+      errorMessage: persisted?.errorMessage,
+      outputDecision: persisted?.outputDecision,
+      actionResults: persisted?.actionResults ?? [],
+      transcriptEvents: mergeTranscriptEvents(baseEvents, events),
+      createdAt:
+        persisted?.createdAt
+        ?? run.startedAt
+        ?? run.queuedAt
+        ?? latestEventAt,
+      updatedAt: Math.max(persisted?.updatedAt ?? 0, latestEventAt),
+    };
   }
 
   private flushPendingRunTranscriptEvents(runId?: string): void {
@@ -1268,13 +1293,6 @@ export class DesktopAutomationService {
       const pending = this.pendingRunTranscriptEvents.get(runId);
       if (!pending) return;
       this.pendingRunTranscriptEvents.delete(runId);
-      if (
-        this.pendingRunTranscriptEvents.size === 0
-        && this.pendingRunTranscriptTimer
-      ) {
-        clearTimeout(this.pendingRunTranscriptTimer);
-        this.pendingRunTranscriptTimer = undefined;
-      }
       const events = [...pending.values()];
       this.options.store.appendRunTranscriptEvents({
         runId,

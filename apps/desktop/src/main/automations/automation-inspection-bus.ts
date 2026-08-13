@@ -25,7 +25,19 @@ import {
 import type { AutomationRecord, AutomationStore } from "./automation-store.js";
 
 export class AutomationInspectionBus {
-  constructor(private readonly store: AutomationStore) {}
+  private readonly readRunArtifact: (
+    runId: string,
+  ) => AutomationRunArtifact | undefined;
+
+  constructor(
+    private readonly store: AutomationStore,
+    options: {
+      readRunArtifact?: (runId: string) => AutomationRunArtifact | undefined;
+    } = {},
+  ) {
+    this.readRunArtifact =
+      options.readRunArtifact ?? ((runId) => store.getRunArtifact(runId));
+  }
 
   inspect(request: AutomationInspectionRequest): AutomationInspectionResponse {
     const operation = request.operation;
@@ -157,7 +169,7 @@ export class AutomationInspectionBus {
     args: AutomationInspectionToolArgsByOperation["get_automation_run_artifact"],
   ): AutomationInspectionToolDataByOperation["get_automation_run_artifact"] {
     const run = this.getScopedRun(args.runId, context);
-    const artifact = this.store.getRunArtifact(run.id);
+    const artifact = this.readRunArtifact(run.id);
     if (!artifact) {
       throw new AutomationInspectionError("not_found", "Automation run artifact not found.");
     }
@@ -236,7 +248,7 @@ export class AutomationInspectionBus {
 
   private toRunSummary(run: AutomationRunSummary): AutomationInspectionRunSummary {
     const automation = this.store.getAutomation(run.automationId);
-    const artifact = this.store.getRunArtifact(run.id);
+    const artifact = this.readRunArtifact(run.id);
     return {
       ...run,
       automationName: automation?.name,
