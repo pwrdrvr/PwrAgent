@@ -10,6 +10,7 @@ import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBound
 import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
 import { installDevPerformancePruning } from "./lib/dev-performance-pruning";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
+import { mountRendererRoot } from "./lib/renderer-root";
 import "./styles/app.css";
 
 installGlobalRendererErrorHandlers();
@@ -186,12 +187,18 @@ function chooseRoot(): ReactElement {
 }
 
 desktopApi?.recordStartupProfileEvent?.("react-render:start");
-ReactDOM.createRoot(document.getElementById("root")!).render(
+// Mount through `mountRendererRoot` rather than calling `createRoot` here:
+// an HMR update re-executes this module in the live page (see that module's
+// notes), and a second `createRoot` on the same container leaves two roots
+// fighting over one DOM tree.
+mountRendererRoot(
+  document.getElementById("root")!,
   <React.StrictMode>
     <RendererErrorBoundary>
       <Suspense fallback={null}>{chooseRoot()}</Suspense>
     </RendererErrorBoundary>
   </React.StrictMode>,
+  (container) => ReactDOM.createRoot(container),
 );
 desktopApi?.recordStartupProfileEvent?.("react-render:scheduled");
 requestAnimationFrame(() => {
