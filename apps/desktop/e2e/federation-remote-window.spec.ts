@@ -8,7 +8,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { generateFederationIdentityKeyPair } from "../src/main/federation/federation-identity";
 import { generateFederationNoiseStaticKeyPair } from "../src/main/federation/federation-noise";
 import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
-import { launchElectronApp } from "./fixtures/electron-app";
+import { launchElectronApp, rightClickThreadRow } from "./fixtures/electron-app";
 import {
   buildFakeAgentConfigToml,
   FEDERATION_CHILD_ENVIRONMENT_MARKER,
@@ -628,7 +628,7 @@ test.describe("federation remote window", () => {
 
       // Pin/unpin propagates to the OWNING instance's store, not the
       // viewer's: the canned gateway backend records the routed write.
-      await remoteRowOne.click({ button: "right" });
+      await rightClickThreadRow(remote, "Remote gateway thread one");
       await remote.getByRole("menuitem", { name: "Pin Thread" }).click();
       await expect
         .poll(() => gateway!.pinnedRankByThreadId.get("remote-thread-1") ?? null, {
@@ -640,7 +640,10 @@ test.describe("federation remote window", () => {
       );
       expect(pinCall).toBeTruthy();
 
-      await remoteRowOne.click({ button: "right" });
+      // The row is PINNED here — right-click the card, not the open
+      // button: the in-title unpin pin can sit at the button's center
+      // and Playwright's hit-target check then refuses the click.
+      await rightClickThreadRow(remote, "Remote gateway thread one");
       await remote.getByRole("menuitem", { name: "Unpin Thread" }).click();
       await expect
         .poll(() => gateway!.pinnedRankByThreadId.get("remote-thread-1") ?? null, {
@@ -716,7 +719,7 @@ test.describe("federation remote window", () => {
         name: "Remote Kimi parent",
       });
       await expect(remoteKimiParent).toBeVisible();
-      await remoteKimiParent.click({ button: "right" });
+      await rightClickThreadRow(remote, "Remote Kimi parent");
       await remote
         .getByRole("menuitem", { name: "Sub-thread in Same Worktree" })
         .click();
@@ -1237,10 +1240,7 @@ test.describe("federation remote window", () => {
       // a pinned row's accessible name is "<title>, pinned" — while the
       // anchor still excludes the row's kebab/sub-thread labels that
       // merely contain the title.
-      const remoteParentButton = viewer.window.getByRole("button", {
-        name: /^Remote Kimi parent(, pinned)?$/,
-      });
-      await remoteParentButton.click({ button: "right" });
+      await rightClickThreadRow(viewer.window, /^Remote Kimi parent(, pinned)?$/);
       await expect(
         viewer.window.getByRole("menuitem", { name: "Rename Thread" }),
       ).toBeVisible();
@@ -1257,11 +1257,7 @@ test.describe("federation remote window", () => {
       relationship = await readViewerRelationship();
       const childTitle = relationship.childThread?.title;
       expect(childTitle).toBeTruthy();
-      const childButton = viewer.window.getByRole("button", {
-        name: childTitle!,
-        exact: true,
-      });
-      await childButton.click({ button: "right" });
+      await rightClickThreadRow(viewer.window, childTitle!, { exact: true });
       await viewer.window.getByRole("menuitem", { name: "Unlink from Parent" }).click();
       await expect
         .poll(async () => (await readViewerRelationship()).childThread)
@@ -1270,7 +1266,7 @@ test.describe("federation remote window", () => {
       expect(relationship.childThread?.parentThreadId).toBeUndefined();
       expect(relationship.childThread?.parentThreadInstanceId).toBeUndefined();
 
-      await remoteParentButton.click({ button: "right" });
+      await rightClickThreadRow(viewer.window, /^Remote Kimi parent(, pinned)?$/);
       await viewer.window.getByRole("menuitem", {
         name: "Archive Thread",
         exact: true,
@@ -1508,7 +1504,7 @@ test.describe("federation remote window", () => {
         name: "Remote Kimi parent",
       });
       await expect(remoteKimiParent).toBeVisible({ timeout: 30_000 });
-      await remoteKimiParent.click({ button: "right" });
+      await rightClickThreadRow(remote, "Remote Kimi parent");
       await remote
         .getByRole("menuitem", { name: "Sub-thread in Same Worktree" })
         .click();

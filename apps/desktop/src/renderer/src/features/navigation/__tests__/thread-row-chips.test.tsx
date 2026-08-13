@@ -244,7 +244,7 @@ describe("ThreadRow chip flow", () => {
     expect(onUnbindMessagingBinding).not.toHaveBeenCalled();
   });
 
-  it("toggles the pin from the hover actions button without selecting the row", () => {
+  it("unpins from the always-visible in-title pin without selecting the row", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const { onSelectThread } = renderRow({
       thread: {
@@ -255,26 +255,21 @@ describe("ThreadRow chip flow", () => {
       onSetThreadPin,
     });
 
-    // The pin left the chip flow in the 2026-08 density pass: pinned
-    // STATE is the aria-hidden in-title marker, and the toggle is a
-    // real button in the hover actions cluster beside the reaction +
-    // overflow buttons.
+    // A pinned row shows exactly ONE pin affordance: the always-visible
+    // in-title pin, which is the unpin control (the title line is a
+    // sibling of the open-thread overlay, so a real button there is
+    // valid). The hover cluster's pin button must NOT also render — it
+    // was a double affordance.
     const pin = screen.getByRole("button", { name: "Unpin thread" });
     expect(pin.tagName).toBe("BUTTON");
-    expect(pin).toHaveClass("thread-row__pin-button");
-    expect(pin).toHaveAttribute("aria-pressed", "true");
-    // The pinned STATE stays in the row's accessible name (the in-title
-    // marker is aria-hidden and this toggle only exists when a pin
-    // handler is wired), so screen readers hear it wherever rows render.
+    expect(pin).toHaveClass("thread-row__heading-pin");
+    expect(document.querySelector(".thread-row__pin-button")).toBeNull();
+    expect(document.querySelector(".thread-row__chip--pin")).toBeNull();
+    // The pinned STATE stays in the row's accessible name so screen
+    // readers hear it wherever rows render.
     expect(
       screen.getByRole("button", { name: "Chip flow thread, pinned" }),
     ).toBeInTheDocument();
-    expect(
-      document.querySelector(".thread-row__heading-pin"),
-    ).not.toBeNull();
-    expect(
-      document.querySelector(".thread-row__chip--pin"),
-    ).toBeNull();
 
     fireEvent.click(pin);
     expect(onSetThreadPin).toHaveBeenCalledWith(
@@ -284,7 +279,7 @@ describe("ThreadRow chip flow", () => {
     expect(onSelectThread).not.toHaveBeenCalled();
   });
 
-  it("pins an unpinned thread from the same actions button", () => {
+  it("pins an unpinned thread from the hover actions button", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     renderRow({
       thread: {
@@ -296,8 +291,8 @@ describe("ThreadRow chip flow", () => {
     });
 
     const pin = screen.getByRole("button", { name: "Pin thread" });
-    expect(pin).toHaveAttribute("aria-pressed", "false");
-    // No pinned-state marker on an unpinned row.
+    expect(pin).toHaveClass("thread-row__pin-button");
+    // No pinned-state control on an unpinned row's title line.
     expect(document.querySelector(".thread-row__heading-pin")).toBeNull();
 
     fireEvent.click(pin);

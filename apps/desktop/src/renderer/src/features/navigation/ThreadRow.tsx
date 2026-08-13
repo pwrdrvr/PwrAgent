@@ -103,7 +103,10 @@ type ThreadRowProps = {
   ) => Promise<void>;
   onSelectThread: (
     thread: NavigationThreadSummary,
-    event: MouseEvent<HTMLButtonElement>,
+    // HTMLElement, not HTMLButtonElement: selection fires from the
+    // overlay button AND from the header's status-indicator forwarder
+    // (a span). Consumers only read modifier keys.
+    event: MouseEvent<HTMLElement>,
   ) => void;
   onRevealSelectedThreadComplete?: (request: number) => void;
   onToggleSubthreads?: () => void;
@@ -145,6 +148,7 @@ export function ThreadRow(props: ThreadRowProps) {
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   const [pickerOpen, setPickerOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
+  const openButtonRef = useRef<HTMLButtonElement>(null);
   const completedRevealRequestRef = useRef(0);
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest ?? 0;
   const onRevealSelectedThreadComplete =
@@ -287,30 +291,49 @@ export function ThreadRow(props: ThreadRowProps) {
         }${isComposerSource ? " is-composer-source" : ""}${
           isRemoteOffline ? " is-remote-offline" : ""
         }`}
+        // The open-thread BUTTON's rect is only the title band (see
+        // `.thread-row__open` in app.css for why a card-sized button
+        // rect broke axe target-size and Playwright row clicks). The
+        // rest of the card still opens the thread through this guarded
+        // forwarder: chip-gap and padding clicks land on this div (the
+        // chip container is pointer-events: none), while clicks on real
+        // controls — chips, the in-title pin, the actions cluster — are
+        // excluded by the closest() guard or never bubble here at all.
+        // The div carries no role, so it is invisible to axe's
+        // target-size neighbor scan; the button remains the row's one
+        // accessible open control.
+        onClick={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("button, [role='button'], a")) {
+            return;
+          }
+          props.onSelectThread(props.thread, event);
+        }}
       >
-        {/* The card's primary action. It carries the title line and
-            stretches over the whole card via `.thread-row__open::after`
-            (see app.css), but it is a SIBLING of the chip flow rather
-            than its ancestor: the chips own real buttons (copy path,
-            copy branch, unpin, unbind, reactions, PR links) and a button
-            inside a button is neither valid nor operable — axe reports it
-            as `nested-interactive`. `.star-map-card-shell` uses the same
-            shape for its kebab. */}
+        {/* The card's primary action: an EMPTY button absolutely
+            stretched over the TITLE BAND only (see `.thread-row__open`
+            in app.css for why its rect must not cover the chip flow).
+            The title line, chip flow, and actions cluster are all
+            SIBLINGS rather than descendants: they own real buttons
+            (unpin, copy path, copy branch, unbind, reactions, PR links)
+            and a button inside a button is neither valid nor operable —
+            axe reports it as `nested-interactive`. (`.star-map-card__open`
+            solves the same problem with the older button-as-heading +
+            `::after` shape, kept there for its truncated-title tooltip.) */}
         <button
+          ref={openButtonRef}
           // ", pinned" keeps the pinned state in the row's accessible
-          // name now that the old role="img" pin chip is gone — the
-          // in-title marker is aria-hidden (it sits inside this button,
-          // where an interactive replacement would be invalid), and the
-          // hover cluster's toggle only exists when a pin handler is
-          // wired. Screen readers hear the state wherever the row
-          // renders.
+          // name. The button is an empty full-card overlay: the visible
+          // title line renders in the SIBLING `.thread-row__header` span
+          // (same pattern as the chip flow) so the in-title pin can be a
+          // real unpin button without nesting a control inside this one.
           aria-label={
             props.thread.pinnedRank && !props.thread.parentThreadId
               ? `${props.thread.title}, pinned`
               : props.thread.title
           }
           aria-pressed={selected}
-          className="thread-row__header thread-row__open"
+          className="thread-row__open"
           type="button"
           onKeyDown={(event) => {
             // Reorder a pinned thread within its backend's pinned
@@ -336,26 +359,57 @@ export function ThreadRow(props: ThreadRowProps) {
             }
           }}
           onClick={(event) => props.onSelectThread(props.thread, event)}
-        >
+        />
+
+        {/* Title line — a SIBLING of the open-thread overlay (pointer
+            events fall through to it except on the pin button and the
+            status indicator), so the always-visible pin can be the
+            actual unpin control instead of the double affordance the
+            hover cluster used to add. Status-indicator clicks bubble
+            past this span to the card div's guarded forwarder above, so
+            the indicator's hoverable lane (kept for the native
+            "Thinking"/"Unread update" tooltip) is not a dead zone. */}
+        <span className="thread-row__header">
           <span className="thread-row__heading">
             <ThreadRowStatus status={status} />
             <span className="thread-row__title">{props.thread.title}</span>
-            {/* Passive pinned-state marker on the title line (both
-                densities — the pin no longer spends a chip). Inside the
-                open-thread button, so no role/tabindex — a nested
-                interactive control would be invalid; the ACTIONABLE pin
-                toggle is the hover-revealed button in the actions
-                cluster, alongside the reaction + overflow buttons. */}
             {props.thread.pinnedRank && !props.thread.parentThreadId ? (
-              <span aria-hidden="true" className="thread-row__heading-pin">
-                <PinIcon size={11} />
-              </span>
+              onSetThreadPin ? (
+                <button
+                  aria-label="Unpin thread"
+                  className="thread-row__heading-pin"
+                  title="Unpin thread"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    // This button unmounts as soon as pinnedRank clears
+                    // (the pin affordances are state-exclusive), which
+                    // would drop keyboard focus to <body>. Park focus on
+                    // the row's persistent open button first — but only
+                    // for keyboard activation (detail === 0), so a mouse
+                    // click doesn't paint the row's :focus ring.
+                    if (event.detail === 0) {
+                      openButtonRef.current?.focus();
+                    }
+                    void onSetThreadPin(props.thread, false);
+                  }}
+                >
+                  <PinIcon size={11} aria-hidden="true" />
+                </button>
+              ) : (
+                <span
+                  aria-hidden="true"
+                  className="thread-row__heading-pin thread-row__heading-pin--static"
+                >
+                  <PinIcon size={11} />
+                </span>
+              )
             ) : null}
           </span>
           <span className="thread-row__time">
             {formatRelativeTime(props.thread.updatedAt)}
           </span>
-        </button>
+        </span>
 
         {/* Single ordered chip flow: meta (provider / location → PR chips
             → branch / drift / git state) → messaging binding chips →
@@ -446,25 +500,27 @@ export function ThreadRow(props: ThreadRowProps) {
       </div>
 
       <div className="thread-row__actions">
-        {/* Hover-revealed pin toggle: pin an unpinned thread, unpin a
-            pinned one. Lives with the other row actions instead of in
-            the chip flow, so the pinned STATE costs no chip space (the
-            in-title marker carries it) and pinning gains a one-click
-            affordance it never had. Sub-threads cannot be pinned. */}
-        {onSetThreadPin && !props.thread.parentThreadId ? (
+        {/* Hover-revealed pin affordance for UNPINNED rows only — a
+            pinned row's always-visible in-title pin IS the unpin
+            control, so a second pin here would be a double affordance.
+            Sub-threads cannot be pinned. */}
+        {onSetThreadPin
+          && !props.thread.parentThreadId
+          && !props.thread.pinnedRank ? (
           <button
-            aria-label={
-              props.thread.pinnedRank ? "Unpin thread" : "Pin thread"
-            }
-            aria-pressed={Boolean(props.thread.pinnedRank)}
-            className={`thread-row__pin-button${
-              props.thread.pinnedRank ? " is-pinned" : ""
-            }`}
-            title={props.thread.pinnedRank ? "Unpin thread" : "Pin thread"}
+            aria-label="Pin thread"
+            className="thread-row__pin-button"
+            title="Pin thread"
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              void onSetThreadPin(props.thread, !props.thread.pinnedRank);
+              // Same focus-parking as the in-title unpin button: this
+              // one-shot control unmounts on activation (replaced by the
+              // in-title pin), so keep keyboard focus in the row.
+              if (event.detail === 0) {
+                openButtonRef.current?.focus();
+              }
+              void onSetThreadPin(props.thread, true);
             }}
           >
             <PinIcon size={12} aria-hidden="true" />

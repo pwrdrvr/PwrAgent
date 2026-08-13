@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { launchElectronApp } from "./fixtures/electron-app";
+import { launchElectronApp, threadRowCard } from "./fixtures/electron-app";
 
 async function createThreadRowStatusFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -215,6 +215,10 @@ test("shows initiated background turns as thinking, then unread once they finish
     const initiatedRow = browseSection.getByRole("button", {
       name: /Initiated thread/i,
     });
+    // The title line + status indicator are SIBLINGS of the open-thread
+    // overlay button since the transcript-gaps pass, so status queries
+    // scope to the row card, not the button.
+    const initiatedCard = threadRowCard(browseSection, /Initiated thread/i);
 
     await initiatedRow.click();
     await expect(
@@ -235,8 +239,8 @@ test("shows initiated background turns as thinking, then unread once they finish
       })
     ).toBeVisible();
 
-    await expect(initiatedRow.locator('[data-thread-status="thinking"]')).toBeVisible();
-    await expect(initiatedRow.locator('[data-thread-status="unread"]')).toHaveCount(0);
+    await expect(initiatedCard.locator('[data-thread-status="thinking"]')).toBeVisible();
+    await expect(initiatedCard.locator('[data-thread-status="unread"]')).toHaveCount(0);
 
     // The aggregate activity signal lives on the Attention tab now, not on
     // Directories — a live turn counts as active, never as to-review.
@@ -263,13 +267,13 @@ test("shows initiated background turns as thinking, then unread once they finish
     ).toHaveCount(0);
 
     await app.advance({ stepId: "turn-started-1" });
-    await expect(initiatedRow.locator('[data-thread-status="thinking"]')).toBeVisible();
+    await expect(initiatedCard.locator('[data-thread-status="thinking"]')).toBeVisible();
 
     await app.advance({ stepId: "turn-completed-1" });
 
-    await expect(initiatedRow.locator('[data-thread-status="thinking"]')).toHaveCount(0);
-    await expect(initiatedRow.locator('[data-thread-status="unread"]')).toBeVisible();
-    await expect(initiatedRow.locator(".thread-row__status-cookie")).toBeVisible();
+    await expect(initiatedCard.locator('[data-thread-status="thinking"]')).toHaveCount(0);
+    await expect(initiatedCard.locator('[data-thread-status="unread"]')).toBeVisible();
+    await expect(initiatedCard.locator(".thread-row__status-cookie")).toBeVisible();
     // Turn finished: the thread leaves the active count and becomes unread, and
     // the Attention tab has to move with it.
     await expect(

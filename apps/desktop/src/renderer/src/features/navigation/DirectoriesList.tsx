@@ -32,7 +32,6 @@ import {
   ChevronDownIcon,
   NewThreadIcon,
   UnlinkedDotIcon,
-  WorkspaceIcon,
 } from "../../icons";
 import {
   didDragLeaveCurrentTarget,
@@ -109,7 +108,7 @@ type DirectoriesListProps = {
   onRevealSelectedThreadComplete?: (request: number) => void;
   onSelectThread: (
     thread: NavigationThreadSummary,
-    event: MouseEvent<HTMLButtonElement>,
+    event: MouseEvent<HTMLElement>,
     selectionOrder: string[],
   ) => void;
   onSelectDirectory?: (
@@ -1604,18 +1603,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 aria-hidden="true"
                 className={`directory-row__chevron${expanded ? " is-open" : ""}`}
               />
-              {/* Icon only where it distinguishes: a folder on EVERY plain
-                  directory row carried no information (2026-08 density
-                  pass), so ordinary directories lead with the chevron +
-                  label alone; workspace and unlinked rows keep their marks
-                  because those are the exceptions worth flagging. */}
-              {directory.kind === "workspace" || directory.kind === "unlinked" ? (
+              {/* Icon only where it distinguishes: a glyph on EVERY row
+                  carried no information (2026-08 density pass dropped the
+                  folder icon; the transcript-gaps pass dropped the
+                  workspace icon too — one Workspaces row with a mark read
+                  as an inconsistency, not a signal). Only the synthetic
+                  unlinked catch-all keeps its dot, because that row is not
+                  a real directory at all. */}
+              {directory.kind === "unlinked" ? (
                 <span aria-hidden="true" className="directory-row__icon">
-                  {directory.kind === "workspace" ? (
-                    <WorkspaceIcon size={14} />
-                  ) : (
-                    <UnlinkedDotIcon size={14} />
-                  )}
+                  <UnlinkedDotIcon size={14} />
                 </span>
               ) : null}
               <span className="directory-row__title-wrap">

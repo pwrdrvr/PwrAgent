@@ -195,6 +195,33 @@ describe("Tangerine Terminal theme contract", () => {
     expect(extractRuleBody(css, ".live-strip__item-action")).toMatch(
       /min-height:\s*24px;/,
     );
+
+    // Same floor for the thread-row hover cluster: the transcript-gaps
+    // pass first shrank these to 22px for visual weight and the review
+    // raised them back — 24px is as small as these standalone targets
+    // may go. The shared rule carries the height for pin + kebab; the
+    // add-reaction chip matches via its cluster override.
+    expect(
+      extractRuleBody(css, ".thread-row__pin-button,\n.thread-row__overflow-button"),
+    ).toMatch(/height:\s*24px;/);
+    expect(
+      extractRuleBody(css, ".thread-row__actions .thread-row__chip--add-reaction"),
+    ).toMatch(/height:\s*24px;[\s\S]*min-width:\s*24px;/);
+
+    // The in-title unpin control is a real 24x24 target too (axe's
+    // target-size rule gives no inline exception to flex-item buttons);
+    // its negative margins collapse the layout footprint back to the
+    // 18px line slot, so the heading's geometry doesn't move.
+    expect(extractRuleBody(css, ".thread-row__heading-pin")).toMatch(
+      /width:\s*24px;[\s\S]*height:\s*24px;/,
+    );
+
+    // And the open-thread overlay keeps the explicit floor the old
+    // in-flow button carried: at the XS title notch a chipless card
+    // computes to 23.75px, so covering the card alone is not enough.
+    expect(extractRuleBody(css, ".thread-row__open")).toMatch(
+      /min-height:\s*24px;/,
+    );
   });
 
   it("keeps every border chevron on one size", () => {
@@ -286,11 +313,12 @@ describe("Tangerine Terminal theme contract", () => {
 
   it("keeps transcript bottom reserve close to the thinking indicator height", () => {
     // The items rule may declare bottom padding either explicitly
-    // (`padding-bottom: 24px`) or via the `padding` shorthand
-    // (`padding: T R 24px L`). Both are equivalent; the lock here is
-    // that the bottom value stays at 24 (the over-scroll feel above
-    // the last message / thinking indicator) and that the pending
-    // override still drops to 4px.
+    // (`padding-bottom: 10px`) or via the `padding` shorthand
+    // (`padding: T R 10px L`). Both are equivalent; the lock here is
+    // that the bottom value stays at 10 (transcript-gaps pass: the old
+    // 24 stacked with the composer's border-top + 12px pad into a
+    // ~37px blank band under the last entry) and that the pending
+    // override still drops to 4px while the thinking line is last.
     //
     // The override keys off `.transcript-list__pending-item`, the
     // role="listitem" wrapper the thinking line now renders inside (a
@@ -302,7 +330,7 @@ describe("Tangerine Terminal theme contract", () => {
     const itemsRule = css.match(/\.transcript-list__items\s*\{[\s\S]*?\}/)?.[0];
     expect(itemsRule).toBeDefined();
     expect(itemsRule).toMatch(
-      /padding-bottom:\s*24px;|padding:\s*\S+\s+\S+\s+24px(?:\s+\S+)?;/,
+      /padding-bottom:\s*10px;|padding:\s*\S+\s+\S+\s+10px(?:\s+\S+)?;/,
     );
     expect(css).toMatch(
       /\.transcript-list__items:has\(\.transcript-list__pending-item:last-child\)\s*\{[\s\S]*?padding-bottom:\s*4px;[\s\S]*?\}/

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { launchElectronApp } from "./fixtures/electron-app";
+import { launchElectronApp, threadRowCard } from "./fixtures/electron-app";
 
 const turnLifecycleSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -491,9 +491,11 @@ test("keeps the in-thread thinking indicator visible for active turns without pe
     await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
     await expect(transcript.getByRole("status")).toContainText("Thinking");
     await expect(
-      app.window
-        .getByRole("button", { name: /Active turn thinking replay/i })
-        .locator('[data-thread-status="thinking"]')
+      // Status indicator is a sibling of the overlay button — query it
+      // on the row card.
+      threadRowCard(app.window, /Active turn thinking replay/i).locator(
+        '[data-thread-status="thinking"]',
+      )
     ).toBeVisible();
   } finally {
     await app.close();

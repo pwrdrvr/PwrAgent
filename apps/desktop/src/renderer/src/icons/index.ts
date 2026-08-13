@@ -52,6 +52,5 @@ export { TerminalIcon } from "./TerminalIcon";
 export { ToolCallsIcon } from "./ToolCallsIcon";
 export { ThreadIcon } from "./ThreadIcon";
 export { UnlinkedDotIcon } from "./UnlinkedDotIcon";
-export { WorkspaceIcon } from "./WorkspaceIcon";
 export { WorktreeIcon } from "./WorktreeIcon";
 export type { IconProps } from "./icon-types";

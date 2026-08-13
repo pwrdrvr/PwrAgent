@@ -450,10 +450,10 @@
    one pending state nothing but the operator will ever resolve, so hiding it
    in the denser view is exactly where it would be lost.
    (The pin is absent from this list because it is no longer a chip in ANY
-   density: pinned state rides the title line as
-   `.thread-row__heading-pin`, and the toggle lives in the hover actions
-   cluster as `.thread-row__pin-button` — a lone pin pill used to keep a
-   whole second chip row alive.)
+   density: pinned state and the unpin control are the in-title
+   `.thread-row__heading-pin` button, and the hover actions cluster's
+   `.thread-row__pin-button` renders only on UNPINNED rows to pin them —
+   a lone pin pill used to keep a whole second chip row alive.)
 
    Surviving chips carry the `thread-row__chip--persistent` marker class
    in TSX — ONE source of truth shared with the gap-zeroing rule below,
@@ -3925,6 +3925,11 @@ textarea,
   background: transparent;
   color: var(--text-primary);
   text-align: left;
+  /* The whole card still opens the thread — the parts outside the
+     title-band `.thread-row__open` button go through the card div's
+     guarded onClick (see ThreadRow), so the pointer affordance covers
+     the card even though the BUTTON's rect does not. */
+  cursor: pointer;
 }
 
 .thread-row--compact {
@@ -4027,34 +4032,39 @@ textarea,
 .thread-row__actions {
   position: absolute;
   /* Align the pin/overflow buttons + add-reaction chip with the title
-     line, not the row's geometric center. The 26-px-tall cluster sits so
-     its vertical midpoint matches the title's line midpoint. When the
+     line, not the row's geometric center. The cluster sits so its
+     vertical midpoint matches the title's line midpoint. When the
      row is multi-line (chips present) the title is still the FIRST
      line, so the same offset keeps the cluster anchored to it. Derived
      from the user-adjustable title token so every notch stays aligned:
      title-line midpoint = 4px padding + (size × 1.25 line + 2px
-     descender pad) / 2; subtract half the 26px cluster height, rounded
+     descender pad) / 2; subtract half the 24px cluster height, rounded
      to a whole pixel so the cluster never sits on a fractional
      boundary (which would antialias-shift the visual goldens). At the
-     md notch (13px) this resolves to 0. */
-  top: round(calc(4px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 13px), 1px);
+     md notch (13px) this resolves to 1. */
+  top: round(calc(4px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 12px), 1px);
   right: 9px;
   z-index: 3;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   pointer-events: none;
 }
 
 /* One base chrome + reveal mechanic for both hover-revealed row action
-   buttons (pin toggle + overflow kebab) — shared selectors, so a reveal
-   or chrome tweak cannot drift between them. Only the width and the
-   pin's `.is-pinned` accent live in per-button rules below. */
+   buttons (pin affordance + overflow kebab) — shared selectors, so a
+   reveal or chrome tweak cannot drift between them. Only the width
+   lives in per-button rules below. 24px tall since the transcript-gaps
+   pass: the 26px cluster read a size class heavier than the tightened
+   cards and their 20px chips, and 24px is as low as these standalone
+   targets may go — WCAG 2.5.8's 24×24 floor, the same line
+   theme-contract pins for `.live-strip__item-action` (which was once
+   ~22px for the same reason and got raised). */
 .thread-row__pin-button,
 .thread-row__overflow-button {
   position: static;
   display: grid;
-  height: 26px;
+  height: 24px;
   place-items: center;
   padding: 0;
   border: 1px solid var(--border-subtle);
@@ -4072,9 +4082,17 @@ textarea,
 }
 
 .thread-row__overflow-button {
-  width: 30px;
-  font-size: 15px;
+  width: 26px;
+  font-size: 13px;
   font-weight: 700;
+}
+
+/* The hover-only add-reaction chip rides in the same cluster; match the
+   24px cluster height so the three controls read as one unit (and stay
+   on the WCAG 2.5.8 target floor together). */
+.thread-row__actions .thread-row__chip--add-reaction {
+  height: 24px;
+  min-width: 24px;
 }
 
 .thread-row-shell:has(.thread-row__pin-button:focus-visible) .thread-row__time,
@@ -4315,59 +4333,66 @@ textarea,
   top: 30px;
 }
 
+/* Title line — a sibling of the open-thread overlay since the
+   transcript-gaps pass, exactly like `.thread-row__chips`: the container
+   is transparent to the pointer (clicks fall through to the overlay
+   button) and only the in-title pin button and the status indicator opt
+   back in. The indicator's opt-in exists solely so its native `title`
+   tooltip ("Thinking" / "Unread update") keeps working — the sidebar's
+   only sighted-hover explanation of the marks; its clicks bubble to the
+   header's onClick in ThreadRow, which forwards to the same select
+   handler as the overlay, so there is no dead zone. */
 .thread-row__header {
   display: flex;
+  position: relative;
+  z-index: 1;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+  pointer-events: none;
 }
 
-/* The row's open-thread action. It is the title line, NOT the card: the
-   chip flow below carries its own buttons (copy path, copy branch, unpin,
-   unbind, reactions, PR links) and nesting those inside the row button
-   made the row an invalid, unoperable control (axe `nested-interactive`).
-   `.star-map-card-shell` solved the same problem for its kebab. Reset the
-   UA button chrome so the title line looks exactly as it did when the
-   whole card was the button. */
+/* The row's open-thread action: an EMPTY button stretched over the whole
+   card. The visible title line, the chip flow, and the actions cluster
+   are all siblings, because they carry their own buttons (unpin, copy
+   path, copy branch, unbind, reactions, PR links) and nesting a control
+   inside this one made the row invalid and unoperable (axe
+   `nested-interactive`). `.star-map-card-shell` solves the same problem
+   differently — its button still carries the card title and lifts its
+   own children over a `::after` stretch; this one is empty because the
+   title line must hold a real unpin button.
+
+   The button's rect is the TITLE BAND, not the whole card, and that is
+   load-bearing twice over. (1) axe target-size: a full-card focusable
+   rect overlaps every chip, and an overlapping widget at zero offset
+   voids the spacing exception that lets the 20px chips pass WCAG 2.5.8
+   — a card-sized button made every copy chip a target-size violation
+   on the a11y gate. (2) Playwright aims clicks at the element's
+   bounding-box CENTER; a full-card rect centers row clicks in (or one
+   wrapped chip row away from) the chip flow, where a pointer-events:
+   auto chip intercepts the hit-target check and the spec times out.
+   With the band rect, `getByRole("button", { name: title }).click()`
+   always lands on the title line. Clicks on the rest of the card still
+   open the thread via the card div's guarded onClick (see ThreadRow).
+
+   The min-height keeps the explicit WCAG 2.5.8 floor the pre-overlay
+   button carried: at the XS title notch the band computes to ~19.75px.
+   The ≤5px transparent overhang below the band is invisible and sits
+   well clear of the chip row at every notch. */
 .thread-row__open {
   appearance: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 0;
+  /* Card block padding + the title's line box (+2px descender pad). */
+  height: calc(4px + var(--sidebar-title-size) * 1.25 + 2px);
+  min-height: 24px;
+  padding: 0;
   border: 0;
   background: transparent;
-  color: inherit;
-  text-align: left;
-  /* WCAG 2.5.8 wants a 24px target, and the title line alone is ~21px.
-     Bleed the button's box symmetrically over the row's padding — the
-     negative margin cancels the padding exactly, in every density, so
-     nothing on screen moves — and keep a 24px floor in case a density
-     ever shrinks the title line further. */
-  min-height: 24px;
-  margin-block: -4px;
-  padding-block: 4px;
-  padding-inline: 0;
-}
-
-/* …and stretch its hit area back over the whole card, so pressing the
-   card's padding or the gaps between chips still opens the thread. The
-   overlay sits at z-index 0; `.thread-row__chips` is lifted above it so
-   each chip keeps its own clicks. */
-.thread-row__open::after {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  content: "";
-}
-
-/* Lift the button's OWN content above that overlay. Hit-testing resolves
-   a pseudo-element to its originating element, so an un-lifted overlay
-   makes the button itself the hover target everywhere — and a native
-   `title` resolves from the hovered element upward through ancestors,
-   never descendants. That silently killed the status indicator's
-   "Thinking" / "Unread update" tooltip. Clicks are unaffected either way:
-   these are the button's own descendants, so they activate it regardless.
-   The empty space around them still falls through to the overlay. */
-.thread-row__open > * {
-  position: relative;
-  z-index: 1;
+  cursor: pointer;
 }
 
 /* The overlay is invisible, so the focus ring belongs on the card it
@@ -4407,19 +4432,54 @@ textarea,
   flex: 1 1 auto;
 }
 
-/* Passive pinned-state signal riding the title line (both densities —
-   the pin no longer spends a chip anywhere). Lives INSIDE the
-   open-thread button, so it is deliberately non-interactive (a button
-   inside a button is `nested-interactive`); the actionable pin toggle
-   is `.thread-row__pin-button` in the hover actions cluster. */
+/* Always-visible in-title pin on pinned rows — and since the
+   transcript-gaps pass, the actual UNPIN control (the title line is a
+   sibling of the open-thread overlay now, so a real button here is
+   valid). The hover cluster's pin button only renders on UNPINNED rows,
+   so each row shows exactly one pin affordance.
+
+   The box is a real 24×24 WCAG 2.5.8 target — axe's target-size rule
+   does not extend the inline exception to a flex-item button, so an
+   18px box would fail the a11y gate the first time an audited fixture
+   pins a thread. The negative margins collapse the layout footprint
+   back to the 18px line slot the title line was tuned around
+   (footprint: -1 + 24 - 3 = 20px wide, 24 - 3 - 3 = 18px tall, icon
+   center unchanged), so the heading's height and spacing don't move. */
 .thread-row__heading-pin {
   display: inline-flex;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   /* The heading gap is tuned for the status-indicator lane's slack;
-     this marker has none, so give it back a little air after the
-     title. */
-  margin-left: 2px;
+     this control has none, so give it back a little air after the
+     title (2px slot air = 2px margin-left on the old 18px box). */
+  margin: -3px -3px -3px -1px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
   color: var(--accent-bright);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.thread-row__heading-pin:hover,
+.thread-row__heading-pin:focus-visible {
+  background: var(--accent-soft);
+}
+
+.thread-row__heading-pin:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Read-only variant for surfaces without a pin handler — same mark,
+   no interaction. */
+.thread-row__heading-pin--static {
+  pointer-events: none;
+  cursor: default;
 }
 
 .thread-row__title,
@@ -4478,6 +4538,14 @@ textarea,
      above the heading's flex center; nudge the mark up to align with
      the TEXT rather than the padded box. */
   transform: translateY(-1px);
+  /* Opt back out of the header's pointer transparency so the native
+     `title` tooltip ("Thinking" / "Unread update") still shows — it is
+     the only sighted-hover explanation of the marks, and the unit suite
+     pins it. Clicks bubble to the header's select forwarder, so the
+     lane is not a dead zone. Harmless on the Star Map card, where the
+     indicator sits inside the open button and was hoverable anyway. */
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .thread-row__status-cookie {
@@ -4516,9 +4584,13 @@ textarea,
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  /* Above `.thread-row__open::after`, so a chip wins its own clicks —
-     but transparent to the pointer itself, so the gaps between chips
-     fall through to the overlay and still open the thread. */
+  /* Transparent to the pointer itself, so the gaps between chips fall
+     through to the card div, whose guarded onClick (see ThreadRow)
+     still opens the thread; each chip opts back in below to win its
+     own clicks and hover tooltips. The chip flow sits BELOW the
+     title-band `.thread-row__open` rect on purpose — an overlapping
+     focusable widget would void the WCAG 2.5.8 spacing exception the
+     20px chips pass target-size with. */
   pointer-events: none;
 }
 
@@ -4641,21 +4713,12 @@ textarea,
   font-weight: 600;
 }
 
-/* Pin toggle — hover-revealed row action beside the reaction + overflow
-   buttons (the pin stopped being a chip in the 2026-08 density pass:
-   passive pinned STATE is the in-title `.thread-row__heading-pin`
-   marker; this button is the one-click pin/unpin). Base chrome, reveal,
-   and hover-accent rules are SHARED with `.thread-row__overflow-button`
-   (see that block) — only the width and pinned accent live here. */
+/* Pin affordance — hover-revealed on UNPINNED rows only (a pinned row's
+   in-title pin is the unpin control). Base chrome, reveal, and
+   hover-accent rules are SHARED with `.thread-row__overflow-button`
+   (see that block) — only the width lives here. */
 .thread-row__pin-button {
-  width: 26px;
-}
-
-/* Pinned state reads accent even before its own hover, so the revealed
-   cluster says "this one is pinned" at a glance. */
-.thread-row__pin-button.is-pinned {
-  border-color: var(--accent-border);
-  color: var(--accent-bright);
+  width: 24px;
 }
 
 .thread-row__chip--approval,
@@ -11774,12 +11837,16 @@ textarea,
   content: "";
 }
 
-/* Lift the button's OWN content above that overlay — same reason as the
-   sidebar row, and it matters more here: `.star-map-card__title` is
-   ellipsised, and its `title` attribute is the only way to read a
-   truncated card title. An un-lifted overlay makes the button the hover
-   target and swallows that tooltip. This also restores the z-index the
-   heading used to carry for painting above the instance watermark. */
+/* Lift the button's OWN content above that overlay. (The sidebar row
+   used to share this button-as-heading + `::after` + lift shape; since
+   the transcript-gaps pass it uses an EMPTY full-card overlay instead,
+   because its title line must hold a real unpin button. This card keeps
+   the old shape deliberately: `.star-map-card__title` is ellipsised,
+   and its `title` attribute is the only way to read a truncated card
+   title — an un-lifted overlay makes the button the hover target and
+   swallows that tooltip. Don't "harmonize" the two without accounting
+   for that trade.) This also restores the z-index the heading used to
+   carry for painting above the instance watermark. */
 .star-map-card__open > * {
   position: relative;
   z-index: 1;
@@ -13527,11 +13594,16 @@ textarea,
   overflow-y: auto;
   /* Internal padding the wrapper used to provide. Right is 12px
      (instead of 16) so the scrollbar has its own narrow gutter. The
-     bottom 24 stays matched to the thinking-indicator height (pinned
-     by theme-contract) so the pending row never jumps the scroll; the
-     top 12 puts the first message a beat below the transcript-area top
-     edge (the fade overlays this band). */
-  padding: 12px 12px 24px 16px;
+     bottom reserve dropped 24 → 10 in the transcript-gaps pass: with
+     the composer's own border-top + 12px pad below it, 24px of rest
+     reserve stacked into a ~37px blank band between the last entry
+     (typically the turn-usage row) and the input. The `:has(pending)`
+     override still trims to 4px while the thinking line is the last
+     entry, so the swap when a turn starts stays a small nudge (pinned
+     by theme-contract, updated in the same commit). The top 12 puts
+     the first message a beat below the transcript-area top edge (the
+     fade overlays this band). */
+  padding: 12px 12px 10px 16px;
 }
 
 /* The scroller is tabIndex=0 only so keyboard users can scroll it (axe
@@ -13844,8 +13916,15 @@ textarea,
   align-items: center;
   gap: 8px;
   align-self: flex-start;
-  min-height: 32px;
-  padding: 4px 8px;
+  /* 32 → 24 in the transcript-gaps pass: 24 keeps the WCAG 2.5.8 hit
+     floor for the toggle while shedding the 8px of pill slack that made
+     "N previous messages" the tallest label row in the transcript. The
+     negative inline margin cancels the pill's horizontal padding (+1px
+     border) so the chevron column sits on the transcript's left grid
+     like the activity toggles; the pill re-appears on hover within it. */
+  min-height: 24px;
+  padding: 2px 8px;
+  margin-inline: -9px;
   border: 1px solid transparent;
   border-radius: 8px;
   color: var(--text-secondary);
@@ -16193,11 +16272,13 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-activity {
   width: min(100%, 760px);
   /* 2026-08 transcript density pass: the full-width `border-top`
-     hairline + 12px of padding above every activity row is gone. The
-     rule was nearly invisible on the app background (border-subtle on
-     bg-app), so it read as ~25px of dead space per row counting the
-     list gap; the chevron + label chrome already separates entries. */
-  padding: 2px 0 0;
+     hairline + 12px of padding above every activity row is gone (the
+     rule was nearly invisible on the app background and read as ~25px
+     of dead space per row counting the list gap; the chevron + label
+     chrome already separates entries). The transcript-gaps pass then
+     dropped the residual 2px top padding too — the list gap alone
+     separates label rows symmetrically. */
+  padding: 0;
   -webkit-user-select: text;
   user-select: text;
 }
