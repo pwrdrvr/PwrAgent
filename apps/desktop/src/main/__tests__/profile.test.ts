@@ -20,6 +20,7 @@ import {
   resolveBootstrapProfileDir,
   resolveBootstrapProfilePath,
   resolveDefaultProfileName,
+  resolveDockProfileSnapshotPath,
   resolveProfileBootDecision,
   setDefaultProfileName,
   startProfileFocusRequestWatcher,
@@ -81,6 +82,25 @@ describe("PwrAgent profiles", () => {
 
     expect(resolveDefaultProfileName({ env })).toBe("work");
     expect(resolveActiveProfileName()).toBe("dev");
+  });
+
+  it("writes the profile-only snapshot consumed by the macOS Dock plug-in", () => {
+    const { env } = createRoot();
+    ensureNamedProfileExists("personal", { env });
+    ensureNamedProfileExists("work", { env });
+    setDefaultProfileName("work", { env });
+
+    const snapshot = JSON.parse(
+      fs.readFileSync(resolveDockProfileSnapshotPath({ env }), "utf8"),
+    );
+    expect(snapshot).toEqual({
+      schemaVersion: 1,
+      defaultProfile: "work",
+      profiles: [
+        { name: "personal" },
+        { name: "work" },
+      ],
+    });
   });
 
   it("seeds [onboarding] completed=false in a freshly created profile's config.toml", () => {

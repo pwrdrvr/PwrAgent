@@ -107,6 +107,7 @@ import {
   openDesktopPwrAgentProfile,
   registerProfilesIpcHandlers,
 } from "./ipc/profiles";
+import { buildDockProfileMenuTemplate } from "./dock-menu";
 import { registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
 import {
   disposeRuntimeIdentityIpcHandlers,
@@ -178,6 +179,7 @@ import {
   resolveActiveProfileName,
   resolveProfileBootDecision,
   startProfileFocusRequestWatcher,
+  writeDockProfileSnapshot,
   type ProfileBootDecision,
   type ProfileFocusRequestWatcher,
 } from "./profile";
@@ -909,6 +911,37 @@ function installProfileFocusRequestWatcher(): void {
   );
 }
 
+function openProfileFromMenu(profile: string): Promise<void> {
+  return Promise.resolve(openDesktopPwrAgentProfile({ profile }))
+    .then(() => undefined)
+    .finally(refreshProfileMenus);
+}
+
+function installDockMenu(): void {
+  if (!isMac) return;
+  const { defaultProfile, profiles } = listDesktopPwrAgentProfiles();
+  // Refresh this on every macOS run so an upgraded installation gets a Dock
+  // menu even when its existing profiles registry did not otherwise change.
+  writeDockProfileSnapshot({
+    schemaVersion: 1,
+    defaultProfile,
+    profiles: profiles.map((profile) => ({
+      name: profile.name,
+      ...(profile.displayName ? { displayName: profile.displayName } : {}),
+    })),
+  });
+  const template = buildDockProfileMenuTemplate(
+    profiles,
+    openProfileFromMenu,
+  );
+  app.dock?.setMenu(Menu.buildFromTemplate(template));
+}
+
+function refreshProfileMenus(): void {
+  installApplicationMenu();
+  installDockMenu();
+}
+
 function installApplicationMenu(): void {
   const developerMode = getDesktopSettingsService().resolveDeveloperMode();
   const profiles = listDesktopPwrAgentProfiles().profiles;
@@ -977,9 +1010,7 @@ function installApplicationMenu(): void {
         requestOpenNewThread();
       },
       openProfile: (profile) => {
-        void Promise.resolve(openDesktopPwrAgentProfile({ profile })).finally(
-          installApplicationMenu,
-        );
+        void openProfileFromMenu(profile);
       },
       openProfilesSettings: () => {
         requestOpenSettings("profiles");
@@ -1138,7 +1169,7 @@ export function bootstrapApp(): void {
     if (bootMode === "active-profile") {
       installProfileFocusRequestWatcher();
     }
-    installApplicationMenu();
+    refreshProfileMenus();
     getDesktopBackendRegistry().setPwrAgentAppManagementHandler(
       createPwrAgentAppManagementHandler({
         startedAt: mainProcessStartedAt,
@@ -1210,7 +1241,7 @@ export function bootstrapApp(): void {
           .readTranscriptImage({ url }),
     });
     registerPreloadLogIpcHandlers();
-    registerProfilesIpcHandlers({ onProfilesChanged: installApplicationMenu });
+    registerProfilesIpcHandlers({ onProfilesChanged: refreshProfileMenus });
     registerRendererErrorIpcHandlers();
     registerBootInfoIpcHandlers({
       requestQuit: async () => {

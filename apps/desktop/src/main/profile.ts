@@ -16,6 +16,7 @@ export { normalizeProfileName };
 
 export const PWRAGENT_PROFILE_ENV = "PWRAGENT_PROFILE";
 export const PWRAGENT_HOME_ENV = "PWRAGENT_HOME";
+export const DOCK_PROFILE_SNAPSHOT_FILENAME = "dock-profiles.json";
 /**
  * Bypass the wizard for missing-profile boot decisions. Intended for
  * E2E fixtures and replay tests where the test harness wants to spin
@@ -70,6 +71,15 @@ export type ProfileEntry = {
 export type ProfilesRegistry = {
   default_profile?: string;
   profiles: ProfileEntry[];
+};
+
+export type DockProfileSnapshot = {
+  schemaVersion: 1;
+  defaultProfile: string;
+  profiles: Array<{
+    name: string;
+    displayName?: string;
+  }>;
 };
 
 export type ProfileRuntimeHeartbeat = {
@@ -403,6 +413,16 @@ export function resolveProfilesRegistryPath(options?: {
   return path.join(resolvePwragentRoot(options), "profiles.toml");
 }
 
+export function resolveDockProfileSnapshotPath(options?: {
+  env?: NodeJS.ProcessEnv;
+  homeDir?: string;
+}): string {
+  return path.join(
+    resolvePwragentRoot(options),
+    DOCK_PROFILE_SNAPSHOT_FILENAME,
+  );
+}
+
 export function readProfilesRegistry(options?: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
@@ -423,6 +443,29 @@ export function writeProfilesRegistry(
   const tmpPath = `${registryPath}.${process.pid}.tmp`;
   fs.writeFileSync(tmpPath, stringifyProfilesToml(registry), "utf8");
   fs.renameSync(tmpPath, registryPath);
+  writeDockProfileSnapshot(buildDockProfileSnapshot(registry), options);
+}
+
+export function writeDockProfileSnapshot(
+  snapshot: DockProfileSnapshot,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): void {
+  writeJsonAtomic(resolveDockProfileSnapshotPath(options), snapshot);
+}
+
+export function buildDockProfileSnapshot(
+  registry: ProfilesRegistry,
+): DockProfileSnapshot {
+  return {
+    schemaVersion: 1,
+    defaultProfile: registry.default_profile ?? "default",
+    profiles: registry.profiles
+      .filter((entry) => isValidProfileName(entry.name))
+      .map((entry) => ({
+        name: entry.name,
+        ...(entry.display_name ? { displayName: entry.display_name } : {}),
+      })),
+  };
 }
 
 export function ensureProfileExists(options?: {

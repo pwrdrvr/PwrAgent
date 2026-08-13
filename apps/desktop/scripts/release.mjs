@@ -523,6 +523,15 @@ if (!signStageOnly) {
   step("electron-vite build");
   runChecked("pnpm", ["--filter", "@pwragent/desktop", "build"], { cwd: repoRoot });
 
+  if (!linux && !win) {
+    step("native Dock tile plug-in build");
+    runChecked(
+      "pnpm",
+      ["--filter", "@pwragent/desktop", "build:native:dock"],
+      { cwd: repoRoot },
+    );
+  }
+
   // 3. Materialize the release stage. Windows must include electron-builder in
   // the staged tree: its protected signing job receives only this tree, and
   // Windows tar follows pnpm's workspace junctions when the workspace
@@ -707,6 +716,18 @@ if (linux) {
 }
 
 const builtApp = join(dist, "mac-universal", "PwrAgent.app");
+const dockTilePlugin = join(
+  builtApp,
+  "Contents",
+  "PlugIns",
+  "PwrAgentDockTilePlugin.plugin",
+);
+const dockTilePluginExecutable = join(
+  dockTilePlugin,
+  "Contents",
+  "MacOS",
+  "PwrAgentDockTilePlugin",
+);
 
 step("verify universal binary slices");
 runChecked("lipo", [
@@ -714,6 +735,22 @@ runChecked("lipo", [
   "-verify_arch",
   "x86_64",
   "arm64",
+]);
+runChecked("lipo", [
+  dockTilePluginExecutable,
+  "-verify_arch",
+  "x86_64",
+  "arm64",
+]);
+runChecked("plutil", [
+  "-lint",
+  join(dockTilePlugin, "Contents", "Info.plist"),
+]);
+runChecked("codesign", [
+  "--verify",
+  "--strict",
+  "--verbose=2",
+  dockTilePlugin,
 ]);
 runChecked("lipo", [
   join(

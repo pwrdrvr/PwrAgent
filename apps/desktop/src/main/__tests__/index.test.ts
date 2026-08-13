@@ -175,6 +175,7 @@ const whenReadyMock = vi.fn(() => Promise.resolve());
 const quitMock = vi.fn();
 const getAllWindowsMock = vi.fn<() => unknown[]>(() => []);
 const dockSetIconMock = vi.fn();
+const dockSetMenuMock = vi.fn();
 const protocolHandleMock = vi.fn();
 const protocolRegisterSchemesAsPrivilegedMock = vi.fn();
 const nativeImageMock = {
@@ -211,6 +212,7 @@ const resolveProfileBootDecisionMock = vi.fn<() => BootDecisionLike>(() => ({
   source: "migration",
 }));
 const cleanupBootstrapProfileMock = vi.fn();
+const writeDockProfileSnapshotMock = vi.fn();
 
 vi.mock("electron", () => ({
   app: {
@@ -224,6 +226,7 @@ vi.mock("electron", () => ({
     whenReady: whenReadyMock,
     dock: {
       setIcon: dockSetIconMock,
+      setMenu: dockSetMenuMock,
     },
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       appEventHandlers.set(event, handler);
@@ -486,6 +489,7 @@ vi.mock("../profile", () => ({
   startProfileFocusRequestWatcher: startProfileFocusRequestWatcherMock,
   resolveProfileBootDecision: resolveProfileBootDecisionMock,
   cleanupBootstrapProfile: cleanupBootstrapProfileMock,
+  writeDockProfileSnapshot: writeDockProfileSnapshotMock,
 }));
 
 const runtimeMessagingLeaseCoordinatorMock = {
@@ -741,6 +745,7 @@ describe("bootstrapApp", () => {
     isCodexBootstrapDeferredMock.mockReturnValue(false);
     getDesktopSettingsServiceMock.mockClear();
     dockSetIconMock.mockClear();
+    dockSetMenuMock.mockClear();
     nativeImageMock.isEmpty.mockReset();
     nativeImageMock.isEmpty.mockReturnValue(false);
     nativeImageCreateFromPathMock.mockClear();
@@ -762,6 +767,7 @@ describe("bootstrapApp", () => {
       source: "migration",
     });
     cleanupBootstrapProfileMock.mockReset();
+    writeDockProfileSnapshotMock.mockReset();
     initializeAppStateMock.mockReset();
     startProfileFocusRequestWatcherMock.mockClear();
     startupProfilerInstance.start.mockReset();
