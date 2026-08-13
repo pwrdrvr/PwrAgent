@@ -10,7 +10,11 @@ type FakeDialogWindow = {
   restored: number;
   closed: number;
   once: (event: string, handler: (...args: unknown[]) => void) => void;
-  webContents: { on: () => void; setWindowOpenHandler: () => void };
+  webContents: {
+    executeJavaScript: (script: string) => Promise<void>;
+    on: () => void;
+    setWindowOpenHandler: () => void;
+  };
   /** The data: URL the dialog loaded, so tests can read the page it built. */
   loadedUrl?: string;
   /** Stays pending unless a test settles it — the real load is async too. */
@@ -41,6 +45,7 @@ function createFakeDialogWindow(): FakeDialogWindow {
       window.listeners.set(event, handler);
     },
     webContents: {
+      executeJavaScript: vi.fn(async () => undefined),
       on: vi.fn(),
       setWindowOpenHandler: vi.fn(),
     },
@@ -70,6 +75,21 @@ function createFakeDialogWindow(): FakeDialogWindow {
 }
 
 const dialogWindows: FakeDialogWindow[] = [];
+
+function sendDialogAction(window: FakeDialogWindow, action: string): void {
+  const on = window.webContents.on as unknown as {
+    mock: { calls: Array<[string, (event: unknown, url: string) => void]> };
+  };
+  const willNavigate = on.mock.calls.find(
+    ([event]) => event === "will-navigate",
+  )?.[1];
+  if (!willNavigate) throw new Error("dialog registered no will-navigate handler");
+  const prefix = /pwragent-quit-confirmation:\/\/[^/]+\//.exec(
+    decodeURIComponent(window.loadedUrl ?? ""),
+  )?.[0];
+  if (!prefix) throw new Error("dialog page carries no navigation prefix");
+  willNavigate({ preventDefault: vi.fn() }, `${prefix}${action}`);
+}
 
 vi.mock("electron", () => ({
   // `new BrowserWindow(...)`: an arrow function is not constructible.
@@ -283,6 +303,134 @@ describe("raising the open quit dialog", () => {
     window.listeners.get("closed")?.();
     await expect(pending).resolves.toBe("manual-cancel");
   });
+
+  it("reports finished work before completing the quit", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = showQuitConfirmationDialog({
+        countdownSeconds: 10,
+        inProgressThreadCount: 0,
+        automationRunCount: 1,
+        terminalSessionCount: 0,
+        items: [
+          {
+            kind: "automation",
+            backend: "codex",
+            threadId: "agent-thread-1",
+            threadKey: "codex:agent-thread-1",
+            title: "Search Bots",
+            detail: "Started 8:29:31 PM",
+          },
+        ],
+        refresh: async () => ({
+          inProgressThreadCount: 0,
+          automationRunCount: 0,
+          terminalSessionCount: 0,
+          actionRunCount: 0,
+          items: [],
+        }),
+      });
+      const window = dialogWindows.at(-1)!;
+      window.listeners.get("ready-to-show")?.();
+      sendDialogAction(window, "wait-for-work");
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(window.webContents.executeJavaScript).toHaveBeenCalledWith(
+        expect.stringContaining("All running work finished"),
+        true,
+      );
+      expect(decodeURIComponent(window.loadedUrl ?? "")).toContain(
+        "Wait for Work",
+      );
+      expect(decodeURIComponent(window.loadedUrl ?? "")).toContain(
+        'send("wait-for-work")',
+      );
+      expect(decodeURIComponent(window.loadedUrl ?? "")).toContain(
+        "1 automation is running",
+      );
+      expect(decodeURIComponent(window.loadedUrl ?? "")).toContain(
+        "Search Bots",
+      );
+      await vi.advanceTimersByTimeAsync(1_250);
+      await expect(pending).resolves.toBe("work-completed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not quit when work finishes after interaction only cancelled the countdown", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = showQuitConfirmationDialog({
+        countdownSeconds: 10,
+        inProgressThreadCount: 1,
+        terminalSessionCount: 0,
+        refresh: async () => ({
+          inProgressThreadCount: 0,
+          automationRunCount: 0,
+          terminalSessionCount: 0,
+          actionRunCount: 0,
+          items: [],
+        }),
+      });
+      const window = dialogWindows.at(-1)!;
+      sendDialogAction(window, "countdown-cancel");
+      window.listeners.get("ready-to-show")?.();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(window.closed).toBe(0);
+      window.listeners.get("closed")?.();
+      await expect(pending).resolves.toBe("manual-cancel");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels wait completion when new work appears during the grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      let refreshCount = 0;
+      const pending = showQuitConfirmationDialog({
+        countdownSeconds: 10,
+        inProgressThreadCount: 1,
+        terminalSessionCount: 0,
+        refresh: async () => {
+          refreshCount += 1;
+          const active = refreshCount > 1;
+          return {
+            inProgressThreadCount: active ? 1 : 0,
+            automationRunCount: 0,
+            terminalSessionCount: 0,
+            actionRunCount: 0,
+            items: active
+              ? [
+                  {
+                    kind: "turn" as const,
+                    backend: "codex",
+                    threadId: "new-thread",
+                    threadKey: "codex:new-thread",
+                  },
+                ]
+              : [],
+          };
+        },
+      });
+      const window = dialogWindows.at(-1)!;
+      window.listeners.get("ready-to-show")?.();
+      sendDialogAction(window, "wait-for-work");
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(refreshCount).toBeGreaterThan(1);
+      expect(window.closed).toBe(0);
+      window.listeners.get("closed")?.();
+      await expect(pending).resolves.toBe("manual-cancel");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("clicking a quit dialog row", () => {
@@ -302,18 +450,7 @@ describe("clicking a quit dialog row", () => {
    * the per-dialog navigation prefix the page was actually built with.
    */
   function clickRow(window: (typeof dialogWindows)[number], action: string) {
-    const on = window.webContents.on as unknown as {
-      mock: { calls: Array<[string, (event: unknown, url: string) => void]> };
-    };
-    const willNavigate = on.mock.calls.find(
-      ([event]) => event === "will-navigate",
-    )?.[1];
-    if (!willNavigate) throw new Error("dialog registered no will-navigate handler");
-    const prefix = /pwragent-quit-confirmation:\/\/[^/]+\//.exec(
-      decodeURIComponent(window.loadedUrl ?? ""),
-    )?.[0];
-    if (!prefix) throw new Error("dialog page carries no navigation prefix");
-    willNavigate({ preventDefault: vi.fn() }, `${prefix}${action}`);
+    sendDialogAction(window, action);
   }
 
   it("routes the show-thread request to the window that owns a remote terminal", async () => {

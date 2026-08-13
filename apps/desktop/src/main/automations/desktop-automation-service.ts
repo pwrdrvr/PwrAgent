@@ -214,6 +214,10 @@ export class DesktopAutomationService {
     this.options.registry.setAutomationInspectionHandler?.(null);
   }
 
+  quiesceDispatch(): () => Promise<void> {
+    return this.scheduler.quiesceDispatch();
+  }
+
   /**
    * Automations the store couldn't load this process lifetime (corrupt payload,
    * or a schedule/trigger shape this build predates). Surfaced to the renderer

@@ -455,9 +455,111 @@ describe("createQuitManager", () => {
       expect.objectContaining({ error: "app-server unavailable" }),
     );
   });
+
+  it("resumes automation dispatch when the operator stays open", async () => {
+    const { createQuitManager } = await import("../quit-manager");
+    const resumeDispatch = vi.fn(async () => undefined);
+    const quiesceAutomationDispatch = vi.fn(() => resumeDispatch);
+    const manager = createQuitManager({
+      confirm: vi.fn(async () => "manual-cancel" as const),
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () => ({
+        count: 1,
+        terminalSessionCount: 0,
+        terminalThreadKeys: [],
+        threadIds: [],
+        automationRunCount: 1,
+        actionRunCount: 0,
+        items: [],
+      }),
+      quiesceAutomationDispatch,
+      log: {},
+      performQuit: vi.fn(),
+    });
+
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(false);
+
+    expect(quiesceAutomationDispatch).toHaveBeenCalledTimes(1);
+    expect(resumeDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a new quit prompt while queued automation dispatch is still resuming", async () => {
+    const { createQuitManager } = await import("../quit-manager");
+    let finishResume!: () => void;
+    const resumePending = new Promise<void>((resolve) => {
+      finishResume = resolve;
+    });
+    const resumeDispatch = vi.fn(() => resumePending);
+    const confirm = vi
+      .fn()
+      .mockResolvedValueOnce("manual-cancel" as const)
+      .mockResolvedValueOnce("manual-confirm" as const);
+    const performQuit = vi.fn();
+    const manager = createQuitManager({
+      confirm,
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () => ({
+        count: 1,
+        terminalSessionCount: 0,
+        terminalThreadKeys: [],
+        threadIds: [],
+        automationRunCount: 1,
+        actionRunCount: 0,
+        items: [],
+      }),
+      quiesceAutomationDispatch: () => resumeDispatch,
+      log: {},
+      performQuit,
+    });
+
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(false);
+    expect(resumeDispatch).toHaveBeenCalledTimes(1);
+
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(true);
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(performQuit).toHaveBeenCalledTimes(1);
+    finishResume();
+    await resumePending;
+  });
 });
 
 describe("buildQuitBlockerSnapshot", () => {
+  it("collapses an ephemeral automation execution onto its named Agent run", async () => {
+    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+
+    const snapshot = buildQuitBlockerSnapshot({
+      inProgressThreads: {
+        count: 1,
+        threadIds: [],
+        automationRuns: [
+          {
+            agentThreadId: "agent-thread-1",
+            automationName: "Search Bots",
+            automationRunId: "automation-run:1",
+            backend: "codex",
+            startedAt: new Date("2026-08-12T20:29:31-04:00").getTime(),
+          },
+        ],
+      },
+      terminalSessions: { count: 0, threads: [] },
+    });
+
+    expect(snapshot.count).toBe(1);
+    expect(snapshot.threadIds).toEqual([]);
+    expect(snapshot.automationRunCount).toBe(1);
+    expect(snapshot.items).toEqual([
+      expect.objectContaining({
+        kind: "automation",
+        backend: "codex",
+        threadId: "agent-thread-1",
+        threadKey: "codex:agent-thread-1",
+        title: "Search Bots",
+        detail: expect.stringMatching(/^Started /),
+      }),
+    ]);
+  });
+
   it("turns every kind of running work into a linkable item", async () => {
     const { buildQuitBlockerSnapshot } = await import("../quit-manager");
 

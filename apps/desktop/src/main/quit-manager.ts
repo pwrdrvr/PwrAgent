@@ -14,6 +14,7 @@ import {
   type DetachedCommandSummary,
 } from "./app-server/codex-environment-runtime";
 import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
+import { getDesktopAutomationService } from "./automations/desktop-automation-service";
 import { getDesktopFederationRuntime } from "./federation/federation-runtime";
 import { getIntegratedTerminalQuitSnapshot } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
@@ -27,6 +28,7 @@ import {
   showQuitConfirmationDialog,
   type QuitBlockerItem,
   type QuitConfirmationDialogResult,
+  type QuitConfirmationDialogSnapshot,
 } from "./quit-confirmation-dialog";
 
 export type { QuitBlockerItem };
@@ -54,6 +56,7 @@ export type QuitBlockerSnapshot = {
   terminalThreadKeys: string[];
   threadIds: string[];
   actionRunCount: number;
+  automationRunCount?: number;
   items: QuitBlockerItem[];
 };
 
@@ -65,6 +68,7 @@ export type QuitManagerDependencies = {
     actionRunCount?: number;
     items?: QuitBlockerItem[];
     parent?: BrowserWindow | null;
+    refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
   }) => Promise<QuitConfirmationDialogResult>;
   /**
    * Raise the confirmation prompt that is already open. Returns false when
@@ -74,6 +78,8 @@ export type QuitManagerDependencies = {
   getConfirmationEnabled: () => boolean;
   getFocusedWindow?: () => BrowserWindow | null;
   getQuitBlockers: () => QuitBlockerSnapshot;
+  /** Hold new automation launches until quitting proceeds or the prompt closes. */
+  quiesceAutomationDispatch?: () => () => Promise<void> | void;
   /**
    * Best-effort thread-title lookup for the dialog's links, keyed by
    * `quitBlockerTitleKey`. Takes whole items rather than thread keys because
@@ -104,6 +110,21 @@ export function createQuitManager(
   let quitAllowed = false;
   let pendingPerformQuit: (() => void) | undefined;
   let promptPromise: Promise<boolean> | undefined;
+  let activePromptId = 0;
+  let nextPromptId = 0;
+
+  const resumeAutomationDispatchAfterPrompt = (
+    resumeAutomationDispatch: (() => Promise<void> | void) | undefined,
+  ): void => {
+    if (!resumeAutomationDispatch) return;
+    void Promise.resolve()
+      .then(() => resumeAutomationDispatch())
+      .catch((error: unknown) => {
+        dependencies.log.warn?.("automation dispatch resume failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  };
 
   const requestQuit = async (options: RequestQuitOptions): Promise<boolean> => {
     if (quitAllowed) {
@@ -127,6 +148,7 @@ export function createQuitManager(
         {
           count: snapshot.count,
           actionRunCount: snapshot.actionRunCount,
+          automationRunCount: snapshot.automationRunCount ?? 0,
           source: options.source,
           terminalSessionCount: snapshot.terminalSessionCount,
           terminalThreadKeys: snapshot.terminalThreadKeys,
@@ -160,6 +182,7 @@ export function createQuitManager(
     dependencies.log.warn?.("quit requested with active work", {
       count: snapshot.count,
       actionRunCount: snapshot.actionRunCount,
+      automationRunCount: snapshot.automationRunCount ?? 0,
       source: options.source,
       terminalSessionCount: snapshot.terminalSessionCount,
       terminalThreadKeys: snapshot.terminalThreadKeys,
@@ -167,7 +190,16 @@ export function createQuitManager(
     });
 
     pendingPerformQuit = options.performQuit ?? dependencies.performQuit;
-    promptPromise = (async () => {
+    const promptId = nextPromptId + 1;
+    nextPromptId = promptId;
+    activePromptId = promptId;
+    const clearPrompt = (): void => {
+      if (activePromptId !== promptId) return;
+      activePromptId = 0;
+      promptPromise = undefined;
+    };
+    const currentPrompt = (async () => {
+      const resumeAutomationDispatch = dependencies.quiesceAutomationDispatch?.();
       // Skip the round trip entirely when there is nothing to title, so the
       // no-resolver path reaches `confirm` without an extra microtask hop.
       const items =
@@ -178,17 +210,32 @@ export function createQuitManager(
               dependencies.log,
             )
           : snapshot.items;
-      const resolution = await (dependencies.confirm ?? showQuitConfirmationDialog)({
-        countdownSeconds: QUIT_CONFIRMATION_COUNTDOWN_SECONDS,
-        inProgressThreadCount: snapshot.threadIds.length,
-        terminalSessionCount: snapshot.terminalSessionCount,
-        actionRunCount: snapshot.actionRunCount,
-        items,
-        parent: dependencies.getFocusedWindow?.(),
-      });
+      let resolution: QuitConfirmationDialogResult;
+      try {
+        resolution = await (dependencies.confirm ?? showQuitConfirmationDialog)({
+          countdownSeconds: QUIT_CONFIRMATION_COUNTDOWN_SECONDS,
+          inProgressThreadCount: snapshot.threadIds.length,
+          automationRunCount: snapshot.automationRunCount ?? 0,
+          terminalSessionCount: snapshot.terminalSessionCount,
+          actionRunCount: snapshot.actionRunCount,
+          items,
+          parent: dependencies.getFocusedWindow?.(),
+          refresh: async () =>
+            await buildQuitConfirmationSnapshot(
+              dependencies.getQuitBlockers(),
+              dependencies.resolveThreadTitles,
+              dependencies.log,
+            ),
+        });
+      } catch (error) {
+        clearPrompt();
+        resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
+        throw error;
+      }
       dependencies.log.warn?.("quit confirmation resolved", {
         count: snapshot.count,
         actionRunCount: snapshot.actionRunCount,
+        automationRunCount: snapshot.automationRunCount ?? 0,
         resolution,
         source: options.source,
         terminalSessionCount: snapshot.terminalSessionCount,
@@ -197,17 +244,25 @@ export function createQuitManager(
       });
       if (resolution === "manual-cancel") {
         pendingPerformQuit = undefined;
+        // The dialog is already gone. Release this prompt before gates and
+        // backend submissions resume so a new quit request can open a visible
+        // confirmation instead of joining work nobody can see.
+        clearPrompt();
+        resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
         return false;
       }
       quitAllowed = true;
       (pendingPerformQuit ?? dependencies.performQuit)();
       pendingPerformQuit = undefined;
       return true;
-    })().finally(() => {
-      promptPromise = undefined;
-    });
+    })();
+    promptPromise = currentPrompt;
 
-    return await promptPromise;
+    try {
+      return await currentPrompt;
+    } finally {
+      clearPrompt();
+    }
   };
 
   return {
@@ -219,10 +274,35 @@ export function createQuitManager(
   };
 }
 
+async function buildQuitConfirmationSnapshot(
+  snapshot: QuitBlockerSnapshot,
+  resolveThreadTitles: QuitManagerDependencies["resolveThreadTitles"],
+  log: QuitManagerDependencies["log"],
+): Promise<QuitConfirmationDialogSnapshot> {
+  const items =
+    resolveThreadTitles && snapshot.items.some((item) => !item.title)
+      ? await withResolvedTitles(snapshot.items, resolveThreadTitles, log)
+      : snapshot.items;
+  return {
+    inProgressThreadCount: snapshot.threadIds.length,
+    automationRunCount: snapshot.automationRunCount ?? 0,
+    terminalSessionCount: snapshot.terminalSessionCount,
+    actionRunCount: snapshot.actionRunCount,
+    items,
+  };
+}
+
 export function buildQuitBlockerSnapshot(params: {
   inProgressThreads: {
     count: number;
     threadIds: string[];
+    automationRuns?: Array<{
+      agentThreadId: string;
+      automationName?: string;
+      automationRunId: string;
+      backend: AppServerBackendKind;
+      startedAt: number;
+    }>;
   };
   terminalSessions: {
     count: number;
@@ -234,6 +314,7 @@ export function buildQuitBlockerSnapshot(params: {
   const terminalThreads = [...params.terminalSessions.threads].sort(byThreadKey);
   const terminalThreadKeys = terminalThreads.map((thread) => thread.threadKey);
   const actionRuns = params.actionRuns ?? [];
+  const automationRuns = params.inProgressThreads.automationRuns ?? [];
 
   const items: QuitBlockerItem[] = [
     // Turns and actions are driven by THIS instance's registry and runtime,
@@ -242,6 +323,15 @@ export function buildQuitBlockerSnapshot(params: {
       kind: "turn" as const,
       ...splitQuitThreadKey(threadKey),
       threadKey,
+    })),
+    ...automationRuns.map((run) => ({
+      kind: "automation" as const,
+      backend: run.backend,
+      threadId: run.agentThreadId,
+      threadKey: buildThreadIdentityKey(run.backend, run.agentThreadId),
+      title: run.automationName?.trim() || "Automation",
+      detail: formatAutomationRunStart(run.startedAt),
+      startedAt: run.startedAt,
     })),
     ...terminalThreads.map((thread) => ({
       kind: "terminal" as const,
@@ -269,13 +359,26 @@ export function buildQuitBlockerSnapshot(params: {
   ];
 
   return {
-    count: threadIds.length + params.terminalSessions.count + actionRuns.length,
+    count:
+      threadIds.length
+      + automationRuns.length
+      + params.terminalSessions.count
+      + actionRuns.length,
     terminalSessionCount: params.terminalSessions.count,
     terminalThreadKeys,
     threadIds,
     actionRunCount: actionRuns.length,
+    automationRunCount: automationRuns.length,
     items,
   };
+}
+
+export function formatAutomationRunStart(startedAt: number): string {
+  return `Started ${new Date(startedAt).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  })}`;
 }
 
 /**
@@ -291,8 +394,12 @@ async function withResolvedTitles(
   if (!resolve || items.length === 0) {
     return items;
   }
+  const unresolvedItems = items.filter((item) => !item.title?.trim());
+  if (unresolvedItems.length === 0) {
+    return items;
+  }
   const byTitleKey = new Map(
-    items.map((item) => [quitBlockerTitleKey(item), item]),
+    unresolvedItems.map((item) => [quitBlockerTitleKey(item), item]),
   );
   let titles: Map<string, string>;
   try {
@@ -498,6 +605,8 @@ export const appQuitManager = createQuitManager({
       terminalSessions: getIntegratedTerminalQuitSnapshot(),
       actionRuns: listRunningDetachedCommands(),
     }),
+  quiesceAutomationDispatch: () =>
+    getDesktopAutomationService().quiesceDispatch(),
   resolveThreadTitles: async (items) =>
     await resolveQuitBlockerThreadTitles(items, {
       listLocalThreads: async () =>

@@ -538,6 +538,178 @@ describe("AutomationScheduler", () => {
     });
   });
 
+  it("starts a queued run once when duplicate terminal signals release the lane", async () => {
+    const automation = store.createAutomation({
+      id: "automation-duplicate-terminal",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Search Bots",
+      taskPrompt: "Investigate.",
+      inboundCoalesceWindowMs: 0,
+      triggers: [
+        {
+          id: "inbound",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    const source = (sourceEventKey: string) => ({
+      kind: "messaging" as const,
+      sourceEventKey,
+      receivedAt: now,
+      matchedTriggerId: "inbound",
+      actor: { platformUserId: "B123", isBot: true },
+      conversation: { channel: "slack" as const, conversationId: "C123" },
+      message: { text: "ERROR" },
+    });
+
+    now = 1_000;
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: source("first"),
+      now,
+    });
+    const activeRun = store.findActiveRunForAutomation(automation.id)!;
+
+    now = 2_000;
+    await scheduler.runFromInboundEvent({
+      automation,
+      source: source("queued"),
+      now,
+    });
+
+    now = 3_000;
+    await Promise.all([
+      scheduler.handleTurnQueueUpdate({
+        automationRunId: activeRun.id,
+        status: "terminal",
+        terminalStatus: "turn/completed",
+        now,
+      }),
+      scheduler.handleTurnQueueUpdate({
+        automationRunId: activeRun.id,
+        status: "terminal",
+        terminalStatus: "turn/completed",
+        now,
+      }),
+    ]);
+
+    expect(queue.submitted).toHaveLength(2);
+    expect(
+      queue.submitted.filter((entry) => entry.automationRunId !== activeRun.id),
+    ).toHaveLength(1);
+  });
+
+  it("queues automation dispatch while quit confirmation is open and resumes it", async () => {
+    const automation = store.createAutomation({
+      id: "automation-quit-wait",
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Search Bots",
+      taskPrompt: "Investigate.",
+      inboundCoalesceWindowMs: 0,
+      triggers: [
+        {
+          id: "inbound",
+          kind: "inbound_message",
+          conversation: { channel: "slack", conversationId: "C123" },
+        },
+      ],
+      now: 0,
+    });
+    const scheduler = buildScheduler();
+    scheduler.start();
+    const resume = scheduler.quiesceDispatch();
+
+    now = 1_000;
+    const result = await scheduler.runFromInboundEvent({
+      automation,
+      source: {
+        kind: "messaging",
+        sourceEventKey: "held-while-quitting",
+        receivedAt: now,
+        matchedTriggerId: "inbound",
+        actor: { platformUserId: "B123", isBot: true },
+        conversation: { channel: "slack", conversationId: "C123" },
+        message: { text: "ERROR" },
+      },
+      now,
+    });
+
+    expect(result?.status).toBe("queued");
+    expect(queue.submitted).toHaveLength(0);
+    expect(store.findActiveRunForAutomation(automation.id)).toMatchObject({
+      status: "queued",
+    });
+
+    await resume();
+
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.findActiveRunForAutomation(automation.id)).toMatchObject({
+      status: "running",
+    });
+  });
+
+  it("queues a run when quit quiescing begins while its gate is in progress", async () => {
+    createIntervalAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      gate: { command: "echo ready" },
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+        anchorAt: 0,
+      },
+      nextRunAt: 5 * 60 * 1000,
+    });
+    let gateCalls = 0;
+    let releaseFirstGate!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirstGate = resolve;
+    });
+    const scheduler = buildSchedulerWithGate({
+      runGate: async (config) => {
+        gateCalls += 1;
+        if (gateCalls === 1) {
+          await firstGate;
+        }
+        return {
+          status: "proceed",
+          command: config.command,
+          durationMs: 5,
+          output: "ready\n",
+        };
+      },
+    });
+    scheduler.start();
+    now = 5 * 60 * 1000;
+
+    const evaluating = scheduler.evaluateDueAutomations();
+    await Promise.resolve();
+    const resume = scheduler.quiesceDispatch();
+    releaseFirstGate();
+    await evaluating;
+
+    expect(queue.submitted).toHaveLength(0);
+    expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
+      status: "queued",
+    });
+
+    await resume();
+
+    expect(gateCalls).toBe(2);
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
+      status: "running",
+    });
+  });
+
   it("ignores a redelivered inbound event with the same source-event key", async () => {
     const automation = store.createAutomation({
       id: "automation-1",

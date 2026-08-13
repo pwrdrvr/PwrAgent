@@ -6720,10 +6720,13 @@ export class DesktopBackendRegistry {
     string,
     {
       agentThreadId: string;
+      backend: AppServerBackendKind;
       automationName?: string;
       automationRunId: string;
       executionMode: ThreadExecutionMode;
+      executionThreadId: string;
       queueEntryId: string;
+      startedAt: number;
       suppressBindingBroadcast?: boolean;
     }
   >();
@@ -7673,10 +7676,13 @@ export class DesktopBackendRegistry {
       buildHeadlessAutomationTurnKey(params.backend, turn.threadId, turn.turnId),
       {
         agentThreadId: params.agentThreadId,
+        backend: params.backend,
         automationName: params.automationName,
         automationRunId: params.automationRunId,
         executionMode,
+        executionThreadId: turn.threadId,
         queueEntryId,
+        startedAt: Date.now(),
         suppressBindingBroadcast: params.suppressBindingBroadcast,
       },
     );
@@ -11649,44 +11655,90 @@ export class DesktopBackendRegistry {
   getInProgressThreadSnapshotForQuit(): {
     count: number;
     threadIds: string[];
+    automationRuns?: Array<{
+      agentThreadId: string;
+      automationName?: string;
+      automationRunId: string;
+      backend: AppServerBackendKind;
+      startedAt: number;
+    }>;
   } {
     const threadKeys = new Set<string>();
+    const automationExecutionThreadKeys = new Set<string>();
+    const automationRunsByKey = new Map<
+      string,
+      {
+        agentThreadId: string;
+        automationName?: string;
+        automationRunId: string;
+        backend: AppServerBackendKind;
+        startedAt: number;
+      }
+    >();
+    for (const run of this.headlessAutomationTurns.values()) {
+      automationExecutionThreadKeys.add(
+        formatQuitThreadKey(run.backend, run.executionThreadId),
+      );
+      const key = `${run.backend}:${run.automationRunId}`;
+      const existing = automationRunsByKey.get(key);
+      if (!existing || run.startedAt < existing.startedAt) {
+        automationRunsByKey.set(key, {
+          agentThreadId: run.agentThreadId,
+          automationName: run.automationName,
+          automationRunId: run.automationRunId,
+          backend: run.backend,
+          startedAt: run.startedAt,
+        });
+      }
+    }
+    const addThread = (backend: AppServerBackendKind, threadId: string): void => {
+      const threadKey = formatQuitThreadKey(backend, threadId);
+      if (!automationExecutionThreadKeys.has(threadKey)) {
+        threadKeys.add(threadKey);
+      }
+    };
     for (const threadId of this.backendActiveCodexThreadIds) {
-      threadKeys.add(formatQuitThreadKey("codex", threadId));
+      addThread("codex", threadId);
     }
     for (const key of this.activeTurnKeys) {
       const parsed = parseActiveTurnKey(key);
       if (parsed) {
-        threadKeys.add(formatQuitThreadKey(parsed.backend, parsed.threadId));
+        addThread(parsed.backend, parsed.threadId);
       }
     }
     for (const key of this.activeCodexTurnModes.keys()) {
       const threadId = parseThreadIdFromThreadTurnKeyBody(key);
       if (threadId) {
-        threadKeys.add(formatQuitThreadKey("codex", threadId));
+        addThread("codex", threadId);
       }
     }
     for (const threadId of this.reservedCodexStartThreadIds) {
-      threadKeys.add(formatQuitThreadKey("codex", threadId));
+      addThread("codex", threadId);
     }
     for (const key of this.reservedAcpStartThreadKeys) {
       const parsed = parseReservedAcpStartThreadKey(key);
       if (parsed) {
-        threadKeys.add(formatQuitThreadKey(parsed.backend, parsed.threadId));
+        addThread(parsed.backend, parsed.threadId);
       }
     }
     for (const entry of this.threadTurnQueue.getAllQueuedEntries()) {
-      threadKeys.add(formatQuitThreadKey(entry.backend, entry.threadId));
+      addThread(entry.backend, entry.threadId);
     }
     for (const move of this.pendingThreadWorkspaceMoves.values()) {
       if (move.status === "queued" || move.status === "running") {
-        threadKeys.add(formatQuitThreadKey(move.backend, move.threadId));
+        addThread(move.backend, move.threadId);
       }
     }
     const threadIds = [...threadKeys].sort();
+    const automationRuns = [...automationRunsByKey.values()].sort(
+      (left, right) =>
+        left.startedAt - right.startedAt
+        || left.automationRunId.localeCompare(right.automationRunId),
+    );
     return {
-      count: threadIds.length,
+      count: threadIds.length + automationRuns.length,
       threadIds,
+      ...(automationRuns.length > 0 ? { automationRuns } : {}),
     };
   }
 
