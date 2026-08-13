@@ -141,6 +141,55 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastAssistantMessage).toBe("Hello world");
   });
 
+  it("drops a whitespace-only assistant chunk after a tool boundary", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { kind: "agent_message_chunk", content: "Before the tool." },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "read-1",
+        kind: "read",
+        title: "Read `README.md`",
+        status: "completed",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: { kind: "agent_message_chunk", content: "\n" },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({ role: "assistant", text: "Before the tool." }),
+    ]);
+    expect(replay.lastAssistantMessage).toBe("Before the tool.");
+  });
+
+  it("preserves whitespace chunks inside an active assistant message", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    for (const [receivedAt, content] of [
+      [1000, "Hello"],
+      [1001, " "],
+      [1002, "world"],
+    ] as const) {
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt,
+        update: { kind: "agent_message_chunk", content },
+      });
+    }
+
+    expect(normalizer.replay().lastAssistantMessage).toBe("Hello world");
+  });
+
   it("prefers a provider timestamp extension over local receipt time", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
@@ -737,6 +786,50 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("lets a refined file-tool label replace Grok's raw tool name", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "read-file-1",
+        kind: "other",
+        title: "read_file",
+        status: "pending",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "read-file-1",
+        kind: "read",
+        title: "Read `docs/messaging-adapter-contract.md`",
+        status: "completed",
+        locations: [{ path: "docs/messaging-adapter-contract.md" }],
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "read-file-1",
+        summary: "Read `docs/messaging-adapter-contract.md`",
+        status: "completed",
+        details: [
+          expect.objectContaining({
+            kind: "read",
+            label: "Read `docs/messaging-adapter-contract.md`",
+            path: "docs/messaging-adapter-contract.md",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("merges Kimi snake_case tool call updates into the original activity", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
@@ -965,6 +1058,53 @@ describe("AcpSessionReplayNormalizer", () => {
             label: "Models",
             url: "https://docs.x.ai/developers/models",
           },
+        ],
+      }),
+    ]);
+  });
+
+  it("upgrades a historical Grok open-page search to a web fetch", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const url = "https://api.slack.com/methods/chat.update";
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "ws_grok-open-1",
+        title: "Web search:",
+        kind: "search",
+        status: "in_progress",
+        rawInput: { variant: "WebSearch", backend: true },
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "ws_grok-open-1",
+        title: "Web search:",
+        status: "completed",
+        rawOutput: {
+          id: "ws_grok-open-1",
+          action: { type: "open_page", url },
+        },
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "ws_grok-open-1",
+        summary: `Fetched ${url}`,
+        status: "completed",
+        details: [
+          expect.objectContaining({
+            kind: "read",
+            label: `Fetched ${url}`,
+          }),
         ],
       }),
     ]);
