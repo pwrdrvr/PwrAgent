@@ -51,7 +51,7 @@ import {
   readDesktopSettingsConfig,
   resolveDesktopConfigPath,
 } from "../settings/desktop-config";
-import { readPwrAgentProfileCodexProfile } from "../profile-codex-auth";
+import { discoverCodexAuthProfiles } from "@pwrdrvr/codex-discovery";
 import { getAppStateMode } from "../state/app-state";
 import { isSecretStorageDisabledByEnv } from "../settings/desktop-secret-store";
 import { getMainLogger } from "../log";
@@ -108,6 +108,21 @@ export function listDesktopPwrAgentProfiles(): ListDesktopPwrAgentProfilesRespon
         codexProfile: readPwrAgentProfileCodexProfile(profile.name),
       })),
   };
+}
+
+function readPwrAgentProfileCodexProfile(profileName: string) {
+  let configuredProfile: string | undefined;
+  try {
+    const config = readDesktopSettingsConfig(
+      resolveDesktopConfigPath({ cliProfile: profileName }),
+    );
+    configuredProfile = config.models?.codex?.profile;
+  } catch {
+    configuredProfile = undefined;
+  }
+  const discovery = discoverCodexAuthProfiles({ configuredProfile });
+  return discovery.profiles.find((profile) => profile.selected)
+    ?? discovery.profiles[0]!;
 }
 
 export function openDesktopPwrAgentProfile(

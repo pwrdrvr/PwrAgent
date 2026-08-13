@@ -33,7 +33,7 @@ import {
   setMainLogDebugCollectionEnabled,
 } from "../log";
 import { resolveActiveProfileName } from "../profile";
-import { readPwrAgentProfileCodexProfile } from "../profile-codex-auth";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { subscribersForChannel } from "../window-channels";
 
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -53,9 +53,7 @@ export function resolveAppMetadata(
 ): AppMetadata {
   const activeProfileName = resolveActiveProfileName();
   const logFilePath = getMainLogFilePath();
-  const codexProfilePath = readPwrAgentProfileCodexProfile(
-    activeProfileName,
-  )?.codexHome;
+  const codexProfilePath = getDesktopSettingsService().resolveStartupCodexHome();
   return {
     applicationName: app.getName(),
     applicationVersion: resolveApplicationVersion(app.getVersion()),

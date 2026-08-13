@@ -1595,6 +1595,11 @@ export class DesktopSettingsService {
     return this.resolveCodexCommandPreferenceFromConfig(this.readConfig().config);
   }
 
+  /** Codex home pinned when this process started; config changes need restart. */
+  resolveStartupCodexHome(): string | undefined {
+    return this.startupCodexHome;
+  }
+
   async refreshCodexDiscovery(): Promise<DesktopSettingsSnapshot> {
     this.codexSpawnEnvHydratedAt = undefined;
     return await this.readSettings({ forceCodexDiscovery: true });
