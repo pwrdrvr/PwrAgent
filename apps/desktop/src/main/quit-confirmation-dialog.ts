@@ -238,6 +238,12 @@ export async function showQuitConfirmationDialog(
     let refreshTimer: NodeJS.Timeout | undefined;
     let completionTimer: NodeJS.Timeout | undefined;
     let refreshInFlight = false;
+    let waitForWork = false;
+    let lastTotalCount =
+      options.inProgressThreadCount
+      + (options.automationRunCount ?? 0)
+      + options.terminalSessionCount
+      + (options.actionRunCount ?? 0);
     let lastRefreshSignature = JSON.stringify({
       inProgressThreadCount: options.inProgressThreadCount,
       automationRunCount: options.automationRunCount ?? 0,
@@ -256,15 +262,39 @@ export async function showQuitConfirmationDialog(
       resolve(result);
     };
 
+    const cancelCompletion = (): void => {
+      if (!completionTimer) return;
+      clearTimeout(completionTimer);
+      completionTimer = undefined;
+    };
+
+    const scheduleCompletion = (): void => {
+      if (!waitForWork || lastTotalCount !== 0 || completionTimer || settled) {
+        return;
+      }
+      completionTimer = setTimeout(() => {
+        completionTimer = undefined;
+        if (waitForWork && lastTotalCount === 0) {
+          finish("work-completed");
+        }
+      }, COMPLETION_REPORT_MS);
+    };
+
     const refreshDialog = async (): Promise<void> => {
       if (!options.refresh || settled || refreshInFlight) return;
       refreshInFlight = true;
       try {
         const snapshot = await options.refresh();
         const signature = JSON.stringify(snapshot);
+        const payload = buildQuitDialogUpdatePayload(snapshot, navigationPrefix);
+        lastTotalCount = payload.totalCount;
+        if (lastTotalCount === 0) {
+          scheduleCompletion();
+        } else {
+          cancelCompletion();
+        }
         if (signature === lastRefreshSignature) return;
         lastRefreshSignature = signature;
-        const payload = buildQuitDialogUpdatePayload(snapshot, navigationPrefix);
         if (!window.isDestroyed()) {
           void window.webContents.executeJavaScript(
             `window.__pwragentUpdateQuitSnapshot?.(${serializeForJavaScript(payload)})`,
@@ -276,14 +306,6 @@ export async function showQuitConfirmationDialog(
             clearTimeout(hardCeiling);
             hardCeiling = undefined;
           }
-          if (refreshTimer) {
-            clearInterval(refreshTimer);
-            refreshTimer = undefined;
-          }
-          completionTimer = setTimeout(
-            () => finish("work-completed"),
-            COMPLETION_REPORT_MS,
-          );
         }
       } catch (error) {
         quitDialogLog.warn("quit confirmation refresh failed", {
@@ -316,6 +338,16 @@ export async function showQuitConfirmationDialog(
           clearTimeout(hardCeiling);
           hardCeiling = undefined;
         }
+        return;
+      }
+
+      if (action === "wait-for-work") {
+        waitForWork = true;
+        if (hardCeiling) {
+          clearTimeout(hardCeiling);
+          hardCeiling = undefined;
+        }
+        scheduleCompletion();
         return;
       }
 
@@ -811,6 +843,7 @@ export function buildQuitConfirmationHtml(options: {
       let remaining = ${JSON.stringify(options.countdownSeconds)};
       const countdown = document.getElementById("countdown");
       let timer;
+      let waitingForWork = false;
 
       function send(result) {
         window.location.href = navigationPrefix + result;
@@ -836,7 +869,7 @@ export function buildQuitConfirmationHtml(options: {
         document.getElementById("blocker-impact").textContent = snapshot.impactText;
         const currentList = document.getElementById("list");
         if (snapshot.totalCount === 0) {
-          if (timer) {
+          if (waitingForWork && timer) {
             clearInterval(timer);
             timer = undefined;
           }
@@ -855,7 +888,11 @@ export function buildQuitConfirmationHtml(options: {
             }
             detail.textContent = "Finished " + finishedAt;
           }
-          countdown.textContent = "All running work finished. Quitting now...";
+          if (waitingForWork) {
+            countdown.textContent = "All running work finished. Quitting now...";
+          } else if (!timer) {
+            countdown.textContent = "All running work finished. Choose an option below.";
+          }
           return;
         }
         if (snapshot.listHtml) {
@@ -896,7 +933,9 @@ export function buildQuitConfirmationHtml(options: {
       document.getElementById("close").addEventListener("click", () => send("manual-cancel"));
       document.getElementById("wait").addEventListener("click", () => {
         cancelCountdown();
+        waitingForWork = true;
         countdown.textContent = "Waiting for running work to finish...";
+        send("wait-for-work");
       });
       document.getElementById("quit").addEventListener("click", () => send("manual-confirm"));
       window.addEventListener("keydown", (event) => {

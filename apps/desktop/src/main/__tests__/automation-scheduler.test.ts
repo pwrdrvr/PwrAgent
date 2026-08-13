@@ -653,6 +653,63 @@ describe("AutomationScheduler", () => {
     });
   });
 
+  it("queues a run when quit quiescing begins while its gate is in progress", async () => {
+    createIntervalAutomation({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Check email",
+      taskPrompt: "Check mail",
+      gate: { command: "echo ready" },
+      schedule: {
+        kind: "interval",
+        every: 5,
+        unit: "minutes",
+        anchorAt: 0,
+      },
+      nextRunAt: 5 * 60 * 1000,
+    });
+    let gateCalls = 0;
+    let releaseFirstGate!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirstGate = resolve;
+    });
+    const scheduler = buildSchedulerWithGate({
+      runGate: async (config) => {
+        gateCalls += 1;
+        if (gateCalls === 1) {
+          await firstGate;
+        }
+        return {
+          status: "proceed",
+          command: config.command,
+          durationMs: 5,
+          output: "ready\n",
+        };
+      },
+    });
+    scheduler.start();
+    now = 5 * 60 * 1000;
+
+    const evaluating = scheduler.evaluateDueAutomations();
+    await Promise.resolve();
+    const resume = scheduler.quiesceDispatch();
+    releaseFirstGate();
+    await evaluating;
+
+    expect(queue.submitted).toHaveLength(0);
+    expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
+      status: "queued",
+    });
+
+    await resume();
+
+    expect(gateCalls).toBe(2);
+    expect(queue.submitted).toHaveLength(1);
+    expect(store.findActiveRunForAutomation("automation-1")).toMatchObject({
+      status: "running",
+    });
+  });
+
   it("ignores a redelivered inbound event with the same source-event key", async () => {
     const automation = store.createAutomation({
       id: "automation-1",

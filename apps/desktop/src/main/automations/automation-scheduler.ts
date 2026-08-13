@@ -621,6 +621,22 @@ export class AutomationScheduler {
       if (gateResult?.status === "skip" || gateResult?.status === "failed") {
         return undefined;
       }
+      // A gate can outlive the moment quit quiescing begins. Nothing awaits
+      // between this check and submitRun, so once it passes the launch is
+      // atomic with respect to another main-process event pausing dispatch.
+      if (this.dispatchPauseCount > 0) {
+        const queued = this.options.store.markRunQueued({
+          runId: run.id,
+          queueEntryId: run.queueEntryId ?? buildLaneQueueEntryId(run.id),
+          queuedAt: params.now,
+          now: params.now,
+        });
+        return buildLaneQueuedResult({
+          automation: params.automation,
+          run: queued ?? run,
+          position: 1,
+        });
+      }
       const result = await this.options.runner.submitRun({
         automation: params.automation,
         gateResult,

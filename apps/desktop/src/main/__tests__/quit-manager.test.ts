@@ -482,6 +482,46 @@ describe("createQuitManager", () => {
     expect(quiesceAutomationDispatch).toHaveBeenCalledTimes(1);
     expect(resumeDispatch).toHaveBeenCalledTimes(1);
   });
+
+  it("allows a new quit prompt while queued automation dispatch is still resuming", async () => {
+    const { createQuitManager } = await import("../quit-manager");
+    let finishResume!: () => void;
+    const resumePending = new Promise<void>((resolve) => {
+      finishResume = resolve;
+    });
+    const resumeDispatch = vi.fn(() => resumePending);
+    const confirm = vi
+      .fn()
+      .mockResolvedValueOnce("manual-cancel" as const)
+      .mockResolvedValueOnce("manual-confirm" as const);
+    const performQuit = vi.fn();
+    const manager = createQuitManager({
+      confirm,
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () => ({
+        count: 1,
+        terminalSessionCount: 0,
+        terminalThreadKeys: [],
+        threadIds: [],
+        automationRunCount: 1,
+        actionRunCount: 0,
+        items: [],
+      }),
+      quiesceAutomationDispatch: () => resumeDispatch,
+      log: {},
+      performQuit,
+    });
+
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(false);
+    expect(resumeDispatch).toHaveBeenCalledTimes(1);
+
+    await expect(manager.requestQuit({ source: "menu" })).resolves.toBe(true);
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(performQuit).toHaveBeenCalledTimes(1);
+    finishResume();
+    await resumePending;
+  });
 });
 
 describe("buildQuitBlockerSnapshot", () => {

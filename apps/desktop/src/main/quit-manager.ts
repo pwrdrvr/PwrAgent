@@ -110,6 +110,21 @@ export function createQuitManager(
   let quitAllowed = false;
   let pendingPerformQuit: (() => void) | undefined;
   let promptPromise: Promise<boolean> | undefined;
+  let activePromptId = 0;
+  let nextPromptId = 0;
+
+  const resumeAutomationDispatchAfterPrompt = (
+    resumeAutomationDispatch: (() => Promise<void> | void) | undefined,
+  ): void => {
+    if (!resumeAutomationDispatch) return;
+    void Promise.resolve()
+      .then(() => resumeAutomationDispatch())
+      .catch((error: unknown) => {
+        dependencies.log.warn?.("automation dispatch resume failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  };
 
   const requestQuit = async (options: RequestQuitOptions): Promise<boolean> => {
     if (quitAllowed) {
@@ -175,7 +190,15 @@ export function createQuitManager(
     });
 
     pendingPerformQuit = options.performQuit ?? dependencies.performQuit;
-    promptPromise = (async () => {
+    const promptId = nextPromptId + 1;
+    nextPromptId = promptId;
+    activePromptId = promptId;
+    const clearPrompt = (): void => {
+      if (activePromptId !== promptId) return;
+      activePromptId = 0;
+      promptPromise = undefined;
+    };
+    const currentPrompt = (async () => {
       const resumeAutomationDispatch = dependencies.quiesceAutomationDispatch?.();
       // Skip the round trip entirely when there is nothing to title, so the
       // no-resolver path reaches `confirm` without an extra microtask hop.
@@ -205,7 +228,8 @@ export function createQuitManager(
             ),
         });
       } catch (error) {
-        await resumeAutomationDispatch?.();
+        clearPrompt();
+        resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
         throw error;
       }
       dependencies.log.warn?.("quit confirmation resolved", {
@@ -219,19 +243,26 @@ export function createQuitManager(
         threadIds: snapshot.threadIds,
       });
       if (resolution === "manual-cancel") {
-        await resumeAutomationDispatch?.();
         pendingPerformQuit = undefined;
+        // The dialog is already gone. Release this prompt before gates and
+        // backend submissions resume so a new quit request can open a visible
+        // confirmation instead of joining work nobody can see.
+        clearPrompt();
+        resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
         return false;
       }
       quitAllowed = true;
       (pendingPerformQuit ?? dependencies.performQuit)();
       pendingPerformQuit = undefined;
       return true;
-    })().finally(() => {
-      promptPromise = undefined;
-    });
+    })();
+    promptPromise = currentPrompt;
 
-    return await promptPromise;
+    try {
+      return await currentPrompt;
+    } finally {
+      clearPrompt();
+    }
   };
 
   return {
