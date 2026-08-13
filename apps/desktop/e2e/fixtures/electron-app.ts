@@ -41,8 +41,33 @@ export const DESKTOP_MAIN_ENTRY = path.resolve(
   fixtureDir,
   "../../out/main/index.js",
 );
+/**
+ * Round-trip budget for asking the app to quit. This only has to reach the
+ * main process and call `app.quit()`; a healthy app usually drops the
+ * Playwright connection before the evaluate even resolves, so the wait that
+ * matters is the close below, not this one.
+ */
 const ELECTRON_EVALUATE_QUIT_TIMEOUT_MS = 1_000;
-const ELECTRON_CLOSE_TIMEOUT_MS = 1_000;
+/**
+ * How long the app gets to shut down on its own before the process tree is
+ * force-killed.
+ *
+ * Was 1s, which is shorter than the app's own shutdown: `app.quit()` runs
+ * `disposeMainProcessResources`, whose before-quit phases are budgeted at 12s
+ * globally in `main/index.ts` (app-server alone may take 7.5s). A one-second
+ * window meant a loaded runner SIGKILLed apps that were draining correctly,
+ * which is how profile processes and their open handles leak past teardown and
+ * turn the subsequent `rm` into EBUSY on Windows.
+ *
+ * 6s does not cover that 12s worst case, and deliberately so: `close()` spends
+ * the test's own 30s budget (see ELECTRON_TEARDOWN_TIMEOUT_MS), so the ceiling
+ * here is what fits beside the other teardown steps, not what the main process
+ * is theoretically allowed. It covers every shutdown observed in practice —
+ * the E2E app runs with no real messaging or federation adapters — while
+ * leaving the force-kill as a genuine last resort rather than a routine step.
+ */
+const ELECTRON_CLOSE_TIMEOUT_MS = 6_000;
+/** After SIGKILL the exit is immediate; this only absorbs reaping latency. */
 const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
 /**
  * Hard ceiling on everything `close()` does.
@@ -52,10 +77,23 @@ const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
  * test timing out at 30s, which replaces whatever the test actually
  * found with a timeout that names nothing. (Playwright's separate 30s
  * *worker* teardown timeout is what collects an Electron process no one
- * closed at all — see the catch in `launchElectronApp`.) 15s leaves room
- * for a slow force-kill plus `rm` while still failing inside one test.
+ * closed at all — see the catch in `launchElectronApp`.) The ceiling leaves
+ * room for every step while still failing inside one test.
+ *
+ * Derivation, worst case: 1s evaluate + 6s graceful close + 1s force-kill +
+ * 1s post-kill close + 5s leftover-profile wait + `rm`. Raised 15s → 20s when
+ * the graceful close went 1s → 6s; both halves of that trade have to move
+ * together or the ceiling starts cutting off the wait it is meant to contain.
  */
-const ELECTRON_TEARDOWN_TIMEOUT_MS = 15_000;
+const ELECTRON_TEARDOWN_TIMEOUT_MS = 20_000;
+/**
+ * How long teardown waits for a leftover profile process to exit after
+ * SIGTERM before giving up and letting the rm report the leak. Sits inside
+ * ELECTRON_TEARDOWN_TIMEOUT_MS alongside the Electron close budget.
+ */
+const PROFILE_PROCESS_EXIT_TIMEOUT_MS = 5_000;
+/** Liveness re-check interval while waiting out PROFILE_PROCESS_EXIT_TIMEOUT_MS. */
+const PROFILE_PROCESS_EXIT_POLL_MS = 100;
 
 /**
  * Root element of the first-run wizard overlay (`OnboardingWizard.tsx`).
@@ -1123,17 +1161,87 @@ async function killSpawnedProfileProcessesUnder(homeRoot: string): Promise<void>
       }
     }
   }
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // Process already dead — that's fine.
+  // Only signal what is actually still running. A marker can outlive its
+  // process (crash, force-kill, an interrupted run), and signalling a dead pid
+  // would otherwise make us wait on nothing.
+  const livePids = [...pids].filter(isPidAlive);
+  if (livePids.length === 0) {
+    return;
+  }
+  // Snapshot the helper processes before signalling, while the parent is still
+  // around to be walked. `HOME` is `homeRoot` for these runs, so an Electron
+  // instance's renderer and GPU helpers hold cache handles under the very tree
+  // the rm is about to remove — waiting only for the marker pid would declare
+  // victory while its children still had the directory open.
+  //
+  // They are watched, not signalled: on POSIX the main process takes its
+  // helpers down as it exits, so this is a wait, not a second kill, and the
+  // force-kill stays `closeElectronApplication`'s alone. `listDescendantPids`
+  // shells out to `ps`, so on Windows it yields nothing and the watch set
+  // stays the marker pids — no worse than before, but not the fix there.
+  const watched = new Set(livePids);
+  for (const pid of livePids) {
+    for (const descendant of await listDescendantPids(pid)) {
+      watched.add(descendant);
     }
   }
-  // Give the killed processes a moment to release their open file
-  // handles before we attempt the rm. SIGTERM is async; without
-  // this sleep we still race against the OS.
-  if (pids.size > 0) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
+
+  for (const pid of livePids) {
+    try {
+      // NB: on Windows there is no SIGTERM. Node maps it to TerminateProcess,
+      // so this is an abrupt kill with no chance to flush — the wait below is
+      // then for the OS to finish tearing the process down and release its
+      // handles, not for a graceful drain. Nothing here can make Windows
+      // graceful; a real quit would need an IPC path rather than a signal.
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Exited between the liveness check and the signal.
+    }
+  }
+
+  // Wait for the processes to actually exit rather than sleeping a fixed
+  // interval and hoping. These children are mid-write to `<homeRoot>`, and the
+  // rm below races their open handles — ENOTEMPTY on POSIX, EBUSY/EPERM on
+  // Windows.
+  //
+  // The budget is generous on purpose. This path only runs when a runtime
+  // marker OUTLIVED its process's own cleanup (`stop()` in `main/profile.ts`
+  // removes the marker on a clean exit), so reaching here already means
+  // something abnormal — exactly when patience beats a deadline. In the
+  // ordinary teardown there are no live pids and this returns immediately,
+  // which is faster than the fixed 500ms sleep it replaces.
+  const deadline = Date.now() + PROFILE_PROCESS_EXIT_TIMEOUT_MS;
+  let remaining = [...watched].filter(isPidAlive);
+  while (remaining.length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) =>
+      setTimeout(resolve, PROFILE_PROCESS_EXIT_POLL_MS),
+    );
+    remaining = remaining.filter(isPidAlive);
+  }
+
+  if (remaining.length > 0) {
+    // Deliberately no SIGKILL here. Process-tree force-kill is the last-resort
+    // hammer that `closeElectronApplication` owns; a survivor at this point is
+    // a real leak, and letting the rm below fail reports it instead of hiding
+    // it behind a kill.
+    console.warn(
+      `[pwragent-e2e-teardown] profile processes still alive ${PROFILE_PROCESS_EXIT_TIMEOUT_MS}ms after SIGTERM: ${remaining.join(", ")}`,
+    );
+  }
+}
+
+/**
+ * Whether `pid` is still running.
+ *
+ * `EPERM` means the process exists but is not ours to signal, so it counts as
+ * alive — treating it as gone would race the rm against a live writer, the
+ * exact failure this check exists to prevent.
+ */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }
