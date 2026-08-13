@@ -667,9 +667,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       const nativeAvailable =
         this.config.liveWorkingCards === true
         && Boolean(target?.threadTs)
-        && Boolean(this.api.startStream)
-        && Boolean(this.api.appendStream)
-        && Boolean(this.api.stopStream);
+        && this.api.startStream !== undefined
+        && this.api.appendStream !== undefined
+        && this.api.stopStream !== undefined;
       // A terminal fallback is intentionally a no-op. Do not reserve ordinary
       // Slack message capacity or defer the authoritative final response for it.
       if (intent.card.isFinal && (!nativeAvailable || state?.nativeUnavailable)) {
