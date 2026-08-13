@@ -45,6 +45,7 @@ import {
   FeishuIcon,
   LineIcon,
   MattermostIcon,
+  PinIcon,
   SlackIcon,
   TelegramIcon,
 } from "../../icons";
@@ -2968,14 +2969,14 @@ function ChoiceCard(props: {
    ---------------------------------------------------------------- */
 
 /* Mini ThreadRow chips — composed to mirror the live ThreadRow primitive:
-   - .mini-chip-pin renders the "Pinned" pill (accent-bordered, accent text)
+   - .mini-pin renders the in-title pin marker
    - .mini-chip-pr renders the "#123" PR pill (dot + number)
    - .mini-chip-meta renders the gray-fill chips (OpenAI / PwrAgnt / branch)
    Compact mode keeps Pin + PR + emoji; Mission Control adds the meta row. */
 function MiniPinChip() {
   return (
-    <span className="onboarding-wizard__mini-chip onboarding-wizard__mini-chip--pin">
-      Pinned
+    <span aria-hidden="true" className="onboarding-wizard__mini-pin">
+      <PinIcon size={9} />
     </span>
   );
 }
@@ -3062,46 +3063,54 @@ function DensityMissionControlPreview() {
   return (
     <div className="onboarding-wizard__mini">
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc is-active">
-        <span className="onboarding-wizard__mini-title">PwrAgent - Release</span>
+        <span className="onboarding-wizard__mini-heading">
+          <span className="onboarding-wizard__mini-title">PwrAgent - Release</span>
+          <MiniPinChip />
+        </span>
         <span className="onboarding-wizard__mini-time">2h</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>
           <MiniMetaChip>📁 PwrAgnt</MiniMetaChip>
           <MiniMetaChip>⌥ main</MiniMetaChip>
-          <MiniPinChip />
         </div>
       </div>
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
-        <span className="onboarding-wizard__mini-title">PwrSnap - Release</span>
+        <span className="onboarding-wizard__mini-heading">
+          <span className="onboarding-wizard__mini-title">PwrSnap - Release</span>
+          <MiniPinChip />
+        </span>
         <span className="onboarding-wizard__mini-time">May 7</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>
           <MiniMetaChip>📁 PwrSnap</MiniMetaChip>
           <MiniMetaChip>⌥ main</MiniMetaChip>
-          <MiniPinChip />
         </div>
       </div>
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
-        <span className="onboarding-wizard__mini-title">Text Mode for Button Platforms</span>
+        <span className="onboarding-wizard__mini-heading">
+          <span className="onboarding-wizard__mini-title">Text Mode for Button Platforms</span>
+          <MiniPinChip />
+        </span>
         <span className="onboarding-wizard__mini-time">2d</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>
           <MiniMetaChip>⌥ PwrAgnt</MiniMetaChip>
           <MiniMetaChip>⌥ feat/messaging-text-mode</MiniMetaChip>
-          <MiniPinChip />
           <MiniPrChip num="352" status="ok" />
           <span className="onboarding-wizard__mini-emoji">👀</span>
         </div>
       </div>
       <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
-        <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">Automation scheduling system</span>
+        <span className="onboarding-wizard__mini-heading">
+          <span className="onboarding-wizard__mini-cookie" />
+          <span className="onboarding-wizard__mini-title">Automation scheduling system</span>
+          <MiniPinChip />
+        </span>
         <span className="onboarding-wizard__mini-time">2d</span>
         <div className="onboarding-wizard__mini-meta">
           <MiniMetaChip>OpenAI</MiniMetaChip>
           <MiniMetaChip>⌥ PwrAgnt</MiniMetaChip>
           <MiniMetaChip>⌥ feat/automation</MiniMetaChip>
-          <MiniPinChip />
           <MiniPrChip num="376" status="ok" />
           <span className="onboarding-wizard__mini-emoji">🏃</span>
         </div>

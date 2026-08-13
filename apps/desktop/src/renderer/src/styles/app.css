@@ -190,6 +190,11 @@
      that defeat scanning. Themes / future surfaces can override
      this single token to retune both surfaces in lockstep. */
   --chat-column-max: 940px;
+
+  /* Sidebar title size — user-adjustable from Settings. Thread titles
+     read it directly; directory labels derive from it so hierarchy holds
+     at every notch. */
+  --sidebar-title-size: 13px;
 }
 
 /* ===========================================================================
@@ -350,72 +355,51 @@
    The default :root values target Mission Control behavior; the explicit
    data-density attribute selector only carries overrides.
    =========================================================================== */
-/* Suppress directory / PR / agent / binding chips in the list. Reaction
-   and pin markers stay visible — reactions because they're user-curated
-   signals, pin because the pin marker on its own is information-dense.
-   The "Scheduled"/"Queued" pending-send chips also stay visible: a pending
-   outbound message is a time-sensitive commitment the operator needs to
-   spot at a glance, so it survives the density strip like the pin marker.
+/* Suppress descriptive metadata chips in the list. Reactions and PR chips
+   stay visible because they are user-curated or actionable work product.
+   Time-sensitive chips mark themselves `--persistent` in TSX and survive
+   the density strip. Pinned state rides the title line instead of a chip.
 
    Scope the rule to `.thread-row__chips` so non-list surfaces that
    carry a `.thread-row__chip--*` variant (e.g. the questionnaire's mode
    chip in the transcript) don't get collapsed when compact density is
    on. The skill chip in the composer and the standalone SkillChip use
    `.chip` directly and aren't affected by this rule. */
-:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--reaction):not(.thread-row__chip--pin):not(.thread-row__chip--scheduled):not(.thread-row__chip--queued) {
+:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--persistent) {
   display: none;
 }
 
 :root[data-density="compact"] .thread-row__chips {
-  /* Tighter inter-chip gap when only reactions + pin remain visible. */
+  /* Tighter inter-chip gap when only reactions + PRs remain visible. */
   gap: 4px;
 }
 
-/* Shrink the icon-only pin marker a touch in Compact so it tracks the
-   denser rows (the marker itself already replaced the old "Pinned"
-   pill — see `.thread-row__chip--pin`). */
-:root[data-density="compact"] .thread-row__chip--pin {
-  height: 18px;
-  min-width: 18px;
-  padding: 0 4px;
-}
-
-/* Tighten thread-row vertical real estate. The row keeps its column
-   layout (title row → chips row when chips remain), but every vertical
-   measurement shrinks. The hidden-chips selector zeroes the column gap
-   for rows where every chip is suppressed — :has() lets us detect
-   "container has at least one visible chip" without JS. */
+/* Both densities share the tuned 4px block padding. Compact differs only
+   in what it shows and keeps the slightly larger left title inset. */
 :root[data-density="compact"] .thread-row {
   gap: 4px;
-  padding: 6px 10px 6px 12px;
+  padding-left: 12px;
 }
 
-/* Pull the overflow + add-reaction buttons up by the same amount the row
-   shrank its top padding, so they keep aligning with the title line
-   instead of sinking toward the row's geometric center on short
-   single-line rows. .thread-row__actions is a SIBLING of .thread-row
-   under .thread-row-shell, so the override targets it directly. */
-:root[data-density="compact"] .thread-row__actions {
-  top: 3px;
-}
-
-/* Mirror the .thread-row__actions compact shift for the sub-thread toggle:
-   compact rows pad 6px (vs 8px), so the title line — and the toggle that
-   centers on it — moves up 2px (9px -> 7px). */
-:root[data-density="compact"] .thread-row__subthread-toggle {
-  top: 7px;
-}
-
-:root[data-density="compact"] .thread-row:not(:has(.thread-row__chip--reaction)):not(:has(.thread-row__chip--pin)) {
+:root[data-density="compact"] .thread-row:not(:has(.thread-row__chip--persistent)):not(:has(.pr-chip)) {
   gap: 0;
 }
 
-/* Pull the inter-row gap in tight so the list reads as a scannable
-   index, not a card stack. The section divider (.recents-pinned-divider)
-   keeps its own vertical breathing room. */
-:root[data-density="compact"] .sidebar-list,
-:root[data-density="compact"] .directory-groups {
-  gap: 2px;
+/* Sidebar title-size notches. "md" is carried by the bare :root token. */
+:root[data-sidebar-text="xs"] {
+  --sidebar-title-size: 11px;
+}
+
+:root[data-sidebar-text="sm"] {
+  --sidebar-title-size: 12px;
+}
+
+:root[data-sidebar-text="lg"] {
+  --sidebar-title-size: 14px;
+}
+
+:root[data-sidebar-text="xl"] {
+  --sidebar-title-size: 15px;
 }
 
 /* Thin, themed scrollbars on every scroll container — sidebar,
@@ -2941,6 +2925,11 @@ textarea,
   outline-offset: -2px;
 }
 
+/* Focused cards paint their ring above a neighbouring selected card. */
+.thread-row:focus {
+  z-index: 2;
+}
+
 .button--ghost {
   border-color: var(--border-subtle);
   background: transparent;
@@ -2984,11 +2973,9 @@ textarea,
 .directory-groups {
   display: flex;
   flex-direction: column;
-  /* Tightened from 8px in the Mission Control density pass. Rows are
-     borderless here, so the gap is pure separation — 4px reads as a
-     scannable index without the cards merging. Compact density drops
-     this further (see the density block). */
-  gap: 4px;
+  /* One tight rhythm in both densities; density controls information,
+     not the card's surrounding air. */
+  gap: 2px;
   padding: 12px 0 16px;
 }
 
@@ -3077,18 +3064,13 @@ textarea,
    subthread-list connector). Previously the whole card was padded 30px,
    which made parents look nested. */
 .thread-row-shell.has-subthreads .thread-row__heading {
-  padding-left: 20px;
+  padding-left: 14px;
 }
 
 .thread-row__subthread-toggle {
   position: absolute;
-  /* Center the toggle on the title's FIRST line, not the row's geometric
-     center — same anchoring as .thread-row__actions, whose 26px button is
-     topped at 5px so its midpoint lands on the ~18px title-line midpoint
-     (8px row padding-top + ~9px into the 15px/1.25 line box). The toggle is
-     18px tall, so top = 18 - 9 = 9. Compact density shifts this up 2px (see
-     the density-compact block) to track its 6px top padding. */
-  top: 9px;
+  /* Follow the user-adjustable title's first-line midpoint. */
+  top: round(calc(4px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 9px), 1px);
   left: 8px;
   z-index: 4;
   display: grid;
@@ -3194,14 +3176,11 @@ textarea,
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  /* Tightened from `12px 12px 12px 14px` in the Mission Control density
-     pass. With the lane's 8px inline padding this leaves ~18px of text
-     inset on each side; 8px block padding + the 4px row gap give ~20px
-     text-to-text between rows. (`.thread-row__actions` top is kept in
-     step with the block padding — see that rule.) */
-  padding: 8px 10px;
+  /* 4px block padding plus the 2px list gap yields a dense, stable
+     operator queue in both information-density modes. */
+  padding: 4px 10px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -3286,16 +3265,8 @@ textarea,
 
 .thread-row__actions {
   position: absolute;
-  /* Align the overflow button + add-reaction chip with the title line,
-     not the row's geometric center. The 26-px-tall button sits a few
-     pixels into the row's top padding so its vertical midpoint matches
-     the title's line midpoint. When the row is multi-line (chips
-     present) the title is still the FIRST line, so the same offset
-     keeps the button anchored to it. Offset tracks the row's top padding
-     (`top ≈ padding-top − 3`): Mission Control rows pad 8px → 5px here;
-     the Compact density variant overrides this `top` to 3px (see the
-     density-compact block at the top of the file) for its 6px padding. */
-  top: 5px;
+  /* Follow the user-adjustable title's first-line midpoint. */
+  top: round(calc(4px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 13px), 1px);
   right: 9px;
   z-index: 3;
   display: flex;
@@ -3304,10 +3275,10 @@ textarea,
   pointer-events: none;
 }
 
+.thread-row__pin-button,
 .thread-row__overflow-button {
   position: static;
   display: grid;
-  width: 30px;
   height: 26px;
   place-items: center;
   padding: 0;
@@ -3315,8 +3286,6 @@ textarea,
   border-radius: 6px;
   background: var(--bg-panel-elevated);
   color: var(--text-secondary);
-  font-size: 15px;
-  font-weight: 700;
   line-height: 1;
   opacity: 0;
   pointer-events: none;
@@ -3327,6 +3296,13 @@ textarea,
     opacity 120ms ease;
 }
 
+.thread-row__overflow-button {
+  width: 30px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.thread-row-shell:has(.thread-row__pin-button:focus-visible) .thread-row__time,
 .thread-row-shell:hover .thread-row__time,
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row__time,
 .thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row__time,
@@ -3334,12 +3310,16 @@ textarea,
   opacity: 0;
 }
 
+.thread-row-shell:hover .thread-row__pin-button,
+.thread-row__pin-button:focus-visible,
 .thread-row-shell:hover .thread-row__overflow-button,
 .thread-row__overflow-button:focus-visible {
   opacity: 1;
   pointer-events: auto;
 }
 
+.thread-row__pin-button:hover,
+.thread-row__pin-button:focus-visible,
 .thread-row__overflow-button:hover,
 .thread-row__overflow-button:focus-visible {
   border-color: var(--accent-border);
@@ -3571,8 +3551,15 @@ textarea,
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   flex: 1 1 auto;
+}
+
+.thread-row__heading-pin {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-left: 2px;
+  color: var(--accent-bright);
 }
 
 .thread-row__title,
@@ -3586,19 +3573,8 @@ textarea,
 
 .thread-row__title {
   padding-bottom: 2px;
-  /* Sidebar readability tune (issue #240 follow-up). The default
-     sidebar is 408px wide and resizes up to 560px in this app;
-     internal feedback noted that the previous 14/600 felt thin and
-     hard to read against the near-black panel at those widths. The
-     v2 design preview uses 13/600, but its sidebar is only 320px
-     wide — narrower than ours and built for a denser layout. We
-     err toward our wider canvas: 15/650 reads as a clear
-     scannable list-row title without going full Bold (700) which
-     would pull focus from the active thread's accent treatment.
-     Titles average 5-6 words so the extra px doesn't push them to
-     wrap. */
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--sidebar-title-size);
+  font-weight: 600;
   line-height: 1.25;
 }
 
@@ -3630,12 +3606,13 @@ textarea,
   align-items: center;
   justify-content: center;
   flex: 0 0 16px;
+  transform: translateY(-1px);
 }
 
 .thread-row__status-cookie {
   display: block;
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border: 1px solid var(--accent-border);
   border-radius: 999px;
   background:
@@ -3695,6 +3672,23 @@ textarea,
   white-space: nowrap;
 }
 
+/* Sidebar chips run one step smaller than the shared pill primitive. */
+.thread-row__chips .thread-row__chip {
+  height: 20px;
+  gap: 5px;
+  font-size: 11px;
+}
+
+.thread-row__chips .pr-chip {
+  height: 20px;
+}
+
+.thread-row__chip--location {
+  min-width: 20px;
+  justify-content: center;
+  padding: 0 5px;
+}
+
 .thread-row__chip.thread-row__chip--reaction {
   min-width: 24px;
   justify-content: center;
@@ -3742,17 +3736,13 @@ textarea,
   font-weight: 600;
 }
 
-/* Pin marker — an icon-only orange pill. The pushpin glyph + the accent
-   tint carry the "pinned" signal without spending a word of row width;
-   the literal label lives in aria-label / title for assistive tech and
-   hover. Square-ish (min-width == height) so it reads as a marker, not a
-   text chip. */
-.thread-row__chip--pin {
-  min-width: 24px;
-  justify-content: center;
-  padding: 0 6px;
-  border: 1px solid var(--accent-border);
-  background: var(--accent-soft);
+/* Pin action sits beside the row's other hover-revealed controls. */
+.thread-row__pin-button {
+  width: 26px;
+}
+
+.thread-row__pin-button.is-pinned {
+  border-color: var(--accent-border);
   color: var(--accent-bright);
 }
 
@@ -4360,12 +4350,7 @@ textarea,
      section instead of only the sticky header. Plan 2026-05-09-002
      Unit K follow-up. */
   position: relative;
-  padding: 4px 0 0;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.directory-row:first-child {
-  border-top: 0;
+  padding: 2px 0 0;
 }
 
 .directory-row__header {
@@ -4373,11 +4358,8 @@ textarea,
   position: sticky;
   top: 0;
   z-index: 5;
-  /* Gap between summary button and launchpad icon button. Tightened
-     from 8 → 4 — the icon button itself lost its border (no longer
-     reads as a separate "card" the way the framed 34px button did). */
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px;
+  /* The hover-revealed launchpad cluster overlays this single column. */
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   background: var(--bg-sidebar);
 }
@@ -4470,12 +4452,7 @@ textarea,
      12 → 8 since the meta block now sits tighter against the
      scrollbar gutter. */
   gap: 8px;
-  /* Row height tightened 44 → 32. Was set to match the masthead's
-     44px button height, but rows are list entries and don't need
-     that same hit-target generosity. Combined with the row top
-     padding drop, each directory header now reads ~22px taller
-     than the comfortable touch target instead of 54px. */
-  min-height: 32px;
+  min-height: 24px;
   /* Lateral inset: 4px on the left sits before the disclosure chevron
      and folder icon; 10px on the right gives the meta block (attention
      count pill) breathing room from the selected-row border. */
@@ -4496,13 +4473,14 @@ textarea,
 }
 
 .directory-row__summary-main {
-  gap: 8px;
+  gap: 5px;
 }
 
 .directory-row__summary-meta {
   flex: 0 0 auto;
   gap: 10px;
   justify-content: flex-end;
+  transition: opacity 120ms ease;
 }
 
 .directory-row__icon {
@@ -4517,6 +4495,11 @@ textarea,
   min-width: 0;
 }
 
+.directory-row__title {
+  color: var(--text-secondary);
+  font-size: calc(var(--sidebar-title-size) - 1px);
+}
+
 .directory-row__attention {
   min-width: 24px;
   height: 24px;
@@ -4525,22 +4508,42 @@ textarea,
 }
 
 .directory-row__chevron {
-  /* Standard inline disclosure chevron (see .live-work-rail__chevron):
-     points right when collapsed, rotates 90deg to point down when
-     expanded. Sits at the left of the row, before the folder icon. */
+  /* Filled caret: one disclosure vocabulary across the sidebar tree. */
   display: inline-flex;
+  width: 0;
+  height: 0;
   flex: 0 0 auto;
-  width: 9px;
-  height: 9px;
-  border-right: 1.75px solid var(--text-muted);
-  border-bottom: 1.75px solid var(--text-muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--text-muted);
   opacity: 0.82;
   transition: transform 120ms ease;
-  transform: rotate(-45deg);
 }
 
 .directory-row__chevron.is-open {
-  transform: rotate(45deg);
+  transform: rotate(90deg);
+}
+
+/* Directory launchpad rides inside the summary's right edge and trades
+   places with the count block on hover. releases/1.0 never applies the
+   split modifier because its local Federation capability seam is false. */
+.directory-row__launchpad-cluster {
+  display: inline-flex;
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  z-index: 2;
+  align-items: center;
+  border-radius: 6px;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease;
+}
+
+.directory-row__header:hover .directory-row__launchpad-cluster,
+.directory-row__launchpad-cluster:has(:focus-visible),
+.directory-row__header--has-draft .directory-row__launchpad-cluster {
+  opacity: 1;
 }
 
 .directory-row__launchpad-button {
@@ -4563,9 +4566,6 @@ textarea,
   color: var(--text-muted);
   font-size: 16px;
   line-height: 1;
-  /* The list wrapper carries `padding-right: 4px` so the icon
-     glyph already sits clear of the scrollbar gutter — no
-     additional margin needed here. */
 }
 
 .directory-row__launchpad-button:hover,
@@ -4583,11 +4583,38 @@ textarea,
   color: var(--accent-bright);
 }
 
+.directory-row__header--with-launchpad:hover .directory-row__summary-meta,
+.directory-row__header--with-launchpad:has(.directory-row__launchpad-cluster :focus-visible) .directory-row__summary-meta {
+  opacity: 0;
+}
+
+.directory-row__header--has-draft:not(:hover) .directory-row__summary-meta {
+  margin-right: 28px;
+}
+
+.directory-row__header--has-draft.directory-row__header--split:not(:hover) .directory-row__summary-meta {
+  margin-right: 44px;
+}
+
+@media (hover: none) {
+  .directory-row__header--with-launchpad .directory-row__launchpad-cluster {
+    opacity: 1;
+  }
+
+  .directory-row__header--with-launchpad .directory-row__summary-meta {
+    margin-right: 28px;
+  }
+
+  .directory-row__header--with-launchpad.directory-row__header--split .directory-row__summary-meta {
+    margin-right: 44px;
+  }
+}
+
 .directory-row__details {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px 0 14px 0;
+  padding: 8px 0 10px 0;
 }
 
 .directory-row__threads {
@@ -4639,17 +4666,17 @@ textarea,
 }
 
 .directory-row__thread-divider-chevron {
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
+  width: 0;
+  height: 0;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  border-left: 4px solid currentColor;
   opacity: 0.82;
   transition: transform 120ms ease;
-  transform: rotate(-45deg);
 }
 
 .directory-row__thread-divider-chevron.is-open {
-  transform: rotate(45deg);
+  transform: rotate(90deg);
 }
 
 .directory-row__threads .thread-row--compact {
@@ -18468,13 +18495,13 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* Real-app-mimic chips used in the preview cards. The visual contract
-   mirrors the live ThreadRow primitive — Pin chip uses --accent, PR
+   mirrors the live ThreadRow primitive — the pin is an in-title marker, PR
    chip uses a small status dot + #number, Meta chips are gray-on-near-
    black for OpenAI / directory / branch slots. */
-.onboarding-wizard__mini-chip--pin {
-  color: var(--accent);
-  border-color: var(--accent-border);
-  background: transparent;
+.onboarding-wizard__mini-pin {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--accent-bright);
 }
 .onboarding-wizard__mini-chip--pr {
   display: inline-flex;
@@ -18523,8 +18550,21 @@ a.transcript-message__messaging-origin:focus-visible {
   gap: 4px 8px;
   padding: 8px 8px 9px;
 }
+.onboarding-wizard__mini-row--mc .onboarding-wizard__mini-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  grid-column: 1;
+  grid-row: 1;
+}
+.onboarding-wizard__mini-row--mc .onboarding-wizard__mini-time {
+  grid-column: 2;
+  grid-row: 1;
+}
 .onboarding-wizard__mini-row--mc .onboarding-wizard__mini-meta {
   grid-column: 1 / -1;
+  grid-row: 2;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;

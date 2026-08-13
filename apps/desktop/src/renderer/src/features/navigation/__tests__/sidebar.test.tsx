@@ -1173,9 +1173,17 @@ describe("Sidebar", () => {
       name: /Local cleanup/i,
     });
 
-    expect(within(worktreeThreadButton).getByText("worktree")).toBeInTheDocument();
+    // Location-kind chips are icon-only; their accessible copy target keeps
+    // the local/worktree distinction available without spending row width.
+    expect(
+      within(worktreeThreadButton).getByLabelText("Copy path for worktree PwrAgent"),
+    ).toBeInTheDocument();
+    expect(within(worktreeThreadButton).queryByText("worktree")).not.toBeInTheDocument();
     expect(within(worktreeThreadButton).queryByText("PwrAgent")).not.toBeInTheDocument();
-    expect(within(localThreadButton).getByText("local")).toBeInTheDocument();
+    expect(
+      within(localThreadButton).getByLabelText("Copy local path for PwrAgent"),
+    ).toBeInTheDocument();
+    expect(within(localThreadButton).queryByText("local")).not.toBeInTheDocument();
   });
 
   it("opens the directory launchpad from the plus button", () => {
@@ -1200,11 +1208,19 @@ describe("Sidebar", () => {
       />
     );
 
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Open new thread launchpad for PwrAgent",
-      })
+    const launchpadButton = screen.getByRole("button", {
+      name: "Open new thread launchpad for PwrAgent",
+    });
+    const launchpadCluster = launchpadButton.closest(
+      ".directory-row__launchpad-cluster",
     );
+    expect(launchpadCluster).not.toBeNull();
+    expect(launchpadCluster?.querySelectorAll("button")).toHaveLength(1);
+    expect(launchpadButton.closest(".directory-row__header")).not.toHaveClass(
+      "directory-row__header--split",
+    );
+
+    fireEvent.click(launchpadButton);
 
     expect(onOpenLaunchpad).toHaveBeenCalledWith(directories[0], undefined);
   });
@@ -1706,8 +1722,8 @@ describe("Sidebar", () => {
     });
     expect(rows[0]).toHaveTextContent("Updated thread");
     expect(
-      within(rows[0]).getByRole("img", { name: "Pinned" }),
-    ).toBeInTheDocument();
+      rows[0]!.querySelector(".thread-row__heading-pin"),
+    ).not.toBeNull();
     expect(screen.getByRole("separator", { name: "Unpinned threads" })).toBeInTheDocument();
 
     const unpinnedRow = within(browseSection as HTMLElement).getByRole("button", {
@@ -1879,9 +1895,12 @@ describe("Sidebar", () => {
     });
     expect(rows[0]).toHaveTextContent("Updated thread");
     expect(
-      within(rows[0]).getByRole("img", { name: "Pinned" }),
-    ).toBeInTheDocument();
+      rows[0]!.querySelector(".thread-row__heading-pin"),
+    ).not.toBeNull();
     expect(rows[1]).toHaveTextContent("Cross-project cleanup");
+    expect(
+      rows[1]!.querySelector(".thread-row__heading-pin"),
+    ).toBeNull();
   });
 
   it("minimizes only unpinned directory threads and restores the sticky state", async () => {

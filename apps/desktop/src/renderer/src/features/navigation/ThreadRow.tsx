@@ -12,7 +12,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import { SmileyIcon } from "../../icons";
+import { PinIcon, SmileyIcon } from "../../icons";
 import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
@@ -101,6 +101,10 @@ type ThreadRowProps = {
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  onSetThreadPin?: (
+    thread: NavigationThreadSummary,
+    pinned: boolean,
+  ) => Promise<void>;
   onOpenPullRequest?: (url: string) => void;
 };
 
@@ -115,6 +119,7 @@ export function ThreadRow(props: ThreadRowProps) {
   const addReactionRef = useRef<HTMLSpanElement>(null);
   const reactions = props.thread.reactions ?? [];
   const canReact = Boolean(props.onSetReaction);
+  const onSetThreadPin = props.onSetThreadPin;
   const bindings = props.thread.messagingBindings ?? [];
   // Pull straight from the navigation snapshot — main persists PR state
   // to the overlay store and surfaces it through the snapshot, so the
@@ -212,7 +217,11 @@ export function ThreadRow(props: ThreadRowProps) {
       ) : null}
       <button
         ref={rowButtonRef}
-        aria-label={props.thread.title}
+        aria-label={
+          props.thread.pinnedRank && !props.thread.parentThreadId
+            ? `${props.thread.title}, pinned`
+            : props.thread.title
+        }
         aria-pressed={selected}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""
@@ -247,18 +256,22 @@ export function ThreadRow(props: ThreadRowProps) {
           <span className="thread-row__heading">
             <ThreadRowStatus status={status} />
             <span className="thread-row__title">{props.thread.title}</span>
+            {props.thread.pinnedRank && !props.thread.parentThreadId ? (
+              <span aria-hidden="true" className="thread-row__heading-pin">
+                <PinIcon size={11} />
+              </span>
+            ) : null}
           </span>
           <span className="thread-row__time">
             {formatRelativeTime(props.thread.updatedAt)}
           </span>
         </span>
 
-        {/* Single ordered chip flow: meta (provider / location / pinned /
-            branch / drift) → messaging binding chips → PR chips →
-            reactions. Pinned rides with the meta chips so it never lands
-            alone on a wrapped row; PR chips + reactions stay last so the
-            fixed-width metadata packs first and single-chip orphan rows
-            are minimized. flex-wrap handles overflow naturally; the
+        {/* Single ordered chip flow: meta (provider / location → PR chips
+            → branch / drift / git state) → messaging binding chips →
+            reactions. PR chips pack before the longest metadata string;
+            pinned state rides the title line instead of spending a chip.
+            flex-wrap handles overflow naturally; the
             hover-only add-reaction affordance is positioned outside the
             flow so it cannot reserve a phantom wrapped row while hidden. */}
         <span
@@ -273,6 +286,30 @@ export function ThreadRow(props: ThreadRowProps) {
             queuedMessageState={props.queuedMessageThreadKeys?.[threadKey]}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
+            prChips={prs.map((pr) => (
+              <PrChip
+                key={pr.url}
+                pr={pr}
+                showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
+                onOpen={openPr}
+                onOpenContextMenu={
+                  props.onOpenPullRequestContextMenu
+                    ? (targetPr, position) =>
+                        props.onOpenPullRequestContextMenu!(
+                          props.thread,
+                          targetPr,
+                          position,
+                        )
+                    : undefined
+                }
+                onDetach={
+                  props.onDetachPullRequest
+                    ? (targetPr) =>
+                        props.onDetachPullRequest!(props.thread, targetPr)
+                    : undefined
+                }
+              />
+            ))}
             thread={props.thread}
           />
 
@@ -284,30 +321,6 @@ export function ThreadRow(props: ThreadRowProps) {
                 props.onUnbindMessagingBinding
                   ? (target) =>
                       void props.onUnbindMessagingBinding!(props.thread, target)
-                  : undefined
-              }
-            />
-          ))}
-
-          {prs.map((pr) => (
-            <PrChip
-              key={pr.url}
-              pr={pr}
-              showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
-              onOpen={openPr}
-              onOpenContextMenu={
-                props.onOpenPullRequestContextMenu
-                  ? (targetPr, position) =>
-                      props.onOpenPullRequestContextMenu!(
-                        props.thread,
-                        targetPr,
-                        position,
-                      )
-                  : undefined
-              }
-              onDetach={
-                props.onDetachPullRequest
-                  ? (targetPr) => props.onDetachPullRequest!(props.thread, targetPr)
                   : undefined
               }
             />
@@ -325,6 +338,26 @@ export function ThreadRow(props: ThreadRowProps) {
       </button>
 
       <div className="thread-row__actions">
+        {onSetThreadPin && !props.thread.parentThreadId ? (
+          <button
+            aria-label={
+              props.thread.pinnedRank ? "Unpin thread" : "Pin thread"
+            }
+            aria-pressed={Boolean(props.thread.pinnedRank)}
+            className={`thread-row__pin-button${
+              props.thread.pinnedRank ? " is-pinned" : ""
+            }`}
+            title={props.thread.pinnedRank ? "Unpin thread" : "Pin thread"}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void onSetThreadPin(props.thread, !props.thread.pinnedRank);
+            }}
+          >
+            <PinIcon size={12} aria-hidden="true" />
+          </button>
+        ) : null}
+
         {canReact ? (
           <AddReactionChip
             anchorRef={addReactionRef}
@@ -410,7 +443,7 @@ function ReactionChip(props: { emoji: string; onToggle: () => void }) {
       role="button"
       tabIndex={0}
       aria-label={`Remove reaction ${emoji} from thread`}
-      className="thread-row__chip thread-row__chip--reaction"
+      className="thread-row__chip thread-row__chip--reaction thread-row__chip--persistent"
       onClick={handleActivate}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {

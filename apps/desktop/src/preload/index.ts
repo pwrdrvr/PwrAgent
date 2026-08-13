@@ -11,6 +11,7 @@ import type {
   ArchiveThreadResponse,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
+  DesktopSidebarTextSize,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -245,6 +246,10 @@ import type {
   UpdateThreadExpectedBranchRequest,
   UpdateThreadExpectedBranchResponse,
   WriteDesktopSettingsConfigRequest,
+} from "@pwragent/shared";
+import {
+  DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+  isDesktopSidebarTextSize,
 } from "@pwragent/shared";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
@@ -1447,6 +1452,7 @@ const desktopApi = Object.freeze({
     callback: (appearance: {
       theme: DesktopAppearanceTheme;
       density: DesktopAppearanceDensity;
+      sidebarTextSize: DesktopSidebarTextSize;
     }) => void,
   ): (() => void) => {
     const listener = (
@@ -1454,6 +1460,7 @@ const desktopApi = Object.freeze({
       payload: {
         theme: DesktopAppearanceTheme;
         density: DesktopAppearanceDensity;
+        sidebarTextSize: DesktopSidebarTextSize;
       },
     ) => callback(payload);
     ipcRenderer.on(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);
@@ -1596,7 +1603,7 @@ const desktopApi = Object.freeze({
 // Decode the appearance hint passed from main via
 // `webPreferences.additionalArguments`. The inline bootstrap script in
 // index.html reads `window.__pwragentAppearance` synchronously, before
-// any React code runs, to set data-theme / data-density on `<html>` —
+// any React code runs, to set appearance data attributes on `<html>` —
 // this is what prevents flash-of-wrong-theme on launch. The TOML
 // (read by `readBootstrapAppearance` in main) is source of truth; the
 // renderer's writeSettingsConfig IPC keeps it in sync.
@@ -1604,6 +1611,7 @@ const APPEARANCE_ARG_PREFIX = "--pwragent-appearance=";
 function readBootstrapAppearance(): {
   theme: "system" | "dark" | "light";
   density: "mission-control" | "compact";
+  sidebarTextSize: DesktopSidebarTextSize;
 } {
   for (const arg of process.argv) {
     if (!arg.startsWith(APPEARANCE_ARG_PREFIX)) continue;
@@ -1617,12 +1625,21 @@ function readBootstrapAppearance(): {
         raw && (raw.density === "mission-control" || raw.density === "compact")
           ? raw.density
           : "mission-control";
-      return { theme, density };
+      const sidebarTextSize =
+        raw && typeof raw.sidebarTextSize === "string"
+          && isDesktopSidebarTextSize(raw.sidebarTextSize)
+          ? raw.sidebarTextSize
+          : DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT;
+      return { theme, density, sidebarTextSize };
     } catch {
       break;
     }
   }
-  return { theme: "system", density: "mission-control" };
+  return {
+    theme: "system",
+    density: "mission-control",
+    sidebarTextSize: DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+  };
 }
 const bootstrapAppearance = readBootstrapAppearance();
 

@@ -9,6 +9,7 @@ import {
   type AppearancePreference,
   type DensityPreference,
   type ResolvedTheme,
+  type SidebarTextSizePreference,
   type ThemePreference,
 } from "./appearance";
 
@@ -21,6 +22,7 @@ export type AppearanceController = {
   appearance: AppearanceState;
   setTheme(theme: ThemePreference): void;
   setDensity(density: DensityPreference): void;
+  setSidebarTextSize(sidebarTextSize: SidebarTextSizePreference): void;
   setAppearance(preference: AppearancePreference): void;
 };
 
@@ -72,6 +74,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
       if (
         current.theme === snapshotPreference.theme
         && current.density === snapshotPreference.density
+        && current.sidebarTextSize === snapshotPreference.sidebarTextSize
       ) {
         return current;
       }
@@ -80,14 +83,22 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
         resolvedTheme: resolveTheme(snapshotPreference.theme),
       };
     });
-  }, [snapshotPreference?.theme, snapshotPreference?.density]);
+  }, [
+    snapshotPreference?.theme,
+    snapshotPreference?.density,
+    snapshotPreference?.sidebarTextSize,
+  ]);
 
   // Apply DOM attributes whenever the resolved appearance changes. No
   // localStorage cache to maintain — the source of truth is TOML, the
   // synchronous first-paint hint is the preload-bridged value.
   useEffect(() => {
-    applyAppearanceAttributes(appearance.resolvedTheme, appearance.density);
-  }, [appearance.resolvedTheme, appearance.density]);
+    applyAppearanceAttributes(
+      appearance.resolvedTheme,
+      appearance.density,
+      appearance.sidebarTextSize,
+    );
+  }, [appearance.resolvedTheme, appearance.density, appearance.sidebarTextSize]);
 
   // Subscribe to prefers-color-scheme changes so `theme: "system"` flips
   // live when the OS theme changes. Unsubscribe on unmount.
@@ -124,9 +135,13 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   }, [writeConfig]);
 
   const persist = useCallback(
-    (theme: ThemePreference, density: DensityPreference) => {
+    (
+      theme: ThemePreference,
+      density: DensityPreference,
+      sidebarTextSize: SidebarTextSizePreference,
+    ) => {
       void writeConfigRef.current({
-        general: { appearance: { theme, density } },
+        general: { appearance: { theme, density, sidebarTextSize } },
       });
     },
     [],
@@ -136,7 +151,7 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     (theme: ThemePreference) => {
       setAppearanceState((current) => {
         if (current.theme === theme) return current;
-        persist(theme, current.density);
+        persist(theme, current.density, current.sidebarTextSize);
         return {
           ...current,
           theme,
@@ -151,10 +166,24 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     (density: DensityPreference) => {
       setAppearanceState((current) => {
         if (current.density === density) return current;
-        persist(current.theme, density);
+        persist(current.theme, density, current.sidebarTextSize);
         return {
           ...current,
           density,
+        };
+      });
+    },
+    [persist],
+  );
+
+  const setSidebarTextSize = useCallback(
+    (sidebarTextSize: SidebarTextSizePreference) => {
+      setAppearanceState((current) => {
+        if (current.sidebarTextSize === sidebarTextSize) return current;
+        persist(current.theme, current.density, sidebarTextSize);
+        return {
+          ...current,
+          sidebarTextSize,
         };
       });
     },
@@ -167,10 +196,15 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
         if (
           current.theme === preference.theme
           && current.density === preference.density
+          && current.sidebarTextSize === preference.sidebarTextSize
         ) {
           return current;
         }
-        persist(preference.theme, preference.density);
+        persist(
+          preference.theme,
+          preference.density,
+          preference.sidebarTextSize,
+        );
         return {
           ...preference,
           resolvedTheme: resolveTheme(preference.theme),
@@ -184,9 +218,15 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     appearance,
     setTheme,
     setDensity,
+    setSidebarTextSize,
     setAppearance,
   };
 }
 
 export { DEFAULT_APPEARANCE };
-export type { ThemePreference, DensityPreference, ResolvedTheme };
+export type {
+  ThemePreference,
+  DensityPreference,
+  ResolvedTheme,
+  SidebarTextSizePreference,
+};

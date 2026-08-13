@@ -3,7 +3,7 @@
  *
  * The async settings-snapshot read pulls in app-discovery, codex-discovery,
  * etc. and is much too heavy to run before window creation. We only need
- * theme + density to pass through `webPreferences.additionalArguments` so
+ * appearance preferences to pass through `webPreferences.additionalArguments` so
  * the preload can expose them to the inline bootstrap script in index.html
  * (which sets data-theme / data-density on `<html>` synchronously before
  * React mounts — avoids flash-of-wrong-theme).
@@ -16,10 +16,13 @@
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
+  DesktopSidebarTextSize,
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
+  DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+  isDesktopSidebarTextSize,
 } from "@pwragent/shared";
 import {
   readDesktopSettingsConfig,
@@ -29,6 +32,7 @@ import {
 export type BootstrapAppearance = {
   theme: DesktopAppearanceTheme;
   density: DesktopAppearanceDensity;
+  sidebarTextSize: DesktopSidebarTextSize;
 };
 
 export const BOOTSTRAP_APPEARANCE_ARG_PREFIX = "--pwragent-appearance=";
@@ -116,6 +120,9 @@ export function readBootstrapAppearance(
       density:
         config.general?.appearance?.density
         ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+      sidebarTextSize:
+        config.general?.appearance?.sidebarTextSize
+        ?? DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
     };
   } catch {
     // Config missing / unreadable / malformed → fall back to defaults.
@@ -124,6 +131,7 @@ export function readBootstrapAppearance(
     return {
       theme: DESKTOP_APPEARANCE_THEME_DEFAULT,
       density: DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+      sidebarTextSize: DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
     };
   }
 }
@@ -151,7 +159,12 @@ export function parseBootstrapAppearanceArg(
           && (raw.density === "mission-control" || raw.density === "compact")
           ? (raw.density as DesktopAppearanceDensity)
           : DESKTOP_APPEARANCE_DENSITY_DEFAULT;
-      return { theme, density };
+      const sidebarTextSize =
+        raw && typeof raw.sidebarTextSize === "string"
+          && isDesktopSidebarTextSize(raw.sidebarTextSize)
+          ? raw.sidebarTextSize
+          : DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT;
+      return { theme, density, sidebarTextSize };
     } catch {
       return undefined;
     }

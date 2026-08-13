@@ -25,12 +25,7 @@ import {
   parseThreadIdentityKey,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
-import {
-  FolderIcon,
-  NewThreadIcon,
-  UnlinkedDotIcon,
-  WorkspaceIcon,
-} from "../../icons";
+import { NewThreadIcon, UnlinkedDotIcon, WorkspaceIcon } from "../../icons";
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
@@ -110,6 +105,10 @@ type DirectoriesListProps = {
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  onSetThreadPin?: (
+    thread: NavigationThreadSummary,
+    pinned: boolean,
+  ) => Promise<void>;
   onUnbindMessagingBinding?: (
     thread: NavigationThreadSummary,
     binding: MessagingThreadBindingSummary,
@@ -162,6 +161,16 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
     launchpad.prompt.trim().length > 0 ||
     (launchpad.imageAttachments?.length ?? 0) > 0
   );
+}
+
+/**
+ * releases/1.0 has no Federation runtime. Keep the directory-launchpad
+ * layout independent from that runtime, but make the split-control capability
+ * explicit and deterministic instead of importing Federation state solely to
+ * discover that there are no eligible clients.
+ */
+function supportsFederationDirectoryLaunchTargets(): boolean {
+  return false;
 }
 
 /**
@@ -609,6 +618,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetReaction}
+              onSetThreadPin={props.onSetThreadPin}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
             );
@@ -699,6 +709,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             onPrefetchPullRequests={props.onPrefetchPullRequests}
             onSelectThread={props.onSelectThread}
             onSetReaction={props.onSetReaction}
+            onSetThreadPin={props.onSetThreadPin}
             onUnbindMessagingBinding={props.onUnbindMessagingBinding}
           />
           {renderStaticSubthreads(thread)}
@@ -709,6 +720,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const dropIndicatorClass = isDirectoryDropTarget
       ? ` is-drop-target-${directoryDropIndicator!.position}`
       : "";
+    const federationLaunchTargetsAvailable =
+      supportsFederationDirectoryLaunchTargets();
 
     return (
       <section
@@ -818,7 +831,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
         }
       >
         <div
-          className="directory-row__header"
+          className={`directory-row__header directory-row__header--with-launchpad${
+            federationLaunchTargetsAvailable
+              ? " directory-row__header--split"
+              : ""
+          }${
+            hasPendingLaunchpadState(directory)
+              ? " directory-row__header--has-draft"
+              : ""
+          }`}
           draggable={directoryDraggable}
           onDragStart={
             directoryDraggable
@@ -917,17 +938,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 aria-hidden="true"
                 className={`directory-row__chevron${expanded ? " is-open" : ""}`}
               />
-              <span aria-hidden="true" className="directory-row__icon">
-                {directory.kind === "workspace" ? (
-                  <WorkspaceIcon size={14} />
-                ) : directory.kind === "unlinked" ? (
-                  <UnlinkedDotIcon size={14} />
-                ) : (
-                  <FolderIcon size={14} />
-                )}
-              </span>
+              {directory.kind === "workspace" || directory.kind === "unlinked" ? (
+                <span aria-hidden="true" className="directory-row__icon">
+                  {directory.kind === "workspace" ? (
+                    <WorkspaceIcon size={14} />
+                  ) : (
+                    <UnlinkedDotIcon size={14} />
+                  )}
+                </span>
+              ) : null}
               <span className="directory-row__title-wrap">
-                <span className="thread-row__title">{directory.label}</span>
+                <span className="thread-row__title directory-row__title">
+                  {directory.label}
+                </span>
               </span>
             </span>
 
@@ -940,18 +963,20 @@ export function DirectoriesList(props: DirectoriesListProps) {
             </span>
           </button>
 
-          <button
-            aria-label={`Open new thread launchpad for ${directory.label}`}
-            className={`directory-row__launchpad-button${
-              hasPendingLaunchpadState(directory) ? " has-draft" : ""
-            }`}
-            type="button"
-            onClick={() => {
-              void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
-            }}
-          >
-            <NewThreadIcon size={16} />
-          </button>
+          <div className="directory-row__launchpad-cluster">
+            <button
+              aria-label={`Open new thread launchpad for ${directory.label}`}
+              className={`directory-row__launchpad-button${
+                hasPendingLaunchpadState(directory) ? " has-draft" : ""
+              }`}
+              type="button"
+              onClick={() => {
+                void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
+              }}
+            >
+              <NewThreadIcon size={16} />
+            </button>
+          </div>
         </div>
 
             {expanded ? (
@@ -1060,6 +1085,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}
+                          onSetThreadPin={props.onSetThreadPin}
 	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
 	                        />
                               {renderStaticSubthreads(thread)}

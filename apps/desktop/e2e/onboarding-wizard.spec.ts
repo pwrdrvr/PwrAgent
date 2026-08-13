@@ -262,6 +262,42 @@ test.describe("Onboarding wizard", () => {
         }),
       ).toBeVisible();
 
+      const missionControlRows = app.window.locator(
+        ".onboarding-wizard__mini-row--mc",
+      );
+      await expect(missionControlRows).toHaveCount(4);
+      for (const row of await missionControlRows.all()) {
+        const heading = row.locator(
+          ":scope > .onboarding-wizard__mini-heading",
+        );
+        const time = row.locator(":scope > .onboarding-wizard__mini-time");
+        const meta = row.locator(":scope > .onboarding-wizard__mini-meta");
+        await expect(heading).toHaveCount(1);
+        await expect(time).toHaveCount(1);
+        await expect(meta).toHaveCount(1);
+
+        const [rowBox, headingBox, timeBox, metaBox] = await Promise.all([
+          row.boundingBox(),
+          heading.boundingBox(),
+          time.boundingBox(),
+          meta.boundingBox(),
+        ]);
+        expect(rowBox).not.toBeNull();
+        expect(headingBox).not.toBeNull();
+        expect(timeBox).not.toBeNull();
+        expect(metaBox).not.toBeNull();
+        expect(
+          Math.abs(
+            headingBox!.y + headingBox!.height / 2
+            - (timeBox!.y + timeBox!.height / 2),
+          ),
+        ).toBeLessThan(2);
+        expect(metaBox!.y).toBeGreaterThan(headingBox!.y);
+        expect(metaBox!.y + metaBox!.height).toBeLessThanOrEqual(
+          rowBox!.y + rowBox!.height + 1,
+        );
+      }
+
       const back = app.window.getByRole("button", { name: /^← Back/i });
       await expect(back).toBeVisible();
       await back.click();

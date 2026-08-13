@@ -197,6 +197,55 @@ describe("ThreadRow chip flow", () => {
     expect(onUnbindMessagingBinding).not.toHaveBeenCalled();
   });
 
+  it("toggles the pin from the hover actions button without selecting the row", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const { onSelectThread } = renderRow({
+      thread: {
+        ...baseThread,
+        pinnedRank: "1024",
+        reactions: [],
+      },
+      onSetThreadPin,
+    });
+
+    const pin = screen.getByRole("button", { name: "Unpin thread" });
+    expect(pin).toHaveClass("thread-row__pin-button");
+    expect(pin).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("button", { name: "Chip flow thread, pinned" }),
+    ).toBeInTheDocument();
+    expect(document.querySelector(".thread-row__heading-pin")).not.toBeNull();
+    expect(document.querySelector(".thread-row__chip--pin")).toBeNull();
+
+    fireEvent.click(pin);
+    expect(onSetThreadPin).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-chips" }),
+      false,
+    );
+    expect(onSelectThread).not.toHaveBeenCalled();
+  });
+
+  it("pins an unpinned thread from the same actions button", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    renderRow({
+      thread: {
+        ...baseThread,
+        reactions: [],
+      },
+      onSetThreadPin,
+    });
+
+    const pin = screen.getByRole("button", { name: "Pin thread" });
+    expect(pin).toHaveAttribute("aria-pressed", "false");
+    expect(document.querySelector(".thread-row__heading-pin")).toBeNull();
+
+    fireEvent.click(pin);
+    expect(onSetThreadPin).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-chips" }),
+      true,
+    );
+  });
+
   it("does not invoke onSelectThread when the add-reaction smiley is clicked", () => {
     const { container, onSelectThread } = renderRow();
     const addReaction = container.querySelector(
@@ -383,14 +432,17 @@ describe("ThreadRow chip flow", () => {
     // ThreadMetaChips internals.
     const indexOf = (selector: string): number =>
       chipNodes.findIndex((el) => el.matches(selector) || el.querySelector(selector) !== null);
-    const prIdx = indexOf(".thread-row__chip--pr, [data-pr-chip]");
+    const prIdx = indexOf(".pr-chip");
+    const branchIdx = indexOf(".thread-row__chip--mono");
     const bindingIdx = indexOf(".thread-row__chip--binding, .thread-row__chip-wrap");
     const reactionIdx = indexOf(".thread-row__chip--reaction");
-    // Each chip type that's present comes after the previous one. Messaging
-    // bindings sit before PR chips so fixed-width metadata packs first and
-    // the variable-count PR + reaction chips trail at the end.
-    if (bindingIdx >= 0 && prIdx >= 0) expect(bindingIdx).toBeLessThan(prIdx);
-    if (prIdx >= 0 && reactionIdx >= 0) expect(prIdx).toBeLessThan(reactionIdx);
+    // Actionable PRs pack before the long branch string; bindings and
+    // reactions continue to trail the shared metadata flow.
+    if (prIdx >= 0 && branchIdx >= 0) expect(prIdx).toBeLessThan(branchIdx);
+    if (branchIdx >= 0 && bindingIdx >= 0) expect(branchIdx).toBeLessThan(bindingIdx);
+    if (bindingIdx >= 0 && reactionIdx >= 0) {
+      expect(bindingIdx).toBeLessThan(reactionIdx);
+    }
   });
 
   it("shows the PR title and status in the shared hover card", () => {
