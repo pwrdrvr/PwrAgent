@@ -15509,25 +15509,36 @@ a.transcript-message__messaging-origin:focus-visible {
   max-height: min(440px, calc(100dvh - 128px));
 }
 
-.branch-picker--review {
-  width: min(100%, 640px);
+/* Dialog variant: the picker stands in for a form field (the handoff dialog's
+   "leave current checkout on"), so it fills the field row and squares off to
+   match the sibling text input instead of hugging a toolbar as a pill. */
+.branch-picker--dialog {
+  width: 100%;
   max-width: 100%;
 }
 
-.branch-picker--review .composer-dropdown__button {
+.branch-picker--dialog .composer-dropdown__button {
   min-height: 34px;
-  justify-content: flex-start;
   border-radius: 6px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
-.branch-picker--review .branch-picker__menu {
+.branch-picker--dialog .composer-dropdown__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Anchor to the field's left edge and match its width — the trigger spans the
+   dialog rather than sitting near the right gutter. */
+.branch-picker--dialog .branch-picker__menu {
   right: auto;
   left: 0;
-  z-index: 45;
-  min-width: min(100%, 420px);
-  width: min(640px, calc(100vw - 32px));
-  max-width: calc(100vw - 32px);
+  min-width: 100%;
+  max-width: 100%;
 }
 
 .review-branch-picker {
