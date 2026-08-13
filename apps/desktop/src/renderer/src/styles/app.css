@@ -4093,6 +4093,64 @@ textarea,
   font-size: 11px;
 }
 
+/* The PR's head branch, one line, never wrapping and never widening the card.
+   This is what tells two PRs on the same thread apart when only one of their
+   branches is checked out. */
+.pr-status-card__branch {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.pr-status-card__branch-icon {
+  flex: 0 0 auto;
+}
+
+/* Middle truncation without measuring anything: the name is rendered as two
+   spans, and only the head is allowed to shrink. The browser puts its ellipsis
+   at the end of the shrinking span — which is the middle of the name, because
+   the fixed tail is still to the right of it. `direction: rtl` (used by the
+   jump palette) would instead sacrifice the prefix, and branches on one thread
+   usually share a prefix and differ later. */
+.pr-status-card__branch-name {
+  display: flex;
+  min-width: 0;
+}
+
+.pr-status-card__branch-head {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-status-card__branch-tail {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* The whole branch name, for assistive tech only. The visual halves above are
+   `aria-hidden` because flex blockifies them into two separate a11y nodes, so
+   the name would otherwise be announced split mid-word. Absolute positioning
+   keeps this out of the flex flow entirely. */
+.pr-status-card__branch-full {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
 .pr-status-card__status {
   display: flex;
   align-items: baseline;

@@ -114,6 +114,32 @@ describe("PrChip", () => {
     expect(chip).not.toHaveAttribute("aria-describedby");
   });
 
+  it("refreshes an open card when its head branch changes", () => {
+    const onOpen = vi.fn();
+    const { container, rerender } = render(
+      <PrChip
+        pr={basePr({ headRefName: "agent/backport-pr-status-card" })}
+        showRepoPrefix={false}
+        onOpen={onOpen}
+      />,
+    );
+    const chip = container.querySelector(".pr-chip") as HTMLElement;
+    fireEvent.mouseEnter(chip);
+    expect(document.querySelector(".pr-status-card__branch-full"))
+      .toHaveTextContent("agent/backport-pr-status-card");
+
+    rerender(
+      <PrChip
+        pr={basePr({ headRefName: "agent/backport-pr-status-card-v2" })}
+        showRepoPrefix={false}
+        onOpen={onOpen}
+      />,
+    );
+
+    expect(document.querySelector(".pr-status-card__branch-full"))
+      .toHaveTextContent("agent/backport-pr-status-card-v2");
+  });
+
   it("defers draft + conflict to sibling pills when withStatusPills is set", () => {
     // In the Pull Requests card the chip sits next to explicit pills, so the
     // dot must stay the check-state color (agreeing with the "Checks …" pill)

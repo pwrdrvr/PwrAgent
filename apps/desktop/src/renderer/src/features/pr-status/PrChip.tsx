@@ -48,6 +48,7 @@ export function PrChip(props: PrChipProps) {
     pr.repo,
     pr.number,
     pr.title,
+    pr.headRefName,
     status,
     chipState,
     props.withStatusPills,

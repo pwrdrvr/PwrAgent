@@ -37,6 +37,7 @@ describe("prSummariesEqual", () => {
     ["createdAt", { createdAt: 1_700_000_999_000 }],
     ["mergedAt", { mergedAt: 1_800_000_000_000 }],
     ["closedAt", { closedAt: 1_800_000_000_000 }],
+    ["headRefName", { headRefName: "fix/pr-status-card-branch" }],
   ])("detects a change to %s alone", (_field, overrides) => {
     expect(
       prSummariesEqual([basePr()], [basePr(overrides as Partial<PrSummary>)]),

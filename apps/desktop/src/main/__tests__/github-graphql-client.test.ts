@@ -19,6 +19,7 @@ function node(overrides: Partial<GraphqlPrNode> = {}): GraphqlPrNode {
     state: "OPEN",
     isDraft: false,
     mergeable: "MERGEABLE",
+    headRefName: "agent/pr-status-card-branch",
     headRepository: { name: "PwrAgent" },
     headRepositoryOwner: { login: "pwrdrvr" },
     commits: {
@@ -158,6 +159,7 @@ describe("buildBatchedPrQuery", () => {
       "createdAt",
       "mergedAt",
       "closedAt",
+      "headRefName",
     ]) {
       expect(query).toContain(field);
     }
@@ -263,6 +265,7 @@ describe("mapGraphqlPrNode", () => {
       org: "pwrdrvr",
       repo: "PwrAgent",
       title: "Add polling",
+      headRefName: "agent/pr-status-card-branch",
       state: "passing",
       checkState: "passing",
       lifecycleState: "open",
