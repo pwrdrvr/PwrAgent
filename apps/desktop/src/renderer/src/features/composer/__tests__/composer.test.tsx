@@ -9035,7 +9035,12 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
 
-    expect(screen.getByLabelText("Leave current checkout on")).toHaveValue("HEAD");
+    const leaveOn = screen.getByLabelText("Leave current checkout on");
+    expect(leaveOn).toHaveAttribute("data-value", "HEAD");
+    expect(leaveOn).toHaveTextContent("Detached HEAD");
+    // The aria-label names the field and suppresses the button's content, so
+    // the selection has to reach assistive tech as a description instead.
+    expect(leaveOn).toHaveAccessibleDescription("Detached HEAD");
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
@@ -9046,6 +9051,103 @@ describe("Composer", () => {
         sourcePath: "/repo",
         sourceBranch: "feature/handoff",
         leaveLocalBranch: "HEAD",
+      });
+    });
+  });
+
+  it("filters the handoff leave-branch picker and shows branch metadata", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/repo",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+          gitStatus: {
+            currentBranch: "feature/handoff",
+            defaultBranch: "main",
+            branches: ["feature/handoff", "main", "release"],
+            branchDetails: [
+              { name: "release", lastCommitAt: nowSeconds - 3600 },
+              { name: "main", lastCommitAt: nowSeconds - 172800 },
+            ],
+            handoffBranches: ["main", "release"],
+            syncState: "untracked",
+          },
+        }}
+        onHandoffThreadWorkspace={onHandoffThreadWorkspace}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          gitBranch: "feature/handoff",
+          linkedDirectories: [
+            { id: "dir-1", label: "PwrAgent", path: "/repo", kind: "local" },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
+    fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Leave current checkout on" })
+    );
+
+    const listbox = screen.getByRole("listbox", {
+      name: "Leave current checkout on options",
+    });
+    // Pinned rows lead: the sentinel (it has no commit date to sort by), then
+    // the default branch. Everything else follows in handoffBranches order.
+    expect(
+      within(listbox)
+        .getAllByRole("option")
+        .map((option) => option.getAttribute("aria-label"))
+    ).toEqual(["Detached HEAD", "main", "release"]);
+    expect(within(listbox).getByRole("option", { name: "main" })).toHaveTextContent(
+      "Default"
+    );
+    expect(
+      within(listbox).getByRole("option", { name: "release" })
+    ).toHaveTextContent("1h ago");
+
+    fireEvent.change(screen.getByLabelText("Find a branch"), {
+      target: { value: "rel" },
+    });
+    expect(
+      within(listbox)
+        .getAllByRole("option")
+        .map((option) => option.getAttribute("aria-label"))
+    ).toEqual(["release"]);
+
+    fireEvent.click(within(listbox).getByRole("option", { name: "release" }));
+    expect(screen.getByLabelText("Leave current checkout on")).toHaveAttribute(
+      "data-value",
+      "release"
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "local-to-worktree",
+        strategy: "move-branch",
+        repositoryPath: "/repo",
+        sourcePath: "/repo",
+        sourceBranch: "feature/handoff",
+        leaveLocalBranch: "release",
       });
     });
   });
