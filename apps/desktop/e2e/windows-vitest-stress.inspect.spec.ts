@@ -8,6 +8,11 @@ import { test } from "@playwright/test";
 const STRESS_ARG = "--pwragent-vitest-stress";
 const PROCESS_SAMPLES_ARG = "--pwragent-vitest-process-samples";
 const TARGET_ARG_PREFIX = "--pwragent-vitest-target=";
+const TIMEOUT_ARG_PREFIX = "--pwragent-vitest-timeout-ms=";
+const PLAYWRIGHT_TIMEOUT_MS = 20 * 60 * 1_000;
+const DEFAULT_VITEST_TIMEOUT_MS = 19 * 60 * 1_000;
+const PROCESS_SNAPSHOT_TIMEOUT_MS = 10_000;
+const PROCESS_TREE_EXIT_TIMEOUT_MS = 15_000;
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(specDir, "../../..");
 
@@ -29,6 +34,7 @@ type CommandResult = {
 async function runCommand(
   command: string,
   args: string[],
+  timeoutMs?: number,
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -38,6 +44,22 @@ async function runCommand(
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      callback();
+    };
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finish(() => reject(new Error(
+          `${path.basename(command)} did not exit within ${timeoutMs}ms.`,
+        )));
+      }, timeoutMs);
+    }
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -46,9 +68,9 @@ async function runCommand(
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    child.once("error", reject);
+    child.once("error", (error) => finish(() => reject(error)));
     child.once("close", (code, signal) => {
-      resolve({ code, signal, stderr, stdout });
+      finish(() => resolve({ code, signal, stderr, stdout }));
     });
   });
 }
@@ -67,7 +89,7 @@ async function captureRelevantProcesses(): Promise<ProcessSnapshotEntry[]> {
     "-NonInteractive",
     "-Command",
     powershell,
-  ]);
+  ], PROCESS_SNAPSHOT_TIMEOUT_MS);
   if (result.code !== 0) {
     throw new Error(
       `Process snapshot failed with exit ${result.code}: ${result.stderr.trim()}`,
@@ -97,6 +119,31 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+async function settleWithin<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<{ timedOut: false; value: T } | { timedOut: true }> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise.then((value) => ({ timedOut: false as const, value })),
+      new Promise<{ timedOut: true }>((resolve) => {
+        timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function terminateProcessTree(processId: number): Promise<CommandResult> {
+  return runCommand(
+    path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
+    ["/PID", String(processId), "/T", "/F"],
+    PROCESS_TREE_EXIT_TIMEOUT_MS,
+  );
+}
+
 test.skip(
   process.platform !== "win32",
   "This diagnostic exercises the native Windows Vitest shutdown path.",
@@ -105,7 +152,7 @@ test.skip(
 test(
   "runs one complete Windows Vitest workspace iteration @windows-vitest-stress",
   async ({ browserName }, testInfo) => {
-    test.setTimeout(20 * 60 * 1_000);
+    test.setTimeout(PLAYWRIGHT_TIMEOUT_MS);
     test.skip(
       !testInfo.config.argv.includes(STRESS_ARG),
       `Pass ${STRESS_ARG} after Playwright's -- separator to run this diagnostic.`,
@@ -117,6 +164,21 @@ test(
     const vitestTarget = targetArgument?.slice(TARGET_ARG_PREFIX.length);
     if (vitestTarget && !/^[A-Za-z0-9_./-]+$/.test(vitestTarget)) {
       throw new Error(`Unsafe Vitest target: ${JSON.stringify(vitestTarget)}`);
+    }
+    const timeoutArgument = testInfo.config.argv.find((argument) =>
+      argument.startsWith(TIMEOUT_ARG_PREFIX),
+    );
+    const timeoutValue = timeoutArgument?.slice(TIMEOUT_ARG_PREFIX.length);
+    if (timeoutValue && !/^\d+$/.test(timeoutValue)) {
+      throw new Error(`Invalid Vitest timeout: ${JSON.stringify(timeoutValue)}`);
+    }
+    const vitestTimeoutMs = timeoutValue
+      ? Number(timeoutValue)
+      : DEFAULT_VITEST_TIMEOUT_MS;
+    if (vitestTimeoutMs < 1_000 || vitestTimeoutMs > DEFAULT_VITEST_TIMEOUT_MS) {
+      throw new Error(
+        `Vitest timeout must be between 1000 and ${DEFAULT_VITEST_TIMEOUT_MS}ms.`,
+      );
     }
 
     const iteration = testInfo.repeatEachIndex + 1;
@@ -132,6 +194,7 @@ test(
     log.write(`availableParallelism=${os.availableParallelism()}\n`);
     log.write(`totalMemoryBytes=${os.totalmem()}\n`);
     log.write(`vitestTarget=${vitestTarget ?? "(full workspace)"}\n`);
+    log.write(`vitestTimeoutMs=${vitestTimeoutMs}\n`);
     log.write(`processesBefore=${JSON.stringify(before)}\n`);
     log.write("\n===== pnpm test =====\n");
 
@@ -157,38 +220,120 @@ test(
     child.stderr.pipe(log, { end: false });
     let processSampling = captureProcessSamples;
     const processSampler = (async () => {
-      let previousSample = "";
-      while (processSampling) {
-        const sample = newlyRunningProcesses(
-          before,
-          await captureRelevantProcesses(),
-        );
-        const serialized = JSON.stringify(sample);
-        if (serialized !== previousSample) {
-          log.write(
-            `processSample=${JSON.stringify({
-              atMs: Date.now() - startedAt,
-              processes: sample,
-            })}\n`,
+      try {
+        let previousSample = "";
+        while (processSampling) {
+          const sample = newlyRunningProcesses(
+            before,
+            await captureRelevantProcesses(),
           );
-          previousSample = serialized;
+          const serialized = JSON.stringify(sample);
+          if (serialized !== previousSample) {
+            log.write(
+              `processSample=${JSON.stringify({
+                atMs: Date.now() - startedAt,
+                processes: sample,
+              })}\n`,
+            );
+            previousSample = serialized;
+          }
+          await wait(250);
         }
-        await wait(250);
+      } catch (error) {
+        log.write(
+          `processSamplingError=${JSON.stringify(error instanceof Error ? error.message : String(error))}\n`,
+        );
       }
     })();
-    const result = await new Promise<{
+    const childResult = new Promise<{
       code: number | null;
+      error?: Error;
       signal: NodeJS.Signals | null;
-    }>((resolve, reject) => {
-      child.once("error", reject);
+    }>((resolve) => {
+      child.once("error", (error) => resolve({ code: null, error, signal: null }));
       child.once("close", (code, signal) => resolve({ code, signal }));
     });
+    const deadlineResult = await settleWithin(childResult, vitestTimeoutMs);
+    const timedOut = deadlineResult.timedOut;
+    let processesAtTimeout: ProcessSnapshotEntry[] = [];
+    let result = deadlineResult.timedOut ? undefined : deadlineResult.value;
+    let childExitObserved = Boolean(result);
+    let residueClassified = true;
+    let timeoutProcessSnapshotClassified = true;
+    const captureForEvidence = async (label: string) => {
+      try {
+        return await captureRelevantProcesses();
+      } catch (error) {
+        residueClassified = false;
+        log.write(
+          `${label}Error=${JSON.stringify(error instanceof Error ? error.message : String(error))}\n`,
+        );
+        return [];
+      }
+    };
+    const captureOptionalTimeoutEvidence = async () => {
+      try {
+        return await captureRelevantProcesses();
+      } catch (error) {
+        timeoutProcessSnapshotClassified = false;
+        log.write(
+          `timeoutProcessSnapshotError=${JSON.stringify(error instanceof Error ? error.message : String(error))}\n`,
+        );
+        return [];
+      }
+    };
+    if (deadlineResult.timedOut) {
+      // Start the optional snapshot, but do not await it before cleanup.
+      // CIM enumeration can stall on the same degraded Windows host this
+      // diagnostic is meant to recover, while taskkill is the ownership
+      // boundary that must run promptly once Vitest exceeds its deadline.
+      const timeoutSnapshot = captureOptionalTimeoutEvidence();
+      if (child.pid) {
+        try {
+          const termination = await terminateProcessTree(child.pid);
+          log.write(
+            `processTreeTermination=${JSON.stringify({
+              code: termination.code,
+              signal: termination.signal,
+              stderr: termination.stderr.trim(),
+              stdout: termination.stdout.trim(),
+            })}\n`,
+          );
+          if (termination.code !== 0) child.kill("SIGKILL");
+        } catch (error) {
+          log.write(
+            `processTreeTerminationError=${JSON.stringify(error instanceof Error ? error.message : String(error))}\n`,
+          );
+          child.kill("SIGKILL");
+        }
+      }
+      processesAtTimeout = newlyRunningProcesses(
+        before,
+        await timeoutSnapshot,
+      );
+      log.write(
+        `vitestTimeout=${JSON.stringify({
+          atMs: Date.now() - startedAt,
+          processes: processesAtTimeout,
+          snapshotClassified: timeoutProcessSnapshotClassified,
+          timeoutMs: vitestTimeoutMs,
+        })}\n`,
+      );
+      const exitResult = await settleWithin(
+        childResult,
+        PROCESS_TREE_EXIT_TIMEOUT_MS,
+      );
+      if (!exitResult.timedOut) {
+        result = exitResult.value;
+        childExitObserved = true;
+      }
+    }
     processSampling = false;
     await processSampler;
 
-    const immediate = await captureRelevantProcesses();
+    const immediate = await captureForEvidence("immediateProcessSnapshot");
     await wait(2_000);
-    const settled = await captureRelevantProcesses();
+    const settled = await captureForEvidence("settledProcessSnapshot");
     const leakedImmediately = newlyRunningProcesses(before, immediate);
     const leakedAfterTwoSeconds = newlyRunningProcesses(before, settled);
     const durationMs = Date.now() - startedAt;
@@ -196,8 +341,15 @@ test(
     log.write("\n===== diagnostic summary =====\n");
     log.write(`finishedAt=${new Date().toISOString()}\n`);
     log.write(`durationMs=${durationMs}\n`);
-    log.write(`exitCode=${String(result.code)}\n`);
-    log.write(`signal=${String(result.signal)}\n`);
+    log.write(`timedOut=${String(timedOut)}\n`);
+    log.write(`timeoutMs=${timedOut ? String(vitestTimeoutMs) : "null"}\n`);
+    log.write(`processesAtTimeout=${JSON.stringify(processesAtTimeout)}\n`);
+    log.write(`timeoutProcessSnapshotClassified=${String(timeoutProcessSnapshotClassified)}\n`);
+    log.write(`childExitObserved=${String(childExitObserved)}\n`);
+    log.write(`exitCode=${String(result?.code ?? null)}\n`);
+    log.write(`signal=${String(result?.signal ?? null)}\n`);
+    log.write(`spawnError=${JSON.stringify(result?.error?.message ?? null)}\n`);
+    log.write(`processResidueClassified=${String(residueClassified)}\n`);
     log.write(`newProcessesImmediate=${JSON.stringify(leakedImmediately)}\n`);
     log.write(`newProcessesAfterTwoSeconds=${JSON.stringify(leakedAfterTwoSeconds)}\n`);
     await new Promise<void>((resolve, reject) => {
@@ -212,20 +364,32 @@ test(
     console.log(
       [
         `Windows Vitest stress iteration ${iteration}:`,
-        `exit=${String(result.code)}`,
+        `exit=${String(result?.code ?? null)}`,
+        `timedOut=${String(timedOut)}`,
         `durationMs=${durationMs}`,
         `persistentNewProcesses=${JSON.stringify(leakedAfterTwoSeconds)}`,
       ].join(" "),
     );
 
-    if (result.code !== 0) {
+    if (timedOut) {
       throw new Error(
-        `Windows Vitest stress iteration ${iteration} exited ${String(result.code)}.`,
+        `Windows Vitest stress iteration ${iteration} exceeded ${vitestTimeoutMs}ms; active processes before termination: ${JSON.stringify(processesAtTimeout)}`,
+      );
+    }
+    if (result?.error) throw result.error;
+    if (result?.code !== 0) {
+      throw new Error(
+        `Windows Vitest stress iteration ${iteration} exited ${String(result?.code)}.`,
       );
     }
     if (leakedAfterTwoSeconds.length > 0) {
       throw new Error(
         `Windows Vitest stress iteration ${iteration} left processes running: ${JSON.stringify(leakedAfterTwoSeconds)}`,
+      );
+    }
+    if (!residueClassified) {
+      throw new Error(
+        `Windows Vitest stress iteration ${iteration} could not classify process residue.`,
       );
     }
   },

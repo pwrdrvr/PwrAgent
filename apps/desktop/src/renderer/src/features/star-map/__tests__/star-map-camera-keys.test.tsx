@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
+import { STAR_MAP_PAN_SPEED } from "../star-map-keyboard";
 
 /**
  * The map flies from the keyboard.
@@ -74,6 +75,43 @@ async function flushFrame() {
       requestAnimationFrame(() => resolve(undefined));
     });
   });
+}
+
+function controlAnimationFrames() {
+  let currentTime = 0;
+  let nextFrameId = 1;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  const request = vi
+    .spyOn(globalThis, "requestAnimationFrame")
+    .mockImplementation((callback) => {
+      const frameId = nextFrameId;
+      nextFrameId += 1;
+      callbacks.set(frameId, callback);
+      return frameId;
+    });
+  const cancel = vi
+    .spyOn(globalThis, "cancelAnimationFrame")
+    .mockImplementation((frameId) => {
+      callbacks.delete(frameId);
+    });
+
+  return {
+    flush: async (elapsedMs = 1000 / 60) => {
+      currentTime += elapsedMs;
+      const pending = [...callbacks.values()];
+      callbacks.clear();
+      if (pending.length !== 1) {
+        throw new Error(`Expected one animation frame, received ${pending.length}.`);
+      }
+      await act(async () => {
+        pending[0](currentTime);
+      });
+    },
+    restore: () => {
+      request.mockRestore();
+      cancel.mockRestore();
+    },
+  };
 }
 
 async function openMap(floating = false) {
@@ -191,24 +229,31 @@ describe("star map keyboard camera", () => {
     // repaint. Pressing 0 did nothing at all.
     await openMap();
     const opened = readTransform();
+    const frames = controlAnimationFrames();
 
-    fireEvent.keyDown(layer(), { key: "d", code: "KeyD" });
-    await flushFrame();
-    await flushFrame();
-    expect(readTransform().x).toBeLessThan(opened.x);
+    try {
+      fireEvent.keyDown(layer(), { key: "d", code: "KeyD" });
+      await frames.flush();
+      await frames.flush();
+      expect(readTransform().x).toBeLessThan(opened.x);
 
-    fireEvent.keyDown(layer(), { key: "0", code: "Digit0" });
-    expect(readTransform()).toEqual(opened);
+      fireEvent.keyDown(layer(), { key: "0", code: "Digit0" });
+      expect(readTransform()).toEqual(opened);
 
-    // Still flying, so the NEXT frame continues from the reset position
-    // rather than teleporting back to where the flight had reached.
-    await flushFrame();
-    const afterReset = readTransform();
-    expect(afterReset.x).toBeLessThan(opened.x);
-    expect(afterReset.x).toBeGreaterThan(opened.x - 100);
+      // Still flying, so the NEXT frame continues from the reset position
+      // rather than teleporting back to where the flight had reached.
+      await frames.flush();
+      const afterReset = readTransform();
+      expect(afterReset.x).toBeCloseTo(
+        opened.x - STAR_MAP_PAN_SPEED / 60,
+        6,
+      );
 
-    fireEvent.keyUp(window, { key: "d", code: "KeyD" });
-    await flushFrame();
+      fireEvent.keyUp(window, { key: "d", code: "KeyD" });
+      await frames.flush();
+    } finally {
+      frames.restore();
+    }
   });
 
   it("composes a trackpad pinch with an in-flight keyboard pan", async () => {
