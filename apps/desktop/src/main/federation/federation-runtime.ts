@@ -82,6 +82,7 @@ import {
   applyNavigationSnapshotTransportResponse,
   buildAppendPinRank,
   buildFederatedThreadRef,
+  buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
   federationEndpointAcceptsCloudflareCredentials,
   isCelestialIconAssignment,
