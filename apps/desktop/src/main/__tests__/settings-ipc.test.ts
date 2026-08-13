@@ -917,6 +917,7 @@ describe("settings ipc", () => {
             "state",
             "acp-discovery-workspace",
           ),
+          requestTimeoutMs: 10 * 60_000,
         }),
       );
       expect(
@@ -1221,6 +1222,10 @@ describe("settings ipc", () => {
       // First refresh: the agent is undiscovered → it must be probed once.
       await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
       expect(probe).toHaveBeenCalledTimes(1);
+      expect(probe).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.not.objectContaining({ requestTimeoutMs: expect.anything() }),
+      );
 
       // Second refresh: cached capabilities are fresh + version-matched → the
       // expensive probe must be skipped (no new launch).
@@ -1289,7 +1294,7 @@ describe("settings ipc", () => {
     // discovery round-trips need headroom over the 5s default under CI load.
   }, 20_000);
 
-  it("coalesces matching forced and weaker regular ACP refreshes", async () => {
+  it("coalesces forced ACP refreshes across overlapping provider scopes", async () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),
     );
@@ -1361,9 +1366,39 @@ describe("settings ipc", () => {
       await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
       const forcedFollower = handler?.({}, { refresh: true, force: true });
       const regular = handler?.({}, { refresh: true });
+      const targetedForced = handler?.(
+        {},
+        { refresh: true, force: true, registryIds: ["gemini"] },
+      );
       releaseProbe?.();
-      await Promise.all([forced, forcedFollower, regular]);
+      await Promise.all([forced, forcedFollower, regular, targetedForced]);
       expect(probe).toHaveBeenCalledTimes(1);
+
+      // The reverse ordering also coordinates the actual per-provider probe:
+      // an all-provider pass may still discover the remaining providers, but
+      // it must not launch Gemini again while targeted login is in flight.
+      probe.mockImplementationOnce(
+        async () => await new Promise((resolve) => {
+          releaseProbe = () => resolve({});
+        }),
+      );
+      const targetedFirst = handler?.(
+        {},
+        { refresh: true, force: true, registryIds: ["gemini"] },
+      );
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+      localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([]);
+      const allProvidersSecond = handler?.({}, { refresh: true, force: true });
+      releaseProbe?.();
+      await Promise.all([targetedFirst, allProvidersSecond]);
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(
+        localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
+      ).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          enabledRegistryIds: ["grok", "kimi", "qwen"],
+        }),
+      );
     } finally {
       disposeAppState();
     }

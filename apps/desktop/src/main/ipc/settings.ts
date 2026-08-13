@@ -147,28 +147,46 @@ async function refreshModelBackendsIfNeeded(params: {
 // so without this two passes would launch the same agents in parallel. Pure
 // cache reads (refresh === false) never launch and are not coalesced.
 //
-// We track whether the in-flight pass was forced so a caller only rides a pass
-// that satisfies it: a non-forced caller can ride any in-flight pass, but a
-// forced caller ("Discover new") only rides an in-flight *forced* pass —
-// otherwise it would silently inherit a freshness-gated pass that skipped the
-// re-probe it asked for. This is what stops two rapid "Discover new" clicks
-// from launching every agent twice in parallel. A forced caller that arrives
-// while only a non-forced pass is in flight still starts its own pass, so
-// "Discover new" is never a no-op.
-type InFlightAcpRefreshes = {
-  forced?: Promise<ListAcpAgentSettingsResponse>;
-  regular?: Promise<ListAcpAgentSettingsResponse>;
+// We track force strength and provider scope so narrower requests can ride a
+// stronger in-flight superset. When a broader request arrives second, it waits
+// for overlapping providers and refreshes only the remainder. This preserves
+// force semantics without launching the same interactive runtime twice.
+type InFlightAcpRefresh = {
+  forced: boolean;
+  probeCapabilities: boolean;
+  registryIds: ReadonlySet<string>;
+  promise: Promise<ListAcpAgentSettingsResponse>;
 };
 
-const inFlightAcpRefreshes = new Map<string, InFlightAcpRefreshes>();
+const LOCAL_ACP_REGISTRY_IDS = ["gemini", "grok", "kimi", "qwen"] as const;
+const inFlightAcpRefreshes = new Set<InFlightAcpRefresh>();
+const USER_INITIATED_ACP_PROBE_TIMEOUT_MS = 10 * 60_000;
 
-function acpRefreshKey(request: ListAcpAgentSettingsRequest): string {
-  return JSON.stringify({
-    probeCapabilities: request.probeCapabilities !== false,
-    registryIds: request.registryIds
-      ? [...new Set(request.registryIds)].sort()
-      : undefined,
-  });
+function acpRefreshRegistryIds(
+  request: ListAcpAgentSettingsRequest,
+): ReadonlySet<string> {
+  const requested = request.registryIds
+    ? new Set(request.registryIds)
+    : undefined;
+  return new Set(
+    LOCAL_ACP_REGISTRY_IDS.filter(
+      (registryId) => !requested || requested.has(registryId),
+    ),
+  );
+}
+
+function setContainsAll(
+  candidate: ReadonlySet<string>,
+  requested: ReadonlySet<string>,
+): boolean {
+  return [...requested].every((registryId) => candidate.has(registryId));
+}
+
+function setsOverlap(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): boolean {
+  return [...left].some((registryId) => right.has(registryId));
 }
 
 async function listAcpAgentSettings(
@@ -178,28 +196,59 @@ async function listAcpAgentSettings(
   if (request.refresh === false) {
     return await listAcpAgentSettingsImpl(request, service);
   }
-  const refreshKey = acpRefreshKey(request);
   const wantsForce = request.force === true;
-  const inFlightForScope = inFlightAcpRefreshes.get(refreshKey);
-  const inFlight = wantsForce
-    ? inFlightForScope?.forced
-    : inFlightForScope?.forced ?? inFlightForScope?.regular;
-  if (inFlight) {
-    return await inFlight;
+  const probeCapabilities = request.probeCapabilities !== false;
+  const registryIds = acpRefreshRegistryIds(request);
+  const compatible = [...inFlightAcpRefreshes].filter(
+    (active) =>
+      active.probeCapabilities === probeCapabilities
+      && (!wantsForce || active.forced),
+  );
+  const superset = compatible.find((active) =>
+    setContainsAll(active.registryIds, registryIds),
+  );
+  if (superset) {
+    return await superset.promise;
   }
-  const kind = wantsForce ? "forced" : "regular";
-  const run = listAcpAgentSettingsImpl(request, service).finally(() => {
-    const current = inFlightAcpRefreshes.get(refreshKey);
-    if (current?.[kind] !== run) return;
-    delete current[kind];
-    if (!current.forced && !current.regular) {
-      inFlightAcpRefreshes.delete(refreshKey);
+
+  const overlapping = compatible.filter((active) =>
+    setsOverlap(active.registryIds, registryIds),
+  );
+  const coveredRegistryIds = new Set(
+    overlapping.flatMap((active) => [...active.registryIds]),
+  );
+  const remainingRegistryIds = [...registryIds].filter(
+    (registryId) => !coveredRegistryIds.has(registryId),
+  );
+  const run = (async () => {
+    if (overlapping.length > 0) {
+      await Promise.all(overlapping.map((entry) => entry.promise));
     }
-  });
-  const nextInFlight = inFlightForScope ?? {};
-  nextInFlight[kind] = run;
-  inFlightAcpRefreshes.set(refreshKey, nextInFlight);
-  return await run;
+    if (registryIds.size > 0 && remainingRegistryIds.length === 0) {
+      return await listAcpAgentSettingsImpl(
+        { ...request, refresh: false },
+        service,
+      );
+    }
+    return await listAcpAgentSettingsImpl(
+      request.registryIds || remainingRegistryIds.length !== registryIds.size
+        ? { ...request, registryIds: remainingRegistryIds }
+        : request,
+      service,
+    );
+  })();
+  const active: InFlightAcpRefresh = {
+    forced: wantsForce,
+    probeCapabilities,
+    registryIds,
+    promise: run,
+  };
+  inFlightAcpRefreshes.add(active);
+  try {
+    return await run;
+  } finally {
+    inFlightAcpRefreshes.delete(active);
+  }
 }
 
 async function listAcpAgentSettingsImpl(
@@ -368,7 +417,7 @@ async function listInstalledAndLocalAcpAgents(
     try {
       const config = readDesktopSettingsConfigSafe();
       const preferences: Record<string, AcpAgentPreference> = {};
-      const requestedRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
+      const requestedRegistryIds = LOCAL_ACP_REGISTRY_IDS.filter(
         (registryId) =>
           !options.registryIds || options.registryIds.includes(registryId),
       );
@@ -438,7 +487,16 @@ async function listInstalledAndLocalAcpAgents(
           })
         ) {
           store.upsertInstalledAgent(
-            await refreshAcpRuntimeCapabilities(nextRecord, discoveryCwd),
+            await refreshAcpRuntimeCapabilities(
+              nextRecord,
+              discoveryCwd,
+              // `force` is reserved for explicit UI refresh/login actions.
+              // Gemini can wait on a human browser OAuth round trip, so keep
+              // background discovery bounded while giving those actions room.
+              options.force === true
+                ? USER_INITIATED_ACP_PROBE_TIMEOUT_MS
+                : undefined,
+            ),
           );
         } else {
           store.upsertInstalledAgent(nextRecord);
@@ -472,10 +530,14 @@ async function listInstalledAndLocalAcpAgents(
 async function refreshAcpRuntimeCapabilities(
   record: AcpInstalledAgentRecord,
   cwd: string,
+  requestTimeoutMs?: number,
 ): Promise<AcpInstalledAgentRecord> {
   const now = Date.now();
   try {
-    const result = await discoverAcpRuntimeCapabilities(record, { cwd });
+    const result = await discoverAcpRuntimeCapabilities(record, {
+      cwd,
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+    });
     return {
       ...record,
       ...(result.runtimeCapabilities
