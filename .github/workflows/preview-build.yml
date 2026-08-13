@@ -21,6 +21,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         with:
           node-version: 24.x
+          cache-electron: "true"
 
       - name: Compute preview version
         id: version
