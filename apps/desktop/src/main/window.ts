@@ -63,7 +63,7 @@ import {
   navigationPreferencesAdditionalArguments,
   readBootstrapNavigationPreferences,
 } from "./navigation-browse-mode-bootstrap";
-import { placementForCursorDisplay } from "./window-placement";
+import { boundsForCursorDisplay } from "./window-placement";
 import { federationWindowTargetAdditionalArguments } from "../shared/federation-window";
 
 export { isSafeExternalOpenUrl } from "./external-url-policy";
@@ -107,6 +107,8 @@ const isWindows = process.platform === "win32";
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const MAIN_WINDOW_WIDTH = 1440;
 const MAIN_WINDOW_HEIGHT = 960;
+const MAIN_WINDOW_MIN_WIDTH = 960;
+const MAIN_WINDOW_MIN_HEIGHT = 640;
 const mainLog = getMainLogger("pwragent:main");
 const heapLog = getMainLogger("pwragent:heap");
 const hotCpuLog = getMainLogger("pwragent:hot-cpu");
@@ -334,6 +336,10 @@ export function createMainWindow(options?: {
   const windowTitle = mainWindowTitle(options?.federationLabel);
   const appearance = readBootstrapAppearance();
   const navigationPreferences = readBootstrapNavigationPreferences();
+  const initialBounds = boundsForCursorDisplay(
+    MAIN_WINDOW_WIDTH,
+    MAIN_WINDOW_HEIGHT,
+  );
   const windowChrome = isMac
     ? {
         titleBarStyle: "hiddenInset" as const,
@@ -355,11 +361,9 @@ export function createMainWindow(options?: {
         }
       : {};
   const window = new BrowserWindow({
-    ...placementForCursorDisplay(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT),
-    width: MAIN_WINDOW_WIDTH,
-    height: MAIN_WINDOW_HEIGHT,
-    minWidth: 1200,
-    minHeight: 760,
+    ...initialBounds,
+    minWidth: Math.min(MAIN_WINDOW_MIN_WIDTH, initialBounds.width),
+    minHeight: Math.min(MAIN_WINDOW_MIN_HEIGHT, initialBounds.height),
     show: false,
     title: windowTitle,
     ...windowChrome,
