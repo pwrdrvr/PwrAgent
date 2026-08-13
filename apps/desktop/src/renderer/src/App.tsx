@@ -109,7 +109,7 @@ const LazyOnboardingWizard = lazy(async () => ({
 export function App() {
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
-  // Owns live theme + density state. Source of truth is per-profile
+  // Owns live appearance state. Source of truth is per-profile
   // config.toml; the snapshot pulls it in over IPC, the hook adopts it
   // when available, and setters write back via writeSettingsConfig.
   // The pre-React bootstrap script in index.html already set the initial
@@ -123,6 +123,8 @@ export function App() {
       ? {
         theme: settings.snapshot.general.appearance.theme.value,
         density: settings.snapshot.general.appearance.density.value,
+        sidebarTextSize:
+          settings.snapshot.general.appearance.sidebarTextSize.value,
       }
       : undefined,
     writeConfig: settings.writeConfig,

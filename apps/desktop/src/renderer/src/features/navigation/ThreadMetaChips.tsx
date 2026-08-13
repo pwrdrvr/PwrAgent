@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted } from "@pwragent/shared";
-import { BranchIcon, FolderIcon, PinIcon, TerminalIcon, WorktreeIcon } from "../../icons";
+import { BranchIcon, FolderIcon, TerminalIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText } from "../../lib/copy-text";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -20,6 +20,8 @@ type ThreadMetaChipsProps = {
   queuedMessageState?: ThreadQueuedMessageState;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
+  /** PR chips slot before the branch so actionable work packs first. */
+  prChips?: ReactNode;
   thread: NavigationThreadSummary;
 };
 
@@ -30,14 +32,9 @@ export function ThreadMetaChips({
   queuedMessageState,
   includeLinkedDirectories = false,
   linkedDirectoryMode = "label",
+  prChips,
   thread,
 }: ThreadMetaChipsProps) {
-  // Hover tooltip for the icon-only pin marker — sighted users get the
-  // "Pinned" label without the old text pill; screen readers get it from
-  // the marker's role="img" + aria-label. Uses the shared viewport
-  // tooltip (not a native `title`) so it escapes the sidebar's clipped
-  // scroll region, matching the copyable branch/path chips.
-  const pinTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const gitStateTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   // Sidebar rows are a clipped scroll region, so a native `title` gets
   // edge-clipped — the viewport tooltip is what the neighbouring chips use.
@@ -95,14 +92,20 @@ export function ThreadMetaChips({
                         : `Copy local path for ${directory.label}`
                     }
                     key={`${thread.id}:${directory.kind}:location-kind`}
-                    className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
+                    className="thread-row__chip thread-row__chip--location path-copy-target tooltip-target"
                     value={
                       directory.kind === "worktree"
                         ? directory.worktreePath ?? directory.path
                         : directory.path
                     }
                   >
-                    {directory.kind}
+                    <span aria-hidden="true" className="thread-row__chip-icon">
+                      {directory.kind === "worktree" ? (
+                        <WorktreeIcon size={12} />
+                      ) : (
+                        <FolderIcon size={12} />
+                      )}
+                    </span>
                   </CopyableThreadChip>
                 ),
               ]),
@@ -150,7 +153,7 @@ export function ThreadMetaChips({
       {queuedMessageState === "scheduled" ? (
         <span
           aria-label="A message is scheduled to send"
-          className="thread-row__chip thread-row__chip--scheduled"
+          className="thread-row__chip thread-row__chip--scheduled thread-row__chip--persistent"
           title="A message is scheduled to send"
         >
           Scheduled
@@ -158,7 +161,7 @@ export function ThreadMetaChips({
       ) : queuedMessageState === "queued" ? (
         <span
           aria-label="A message is queued to send"
-          className="thread-row__chip thread-row__chip--queued"
+          className="thread-row__chip thread-row__chip--queued thread-row__chip--persistent"
           title="A message is queued to send"
         >
           Queued
@@ -203,20 +206,7 @@ export function ThreadMetaChips({
 
       {linkedDirectoryChips}
 
-      {thread.pinnedRank && !thread.parentThreadId ? (
-        <span
-          aria-label="Pinned"
-          role="img"
-          className="thread-row__chip thread-row__chip--pin"
-          onMouseEnter={(event) => pinTooltip.show(event.currentTarget, "Pinned")}
-          onMouseLeave={pinTooltip.hide}
-        >
-          <span aria-hidden="true" className="thread-row__chip-icon">
-            <PinIcon size={12} />
-          </span>
-        </span>
-      ) : null}
-      {pinTooltip.tooltipNode}
+      {prChips}
 
       {branchChip ? (
         <CopyableThreadChip

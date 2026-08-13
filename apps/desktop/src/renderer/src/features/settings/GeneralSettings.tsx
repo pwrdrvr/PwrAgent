@@ -17,6 +17,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type {
   AppearanceController,
   DensityPreference,
+  SidebarTextSizePreference,
   ThemePreference,
 } from "../../lib/useAppearance";
 import {
@@ -49,7 +50,18 @@ const DENSITY_OPTIONS: Array<{
     meta: "Full thread chips",
     value: "mission-control",
   },
-  { label: "Compact", meta: "Chips hidden", value: "compact" },
+  { label: "Compact", meta: "Metadata chips hidden", value: "compact" },
+];
+
+const SIDEBAR_TEXT_SIZE_OPTIONS: Array<{
+  label: string;
+  value: SidebarTextSizePreference;
+}> = [
+  { label: "XS", value: "xs" },
+  { label: "S", value: "sm" },
+  { label: "M", value: "md" },
+  { label: "L", value: "lg" },
+  { label: "XL", value: "xl" },
 ];
 
 const PASTED_IMAGE_PATCH_OPTIONS: Array<{
@@ -457,13 +469,13 @@ export function GeneralSettings(props: {
               }
             />
             <SettingsField
-              label="Density"
-              sub="Compact hides the directory and PR chips in thread rows so more threads fit on screen. Reaction and pin markers stay visible."
+              label="Info density"
+              sub="Compact hides the provider, directory, and branch chips in thread rows so more threads fit on screen. PR chips, reactions, and pin markers stay visible."
               control={
                 <div
                   className="settings-segmented"
                   role="radiogroup"
-                  aria-label="Density"
+                  aria-label="Info density"
                 >
                   {DENSITY_OPTIONS.map((option) => (
                     <button
@@ -482,6 +494,40 @@ export function GeneralSettings(props: {
                       <span className="settings-segmented__meta">
                         {option.meta}
                       </span>
+                    </button>
+                  ))}
+                </div>
+              }
+            />
+            <SettingsField
+              label="Sidebar text size"
+              sub="Scales the thread and directory titles in the left sidebar. M is the tuned default; each notch moves the titles one pixel."
+              control={
+                <div
+                  className="settings-segmented"
+                  role="radiogroup"
+                  aria-label="Sidebar text size"
+                >
+                  {SIDEBAR_TEXT_SIZE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      aria-checked={
+                        appearance.sidebarTextSize === option.value
+                      }
+                      className={`settings-segmented__button${
+                        appearance.sidebarTextSize === option.value
+                          ? " is-active"
+                          : ""
+                      }`}
+                      role="radio"
+                      type="button"
+                      onClick={() => {
+                        props.appearanceController?.setSidebarTextSize(
+                          option.value,
+                        );
+                      }}
+                    >
+                      {option.label}
                     </button>
                   ))}
                 </div>

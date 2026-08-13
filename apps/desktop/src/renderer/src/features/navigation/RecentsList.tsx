@@ -59,6 +59,10 @@ type RecentsListProps = {
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  onSetThreadPin?: (
+    thread: NavigationThreadSummary,
+    pinned: boolean,
+  ) => Promise<void>;
   onUnbindMessagingBinding?: (
     thread: NavigationThreadSummary,
     binding: MessagingThreadBindingSummary,
@@ -222,6 +226,7 @@ export function RecentsList(props: RecentsListProps) {
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetReaction}
+              onSetThreadPin={props.onSetThreadPin}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
           );
@@ -335,6 +340,7 @@ export function RecentsList(props: RecentsListProps) {
           onPrefetchPullRequests={props.onPrefetchPullRequests}
           onSelectThread={props.onSelectThread}
           onSetReaction={props.onSetReaction}
+          onSetThreadPin={props.onSetThreadPin}
           onUnbindMessagingBinding={props.onUnbindMessagingBinding}
         />
         {renderSubthreads(thread)}

@@ -9,7 +9,7 @@
     <title>PwrAgnt</title>
     <script>
       // Appearance bootstrap — runs BEFORE the React bundle loads so the
-      // first paint matches the persisted theme + density. Without this,
+      // first paint matches the persisted appearance. Without this,
       // a flash-of-wrong-theme appears on every launch (renders dark for
       // ~50-150ms, then snaps to light when React mounts the setting).
       //
@@ -58,6 +58,19 @@
           // when compact is selected.
           if (density === "compact") {
             document.documentElement.setAttribute("data-density", "compact");
+          }
+          // "md" is the default the bare :root carries. Unknown values are
+          // inert because no CSS notch selector matches them, so this inline
+          // script does not need a hand-copied enum that could become stale.
+          var sidebarTextSize = bridged.sidebarTextSize;
+          if (
+            typeof sidebarTextSize === "string"
+            && sidebarTextSize !== "md"
+          ) {
+            document.documentElement.setAttribute(
+              "data-sidebar-text",
+              sidebarTextSize
+            );
           }
         } catch (_) {
           // Bridge unavailable or shape wrong — fall back to dark + mission-

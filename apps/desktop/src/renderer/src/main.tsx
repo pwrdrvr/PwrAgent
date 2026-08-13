@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
+  DesktopSidebarTextSize,
 } from "@pwragent/shared";
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
@@ -19,7 +20,7 @@ const performancePruning = import.meta.env.DEV
 // Subscribe to main → renderer appearance broadcasts. Every window
 // (including secondary surfaces like changelog, app-log, license,
 // messaging activity) listens here so when the user changes theme or
-// density in Settings, the active <html data-theme/data-density>
+// appearance in Settings, the active <html data-*> attributes
 // attributes update everywhere instead of staying stuck on whatever
 // the window bootstrapped with at creation. The main window's
 // useAppearance hook also re-applies via its own React state path,
@@ -35,6 +36,7 @@ const desktopApi = (
         callback: (appearance: {
           theme: DesktopAppearanceTheme;
           density: DesktopAppearanceDensity;
+          sidebarTextSize: DesktopSidebarTextSize;
         }) => void,
       ) => () => void;
       onWindowFullscreen?: (
@@ -59,6 +61,7 @@ const unsubscribeAppearance = desktopApi?.onAppearanceChanged?.(
     applyAppearanceAttributes(
       resolveTheme(appearance.theme),
       appearance.density,
+      appearance.sidebarTextSize,
     );
   },
 );

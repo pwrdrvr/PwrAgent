@@ -514,18 +514,24 @@ describe("DesktopSettingsService", () => {
       value: "mission-control",
       source: "default",
     });
+    expect(initialSettings.general.appearance.sidebarTextSize).toEqual({
+      value: "md",
+      source: "default",
+    });
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "system",
       density: "mission-control",
+      sidebarTextSize: "md",
     });
 
     // Write non-default values. The byte-preserving patch path should
-    // create `[general.appearance]` with both keys.
+    // create `[general.appearance]` with all three keys.
     await service.writeConfigPatch({
       general: {
         appearance: {
           theme: "light",
           density: "compact",
+          sidebarTextSize: "lg",
         },
       },
     });
@@ -534,6 +540,7 @@ describe("DesktopSettingsService", () => {
     expect(writtenFile).toContain("[general.appearance]");
     expect(writtenFile).toContain('theme = "light"');
     expect(writtenFile).toContain('density = "compact"');
+    expect(writtenFile).toContain('sidebar_text_size = "lg"');
 
     const afterWrite = await service.readSettings();
     expect(afterWrite.general.appearance.theme).toEqual({
@@ -544,18 +551,24 @@ describe("DesktopSettingsService", () => {
       value: "compact",
       source: "config",
     });
+    expect(afterWrite.general.appearance.sidebarTextSize).toEqual({
+      value: "lg",
+      source: "config",
+    });
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "light",
       density: "compact",
+      sidebarTextSize: "lg",
     });
 
-    // Restore to defaults: the patch path should DELETE both keys
+    // Restore to defaults: the patch path should DELETE all three keys
     // (defaults aren't written to disk) so the file stays minimal.
     await service.writeConfigPatch({
       general: {
         appearance: {
           theme: "system",
           density: "mission-control",
+          sidebarTextSize: "md",
         },
       },
     });
@@ -563,13 +576,18 @@ describe("DesktopSettingsService", () => {
     const restoredFile = fs.readFileSync(configPath, "utf8");
     expect(restoredFile).not.toContain('theme = "');
     expect(restoredFile).not.toContain('density = "');
+    expect(restoredFile).not.toContain('sidebar_text_size = "');
 
     const afterRestore = await service.readSettings();
     expect(afterRestore.general.appearance.theme.source).toBe("default");
     expect(afterRestore.general.appearance.density.source).toBe("default");
+    expect(afterRestore.general.appearance.sidebarTextSize.source).toBe(
+      "default",
+    );
     expect(readBootstrapAppearance(configPath)).toEqual({
       theme: "system",
       density: "mission-control",
+      sidebarTextSize: "md",
     });
   });
 
@@ -606,6 +624,7 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "light",
       density: "compact",
+      sidebarTextSize: "md",
     });
 
     // Patch that restores defaults still fires (the renderer needs to
@@ -625,6 +644,7 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "system",
       density: "mission-control",
+      sidebarTextSize: "md",
     });
 
     // Patch with `general` but only developerMode (not appearance) must
@@ -647,6 +667,7 @@ describe("DesktopSettingsService", () => {
     expect(onAppearanceChange).toHaveBeenLastCalledWith({
       theme: "dark",
       density: "mission-control",
+      sidebarTextSize: "md",
     });
   });
 
