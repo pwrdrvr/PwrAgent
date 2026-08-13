@@ -76,6 +76,8 @@ export type ElectronShutdownSummary = {
   phases: {
     rendererWindow: ElectronShutdownPhaseSummary;
     messaging: ElectronShutdownPhaseSummary;
+    federation: ElectronShutdownPhaseSummary;
+    mcpConnections: ElectronShutdownPhaseSummary;
     appServer: ElectronShutdownPhaseSummary;
     overall: ElectronShutdownPhaseSummary;
   };
@@ -239,6 +241,8 @@ export function buildElectronShutdownSummary(params: {
     phases: {
       rendererWindow: summarizePhase(params.events, "renderer-window"),
       messaging: summarizePhase(params.events, "messaging"),
+      federation: summarizePhase(params.events, "federation"),
+      mcpConnections: summarizePhase(params.events, "mcp-connections"),
       appServer: summarizePhase(params.events, "app-server"),
       overall: summarizePhase(params.events, "overall"),
     },

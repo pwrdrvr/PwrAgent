@@ -50,10 +50,9 @@ describe("desktop E2E pre-flight canary", () => {
 
   // Teardown must never gate: this app's graceful close routinely does not
   // resolve, so failing on it would fail every healthy run.
-  it("tears down through the bounded force-killing helper without gating", () => {
-    expect(globalSetupCode).toContain("closeElectronApplication");
+  it("tears down through the bounded shared fixture helper without gating", () => {
     expect(globalSetupCode).toMatch(
-      /closeElectronApplication\([\s\S]{0,80}?\)\s*\.catch\(/,
+      /await\s+launched\.close\(\)\.catch\(/,
     );
   });
 
@@ -67,11 +66,11 @@ describe("desktop E2E pre-flight canary", () => {
     expect(globalSetupCode).toContain("withTimeout(");
     expect(globalSetupCode).not.toMatch(/Promise\.race\(/);
     // Anchored on the launch promise's own handler. A looser match on
-    // `settled` near `closeElectronApplication` passes on the `finally`
+    // `settled` near `late.close()` passes on the `finally`
     // block alone, so deleting the late-success close went undetected —
     // verified by mutation, which is the only reason this reads oddly.
     expect(globalSetupCode).toMatch(
-      /launching\.then\([\s\S]{0,300}?closeElectronApplication/,
+      /launching\.then\([\s\S]{0,300}?late\.close\(\)\.catch\(/,
     );
   });
 
