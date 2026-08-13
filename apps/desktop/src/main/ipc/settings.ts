@@ -155,8 +155,21 @@ async function refreshModelBackendsIfNeeded(params: {
 // from launching every agent twice in parallel. A forced caller that arrives
 // while only a non-forced pass is in flight still starts its own pass, so
 // "Discover new" is never a no-op.
-let inFlightAcpRefresh: Promise<ListAcpAgentSettingsResponse> | undefined;
-let inFlightAcpRefreshForced = false;
+type InFlightAcpRefreshes = {
+  forced?: Promise<ListAcpAgentSettingsResponse>;
+  regular?: Promise<ListAcpAgentSettingsResponse>;
+};
+
+const inFlightAcpRefreshes = new Map<string, InFlightAcpRefreshes>();
+
+function acpRefreshKey(request: ListAcpAgentSettingsRequest): string {
+  return JSON.stringify({
+    probeCapabilities: request.probeCapabilities !== false,
+    registryIds: request.registryIds
+      ? [...new Set(request.registryIds)].sort()
+      : undefined,
+  });
+}
 
 async function listAcpAgentSettings(
   request: ListAcpAgentSettingsRequest = {},
@@ -165,18 +178,27 @@ async function listAcpAgentSettings(
   if (request.refresh === false) {
     return await listAcpAgentSettingsImpl(request, service);
   }
+  const refreshKey = acpRefreshKey(request);
   const wantsForce = request.force === true;
-  if (inFlightAcpRefresh && (!wantsForce || inFlightAcpRefreshForced)) {
-    return await inFlightAcpRefresh;
+  const inFlightForScope = inFlightAcpRefreshes.get(refreshKey);
+  const inFlight = wantsForce
+    ? inFlightForScope?.forced
+    : inFlightForScope?.forced ?? inFlightForScope?.regular;
+  if (inFlight) {
+    return await inFlight;
   }
+  const kind = wantsForce ? "forced" : "regular";
   const run = listAcpAgentSettingsImpl(request, service).finally(() => {
-    if (inFlightAcpRefresh === run) {
-      inFlightAcpRefresh = undefined;
-      inFlightAcpRefreshForced = false;
+    const current = inFlightAcpRefreshes.get(refreshKey);
+    if (current?.[kind] !== run) return;
+    delete current[kind];
+    if (!current.forced && !current.regular) {
+      inFlightAcpRefreshes.delete(refreshKey);
     }
   });
-  inFlightAcpRefresh = run;
-  inFlightAcpRefreshForced = wantsForce;
+  const nextInFlight = inFlightForScope ?? {};
+  nextInFlight[kind] = run;
+  inFlightAcpRefreshes.set(refreshKey, nextInFlight);
   return await run;
 }
 
@@ -216,6 +238,10 @@ async function listAcpAgentSettingsImpl(
   const installed = await listInstalledAndLocalAcpAgents(store, {
     refreshLocal: request.refresh === true,
     ...(request.force === true ? { force: true } : {}),
+    ...(request.probeCapabilities === false
+      ? { probeCapabilities: false }
+      : {}),
+    ...(request.registryIds ? { registryIds: request.registryIds } : {}),
     ...(discoveryEnv ? { env: discoveryEnv } : {}),
   });
   if (request.refresh === true) {
@@ -331,6 +357,8 @@ async function listInstalledAndLocalAcpAgents(
   options?: {
     refreshLocal?: boolean;
     force?: boolean;
+    probeCapabilities?: boolean;
+    registryIds?: readonly string[];
     env?: NodeJS.ProcessEnv;
   },
 ): Promise<AcpInstalledAgentRecord[]> {
@@ -340,17 +368,23 @@ async function listInstalledAndLocalAcpAgents(
     try {
       const config = readDesktopSettingsConfigSafe();
       const preferences: Record<string, AcpAgentPreference> = {};
-      const enabledRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
-        (registryId) => acpAgentEnabledFor(config, registryId),
+      const requestedRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
+        (registryId) =>
+          !options.registryIds || options.registryIds.includes(registryId),
       );
-      for (const registryId of enabledRegistryIds) {
+      const discoveryRegistryIds = options.probeCapabilities === false
+        ? requestedRegistryIds
+        : requestedRegistryIds.filter((registryId) =>
+            acpAgentEnabledFor(config, registryId),
+          );
+      for (const registryId of discoveryRegistryIds) {
         const override = acpCliPathOverrideFor(config, registryId);
         if (override) {
           preferences[registryId] = { overridePath: override };
         }
       }
       discovered = await discoverLocalAcpAgentRecords({
-        enabledRegistryIds,
+        enabledRegistryIds: discoveryRegistryIds,
         ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
         ...(options?.env ? { env: options.env } : {}),
       });
@@ -365,16 +399,33 @@ async function listInstalledAndLocalAcpAgents(
           continue;
         }
         const current = store.getInstalledAgent(record.backendId);
+        const runtimeVersionChanged =
+          current?.version !== undefined
+          && record.version !== undefined
+          && current.version !== record.version;
         const nextRecord = {
           ...record,
-          runtimeCapabilities: current?.runtimeCapabilities,
+          runtimeCapabilities: runtimeVersionChanged
+            ? undefined
+            : current?.runtimeCapabilities,
           update: current?.update,
           updateCommand: current?.updateCommand,
-          lastDiscoveredAt: current?.lastDiscoveredAt,
-          lastDiscoveryError: current?.lastDiscoveryError,
+          lastDiscoveredAt: runtimeVersionChanged
+            ? undefined
+            : current?.lastDiscoveredAt,
+          lastDiscoveryError: runtimeVersionChanged
+            ? undefined
+            : current?.lastDiscoveryError,
           installedAt: current?.installedAt ?? record.installedAt,
           updatedAt: Math.max(current?.updatedAt ?? 0, record.updatedAt),
         } satisfies AcpInstalledAgentRecord;
+        if (
+          options.probeCapabilities === false
+          || !acpAgentEnabledFor(config, record.registryId)
+        ) {
+          store.upsertInstalledAgent(nextRecord);
+          continue;
+        }
         // Cheap local discovery (above) always runs to find newly-installed
         // agents and refresh version metadata. The EXPENSIVE runtime-capability
         // probe launches the agent over ACP, so gate it: only re-probe agents

@@ -26707,8 +26707,16 @@ a.transcript-message__messaging-origin:focus-visible {
 .onboarding-wizard__prereq-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   min-height: 30px;
+}
+.onboarding-wizard__prereq-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font: 600 11px/1.3 var(--font-sans, sans-serif);
 }
 .onboarding-wizard__prereq-error {
   color: var(--danger-text);
