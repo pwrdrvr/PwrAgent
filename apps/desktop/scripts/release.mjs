@@ -467,12 +467,19 @@ function verifyPackagedGrok(resourcesDirectory) {
     env: { GROK_INSTALLER: "pwragent", NO_COLOR: "1" },
   });
   if (process.platform === "darwin") {
-    runChecked("codesign", [
+    const codesignArgs = [
       "--verify",
       "--strict",
       "--verbose=2",
-      bundledExecutable,
-    ]);
+    ];
+    if (!dryrun) {
+      codesignArgs.push(
+        "--test-requirement",
+        '=anchor apple generic and certificate leaf[subject.OU] = "T44CNHC4UH"',
+      );
+    }
+    codesignArgs.push(bundledExecutable);
+    runChecked("codesign", codesignArgs);
   } else if (process.platform === "win32" && requireSigning) {
     runChecked(
       "powershell.exe",
@@ -480,7 +487,7 @@ function verifyPackagedGrok(resourcesDirectory) {
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        "$signature = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_EXECUTABLE; if ($signature.Status -ne 'Valid') { throw \"Bundled Grok Authenticode signature is $($signature.Status): $($signature.StatusMessage)\" }",
+        "$signature = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_EXECUTABLE; if ($signature.Status -ne 'Valid') { throw \"Bundled Grok Authenticode signature is $($signature.Status): $($signature.StatusMessage)\" }; if ($signature.SignerCertificate.Subject -notmatch '(^|,\\s*)CN=PwrDrvr LLC(,|$)') { throw \"Bundled Grok signer is not PwrDrvr LLC: $($signature.SignerCertificate.Subject)\" }",
       ],
       { env: { PWRAGENT_VERIFY_EXECUTABLE: bundledExecutable } },
     );
