@@ -227,6 +227,7 @@ export function ThreadLinkProvider(props: {
     backend: AppServerBackendKind;
     instanceId: FederationInstanceId;
     instanceLabel?: string;
+    messageId?: string;
     threadId: string;
   }) => void;
   onShowThread: (request: {
@@ -304,6 +305,7 @@ export function ThreadLinkProvider(props: {
           backend: link.backend,
           instanceId: link.instanceId,
           ...(link.instanceLabel ? { instanceLabel: link.instanceLabel } : {}),
+          ...(link.messageId ? { messageId: link.messageId } : {}),
           threadId: link.threadId,
         });
       },

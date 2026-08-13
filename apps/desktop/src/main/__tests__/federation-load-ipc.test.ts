@@ -185,4 +185,34 @@ describe("federation read-instance-load ipc", () => {
       initialThread: undefined,
     });
   });
+
+  it("preserves a transcript message target when opening a remote thread", async () => {
+    const peer = {
+      target: { scope: "remote" as const, instanceId: "pwr_studio" },
+      label: "Studio Mac / work",
+      capabilities: ["remote_window", "thread_navigation"],
+    };
+    runtime.connectedPeerTargets.mockReturnValue([peer]);
+    const { registerFederationIpcHandlers } = await import("../ipc/federation");
+    registerFederationIpcHandlers();
+
+    await handlers.get(FEDERATION_OPEN_WINDOW_CHANNEL)!({}, {
+      target: peer.target,
+      initialThread: {
+        backend: "codex",
+        messageId: "assistant-message-7",
+        target: peer.target,
+        threadId: "thread-7",
+      },
+    });
+
+    expect(createFederationWindow).toHaveBeenCalledWith({
+      peer,
+      initialThread: {
+        backend: "codex",
+        messageId: "assistant-message-7",
+        threadId: "thread-7",
+      },
+    });
+  });
 });

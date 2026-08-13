@@ -1,7 +1,7 @@
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
-  DesktopSidebarTextSize,
+  DesktopTextSize,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
@@ -40,7 +40,7 @@ import {
   DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
-  DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+  DESKTOP_TEXT_SIZE_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
@@ -242,7 +242,8 @@ type DesktopSettingsServiceOptions = {
   onAppearanceChange?: (appearance: {
     theme: DesktopAppearanceTheme;
     density: DesktopAppearanceDensity;
-    sidebarTextSize: DesktopSidebarTextSize;
+    sidebarTextSize: DesktopTextSize;
+    transcriptTextSize: DesktopTextSize;
   }) => void;
 };
 
@@ -646,8 +647,11 @@ export class DesktopSettingsService {
           density: this.resolveAppearanceDensity(
             config.general?.appearance?.density,
           ),
-          sidebarTextSize: this.resolveSidebarTextSize(
+          sidebarTextSize: this.resolveTextSize(
             config.general?.appearance?.sidebarTextSize,
+          ),
+          transcriptTextSize: this.resolveTextSize(
+            config.general?.appearance?.transcriptTextSize,
           ),
         },
         codexProfileModel: this.resolveCodexProfileModel(
@@ -1350,14 +1354,17 @@ export class DesktopSettingsService {
       appearancePatch
       && (appearancePatch.theme !== undefined
         || appearancePatch.density !== undefined
-        || appearancePatch.sidebarTextSize !== undefined)
+        || appearancePatch.sidebarTextSize !== undefined
+        || appearancePatch.transcriptTextSize !== undefined)
     ) {
       const next = this.readConfig().config.general?.appearance;
       this.options.onAppearanceChange?.({
         theme: next?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
         density: next?.density ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
         sidebarTextSize:
-          next?.sidebarTextSize ?? DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+          next?.sidebarTextSize ?? DESKTOP_TEXT_SIZE_DEFAULT,
+        transcriptTextSize:
+          next?.transcriptTextSize ?? DESKTOP_TEXT_SIZE_DEFAULT,
       });
     }
     // Any successful write notifies generic listeners so main-process services
@@ -1964,11 +1971,11 @@ export class DesktopSettingsService {
     };
   }
 
-  private resolveSidebarTextSize(
-    configValue: DesktopSidebarTextSize | undefined,
-  ): DesktopSettingsValue<DesktopSidebarTextSize> {
+  private resolveTextSize(
+    configValue: DesktopTextSize | undefined,
+  ): DesktopSettingsValue<DesktopTextSize> {
     return {
-      value: configValue ?? DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+      value: configValue ?? DESKTOP_TEXT_SIZE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }

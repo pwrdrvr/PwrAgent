@@ -581,7 +581,10 @@ export type ResetFederationEnrollmentResponse = {
 
 export type OpenFederationWindowRequest = {
   target: FederationRemoteTarget;
-  initialThread?: FederatedThreadRef;
+  initialThread?: FederatedThreadRef & {
+    /** Transcript message to reveal after the remote thread opens. */
+    messageId?: string;
+  };
   /** Open the target instance's ordinary new-thread launchpad on arrival. */
   initialLaunchpad?: boolean;
 };

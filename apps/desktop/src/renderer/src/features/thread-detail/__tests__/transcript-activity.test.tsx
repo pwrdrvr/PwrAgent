@@ -142,7 +142,7 @@ describe("TranscriptActivity", () => {
           titleSource: "explicit",
           source: "codex",
           linkedDirectories: [],
-          inbox: { unread: false },
+          inbox: { inInbox: true, unread: false },
         } as NavigationThreadSummary]}
       >
         <TranscriptActivity
@@ -211,7 +211,7 @@ describe("TranscriptActivity", () => {
           titleSource: "explicit",
           source: "codex",
           linkedDirectories: [],
-          inbox: { unread: false },
+          inbox: { inInbox: true, unread: false },
         } as NavigationThreadSummary]}
       >
         <TranscriptActivity

@@ -960,6 +960,7 @@ describe("App", () => {
           theme: { value: "system", source: "default" },
           density: { value: "mission-control", source: "default" },
           sidebarTextSize: { value: "md", source: "default" },
+          transcriptTextSize: { value: "md", source: "default" },
         },
         codexProfileModel: { value: "shared", source: "default" },
         messagingAcknowledgment: { value: null, source: "default" },
@@ -1263,6 +1264,7 @@ describe("App", () => {
               theme: { value: "system", source: "default" },
               density: { value: "mission-control", source: "default" },
               sidebarTextSize: { value: "md", source: "default" },
+              transcriptTextSize: { value: "md", source: "default" },
             },
           },
           onboarding: {
@@ -2246,6 +2248,7 @@ describe("App", () => {
                 theme: { value: "system", source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
               },
             },
             onboarding: {
@@ -3627,7 +3630,8 @@ describe("App", () => {
                     role: "assistant" as const,
                     text:
                       "Open [runner preflight](pwragent://thread/thread-remote"
-                      + "?backend=codex&instanceId=studio-mac)",
+                      + "?backend=codex&instanceId=studio-mac"
+                      + "&messageId=remote-message-7)",
                   },
                 ]
               : [],
@@ -3638,7 +3642,8 @@ describe("App", () => {
                     role: "assistant" as const,
                     text:
                       "Open [runner preflight](pwragent://thread/thread-remote"
-                      + "?backend=codex&instanceId=studio-mac)",
+                      + "?backend=codex&instanceId=studio-mac"
+                      + "&messageId=remote-message-7)",
                   },
                 ]
               : [],
@@ -3662,6 +3667,7 @@ describe("App", () => {
       target: remoteTarget,
       initialThread: {
         backend: "codex",
+        messageId: "remote-message-7",
         target: remoteTarget,
         threadId: "thread-remote",
       },
@@ -3684,15 +3690,31 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Local planning thread/i }));
     await screen.findByRole("heading", { level: 2, name: localThread.title });
+    (window as typeof window & {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "field-mac",
+    };
     fireEvent.click(screen.getByRole("button", {
       name: "Open thread M4 Mac Mini runner-host conversion preflight",
     }));
 
-    expect(await screen.findByRole("heading", {
-      level: 2,
-      name: remoteThread.title,
-    })).toBeInTheDocument();
+    expect(openFederationWindow).toHaveBeenLastCalledWith({
+      target: remoteTarget,
+      initialThread: {
+        backend: "codex",
+        messageId: "remote-message-7",
+        target: remoteTarget,
+        threadId: "thread-remote",
+      },
+    });
+    expect(openFederationWindow).toHaveBeenCalledTimes(2);
     expect(addRemoteThreadPin).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("heading", {
+      level: 2,
+      name: localThread.title,
+    })).toBeInTheDocument();
   });
 
   it("reuses cached thread history when reselecting an unchanged thread", async () => {

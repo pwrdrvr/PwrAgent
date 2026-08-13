@@ -28,7 +28,11 @@ describe("requestShowThread", () => {
   });
 
   it("sends to the focused subscribed main window", () => {
-    const request = { backend: "codex" as const, threadId: "thread-1" };
+    const request = {
+      backend: "codex" as const,
+      messageId: "assistant-message-1",
+      threadId: "thread-1",
+    };
     const send = vi.fn();
     const focusedWebContents = { send } as unknown as WebContents;
     const focusedWindow = {

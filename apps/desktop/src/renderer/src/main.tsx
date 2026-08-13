@@ -3,16 +3,17 @@ import ReactDOM from "react-dom/client";
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
-  DesktopSidebarTextSize,
+  DesktopTextSize,
 } from "@pwragent/shared";
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
 import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
 import { installDevPerformancePruning } from "./lib/dev-performance-pruning";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
+import { mountRendererRoot } from "./lib/renderer-root";
 import "./styles/app.css";
 
-installGlobalRendererErrorHandlers();
+const uninstallGlobalErrorHandlers = installGlobalRendererErrorHandlers();
 const performancePruning = import.meta.env.DEV
   ? installDevPerformancePruning()
   : undefined;
@@ -36,7 +37,8 @@ const desktopApi = (
         callback: (appearance: {
           theme: DesktopAppearanceTheme;
           density: DesktopAppearanceDensity;
-          sidebarTextSize: DesktopSidebarTextSize;
+          sidebarTextSize: DesktopTextSize;
+          transcriptTextSize: DesktopTextSize;
         }) => void,
       ) => () => void;
       onWindowFullscreen?: (
@@ -62,6 +64,7 @@ const unsubscribeAppearance = desktopApi?.onAppearanceChanged?.(
       resolveTheme(appearance.theme),
       appearance.density,
       appearance.sidebarTextSize,
+      appearance.transcriptTextSize,
     );
   },
 );
@@ -87,6 +90,13 @@ const unsubscribeFullscreen = desktopApi?.onWindowFullscreen?.(
 // `import.meta.hot` is undefined and the dispose registration is a
 // no-op — same listener, single lifetime.
 //
+// The global error handlers belong here for the same reason, and the cost
+// of leaving them out was visible: each re-evaluation added another
+// window `error` listener, so one uncaught error became one
+// `reportRendererError` round-trip per accumulated handler. A single pull
+// on 2026-08-13 walked one error up to nine duplicate reports in the main
+// log before the page reload reset the count.
+//
 // `import.meta.hot` is a Vite-injected dev-only property. We could pull
 // in `vite/client` triple-slash types globally, but that drags more
 // surface than we need; this single-site shape augmentation keeps the
@@ -98,6 +108,7 @@ const importMetaHot = (
 ).hot;
 if (importMetaHot) {
   importMetaHot.dispose(() => {
+    uninstallGlobalErrorHandlers();
     unsubscribeAppearance?.();
     unsubscribeFullscreen?.();
     performancePruning?.stop();
@@ -186,12 +197,18 @@ function chooseRoot(): ReactElement {
 }
 
 desktopApi?.recordStartupProfileEvent?.("react-render:start");
-ReactDOM.createRoot(document.getElementById("root")!).render(
+// Mount through `mountRendererRoot` rather than calling `createRoot` here:
+// an HMR update re-executes this module in the live page (see that module's
+// notes), and a second `createRoot` on the same container leaves two roots
+// fighting over one DOM tree.
+mountRendererRoot(
+  document.getElementById("root")!,
   <React.StrictMode>
     <RendererErrorBoundary>
       <Suspense fallback={null}>{chooseRoot()}</Suspense>
     </RendererErrorBoundary>
   </React.StrictMode>,
+  (container) => ReactDOM.createRoot(container),
 );
 desktopApi?.recordStartupProfileEvent?.("react-render:scheduled");
 requestAnimationFrame(() => {

@@ -22,30 +22,32 @@
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
-  DesktopSidebarTextSize,
+  DesktopTextSize,
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
-  DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
-  isDesktopSidebarTextSize,
+  DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopTextSize,
 } from "@pwragent/shared";
 
 export type ThemePreference = DesktopAppearanceTheme;
 export type DensityPreference = DesktopAppearanceDensity;
-export type SidebarTextSizePreference = DesktopSidebarTextSize;
+export type TextSizePreference = DesktopTextSize;
 export type ResolvedTheme = "dark" | "light";
 
 export type AppearancePreference = {
   theme: ThemePreference;
   density: DensityPreference;
-  sidebarTextSize: SidebarTextSizePreference;
+  sidebarTextSize: TextSizePreference;
+  transcriptTextSize: TextSizePreference;
 };
 
 export const DEFAULT_APPEARANCE: AppearancePreference = {
   theme: DESKTOP_APPEARANCE_THEME_DEFAULT,
   density: DESKTOP_APPEARANCE_DENSITY_DEFAULT,
-  sidebarTextSize: DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+  sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
+  transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
 };
 
 /** Resolve `"system"` to either `"dark"` or `"light"` by querying the
@@ -70,7 +72,8 @@ export function resolveTheme(preference: ThemePreference): ResolvedTheme {
 export function applyAppearanceAttributes(
   resolvedTheme: ResolvedTheme,
   density: DensityPreference,
-  sidebarTextSize: SidebarTextSizePreference,
+  sidebarTextSize: TextSizePreference,
+  transcriptTextSize: TextSizePreference,
 ): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
@@ -84,10 +87,15 @@ export function applyAppearanceAttributes(
   } else {
     root.removeAttribute("data-density");
   }
-  if (sidebarTextSize !== DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT) {
+  if (sidebarTextSize !== DESKTOP_TEXT_SIZE_DEFAULT) {
     root.setAttribute("data-sidebar-text", sidebarTextSize);
   } else {
     root.removeAttribute("data-sidebar-text");
+  }
+  if (transcriptTextSize !== DESKTOP_TEXT_SIZE_DEFAULT) {
+    root.setAttribute("data-transcript-text", transcriptTextSize);
+  } else {
+    root.removeAttribute("data-transcript-text");
   }
 }
 
@@ -106,7 +114,8 @@ export function readBridgedAppearance(): AppearancePreference {
   return {
     theme: normalizeTheme(bridged?.theme),
     density: normalizeDensity(bridged?.density),
-    sidebarTextSize: normalizeSidebarTextSize(bridged?.sidebarTextSize),
+    sidebarTextSize: normalizeTextSize(bridged?.sidebarTextSize),
+    transcriptTextSize: normalizeTextSize(bridged?.transcriptTextSize),
   };
 }
 
@@ -122,8 +131,8 @@ function normalizeDensity(value: unknown): DensityPreference {
     : DEFAULT_APPEARANCE.density;
 }
 
-function normalizeSidebarTextSize(value: unknown): SidebarTextSizePreference {
-  return typeof value === "string" && isDesktopSidebarTextSize(value)
+function normalizeTextSize(value: unknown): TextSizePreference {
+  return typeof value === "string" && isDesktopTextSize(value)
     ? value
     : DEFAULT_APPEARANCE.sidebarTextSize;
 }
