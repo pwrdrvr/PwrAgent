@@ -285,12 +285,13 @@ describe("SqliteOverlayStore — thread PRs", () => {
   });
 
   it("persists canonical PR status cache rows across reopen", async () => {
+    const cachedPr = { ...prPassing, headRefName: "fix/pr-status-card-branch" };
     await store.writePrStatusCacheEntries([
       {
         provider: "github.com",
         prKey: "github.com/pwrdrvr/pwragent#179",
         fetchedAt: 1234,
-        pr: prPassing,
+        pr: cachedPr,
       },
     ]);
 
@@ -304,7 +305,7 @@ describe("SqliteOverlayStore — thread PRs", () => {
         provider: "github.com",
         prKey: "github.com/pwrdrvr/pwragent#179",
         fetchedAt: 1234,
-        pr: prPassing,
+        pr: cachedPr,
       },
     });
     reopened.close();

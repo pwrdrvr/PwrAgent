@@ -144,6 +144,7 @@ fragment PrStatus on PullRequest {
   state
   isDraft
   mergeable
+  headRefName
   additions
   deletions
   changedFiles
@@ -170,6 +171,7 @@ export type GraphqlPrNode = {
   state: string;
   isDraft: boolean;
   mergeable?: string | null;
+  headRefName?: string | null;
   additions?: number | null;
   deletions?: number | null;
   changedFiles?: number | null;
@@ -329,6 +331,7 @@ export function mapGraphqlPrNode(node: GraphqlPrNode): PrSummary {
     org: node.headRepositoryOwner?.login ?? "",
     repo: node.headRepository?.name ?? "",
     ...(node.title?.trim() ? { title: node.title.trim() } : {}),
+    ...(node.headRefName?.trim() ? { headRefName: node.headRefName.trim() } : {}),
     state: checkState,
     checkState,
     lifecycleState: deriveLifecycleState(shaped),

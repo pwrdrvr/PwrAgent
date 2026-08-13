@@ -250,6 +250,8 @@ export type PrSummary = {
   repo: string;
   /** Last observed pull request title, when the provider returns one. */
   title?: string;
+  /** Branch containing the PR changes, when the provider returns one. */
+  headRefName?: string;
   /**
    * Deprecated compatibility alias for `checkState`. New writers keep this
    * check-only so review/lifecycle/mergeability never collide with checks.

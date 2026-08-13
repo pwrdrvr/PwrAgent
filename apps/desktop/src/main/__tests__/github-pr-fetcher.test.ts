@@ -53,6 +53,7 @@ describe("parseGhPrPayload", () => {
       org: "pwrdrvr",
       repo: "PwrAgent",
       title: "Retain thread pull request history",
+      headRefName: "feat/desktop-thread-reactions-and-pr-chips",
       state: "passing",
       checkState: "passing",
       lifecycleState: "merged",
@@ -591,6 +592,7 @@ describe("GithubPrFetcher", () => {
           org: "pwrdrvr",
           repo: "PwrAgent",
           title: "Retain thread pull request history",
+          headRefName: "feat/desktop-thread-reactions-and-pr-chips",
           state: "passing",
           checkState: "passing",
           lifecycleState: "merged",
@@ -629,6 +631,7 @@ describe("GithubPrFetcher", () => {
         "mergedAt",
         "closedAt",
         "commits",
+        "headRefName",
       ]) {
         expect(fields?.split(",")).toContain(field);
       }
@@ -659,6 +662,7 @@ describe("GithubPrFetcher", () => {
         org: "pwrdrvr",
         repo: "PwrAgent",
         title: "Retain thread pull request history",
+        headRefName: "feat/desktop-thread-reactions-and-pr-chips",
         state: "passing",
         checkState: "passing",
         lifecycleState: "merged",

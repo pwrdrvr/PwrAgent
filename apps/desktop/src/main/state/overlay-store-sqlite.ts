@@ -98,6 +98,7 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
     reviewState: pr.reviewState ?? legacyPrReviewState(pr.state),
     mergeState: pr.mergeState ?? "unknown",
     commitShas: normalizeCommitShas(pr.commitShas),
+    ...(pr.headRefName?.trim() ? { headRefName: pr.headRefName.trim() } : {}),
   };
 }
 

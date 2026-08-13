@@ -65,6 +65,7 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     org: row.headRepositoryOwner?.login ?? "",
     repo: row.headRepository?.name ?? "",
     ...(row.title?.trim() ? { title: row.title.trim() } : {}),
+    ...(row.headRefName?.trim() ? { headRefName: row.headRefName.trim() } : {}),
     state: checkState,
     checkState,
     lifecycleState: deriveLifecycleState(row),

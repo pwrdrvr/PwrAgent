@@ -598,6 +598,7 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
     reviewState: pr.reviewState ?? legacyPrReviewState(pr.state),
     mergeState: pr.mergeState ?? "unknown",
     commitShas: normalizeCommitShas(pr.commitShas),
+    ...(pr.headRefName?.trim() ? { headRefName: pr.headRefName.trim() } : {}),
   };
 }
 
@@ -718,6 +719,7 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       candidate.org === pr.org &&
       candidate.repo === pr.repo &&
       candidate.title === pr.title &&
+      candidate.headRefName === pr.headRefName &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
       candidate.lifecycleState === pr.lifecycleState &&
