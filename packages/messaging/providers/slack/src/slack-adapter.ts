@@ -1997,7 +1997,7 @@ export class SlackAdapter implements SlackProviderAdapter {
             const result = await this.api.startStream!({
               channel: state.target.channelId,
               chunks,
-              taskDisplayMode: intent.card.displayHint,
+              taskDisplayMode: state.taskDisplayMode,
               threadTs: state.target.threadTs,
               ...(intent.audit?.actor.platformUserId
                 ? { recipientUserId: intent.audit.actor.platformUserId }
