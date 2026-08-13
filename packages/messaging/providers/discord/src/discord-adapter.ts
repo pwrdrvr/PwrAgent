@@ -391,16 +391,20 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const lifecycleGeneration = ++this.lifecycleGeneration;
     await this.reconcileApplicationCommands();
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
       return;
     }
     this.listener = listener;
-    this.unsubscribeGateway = this.gateway.onEvent(async (event) => {
+    const unsubscribeGateway = this.gateway.onEvent(async (event) => {
       await this.handleGatewayEvent(event);
     });
+    this.unsubscribeGateway = unsubscribeGateway;
     await this.gateway.start();
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
+      unsubscribeGateway();
+      if (this.unsubscribeGateway === unsubscribeGateway) {
+        this.unsubscribeGateway = undefined;
+        this.listener = undefined;
+      }
     }
   }
 

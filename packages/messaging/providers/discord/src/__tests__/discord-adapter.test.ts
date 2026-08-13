@@ -105,7 +105,60 @@ describe("discord adapter", () => {
     await startPromise;
 
     expect(gateway.start).not.toHaveBeenCalled();
-    expect(gateway.close).toHaveBeenCalledTimes(2);
+    expect(gateway.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let stale reconciliation stop a newer lifecycle", async () => {
+    let resolveFirstCommands!: (value: DiscordApplicationCommand[]) => void;
+    let resolveSecondCommands!: (value: DiscordApplicationCommand[]) => void;
+    const firstCommands = new Promise<DiscordApplicationCommand[]>((resolve) => {
+      resolveFirstCommands = resolve;
+    });
+    const secondCommands = new Promise<DiscordApplicationCommand[]>((resolve) => {
+      resolveSecondCommands = resolve;
+    });
+    const listApplicationCommands = vi.fn()
+      .mockImplementationOnce(async () => await firstCommands)
+      .mockImplementationOnce(async () => await secondCommands);
+    let gatewayOpen = false;
+    const gateway: DiscordGatewayConnection = {
+      close: vi.fn(async () => {
+        gatewayOpen = false;
+      }),
+      onEvent: vi.fn(() => () => undefined),
+      start: vi.fn(async () => {
+        gatewayOpen = true;
+      }),
+    };
+    const adapter = new DiscordAdapter({
+      api: createApi({ listApplicationCommands }),
+      config: {
+        applicationId: TEST_CHANNEL_ID,
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+    });
+
+    const staleStart = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(listApplicationCommands).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+
+    const currentStart = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(listApplicationCommands).toHaveBeenCalledTimes(2);
+    });
+    resolveSecondCommands([]);
+    await currentStart;
+    resolveFirstCommands([]);
+    await staleStart;
+
+    expect(gateway.start).toHaveBeenCalledTimes(1);
+    expect(gateway.close).toHaveBeenCalledTimes(1);
+    expect(gatewayOpen).toBe(true);
   });
 
   it("declares backend-owned scheduling as Discord application commands", () => {
