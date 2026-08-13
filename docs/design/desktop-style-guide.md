@@ -80,7 +80,7 @@ Use a restrained desktop scale:
 - App title / page title: `40px / 700`
 - Section title: `24px / 650`
 - Thread row primary text: `13px / 600` (user-adjustable ±2px via Settings → General → Appearance → Sidebar text size; directory labels ride 1px below the thread title)
-- Body text: `14px / 400`
+- Body text: `14px / 400` (transcript body is user-adjustable ±2px via Settings → General → Appearance → Transcript text size; read `--transcript-text-size` in new transcript surfaces instead of hardcoding 14px)
 - Secondary metadata: `12px / 500`
 - Labels / caps / tiny status: `11px / 600`
 

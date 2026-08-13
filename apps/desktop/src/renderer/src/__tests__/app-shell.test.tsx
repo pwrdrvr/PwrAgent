@@ -960,6 +960,7 @@ describe("App", () => {
           theme: { value: "system", source: "default" },
           density: { value: "mission-control", source: "default" },
           sidebarTextSize: { value: "md", source: "default" },
+          transcriptTextSize: { value: "md", source: "default" },
         },
         codexProfileModel: { value: "shared", source: "default" },
         messagingAcknowledgment: { value: null, source: "default" },
@@ -1263,6 +1264,7 @@ describe("App", () => {
               theme: { value: "system", source: "default" },
               density: { value: "mission-control", source: "default" },
               sidebarTextSize: { value: "md", source: "default" },
+              transcriptTextSize: { value: "md", source: "default" },
             },
           },
           onboarding: {
@@ -2246,6 +2248,7 @@ describe("App", () => {
                 theme: { value: "system", source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
               },
             },
             onboarding: {

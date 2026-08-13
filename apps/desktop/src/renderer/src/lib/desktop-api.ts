@@ -338,7 +338,7 @@ import type {
   DeleteDesktopPwrAgentProfileResponse,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
-  DesktopSidebarTextSize,
+  DesktopTextSize,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
@@ -1092,7 +1092,8 @@ export type DesktopApi = {
     callback: (appearance: {
       theme: DesktopAppearanceTheme;
       density: DesktopAppearanceDensity;
-      sidebarTextSize: DesktopSidebarTextSize;
+      sidebarTextSize: DesktopTextSize;
+      transcriptTextSize: DesktopTextSize;
     }) => void,
   ) => () => void;
   onCodexEnvironmentSetupProgress?: (
