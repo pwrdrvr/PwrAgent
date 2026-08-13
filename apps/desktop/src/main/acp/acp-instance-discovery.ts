@@ -25,6 +25,7 @@ import type {
 } from "@pwragent/shared";
 import { resolveActiveAcpInstance } from "./acp-instance-resolver.js";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
+import { resolveBundledGrokCommand } from "./acp-bundled-agent.js";
 import { normalizeAcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 import type {
@@ -75,12 +76,18 @@ export type DiscoverAcpAgentInstancesOptions = {
   discover?: (
     options?: LocalAcpDiscoveryOptions,
   ) => Promise<DiscoveredAcpAgentGroup[]>;
-  /** Injectable raw version-output probe used to distinguish products that
-   *  share one command name (currently legacy Python kimi-cli vs Kimi Code). */
+  /** Injectable raw version-output probe used for synthesized bundled instances
+   *  and to distinguish products that share one command name (currently legacy
+   *  Python kimi-cli vs Kimi Code). */
   readVersionOutput?: (
     command: string,
     env: NodeJS.ProcessEnv,
   ) => Promise<string | undefined>;
+  /**
+   * Packaged PwrAgent Grok executable. `undefined` auto-detects it under
+   * Electron resources; `null` disables it (primarily for tests).
+   */
+  bundledGrokCommand?: string | null;
 };
 
 /**
@@ -105,12 +112,21 @@ export async function discoverAcpAgentInstances(
   }
 
   const discover = options?.discover ?? discoverLocalAcpAgentInstances;
-  const groups = await discover({
+  const discoveredGroups = await discover({
     ...(strategies !== undefined ? { strategies } : {}),
     ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     ...(options?.env ? { env: options.env } : {}),
     ...(options?.now ? { now: options.now } : {}),
   });
+  const groups = await withBundledGrok(
+    discoveredGroups,
+    strategies,
+    options?.bundledGrokCommand === undefined
+      ? resolveBundledGrokCommand()
+      : options.bundledGrokCommand,
+    options?.now?.() ?? Date.now(),
+    options,
+  );
 
   const byRegistryId = new Map<string, AcpInstanceDiscovery>();
   for (const group of groups) {
@@ -159,13 +175,24 @@ export async function discoverLocalAcpAgentRecords(
   }
 
   const discover = options?.discover ?? discoverLocalAcpAgentInstances;
-  const groups = await discover({
+  const discoveredGroups = await discover({
     ...(strategies !== undefined ? { strategies } : {}),
     ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     ...(options?.env ? { env: options.env } : {}),
     ...(options?.now ? { now: options.now } : {}),
   });
   const now = options?.now?.() ?? Date.now();
+  const bundledGrokCommand =
+    options?.bundledGrokCommand === undefined
+      ? resolveBundledGrokCommand()
+      : options.bundledGrokCommand;
+  const groups = await withBundledGrok(
+    discoveredGroups,
+    strategies,
+    bundledGrokCommand,
+    now,
+    options,
+  );
 
   const records: AcpInstalledAgentRecord[] = [];
   for (const group of groups) {
@@ -203,7 +230,13 @@ export async function discoverLocalAcpAgentRecords(
       distributionKind: "local",
       command: active.command,
       args: group.args,
-      env: group.env,
+      env: {
+        ...group.env,
+        ...(group.strategyId === "grok"
+          && active.command === bundledGrokCommand
+          ? { GROK_INSTALLER: "pwragent" }
+          : {}),
+      },
     });
     const registryAgent: AcpRegistryAgent = {
       id: group.strategyId,
@@ -377,4 +410,85 @@ function strategiesForEnabledRegistryIds(
   }
   const enabled = new Set(enabledRegistryIds);
   return ACP_DISCOVERY_STRATEGIES.filter((strategy) => enabled.has(strategy.id));
+}
+
+async function withBundledGrok(
+  discoveredGroups: readonly DiscoveredAcpAgentGroup[],
+  enabledStrategies: readonly AcpAgentStrategy[] | undefined,
+  bundledGrokCommand: string | null | undefined,
+  discoveredAt: number,
+  options: DiscoverAcpAgentInstancesOptions | undefined,
+): Promise<DiscoveredAcpAgentGroup[]> {
+  const groups = discoveredGroups.map((group) => ({
+    ...group,
+    instances: [...group.instances],
+  }));
+  if (!bundledGrokCommand) {
+    return groups;
+  }
+
+  const grokStrategy = (enabledStrategies ?? BUILT_IN_ACP_STRATEGIES).find(
+    (strategy) => strategy.id === "grok",
+  );
+  if (!grokStrategy) {
+    return groups;
+  }
+
+  const grokGroup = groups.find((group) => group.strategyId === "grok");
+  if (grokGroup) {
+    if (grokGroup.instances.some(
+      (instance) => instance.command === bundledGrokCommand,
+    )) {
+      return groups;
+    }
+  }
+
+  const bundledInstance = await probeBundledGrokInstance(
+    bundledGrokCommand,
+    options,
+  );
+  if (grokGroup) {
+    grokGroup.instances.push(bundledInstance);
+    return groups;
+  }
+
+  groups.push({
+    strategyId: grokStrategy.id,
+    backendId: grokStrategy.backendId,
+    name: grokStrategy.displayName,
+    args: [...grokStrategy.spawn.args],
+    env: { ...grokStrategy.spawn.env },
+    instances: [bundledInstance],
+    discoveredAt,
+  });
+  return groups;
+}
+
+async function probeBundledGrokInstance(
+  command: string,
+  options: DiscoverAcpAgentInstancesOptions | undefined,
+): Promise<AcpAgentInstance> {
+  const env = buildPwrAgentChildProcessEnv(options?.env ?? process.env);
+  const readVersionOutput = options?.readVersionOutput ?? defaultReadVersionOutput;
+  let version: string | undefined;
+  try {
+    version = parseCliVersion(await readVersionOutput(command, env));
+  } catch {
+    // The bundle path is a trusted packaged fallback. If an install/update race
+    // makes the version probe fail, retain the instance so launch can surface
+    // the concrete error instead of silently hiding Grok from discovery.
+  }
+  return {
+    command,
+    source: "fallback",
+    ...(version !== undefined ? { version } : {}),
+  };
+}
+
+function parseCliVersion(output: string | undefined): string | undefined {
+  const trimmed = output?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.match(/\d+\.\d+\.\d+(?:[-+][\w.-]+)?/)?.[0] ?? trimmed;
 }

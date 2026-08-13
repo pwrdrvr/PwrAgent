@@ -389,7 +389,20 @@ describe("settings ipc", () => {
         },
       },
     );
-    expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(1);
+    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
+      {},
+      {
+        patch: {
+          acpAgents: {
+            grok: {
+              cliPath: "/tmp/pwragent-grok-arm64/grok",
+            },
+          },
+        },
+      },
+    );
+
+    expect(disposeDesktopBackendRegistryMock).toHaveBeenCalledTimes(2);
     expect(invalidateAcpBackendDiscoveryMock).toHaveBeenCalledTimes(1);
   });
 

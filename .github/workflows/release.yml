@@ -52,7 +52,14 @@ jobs:
       - name: Test (unit)
         run: pnpm test
 
+      - name: Stage pinned Grok ACP runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node apps/desktop/scripts/stage-grok-bundle.mjs --platform macos-universal
+
       - name: Prepare release stage
+        env:
+          PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --prepare-only
 
       - name: Archive signing input
@@ -128,6 +135,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: T44CNHC4UH
 
+          PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --sign-stage-only --no-publish
 
       - name: Prepare stable-name DMG alias
@@ -166,9 +174,11 @@ jobs:
         include:
           - deb_arch: amd64
             builder_arch: x64
+            grok_platform: linux-x86_64
             runner: ubuntu-24.04
           - deb_arch: arm64
             builder_arch: arm64
+            grok_platform: linux-aarch64
             runner: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
@@ -188,9 +198,15 @@ jobs:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: pnpm release:check
 
+      - name: Stage pinned Grok ACP runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node apps/desktop/scripts/stage-grok-bundle.mjs --platform ${{ matrix.grok_platform }}
+
       - name: Package Linux DEB
         env:
           PWRAGENT_LINUX_ARCH: ${{ matrix.builder_arch }}
+          PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --linux --no-publish
 
       - name: Upload Linux package artifact
@@ -227,7 +243,14 @@ jobs:
           working-directory: .
           cache-electron: "true"
 
+      - name: Stage pinned Grok ACP runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node apps/desktop/scripts/stage-grok-bundle.mjs --platform windows-x86_64
+
       - name: Prepare Windows release stage
+        env:
+          PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: node apps/desktop/scripts/release.mjs --win --prepare-only
 
       - name: Archive Windows signing input
@@ -307,6 +330,7 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
         run: >-
           node apps/desktop/scripts/release.mjs
           --win --sign-stage-only --no-publish --require-signing

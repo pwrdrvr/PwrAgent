@@ -424,7 +424,6 @@ function acpAgentLaunchIdentity(agent: AcpInstalledAgentRecord): string {
       : undefined,
   });
 }
-
 function effectiveAcpAgentCapabilities(
   agent: AcpInstalledAgentRecord,
 ): AcpAgentCapabilities {

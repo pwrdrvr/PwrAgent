@@ -80,6 +80,30 @@ function acpSnapshot(
 }
 
 describe("AcpAgentsSettings", () => {
+  it("refreshes backend summaries after capability discovery completes", async () => {
+    const onBackendSummariesRefresh = vi.fn();
+    window.addEventListener(
+      BACKEND_SUMMARIES_REFRESH_EVENT,
+      onBackendSummariesRefresh,
+    );
+    const listAcpAgents = vi.fn(
+      async (_request?: { refresh?: boolean; force?: boolean }) => ({
+        fetchedAt: 1000,
+        entries: [geminiEntry()],
+      }),
+    );
+
+    render(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
+
+    await waitFor(() => {
+      expect(onBackendSummariesRefresh).toHaveBeenCalledTimes(1);
+    });
+    window.removeEventListener(
+      BACKEND_SUMMARIES_REFRESH_EVENT,
+      onBackendSummariesRefresh,
+    );
+  });
+
   it("keeps cached ACP agents visible while background discovery refreshes", async () => {
     const dispatchEvent = vi.spyOn(window, "dispatchEvent");
     let resolveRefresh:

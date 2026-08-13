@@ -28,6 +28,7 @@ apps/desktop/e2e/fixtures/**/raw.capture.jsonl
 apps/desktop/dist/
 # pnpm deploy stage (release.mjs materializes a flat node_modules tree here)
 apps/desktop/release-stage/
+apps/desktop/build/bundled-agents/grok/
 
 # Release-time secrets — must never land in the repo
 .envrc.release
