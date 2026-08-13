@@ -12,7 +12,7 @@ export function AgentThreadChip(props: { threadRow?: boolean }) {
         aria-label="Agent thread"
         className={
           props.threadRow
-            ? "thread-row__chip thread-row__chip--agent"
+            ? "thread-row__chip thread-row__chip--agent thread-row__chip--persistent"
             : "chip chip--agent"
         }
         onMouseEnter={(event) =>

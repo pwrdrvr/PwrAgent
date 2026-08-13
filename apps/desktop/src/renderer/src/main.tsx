@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
+  DesktopSidebarTextSize,
 } from "@pwragent/shared";
 import { App } from "./App";
 import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBoundary";
@@ -35,6 +36,7 @@ const desktopApi = (
         callback: (appearance: {
           theme: DesktopAppearanceTheme;
           density: DesktopAppearanceDensity;
+          sidebarTextSize: DesktopSidebarTextSize;
         }) => void,
       ) => () => void;
       onWindowFullscreen?: (
@@ -59,6 +61,7 @@ const unsubscribeAppearance = desktopApi?.onAppearanceChanged?.(
     applyAppearanceAttributes(
       resolveTheme(appearance.theme),
       appearance.density,
+      appearance.sidebarTextSize,
     );
   },
 );

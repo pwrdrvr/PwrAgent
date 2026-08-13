@@ -132,6 +132,7 @@ function createSnapshot(
       appearance: {
         theme: { value: "system", source: "default" },
         density: { value: "mission-control", source: "default" },
+        sidebarTextSize: { value: "md", source: "default" },
       },
       codexProfileModel: { value: "shared", source: "default" },
       messagingAcknowledgment: { value: null, source: "default" },

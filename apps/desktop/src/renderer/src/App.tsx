@@ -165,6 +165,8 @@ export function App() {
       ? {
         theme: settings.snapshot.general.appearance.theme.value,
         density: settings.snapshot.general.appearance.density.value,
+        sidebarTextSize:
+          settings.snapshot.general.appearance.sidebarTextSize.value,
       }
       : undefined,
     writeConfig: settings.writeConfig,
