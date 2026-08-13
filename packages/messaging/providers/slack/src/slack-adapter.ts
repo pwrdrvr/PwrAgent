@@ -91,6 +91,7 @@ const SLACK_DIRECTORY_PAGE_SIZE = 200;
 const SLACK_DIRECTORY_MAX_PAGES = 10;
 const SLACK_WORKING_CARD_TOMBSTONE_MAX = 200;
 const SLACK_WORKING_CARD_RETRY_MS = 3_000;
+const SLACK_WORKING_CARD_STOP_MAX_FAILURES = 3;
 const SLACK_WORKING_CARD_BUCKETS = {
   start: { method: "chat.startStream", limit: 20 },
   append: { method: "chat.appendStream", limit: 100 },
@@ -313,6 +314,11 @@ type SlackSurfaceOpaqueState = {
 };
 
 type SlackWorkingCardMethod = keyof typeof SLACK_WORKING_CARD_BUCKETS;
+type SlackWorkingCardIntent = Extract<
+  MessagingSurfaceIntent,
+  { kind: "working_card" }
+>;
+type SlackWorkingCardTask = SlackWorkingCardIntent["card"]["tasks"][number];
 
 type SlackWorkingCardTarget = {
   channelId: string;
@@ -322,13 +328,13 @@ type SlackWorkingCardTarget = {
 
 type SlackWorkingCardQueueState = {
   cancelled: boolean;
-  deliveredTaskIds: Set<string>;
+  deliveredTaskSlots: Map<number, string>;
   fallbackSurface?: MessagingSurfaceRef;
   lastDeliveredPhase?: Extract<
     MessagingSurfaceIntent,
     { kind: "working_card" }
   >["card"]["phase"];
-  latest: Extract<MessagingSurfaceIntent, { kind: "working_card" }>;
+  latest: SlackWorkingCardIntent;
   lastDeliveredSequence: number;
   nativeUnavailable?: boolean;
   nonRateFailureCount: number;
@@ -655,18 +661,24 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
-    if (intent.kind === "working_card" && this.config.liveWorkingCards === true) {
+    if (intent.kind === "working_card") {
       const target = this.resolveTarget(intent);
       const state = this.workingCardStreams.get(intent.card.key);
+      const nativeAvailable =
+        this.config.liveWorkingCards === true
+        && Boolean(target?.threadTs)
+        && Boolean(this.api.startStream)
+        && Boolean(this.api.appendStream)
+        && Boolean(this.api.stopStream);
+      // A terminal fallback is intentionally a no-op. Do not reserve ordinary
+      // Slack message capacity or defer the authoritative final response for it.
+      if (intent.card.isFinal && (!nativeAvailable || state?.nativeUnavailable)) {
+        return undefined;
+      }
       if (state?.nativeUnavailable) {
         return target ? this.rateLimitScopeForTarget(target) : undefined;
       }
-      if (
-        target?.threadTs
-        && this.api.startStream
-        && this.api.appendStream
-        && this.api.stopStream
-      ) {
+      if (nativeAvailable) {
         return undefined;
       }
       return target ? this.rateLimitScopeForTarget(target) : undefined;
@@ -1881,7 +1893,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
     const state: SlackWorkingCardQueueState = current ?? {
       cancelled: false,
-      deliveredTaskIds: new Set(),
+      deliveredTaskSlots: new Map(),
       latest: intent,
       lastDeliveredSequence: 0,
       nonRateFailureCount: 0,
@@ -1951,6 +1963,14 @@ export class SlackAdapter implements SlackProviderAdapter {
         const bucket = this.workingCardBucket(method, state.target);
         const admission = this.workingCardRateLimits.admit(bucket);
         if (!admission.admitted) {
+          if (method === "append") {
+            // Working Updates are disposable under pressure. Remember that
+            // this sequence was considered without mutating the mounted slot
+            // snapshot; a later admitted update can still reconcile directly
+            // to its newest bounded card state. Never queue an append backlog.
+            state.lastDeliveredSequence = intent.card.sequence;
+            return;
+          }
           this.scheduleWorkingCardPump(
             key,
             state,
@@ -2021,6 +2041,10 @@ export class SlackAdapter implements SlackProviderAdapter {
           if (retryAfterMs !== undefined) {
             this.workingCardRateLimits.recordRateLimit(bucket.id, retryAfterMs);
             this.emitWorkingCardRateLimit(error, bucket, state.target, retryAfterMs);
+            if (method === "append") {
+              state.lastDeliveredSequence = intent.card.sequence;
+              return;
+            }
             this.scheduleWorkingCardPump(key, state, retryAfterMs, method);
             return;
           }
@@ -2030,26 +2054,35 @@ export class SlackAdapter implements SlackProviderAdapter {
               "Slack Thinking Steps stream unavailable; using text Working Update",
               { error: error instanceof Error ? error.message : String(error) },
             );
-            const fallback = await this.deliverWorkingCardFallback(intent, {
+            // Flip the mode before awaiting the fallback so newer updates use
+            // the classic path instead of being accepted into a dead stream.
+            state.nativeUnavailable = true;
+            const fallbackIntent = state.latest;
+            const fallback = await this.deliverWorkingCardFallback(fallbackIntent, {
               controllerBudgeted: false,
             });
             state.fallbackSurface = fallback.surface;
-            state.lastDeliveredSequence = intent.card.sequence;
-            state.nativeUnavailable = true;
+            state.lastDeliveredSequence = fallbackIntent.card.sequence;
             return;
           }
           this.logger.warn?.("Slack Thinking Steps stream call failed; preserving open card", {
             error: error instanceof Error ? error.message : String(error),
             method: SLACK_WORKING_CARD_BUCKETS[method].method,
           });
-          if (state.nonRateFailureCount === 1) {
+          if (method === "append") {
+            state.lastDeliveredSequence = intent.card.sequence;
+            return;
+          }
+          if (state.nonRateFailureCount < SLACK_WORKING_CARD_STOP_MAX_FAILURES) {
             this.scheduleWorkingCardPump(
               key,
               state,
-              SLACK_WORKING_CARD_RETRY_MS,
+              SLACK_WORKING_CARD_RETRY_MS * state.nonRateFailureCount,
               method,
             );
+            return;
           }
+          await this.abandonWorkingCardAfterStopFailure(key, state, intent);
           return;
         }
       }
@@ -2088,24 +2121,16 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   private workingCardChunks(
-    intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
+    intent: SlackWorkingCardIntent,
     state: SlackWorkingCardQueueState,
   ): SlackStreamChunk[] {
     const chunks = intent.card.tasks
-      .filter((task) => !state.deliveredTaskIds.has(task.id))
-      .map((task): SlackStreamChunk => {
-        const details = [
-          task.status === "cancelled" && !task.detail ? "Cancelled" : undefined,
-          task.detail,
-        ].filter(Boolean).join(" · ");
-        return {
-          type: "task_update",
-          id: clampSlackTaskField(task.id),
-          title: clampSlackTaskField(task.title),
-          status: task.status === "cancelled" ? "complete" : task.status,
-          ...(details ? { details: clampSlackTaskField(details) } : {}),
-        };
-      });
+      .map((task, index) => this.workingCardTaskSlot(intent, task, index))
+      .filter(
+        (slot, index) =>
+          state.deliveredTaskSlots.get(index) !== slot.fingerprint,
+      )
+      .map(({ fingerprint: _fingerprint, ...chunk }) => chunk);
     if (
       intent.card.phase === "waiting"
       && state.lastDeliveredPhase !== "waiting"
@@ -2118,7 +2143,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (intent.card.isFinal && intent.card.phase === "failed") {
       chunks.push({
         type: "task_update",
-        id: clampSlackTaskField(`${intent.card.key}:terminal`),
+        id: workingCardTaskSlotId(intent.card.key, "terminal"),
         status: "error",
         title: "Turn failed",
       });
@@ -2128,13 +2153,63 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private recordWorkingCardSnapshot(
     state: SlackWorkingCardQueueState,
-    intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
+    intent: SlackWorkingCardIntent,
   ): void {
-    for (const task of intent.card.tasks) {
-      state.deliveredTaskIds.add(task.id);
+    state.deliveredTaskSlots.clear();
+    for (const [index, task] of intent.card.tasks.entries()) {
+      state.deliveredTaskSlots.set(index, this.workingCardTaskSlot(
+        intent,
+        task,
+        index,
+      ).fingerprint);
     }
     state.lastDeliveredPhase = intent.card.phase;
     state.lastDeliveredSequence = intent.card.sequence;
+  }
+
+  private workingCardTaskSlot(
+    intent: SlackWorkingCardIntent,
+    task: SlackWorkingCardTask,
+    index: number,
+  ): SlackStreamChunk & { fingerprint: string } {
+    const details = [
+      task.status === "cancelled" && !task.detail ? "Cancelled" : undefined,
+      task.detail,
+    ].filter(Boolean).join(" · ");
+    const chunk: SlackStreamChunk = {
+      type: "task_update",
+      // Stable positional slots let a bounded controller snapshot replace
+      // evicted tasks without leaving the old rows mounted in Slack.
+      id: workingCardTaskSlotId(intent.card.key, index + 1),
+      title: clampSlackTaskField(task.title),
+      status: task.status === "cancelled" ? "complete" : task.status,
+      ...(details ? { details: clampSlackTaskField(details) } : {}),
+    };
+    return {
+      ...chunk,
+      fingerprint: JSON.stringify([task.id, chunk]),
+    };
+  }
+
+  private async abandonWorkingCardAfterStopFailure(
+    key: string,
+    state: SlackWorkingCardQueueState,
+    intent: SlackWorkingCardIntent,
+  ): Promise<void> {
+    if (state.ts) {
+      try {
+        await this.api.deleteMessage({
+          channel: state.target.channelId,
+          ts: state.ts,
+        });
+      } catch (error) {
+        this.logger.warn?.("Slack terminal Thinking Steps card could not be removed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    this.workingCardStreams.delete(key);
+    this.recordWorkingCardTombstone(key, intent.card.sequence);
   }
 
   private workingCardBucket(
@@ -2269,11 +2344,11 @@ export class SlackAdapter implements SlackProviderAdapter {
     return await this.deliver({
       ...intent,
       kind: "message",
-      role: "system",
+      role: intent.card.fallbackPresentation?.role ?? "system",
       parts: [{
         type: "text",
         text: fallbackText,
-        markdown: "light",
+        markdown: intent.card.fallbackPresentation?.markdown ?? "light",
       }],
     });
   }
@@ -3661,6 +3736,14 @@ function findSlackMentionOutsideCode(text: string, mention: string): number {
 
 function clampSlackTaskField(value: string): string {
   return value.length <= 256 ? value : `${value.slice(0, 255)}…`;
+}
+
+function workingCardTaskSlotId(
+  key: string,
+  slot: number | "terminal",
+): string {
+  const keyHash = createHash("sha256").update(key).digest("hex").slice(0, 16);
+  return `pwragent:${keyHash}:${slot}`;
 }
 
 function parseCommand(text: string): { command: string; args: string[] } | undefined {

@@ -127,18 +127,24 @@ stream state stays in memory. Slack Live Working Updates cards are opt-in throug
 must remain absent during unrelated config writes so a future default change
 can apply to untouched profiles. If native streaming is disabled or
 unavailable, the adapter delivers `fallbackText` as the existing Working
-Update. Providers without a native live-card surface continue to use that text
-fallback.
+Update using the intent's `fallbackPresentation` role and Markdown policy.
+Providers without a native live-card surface continue to use that text
+fallback. Terminal fallback intents are no-ops and must not consume or wait on
+ordinary message-delivery capacity.
 
 Provider-native live surfaces may have API budgets orthogonal to ordinary
 message delivery. Adapters may use `MessagingRateLimitGate` to account for
-multiple workspace/method buckets independently. Slack maintains ordered,
-per-card queues over workspace-wide `chat.startStream`, `chat.appendStream`,
-and `chat.stopStream` buckets: start is a barrier, intermediate snapshots are
-coalesced while waiting, and terminal stop remains queued until admitted.
-These queues must not block approval, questionnaire, final-answer, or other
-ordinary message delivery. A platform 429 extends the affected bucket from
-`Retry-After`; it is not permission to discard a terminal stop.
+multiple workspace/method buckets independently. Slack maintains ordered
+per-card lifecycle state over workspace-wide `chat.startStream`,
+`chat.appendStream`, and `chat.stopStream` buckets. Start is a barrier and
+terminal stop remains queued until admitted. Intermediate appends are
+disposable: when their local bucket or Slack 429 cool-off blocks them, the
+adapter drops them without a timer or text fallback. A later admitted update
+reconciles directly to the newest controller-bounded snapshot. This prevents a
+multi-thread append backlog while keeping start/stop lifecycle ordering. These
+card lanes must not block approval, questionnaire, final-answer, or other
+ordinary message delivery. A platform 429 extends only the affected method
+bucket from `Retry-After`; it is not permission to discard a terminal stop.
 
 An open native card replaces classic tool-update posts for those activities.
 Task titles use the already-redacted activity title, while duration and other
@@ -148,6 +154,8 @@ has no cancelled task status, cancelled tasks close neutrally with cancellation
 called out in their details instead of rendering as errors. Waiting phases add
 a visible stream headline and waiting and terminal phases clear transient
 working indicators; the final assistant message remains authoritative.
+Slack renderers reuse a bounded set of positional task IDs so controller
+history eviction replaces mounted rows instead of growing the native card.
 Adapters return a retractable surface as soon as a native card is queued so
 turn cancellation and terminal private-response routing can cancel pending
 work or remove an already-mounted card. Completed keys retain a bounded

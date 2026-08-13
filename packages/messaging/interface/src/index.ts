@@ -856,6 +856,10 @@ export type MessagingWorkingCardIntent = MessagingBaseSurfaceIntent & {
   kind: "working_card";
   card: {
     displayHint: "timeline" | "plan" | "dense";
+    fallbackPresentation?: {
+      markdown: MessagingMarkdownPolicy;
+      role: "assistant" | "system";
+    };
     isFinal: boolean;
     key: string;
     phase: "queued" | "working" | "waiting" | "completed" | "failed";

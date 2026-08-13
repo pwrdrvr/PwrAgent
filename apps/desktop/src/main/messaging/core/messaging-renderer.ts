@@ -223,6 +223,12 @@ export function buildWorkingCardIntent(params: {
       : "Working update",
     card: {
       displayHint: params.displayHint,
+      fallbackPresentation: {
+        markdown: fallbackPart?.type === "text"
+          ? fallbackPart.markdown ?? "light"
+          : "light",
+        role: fallback.role === "assistant" ? "assistant" : "system",
+      },
       isFinal: false,
       key: params.key,
       phase: "working",
