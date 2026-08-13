@@ -13,17 +13,28 @@ declare global {
   var __PWRAGENT_E2E_CLIPBOARD__: E2eClipboardSnapshot | undefined;
 }
 
+function shouldKeepE2eClipboardWriteInMemory(
+  snapshot: E2eClipboardSnapshot,
+): boolean {
+  if (process.env.PWRAGENT_E2E !== "1") {
+    return false;
+  }
+  globalThis.__PWRAGENT_E2E_CLIPBOARD__ = snapshot;
+  // Local Electron E2E shares the operator's OS clipboard, so keep writes in
+  // memory. CI runs on an isolated machine and may exercise the native bridge.
+  const isCi = process.env.CI === "1" || process.env.CI === "true";
+  return !isCi;
+}
+
 function writeText(text: string): void {
-  if (process.env.PWRAGENT_E2E === "1") {
-    globalThis.__PWRAGENT_E2E_CLIPBOARD__ = { text };
+  if (shouldKeepE2eClipboardWriteInMemory({ text })) {
     return;
   }
   clipboard.writeText(text);
 }
 
 function writeRichText(payload: E2eClipboardSnapshot & { html: string }): void {
-  if (process.env.PWRAGENT_E2E === "1") {
-    globalThis.__PWRAGENT_E2E_CLIPBOARD__ = payload;
+  if (shouldKeepE2eClipboardWriteInMemory(payload)) {
     return;
   }
   clipboard.write({ text: payload.text, html: payload.html });

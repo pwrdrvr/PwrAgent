@@ -166,18 +166,18 @@ async function pasteIntoReply(
 // Prose paragraphs whose only paragraph-break signal lives in text/html. The
 // text/plain flavor flattens them to single newlines (as many rich sources do).
 const PROSE_LINES = [
-  "We reproduced and fixed the upload bug.",
+  "We reproduced and fixed the cereal-pouring bug.",
   "Root cause:",
-  "After selecting multiple reel items, the click silently fell through.",
+  "After selecting multiple cereal boxes, the click silently fell through.",
   "Fix:",
-  "Handle upload by command/title as well as object identity:",
+  "Handle cereal pouring by command/title as well as object identity:",
 ];
 const PROSE_PLAIN_SINGLE_NL = PROSE_LINES.join("\n");
 const PROSE_HTML = PROSE_LINES.map((line) => `<p>${line}</p>`).join("");
 
 const CODE_LINES = [
-  "} else if button === uploadButton {",
-  "    uploadButtonClicked()",
+  "} else if button === pourButton {",
+  "    pourCerealIntoBowl()",
   "}",
 ];
 const CODE_PLAIN = ["```swift", ...CODE_LINES, "```"].join("\n");
@@ -351,19 +351,19 @@ test("a copied transcript table pastes and sends as Markdown source", async () =
 // both feed the same markdown serializer. A divergence here is invisible to the
 // per-flavor tests above; only pasting both flavors of one source catches it.
 const SOURCE_PARAGRAPHS = [
-  "We reproduced and fixed the upload bug.",
+  "We reproduced and fixed the cereal-pouring bug.",
   "Root cause:",
-  "After selecting multiple reel items, the click silently fell through.",
+  "After selecting multiple cereal boxes, the click silently fell through.",
   "Fix:",
-  "Handle upload by command/title as well as object identity:",
+  "Handle cereal pouring by command/title as well as object identity:",
 ];
 const SOURCE_LIST = [
-  "Create several ready recordings.",
-  "Add them to the GGDataStore.",
+  "Create several cereal boxes.",
+  "Add them to the BreakfastPantry.",
 ];
 const SOURCE_CODE = [
-  "} else if button === uploadButton {",
-  "    uploadButtonClicked()",
+  "} else if button === pourButton {",
+  "    pourCerealIntoBowl()",
   "}",
 ];
 

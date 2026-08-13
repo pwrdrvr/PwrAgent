@@ -118,7 +118,7 @@ test("renders markdown edge cases without breaking transcript boundaries", async
       .click();
     await expect
       .poll(async () => (await app.getClipboardSnapshot())?.text)
-      .toContain("8. Asserts `representedRecording` is the currently selected recording.");
+      .toContain("8. Asserts `selectedCereal` is the currently selected cereal box.");
 
     const reply = app.window.getByRole("textbox", { name: "Reply" });
     await reply.focus();
@@ -129,59 +129,59 @@ test("renders markdown edge cases without breaking transcript boundaries", async
     const composerEditor = app.window.locator(".composer-tiptap-input__editor");
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /```swift\n\} else if button === uploadButton/,
+      /```swift\n\} else if button === pourButton/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /```swift\n\n\} else if button === uploadButton/,
+      /```swift\n\n\} else if button === pourButton/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /uploadButtonClicked\(\)\n\n\}/,
+      /pourCerealIntoBowl\(\)\n\n\}/,
     );
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /videos" bug\.\n\nRoot cause:\n\nAfter selecting multiple reel items/,
+      /boxes" bug\.\n\nRoot cause:\n\nAfter selecting multiple cereal boxes/,
     );
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /silently fell through and did nothing\.\n\nFix:\n\nIn `GGEditorOptionsViewController\.exampleButtonClicked\(_:\)`/,
+      /silently fell through and did nothing\.\n\nFix:\n\nIn `BreakfastEditorViewController\.pourCerealButtonClicked\(_:\)`/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /videos" bug\.\n\nRoot cause:\nAfter selecting multiple reel items/,
+      /boxes" bug\.\n\nRoot cause:\nAfter selecting multiple cereal boxes/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /silently fell through and did nothing\.\n\nFix:\nIn `GGEditorOptionsViewController\.exampleButtonClicked\(_:\)`/,
+      /silently fell through and did nothing\.\n\nFix:\nIn `BreakfastEditorViewController\.pourCerealButtonClicked\(_:\)`/,
     );
     await expectVisibleBlockGap(
       composerEditor.locator("> p", { hasText: /^Root cause:$/ }),
-      composerEditor.locator("> p", { hasText: /^After selecting multiple reel items/ }),
+      composerEditor.locator("> p", { hasText: /^After selecting multiple cereal boxes/ }),
     );
     await expectVisibleBlockGap(
       composerEditor.locator("> p", { hasText: /^Fix:$/ }),
       composerEditor.locator("> p", {
-        hasText: /^In GGEditorOptionsViewController\.exampleButtonClicked/,
+        hasText: /^In BreakfastEditorViewController\.pourCerealButtonClicked/,
       }),
     );
     await expect(composerEditor.locator("ol > li")).toHaveCount(8);
     await expect(composerEditor.locator("ul > li")).toHaveCount(3);
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /Add a test that:\n\n1\. Creates several ready recordings\.\n2\. Adds them to `GGDataStore`\./,
+      /Add a test that:\n\n1\. Creates several cereal boxes\.\n2\. Adds them to `BreakfastPantry`\./,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /1\. Creates several ready recordings\.\n\n2\. Adds them to `GGDataStore`\./,
+      /1\. Creates several cereal boxes\.\n\n2\. Adds them to `BreakfastPantry`\./,
     );
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /Related hardening from this investigation:\n\n- Add diagnostic logs[\s\S]*\n- Make `GGUploadWindowController\.close\(\)`/,
+      /Related hardening from this investigation:\n\n- Add diagnostic logs[\s\S]*\n- Make `ServingSizeWindowController\.close\(\)`/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /- Add diagnostic logs[\s\S]*\n\n- Make `GGUploadWindowController\.close\(\)`/,
+      /- Add diagnostic logs[\s\S]*\n\n- Make `ServingSizeWindowController\.close\(\)`/,
     );
   } finally {
     await app.close();

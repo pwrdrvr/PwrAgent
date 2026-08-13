@@ -20,6 +20,7 @@ vi.mock("electron", () => ({
 }));
 
 describe("clipboard ipc", () => {
+  const originalCi = process.env.CI;
   const originalE2e = process.env.PWRAGENT_E2E;
 
   beforeEach(() => {
@@ -27,10 +28,16 @@ describe("clipboard ipc", () => {
     writeMock.mockReset();
     writeTextMock.mockReset();
     delete globalThis.__PWRAGENT_E2E_CLIPBOARD__;
+    delete process.env.CI;
     delete process.env.PWRAGENT_E2E;
   });
 
   afterEach(() => {
+    if (originalCi === undefined) {
+      delete process.env.CI;
+    } else {
+      process.env.CI = originalCi;
+    }
     if (originalE2e === undefined) {
       delete process.env.PWRAGENT_E2E;
     } else {
@@ -60,7 +67,7 @@ describe("clipboard ipc", () => {
     });
   });
 
-  it("keeps clipboard writes in memory during E2E", async () => {
+  it("keeps clipboard writes in memory during local E2E", async () => {
     process.env.PWRAGENT_E2E = "1";
     const { registerClipboardIpcHandlers } = await import("../ipc/clipboard");
     const {
@@ -82,5 +89,32 @@ describe("clipboard ipc", () => {
     });
     expect(writeTextMock).not.toHaveBeenCalled();
     expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("records clipboard writes in memory while exercising the system clipboard in CI", async () => {
+    process.env.CI = "true";
+    process.env.PWRAGENT_E2E = "1";
+    const { registerClipboardIpcHandlers } = await import("../ipc/clipboard");
+    const {
+      CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
+      CLIPBOARD_WRITE_TEXT_CHANNEL,
+    } = await import("../../shared/ipc");
+    registerClipboardIpcHandlers();
+
+    await handlers.get(CLIPBOARD_WRITE_TEXT_CHANNEL)?.({}, "plain text");
+    await handlers.get(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL)?.({}, {
+      html: "<strong>rich text</strong>",
+      text: "rich text",
+    });
+
+    expect(globalThis.__PWRAGENT_E2E_CLIPBOARD__).toEqual({
+      html: "<strong>rich text</strong>",
+      text: "rich text",
+    });
+    expect(writeTextMock).toHaveBeenCalledWith("plain text");
+    expect(writeMock).toHaveBeenCalledWith({
+      html: "<strong>rich text</strong>",
+      text: "rich text",
+    });
   });
 });

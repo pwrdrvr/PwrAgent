@@ -49,42 +49,42 @@ function setComposerSelection(textbox: HTMLElement, index: number): void {
 }
 
 const copiedHandoffText = [
-  "We reproduced and fixed the \"Upload to EXAMPLE does nothing after clicking through several reel videos\" bug.",
+  "We reproduced and fixed the \"Pour cereal does nothing after switching between several cereal boxes\" bug.",
   "",
   "Root cause:",
   "",
-  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO EXAMPLE` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.exampleButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGEXAMPLEButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
+  "After selecting multiple cereal boxes, the visible editor bottom-bar `POUR CEREAL` button still had a delegate and received mouseUp, but `BreakfastEditorViewController.pourCerealButtonClicked(_:)` only handled the click when `button === pourButton`. In the cereal-switch path, the clicked button could be a different styled `CerealActionButton` instance than the controller's stored `pourButton`, so the delegate method silently fell through and did nothing.",
   "",
   "Fix:",
   "",
-  "In `GGEditorOptionsViewController.exampleButtonClicked(_:)`, handle upload by command/title as well as object identity:",
+  "In `BreakfastEditorViewController.pourCerealButtonClicked(_:)`, handle cereal pouring by command/title as well as object identity:",
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO EXAMPLE\" {",
-  "    uploadButtonClicked()",
+  "} else if button === pourButton || button.titleText == \"POUR CEREAL\" {",
+  "    pourCerealIntoBowl()",
   "}",
   "```",
   "",
   "Regression test:",
   "",
   "Add a test that:",
-  "1. Creates several ready recordings.",
-  "2. Adds them to `GGDataStore`.",
-  "3. Opens `GGGIFCollectionWindowController`.",
-  "4. Selects multiple reel items in sequence, reusing the existing editor.",
-  "5. Finds the visible editor `UPLOAD TO EXAMPLE` button.",
+  "1. Creates several cereal boxes.",
+  "2. Adds them to `BreakfastPantry`.",
+  "3. Opens `CerealShelfWindowController`.",
+  "4. Selects multiple cereal boxes in sequence, reusing the existing editor.",
+  "5. Finds the visible editor `POUR CEREAL` button.",
   "6. Sends mouseDown/mouseUp to that button.",
-  "7. Asserts `editor.window?.attachedSheet?.windowController` is `GGUploadWindowController`.",
-  "8. Asserts `representedRecording` is the currently selected recording.",
+  "7. Asserts `editor.window?.attachedSheet?.windowController` is `ServingSizeWindowController`.",
+  "8. Asserts `selectedCereal` is the currently selected cereal box.",
   "",
   "Important observation:",
   "",
-  "The editor Upload button should only open the metadata upload sheet. It should not render or POST the GIF. The actual network upload happens later from `GGUploadWindowController.doUpload()` when clicking Upload inside that sheet.",
+  "The editor Pour button should only open the serving-size sheet. It should not dispense or remove cereal from inventory. The actual cereal serving happens later from `ServingSizeWindowController.serve()` when clicking Pour inside that sheet.",
   "",
   "Related hardening from this investigation:",
-  "- Add diagnostic logs for upload button mouseUp, delegate dispatch, upload path entry, blocked early returns, and upload sheet opening.",
-  "- Make `GGUploadWindowController.close()`/window close/Cancel/Done end the attached sheet consistently.",
-  "- Clear the retained upload window controller when the sheet ends.",
+  "- Add diagnostic logs for pour button mouseUp, delegate dispatch, pour path entry, blocked early returns, and serving-size sheet opening.",
+  "- Make `ServingSizeWindowController.close()`/window close/Cancel/Done end the attached sheet consistently.",
+  "- Clear the retained serving-size window controller when the sheet ends.",
   "",
 ].join("\n");
 
@@ -97,43 +97,43 @@ const canonicalCopiedHandoffText = copiedHandoffText
   .trimEnd();
 
 const handoffPrefixWithoutCodeBlock = [
-  "We reproduced and fixed the \"Upload to EXAMPLE does nothing after clicking through several reel videos\" bug.",
+  "We reproduced and fixed the \"Pour cereal does nothing after switching between several cereal boxes\" bug.",
   "",
   "Root cause:",
-  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO EXAMPLE` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.exampleButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGEXAMPLEButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
+  "After selecting multiple cereal boxes, the visible editor bottom-bar `POUR CEREAL` button still had a delegate and received mouseUp, but `BreakfastEditorViewController.pourCerealButtonClicked(_:)` only handled the click when `button === pourButton`. In the cereal-switch path, the clicked button could be a different styled `CerealActionButton` instance than the controller's stored `pourButton`, so the delegate method silently fell through and did nothing.",
   "",
   "Fix:",
-  "In `GGEditorOptionsViewController.exampleButtonClicked(_:)`, handle upload by command/title as well as object identity:",
+  "In `BreakfastEditorViewController.pourCerealButtonClicked(_:)`, handle cereal pouring by command/title as well as object identity:",
 ].join("\n");
 
 const handoffPrefixWithCodeBlock = [
   handoffPrefixWithoutCodeBlock,
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO EXAMPLE\" {",
-  "    uploadButtonClicked()",
+  "} else if button === pourButton || button.titleText == \"POUR CEREAL\" {",
+  "    pourCerealIntoBowl()",
   "}",
   "```",
 ].join("\n");
 
 const canonicalHandoffPrefix = [
-  "We reproduced and fixed the \"Upload to EXAMPLE does nothing after clicking through several reel videos\" bug.",
+  "We reproduced and fixed the \"Pour cereal does nothing after switching between several cereal boxes\" bug.",
   "",
   "Root cause:",
   "",
-  "After selecting multiple reel items, the visible editor bottom-bar `UPLOAD TO EXAMPLE` button still had a delegate and received mouseUp, but `GGEditorOptionsViewController.exampleButtonClicked(_:)` only handled the click when `button === uploadButton`. In the reel-switch path, the clicked button could be a different styled `GGEXAMPLEButton` instance than the controller's stored `uploadButton`, so the delegate method silently fell through and did nothing.",
+  "After selecting multiple cereal boxes, the visible editor bottom-bar `POUR CEREAL` button still had a delegate and received mouseUp, but `BreakfastEditorViewController.pourCerealButtonClicked(_:)` only handled the click when `button === pourButton`. In the cereal-switch path, the clicked button could be a different styled `CerealActionButton` instance than the controller's stored `pourButton`, so the delegate method silently fell through and did nothing.",
   "",
   "Fix:",
   "",
-  "In `GGEditorOptionsViewController.exampleButtonClicked(_:)`, handle upload by command/title as well as object identity:",
+  "In `BreakfastEditorViewController.pourCerealButtonClicked(_:)`, handle cereal pouring by command/title as well as object identity:",
 ].join("\n");
 
 const canonicalHandoffPrefixWithCodeBlock = [
   canonicalHandoffPrefix,
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO EXAMPLE\" {",
-  "    uploadButtonClicked()",
+  "} else if button === pourButton || button.titleText == \"POUR CEREAL\" {",
+  "    pourCerealIntoBowl()",
   "}",
   "```",
 ].join("\n");
@@ -251,8 +251,8 @@ describe("ComposerTiptapInput", () => {
     const codeBlock = container.querySelector("pre code");
     expect(codeBlock?.textContent).toBe(
       [
-        "} else if button === uploadButton || button.titleText == \"UPLOAD TO EXAMPLE\" {",
-        "    uploadButtonClicked()",
+        "} else if button === pourButton || button.titleText == \"POUR CEREAL\" {",
+        "    pourCerealIntoBowl()",
         "}",
       ].join("\n")
     );
@@ -260,20 +260,20 @@ describe("ComposerTiptapInput", () => {
 
     const orderedItems = [...container.querySelectorAll("ol > li")];
     expect(orderedItems).toHaveLength(8);
-    expect(orderedItems[0]).toHaveTextContent("Creates several ready recordings.");
+    expect(orderedItems[0]).toHaveTextContent("Creates several cereal boxes.");
     expect(orderedItems[7]).toHaveTextContent(
-      "Asserts representedRecording is the currently selected recording.",
+      "Asserts selectedCereal is the currently selected cereal box.",
     );
 
     const bulletItems = [...container.querySelectorAll("ul > li")];
     expect(bulletItems).toHaveLength(3);
     expect(bulletItems[0]).toHaveTextContent(
-      "Add diagnostic logs for upload button mouseUp",
+      "Add diagnostic logs for pour button mouseUp",
     );
     const paragraphs = [...container.querySelectorAll(".composer-tiptap-input__editor > p")];
     expect(
       paragraphs.some((paragraph) =>
-        paragraph.textContent?.startsWith("1. Creates several ready recordings.")
+        paragraph.textContent?.startsWith("1. Creates several cereal boxes.")
       ),
     ).toBe(false);
   });
