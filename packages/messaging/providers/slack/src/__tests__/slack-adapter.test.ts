@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SlackAdapter,
   SlackSocketModeConnection,
   type SlackApi,
+  type SlackStreamChunk,
   type SlackSocketClient,
 } from "../slack-adapter.ts";
 import type { SlackHomeView } from "../slack-home.ts";
@@ -29,6 +30,42 @@ const baseConfig = {
   teamAuthorizationMode: "allow_all" as const,
   channelAuthorizationMode: "allow_all" as const,
 };
+
+function slackWorkingCardIntent(
+  sequence: number,
+  options: { isFinal?: boolean; key?: string; phase?: "completed" | "failed" } = {},
+): MessagingSurfaceIntent {
+  const isFinal = options.isFinal ?? false;
+  return {
+    id: `working-card-${sequence}`,
+    kind: "working_card",
+    bindingId: "slack-binding-1",
+    createdAt: sequence,
+    fallbackText: `Tool update: activity ${sequence}`,
+    card: {
+      displayHint: "plan",
+      isFinal,
+      key: options.key ?? "slack-binding-1\0turn-1",
+      phase: options.phase ?? (isFinal ? "completed" : "working"),
+      sequence,
+      tasks: [{ id: `task-${sequence}`, title: `Activity ${sequence}`, status: "complete" }],
+    },
+    audit: {
+      actor: { platformUserId: "U012ABCDEF0" },
+      bindingId: "slack-binding-1",
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "thread",
+          parentId: "1700000000.000001",
+          workspaceId: "T012ABCDEF0",
+        },
+      },
+      occurredAt: sequence,
+    },
+  };
+}
 
 function fakeStore(): MessagingCallbackHandleStore & {
   records: MessagingCallbackHandleRecord[];
@@ -62,6 +99,7 @@ function conversationKey(channel: MessagingChannelRef): string {
 function fakeApi(spies: {
   assistantStatusError?: Error;
   assistantStatuses?: Array<{ channelId: string; status: string; threadTs: string }>;
+  appendedStreams?: unknown[];
   bots?: Record<string, string>;
   botsInfoCalls?: string[];
   conversations?: Record<string, string>;
@@ -75,9 +113,21 @@ function fakeApi(spies: {
   postedTimestamps?: string[];
   replies?: Record<string, string>;
   updated?: unknown[];
+  startedStreams?: unknown[];
+  stoppedStreams?: unknown[];
   users?: Record<string, { displayName?: string; realName?: string; username?: string }>;
 }): SlackApi {
   return {
+    startStream: async (params) => {
+      spies.startedStreams?.push(params);
+      return { channel: params.channel, ts: "1700000000.900001" };
+    },
+    appendStream: async (params) => {
+      spies.appendedStreams?.push(params);
+    },
+    stopStream: async (params) => {
+      spies.stoppedStreams?.push(params);
+    },
     authTest: async () => ({
       bot_id: "B0PWRAGENT",
       user: "pwragent",
@@ -4049,6 +4099,806 @@ describe("SlackAdapter", () => {
         .messageTimestamps
         .map((ts) => ({ channel: "D012ABCDEF0", ts })),
     );
+  });
+
+  it("streams one sequenced Thinking Steps card and drops stale updates", async () => {
+    const appendedStreams: unknown[] = [];
+    const startedStreams: unknown[] = [];
+    const stoppedStreams: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ appendedStreams, startedStreams, stoppedStreams }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const intent = (sequence: number, isFinal = false): MessagingSurfaceIntent => ({
+      id: `working-card-${sequence}`,
+      kind: "working_card",
+      bindingId: "slack-binding-1",
+      createdAt: sequence,
+      fallbackText: "Tool update: searched files",
+      card: {
+        displayHint: "plan",
+        isFinal,
+        key: "slack-binding-1\0turn-1",
+        phase: isFinal ? "completed" : "working",
+        sequence,
+        tasks: Array.from({ length: sequence }, (_, index) => ({
+          detail: "0ms",
+          id: `task-${index + 1}`,
+          title: `Activity ${index + 1}: ${"x".repeat(300)}`,
+          status: "complete" as const,
+        })),
+      },
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        bindingId: "slack-binding-1",
+        channel: {
+          channel: "slack",
+          conversation: {
+            id: "C012ABCDEF0",
+            kind: "thread",
+            parentId: "1700000000.000001",
+            workspaceId: "T012ABCDEF0",
+          },
+        },
+        occurredAt: sequence,
+      },
+    });
+
+    await expect(adapter.deliver(intent(1))).resolves.toMatchObject({ outcome: "presented" });
+    await expect(adapter.deliver(intent(1))).resolves.toMatchObject({ outcome: "discarded" });
+    await expect(adapter.deliver(intent(2))).resolves.toMatchObject({ outcome: "updated" });
+    await expect(adapter.deliver(intent(3, true))).resolves.toMatchObject({ outcome: "updated" });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(startedStreams).toHaveLength(1);
+    expect(appendedStreams).toHaveLength(1);
+    expect(stoppedStreams).toHaveLength(1);
+    expect(JSON.stringify(startedStreams[0])).not.toContain("x".repeat(257));
+    expect((startedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
+      .toEqual([expect.objectContaining({
+        id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:1$/),
+        details: "0ms",
+      })]);
+    expect((appendedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
+      .toEqual([expect.objectContaining({
+        id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:2$/),
+        details: "0ms",
+      })]);
+    expect((stoppedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
+      .toEqual([expect.objectContaining({
+        id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:3$/),
+        details: "0ms",
+      })]);
+  });
+
+  it("anchors a channel-root Agent Route card to its inbound user message", async () => {
+    const startedStreams: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ startedStreams }),
+      socketClient: fakeSocket(),
+    });
+    const intent = slackWorkingCardIntent(1);
+    if (intent.kind !== "working_card") throw new Error("expected working card");
+    intent.audit = {
+      ...intent.audit!,
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "channel",
+          workspaceId: "T012ABCDEF0",
+        },
+      },
+    };
+    intent.targetSurface = {
+      channel: "slack",
+      id: "slack-inbound-1",
+      state: {
+        opaque: {
+          channelId: "C012ABCDEF0",
+          teamId: "T012ABCDEF0",
+          ts: "1700000000.000099",
+        },
+      },
+    };
+
+    await expect(adapter.deliver(intent)).resolves.toMatchObject({
+      outcome: "presented",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(startedStreams).toEqual([
+      expect.objectContaining({
+        channel: "C012ABCDEF0",
+        recipientTeamId: "T012ABCDEF0",
+        recipientUserId: "U012ABCDEF0",
+        threadTs: "1700000000.000099",
+      }),
+    ]);
+  });
+
+  it("renders waiting visibly and closes cancelled tasks without an error state", async () => {
+    const appendedStreams: unknown[] = [];
+    const startedStreams: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ appendedStreams, startedStreams }),
+      socketClient: fakeSocket(),
+    });
+    const first = slackWorkingCardIntent(1);
+    if (first.kind !== "working_card") throw new Error("expected working card");
+    first.card.tasks = [{
+      detail: "Cancelled · 1.2s",
+      id: "task-cancelled",
+      status: "cancelled",
+      title: "Deploy production",
+    }];
+    const waiting = {
+      ...first,
+      id: "working-card-waiting",
+      card: {
+        ...first.card,
+        phase: "waiting" as const,
+        sequence: 2,
+      },
+    };
+
+    await adapter.deliver(first);
+    await adapter.deliver(waiting);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const startedChunks = (startedStreams[0] as {
+      chunks: SlackStreamChunk[];
+    }).chunks;
+    expect(startedChunks).toContainEqual(expect.objectContaining({
+      details: "Cancelled · 1.2s",
+      status: "complete",
+      title: "Deploy production",
+      type: "task_update",
+    }));
+    const appendedChunks = (appendedStreams[0] as {
+      chunks: SlackStreamChunk[];
+    }).chunks;
+    expect(appendedChunks).toContainEqual({
+      markdown_text: "*Waiting for your input*",
+      type: "markdown_text",
+    });
+  });
+
+  it("falls back to the classic text Working Update without stream APIs", async () => {
+    const posted: unknown[] = [];
+    const api = fakeApi({ posted });
+    api.startStream = undefined;
+    api.appendStream = undefined;
+    api.stopStream = undefined;
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(adapter.deliver({
+      id: "working-card-fallback",
+      kind: "working_card",
+      createdAt: 1,
+      fallbackText: "Tool update: searched files",
+      card: {
+        displayHint: "plan",
+        isFinal: false,
+        key: "fallback-turn",
+        phase: "working",
+        sequence: 1,
+        tasks: [{ id: "task-1", title: "Searched files", status: "complete" }],
+      },
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        channel: {
+          channel: "slack",
+          conversation: {
+            id: "C012ABCDEF0",
+            kind: "thread",
+            parentId: "1700000000.000001",
+          },
+        },
+        occurredAt: 1,
+      },
+    })).resolves.toMatchObject({ outcome: "presented" });
+
+    expect(posted).toHaveLength(1);
+    expect(JSON.stringify(posted[0])).toContain("Tool update: searched files");
+  });
+
+  it("keeps Live Working Cards opt-in and uses classic updates when unspecified", async () => {
+    const posted: unknown[] = [];
+    const startedStreams: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted, startedStreams }),
+      socketClient: fakeSocket(),
+    });
+
+    await expect(adapter.deliver(slackWorkingCardIntent(1))).resolves.toMatchObject({
+      outcome: "presented",
+    });
+
+    expect(posted).toHaveLength(1);
+    expect(startedStreams).toEqual([]);
+  });
+
+  it("keeps native card calls off the ordinary message budget but budgets fallback text", () => {
+    const nativeAdapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: fakeSocket(),
+    });
+    const fallbackApi = fakeApi({});
+    fallbackApi.startStream = undefined;
+    fallbackApi.appendStream = undefined;
+    fallbackApi.stopStream = undefined;
+    const fallbackAdapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api: fallbackApi,
+      socketClient: fakeSocket(),
+    });
+    const intent = slackWorkingCardIntent(1);
+
+    expect(nativeAdapter.resolveDeliveryScope(intent)).toBeUndefined();
+    expect(fallbackAdapter.resolveDeliveryScope(intent)).toMatchObject({
+      id: "slack:channel:C012ABCDEF0",
+      budget: { limit: 30, intervalMs: 60_000, reserved: 5 },
+    });
+  });
+
+  it("does not post empty waiting or terminal text fallbacks", async () => {
+    const posted: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted }),
+      socketClient: fakeSocket(),
+    });
+    const waiting = slackWorkingCardIntent(2);
+    if (waiting.kind !== "working_card") throw new Error("expected working card");
+    waiting.card.phase = "waiting";
+    waiting.fallbackText = "";
+
+    await expect(adapter.deliver(waiting)).resolves.toMatchObject({
+      outcome: "discarded",
+    });
+    const terminal = {
+      ...waiting,
+      id: "working-card-terminal-fallback",
+      card: {
+        ...waiting.card,
+        isFinal: true,
+        phase: "completed",
+        sequence: 3,
+      },
+    } satisfies MessagingSurfaceIntent;
+    expect(adapter.resolveDeliveryScope(terminal)).toBeUndefined();
+    await expect(adapter.deliver(terminal)).resolves.toMatchObject({
+      outcome: "discarded",
+    });
+    expect(posted).toEqual([]);
+  });
+
+  it("moves native-degraded cards back onto the channel budget", async () => {
+    const posted: unknown[] = [];
+    const api = fakeApi({ posted });
+    api.startStream = async () => {
+      throw new Error("missing_scope");
+    };
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const first = slackWorkingCardIntent(1, { key: "degraded-turn" });
+
+    expect(adapter.resolveDeliveryScope(first)).toBeUndefined();
+    await adapter.deliver(first);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(posted).toHaveLength(1);
+
+    const second = slackWorkingCardIntent(2, { key: "degraded-turn" });
+    expect(adapter.resolveDeliveryScope(second)).toMatchObject({
+      id: "slack:channel:C012ABCDEF0",
+      budget: { limit: 30, intervalMs: 60_000, reserved: 5 },
+    });
+    await expect(adapter.deliver(second)).resolves.toMatchObject({
+      outcome: "presented",
+    });
+    expect(posted).toHaveLength(2);
+
+    const terminal = slackWorkingCardIntent(3, {
+      isFinal: true,
+      key: "degraded-turn",
+    });
+    expect(adapter.resolveDeliveryScope(terminal)).toBeUndefined();
+
+    await adapter.deliver(slackWorkingCardIntent(1, { key: "second-degraded-turn" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(posted).toHaveLength(2);
+  });
+
+  it("falls back with the latest snapshot when a pending start fails", async () => {
+    const posted: Array<{ text?: string }> = [];
+    let rejectStart!: (error: Error) => void;
+    const startResult = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const api = fakeApi({ posted });
+    api.startStream = async () => await startResult;
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+    });
+
+    await adapter.deliver(slackWorkingCardIntent(1, { key: "slow-start" }));
+    await adapter.deliver(slackWorkingCardIntent(2, { key: "slow-start" }));
+    rejectStart(new Error("missing_scope"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.text).toContain("activity 2");
+    expect(posted[0]?.text).not.toContain("activity 1");
+  });
+
+  it("preserves assistant standard Markdown in classic card fallbacks", async () => {
+    const posted: Array<{
+      blocks?: Array<{ type: string }>;
+      text?: string;
+    }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted }),
+      socketClient: fakeSocket(),
+    });
+    const intent = slackWorkingCardIntent(1);
+    if (intent.kind !== "working_card") throw new Error("expected working card");
+    intent.fallbackText = "| Result |\n| --- |\n| Passed |";
+    intent.card.fallbackPresentation = {
+      markdown: "markdown",
+      role: "assistant",
+    };
+
+    await adapter.deliver(intent);
+
+    expect(posted[0]?.blocks).toEqual([
+      expect.objectContaining({ type: "markdown" }),
+    ]);
+  });
+
+  it("returns a retractable surface and cancels an open working card", async () => {
+    const deleted: Array<{ channel: string; ts: string }> = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ deleted }),
+      socketClient: fakeSocket(),
+    });
+
+    const result = await adapter.deliver(slackWorkingCardIntent(1));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(result).toMatchObject({
+      outcome: "presented",
+      surface: {
+        state: { opaque: { workingCardKey: "slack-binding-1\0turn-1" } },
+      },
+    });
+    await expect(adapter.deliver({
+      id: "dismiss-working-card",
+      kind: "dismiss",
+      createdAt: 2,
+      reason: "terminal_private_response",
+      targetSurface: result.surface!,
+    })).resolves.toMatchObject({ outcome: "dismissed" });
+    expect(deleted).toEqual([{
+      channel: "C012ABCDEF0",
+      ts: "1700000000.900001",
+    }]);
+  });
+
+  it("retracts a card whose queued start resolves after cancellation", async () => {
+    const deleted: Array<{ channel: string; ts: string }> = [];
+    let resolveStart!: () => void;
+    const startRelease = new Promise<void>((resolve) => {
+      resolveStart = resolve;
+    });
+    const api = fakeApi({ deleted });
+    api.startStream = async (params) => {
+      await startRelease;
+      return { channel: params.channel, ts: "1700000000.900002" };
+    };
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+    });
+
+    const result = await adapter.deliver(slackWorkingCardIntent(1, {
+      key: "pending-start-turn",
+    }));
+    await expect(adapter.deliver({
+      id: "dismiss-pending-working-card",
+      kind: "dismiss",
+      createdAt: 2,
+      reason: "terminal_private_response",
+      targetSurface: result.surface!,
+    })).resolves.toMatchObject({ outcome: "dismissed" });
+    expect(deleted).toEqual([]);
+
+    resolveStart();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(deleted).toEqual([{
+      channel: "C012ABCDEF0",
+      ts: "1700000000.900002",
+    }]);
+  });
+
+  it("keeps a terminal sequence tombstone and renders failed turns as errors", async () => {
+    const startedStreams: unknown[] = [];
+    const stoppedStreams: Array<{ chunks?: Array<{ status: string; title: string }> }> = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ startedStreams, stoppedStreams }),
+      socketClient: fakeSocket(),
+    });
+
+    await adapter.deliver(slackWorkingCardIntent(1));
+    await adapter.deliver(slackWorkingCardIntent(3, {
+      isFinal: true,
+      phase: "failed",
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(stoppedStreams[0]?.chunks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "error", title: "Turn failed" }),
+      ]),
+    );
+    await expect(adapter.deliver(slackWorkingCardIntent(2))).resolves.toMatchObject({
+      outcome: "discarded",
+    });
+    expect(startedStreams).toHaveLength(1);
+  });
+
+  it("deletes and tombstones a card after bounded terminal stop failures", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      const deleted: Array<{ channel: string; ts: string }> = [];
+      let stopAttempts = 0;
+      const api = fakeApi({ deleted });
+      api.stopStream = async () => {
+        stopAttempts += 1;
+        throw new Error("service_unavailable");
+      };
+      const adapter = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api,
+        socketClient: fakeSocket(),
+      });
+
+      await adapter.deliver(slackWorkingCardIntent(1));
+      await Promise.resolve();
+      await Promise.resolve();
+      await adapter.deliver(slackWorkingCardIntent(2, { isFinal: true }));
+      await Promise.resolve();
+      expect(stopAttempts).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(stopAttempts).toBe(2);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(stopAttempts).toBe(3);
+      expect(deleted).toEqual([{
+        channel: "C012ABCDEF0",
+        ts: "1700000000.900001",
+      }]);
+      await expect(adapter.deliver(slackWorkingCardIntent(1))).resolves
+        .toMatchObject({ outcome: "discarded" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops rate-limited card appends without retrying or posting text", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      const posted: unknown[] = [];
+      let appendAttempts = 0;
+      const api = fakeApi({ posted });
+      api.appendStream = async () => {
+        appendAttempts += 1;
+        throw Object.assign(new Error("rate_limited"), {
+          status: 429,
+          retryAfterMs: 60_000,
+        });
+      };
+      const adapter = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api,
+        socketClient: fakeSocket(),
+      });
+
+      await adapter.deliver(slackWorkingCardIntent(1));
+      await Promise.resolve();
+      await Promise.resolve();
+      await adapter.deliver(slackWorkingCardIntent(2));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(appendAttempts).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(appendAttempts).toBe(1);
+      expect(posted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reuses twelve mounted task slots when older card history is collapsed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      const appendedStreams: Array<{ chunks: SlackStreamChunk[] }> = [];
+      const startedStreams: Array<{ chunks: SlackStreamChunk[] }> = [];
+      const adapter = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api: fakeApi({ appendedStreams, startedStreams }),
+        socketClient: fakeSocket(),
+      });
+
+      for (let sequence = 1; sequence <= 13; sequence += 1) {
+        const intent = slackWorkingCardIntent(sequence, { key: "bounded-card" });
+        if (intent.kind !== "working_card") throw new Error("expected working card");
+        const firstVisible = Math.max(1, sequence - 11);
+        intent.card.tasks = Array.from(
+          { length: sequence - firstVisible + 1 },
+          (_, index) => ({
+            id: `activity-${firstVisible + index}`,
+            title: `Activity ${firstVisible + index}`,
+            status: "complete" as const,
+            ...(sequence > 12 && index === 0
+              ? { detail: `${sequence - 12} earlier step` }
+              : {}),
+          }),
+        );
+        await adapter.deliver(intent);
+        await Promise.resolve();
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+
+      const allChunks = [
+        ...(startedStreams[0]?.chunks ?? []),
+        ...appendedStreams.flatMap((call) => call.chunks),
+      ].filter((chunk) => chunk.type === "task_update");
+      expect(new Set(allChunks.map((chunk) => chunk.id)).size).toBe(12);
+      expect(appendedStreams.at(-1)?.chunks).toHaveLength(12);
+      expect(appendedStreams.at(-1)?.chunks[0]).toMatchObject({
+        details: "1 earlier step",
+        title: "Activity 2",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("queues a rate-limited card start while approvals and questionnaires bypass it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      const posted: unknown[] = [];
+      let startAttempts = 0;
+      const api = fakeApi({ posted });
+      api.startStream = async (params) => {
+        startAttempts += 1;
+        if (startAttempts === 1) {
+          throw Object.assign(new Error("rate_limited"), {
+            status: 429,
+            retryAfterMs: 5_000,
+          });
+        }
+        return { channel: params.channel, ts: "1700000000.900001" };
+      };
+      const adapter = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api,
+        socketClient: fakeSocket(),
+      });
+
+      await adapter.deliver(slackWorkingCardIntent(1));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(startAttempts).toBe(1);
+
+      await adapter.deliver({
+        id: "approval-during-card-cooldown",
+        kind: "approval",
+        bindingId: "slack-binding-1",
+        createdAt: 2,
+        title: "Approve command",
+        body: "Run the requested command?",
+        decisions: [{
+          id: "approve",
+          label: "Approve",
+          decision: "accept",
+        }],
+        audit: slackWorkingCardIntent(1).audit,
+      });
+      await adapter.deliver({
+        id: "questionnaire-during-card-cooldown",
+        kind: "questionnaire",
+        bindingId: "slack-binding-1",
+        createdAt: 3,
+        answers: [null],
+        currentIndex: 0,
+        phase: "answering",
+        questions: [{
+          id: "mode",
+          question: "Which mode?",
+          options: [{ id: "safe", label: "Safe" }],
+        }],
+        audit: slackWorkingCardIntent(1).audit,
+      });
+
+      expect(posted).toHaveLength(2);
+      expect(startAttempts).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(startAttempts).toBe(2);
+      await adapter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops locally throttled card updates and lets terminal stop supersede them", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      const appendedStreams: Array<{
+        chunks: Array<{ id: string }>;
+      }> = [];
+      const stoppedStreams: unknown[] = [];
+      const adapter = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api: fakeApi({ appendedStreams, stoppedStreams }),
+        socketClient: fakeSocket(),
+      });
+
+      await adapter.deliver(slackWorkingCardIntent(1));
+      await Promise.resolve();
+      await Promise.resolve();
+      await adapter.deliver(slackWorkingCardIntent(2));
+      await Promise.resolve();
+      await Promise.resolve();
+      await adapter.deliver(slackWorkingCardIntent(3));
+      await adapter.deliver(slackWorkingCardIntent(4));
+
+      expect(appendedStreams).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(appendedStreams).toHaveLength(1);
+
+      await adapter.deliver(slackWorkingCardIntent(5));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(appendedStreams).toHaveLength(2);
+      await adapter.deliver(slackWorkingCardIntent(6, { isFinal: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(stoppedStreams).toHaveLength(1);
+      expect(appendedStreams).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares method budgets across simultaneous working cards", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      const startedStreams: Array<{
+        chunks: Array<{ id: string }>;
+      }> = [];
+      const appendedStreams: Array<{
+        chunks: Array<{ id: string }>;
+      }> = [];
+      const stoppedStreams: Array<{
+        chunks: Array<{ id: string }>;
+      }> = [];
+      const adapter = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api: fakeApi({ appendedStreams, startedStreams, stoppedStreams }),
+        socketClient: fakeSocket(),
+      });
+      const first = (sequence: number, isFinal = false) =>
+        slackWorkingCardIntent(sequence, {
+          isFinal,
+          key: "slack-binding-1\0turn-1",
+        });
+      const second = (sequence: number, isFinal = false) =>
+        slackWorkingCardIntent(sequence, {
+          isFinal,
+          key: "slack-binding-1\0turn-2",
+        });
+
+      await adapter.deliver(first(1));
+      await adapter.deliver(second(1));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(startedStreams).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(startedStreams).toHaveLength(2);
+
+      await adapter.deliver(first(2));
+      await adapter.deliver(second(2));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(appendedStreams).toHaveLength(1);
+
+      await adapter.deliver(first(3, true));
+      await adapter.deliver(second(3, true));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Stop has its own workspace budget, so one terminal call proceeds even
+      // though the second append was discarded. Each lifecycle method still
+      // serializes calls shared by all cards on this adapter.
+      expect(stoppedStreams).toHaveLength(1);
+      expect(appendedStreams).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(stoppedStreams).toHaveLength(2);
+      expect(appendedStreams).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("splits long Markdown with images and attaches them to the final post", async () => {

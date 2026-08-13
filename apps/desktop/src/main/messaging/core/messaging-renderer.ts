@@ -11,6 +11,7 @@ import type {
   MessagingSurfaceAction,
   MessagingMessageIntent,
   MessagingThreadPickerIntent,
+  MessagingWorkingCardIntent,
 } from "@pwragent/messaging-interface";
 import {
   applyActionCapabilityLimits,
@@ -18,6 +19,7 @@ import {
   type MessagingCapabilityProfile,
 } from "@pwragent/messaging-interface";
 import {
+  formatToolActivityDuration,
   formatToolActivityLine,
   type MessagingToolActivity,
 } from "./messaging-tool-activity.js";
@@ -167,6 +169,84 @@ export function buildToolUpdateBatchMessageIntent(params: {
       },
     ],
   };
+}
+
+export function buildWorkingCardIntent(params: {
+  activities: MessagingToolActivity[];
+  bindingId: string;
+  createdAt: number;
+  displayHint: MessagingWorkingCardIntent["card"]["displayHint"];
+  fallbackActivities?: MessagingToolActivity[];
+  id: string;
+  key: string;
+  omittedTaskCount?: number;
+  sequence: number;
+}): MessagingWorkingCardIntent {
+  const fallback = buildToolUpdateBatchMessageIntent({
+    activities: params.fallbackActivities ?? params.activities,
+    bindingId: params.bindingId,
+    createdAt: params.createdAt,
+    id: `${params.id}:fallback`,
+  });
+  const fallbackPart = fallback.parts[0];
+  const tasks = params.activities.map((activity) => {
+    const detail = workingCardTaskDetail(activity);
+    return {
+      id: activity.id,
+      status: activity.status === "failed"
+        ? "error" as const
+        : activity.status === "cancelled"
+          ? "cancelled" as const
+          : "complete" as const,
+      title: activity.title,
+      ...(detail ? { detail } : {}),
+    };
+  });
+  if (params.omittedTaskCount && params.omittedTaskCount > 0 && tasks[0]) {
+    tasks[0] = {
+      ...tasks[0],
+      detail: [
+        `${params.omittedTaskCount} earlier step${
+          params.omittedTaskCount === 1 ? "" : "s"
+        }`,
+        tasks[0].detail,
+      ].filter(Boolean).join(" · "),
+    };
+  }
+  return {
+    id: params.id,
+    kind: "working_card",
+    bindingId: params.bindingId,
+    createdAt: params.createdAt,
+    fallbackText: fallbackPart?.type === "text"
+      ? fallbackPart.text
+      : "Working update",
+    card: {
+      displayHint: params.displayHint,
+      fallbackPresentation: {
+        markdown: fallbackPart?.type === "text"
+          ? fallbackPart.markdown ?? "light"
+          : "light",
+        role: fallback.role === "assistant" ? "assistant" : "system",
+      },
+      isFinal: false,
+      key: params.key,
+      phase: "working",
+      sequence: params.sequence,
+      tasks,
+    },
+  };
+}
+
+function workingCardTaskDetail(
+  activity: MessagingToolActivity,
+): string | undefined {
+  return [
+    activity.status === "cancelled" ? "Cancelled" : undefined,
+    activity.durationMs !== undefined
+      ? formatToolActivityDuration(activity.durationMs)
+      : undefined,
+  ].filter(Boolean).join(" · ") || undefined;
 }
 
 export function buildConfirmationIntent(params: {

@@ -928,6 +928,10 @@ export class DesktopSettingsService {
             false,
             SLACK_ENABLED_ENV,
           ),
+          liveWorkingCards: this.resolveConfigBoolean(
+            config.messaging?.slack?.liveWorkingCards,
+            false,
+          ),
           responseMode: this.resolveConfigMessagingResponseMode(
             config.messaging?.slack?.responseMode,
             "mention_only",

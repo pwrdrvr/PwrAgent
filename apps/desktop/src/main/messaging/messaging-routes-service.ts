@@ -18,6 +18,7 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
+  MESSAGING_TOOL_UPDATE_MODES,
   normalizeMessagingBindingTargetKind,
 } from "@pwragent/shared";
 import type {
@@ -109,6 +110,9 @@ export async function listDesktopMessagingRoutes(
       return {
         assignmentId: assignment.id,
         scope: toDesktopScope(assignment.scope),
+        ...(assignment.toolUpdateMode
+          ? { toolUpdateMode: assignment.toolUpdateMode }
+          : {}),
         target: eligible ?? {
           backend: assignment.target.backend,
           threadId: assignment.target.threadId,
@@ -216,6 +220,13 @@ export async function setDesktopMessagingDefaultAgent(
   request: SetMessagingDefaultAgentRequest,
   dependencies: MessagingRoutesServiceDependencies = {},
 ): Promise<SetMessagingDefaultAgentResponse> {
+  if (
+    request.toolUpdateMode !== undefined
+    && request.toolUpdateMode !== null
+    && !MESSAGING_TOOL_UPDATE_MODES.includes(request.toolUpdateMode)
+  ) {
+    throw new Error("The selected Working Updates mode is invalid.");
+  }
   const store = dependencies.store ?? getDesktopMessagingStore();
   const routes = await listDesktopMessagingRoutes(dependencies);
   const target = routes.eligibleAgents.find(
@@ -233,6 +244,9 @@ export async function setDesktopMessagingDefaultAgent(
     throw new Error("The default Agent assignment no longer exists.");
   }
   const now = (dependencies.now ?? Date.now)();
+  const toolUpdateMode = request.toolUpdateMode === undefined
+    ? existing?.toolUpdateMode
+    : request.toolUpdateMode ?? undefined;
   const assignment: MessagingDefaultAgentAssignmentRecord = {
     id:
       existing?.id
@@ -243,6 +257,7 @@ export async function setDesktopMessagingDefaultAgent(
       backend: request.target.backend,
       threadId: request.target.threadId,
     },
+    ...(toolUpdateMode ? { toolUpdateMode } : {}),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };

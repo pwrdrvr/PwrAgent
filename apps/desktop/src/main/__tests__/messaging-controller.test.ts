@@ -50,7 +50,9 @@ import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/tes
 import {
   MessagingController,
   messagingDeliveryPriority,
+  rememberWorkingCardState,
   shouldConsumeDeliveryBudget,
+  updateWorkingCardActivities,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
 import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
@@ -1690,7 +1692,7 @@ describe("MessagingController", () => {
     const harness = await createHarness({
       createManagedConversation,
       navigation,
-      toolUpdateDefaultMode: "show_all",
+      toolUpdateDefaultMode: "show_none",
     });
     const channel = buildTopicChannel("13056");
     const event = buildTextEvent("find the thread for 13056", {
@@ -1703,7 +1705,12 @@ describe("MessagingController", () => {
         },
       },
     });
-    await seedConversationDefaultAgent(harness.store, channel);
+    await seedConversationDefaultAgent(
+      harness.store,
+      channel,
+      "codex",
+      "show_all",
+    );
 
     await harness.controller.handleInboundEvent(event);
 
@@ -1798,6 +1805,69 @@ describe("MessagingController", () => {
       "I am searching for the thread now.",
     );
     expect(JSON.stringify(harness.delivered)).toContain("find the thread");
+  });
+
+  it("anchors Slack Agent Route working cards to the inbound channel message", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Signals Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      channel: "slack",
+      navigation,
+      toolUpdateDefaultMode: "show_none",
+    });
+    const channel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SIGNALS",
+        kind: "channel" as const,
+        title: "p-search-signals-project",
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    const routingState = {
+      opaque: {
+        channelId: "C012SIGNALS",
+        teamId: "T012WORKSPACE",
+        ts: "1700000000.000099",
+      },
+    };
+    await seedConversationDefaultAgent(
+      harness.store,
+      channel,
+      "codex",
+      "show_some",
+    );
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("check the latest signals", {
+        botMention: true,
+        channel,
+        routingState,
+      }),
+    );
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent(
+      buildToolCompletedEvent("tool-1", "check automation run"),
+    );
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "working_card",
+        targetSurface: {
+          channel: "slack",
+          id: "event-text",
+          state: routingState,
+        },
+      }),
+    );
   });
 
   it("routes an accepted every-message topic to its default Agent without binding it", async () => {
@@ -3200,7 +3270,10 @@ describe("MessagingController", () => {
       toolUpdateDefaultMode: "show_all",
       deliver: async (intent) => {
         delivered.push(intent);
-        if (intent.id.startsWith("tool-update")) {
+        if (
+          intent.id.startsWith("tool-update")
+          || intent.id.startsWith("working-card")
+        ) {
           resolveWorkingUpdateStarted();
           await workingUpdateRelease;
           return {
@@ -3261,7 +3334,10 @@ describe("MessagingController", () => {
     const recordDelivery = harness.store.recordDelivery.bind(harness.store);
     vi.spyOn(harness.store, "recordDelivery").mockImplementation(async (delivery) => {
       const recorded = await recordDelivery(delivery);
-      if (delivery.intentId?.startsWith("tool-update:")) {
+      if (
+        delivery.intentId?.startsWith("tool-update:")
+        || delivery.intentId?.startsWith("working-card:")
+      ) {
         resolveWorkingUpdateRecorded();
         await workingUpdateRecordRelease;
       }
@@ -15080,6 +15156,75 @@ describe("MessagingController", () => {
     expect(messagingDeliveryPriority(finalAssistant)).toBe("final_turn");
   });
 
+  it("reserves final-turn delivery priority for terminal working cards", () => {
+    const workingCard = {
+      id: "working-card-1",
+      kind: "working_card",
+      createdAt: 1_000,
+      card: {
+        displayHint: "plan",
+        isFinal: false,
+        key: "binding-1\0turn-1",
+        phase: "working",
+        sequence: 1,
+        tasks: [],
+      },
+    } satisfies MessagingSurfaceIntent;
+
+    expect(messagingDeliveryPriority(workingCard)).toBe("tool_progress");
+    expect(messagingDeliveryPriority({
+      ...workingCard,
+      id: "working-card-final-1",
+      card: {
+        ...workingCard.card,
+        isFinal: true,
+        phase: "completed",
+        sequence: 2,
+      },
+    })).toBe("final_turn");
+  });
+
+  it("bounds accumulated working-card tasks and collapses the oldest entries", () => {
+    const state = {
+      activities: new Map(),
+      omittedTaskCount: 0,
+      sequence: 0,
+    };
+    for (let index = 1; index <= 14; index += 1) {
+      updateWorkingCardActivities(state, [{
+        id: `tool-${index}`,
+        kind: "tool",
+        status: "completed",
+        title: `Ran tool ${index}`,
+      }]);
+    }
+
+    expect([...state.activities.keys()]).toEqual(
+      Array.from({ length: 12 }, (_, index) => `tool-${index + 3}`),
+    );
+    expect(state.omittedTaskCount).toBe(2);
+  });
+
+  it("bounds per-turn working-card state when terminal events are missing", () => {
+    const states = new Map();
+    const state = () => ({
+      activities: new Map(),
+      omittedTaskCount: 0,
+      sequence: 0,
+    });
+
+    expect(rememberWorkingCardState(states, "binding\0turn-1", state(), 2))
+      .toEqual([]);
+    expect(rememberWorkingCardState(states, "binding\0turn-2", state(), 2))
+      .toEqual([]);
+    expect(rememberWorkingCardState(states, "binding\0turn-3", state(), 2))
+      .toEqual(["binding\0turn-1"]);
+    expect([...states.keys()]).toEqual([
+      "binding\0turn-2",
+      "binding\0turn-3",
+    ]);
+  });
+
   it("treats user-initiated status renders as user command budget traffic", () => {
     const status = {
       id: "status-1",
@@ -16125,6 +16270,86 @@ describe("MessagingController", () => {
         ],
       }),
     );
+  });
+
+  it("finalizes a Slack working card before task-monitor state is cleared", async () => {
+    const harness = await createHarness({
+      channel: "slack",
+      toolUpdateDefaultMode: "show_all",
+    });
+    await harness.store.upsertBinding({
+      id: "binding-slack-monitor",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C012MONITOR",
+          kind: "thread",
+          parentId: "1700000000.000001",
+          workspaceId: "T012WORKSPACE",
+        },
+      },
+      createdAt: 1000,
+      routingState: {
+        opaque: {
+          channelId: "C012MONITOR",
+          threadTs: "1700000000.000001",
+        },
+      },
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "monitor:monitor-1",
+          item: {
+            id: "monitor-1:progress:1000",
+            type: "agentMessage",
+            text: "Monitor · PR checks\nLint is still running.",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId: "monitor-1",
+              transient: true,
+            },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "monitor:monitor-1",
+          item: {
+            id: "monitor-1:completion:2000",
+            type: "taskMonitorCompletion",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId: "monitor-1",
+              outcome: "success",
+              transient: false,
+            },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const cards = harness.delivered.filter(
+      (intent): intent is Extract<MessagingSurfaceIntent, { kind: "working_card" }> =>
+        intent.kind === "working_card",
+    );
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.card).toMatchObject({ isFinal: false, phase: "working" });
+    expect(cards[1]?.card).toMatchObject({ isFinal: true, phase: "completed" });
   });
 
   it("discards a coalesced monitor heartbeat when the monitor completes", async () => {
@@ -23119,6 +23344,7 @@ async function seedConversationDefaultAgent(
   store: MessagingStore,
   channel: MessagingInboundEvent["channel"],
   backend: AppServerBackendKind = "codex",
+  toolUpdateMode?: MessagingToolUpdateMode,
 ): Promise<void> {
   await store.upsertDefaultAgentAssignment({
     id: `default-agent:${channel.channel}:${channel.conversation.id}`,
@@ -23131,6 +23357,7 @@ async function seedConversationDefaultAgent(
       backend,
       threadId: "thread-1",
     },
+    ...(toolUpdateMode ? { toolUpdateMode } : {}),
     createdAt: 1000,
     updatedAt: 1000,
   });

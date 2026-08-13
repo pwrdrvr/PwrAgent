@@ -648,6 +648,8 @@ export class MattermostAdapter implements MattermostProviderAdapter {
           return await this.deliverDismiss(intent);
         case "stream_update":
           return await this.deliverStreamUpdate(intent);
+        case "working_card":
+          return await this.deliverPostIntent(intent);
         case "message":
         case "status":
         case "progress":

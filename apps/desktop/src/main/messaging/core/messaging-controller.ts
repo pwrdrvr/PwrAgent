@@ -161,6 +161,7 @@ import {
   buildStatusIntent,
   buildToolUpdateBatchMessageIntent,
   buildToolUpdateMessageIntent,
+  buildWorkingCardIntent,
 } from "./messaging-renderer.js";
 import {
   artifactFromPlanEntry,
@@ -304,6 +305,12 @@ const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
 type MessagingTurnProseState = {
   latest?: { activityId: string; text: string };
   deliveredIds: Set<string>;
+};
+
+export type MessagingWorkingCardState = {
+  activities: Map<string, MessagingToolActivity>;
+  omittedTaskCount: number;
+  sequence: number;
 };
 const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
 const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
@@ -917,6 +924,10 @@ export class MessagingController {
   // Bounded so a turn that ends without a clean terminal event to clear it
   // cannot grow the map without limit.
   private readonly turnProse = new Map<string, MessagingTurnProseState>();
+  private readonly workingCards = new Map<
+    string,
+    MessagingWorkingCardState
+  >();
   private readonly completedTaskMonitorTurns = new Set<string>();
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
@@ -1643,6 +1654,7 @@ export class MessagingController {
           clear: true,
           turnId: eventTurnId,
         });
+        await this.finalizeWorkingCard(binding, eventTurnId, "completed");
         this.clearTurnProse(binding.id, eventTurnId);
       }
       if (
@@ -1664,6 +1676,13 @@ export class MessagingController {
           });
         }
         if (terminalTurnId) {
+          await this.finalizeWorkingCard(
+            binding,
+            terminalTurnId,
+            lifecycle?.status === "failed" || lifecycle?.status === "interrupted"
+              ? "failed"
+              : "completed",
+          );
           this.clearTurnProse(binding.id, terminalTurnId);
           if (!privateResponseFallback) {
             const workingUpdateKey = this.turnProseKey(
@@ -3375,6 +3394,7 @@ export class MessagingController {
     const binding = this.defaultAgentRouteBinding(event, {
       backend: selected.assignment.target.backend,
       threadId: selected.assignment.target.threadId,
+      toolUpdateMode: selected.assignment.toolUpdateMode,
     });
     await this.turnAdmission.append({
       binding,
@@ -15332,6 +15352,7 @@ export class MessagingController {
     target: {
       backend: AppServerBackendKind;
       threadId: ThreadIdentifier;
+      toolUpdateMode?: MessagingToolUpdateMode;
     },
   ): MessagingBindingRecord {
     const now = this.now();
@@ -15343,6 +15364,14 @@ export class MessagingController {
       targetKind: "agent_thread",
       backend: target.backend,
       threadId: target.threadId,
+      ...(target.toolUpdateMode
+        ? {
+            preferences: {
+              toolUpdateMode: target.toolUpdateMode,
+              updatedAt: now,
+            },
+          }
+        : {}),
       authorizedActorIds: [event.actor.platformUserId],
       routingState: event.routingState,
       createdAt: now,
@@ -15464,6 +15493,9 @@ export class MessagingController {
   ): Promise<MessagingDeliveryResult> {
     if (binding && shouldFlushToolUpdatesBeforeIntent(intent)) {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
+      if (intent.kind === "approval" || intent.kind === "questionnaire") {
+        await this.markWorkingCardWaiting(binding);
+      }
     }
     const displayIntent = binding?.backend === "codex"
       ? stripCodexGitActionDirectivesFromMessagingIntent(intent)
@@ -15641,6 +15673,46 @@ export class MessagingController {
       }
       return result;
     }
+  }
+
+  private async markWorkingCardWaiting(
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    if (binding.channel.channel !== "slack") {
+      return;
+    }
+    const turnId = this.getActiveTurn(binding)?.turnId;
+    if (!turnId) {
+      return;
+    }
+    const key = this.turnProseKey(binding.id, turnId);
+    const state = this.workingCards.get(key);
+    if (!state) return;
+    state.sequence += 1;
+    const card = buildWorkingCardIntent({
+      activities: [...state.activities.values()],
+      bindingId: binding.id,
+      createdAt: this.now(),
+      displayHint: "plan",
+      fallbackActivities: [],
+      id: this.newIntentId("working-card-waiting"),
+      key,
+      omittedTaskCount: state.omittedTaskCount,
+      sequence: state.sequence,
+    });
+    card.card.phase = "waiting";
+    await this.deliver(
+      card,
+      binding,
+      this.agentMessagingOriginEvent(binding, turnId),
+    );
+    await this.deliver(buildActivityIntent({
+      activity: "typing",
+      bindingId: binding.id,
+      createdAt: this.now(),
+      id: this.newIntentId("working-card-waiting-idle"),
+      state: "idle",
+    }), binding);
   }
 
   private async deliverArtifactForBinding(params: {
@@ -15841,7 +15913,9 @@ export class MessagingController {
   }
 
   private clearTurnProse(bindingId: string, turnId: string): void {
-    this.turnProse.delete(this.turnProseKey(bindingId, turnId));
+    const key = this.turnProseKey(bindingId, turnId);
+    this.turnProse.delete(key);
+    this.workingCards.delete(key);
   }
 
   private rememberCompletedTaskMonitorTurn(
@@ -15909,8 +15983,9 @@ export class MessagingController {
       return;
     }
 
-    const intent =
-      delivery.kind === "individual"
+    const intent = binding.channel.channel === "slack"
+      ? this.buildWorkingCardDeliveryIntent(delivery, binding.id, activities)
+      : delivery.kind === "individual"
         ? buildToolUpdateMessageIntent({
             activity: activities[0]!,
             bindingId: binding.id,
@@ -15931,25 +16006,30 @@ export class MessagingController {
     const guardedIsCancelled = () =>
       isTaskMonitorCancelled() || cancellation.isCancelled();
     const deliveryPromise = (async (): Promise<MessagingDeliveryResult> => {
-      const result = await this.deliver(intent, binding, undefined, {
-        isCancelled: guardedIsCancelled,
-        whenCancelled: cancellation.whenCancelled,
-        onCancelledDelivery: async (cancelledResult) => {
-          if (
-            cancelledResult.surface
-            && isVisibleAssistantStreamDelivery(cancelledResult)
-          ) {
-            const dismissed = await this.dismissTerminalPrivateResponseSurface(
-              binding,
-              delivery.turnId,
-              cancelledResult.surface,
-            );
-            if (!dismissed) {
-              this.workingUpdateCancellationFailures.add(cancellationKey);
+      const result = await this.deliver(
+        intent,
+        binding,
+        this.agentMessagingOriginEvent(binding, delivery.turnId),
+        {
+          isCancelled: guardedIsCancelled,
+          whenCancelled: cancellation.whenCancelled,
+          onCancelledDelivery: async (cancelledResult) => {
+            if (
+              cancelledResult.surface
+              && isVisibleAssistantStreamDelivery(cancelledResult)
+            ) {
+              const dismissed = await this.dismissTerminalPrivateResponseSurface(
+                binding,
+                delivery.turnId,
+                cancelledResult.surface,
+              );
+              if (!dismissed) {
+                this.workingUpdateCancellationFailures.add(cancellationKey);
+              }
             }
-          }
+          },
         },
-      });
+      );
       if (
         !guardedIsCancelled()
         && result.surface
@@ -15978,6 +16058,80 @@ export class MessagingController {
         this.workingUpdateDeliveries.delete(cancellationKey);
       }
     }
+  }
+
+  private buildWorkingCardDeliveryIntent(
+    delivery: MessagingToolUpdatePolicyDelivery,
+    bindingId: string,
+    activities: MessagingToolActivity[],
+  ): MessagingSurfaceIntent {
+    const key = this.turnProseKey(bindingId, delivery.turnId);
+    let state = this.workingCards.get(key);
+    if (!state) {
+      state = { activities: new Map(), omittedTaskCount: 0, sequence: 0 };
+      rememberWorkingCardState(this.workingCards, key, state);
+    }
+    updateWorkingCardActivities(state, activities);
+    state.sequence += 1;
+    return buildWorkingCardIntent({
+      activities: [...state.activities.values()],
+      bindingId,
+      createdAt: this.now(),
+      displayHint: delivery.mode === "show_all"
+        ? "timeline"
+        : delivery.mode === "show_less"
+          ? "dense"
+          : "plan",
+      fallbackActivities: activities,
+      id: this.newIntentId("working-card"),
+      key,
+      omittedTaskCount: state.omittedTaskCount,
+      sequence: state.sequence,
+    });
+  }
+
+  private async finalizeWorkingCard(
+    binding: MessagingBindingRecord,
+    turnId: string,
+    phase: "completed" | "failed",
+  ): Promise<void> {
+    if (binding.channel.channel !== "slack") {
+      return;
+    }
+    const key = this.turnProseKey(binding.id, turnId);
+    const state = this.workingCards.get(key);
+    if (!state) {
+      return;
+    }
+    state.sequence += 1;
+    const intent = buildWorkingCardIntent({
+      activities: [...state.activities.values()],
+      bindingId: binding.id,
+      createdAt: this.now(),
+      displayHint: "plan",
+      fallbackActivities: [],
+      id: this.newIntentId("working-card-final"),
+      key,
+      omittedTaskCount: state.omittedTaskCount,
+      sequence: state.sequence,
+    });
+    intent.card.phase = phase;
+    intent.card.isFinal = true;
+    await this.deliver(
+      intent,
+      binding,
+      this.agentMessagingOriginEvent(binding, turnId),
+    );
+    this.workingCards.delete(key);
+  }
+
+  private agentMessagingOriginEvent(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): MessagingInboundEvent | undefined {
+    return this.activeAgentMessagingOriginsByTurnKey.get(
+      agentMessagingTurnKey(binding.backend, binding.threadId, turnId),
+    )?.event;
   }
 
   private filterUndeliveredProseActivities(
@@ -19894,6 +20048,8 @@ export function messagingDeliveryPriority(
       return "critical_interactive";
     case "stream_update":
       return intent.stream.isFinal ? "final_turn" : "stream_partial";
+    case "working_card":
+      return intent.card.isFinal ? "final_turn" : "tool_progress";
     case "message":
       if (intent.id.startsWith("assistant-resume-repost-important")) {
         return "user_command";
@@ -19928,6 +20084,43 @@ export function messagingDeliveryPriority(
     case "error":
       return "user_command";
   }
+}
+
+export function updateWorkingCardActivities(
+  state: MessagingWorkingCardState,
+  activities: readonly MessagingToolActivity[],
+  maxVisibleTasks = 12,
+): void {
+  for (const activity of activities) {
+    if (
+      !state.activities.has(activity.id)
+      && state.activities.size >= maxVisibleTasks
+    ) {
+      const oldestId = state.activities.keys().next().value;
+      if (oldestId !== undefined) {
+        state.activities.delete(oldestId);
+        state.omittedTaskCount += 1;
+      }
+    }
+    state.activities.set(activity.id, activity);
+  }
+}
+
+export function rememberWorkingCardState(
+  states: Map<string, MessagingWorkingCardState>,
+  key: string,
+  state: MessagingWorkingCardState,
+  maxStates = MAX_TRACKED_TURN_PROSE,
+): string[] {
+  states.set(key, state);
+  const evicted: string[] = [];
+  while (states.size > maxStates) {
+    const oldest = states.keys().next().value;
+    if (oldest === undefined) break;
+    states.delete(oldest);
+    evicted.push(oldest);
+  }
+  return evicted;
 }
 
 function isUserInitiatedDeliveryEvent(

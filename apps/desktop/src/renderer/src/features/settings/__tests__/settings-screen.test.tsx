@@ -288,6 +288,7 @@ function createSnapshot(
       },
       slack: {
         enabled: { value: false, source: "default" },
+        liveWorkingCards: { value: false, source: "default" },
         responseMode: { value: "mention_only", source: "default" },
         streamingResponses: { value: false, source: "default" },
         botToken: { configured: false, source: "unset", writable: true },
@@ -1065,6 +1066,11 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    expect(
+      screen.queryByRole("radiogroup", {
+        name: "Agent route Working Updates",
+      }),
+    ).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Input debounce"), {
       target: { value: "750" },
     });
@@ -1081,6 +1087,23 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("radio", { name: "Group/supergroup chat" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Shows Working Updates in one Slack task card per turn when Slack stream APIs are available; otherwise uses text updates.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Live Working Updates card" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          slack: {
+            liveWorkingCards: true,
+          },
+        },
+      });
+    });
     // Five providers expose a streaming toggle; LINE has no message-edit API so
     // it deliberately has none.
     expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(5);

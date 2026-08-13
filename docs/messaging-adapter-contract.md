@@ -115,6 +115,52 @@ long-lived sqlite records:
 
 Adapters own platform limits and degradation:
 
+### Working cards
+
+`working_card` is a channel-neutral, turn-scoped Working Updates surface. The
+controller owns the dial policy and emits only admitted, redacted tasks with a
+stable `key` and monotonic `sequence`. Adapters must discard stale sequences.
+Slack renders the intent with Thinking Steps (`chat.startStream`,
+`chat.appendStream`, and `chat.stopStream`) when a thread target is available;
+stream state stays in memory. Slack Live Working Updates cards are opt-in through
+`messaging.slack.live_working_cards`; an absent setting currently means off and
+must remain absent during unrelated config writes so a future default change
+can apply to untouched profiles. If native streaming is disabled or
+unavailable, the adapter delivers `fallbackText` as the existing Working
+Update using the intent's `fallbackPresentation` role and Markdown policy.
+Providers without a native live-card surface continue to use that text
+fallback. Terminal fallback intents are no-ops and must not consume or wait on
+ordinary message-delivery capacity.
+
+Provider-native live surfaces may have API budgets orthogonal to ordinary
+message delivery. Adapters may use `MessagingRateLimitGate` to account for
+multiple workspace/method buckets independently. Slack maintains ordered
+per-card lifecycle state over workspace-wide `chat.startStream`,
+`chat.appendStream`, and `chat.stopStream` buckets. Start is a barrier and
+terminal stop remains queued until admitted. Intermediate appends are
+disposable: when their local bucket or Slack 429 cool-off blocks them, the
+adapter drops them without a timer or text fallback. A later admitted update
+reconciles directly to the newest controller-bounded snapshot. This prevents a
+multi-thread append backlog while keeping start/stop lifecycle ordering. These
+card lanes must not block approval, questionnaire, final-answer, or other
+ordinary message delivery. A platform 429 extends only the affected method
+bucket from `Retry-After`; it is not permission to discard a terminal stop.
+
+An open native card replaces classic tool-update posts for those activities.
+Task titles use the already-redacted activity title, while duration and other
+secondary context belong in task details; both fields must be clamped to
+provider limits and must never add raw command output or secrets. Because Slack
+has no cancelled task status, cancelled tasks close neutrally with cancellation
+called out in their details instead of rendering as errors. Waiting phases add
+a visible stream headline and waiting and terminal phases clear transient
+working indicators; the final assistant message remains authoritative.
+Slack renderers reuse a bounded set of positional task IDs so controller
+history eviction replaces mounted rows instead of growing the native card.
+Adapters return a retractable surface as soon as a native card is queued so
+turn cancellation and terminal private-response routing can cancel pending
+work or remove an already-mounted card. Completed keys retain a bounded
+sequence tombstone so delayed events cannot reopen a terminal card.
+
 - chunk long messages according to platform limits
 - preserve inline code and fenced code when supported
 - escape or neutralize markdown dialect hazards

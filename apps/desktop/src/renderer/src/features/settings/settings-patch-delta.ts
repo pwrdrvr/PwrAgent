@@ -162,6 +162,9 @@ export function buildSlackPatchDelta(
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
   }
+  if (snapshot.liveWorkingCards.value !== candidate.liveWorkingCards.value) {
+    patch.liveWorkingCards = candidate.liveWorkingCards.value;
+  }
   if (snapshot.responseMode.value !== candidate.responseMode.value) {
     patch.responseMode = candidate.responseMode.value;
   }

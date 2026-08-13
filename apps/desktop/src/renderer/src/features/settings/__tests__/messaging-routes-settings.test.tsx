@@ -209,6 +209,78 @@ describe("MessagingRoutesSettings", () => {
     expect(screen.getByText("Issue 13056")).toBeInTheDocument();
     expect(screen.getAllByText("Codex")).toHaveLength(2);
     expect(screen.getByText("3 active")).toBeInTheDocument();
+    // Routes that inherit the default carry no chip at all — the marker is
+    // for the exception, not for repeating the profile default on every row.
+    expect(screen.queryByText(/^Updates:/)).not.toBeInTheDocument();
+  });
+
+  it("sets and clears a per-route Working Updates override", async () => {
+    const routes = buildRoutes();
+    routes.defaultAgents[0] = {
+      ...routes.defaultAgents[0]!,
+      toolUpdateMode: "show_more",
+    };
+    const api = buildDesktopApi(routes);
+
+    render(
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <MessagingRoutesSettings
+          agentRouteToolUpdateMode="show_none"
+          desktopApi={api.desktopApi}
+        />
+      </MessagingRoutesProvider>,
+    );
+
+    // Kept short so the chip survives the narrow target column; the full
+    // phrase stays in the row's aria-label and the chip's title.
+    expect(await screen.findByText("Updates: Show More")).toHaveClass(
+      "messaging-route-row__provider-chip",
+    );
+    expect(
+      screen.getByRole("button", {
+        name: /Working Updates override Show More/,
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Change" })[0]!);
+    expect(screen.getByLabelText("Route Working Updates")).toHaveValue(
+      "show_more",
+    );
+    expect(screen.getByLabelText("Route Working Updates")).toHaveDisplayValue(
+      "Show More",
+    );
+    expect(screen.getByRole("option", { name: "Show Less" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("option", {
+        name: "Use manager-agent default (Show None)",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Route Working Updates"), {
+      target: { value: "show_all" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save default" }));
+    await waitFor(() => {
+      expect(api.setMessagingDefaultAgent).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          assignmentId: "assignment-1",
+          toolUpdateMode: "show_all",
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Change" })[0]!);
+    fireEvent.change(screen.getByLabelText("Route Working Updates"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save default" }));
+    await waitFor(() => {
+      expect(api.setMessagingDefaultAgent).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          assignmentId: "assignment-1",
+          toolUpdateMode: null,
+        }),
+      );
+    });
   });
 
   it("distinguishes untitled topics in the same messaging group", async () => {

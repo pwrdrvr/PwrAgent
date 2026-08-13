@@ -26,6 +26,11 @@ export {
 } from "./text-splitting";
 export { evictStaleStreamAnchors } from "./stream-anchors";
 export {
+  MessagingRateLimitGate,
+  type MessagingRateLimitAdmission,
+  type MessagingRateLimitBucket,
+} from "./rate-limit-gate";
+export {
   MESSAGING_COMMAND_CATALOG,
   MESSAGING_HELP_ACTION_COMMANDS,
   matchMessagingCommandVerb,
@@ -66,6 +71,7 @@ export const MESSAGING_SURFACE_INTENT_KINDS = [
   "activity",
   "message",
   "stream_update",
+  "working_card",
   "status",
   "progress",
   "thread_picker",
@@ -399,6 +405,7 @@ export type MessagingConversationResponseMode = {
 };
 
 export type MessagingAdapterRenderingPreferencesUpdate = {
+  liveWorkingCards?: boolean;
   streamingResponses?: boolean;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
 };
@@ -845,6 +852,27 @@ export type MessagingStreamUpdateIntent = MessagingBaseSurfaceIntent & {
   text: string;
 };
 
+export type MessagingWorkingCardIntent = MessagingBaseSurfaceIntent & {
+  kind: "working_card";
+  card: {
+    displayHint: "timeline" | "plan" | "dense";
+    fallbackPresentation?: {
+      markdown: MessagingMarkdownPolicy;
+      role: "assistant" | "system";
+    };
+    isFinal: boolean;
+    key: string;
+    phase: "queued" | "working" | "waiting" | "completed" | "failed";
+    sequence: number;
+    tasks: Array<{
+      detail?: string;
+      id: string;
+      status: "pending" | "in_progress" | "complete" | "error" | "cancelled";
+      title: string;
+    }>;
+  };
+};
+
 export type MessagingActivityIntent = MessagingBaseSurfaceIntent & {
   kind: "activity";
   activity: "typing";
@@ -1170,6 +1198,7 @@ export type MessagingSurfaceIntent =
   | MessagingActivityIntent
   | MessagingMessageIntent
   | MessagingStreamUpdateIntent
+  | MessagingWorkingCardIntent
   | MessagingStatusIntent
   | MessagingProgressIntent
   | MessagingThreadPickerIntent
@@ -1632,6 +1661,8 @@ export type MessagingDefaultAgentAssignmentRecord = {
   id: string;
   scope: MessagingDefaultAgentScope;
   target: MessagingDefaultAgentTarget;
+  /** Per-route override. Omitted assignments inherit the Agent-route default. */
+  toolUpdateMode?: MessagingToolUpdateMode;
   createdAt: number;
   updatedAt: number;
   revokedAt?: number;

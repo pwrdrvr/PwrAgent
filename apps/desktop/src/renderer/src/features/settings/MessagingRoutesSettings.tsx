@@ -17,6 +17,7 @@ import type {
   ListMessagingRoutesResponse,
   MessagingChannelKind,
   MessagingConversationKind,
+  MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { PlusIcon } from "../../icons";
 import {
@@ -40,6 +41,17 @@ const ROUTE_PLATFORMS: MessagingChannelKind[] = [
   "mattermost",
   "feishu",
   "line",
+];
+
+const ROUTE_TOOL_UPDATE_MODE_OPTIONS: Array<{
+  label: string;
+  value: MessagingToolUpdateMode;
+}> = [
+  { label: "Show None", value: "show_none" },
+  { label: "Show Less", value: "show_less" },
+  { label: "Show Some", value: "show_some" },
+  { label: "Show More", value: "show_more" },
+  { label: "Show All", value: "show_all" },
 ];
 
 type DefaultScopeKind = DesktopMessagingDefaultAgentScope["kind"];
@@ -161,6 +173,7 @@ function useMessagingRoutes(): MessagingRoutesContextValue {
 }
 
 export function MessagingRoutesSettings(props: {
+  agentRouteToolUpdateMode?: MessagingToolUpdateMode;
   configuredPlatforms?: readonly MessagingChannelKind[];
   desktopApi?: DesktopApi;
   onOpenThread?: (target: {
@@ -170,6 +183,8 @@ export function MessagingRoutesSettings(props: {
 }) {
   const routeState = useMessagingRoutes();
   const { routes, loading, loadRoutes } = routeState;
+  const agentRouteToolUpdateMode =
+    props.agentRouteToolUpdateMode ?? "show_none";
   const configuredPlatforms = props.configuredPlatforms ?? ROUTE_PLATFORMS;
   const emptyForm = props.configuredPlatforms
     ? newDefaultForm(configuredPlatforms)
@@ -289,6 +304,7 @@ export function MessagingRoutesSettings(props: {
               await loadRoutes();
             }}
             desktopApi={props.desktopApi}
+            inheritedToolUpdateMode={agentRouteToolUpdateMode}
           />
         ) : null}
 
@@ -306,6 +322,7 @@ export function MessagingRoutesSettings(props: {
               await loadRoutes();
             }}
             desktopApi={props.desktopApi}
+            inheritedToolUpdateMode={agentRouteToolUpdateMode}
           />
         ) : null}
 
@@ -421,10 +438,18 @@ function DefaultAgentRow(props: {
 }) {
   const platform = platformForScope(props.route.scope);
   const Icon = platform ? MESSAGING_PLATFORM_ICONS[platform] : undefined;
+  const toolUpdateOverride = props.route.toolUpdateMode
+    ? routeToolUpdateModeLabel(props.route.toolUpdateMode)
+    : undefined;
   return (
     <div className="messaging-route-row">
       <button
-        aria-label={`Open thread ${props.route.target.label}`}
+        aria-label={[
+          `Open thread ${props.route.target.label}`,
+          toolUpdateOverride
+            ? `Working Updates override ${toolUpdateOverride}`
+            : undefined,
+        ].filter(Boolean).join(", ")}
         className="messaging-route-row__open"
         disabled={!props.onOpenThread}
         title={props.onOpenThread ? `Open ${props.route.target.label}` : undefined}
@@ -456,6 +481,14 @@ function DefaultAgentRow(props: {
               available={props.route.target.backendAvailable}
               label={props.route.target.backendLabel}
             />
+            {toolUpdateOverride ? (
+              <span
+                className="chip chip--backend messaging-route-row__provider-chip"
+                title={`Working Updates override: ${toolUpdateOverride}`}
+              >
+                Updates: {toolUpdateOverride}
+              </span>
+            ) : null}
             {!props.route.target.available
               && props.route.target.backendAvailable ? (
                 <span className="messaging-route-row__target-warning">
@@ -566,6 +599,7 @@ function DefaultAgentEditor(props: {
   agents: DesktopMessagingAgentRouteTarget[];
   assignment?: DesktopMessagingDefaultAgentRoute;
   desktopApi?: DesktopApi;
+  inheritedToolUpdateMode: MessagingToolUpdateMode;
   initialForm?: NewDefaultForm;
   observedSurfaces: DesktopMessagingObservedSurface[];
   platforms: readonly MessagingChannelKind[];
@@ -586,6 +620,9 @@ function DefaultAgentEditor(props: {
       ? encodeTarget(props.assignment.target)
       : "",
   );
+  const [toolUpdateMode, setToolUpdateMode] = useState<
+    MessagingToolUpdateMode | ""
+  >(props.assignment?.toolUpdateMode ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const editing = Boolean(props.assignment);
@@ -622,6 +659,11 @@ function DefaultAgentEditor(props: {
           : {}),
         scope,
         target,
+        ...(toolUpdateMode
+          ? { toolUpdateMode }
+          : props.assignment?.toolUpdateMode
+            ? { toolUpdateMode: null }
+            : {}),
       });
       await props.onSaved();
     } catch (saveError) {
@@ -817,7 +859,7 @@ function DefaultAgentEditor(props: {
           ) : null}
         </div>
       ) : null}
-      <label className="messaging-route-editor__agent">
+      <label className="messaging-route-editor__field">
         <span>Agent</span>
         <select
           aria-label="Default Agent"
@@ -829,6 +871,29 @@ function DefaultAgentEditor(props: {
           {props.agents.map((agent) => (
             <option key={encodeTarget(agent)} value={encodeTarget(agent)}>
               {agent.label} - {agent.backendLabel}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="messaging-route-editor__field">
+        <span>Working Updates</span>
+        <select
+          aria-label="Route Working Updates"
+          className="settings-select"
+          value={toolUpdateMode}
+          onChange={(event) =>
+            setToolUpdateMode(
+              event.target.value as MessagingToolUpdateMode | "",
+            )}
+        >
+          <option value="">
+            Use manager-agent default ({routeToolUpdateModeLabel(
+              props.inheritedToolUpdateMode,
+            )})
+          </option>
+          {ROUTE_TOOL_UPDATE_MODE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
@@ -854,6 +919,12 @@ function DefaultAgentEditor(props: {
       </div>
     </div>
   );
+}
+
+function routeToolUpdateModeLabel(mode: MessagingToolUpdateMode): string {
+  return ROUTE_TOOL_UPDATE_MODE_OPTIONS.find(
+    (option) => option.value === mode,
+  )?.label ?? "Show None";
 }
 
 function newDefaultForm(

@@ -4,6 +4,7 @@ import type { MessagingToolActivity } from "../messaging/core/messaging-tool-act
 import {
   buildToolUpdateBatchMessageIntent,
   buildToolUpdateMessageIntent,
+  buildWorkingCardIntent,
 } from "../messaging/core/messaging-renderer.js";
 
 const tool = (id: string, title: string): MessagingToolActivity => ({
@@ -80,5 +81,65 @@ describe("tool-update renderer prose handling", () => {
       "Looking into the failing test.\n\nTool updates: ran 1 tool\n- Ran tests",
     );
     expect(part).toMatchObject({ markdown: "markdown" });
+  });
+
+  it("preserves cancelled tasks and separates card history from fallback text", () => {
+    const cancelled: MessagingToolActivity = {
+      id: "cancelled-1",
+      kind: "tool",
+      status: "cancelled",
+      title: "Deploy production",
+      durationMs: 1_200,
+    };
+    const latest = tool("latest-1", "Ran focused tests");
+    const intent = buildWorkingCardIntent({
+      activities: [cancelled, latest],
+      bindingId: "b1",
+      createdAt: 1,
+      displayHint: "plan",
+      fallbackActivities: [latest],
+      id: "working-1",
+      key: "b1\0turn-1",
+      omittedTaskCount: 3,
+      sequence: 4,
+    });
+
+    expect(intent.card.tasks).toEqual([
+      expect.objectContaining({
+        detail: "3 earlier steps · Cancelled · 1.2s",
+        id: "cancelled-1",
+        status: "cancelled",
+        title: "Deploy production",
+      }),
+      expect.objectContaining({ id: "latest-1", status: "complete" }),
+    ]);
+    expect(intent.fallbackText).toContain("Ran focused tests");
+    expect(intent.fallbackText).not.toContain("Deploy production");
+    expect(intent.card.fallbackPresentation).toEqual({
+      markdown: "light",
+      role: "system",
+    });
+  });
+
+  it("preserves assistant Markdown presentation for card fallbacks", () => {
+    const intent = buildWorkingCardIntent({
+      activities: [{
+        id: "prose-1",
+        kind: "prose",
+        status: "completed",
+        title: "| Result |\n| --- |\n| Passed |",
+      }],
+      bindingId: "b1",
+      createdAt: 1,
+      displayHint: "plan",
+      id: "working-prose-1",
+      key: "b1\0turn-1",
+      sequence: 1,
+    });
+
+    expect(intent.card.fallbackPresentation).toEqual({
+      markdown: "markdown",
+      role: "assistant",
+    });
   });
 });

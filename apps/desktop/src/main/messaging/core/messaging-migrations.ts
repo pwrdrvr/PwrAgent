@@ -12,7 +12,10 @@ import type {
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
-import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
+import {
+  MESSAGING_TOOL_UPDATE_MODES,
+  normalizeMessagingBindingTargetKind,
+} from "@pwragent/shared";
 
 // SCHEMA-DRIFT-CHECKPOINT: when bumping CURRENT_MESSAGING_STORE_VERSION,
 // also audit `apps/desktop/e2e/fixtures/readme-state-seeding.ts`. Its
@@ -102,7 +105,13 @@ export function migrateMessagingDefaultAgentAssignmentRecord(
     typeof target.backend === "string" &&
     typeof target.threadId === "string" &&
     typeof record.createdAt === "number" &&
-    typeof record.updatedAt === "number"
+    typeof record.updatedAt === "number" &&
+    (
+      record.toolUpdateMode === undefined
+      || MESSAGING_TOOL_UPDATE_MODES.some(
+        (mode) => mode === record.toolUpdateMode,
+      )
+    )
   ) {
     return value as MessagingDefaultAgentAssignmentRecord;
   }

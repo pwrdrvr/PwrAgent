@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Messaging - Add opt-in Slack Live Working Updates cards that render Working Updates as one rate-aware Thinking Steps task card per turn, with ordered/coalesced stream calls, terminal/waiting state handling, cancellation, classic text fallback when native streaming is off or unavailable, and profile-wide plus per-route Working Updates controls for Default Agent routes.
+
 ## v1.1.0-beta.1 - 2026-08-09
 
 - Federation and Star Map - Added secure remote-instance federation, live remote thread and terminal access, and the Star Map mission-control surface with project lenses, filters, arrangement controls, load visibility, and drag, snap, and multi-select interactions.

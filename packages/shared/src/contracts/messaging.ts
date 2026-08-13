@@ -347,6 +347,7 @@ export type DesktopMessagingDefaultAgentRoute = {
   assignmentId: string;
   scope: DesktopMessagingDefaultAgentScope;
   target: DesktopMessagingAgentRouteTarget;
+  toolUpdateMode?: MessagingToolUpdateMode;
   createdAt: number;
   updatedAt: number;
 };
@@ -403,6 +404,8 @@ export type SetMessagingDefaultAgentRequest = {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
   };
+  /** `null` clears an existing override; omitted preserves it when editing. */
+  toolUpdateMode?: MessagingToolUpdateMode | null;
 };
 
 export type SetMessagingDefaultAgentResponse = {

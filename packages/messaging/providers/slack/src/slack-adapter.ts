@@ -34,6 +34,7 @@ import type {
   MessagingManagedConversationRightsResult,
   MessagingPrivateConversationResolveRequest,
   MessagingPrivateConversationResolveResult,
+  MessagingRateLimitBucket,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
@@ -43,6 +44,7 @@ import type {
 import {
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
+  MessagingRateLimitGate,
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
   SLACK_DM_ACCESS_MODE_DEFAULT,
@@ -87,6 +89,14 @@ const SLACK_DIRECTORY_PAGE_SIZE = 200;
 // Bounds a very large workspace: 10 pages x 200 = 2,000 people, past which a
 // name search is the wrong interaction anyway.
 const SLACK_DIRECTORY_MAX_PAGES = 10;
+const SLACK_WORKING_CARD_TOMBSTONE_MAX = 200;
+const SLACK_WORKING_CARD_RETRY_MS = 3_000;
+const SLACK_WORKING_CARD_STOP_MAX_FAILURES = 3;
+const SLACK_WORKING_CARD_BUCKETS = {
+  start: { method: "chat.startStream", limit: 20 },
+  append: { method: "chat.appendStream", limit: 100 },
+  stop: { method: "chat.stopStream", limit: 20 },
+} as const;
 
 export type SlackProviderLogger = {
   debug?: (message: string, data?: Record<string, unknown>) => void;
@@ -96,6 +106,11 @@ export type SlackProviderLogger = {
 };
 
 export type SlackApi = {
+  appendStream?(params: {
+    channel: string;
+    chunks: SlackStreamChunk[];
+    ts: string;
+  }): Promise<void>;
   setAssistantThreadStatus?(params: {
     channelId: string;
     loadingMessages?: string[];
@@ -121,6 +136,19 @@ export type SlackApi = {
   downloadFile(params: { url: string; maxBytes: number }): Promise<Uint8Array>;
   filesInfo(params: { file: string }): Promise<SlackFileInfo | undefined>;
   postMessage(params: SlackPostBody): Promise<SlackMessageResult>;
+  startStream?(params: {
+    channel: string;
+    chunks: SlackStreamChunk[];
+    recipientTeamId?: string;
+    recipientUserId?: string;
+    taskDisplayMode: "timeline" | "plan" | "dense";
+    threadTs: string;
+  }): Promise<SlackMessageResult>;
+  stopStream?(params: {
+    channel: string;
+    chunks?: SlackStreamChunk[];
+    ts: string;
+  }): Promise<void>;
   publishHomeView?(params: {
     userId: string;
     view: SlackHomeView;
@@ -141,6 +169,19 @@ export type SlackApi = {
   }): Promise<SlackUserListPage>;
   botsInfo?(params: { bot: string }): Promise<{ name?: string } | undefined>;
 };
+
+export type SlackStreamChunk =
+  | {
+      details?: string;
+      id: string;
+      status: "pending" | "in_progress" | "complete" | "error";
+      title: string;
+      type: "task_update";
+    }
+  | {
+      markdown_text: string;
+      type: "markdown_text";
+    };
 
 export type SlackUserListPage = {
   members?: SlackUserListMember[];
@@ -268,6 +309,39 @@ type SlackSurfaceOpaqueState = {
   channelId?: string;
   messageTimestamps?: string[];
   threadTs?: string;
+  ts?: string;
+  workingCardKey?: string;
+};
+
+type SlackWorkingCardMethod = keyof typeof SLACK_WORKING_CARD_BUCKETS;
+type SlackWorkingCardIntent = Extract<
+  MessagingSurfaceIntent,
+  { kind: "working_card" }
+>;
+type SlackWorkingCardTask = SlackWorkingCardIntent["card"]["tasks"][number];
+
+type SlackWorkingCardTarget = {
+  channelId: string;
+  channelRef: MessagingChannelRef;
+  threadTs: string;
+};
+
+type SlackWorkingCardQueueState = {
+  cancelled: boolean;
+  deliveredTaskSlots: Map<number, string>;
+  fallbackSurface?: MessagingSurfaceRef;
+  lastDeliveredPhase?: Extract<
+    MessagingSurfaceIntent,
+    { kind: "working_card" }
+  >["card"]["phase"];
+  latest: SlackWorkingCardIntent;
+  lastDeliveredSequence: number;
+  nativeUnavailable?: boolean;
+  nonRateFailureCount: number;
+  pumping: boolean;
+  retryMethod?: SlackWorkingCardMethod;
+  retryTimer?: ReturnType<typeof setTimeout>;
+  target: SlackWorkingCardTarget;
   ts?: string;
 };
 
@@ -446,10 +520,14 @@ export class SlackAdapter implements SlackProviderAdapter {
       text: string;
     }>
   >();
+  private readonly workingCardStreams = new Map<string, SlackWorkingCardQueueState>();
+  private readonly workingCardTombstones = new Map<string, number>();
+  private readonly workingCardRateLimits: MessagingRateLimitGate;
   private botAccount: string | undefined;
   private botAccountDetail: string | undefined;
   private botId: string | undefined;
   private botUserId: string | undefined;
+  private workspaceId: string | undefined;
   private assistantThreadStatusDisabled = false;
   private conversationInfoLookupDisabled = false;
   private threadInfoLookupDisabled = false;
@@ -464,6 +542,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.config = options.config;
     this.logger = options.logger ?? {};
     this.now = options.now ?? Date.now;
+    this.workingCardRateLimits = new MessagingRateLimitGate(this.now);
     this.callbackHandleStore = options.callbackHandleStore;
     this.authorizedActorIdsValue = options.config.authorizedActorIds.map(
       (actor) => actor.id,
@@ -556,6 +635,12 @@ export class SlackAdapter implements SlackProviderAdapter {
   async updateRenderingPreferences(
     update: MessagingAdapterRenderingPreferencesUpdate,
   ): Promise<void> {
+    if (update.liveWorkingCards !== undefined) {
+      this.config.liveWorkingCards = update.liveWorkingCards;
+      if (!update.liveWorkingCards) {
+        await this.cancelAllWorkingCards();
+      }
+    }
     if (update.streamingResponses !== undefined) {
       this.config.streamingResponses = update.streamingResponses;
     }
@@ -576,6 +661,28 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   resolveDeliveryScope(intent: MessagingSurfaceIntent): MessagingDeliveryScope | undefined {
+    if (intent.kind === "working_card") {
+      const target = this.resolveTarget(intent);
+      const state = this.workingCardStreams.get(intent.card.key);
+      const nativeAvailable =
+        this.config.liveWorkingCards === true
+        && Boolean(target?.threadTs)
+        && this.api.startStream !== undefined
+        && this.api.appendStream !== undefined
+        && this.api.stopStream !== undefined;
+      // A terminal fallback is intentionally a no-op. Do not reserve ordinary
+      // Slack message capacity or defer the authoritative final response for it.
+      if (intent.card.isFinal && (!nativeAvailable || state?.nativeUnavailable)) {
+        return undefined;
+      }
+      if (state?.nativeUnavailable) {
+        return target ? this.rateLimitScopeForTarget(target) : undefined;
+      }
+      if (nativeAvailable) {
+        return undefined;
+      }
+      return target ? this.rateLimitScopeForTarget(target) : undefined;
+    }
     const target = this.resolveTarget(intent);
     return target ? this.rateLimitScopeForTarget(target) : undefined;
   }
@@ -593,6 +700,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.botUserId = auth.user_id;
     this.botAccount = auth.user ?? auth.user_id;
     this.botAccountDetail = auth.team ?? hostFromUrl(auth.url) ?? auth.team_id;
+    this.workspaceId = auth.team_id;
 
     if (this.config.inboundMode === "events") {
       throw new Error("Slack Events API mode is not implemented yet; use Socket Mode");
@@ -626,6 +734,13 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   async stop(): Promise<void> {
     this.lifecycleGeneration += 1;
+    for (const state of this.workingCardStreams.values()) {
+      state.cancelled = true;
+      if (state.retryTimer) clearTimeout(state.retryTimer);
+    }
+    this.workingCardStreams.clear();
+    this.workingCardTombstones.clear();
+    this.workingCardRateLimits.clear();
     const shouldDisconnect =
       this.started
       || this.socketListenersAttached
@@ -656,6 +771,9 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
     if (intent.kind === "stream_update") {
       return await this.deliverStreamUpdate(intent);
+    }
+    if (intent.kind === "working_card") {
+      return await this.deliverWorkingCard(intent);
     }
 
     const target = this.resolveTarget(intent);
@@ -1381,6 +1499,50 @@ export class SlackAdapter implements SlackProviderAdapter {
     intent: Extract<MessagingSurfaceIntent, { kind: "dismiss" }>,
   ): Promise<MessagingDeliveryResult> {
     const target = readSlackSurfaceState(intent.targetSurface);
+    if (target?.workingCardKey) {
+      const state = this.workingCardStreams.get(target.workingCardKey);
+      if (state) {
+        state.cancelled = true;
+        if (state.retryTimer) clearTimeout(state.retryTimer);
+        this.workingCardStreams.delete(target.workingCardKey);
+        this.recordWorkingCardTombstone(
+          target.workingCardKey,
+          state.latest.card.sequence,
+        );
+        const fallbackState = readSlackSurfaceState(state.fallbackSurface);
+        const deleteTarget = state.ts
+          ? { channelId: state.target.channelId, ts: state.ts }
+          : fallbackState?.channelId && fallbackState.ts
+            ? { channelId: fallbackState.channelId, ts: fallbackState.ts }
+            : undefined;
+        if (deleteTarget) {
+          try {
+            await this.api.deleteMessage({
+              channel: deleteTarget.channelId,
+              ts: deleteTarget.ts,
+            });
+          } catch (error) {
+            const rateLimit = this.emitRateLimitFromError(
+              error,
+              state.target,
+              { retryable: true },
+            );
+            return {
+              outcome: "failed",
+              channel: this.channel,
+              deliveredAt: this.now(),
+              errorMessage: error instanceof Error ? error.message : String(error),
+              ...(rateLimit ? { rateLimit } : {}),
+            };
+          }
+        }
+      }
+      return {
+        outcome: "dismissed",
+        channel: this.channel,
+        deliveredAt: this.now(),
+      };
+    }
     const messageTimestamps = target?.messageTimestamps?.length
       ? target.messageTimestamps
       : target?.ts
@@ -1691,6 +1853,506 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
   }
 
+  private async deliverWorkingCard(
+    intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
+  ): Promise<MessagingDeliveryResult> {
+    const deliveredAt = this.now();
+    if (this.config.liveWorkingCards !== true) {
+      return await this.deliverWorkingCardFallback(intent);
+    }
+    const target = this.resolveTarget(intent);
+    const terminalSequence = this.workingCardTombstones.get(intent.card.key);
+    if (terminalSequence !== undefined && intent.card.sequence <= terminalSequence) {
+      return { outcome: "discarded", channel: this.channel, deliveredAt };
+    }
+    const current = this.workingCardStreams.get(intent.card.key);
+    if (current && intent.card.sequence <= current.latest.card.sequence) {
+      return { outcome: "discarded", channel: this.channel, deliveredAt };
+    }
+    if (current?.nativeUnavailable) {
+      current.latest = intent;
+      if (intent.card.isFinal) {
+        this.workingCardStreams.delete(intent.card.key);
+        this.recordWorkingCardTombstone(intent.card.key, intent.card.sequence);
+        return { outcome: "discarded", channel: this.channel, deliveredAt };
+      }
+      return await this.deliverWorkingCardFallback(intent);
+    }
+    if (
+      !target?.threadTs
+      || !this.api.startStream
+      || !this.api.appendStream
+      || !this.api.stopStream
+    ) {
+      return await this.deliverWorkingCardFallback(intent);
+    }
+    const workingTarget: SlackWorkingCardTarget = {
+      channelId: target.channelId,
+      channelRef: target.channelRef,
+      threadTs: target.threadTs,
+    };
+    const state: SlackWorkingCardQueueState = current ?? {
+      cancelled: false,
+      deliveredTaskSlots: new Map(),
+      latest: intent,
+      lastDeliveredSequence: 0,
+      nonRateFailureCount: 0,
+      pumping: false,
+      target: workingTarget,
+    };
+    if (!current) {
+      this.workingCardStreams.set(intent.card.key, state);
+    } else {
+      state.latest = intent;
+      state.nonRateFailureCount = 0;
+      if (intent.card.isFinal && state.retryMethod === "append" && state.retryTimer) {
+        clearTimeout(state.retryTimer);
+        state.retryTimer = undefined;
+        state.retryMethod = undefined;
+      }
+    }
+    this.startWorkingCardPump(intent.card.key, state);
+    return {
+      outcome: current ? "updated" : "presented",
+      channel: this.channel,
+      deliveredAt,
+      surface: this.workingCardSurface(intent.card.key, state),
+    };
+  }
+
+  private startWorkingCardPump(
+    key: string,
+    state: SlackWorkingCardQueueState,
+  ): void {
+    if (state.pumping || state.cancelled || state.retryTimer) return;
+    void this.pumpWorkingCard(key, state).catch((error) => {
+      this.logger.error?.("Slack Thinking Steps queue failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private async pumpWorkingCard(
+    key: string,
+    state: SlackWorkingCardQueueState,
+  ): Promise<void> {
+    if (state.pumping || state.cancelled) return;
+    state.pumping = true;
+    try {
+      while (
+        !state.cancelled
+        && this.workingCardStreams.get(key) === state
+      ) {
+        const intent = state.latest;
+        const method: SlackWorkingCardMethod = !state.ts
+          ? "start"
+          : intent.card.isFinal
+            ? "stop"
+            : "append";
+        if (
+          method === "append"
+          && intent.card.sequence <= state.lastDeliveredSequence
+        ) {
+          return;
+        }
+        const chunks = this.workingCardChunks(intent, state);
+        if (method === "append" && chunks.length === 0) {
+          this.recordWorkingCardSnapshot(state, intent);
+          continue;
+        }
+        const bucket = this.workingCardBucket(method, state.target);
+        const admission = this.workingCardRateLimits.admit(bucket);
+        if (!admission.admitted) {
+          if (method === "append") {
+            // Working Updates are disposable under pressure. Remember that
+            // this sequence was considered without mutating the mounted slot
+            // snapshot; a later admitted update can still reconcile directly
+            // to its newest bounded card state. Never queue an append backlog.
+            state.lastDeliveredSequence = intent.card.sequence;
+            return;
+          }
+          this.scheduleWorkingCardPump(
+            key,
+            state,
+            Math.max(0, admission.retryAt - this.now()),
+            method,
+          );
+          return;
+        }
+        try {
+          if (method === "start") {
+            const result = await this.api.startStream!({
+              channel: state.target.channelId,
+              chunks,
+              taskDisplayMode: intent.card.displayHint,
+              threadTs: state.target.threadTs,
+              ...(intent.audit?.actor.platformUserId
+                ? { recipientUserId: intent.audit.actor.platformUserId }
+                : {}),
+              ...(state.target.channelRef.conversation.workspaceId
+                ? {
+                    recipientTeamId:
+                      state.target.channelRef.conversation.workspaceId,
+                  }
+                : {}),
+            });
+            if (!result.ts) {
+              throw new Error("Slack chat.startStream returned no timestamp");
+            }
+            if (state.cancelled) {
+              try {
+                await this.api.deleteMessage({
+                  channel: state.target.channelId,
+                  ts: result.ts,
+                });
+              } catch (error) {
+                this.logger.warn?.("Slack cancelled Thinking Steps card could not be removed", {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+              return;
+            }
+            state.ts = result.ts;
+            this.recordWorkingCardSnapshot(state, intent);
+            state.nonRateFailureCount = 0;
+            continue;
+          }
+          if (method === "append") {
+            await this.api.appendStream!({
+              channel: state.target.channelId,
+              chunks,
+              ts: state.ts!,
+            });
+            this.recordWorkingCardSnapshot(state, intent);
+            state.nonRateFailureCount = 0;
+            continue;
+          }
+          await this.api.stopStream!({
+            channel: state.target.channelId,
+            ...(chunks.length > 0 ? { chunks } : {}),
+            ts: state.ts!,
+          });
+          this.workingCardStreams.delete(key);
+          this.recordWorkingCardTombstone(key, intent.card.sequence);
+          return;
+        } catch (error) {
+          if (state.cancelled) return;
+          const retryAfterMs = retryAfterMsFromError(error);
+          if (retryAfterMs !== undefined) {
+            this.workingCardRateLimits.recordRateLimit(bucket.id, retryAfterMs);
+            this.emitWorkingCardRateLimit(error, bucket, state.target, retryAfterMs);
+            if (method === "append") {
+              state.lastDeliveredSequence = intent.card.sequence;
+              return;
+            }
+            this.scheduleWorkingCardPump(key, state, retryAfterMs, method);
+            return;
+          }
+          state.nonRateFailureCount += 1;
+          if (method === "start") {
+            this.logger.warn?.(
+              "Slack Thinking Steps stream unavailable; using text Working Update",
+              { error: error instanceof Error ? error.message : String(error) },
+            );
+            // Flip the mode before awaiting the fallback so newer updates use
+            // the classic path instead of being accepted into a dead stream.
+            state.nativeUnavailable = true;
+            const fallbackIntent = state.latest;
+            const fallback = await this.deliverWorkingCardFallback(fallbackIntent, {
+              controllerBudgeted: false,
+            });
+            state.fallbackSurface = fallback.surface;
+            state.lastDeliveredSequence = fallbackIntent.card.sequence;
+            return;
+          }
+          this.logger.warn?.("Slack Thinking Steps stream call failed; preserving open card", {
+            error: error instanceof Error ? error.message : String(error),
+            method: SLACK_WORKING_CARD_BUCKETS[method].method,
+          });
+          if (method === "append") {
+            state.lastDeliveredSequence = intent.card.sequence;
+            return;
+          }
+          if (state.nonRateFailureCount < SLACK_WORKING_CARD_STOP_MAX_FAILURES) {
+            this.scheduleWorkingCardPump(
+              key,
+              state,
+              SLACK_WORKING_CARD_RETRY_MS * state.nonRateFailureCount,
+              method,
+            );
+            return;
+          }
+          await this.abandonWorkingCardAfterStopFailure(key, state, intent);
+          return;
+        }
+      }
+    } finally {
+      state.pumping = false;
+      if (
+        !state.cancelled
+        && !state.nativeUnavailable
+        && !state.retryTimer
+        && state.nonRateFailureCount < 2
+        && this.workingCardStreams.get(key) === state
+        && (
+          !state.ts
+          || state.latest.card.isFinal
+          || state.latest.card.sequence > state.lastDeliveredSequence
+        )
+      ) {
+        this.startWorkingCardPump(key, state);
+      }
+    }
+  }
+
+  private scheduleWorkingCardPump(
+    key: string,
+    state: SlackWorkingCardQueueState,
+    delayMs: number,
+    method: SlackWorkingCardMethod,
+  ): void {
+    if (state.cancelled || state.retryTimer) return;
+    state.retryMethod = method;
+    state.retryTimer = setTimeout(() => {
+      state.retryTimer = undefined;
+      state.retryMethod = undefined;
+      this.startWorkingCardPump(key, state);
+    }, delayMs);
+  }
+
+  private workingCardChunks(
+    intent: SlackWorkingCardIntent,
+    state: SlackWorkingCardQueueState,
+  ): SlackStreamChunk[] {
+    const chunks = intent.card.tasks
+      .map((task, index) => this.workingCardTaskSlot(intent, task, index))
+      .filter(
+        (slot, index) =>
+          state.deliveredTaskSlots.get(index) !== slot.fingerprint,
+      )
+      .map(({ fingerprint: _fingerprint, ...chunk }) => chunk);
+    if (
+      intent.card.phase === "waiting"
+      && state.lastDeliveredPhase !== "waiting"
+    ) {
+      chunks.unshift({
+        type: "markdown_text",
+        markdown_text: "*Waiting for your input*",
+      });
+    }
+    if (intent.card.isFinal && intent.card.phase === "failed") {
+      chunks.push({
+        type: "task_update",
+        id: workingCardTaskSlotId(intent.card.key, "terminal"),
+        status: "error",
+        title: "Turn failed",
+      });
+    }
+    return chunks;
+  }
+
+  private recordWorkingCardSnapshot(
+    state: SlackWorkingCardQueueState,
+    intent: SlackWorkingCardIntent,
+  ): void {
+    state.deliveredTaskSlots.clear();
+    for (const [index, task] of intent.card.tasks.entries()) {
+      state.deliveredTaskSlots.set(index, this.workingCardTaskSlot(
+        intent,
+        task,
+        index,
+      ).fingerprint);
+    }
+    state.lastDeliveredPhase = intent.card.phase;
+    state.lastDeliveredSequence = intent.card.sequence;
+  }
+
+  private workingCardTaskSlot(
+    intent: SlackWorkingCardIntent,
+    task: SlackWorkingCardTask,
+    index: number,
+  ): SlackStreamChunk & { fingerprint: string } {
+    const details = [
+      task.status === "cancelled" && !task.detail ? "Cancelled" : undefined,
+      task.detail,
+    ].filter(Boolean).join(" · ");
+    const chunk: SlackStreamChunk = {
+      type: "task_update",
+      // Stable positional slots let a bounded controller snapshot replace
+      // evicted tasks without leaving the old rows mounted in Slack.
+      id: workingCardTaskSlotId(intent.card.key, index + 1),
+      title: clampSlackTaskField(task.title),
+      status: task.status === "cancelled" ? "complete" : task.status,
+      ...(details ? { details: clampSlackTaskField(details) } : {}),
+    };
+    return {
+      ...chunk,
+      fingerprint: JSON.stringify([task.id, chunk]),
+    };
+  }
+
+  private async abandonWorkingCardAfterStopFailure(
+    key: string,
+    state: SlackWorkingCardQueueState,
+    intent: SlackWorkingCardIntent,
+  ): Promise<void> {
+    if (state.ts) {
+      try {
+        await this.api.deleteMessage({
+          channel: state.target.channelId,
+          ts: state.ts,
+        });
+      } catch (error) {
+        this.logger.warn?.("Slack terminal Thinking Steps card could not be removed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    this.workingCardStreams.delete(key);
+    this.recordWorkingCardTombstone(key, intent.card.sequence);
+  }
+
+  private workingCardBucket(
+    method: SlackWorkingCardMethod,
+    target: SlackWorkingCardTarget,
+  ): MessagingRateLimitBucket {
+    const definition = SLACK_WORKING_CARD_BUCKETS[method];
+    const workspaceId =
+      this.workspaceId
+      ?? target.channelRef.conversation.workspaceId
+      ?? this.botAccountDetail
+      ?? "configured-workspace";
+    return {
+      id: `slack:workspace:${workspaceId}:${definition.method}`,
+      intervalMs: 60_000,
+      limit: definition.limit,
+      minIntervalMs: 1_000,
+    };
+  }
+
+  private emitWorkingCardRateLimit(
+    error: unknown,
+    bucket: MessagingRateLimitBucket,
+    target: SlackWorkingCardTarget,
+    retryAfterMs: number,
+  ): void {
+    this.emitRateLimit({
+      scope: {
+        platform: this.channel,
+        id: bucket.id,
+        kind: "workspace",
+        label: `Slack ${bucket.id.split(":").at(-1) ?? "stream"}`,
+        budget: { limit: bucket.limit, intervalMs: bucket.intervalMs },
+        parentId: this.rateLimitScopeForTarget(target).id,
+      },
+      retryAfterMs,
+      message: error instanceof Error ? error.message : String(error),
+      observedAt: this.now(),
+      retryable: false,
+    });
+  }
+
+  private workingCardSurface(
+    key: string,
+    state: SlackWorkingCardQueueState,
+  ): MessagingSurfaceRef {
+    return {
+      channel: this.channel,
+      id: `working-card:${key}`,
+      state: {
+        opaque: {
+          channelId: state.target.channelId,
+          threadTs: state.target.threadTs,
+          workingCardKey: key,
+          ...(state.ts ? { ts: state.ts } : {}),
+        },
+      },
+    };
+  }
+
+  private recordWorkingCardTombstone(key: string, sequence: number): void {
+    this.workingCardTombstones.delete(key);
+    this.workingCardTombstones.set(key, sequence);
+    while (this.workingCardTombstones.size > SLACK_WORKING_CARD_TOMBSTONE_MAX) {
+      const oldest = this.workingCardTombstones.keys().next().value;
+      if (oldest === undefined) break;
+      this.workingCardTombstones.delete(oldest);
+    }
+  }
+
+  private async cancelAllWorkingCards(): Promise<void> {
+    const removals: Promise<void>[] = [];
+    for (const [key, state] of this.workingCardStreams) {
+      state.cancelled = true;
+      if (state.retryTimer) clearTimeout(state.retryTimer);
+      this.recordWorkingCardTombstone(key, state.latest.card.sequence);
+      if (state.ts) {
+        removals.push(
+          this.api.deleteMessage({ channel: state.target.channelId, ts: state.ts })
+            .catch((error) => {
+              this.logger.warn?.("Slack disabled Thinking Steps card could not be removed", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }),
+        );
+      }
+    }
+    this.workingCardStreams.clear();
+    await Promise.all(removals);
+  }
+
+  private async deliverWorkingCardFallback(
+    intent: Extract<MessagingSurfaceIntent, { kind: "working_card" }>,
+    options: { controllerBudgeted?: boolean } = {},
+  ): Promise<MessagingDeliveryResult> {
+    const fallbackText = intent.fallbackText?.trim();
+    if (intent.card.isFinal || !fallbackText) {
+      return {
+        outcome: "discarded",
+        channel: this.channel,
+        deliveredAt: this.now(),
+      };
+    }
+    const target = this.resolveTarget(intent);
+    if (!target) {
+      return {
+        outcome: "failed",
+        channel: this.channel,
+        deliveredAt: this.now(),
+        errorMessage: "Slack delivery target is missing",
+      };
+    }
+    if (options.controllerBudgeted === false) {
+      const scope = this.rateLimitScopeForTarget(target);
+      const admission = this.workingCardRateLimits.admit({
+        id: `${scope.id}:working-card-fallback`,
+        intervalMs: scope.budget?.intervalMs ?? 60_000,
+        // The first fallback happens asynchronously after controller
+        // admission, so it gets one emergency write per channel/minute.
+        // Later updates expose the degraded state through resolveDeliveryScope
+        // and return to the controller's ordinary channel budget.
+        limit: 1,
+      });
+      if (!admission.admitted) {
+        return {
+          outcome: "discarded",
+          channel: this.channel,
+          deliveredAt: this.now(),
+        };
+      }
+    }
+    return await this.deliver({
+      ...intent,
+      kind: "message",
+      role: intent.card.fallbackPresentation?.role ?? "system",
+      parts: [{
+        type: "text",
+        text: fallbackText,
+        markdown: intent.card.fallbackPresentation?.markdown ?? "light",
+      }],
+    });
+  }
+
   private resolveTarget(intent: MessagingSurfaceIntent):
     | {
         channelId: string;
@@ -1704,6 +2366,14 @@ export class SlackAdapter implements SlackProviderAdapter {
     const channelId = surfaceState?.channelId ?? auditChannel?.conversation.id;
     if (!channelId) return undefined;
     const sourceRelative = intent.delivery?.sourceRelative;
+    // Slack requires every stream to reply to the user message that prompted
+    // it. Channel-root Agent Route requests are not themselves thread
+    // conversations, so their inbound message timestamp lives in the opaque
+    // source surface rather than channel.parentId. Use that timestamp only for
+    // Working Cards; ordinary and final replies keep their existing placement.
+    const workingCardAnchorTs = intent.kind === "working_card"
+      ? surfaceState?.ts
+      : undefined;
     const threadTs =
       sourceRelative === "source_channel"
         ? undefined
@@ -1711,6 +2381,7 @@ export class SlackAdapter implements SlackProviderAdapter {
           ? surfaceState?.threadTs ?? surfaceState?.ts ?? auditChannel?.conversation.parentId
           : surfaceState?.threadTs
             ?? auditChannel?.conversation.parentId
+            ?? workingCardAnchorTs
             ?? (auditChannel?.conversation.kind === "thread"
               ? auditChannel.conversation.parentId
               : undefined);
@@ -2732,6 +3403,43 @@ export function createSlackAdapter(
 export function createSlackApi(botToken: string): SlackApi {
   const client = new WebClient(botToken, { rejectRateLimitedCalls: true });
   return {
+    async startStream(params) {
+      const chat = client.chat as unknown as {
+        startStream(input: Record<string, unknown>): Promise<SlackMessageResult>;
+      };
+      return await chat.startStream({
+        channel: params.channel,
+        chunks: params.chunks,
+        thread_ts: params.threadTs,
+        task_display_mode: params.taskDisplayMode,
+        ...(params.recipientUserId
+          ? { recipient_user_id: params.recipientUserId }
+          : {}),
+        ...(params.recipientTeamId
+          ? { recipient_team_id: params.recipientTeamId }
+          : {}),
+      });
+    },
+    async appendStream(params) {
+      const chat = client.chat as unknown as {
+        appendStream(input: Record<string, unknown>): Promise<unknown>;
+      };
+      await chat.appendStream({
+        channel: params.channel,
+        chunks: params.chunks,
+        ts: params.ts,
+      });
+    },
+    async stopStream(params) {
+      const chat = client.chat as unknown as {
+        stopStream(input: Record<string, unknown>): Promise<unknown>;
+      };
+      await chat.stopStream({
+        channel: params.channel,
+        ts: params.ts,
+        ...(params.chunks ? { chunks: params.chunks } : {}),
+      });
+    },
     async authTest() {
       return (await client.auth.test()) as SlackAuthTestResult;
     },
@@ -3026,6 +3734,18 @@ function findSlackMentionOutsideCode(text: string, mention: string): number {
   return -1;
 }
 
+function clampSlackTaskField(value: string): string {
+  return value.length <= 256 ? value : `${value.slice(0, 255)}…`;
+}
+
+function workingCardTaskSlotId(
+  key: string,
+  slot: number | "terminal",
+): string {
+  const keyHash = createHash("sha256").update(key).digest("hex").slice(0, 16);
+  return `pwragent:${keyHash}:${slot}`;
+}
+
 function parseCommand(text: string): { command: string; args: string[] } | undefined {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return undefined;
@@ -3076,6 +3796,9 @@ function readSlackOpaqueState(
     ...(typeof record.teamId === "string" ? { teamId: record.teamId } : {}),
     ...(typeof record.threadTs === "string" ? { threadTs: record.threadTs } : {}),
     ...(typeof record.ts === "string" ? { ts: record.ts } : {}),
+    ...(typeof record.workingCardKey === "string"
+      ? { workingCardKey: record.workingCardKey }
+      : {}),
   };
 }
 
@@ -3348,10 +4071,13 @@ function slackTimestampToMs(ts: string | undefined): number | undefined {
 }
 
 function retryAfterMsFromError(error: unknown): number | undefined {
+  const explicitMilliseconds = readNumberProperty(error, "retryAfterMs");
+  if (explicitMilliseconds !== undefined) {
+    return Math.ceil(explicitMilliseconds);
+  }
   const retryAfter =
-    readNumberProperty(error, "retryAfter") ??
-    readNumberProperty(error, "retry_after") ??
-    readNumberProperty(error, "retryAfterMs");
+    readNumberProperty(error, "retryAfter")
+    ?? readNumberProperty(error, "retry_after");
   if (retryAfter !== undefined) {
     return retryAfter > 1_000 ? Math.ceil(retryAfter) : Math.ceil(retryAfter * 1000);
   }

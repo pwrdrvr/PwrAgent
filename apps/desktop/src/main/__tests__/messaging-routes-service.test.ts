@@ -153,7 +153,9 @@ function buildDependencies(options: {
 
 describe("messaging routes service", () => {
   it("lists default Agents, active bindings, and eligible Agent choices", async () => {
-    const dependencies = buildDependencies();
+    const dependencies = buildDependencies({
+      assignments: [buildAssignment({ toolUpdateMode: "show_some" })],
+    });
 
     const result = await listDesktopMessagingRoutes(dependencies);
 
@@ -174,6 +176,7 @@ describe("messaging routes service", () => {
           platform: "slack",
         }),
         target: expect.objectContaining({ label: "Search Signals Agent" }),
+        toolUpdateMode: "show_some",
       }),
     ]);
     expect(result.bindings).toEqual([
@@ -321,6 +324,64 @@ describe("messaging routes service", () => {
         dependencies,
       ),
     ).rejects.toThrow("not an eligible default Agent");
+  });
+
+  it("sets, preserves, and clears per-route Working Updates overrides", async () => {
+    const existing = buildAssignment({ toolUpdateMode: "show_more" });
+    const dependencies = buildDependencies({ assignments: [existing] });
+
+    await setDesktopMessagingDefaultAgent(
+      {
+        assignmentId: existing.id,
+        scope: { kind: "profile" },
+        target: { backend: "codex", threadId: "agent-1" },
+      },
+      { ...dependencies, now: () => 3000 },
+    );
+    expect(dependencies.store.upsertDefaultAgentAssignment).toHaveBeenLastCalledWith(
+      expect.objectContaining({ toolUpdateMode: "show_more" }),
+    );
+
+    await setDesktopMessagingDefaultAgent(
+      {
+        assignmentId: existing.id,
+        scope: { kind: "profile" },
+        target: { backend: "codex", threadId: "agent-1" },
+        toolUpdateMode: "show_all",
+      },
+      { ...dependencies, now: () => 4000 },
+    );
+    expect(dependencies.store.upsertDefaultAgentAssignment).toHaveBeenLastCalledWith(
+      expect.objectContaining({ toolUpdateMode: "show_all" }),
+    );
+
+    await setDesktopMessagingDefaultAgent(
+      {
+        assignmentId: existing.id,
+        scope: { kind: "profile" },
+        target: { backend: "codex", threadId: "agent-1" },
+        toolUpdateMode: null,
+      },
+      { ...dependencies, now: () => 5000 },
+    );
+    expect(dependencies.store.upsertDefaultAgentAssignment).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ toolUpdateMode: expect.anything() }),
+    );
+  });
+
+  it("rejects an invalid per-route Working Updates override", async () => {
+    const dependencies = buildDependencies();
+
+    await expect(
+      setDesktopMessagingDefaultAgent(
+        {
+          scope: { kind: "profile" },
+          target: { backend: "codex", threadId: "agent-1" },
+          toolUpdateMode: "show_everything" as never,
+        },
+        dependencies,
+      ),
+    ).rejects.toThrow("Working Updates mode is invalid");
   });
 
   it("clears assignments by id", async () => {
