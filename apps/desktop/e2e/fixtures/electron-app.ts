@@ -10,8 +10,20 @@ import type {
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
 import { SECRET_STORAGE_DISABLED_ENV } from "../../src/main/settings/desktop-secret-store";
+import {
+  isPidAlive,
+  listDescendantPids,
+  waitForPidsToExit,
+} from "./process-exit";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
+/**
+ * How long teardown waits for a leftover profile process to exit after
+ * SIGTERM before giving up and letting the rm report the leak.
+ */
+const PROFILE_PROCESS_EXIT_TIMEOUT_MS = 5_000;
+/** Liveness re-check interval while waiting out PROFILE_PROCESS_EXIT_TIMEOUT_MS. */
+const PROFILE_PROCESS_EXIT_POLL_MS = 100;
 
 type LaunchResult = {
   electronApp: ElectronApplication;
@@ -330,17 +342,53 @@ async function killSpawnedProfileProcessesUnder(homeRoot: string): Promise<void>
       }
     }
   }
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // Process already dead — that's fine.
+  // Only signal what is actually still running. A marker can outlive its
+  // process (crash, force-kill, an interrupted run), and signalling a dead pid
+  // would otherwise make us wait on nothing.
+  const livePids = [...pids].filter(isPidAlive);
+  if (livePids.length === 0) {
+    return;
+  }
+
+  // Snapshot the helper processes before signalling, while the parent is still
+  // around to be walked. `HOME` is `homeRoot` for these runs, so an Electron
+  // instance's renderer and GPU helpers hold cache handles under the very tree
+  // the rm is about to remove. They are watched, not signalled: on POSIX the
+  // main process takes its helpers down as it exits. `listDescendantPids`
+  // shells out to `ps`, so on Windows it yields nothing and the watch set stays
+  // the marker pids.
+  const watched = new Set(livePids);
+  for (const pid of livePids) {
+    for (const descendant of await listDescendantPids(pid)) {
+      watched.add(descendant);
     }
   }
-  // Give the killed processes a moment to release their open file
-  // handles before we attempt the rm. SIGTERM is async; without
-  // this sleep we still race against the OS.
-  if (pids.size > 0) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
+
+  for (const pid of livePids) {
+    try {
+      // Node maps SIGTERM to TerminateProcess on Windows, so the wait below is
+      // for the OS to release handles there rather than for a graceful drain.
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Exited between the liveness check and the signal.
+    }
+  }
+
+  // Wait for the processes to actually exit rather than sleeping a fixed
+  // interval and hoping. These children are mid-write to `<homeRoot>`, and the
+  // rm below races their open handles — ENOTEMPTY on POSIX, EBUSY/EPERM on
+  // Windows. This path only runs when a runtime marker outlived its process's
+  // own cleanup, so a generous ceiling has no cost in the ordinary path.
+  const remaining = await waitForPidsToExit(
+    watched,
+    PROFILE_PROCESS_EXIT_TIMEOUT_MS,
+    PROFILE_PROCESS_EXIT_POLL_MS,
+  );
+  if (remaining.length > 0) {
+    // Deliberately no SIGKILL here. A survivor is a real leak, and letting the
+    // rm below fail reports it instead of hiding it behind a kill.
+    console.warn(
+      `[pwragent-e2e-teardown] profile processes still alive ${PROFILE_PROCESS_EXIT_TIMEOUT_MS}ms after SIGTERM: ${remaining.join(", ")}`,
+    );
   }
 }
