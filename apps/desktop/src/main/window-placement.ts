@@ -9,6 +9,11 @@ type WindowPosition = {
   y: number;
 };
 
+type WindowBounds = WindowPosition & {
+  width: number;
+  height: number;
+};
+
 export type WindowPlacementSource = {
   sourceBounds?: Rectangle | undefined;
   sourceWindow?: BrowserWindow | null | undefined;
@@ -44,6 +49,20 @@ export function placementForCursorDisplay(
     height,
     screen.getDisplayNearestPoint(screen.getCursorScreenPoint()),
   );
+}
+
+export function boundsForCursorDisplay(
+  width: number,
+  height: number,
+): WindowBounds {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const fittedWidth = Math.min(width, display.workArea.width);
+  const fittedHeight = Math.min(height, display.workArea.height);
+  return {
+    ...centerWindowOnDisplay(fittedWidth, fittedHeight, display),
+    width: fittedWidth,
+    height: fittedHeight,
+  };
 }
 
 export function positionWindowForSourceDisplay(
