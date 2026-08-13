@@ -7160,12 +7160,13 @@ textarea,
 /* Quiet create action in the Automations nav, under Exit. It sits where the
    operator's eye already is when the screen opens (they arrived via the left
    rail) — a full-accent button across the empty canvas made the create action
-   the farthest thing from the pointer. Only the plus carries accent. */
-/* Automations-only row, directly under Exit. The nav's 4px flex gap plus the
-   Exit row's 4px bottom margin left only 8px above this and 16px below it,
-   so two rows of identical size, weight, and color read as one clump with a
-   hole under them. 4px top and bottom puts both gaps at 12px — the same
-   Exit-to-next-thing rhythm Settings has. */
+   the farthest thing from the pointer. Only the plus carries accent.
+
+   The nav is a flex column with a 4px gap and Exit carries a 4px bottom
+   margin, so `margin: 4px 0` here puts both the Exit→New and New→group-label
+   gaps at 12px — the same Exit-to-next-thing rhythm Settings has. It was
+   `0 0 8px`, which left 8px above and 16px below: two rows of identical size,
+   weight, and color clumped together with a hole beneath them. */
 .settings-nav__new {
   display: inline-flex;
   width: 100%;
