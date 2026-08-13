@@ -15,6 +15,7 @@ import type {
 } from "./core/messaging-adapter";
 import type {
   AgentEvent,
+  AppServerBackendKind,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
   FederationEventSubscription,
@@ -1821,17 +1822,32 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       this.options.backendBridge.setRemoteEventSubscriptions([]);
       return;
     }
-    const instanceIds = new Set<string>();
+    const threadsByInstanceId = new Map<
+      string,
+      Map<string, { backend: AppServerBackendKind; threadId: string }>
+    >();
     for (const binding of await getDesktopMessagingStore().findActiveBindings()) {
       if (
         this.runningAdapters.has(binding.channel.channel)
         && binding.federatedThread?.target.scope === "remote"
       ) {
-        instanceIds.add(binding.federatedThread.target.instanceId);
+        const instanceId = binding.federatedThread.target.instanceId;
+        const threads = threadsByInstanceId.get(instanceId) ?? new Map();
+        threads.set(
+          buildThreadIdentityKey(
+            binding.federatedThread.backend,
+            binding.federatedThread.threadId,
+          ),
+          {
+            backend: binding.federatedThread.backend,
+            threadId: binding.federatedThread.threadId,
+          },
+        );
+        threadsByInstanceId.set(instanceId, threads);
       }
     }
     this.options.backendBridge.setRemoteEventSubscriptions(
-      [...instanceIds].map((sourceInstanceId) => ({
+      [...threadsByInstanceId].map(([sourceInstanceId, threads]) => ({
         sourceInstanceId,
         eventClasses: [
           "navigation",
@@ -1839,6 +1855,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           "pending_requests",
           "scheduled_actions",
         ],
+        threadSelection: {
+          kind: "threads",
+          threads: [...threads.values()],
+        },
       })),
     );
   }

@@ -8,7 +8,9 @@ import type {
   FederationEventSubscription,
   FederationInstanceId,
   FederationProtocolEnvelope,
+  GetNavigationSnapshotTransportRequest,
   NavigationSnapshot,
+  NavigationSnapshotTransportResponse,
   SetCelestialIconResponse,
   StarMapArrangementEntry,
 } from "@pwragent/shared";
@@ -110,6 +112,9 @@ type RuntimeHarness = {
     instanceId: FederationInstanceId;
   }) => {
     getNavigationSnapshot: () => Promise<NavigationSnapshot>;
+    getNavigationSnapshotTransport?: (
+      request: GetNavigationSnapshotTransportRequest,
+    ) => Promise<NavigationSnapshot | NavigationSnapshotTransportResponse>;
     listThreads: (request: { backend: "codex" }) => Promise<{
       backend: "codex";
       fetchedAt: number;
@@ -118,7 +123,7 @@ type RuntimeHarness = {
   };
   remoteNavigationSnapshot: (
     target: { scope: "remote"; instanceId: FederationInstanceId },
-    request: Record<string, never>,
+    request: { backend?: "all" | "codex"; filter?: string },
   ) => Promise<NavigationSnapshot>;
   remoteThreadSummaries: () => {
     searchForJump: (request: { query: string }) => Promise<{ results: unknown[] }>;
@@ -227,13 +232,19 @@ function applyEventSubscription(params: {
   subscriberInstanceId: FederationInstanceId;
   sourcePeerId?: FederationInstanceId;
   eventClasses: FederationEventClass[];
+  threadSelection?: FederationEventSubscription["threadSelection"];
   hopCount?: number;
 }): void {
   expect(params.runtime.applyEventSubscription({
     id: `subscription:${params.subscriberInstanceId}`,
     kind: "notification",
     method: "federation.eventSubscription",
-    params: { eventClasses: params.eventClasses },
+    params: {
+      eventClasses: params.eventClasses,
+      ...(params.threadSelection
+        ? { threadSelection: params.threadSelection }
+        : {}),
+    },
     protocolVersion: FEDERATION_PROTOCOL_VERSION,
     sourceInstanceId: params.subscriberInstanceId,
     targetInstanceId: params.sourceInstanceId,
@@ -349,6 +360,177 @@ describe("DesktopFederationRuntime", () => {
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
       pwrAgentWorktree,
     );
+  });
+
+  it("reconstructs Federation navigation deltas against the peer revision", async () => {
+    const firstSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [
+        {
+          id: "thread-1",
+          title: "Remote one",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+        },
+        {
+          id: "thread-2",
+          title: "Remote two",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "new-thread" },
+        },
+      ],
+      inboxThreadKeys: ["codex:thread-1", "codex:thread-2"],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const getNavigationSnapshotTransport = vi
+      .fn<(request: GetNavigationSnapshotTransportRequest) =>
+        Promise<NavigationSnapshotTransportResponse>>()
+      .mockResolvedValueOnce({
+        kind: "full",
+        revision: "peer-revision-1",
+        snapshot: firstSnapshot,
+      })
+      .mockResolvedValueOnce({
+        kind: "delta",
+        baseRevision: "peer-revision-1",
+        revision: "peer-revision-2",
+        fetchedAt: 2_000,
+        removedThreadKeys: ["codex:thread-2"],
+        upsertedThreads: [{
+          ...firstSnapshot.threads[0]!,
+          title: "Remote one updated",
+        }],
+        removedDirectoryKeys: [],
+        upsertedDirectories: [],
+        removedInboxThreadKeys: ["codex:thread-2"],
+      })
+      .mockResolvedValueOnce({
+        kind: "unchanged",
+        revision: "peer-revision-2",
+      });
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.remoteBackend = () => ({
+      getNavigationSnapshot: async () => firstSnapshot,
+      getNavigationSnapshotTransport,
+      listThreads: async () => ({
+        backend: "codex",
+        fetchedAt: 1_000,
+        threads: [],
+      }),
+    });
+    runtime.store = () => ({
+      getPeer: () => ({ label: "Studio Mac", status: "connected" }),
+      listPeers: () => [],
+    });
+    runtime.visiblePeers = () => [{
+      id: "client_one",
+      label: "Studio Mac",
+      role: "client",
+      status: "connected",
+      capabilities: ["thread_navigation", "navigation_snapshot_deltas"],
+    }];
+    const target = { scope: "remote" as const, instanceId: "client_one" };
+
+    const first = await runtime.remoteNavigationSnapshot(target, {
+      backend: "all",
+    });
+    const changed = await runtime.remoteNavigationSnapshot(target, {});
+    const unchanged = await runtime.remoteNavigationSnapshot(target, {});
+
+    expect(first.threads.map((thread) => thread.title)).toEqual([
+      "Remote one",
+      "Remote two",
+    ]);
+    expect(changed.threads.map((thread) => thread.title)).toEqual([
+      "Remote one updated",
+    ]);
+    expect(changed.inboxThreadKeys).toEqual(["codex:thread-1"]);
+    expect(unchanged.threads.map((thread) => thread.title)).toEqual([
+      "Remote one updated",
+    ]);
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(2, {
+      transport: {
+        baseRevision: "peer-revision-1",
+        protocol: 1,
+        selection: { kind: "all" },
+      },
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(3, {
+      transport: {
+        baseRevision: "peer-revision-2",
+        protocol: 1,
+        selection: { kind: "all" },
+      },
+    });
+  });
+
+  it("uses full snapshots when an older owner does not advertise delta support", async () => {
+    const legacySnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [{
+        id: "legacy-thread",
+        title: "Legacy owner thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      }],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const getNavigationSnapshotTransport = vi.fn(async () => legacySnapshot);
+    const getNavigationSnapshot = vi.fn(async () => legacySnapshot);
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.remoteBackend = () => ({
+      getNavigationSnapshot,
+      getNavigationSnapshotTransport,
+      listThreads: async () => ({
+        backend: "codex",
+        fetchedAt: 1_000,
+        threads: [],
+      }),
+    });
+    runtime.store = () => ({
+      getPeer: () => ({ label: "Older Mac", status: "connected" }),
+      listPeers: () => [],
+    });
+    runtime.visiblePeers = () => [{
+      id: "older_owner",
+      label: "Older Mac",
+      role: "client",
+      status: "connected",
+      capabilities: ["thread_navigation"],
+    }];
+
+    const snapshot = await runtime.remoteNavigationSnapshot(
+      { scope: "remote", instanceId: "older_owner" },
+      { backend: "all" },
+    );
+
+    expect(snapshot.threads[0]).toMatchObject({
+      id: "legacy-thread",
+      federation: {
+        instanceLabel: "Older Mac",
+      },
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(getNavigationSnapshotTransport).not.toHaveBeenCalled();
   });
 
   it("preserves a transitive child's true federation owner", async () => {
@@ -999,6 +1181,64 @@ describe("DesktopFederationRuntime", () => {
     expect(forwarded).toEqual([]);
   });
 
+  it("forwards only events matching a sparse thread subscription", () => {
+    const forwarded: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "owner_one" });
+    router.registerConnection(createConnection({
+      peerId: "viewer_one",
+      capabilities: [
+        "thread_navigation",
+        "navigation_snapshot_deltas",
+        "event_subscriptions",
+      ],
+      sendEnvelope: (envelope) => forwarded.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.router = router;
+    applyEventSubscription({
+      runtime,
+      sourceInstanceId: "owner_one",
+      subscriberInstanceId: "viewer_one",
+      eventClasses: ["navigation"],
+      threadSelection: {
+        kind: "threads",
+        threads: [{ backend: "codex", threadId: "thread-1" }],
+      },
+    });
+
+    for (const threadId of ["thread-2", "thread-1"]) {
+      runtime.forwardLocalBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId,
+            turn: { id: `turn:${threadId}`, status: "in_progress" },
+            turnId: `turn:${threadId}`,
+          },
+        },
+      } as AgentEvent);
+    }
+    runtime.forwardLocalBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "pullRequest/status/updated",
+        params: { prKey: "github.com/pwrdrvr/pwragent#1515" },
+      },
+    } as AgentEvent);
+
+    expect(forwarded).toHaveLength(2);
+    expect(forwarded[0]).toMatchObject({
+      params: {
+        notification: { params: { threadId: "thread-1" } },
+      },
+    });
+    expect(forwarded[1]).toMatchObject({
+      params: { notification: { method: "pullRequest/status/updated" } },
+    });
+  });
+
   it("replaces viewer subscriptions when retargeted and unsubscribes on close", () => {
     const sentToOne: FederationProtocolEnvelope[] = [];
     const sentToTwo: FederationProtocolEnvelope[] = [];
@@ -1042,6 +1282,65 @@ describe("DesktopFederationRuntime", () => {
       { eventClasses: ["transcript"] },
       { eventClasses: [] },
     ]);
+  });
+
+  it("unions sparse thread subscriptions and lets a full viewer dominate", () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "viewer_one" });
+    router.registerConnection(createConnection({
+      peerId: "owner_one",
+      capabilities: [
+        "thread_navigation",
+        "navigation_snapshot_deltas",
+        "event_subscriptions",
+      ],
+      sendEnvelope: (envelope) => sent.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "viewer_one";
+    runtime.router = router;
+
+    runtime.setEventSubscriptions("messaging", [{
+      sourceInstanceId: "owner_one",
+      eventClasses: ["navigation"],
+      threadSelection: {
+        kind: "threads",
+        threads: [{ backend: "codex", threadId: "thread-2" }],
+      },
+    }]);
+    runtime.setEventSubscriptions("pins", [{
+      sourceInstanceId: "owner_one",
+      eventClasses: ["navigation"],
+      threadSelection: {
+        kind: "threads",
+        threads: [{ backend: "codex", threadId: "thread-1" }],
+      },
+    }]);
+    runtime.setRendererEventSubscriptions(7, "remote-window", [{
+      sourceInstanceId: "owner_one",
+      eventClasses: ["navigation"],
+      threadSelection: { kind: "all" },
+    }]);
+    runtime.clearRendererEventSubscriptions(7, "remote-window");
+
+    const params = sent.map((envelope) =>
+      envelope.kind === "notification" ? envelope.params : undefined
+    );
+    expect(params.at(1)).toEqual({
+      eventClasses: ["navigation"],
+      threadSelection: {
+        kind: "threads",
+        threads: [
+          { backend: "codex", threadId: "thread-1" },
+          { backend: "codex", threadId: "thread-2" },
+        ],
+      },
+    });
+    expect(params.at(2)).toEqual({
+      eventClasses: ["navigation"],
+      threadSelection: { kind: "all" },
+    });
+    expect(params.at(3)).toEqual(params.at(1));
   });
 
   it("keeps viewer and thread subscriptions while Star Map opens and closes", () => {
@@ -1459,7 +1758,11 @@ describe("DesktopFederationRuntime", () => {
     router.registerConnection(
       createConnection({
         peerId: "client_one",
-        capabilities: ["scheduled_actions", "event_subscriptions"],
+        capabilities: [
+          "scheduled_actions",
+          "event_subscriptions",
+          "navigation_snapshot_deltas",
+        ],
         sendEnvelope: (envelope) => forwarded.push(envelope),
       }),
     );
@@ -1478,30 +1781,37 @@ describe("DesktopFederationRuntime", () => {
       sourceInstanceId: "gateway_one",
       subscriberInstanceId: "client_one",
       eventClasses: ["scheduled_actions"],
+      threadSelection: {
+        kind: "threads",
+        threads: [{ backend: "codex", threadId: "thread-1" }],
+      },
     });
 
-    runtime.forwardLocalBackendEvent({
-      backend: "codex",
-      notification: {
-        method: "thread/scheduledAction/updated",
-        params: {
-          action: {
-            id: "scheduled-1",
-            backend: "codex",
-            threadId: "thread-1",
-            kind: "turn",
-            origin: "desktop",
-            status: "scheduled",
-            scheduledFor: 3_000,
-            displayText: "Follow up",
-            turn: { input: [{ type: "text", text: "Follow up" }] },
-            createdAt: 1_000,
-            updatedAt: 1_000,
+    for (const threadId of ["thread-2", "thread-1"]) {
+      runtime.forwardLocalBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/scheduledAction/updated",
+          params: {
+            action: {
+              id: `scheduled:${threadId}`,
+              backend: "codex",
+              threadId,
+              kind: "turn",
+              origin: "desktop",
+              status: "scheduled",
+              scheduledFor: 3_000,
+              displayText: "Follow up",
+              turn: { input: [{ type: "text", text: "Follow up" }] },
+              createdAt: 1_000,
+              updatedAt: 1_000,
+            },
           },
         },
-      },
-    } as AgentEvent);
+      } as AgentEvent);
+    }
 
+    expect(forwarded).toHaveLength(1);
     expect(forwarded).toMatchObject([
       {
         kind: "notification",

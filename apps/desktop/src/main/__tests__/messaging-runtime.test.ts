@@ -162,6 +162,10 @@ describe("DesktopMessagingRuntime", () => {
         "pending_requests",
         "scheduled_actions",
       ],
+      threadSelection: {
+        kind: "threads",
+        threads: [{ backend: "codex", threadId: "thread-remote" }],
+      },
     }]);
 
     await runtime.requestBindingRevoke({

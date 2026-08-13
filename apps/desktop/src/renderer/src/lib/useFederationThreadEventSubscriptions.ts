@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from "react";
 import {
+  buildThreadIdentityKey,
   isRemoteFederationTarget,
   type FederationEventClass,
   type FederationEventSubscription,
@@ -27,6 +28,10 @@ export function buildFederationThreadEventSubscriptions(params: {
   const eventClassesByInstance = new Map<
     string,
     Set<FederationEventClass>
+  >();
+  const threadsByInstance = new Map<
+    string,
+    Map<string, { backend: NavigationThreadSummary["source"]; threadId: string }>
   >();
   const threads = params.selectedThread
     ? [...params.threads, params.selectedThread]
@@ -69,6 +74,13 @@ export function buildFederationThreadEventSubscriptions(params: {
     }
     if (eventClasses.size > 0) {
       eventClassesByInstance.set(target.instanceId, eventClasses);
+      const selectedThreads = threadsByInstance.get(target.instanceId)
+        ?? new Map();
+      selectedThreads.set(buildThreadIdentityKey(thread.source, thread.id), {
+        backend: thread.source,
+        threadId: thread.id,
+      });
+      threadsByInstance.set(target.instanceId, selectedThreads);
     }
   }
 
@@ -79,6 +91,10 @@ export function buildFederationThreadEventSubscriptions(params: {
       eventClasses: THREAD_VIEW_EVENT_CLASS_ORDER.filter((eventClass) =>
         eventClasses.has(eventClass)
       ),
+      threadSelection: {
+        kind: "threads" as const,
+        threads: [...(threadsByInstance.get(sourceInstanceId)?.values() ?? [])],
+      },
     }));
 }
 

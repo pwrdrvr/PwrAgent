@@ -31,6 +31,7 @@ import type {
   ForkThreadRequest,
   ForkThreadResponse,
   GetNavigationSnapshotRequest,
+  GetNavigationSnapshotTransportRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   GetWorktreeUnpublishedCommitDiffRequest,
@@ -70,6 +71,8 @@ import type {
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
   NavigationSnapshot,
+  NavigationSnapshotTransportResponse,
+  NavigationSnapshotTransportSelection,
   NavigationThreadSummary,
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
@@ -134,6 +137,7 @@ import {
   encodeNavigationSnapshotThreadKeysForProtocolV1,
   normalizeNavigationSnapshotThreadKeys,
 } from "@pwragent/shared";
+import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 import {
@@ -619,15 +623,59 @@ export function registerFederationBackendHandlers(params: {
     event: CodexEnvironmentSetupProgressEvent,
     targetInstanceId: string,
   ) => void;
-}): void {
+}): NavigationSnapshotTransport {
+  const navigationSnapshotTransport = new NavigationSnapshotTransport({
+    // Federation has one owner collection and one resource-version history.
+    // Request selectors never create histories of their own.
+    maxScopes: 1,
+  });
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
-    async (envelope) =>
-      encodeNavigationSnapshotThreadKeysForProtocolV1(
-        await params.backend.getNavigationSnapshot(
-          (envelope.params ?? {}) as GetNavigationSnapshotRequest,
-        ),
-      ),
+    async (envelope) => {
+      const request = (envelope.params ?? {}) as
+        | GetNavigationSnapshotRequest
+        | GetNavigationSnapshotTransportRequest;
+      const transportRequest =
+        "transport" in request && request.transport?.protocol === 1
+          ? request
+          : undefined;
+      if (!transportRequest) {
+        const { transport: _unsupportedTransport, ...snapshotRequest } =
+          request as GetNavigationSnapshotRequest & {
+            transport?: unknown;
+          };
+        return encodeNavigationSnapshotThreadKeysForProtocolV1(
+          await params.backend.getNavigationSnapshot(snapshotRequest),
+        );
+      }
+      const { transport, ...snapshotRequest } = transportRequest;
+      const selection: NavigationSnapshotTransportSelection =
+        transport.selection?.kind === "threads"
+        && Array.isArray(transport.selection.threadKeys)
+          ? {
+              kind: "threads",
+              threadKeys: transport.selection.threadKeys.filter(
+                (key): key is string => typeof key === "string",
+              ),
+            }
+          : { kind: "all" };
+      const snapshot = encodeNavigationSnapshotThreadKeysForProtocolV1(
+        // One canonical collection drives Federation resource versions.
+        // Backend/filter/search are client-side lenses over that collection;
+        // allowing them into this read would recreate per-query histories.
+        await params.backend.getNavigationSnapshot({
+          forceRefresh: snapshotRequest.forceRefresh,
+          refreshMode: "full",
+        }),
+      );
+      return navigationSnapshotTransport.encode({
+        baseRevision: transport.baseRevision,
+        request: {},
+        scopeKey: "federation-navigation",
+        selection,
+        snapshot,
+      });
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listThreads,
@@ -1170,6 +1218,7 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as StarMapIntakeRequest,
       ),
   );
+  return navigationSnapshotTransport;
 }
 
 export class FederationRemoteBackendClient implements FederationBackendOperations {
@@ -1191,6 +1240,17 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
         params: request,
       }),
     );
+  }
+
+  async getNavigationSnapshotTransport(
+    request: GetNavigationSnapshotTransportRequest,
+  ): Promise<NavigationSnapshot | NavigationSnapshotTransportResponse> {
+    return await this.rpc.request<
+      NavigationSnapshot | NavigationSnapshotTransportResponse
+    >({
+      method: FEDERATION_BACKEND_METHODS.getNavigationSnapshot,
+      params: request,
+    });
   }
 
   async listThreads(

@@ -37,6 +37,7 @@ export * from "./directory-pins";
 export * from "./directory-navigation";
 export * from "./inbox";
 export * from "./navigation-state";
+export * from "./navigation-snapshot-transport";
 export * from "./pending-request-response";
 export * from "./path-display";
 export * from "./renderer-payload-boundary";

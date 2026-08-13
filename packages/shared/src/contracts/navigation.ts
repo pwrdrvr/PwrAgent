@@ -1234,21 +1234,31 @@ export type GetNavigationSnapshotRequest = {
 };
 
 /**
- * Opt-in renderer transport layered over the full navigation snapshot API.
- * Internal main-process, messaging, and federation callers continue to use
- * `GetNavigationSnapshotRequest` and always receive a complete snapshot.
+ * Opt-in revision transport layered over the full navigation snapshot API.
+ * Sending `transport.protocol` advertises client support; callers that omit
+ * it retain the legacy complete-snapshot response contract.
  */
 export type GetNavigationSnapshotTransportRequest =
   GetNavigationSnapshotRequest & {
     transport: {
       baseRevision?: string;
       protocol: 1;
+      selection?: NavigationSnapshotTransportSelection;
     };
   };
 
 /**
- * Stable renderer/main cache scope. `forceRefresh` is a scheduling hint and
- * does not change the semantic snapshot population.
+ * The materialized navigation collection a revision client wants to retain.
+ * `threads` is intentionally an identity set rather than a query: lenses and
+ * search remain client-side projections over the received collection.
+ */
+export type NavigationSnapshotTransportSelection =
+  | { kind: "all" }
+  | { kind: "threads"; threadKeys: string[] };
+
+/**
+ * Stable shared revision-history scope. `forceRefresh` is a scheduling hint
+ * and does not change the semantic snapshot population.
  */
 export function buildNavigationSnapshotTransportScopeKey(
   request: GetNavigationSnapshotRequest,
@@ -1292,10 +1302,18 @@ export type NavigationSnapshotTransportDelta = {
   launchpadDefaults?: NavigationLaunchpadDefaults;
 };
 
+export type NavigationSnapshotTransportChanges = {
+  kind: "changes";
+  baseRevision: string;
+  revision: string;
+  changes: NavigationSnapshotTransportDelta[];
+};
+
 export type NavigationSnapshotTransportResponse =
   | NavigationSnapshotTransportFull
   | NavigationSnapshotTransportUnchanged
-  | NavigationSnapshotTransportDelta;
+  | NavigationSnapshotTransportDelta
+  | NavigationSnapshotTransportChanges;
 
 export type SetNavigationBrowseModeRequest = {
   browseMode: NavigationBrowseMode;

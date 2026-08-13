@@ -5,11 +5,13 @@ import type {
   NavigationSnapshot,
   NavigationSnapshotTransportDelta,
   NavigationSnapshotTransportResponse,
+  NavigationSnapshotTransportSelection,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
   buildNavigationSnapshotTransportScopeKey,
   buildThreadIdentityKey,
+  normalizeThreadIdentityKey,
 } from "@pwragent/shared";
 
 type CachedNavigationSnapshot = {
@@ -17,8 +19,101 @@ type CachedNavigationSnapshot = {
   snapshot: NavigationSnapshot;
 };
 
+type CachedNavigationScope = {
+  changes: NavigationSnapshotTransportDelta[];
+  current: CachedNavigationSnapshot;
+};
+
+const DEFAULT_MAX_SCOPES = 8;
+const DEFAULT_MAX_CHANGES_PER_SCOPE = 4;
+
+type NavigationSnapshotTransportOptions = {
+  maxChangesPerScope?: number;
+  maxScopes?: number;
+};
+
+function positiveIntegerOrDefault(
+  value: number | undefined,
+  fallback: number,
+): number {
+  return value !== undefined && Number.isInteger(value) && value > 0
+    ? value
+    : fallback;
+}
+
 function threadKey(thread: NavigationThreadSummary): string {
   return buildThreadIdentityKey(thread.source, thread.id);
+}
+
+function selectionHasKey(selected: ReadonlySet<string>, key: string): boolean {
+  return selected.has(normalizeThreadIdentityKey(key) ?? key);
+}
+
+function filterSnapshot(
+  snapshot: NavigationSnapshot,
+  selection: NavigationSnapshotTransportSelection,
+): NavigationSnapshot {
+  if (selection.kind === "all") return snapshot;
+  const selected = new Set(selection.threadKeys);
+  return {
+    ...snapshot,
+    threads: snapshot.threads.filter((thread) => selected.has(threadKey(thread))),
+    inboxThreadKeys: snapshot.inboxThreadKeys.filter((key) =>
+      selectionHasKey(selected, key)
+    ),
+    // Sparse consumers (messaging bindings and pinned summaries) consume
+    // thread rows, not the owner's directory lens. Keeping directory models
+    // out also means an unrelated directory edit cannot wake or inflate them.
+    directories: [],
+  };
+}
+
+function filterDelta(
+  delta: NavigationSnapshotTransportDelta,
+  selection: NavigationSnapshotTransportSelection,
+): NavigationSnapshotTransportDelta {
+  if (selection.kind === "all") return delta;
+  const selected = new Set(selection.threadKeys);
+  return {
+    ...delta,
+    removedThreadKeys: delta.removedThreadKeys.filter((key) =>
+      selectionHasKey(selected, key)
+    ),
+    upsertedThreads: delta.upsertedThreads.filter((thread) =>
+      selected.has(threadKey(thread))
+    ),
+    ...(delta.threadKeys
+      ? {
+          threadKeys: delta.threadKeys.filter((key) =>
+            selectionHasKey(selected, key)
+          ),
+        }
+      : {}),
+    removedDirectoryKeys: [],
+    upsertedDirectories: [],
+    ...(delta.directoryKeys ? { directoryKeys: [] } : {}),
+    ...(delta.addedInboxThreadKeys
+      ? {
+          addedInboxThreadKeys: delta.addedInboxThreadKeys.filter((key) =>
+            selectionHasKey(selected, key)
+          ),
+        }
+      : {}),
+    ...(delta.removedInboxThreadKeys
+      ? {
+          removedInboxThreadKeys: delta.removedInboxThreadKeys.filter((key) =>
+            selectionHasKey(selected, key)
+          ),
+        }
+      : {}),
+    ...(delta.inboxThreadKeys
+      ? {
+          inboxThreadKeys: delta.inboxThreadKeys.filter((key) =>
+            selectionHasKey(selected, key)
+          ),
+        }
+      : {}),
+  };
 }
 
 function keysEqual(left: string[], right: string[]): boolean {
@@ -157,83 +252,161 @@ function buildDelta(params: {
 }
 
 /**
- * Per-renderer revision cache for the Electron IPC boundary. The app-server
- * service still builds and returns complete snapshots to every internal
- * caller; only renderer clients that opt into protocol 1 receive deltas.
+ * Bounded shared revision history for navigation snapshot scopes. Clients own
+ * their materialized snapshots and send only their last revision; the server
+ * retains no per-client state. If a revision falls out of history, the caller
+ * receives a fresh full baseline.
  */
 export class NavigationSnapshotTransport {
   private nextRevision = 0;
-  private readonly snapshotsByRenderer = new Map<
-    number,
-    Map<string, CachedNavigationSnapshot>
-  >();
+  private readonly maxChangesPerScope: number;
+  private readonly maxScopes: number;
+  private readonly scopes = new Map<string, CachedNavigationScope>();
 
-  clearRenderer(rendererId: number): void {
-    this.snapshotsByRenderer.delete(rendererId);
+  constructor(options: NavigationSnapshotTransportOptions = {}) {
+    this.maxChangesPerScope = positiveIntegerOrDefault(
+      options.maxChangesPerScope,
+      DEFAULT_MAX_CHANGES_PER_SCOPE,
+    );
+    this.maxScopes = positiveIntegerOrDefault(
+      options.maxScopes,
+      DEFAULT_MAX_SCOPES,
+    );
   }
 
   clear(): void {
-    this.snapshotsByRenderer.clear();
+    this.scopes.clear();
+  }
+
+  private cacheScope(scopeKey: string, scope: CachedNavigationScope): void {
+    this.scopes.delete(scopeKey);
+    this.scopes.set(scopeKey, scope);
+    while (this.scopes.size > this.maxScopes) {
+      const oldestScopeKey = this.scopes.keys().next().value;
+      if (oldestScopeKey === undefined) break;
+      this.scopes.delete(oldestScopeKey);
+    }
+  }
+
+  private full(
+    scope: CachedNavigationScope,
+    selection: NavigationSnapshotTransportSelection,
+  ): NavigationSnapshotTransportResponse {
+    return {
+      kind: "full",
+      revision: scope.current.revision,
+      snapshot: {
+        ...filterSnapshot(scope.current.snapshot, selection),
+        unchanged: false,
+      },
+    };
+  }
+
+  private responseSince(
+    scope: CachedNavigationScope,
+    baseRevision: string | undefined,
+    selection: NavigationSnapshotTransportSelection,
+  ): NavigationSnapshotTransportResponse {
+    if (!baseRevision) return this.full(scope, selection);
+    if (baseRevision === scope.current.revision) {
+      return {
+        kind: "unchanged",
+        revision: scope.current.revision,
+      };
+    }
+    const start = scope.changes.findIndex(
+      (change) => change.baseRevision === baseRevision,
+    );
+    if (start < 0) return this.full(scope, selection);
+    const changes = scope.changes.slice(start).map((change) =>
+      filterDelta(change, selection)
+    );
+    for (let index = 1; index < changes.length; index += 1) {
+      if (changes[index]!.baseRevision !== changes[index - 1]!.revision) {
+        return this.full(scope, selection);
+      }
+    }
+    if (changes.at(-1)?.revision !== scope.current.revision) {
+      return this.full(scope, selection);
+    }
+    if (changes.length === 1) return changes[0]!;
+    return {
+      kind: "changes",
+      baseRevision,
+      revision: scope.current.revision,
+      changes,
+    };
   }
 
   encode(params: {
     baseRevision?: string;
-    rendererId: number;
     request: GetNavigationSnapshotRequest;
+    scopeKey?: string;
+    selection?: NavigationSnapshotTransportSelection;
     snapshot: NavigationSnapshot;
   }): NavigationSnapshotTransportResponse {
-    const scopeKey = buildNavigationSnapshotTransportScopeKey(params.request);
-    const rendererSnapshots =
-      this.snapshotsByRenderer.get(params.rendererId) ?? new Map();
-    this.snapshotsByRenderer.set(params.rendererId, rendererSnapshots);
-    const cached = rendererSnapshots.get(scopeKey);
+    const scopeKey =
+      params.scopeKey ?? buildNavigationSnapshotTransportScopeKey(params.request);
+    const selection = params.selection ?? { kind: "all" };
+    let scope = this.scopes.get(scopeKey);
+    if (!scope) {
+      scope = {
+        changes: [],
+        current: {
+          revision: String(++this.nextRevision),
+          snapshot: params.snapshot,
+        },
+      };
+      this.cacheScope(scopeKey, scope);
+      return this.full(scope, selection);
+    }
 
+    if (params.snapshot.fetchedAt < scope.current.snapshot.fetchedAt) {
+      this.cacheScope(scopeKey, scope);
+      return this.responseSince(scope, params.baseRevision, selection);
+    }
     if (
-      !cached
-      || params.baseRevision !== cached.revision
-      || params.snapshot.backend !== cached.snapshot.backend
+      params.snapshot.backend !== scope.current.snapshot.backend
       || !isDeepStrictEqual(
         params.snapshot.federationTarget,
-        cached.snapshot.federationTarget,
+        scope.current.snapshot.federationTarget,
       )
     ) {
-      const revision = String(++this.nextRevision);
-      rendererSnapshots.set(scopeKey, {
-        revision,
-        snapshot: params.snapshot,
-      });
-      return {
-        kind: "full",
-        revision,
-        // `unchanged` is global overlay-store history, not proof that this
-        // renderer already owns the baseline. A recovery full must apply.
-        snapshot: { ...params.snapshot, unchanged: false },
+      scope = {
+        changes: [],
+        current: {
+          revision: String(++this.nextRevision),
+          snapshot: params.snapshot,
+        },
       };
+      this.cacheScope(scopeKey, scope);
+      return this.full(scope, selection);
     }
 
     const revision = String(this.nextRevision + 1);
     const delta = buildDelta({
-      baseRevision: cached.revision,
+      baseRevision: scope.current.revision,
       current: params.snapshot,
-      previous: cached.snapshot,
+      previous: scope.current.snapshot,
       revision,
     });
-    if (!delta) {
-      rendererSnapshots.set(scopeKey, {
-        revision: cached.revision,
+    if (delta) {
+      this.nextRevision += 1;
+      scope.changes.push(delta);
+      if (scope.changes.length > this.maxChangesPerScope) {
+        scope.changes.splice(
+          0,
+          scope.changes.length - this.maxChangesPerScope,
+        );
+      }
+      scope.current = {
+        revision,
         snapshot: params.snapshot,
-      });
-      return {
-        kind: "unchanged",
-        revision: cached.revision,
       };
+    } else {
+      scope.current.snapshot = params.snapshot;
     }
-
-    this.nextRevision += 1;
-    rendererSnapshots.set(scopeKey, {
-      revision,
-      snapshot: params.snapshot,
-    });
-    return delta;
+    this.cacheScope(scopeKey, scope);
+    return this.responseSince(scope, params.baseRevision, selection);
   }
 }

@@ -945,6 +945,7 @@ describe("StarMapScreen", () => {
             "star_map",
             "scheduled_actions",
           ],
+          threadSelection: { kind: "all" },
         }],
       });
     });

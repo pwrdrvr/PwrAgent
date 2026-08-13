@@ -79,10 +79,18 @@ describe("useFederationThreadEventSubscriptions", () => {
           "pending_requests",
           "scheduled_actions",
         ],
+        threadSelection: {
+          kind: "threads",
+          threads: [{ backend: "codex", threadId: "selected" }],
+        },
       },
       {
         sourceInstanceId: "owner_two",
         eventClasses: ["navigation", "scheduled_actions"],
+        threadSelection: {
+          kind: "threads",
+          threads: [{ backend: "codex", threadId: "background" }],
+        },
       },
     ]);
   });
@@ -120,6 +128,10 @@ describe("useFederationThreadEventSubscriptions", () => {
             "pending_requests",
             "scheduled_actions",
           ],
+          threadSelection: {
+            kind: "threads",
+            threads: [{ backend: "codex", threadId: "selected" }],
+          },
         }],
       });
     });

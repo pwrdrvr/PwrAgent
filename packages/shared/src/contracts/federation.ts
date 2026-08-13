@@ -13,6 +13,7 @@ export const FEDERATION_TRANSPORT_VERSION = 1;
 export const FEDERATION_CAPABILITIES = [
   "remote_window",
   "thread_navigation",
+  "navigation_snapshot_deltas",
   "thread_detail",
   "turn_control",
   "scheduled_actions",
@@ -45,9 +46,21 @@ export const FEDERATION_EVENT_CLASSES = [
 export type FederationEventClass =
   (typeof FEDERATION_EVENT_CLASSES)[number];
 
+export type FederationThreadSelection =
+  | { kind: "all" }
+  | {
+      kind: "threads";
+      threads: Array<{
+        backend: AppServerBackendKind;
+        threadId: ThreadIdentifier;
+      }>;
+    };
+
 export type FederationEventSubscription = {
   sourceInstanceId: FederationInstanceId;
   eventClasses: FederationEventClass[];
+  /** Absent means `all` for peers that predate filtered subscriptions. */
+  threadSelection?: FederationThreadSelection;
 };
 
 export type FederationEventSubscriptionConsumer =

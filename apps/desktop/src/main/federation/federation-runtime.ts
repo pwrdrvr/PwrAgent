@@ -21,6 +21,7 @@ import type {
   FederationEndpointStatus,
   FederationEventClass,
   FederationEventSubscription,
+  FederationThreadSelection,
   FederatedSearchRequest,
   FederatedSearchResponse,
   FederationHealthStatus,
@@ -44,6 +45,8 @@ import type {
   ListRecentFileReferencesResponse,
   MarkThreadSeenResponse,
   MessagingPlatformStatus,
+  NavigationSnapshotTransportState,
+  NavigationSnapshotTransportSelection,
   PwrSnapConnectionStatus,
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
@@ -76,7 +79,9 @@ import {
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
   MAX_CELESTIAL_ASSIGNMENTS,
+  applyNavigationSnapshotTransportResponse,
   buildFederatedThreadRef,
+  buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
   federationEndpointAcceptsCloudflareCredentials,
   isCelestialIconAssignment,
@@ -85,12 +90,14 @@ import {
   isFederationGatewayEndpointUrl,
   isFederationInstanceId,
   isFederationEventClass,
+  isAppServerBackendKind,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
   mergeCelestialIconAssignments,
   normalizeNavigationSnapshotThreadKeys,
   pickCelestialIcon,
   resolveThreadTerminalCwd,
+  threadMatchesQuery,
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
   type AppServerReadThreadRequest,
@@ -111,6 +118,7 @@ import {
   type DesktopFederationMode,
   type DesktopSettingsSnapshot,
   type HandoffThreadWorkspaceRequest,
+  type GetNavigationSnapshotRequest,
   type GetWorktreeUnpublishedCommitDiffRequest,
   type GetWorktreeUnpublishedCommitDiffResponse,
   type InterruptTurnRequest,
@@ -199,6 +207,7 @@ import {
   recordRecentFileReferencePaths,
 } from "../state/recent-file-references-store";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import {
   createFederationEnrollmentInvite,
   decodeFederationInvite,
@@ -356,6 +365,7 @@ function rewriteLiveTranscriptImagesForFederation(
 const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
+  "navigation_snapshot_deltas",
   "thread_detail",
   "turn_control",
   "scheduled_actions",
@@ -411,12 +421,19 @@ type FederationEventSubscriptionNotification = {
   method: typeof FEDERATION_EVENT_SUBSCRIPTION_METHOD;
   params: {
     eventClasses: FederationEventClass[];
+    threadSelection?: FederationThreadSelection;
   };
 };
 
 type IncomingEventSubscription = {
   eventClasses: Set<FederationEventClass>;
+  threadSelection: FederationThreadSelection;
   viaPeerId: FederationInstanceId;
+};
+
+type DesiredEventSubscription = {
+  eventClasses: Set<FederationEventClass>;
+  threadSelection: FederationThreadSelection;
 };
 
 type RelayedEventSubscription = IncomingEventSubscription & {
@@ -529,6 +546,174 @@ function equalEventClassSets(
   return left.size === right.size && [...left].every((value) => right.has(value));
 }
 
+function normalizeFederationThreadSelection(
+  value: unknown,
+): FederationThreadSelection {
+  if (
+    !value
+    || typeof value !== "object"
+    || (value as { kind?: unknown }).kind !== "threads"
+    || !Array.isArray((value as { threads?: unknown }).threads)
+  ) {
+    return { kind: "all" };
+  }
+  const byKey = new Map<
+    string,
+    Extract<FederationThreadSelection, { kind: "threads" }>["threads"][number]
+  >();
+  for (const candidate of (value as { threads: unknown[] }).threads) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const backend = (candidate as { backend?: unknown }).backend;
+    const threadId = (candidate as { threadId?: unknown }).threadId;
+    if (
+      typeof backend !== "string"
+      || !isAppServerBackendKind(backend)
+      || typeof threadId !== "string"
+    ) {
+      continue;
+    }
+    byKey.set(buildThreadIdentityKey(backend, threadId), { backend, threadId });
+  }
+  return {
+    kind: "threads",
+    threads: [...byKey.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, thread]) => thread),
+  };
+}
+
+function mergeFederationThreadSelections(
+  left: FederationThreadSelection | undefined,
+  right: FederationThreadSelection,
+): FederationThreadSelection {
+  if (!left) return right;
+  if (left.kind === "all" || right.kind === "all") {
+    return { kind: "all" };
+  }
+  return normalizeFederationThreadSelection({
+    kind: "threads",
+    threads: [...left.threads, ...right.threads],
+  });
+}
+
+function federationThreadSelectionKey(
+  selection: FederationThreadSelection,
+): string {
+  return selection.kind === "all"
+    ? "all"
+    : JSON.stringify(selection.threads.map((thread) =>
+        buildThreadIdentityKey(thread.backend, thread.threadId)
+      ));
+}
+
+function equalFederationThreadSelections(
+  left: FederationThreadSelection | undefined,
+  right: FederationThreadSelection | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return federationThreadSelectionKey(left) === federationThreadSelectionKey(right);
+}
+
+function federationThreadSelectionIncludes(
+  available: FederationThreadSelection,
+  requested: FederationThreadSelection,
+): boolean {
+  if (available.kind === "all") return true;
+  if (requested.kind === "all") return false;
+  const availableKeys = new Set(available.threads.map((thread) =>
+    buildThreadIdentityKey(thread.backend, thread.threadId)
+  ));
+  return requested.threads.every((thread) => availableKeys.has(
+    buildThreadIdentityKey(thread.backend, thread.threadId)
+  ));
+}
+
+function transportSelectionFor(
+  selection: FederationThreadSelection,
+): NavigationSnapshotTransportSelection {
+  return selection.kind === "all"
+    ? { kind: "all" }
+    : {
+        kind: "threads",
+        threadKeys: selection.threads.map((thread) =>
+          buildThreadIdentityKey(thread.backend, thread.threadId)
+        ),
+      };
+}
+
+function eventMatchesThreadSelection(
+  event: AgentEvent,
+  eventClass: FederationEventClass,
+  selection: FederationThreadSelection,
+): boolean {
+  if (selection.kind === "all") return true;
+  const params = event.notification.params as Record<string, unknown> | undefined;
+  const nestedThread = params?.thread as Record<string, unknown> | undefined;
+  const scheduledAction =
+    event.notification.method === "thread/scheduledAction/updated"
+      ? params?.action as Record<string, unknown> | undefined
+      : undefined;
+  const threadId =
+    typeof scheduledAction?.threadId === "string"
+      ? scheduledAction.threadId
+      : typeof params?.threadId === "string"
+        ? params.threadId
+        : typeof nestedThread?.id === "string"
+          ? nestedThread.id
+          : undefined;
+  // Some navigation invalidations (for example PR status observations) name
+  // a shared resource rather than one thread. Sparse consumers still need the
+  // tiny invalidation so they can refresh their selected rows; the expensive
+  // snapshot response remains filtered.
+  if (!threadId) return eventClass === "navigation";
+  const actionBackend =
+    typeof scheduledAction?.backend === "string"
+    && isAppServerBackendKind(scheduledAction.backend)
+      ? scheduledAction.backend
+      : event.backend;
+  const key = buildThreadIdentityKey(actionBackend, threadId);
+  return selection.threads.some((thread) =>
+    buildThreadIdentityKey(thread.backend, thread.threadId) === key
+  );
+}
+
+function projectNavigationSnapshot(
+  snapshot: NavigationSnapshot,
+  request: {
+    backend?: GetNavigationSnapshotRequest["backend"];
+    filter?: string;
+  },
+): NavigationSnapshot {
+  const query = request.filter?.trim();
+  const threads = snapshot.threads.filter((thread) =>
+    (
+      !request.backend
+      || request.backend === "all"
+      || thread.source === request.backend
+    )
+    && (!query || threadMatchesQuery(thread, query))
+  );
+  const threadKeys = new Set(
+    threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+  );
+  return {
+    ...snapshot,
+    backend: request.backend ?? "all",
+    threads,
+    inboxThreadKeys: snapshot.inboxThreadKeys.filter((key) =>
+      threadKeys.has(key)
+    ),
+    directories: snapshot.directories.flatMap((directory) => {
+      const directoryThreadKeys = directory.threadKeys.filter((key) =>
+        threadKeys.has(key)
+      );
+      return directoryThreadKeys.length > 0
+        ? [{ ...directory, threadKeys: directoryThreadKeys }]
+        : [];
+    }),
+  };
+}
+
 function eventClassAllowedByCapabilities(
   eventClass: FederationEventClass,
   capabilities: readonly FederationCapability[],
@@ -564,6 +749,14 @@ export class DesktopFederationRuntime {
     Omit<FederationEndpointStatus, "url">
   >();
   private readonly rpcByPeer = new Map<FederationInstanceId, FederationRpcEndpoint>();
+  private readonly remoteNavigationTransportByPeer = new Map<
+    string,
+    {
+      selectionKey: string;
+      state: NavigationSnapshotTransportState;
+    }
+  >();
+  private ownedNavigationSnapshotTransport?: NavigationSnapshotTransport;
   private readonly remotePeerDirectory = new Map<
     FederationInstanceId,
     FederationPeerSummary
@@ -594,7 +787,7 @@ export class DesktopFederationRuntime {
   private readonly peerStatusListeners = new Set<() => void>();
   private readonly desiredEventSubscriptions = new Map<
     string,
-    Map<FederationInstanceId, Set<FederationEventClass>>
+    Map<FederationInstanceId, DesiredEventSubscription>
   >();
   private readonly incomingEventSubscriptions = new Map<
     FederationInstanceId,
@@ -655,15 +848,22 @@ export class DesktopFederationRuntime {
     const previous = this.aggregateDesiredEventSubscriptions();
     const normalized = new Map<
       FederationInstanceId,
-      Set<FederationEventClass>
+      DesiredEventSubscription
     >();
     for (const subscription of subscriptions) {
       if (!isFederationInstanceId(subscription.sourceInstanceId)) continue;
       const eventClasses = subscription.eventClasses.filter(isFederationEventClass);
       if (eventClasses.length === 0) continue;
-      const current = normalized.get(subscription.sourceInstanceId) ?? new Set();
-      for (const eventClass of eventClasses) current.add(eventClass);
-      normalized.set(subscription.sourceInstanceId, current);
+      const current = normalized.get(subscription.sourceInstanceId);
+      const currentClasses = current?.eventClasses ?? new Set();
+      for (const eventClass of eventClasses) currentClasses.add(eventClass);
+      normalized.set(subscription.sourceInstanceId, {
+        eventClasses: currentClasses,
+        threadSelection: mergeFederationThreadSelections(
+          current?.threadSelection,
+          normalizeFederationThreadSelection(subscription.threadSelection),
+        ),
+      });
     }
     if (normalized.size > 0) {
       this.desiredEventSubscriptions.set(consumerId, normalized);
@@ -675,20 +875,28 @@ export class DesktopFederationRuntime {
     for (const sourceInstanceId of sourceIds) {
       if (
         equalEventClassSets(
-          previous.get(sourceInstanceId),
-          next.get(sourceInstanceId),
+          previous.get(sourceInstanceId)?.eventClasses,
+          next.get(sourceInstanceId)?.eventClasses,
+        )
+        && equalFederationThreadSelections(
+          previous.get(sourceInstanceId)?.threadSelection,
+          next.get(sourceInstanceId)?.threadSelection,
         )
       ) {
         continue;
       }
       this.sendDesiredEventSubscription(
         sourceInstanceId,
-        next.get(sourceInstanceId) ?? new Set(),
+        next.get(sourceInstanceId) ?? {
+          eventClasses: new Set(),
+          threadSelection: { kind: "threads", threads: [] },
+        },
       );
     }
-    return [...normalized].map(([sourceInstanceId, eventClasses]) => ({
+    return [...normalized].map(([sourceInstanceId, subscription]) => ({
       sourceInstanceId,
-      eventClasses: [...eventClasses],
+      eventClasses: [...subscription.eventClasses],
+      threadSelection: subscription.threadSelection,
     }));
   }
 
@@ -722,6 +930,7 @@ export class DesktopFederationRuntime {
         eventClasses: FEDERATION_EVENT_CLASSES.filter((eventClass) =>
           eventClassAllowedByCapabilities(eventClass, capabilities)
         ),
+        threadSelection: { kind: "all" },
       }],
     );
   }
@@ -752,7 +961,7 @@ export class DesktopFederationRuntime {
       this.desiredEventSubscriptions) {
       if (
         consumerId.startsWith(prefix)
-        && subscriptions.get(sourceInstanceId)?.has(eventClass)
+        && subscriptions.get(sourceInstanceId)?.eventClasses.has(eventClass)
       ) {
         return true;
       }
@@ -833,6 +1042,9 @@ export class DesktopFederationRuntime {
     this.unsubscribeLocalBackendEvents = undefined;
     this.remoteThreadSummaryCache?.dispose();
     this.remoteThreadSummaryCache = undefined;
+    this.remoteNavigationTransportByPeer.clear();
+    this.ownedNavigationSnapshotTransport?.clear();
+    this.ownedNavigationSnapshotTransport = undefined;
     // Owner shutdown kills every remote session immediately, mirroring how
     // the local panel's shells die with the app.
     this.ptyService?.disposeAll();
@@ -1321,7 +1533,7 @@ export class DesktopFederationRuntime {
     };
   }
 
-  remoteBackend(target: FederationRemoteTarget): FederationBackendOperations {
+  remoteBackend(target: FederationRemoteTarget): FederationRemoteBackendClient {
     return new FederationRemoteBackendClient(
       this.rpcFor(target),
       async (response) =>
@@ -1546,15 +1758,136 @@ export class DesktopFederationRuntime {
 
   async remoteNavigationSnapshot(
     target: FederationRemoteTarget,
-    request: { backend?: AppServerListThreadsRequest["backend"]; filter?: string },
+    request: Pick<GetNavigationSnapshotRequest, "backend" | "filter">,
+    selectionOverride?: FederationThreadSelection,
   ): Promise<NavigationSnapshot> {
     const backend = this.remoteBackend(target);
-    const response = normalizeNavigationSnapshotThreadKeys(
-      await backend.getNavigationSnapshot({
-        backend: request.backend,
-        filter: request.filter,
-      }),
+    const snapshotRequest = {
+      backend: request.backend,
+      filter: request.filter,
+    };
+    if (
+      typeof backend.getNavigationSnapshotTransport !== "function"
+      || !this.remotePeerAdvertisesCapability(
+        target.instanceId,
+        "navigation_snapshot_deltas",
+      )
+    ) {
+      return await this.stampRemoteNavigationSnapshot(
+        target,
+        projectNavigationSnapshot(
+          normalizeNavigationSnapshotThreadKeys(
+            await backend.getNavigationSnapshot(snapshotRequest),
+          ),
+          snapshotRequest,
+        ),
+      );
+    }
+    const desiredThreadSelection = this.desiredThreadSelectionFor(
+      target.instanceId,
     );
+    const threadSelection =
+      desiredThreadSelection
+      && selectionOverride
+      && !federationThreadSelectionIncludes(
+        desiredThreadSelection,
+        selectionOverride,
+      )
+        ? selectionOverride
+        : desiredThreadSelection ?? selectionOverride ?? { kind: "all" };
+    const selection = transportSelectionFor(threadSelection);
+    const selectionKey = federationThreadSelectionKey(threadSelection);
+    const cacheable =
+      desiredThreadSelection !== undefined
+        ? selectionKey === federationThreadSelectionKey(desiredThreadSelection)
+        : selectionOverride === undefined;
+    const cachedTransport = this.remoteNavigationTransportByPeer.get(
+      target.instanceId,
+    );
+    const previousTransportState =
+      cacheable && cachedTransport?.selectionKey === selectionKey
+        ? cachedTransport.state
+        : undefined;
+    let transportResponse = await backend.getNavigationSnapshotTransport({
+      transport: {
+        protocol: 1,
+        selection,
+        ...(previousTransportState
+          ? { baseRevision: previousTransportState.revision }
+          : {}),
+      },
+    });
+    if ("threads" in transportResponse) {
+      return await this.stampRemoteNavigationSnapshot(
+        target,
+        projectNavigationSnapshot(
+          normalizeNavigationSnapshotThreadKeys(transportResponse),
+          snapshotRequest,
+        ),
+      );
+    }
+    let nextTransportState = applyNavigationSnapshotTransportResponse(
+      previousTransportState,
+      transportResponse,
+    );
+    if (!nextTransportState) {
+      transportResponse = await backend.getNavigationSnapshotTransport({
+        transport: { protocol: 1, selection },
+      });
+      if ("threads" in transportResponse) {
+        return await this.stampRemoteNavigationSnapshot(
+          target,
+          projectNavigationSnapshot(
+            normalizeNavigationSnapshotThreadKeys(transportResponse),
+            snapshotRequest,
+          ),
+        );
+      }
+      nextTransportState = applyNavigationSnapshotTransportResponse(
+        undefined,
+        transportResponse,
+      );
+    }
+    if (!nextTransportState) {
+      throw new Error(
+        "Federation navigation snapshot transport did not provide a recoverable baseline.",
+      );
+    }
+    if (cacheable) {
+      this.remoteNavigationTransportByPeer.set(target.instanceId, {
+        selectionKey,
+        state: nextTransportState,
+      });
+    }
+    const response = projectNavigationSnapshot(
+      normalizeNavigationSnapshotThreadKeys(nextTransportState.snapshot),
+      snapshotRequest,
+    );
+    return await this.stampRemoteNavigationSnapshot(target, response);
+  }
+
+  private remotePeerAdvertisesCapability(
+    instanceId: FederationInstanceId,
+    capability: FederationCapability,
+  ): boolean {
+    let visiblePeer: FederationPeerSummary | undefined;
+    try {
+      visiblePeer = this.visiblePeers().find(
+        (candidate) => candidate.id === instanceId,
+      );
+    } catch {
+      // Direct connection metadata remains available during early boot and
+      // in store-injected harnesses where the app-state database is absent.
+    }
+    return this.viewerCapabilitiesFor(instanceId, visiblePeer).includes(
+      capability,
+    );
+  }
+
+  private async stampRemoteNavigationSnapshot(
+    target: FederationRemoteTarget,
+    response: NavigationSnapshot,
+  ): Promise<NavigationSnapshot> {
     // visiblePeers reads the app-state db (local instance id); during
     // early boot or in store-injected test harnesses that db may be
     // absent — fall back to the bare store record (mirrors the menu's
@@ -1657,7 +1990,8 @@ export class DesktopFederationRuntime {
   remoteThreadSummaries(): RemoteThreadSummaryCache {
     this.remoteThreadSummaryCache ??= new RemoteThreadSummaryCache({
       peers: () => this.connectedPeerTargets(),
-      fetchSnapshot: (target) => this.remoteNavigationSnapshot(target, {}),
+      fetchSnapshot: (target, selection) =>
+        this.remoteNavigationSnapshot(target, {}, selection),
       fetchArchivedThreads: async (target, backend) =>
         (
           await this.remoteBackend(target).listThreads({
@@ -1682,20 +2016,26 @@ export class DesktopFederationRuntime {
           return {};
         }
       },
-      onPeerInterestChanged: (instanceIds) => {
-        const interested = new Set(instanceIds);
+      onPeerInterestChanged: (interests) => {
+        const byInstanceId = new Map(
+          interests.map((interest) => [interest.instanceId, interest]),
+        );
         this.setEventSubscriptions(
           REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID,
           this.connectedPeerTargets()
             .filter(
               (peer) =>
-                interested.has(peer.target.instanceId)
+                byInstanceId.has(peer.target.instanceId)
                 && peer.capabilities.includes("event_subscriptions"),
             )
-            .map((peer) => ({
-              sourceInstanceId: peer.target.instanceId,
-              eventClasses: ["navigation"],
-            })),
+            .map((peer) => {
+              const interest = byInstanceId.get(peer.target.instanceId)!;
+              return {
+                sourceInstanceId: peer.target.instanceId,
+                eventClasses: ["navigation" as const],
+                threadSelection: interest.threadSelection,
+              };
+            }),
         );
       },
       // Pinned-summary refreshes land in the background (the snapshot
@@ -1888,7 +2228,7 @@ export class DesktopFederationRuntime {
       },
       additionalRequiredCapabilities: additionalFederationBackendCapabilities,
     });
-    registerFederationBackendHandlers({
+    this.ownedNavigationSnapshotTransport = registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
       resolveSourceInstance: (instanceId) =>
@@ -2492,6 +2832,13 @@ export class DesktopFederationRuntime {
       ),
     );
     this.rpcByPeer.delete(peerId);
+    this.clearRemoteNavigationTransportForPeer(peerId);
+  }
+
+  private clearRemoteNavigationTransportForPeer(
+    peerId: FederationInstanceId,
+  ): void {
+    this.remoteNavigationTransportByPeer.delete(peerId);
   }
 
   private disconnectAdvertisedPeers(reason: string): void {
@@ -2510,6 +2857,7 @@ export class DesktopFederationRuntime {
       if (peer.status === "connected") {
         this.ptyService?.notifyPeerDisconnected(peerId);
       }
+      this.clearRemoteNavigationTransportForPeer(peerId);
       this.publishPeerStatus(
         peerId,
         peer.status === "revoked" ? "revoked" : "disconnected",
@@ -3548,17 +3896,26 @@ export class DesktopFederationRuntime {
 
   private aggregateDesiredEventSubscriptions(): Map<
     FederationInstanceId,
-    Set<FederationEventClass>
+    DesiredEventSubscription
   > {
     const aggregated = new Map<
       FederationInstanceId,
-      Set<FederationEventClass>
+      DesiredEventSubscription
     >();
     for (const subscriptions of this.desiredEventSubscriptions.values()) {
-      for (const [sourceInstanceId, eventClasses] of subscriptions) {
-        const current = aggregated.get(sourceInstanceId) ?? new Set();
-        for (const eventClass of eventClasses) current.add(eventClass);
-        aggregated.set(sourceInstanceId, current);
+      for (const [sourceInstanceId, subscription] of subscriptions) {
+        const current = aggregated.get(sourceInstanceId);
+        const eventClasses = current?.eventClasses ?? new Set();
+        for (const eventClass of subscription.eventClasses) {
+          eventClasses.add(eventClass);
+        }
+        aggregated.set(sourceInstanceId, {
+          eventClasses,
+          threadSelection: mergeFederationThreadSelections(
+            current?.threadSelection,
+            subscription.threadSelection,
+          ),
+        });
       }
     }
     return aggregated;
@@ -3569,24 +3926,40 @@ export class DesktopFederationRuntime {
     eventClass: FederationEventClass,
   ): boolean {
     for (const subscriptions of this.desiredEventSubscriptions.values()) {
-      if (subscriptions.get(sourceInstanceId)?.has(eventClass)) {
+      if (subscriptions.get(sourceInstanceId)?.eventClasses.has(eventClass)) {
         return true;
       }
     }
     return false;
   }
 
+  private desiredThreadSelectionFor(
+    sourceInstanceId: FederationInstanceId,
+  ): FederationThreadSelection | undefined {
+    return this.aggregateDesiredEventSubscriptions().get(sourceInstanceId)
+      ?.threadSelection;
+  }
+
   private sendDesiredEventSubscription(
     sourceInstanceId: FederationInstanceId,
-    eventClasses: ReadonlySet<FederationEventClass>,
+    subscription: DesiredEventSubscription,
   ): void {
     if (sourceInstanceId === this.ensureLocalInstanceId()) return;
+    const supportsSelection = this.remotePeerAdvertisesCapability(
+      sourceInstanceId,
+      "navigation_snapshot_deltas",
+    );
     try {
       this.sendEnvelopeToTarget(sourceInstanceId, {
         id: `federation-subscription:${randomUUID()}`,
         kind: "notification",
         method: FEDERATION_EVENT_SUBSCRIPTION_METHOD,
-        params: { eventClasses: [...eventClasses] },
+        params: {
+          eventClasses: [...subscription.eventClasses],
+          ...(supportsSelection
+            ? { threadSelection: subscription.threadSelection }
+            : {}),
+        },
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         sourceInstanceId: this.ensureLocalInstanceId(),
         targetInstanceId: sourceInstanceId,
@@ -3598,9 +3971,9 @@ export class DesktopFederationRuntime {
   }
 
   private syncDesiredEventSubscriptions(): void {
-    for (const [sourceInstanceId, eventClasses] of
+    for (const [sourceInstanceId, subscription] of
       this.aggregateDesiredEventSubscriptions()) {
-      this.sendDesiredEventSubscription(sourceInstanceId, eventClasses);
+      this.sendDesiredEventSubscription(sourceInstanceId, subscription);
     }
   }
 
@@ -3643,6 +4016,9 @@ export class DesktopFederationRuntime {
     const requestedClasses = Array.isArray(notification.params?.eventClasses)
       ? notification.params.eventClasses.filter(isFederationEventClass)
       : [];
+    const requestedThreadSelection = normalizeFederationThreadSelection(
+      notification.params?.threadSelection,
+    );
 
     if (sourceInstanceId !== this.ensureLocalInstanceId()) {
       const allowedClasses = requestedClasses.filter((eventClass) =>
@@ -3659,6 +4035,7 @@ export class DesktopFederationRuntime {
         eventClasses: new Set(allowedClasses),
         sourceInstanceId,
         subscriberInstanceId,
+        threadSelection: requestedThreadSelection,
         viaPeerId: sourcePeerId,
       };
       if (allowedClasses.length > 0) {
@@ -3668,7 +4045,7 @@ export class DesktopFederationRuntime {
       }
       this.sendRelayedEventSubscription(
         relayedSubscription,
-        relayedSubscription.eventClasses,
+        relayedSubscription,
       );
       return true;
     }
@@ -3685,6 +4062,7 @@ export class DesktopFederationRuntime {
     if (allowedClasses.length > 0) {
       this.incomingEventSubscriptions.set(subscriberInstanceId, {
         eventClasses: new Set(allowedClasses),
+        threadSelection: requestedThreadSelection,
         viaPeerId: sourcePeerId,
       });
     } else {
@@ -3744,12 +4122,18 @@ export class DesktopFederationRuntime {
     }
     for (const [key, subscription] of this.relayedEventSubscriptions) {
       if (subscription.subscriberInstanceId === peerId) {
-        this.sendRelayedEventSubscription(subscription, new Set());
+        this.sendRelayedEventSubscription(subscription, {
+          eventClasses: new Set(),
+          threadSelection: { kind: "threads", threads: [] },
+        });
         this.relayedEventSubscriptions.delete(key);
         continue;
       }
       if (subscription.viaPeerId === peerId) {
-        this.sendRelayedEventSubscription(subscription, new Set());
+        this.sendRelayedEventSubscription(subscription, {
+          eventClasses: new Set(),
+          threadSelection: { kind: "threads", threads: [] },
+        });
         this.relayedEventSubscriptions.delete(key);
       }
     }
@@ -3757,14 +4141,23 @@ export class DesktopFederationRuntime {
 
   private sendRelayedEventSubscription(
     subscription: RelayedEventSubscription,
-    eventClasses: ReadonlySet<FederationEventClass>,
+    desired: DesiredEventSubscription,
   ): void {
+    const supportsSelection = this.remotePeerAdvertisesCapability(
+      subscription.sourceInstanceId,
+      "navigation_snapshot_deltas",
+    );
     try {
       this.sendEnvelopeToTarget(subscription.sourceInstanceId, {
         id: `federation-subscription-relay:${randomUUID()}`,
         kind: "notification",
         method: FEDERATION_EVENT_SUBSCRIPTION_METHOD,
-        params: { eventClasses: [...eventClasses] },
+        params: {
+          eventClasses: [...desired.eventClasses],
+          ...(supportsSelection
+            ? { threadSelection: desired.threadSelection }
+            : {}),
+        },
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         sourceInstanceId: subscription.subscriberInstanceId,
         targetInstanceId: subscription.sourceInstanceId,
@@ -3786,7 +4179,7 @@ export class DesktopFederationRuntime {
       ) {
         this.sendRelayedEventSubscription(
           subscription,
-          subscription.eventClasses,
+          subscription,
         );
       }
     }
@@ -3859,6 +4252,16 @@ export class DesktopFederationRuntime {
     for (const [subscriberInstanceId, subscription] of
       this.incomingEventSubscriptions) {
       if (!subscription.eventClasses.has(eventClass)) continue;
+      if (
+        eventClass !== "star_map"
+        && !eventMatchesThreadSelection(
+          federatedEvent,
+          eventClass,
+          subscription.threadSelection,
+        )
+      ) {
+        continue;
+      }
       try {
         this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
           id: `federation-event:${randomUUID()}`,
@@ -3924,6 +4327,16 @@ export class DesktopFederationRuntime {
       },
       notification: notification.params.notification,
     };
+    if (
+      eventClass !== "star_map"
+      && !eventMatchesThreadSelection(
+        event,
+        eventClass,
+        this.desiredThreadSelectionFor(sourceInstanceId) ?? { kind: "all" },
+      )
+    ) {
+      return true;
+    }
     if (
       event.notification.method === "thread/pullRequests/updated"
       || event.notification.method === "thread/reactions/updated"

@@ -46,7 +46,6 @@ describe("NavigationSnapshotTransport", () => {
       buildThread(index),
     );
     const full = transport.encode({
-      rendererId: 7,
       request: {},
       snapshot: buildSnapshot(threads),
     });
@@ -58,7 +57,6 @@ describe("NavigationSnapshotTransport", () => {
 
     const unchanged = transport.encode({
       baseRevision: full.revision,
-      rendererId: 7,
       request: {},
       snapshot: buildSnapshot(threads, 2),
     });
@@ -78,7 +76,6 @@ describe("NavigationSnapshotTransport", () => {
       buildThread(index),
     );
     const full = transport.encode({
-      rendererId: 8,
       request: {},
       snapshot: buildSnapshot(threads),
     });
@@ -93,7 +90,6 @@ describe("NavigationSnapshotTransport", () => {
 
     const updated = transport.encode({
       baseRevision: full.revision,
-      rendererId: 8,
       request: {},
       snapshot: buildSnapshot(updatedThreads, 2),
     });
@@ -109,7 +105,6 @@ describe("NavigationSnapshotTransport", () => {
     const remainingThreads = updatedThreads.slice(5);
     const removed = transport.encode({
       baseRevision: updated.revision,
-      rendererId: 8,
       request: {},
       snapshot: buildSnapshot(remainingThreads, 3),
     });
@@ -131,11 +126,10 @@ describe("NavigationSnapshotTransport", () => {
     expect(removed.inboxThreadKeys).toBeUndefined();
   });
 
-  it("sends a full baseline for a stale revision or another renderer", () => {
+  it("sends a full baseline for a stale revision", () => {
     const transport = new NavigationSnapshotTransport();
     const snapshot = buildSnapshot([buildThread(1)]);
     const first = transport.encode({
-      rendererId: 9,
       request: {},
       snapshot,
     });
@@ -145,28 +139,24 @@ describe("NavigationSnapshotTransport", () => {
 
     expect(transport.encode({
       baseRevision: "stale",
-      rendererId: 9,
       request: {},
       snapshot,
     }).kind).toBe("full");
     expect(transport.encode({
       baseRevision: first.revision,
-      rendererId: 10,
       request: {},
       snapshot,
-    }).kind).toBe("full");
+    }).kind).toBe("unchanged");
   });
 
   it("retains independent revisions for full and active-recent scopes", () => {
     const transport = new NavigationSnapshotTransport();
     const snapshot = buildSnapshot([buildThread(1)]);
     const full = transport.encode({
-      rendererId: 11,
       request: {},
       snapshot,
     });
     const activeRecent = transport.encode({
-      rendererId: 11,
       request: { refreshMode: "active-recent" },
       snapshot,
     });
@@ -176,7 +166,6 @@ describe("NavigationSnapshotTransport", () => {
 
     expect(transport.encode({
       baseRevision: full.revision,
-      rendererId: 11,
       request: { refreshMode: "full" },
       snapshot,
     })).toEqual({
@@ -185,12 +174,177 @@ describe("NavigationSnapshotTransport", () => {
     });
     expect(transport.encode({
       baseRevision: activeRecent.revision,
-      rendererId: 11,
       request: { refreshMode: "active-recent" },
       snapshot,
     })).toEqual({
       kind: "unchanged",
       revision: activeRecent.revision,
+    });
+  });
+
+  it("filters one canonical history for sparse and full consumers", () => {
+    const transport = new NavigationSnapshotTransport();
+    const threads = Array.from({ length: 1_200 }, (_, index) =>
+      buildThread(index),
+    );
+    const sparseSelection = {
+      kind: "threads" as const,
+      threadKeys: ["codex:thread-3", "codex:thread-9"],
+    };
+    const sparse = transport.encode({
+      request: {},
+      scopeKey: "federation-navigation",
+      selection: sparseSelection,
+      snapshot: buildSnapshot(threads),
+    });
+    if (sparse.kind !== "full") throw new Error("Expected sparse baseline");
+    expect(sparse.snapshot.threads.map((thread) => thread.id)).toEqual([
+      "thread-3",
+      "thread-9",
+    ]);
+
+    const updatedThreads = threads.map((thread) =>
+      thread.id === "thread-3" || thread.id === "thread-700"
+        ? { ...thread, title: `${thread.title} updated` }
+        : thread
+    );
+    const sparseDelta = transport.encode({
+      baseRevision: sparse.revision,
+      request: { filter: "ignored-owner-scope" },
+      scopeKey: "federation-navigation",
+      selection: sparseSelection,
+      snapshot: buildSnapshot(updatedThreads, 2),
+    });
+    if (sparseDelta.kind !== "delta") {
+      throw new Error("Expected sparse delta");
+    }
+    expect(sparseDelta.upsertedThreads.map((thread) => thread.id)).toEqual([
+      "thread-3",
+    ]);
+
+    const full = transport.encode({
+      request: { refreshMode: "active-recent" },
+      scopeKey: "federation-navigation",
+      selection: { kind: "all" },
+      snapshot: buildSnapshot(updatedThreads, 3),
+    });
+    if (full.kind !== "full") throw new Error("Expected full baseline");
+    expect(full.revision).toBe(sparseDelta.revision);
+    expect(full.snapshot.threads).toHaveLength(1_200);
+  });
+
+  it("evicts the least recently used shared scope", () => {
+    const transport = new NavigationSnapshotTransport({ maxScopes: 2 });
+    const snapshot = buildSnapshot([buildThread(1)]);
+    const first = transport.encode({
+      request: { filter: "first" },
+      snapshot,
+    });
+    const second = transport.encode({
+      request: { filter: "second" },
+      snapshot,
+    });
+    if (first.kind !== "full" || second.kind !== "full") {
+      throw new Error("Expected full baselines");
+    }
+
+    expect(transport.encode({
+      baseRevision: first.revision,
+      request: { filter: "first" },
+      snapshot,
+    }).kind).toBe("unchanged");
+    transport.encode({
+      request: { filter: "third" },
+      snapshot,
+    });
+
+    expect(transport.encode({
+      baseRevision: second.revision,
+      request: { filter: "second" },
+      snapshot,
+    }).kind).toBe("full");
+  });
+
+  it("serves shared change history and expires old revisions", () => {
+    const transport = new NavigationSnapshotTransport({
+      maxChangesPerScope: 2,
+    });
+    const initial = buildSnapshot([buildThread(1)]);
+    const full = transport.encode({ request: {}, snapshot: initial });
+    if (full.kind !== "full") throw new Error("Expected full baseline");
+    const secondSnapshot = buildSnapshot([
+      { ...buildThread(1), title: "Second" },
+    ], 2);
+    const second = transport.encode({
+      baseRevision: full.revision,
+      request: {},
+      snapshot: secondSnapshot,
+    });
+    if (second.kind !== "delta") throw new Error("Expected first change");
+    const thirdSnapshot = buildSnapshot([
+      { ...buildThread(1), title: "Third" },
+    ], 3);
+    const third = transport.encode({
+      baseRevision: second.revision,
+      request: {},
+      snapshot: thirdSnapshot,
+    });
+    if (third.kind !== "delta") throw new Error("Expected second change");
+
+    expect(transport.encode({
+      baseRevision: full.revision,
+      request: {},
+      snapshot: thirdSnapshot,
+    })).toMatchObject({
+      kind: "changes",
+      baseRevision: full.revision,
+      revision: third.revision,
+      changes: [
+        { baseRevision: full.revision, revision: second.revision },
+        { baseRevision: second.revision, revision: third.revision },
+      ],
+    });
+
+    const fourthSnapshot = buildSnapshot([
+      { ...buildThread(1), title: "Fourth" },
+    ], 4);
+    transport.encode({
+      baseRevision: third.revision,
+      request: {},
+      snapshot: fourthSnapshot,
+    });
+    expect(transport.encode({
+      baseRevision: full.revision,
+      request: {},
+      snapshot: fourthSnapshot,
+    }).kind).toBe("full");
+  });
+
+  it("does not rewind shared history when an older snapshot finishes late", () => {
+    const transport = new NavigationSnapshotTransport();
+    const initial = buildSnapshot([buildThread(1)], 1);
+    const full = transport.encode({ request: {}, snapshot: initial });
+    if (full.kind !== "full") throw new Error("Expected full baseline");
+    const currentSnapshot = buildSnapshot([
+      { ...buildThread(1), title: "Current" },
+    ], 3);
+    const current = transport.encode({
+      baseRevision: full.revision,
+      request: {},
+      snapshot: currentSnapshot,
+    });
+    if (current.kind !== "delta") throw new Error("Expected current change");
+
+    const lateSnapshot = buildSnapshot([
+      { ...buildThread(1), title: "Late stale result" },
+    ], 2);
+    expect(transport.encode({
+      baseRevision: current.revision,
+      request: {},
+      snapshot: lateSnapshot,
+    })).toEqual({
+      kind: "unchanged",
+      revision: current.revision,
     });
   });
 });

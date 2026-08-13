@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildFederatedThreadRef,
   type FederationRemoteTarget,
+  type FederationThreadSelection,
   type NavigationSnapshot,
   type NavigationThreadSummary,
   type RemoteThreadPin,
@@ -282,7 +283,10 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
     try {
       await cache.searchForJump({ query: "49" });
       expect(onPeerInterestChanged).toHaveBeenCalledTimes(1);
-      expect(onPeerInterestChanged).toHaveBeenLastCalledWith(["peer-a"]);
+      expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{
+        instanceId: "peer-a",
+        threadSelection: { kind: "all" },
+      }]);
 
       await vi.advanceTimersByTimeAsync(50);
       await cache.searchForJump({ query: "49" });
@@ -499,6 +503,38 @@ async function settle(): Promise<void> {
 }
 
 describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
+  it("fetches all threads so pinned mounted descendants survive a cold cache", async () => {
+    const fetchSnapshot = vi.fn(async (
+      _target: FederationRemoteTarget,
+      selection: FederationThreadSelection,
+    ) => snapshotOf(selection.kind === "all" ? [
+      stampedThread({ instanceId: "peer-a", threadId: "t1", title: "t1" }),
+      stampedThread({ instanceId: "peer-a", threadId: "t2", title: "t2" }),
+    ] : []));
+    const onPeerInterestChanged = vi.fn();
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+      onPeerInterestChanged,
+    });
+
+    await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t2" }),
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+
+    expect(fetchSnapshot).toHaveBeenCalledWith(
+      remoteTarget("peer-a"),
+      { kind: "all" },
+    );
+    expect(onPeerInterestChanged).toHaveBeenLastCalledWith([{
+      instanceId: "peer-a",
+      threadSelection: { kind: "all" },
+    }]);
+  });
+
   it("serves cached stamped rows for reachable owners and queues payload refreshes", async () => {
     const fresh = stampedThread({
       instanceId: "peer-a",
@@ -552,7 +588,9 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     child.parentThreadInstanceId = "peer-a";
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
-      fetchSnapshot: async () => snapshotOf([parent, child]),
+      fetchSnapshot: async (_target, selection) => snapshotOf(
+        selection.kind === "all" ? [parent, child] : [parent],
+      ),
       fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({ status: "connected" }),
     });

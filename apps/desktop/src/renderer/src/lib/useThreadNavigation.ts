@@ -3110,7 +3110,12 @@ export function useThreadNavigation(
         const threadStatusSequenceAtRefreshStart =
           threadStatusObservationSequenceRef.current;
         let snapshot: NavigationSnapshot;
-        let transportKind: "delta" | "full" | "legacy" | "unchanged" =
+        let transportKind:
+          | "changes"
+          | "delta"
+          | "full"
+          | "legacy"
+          | "unchanged" =
           "legacy";
         if (getNavigationSnapshotTransport) {
           const transportScopeKey = buildNavigationSnapshotTransportScopeKey(

@@ -644,6 +644,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             ? ["scheduled_actions" as const]
             : []),
         ],
+        threadSelection: { kind: "all" as const },
       })),
   );
   useEffect(() => {
@@ -651,6 +652,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const subscriptions = JSON.parse(eventSubscriptionsJson) as Array<{
       sourceInstanceId: string;
       eventClasses: Array<"navigation" | "scheduled_actions" | "star_map">;
+      threadSelection: { kind: "all" };
     }>;
     void props.desktopApi.setFederationEventSubscriptions({
       consumer: "star_map",
