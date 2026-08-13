@@ -33,7 +33,12 @@ const baseConfig = {
 
 function slackWorkingCardIntent(
   sequence: number,
-  options: { isFinal?: boolean; key?: string; phase?: "completed" | "failed" } = {},
+  options: {
+    displayHint?: "timeline" | "plan" | "dense";
+    isFinal?: boolean;
+    key?: string;
+    phase?: "completed" | "failed";
+  } = {},
 ): MessagingSurfaceIntent {
   const isFinal = options.isFinal ?? false;
   return {
@@ -43,7 +48,7 @@ function slackWorkingCardIntent(
     createdAt: sequence,
     fallbackText: `Tool update: activity ${sequence}`,
     card: {
-      displayHint: "plan",
+      displayHint: options.displayHint ?? "plan",
       isFinal,
       key: options.key ?? "slack-binding-1\0turn-1",
       phase: options.phase ?? (isFinal ? "completed" : "working"),
@@ -4160,20 +4165,32 @@ describe("SlackAdapter", () => {
     expect(stoppedStreams).toHaveLength(1);
     expect(JSON.stringify(startedStreams[0])).not.toContain("x".repeat(257));
     expect((startedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
-      .toEqual([expect.objectContaining({
-        id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:1$/),
-        details: "0ms",
-      })]);
+      .toEqual([
+        {
+          title: "Working on your request",
+          type: "plan_update",
+        },
+        expect.objectContaining({
+          id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:1$/),
+          details: "0ms",
+        }),
+      ]);
     expect((appendedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
       .toEqual([expect.objectContaining({
         id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:2$/),
         details: "0ms",
       })]);
     expect((stoppedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
-      .toEqual([expect.objectContaining({
-        id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:3$/),
-        details: "0ms",
-      })]);
+      .toEqual([
+        {
+          title: "Work completed",
+          type: "plan_update",
+        },
+        expect.objectContaining({
+          id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:3$/),
+          details: "0ms",
+        }),
+      ]);
   });
 
   it("anchors a channel-root Agent Route card to its inbound user message", async () => {
@@ -4225,7 +4242,7 @@ describe("SlackAdapter", () => {
     ]);
   });
 
-  it("renders waiting visibly and closes cancelled tasks without an error state", async () => {
+  it("renders waiting in the plan headline and closes cancelled tasks without an error state", async () => {
     const appendedStreams: unknown[] = [];
     const startedStreams: unknown[] = [];
     const adapter = new SlackAdapter({
@@ -4271,9 +4288,12 @@ describe("SlackAdapter", () => {
       chunks: SlackStreamChunk[];
     }).chunks;
     expect(appendedChunks).toContainEqual({
-      markdown_text: "*Waiting for your input*",
-      type: "markdown_text",
+      title: "Waiting for your input",
+      type: "plan_update",
     });
+    expect(appendedChunks).not.toContainEqual(expect.objectContaining({
+      type: "markdown_text",
+    }));
   });
 
   it("falls back to the classic text Working Update without stream APIs", async () => {
@@ -4788,6 +4808,60 @@ describe("SlackAdapter", () => {
 
       await vi.advanceTimersByTimeAsync(5_000);
       expect(startAttempts).toBe(2);
+      await adapter.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the original display mode when a queued start receives a terminal snapshot", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      const startedStreams: Array<{
+        chunks: SlackStreamChunk[];
+        taskDisplayMode: "timeline" | "plan" | "dense";
+      }> = [];
+      let startAttempts = 0;
+      const api = fakeApi({});
+      api.startStream = async (params) => {
+        startAttempts += 1;
+        startedStreams.push(params);
+        if (startAttempts === 1) {
+          throw Object.assign(new Error("rate_limited"), {
+            status: 429,
+            retryAfterMs: 5_000,
+          });
+        }
+        return { channel: params.channel, ts: "1700000000.900001" };
+      };
+      const adapter = new SlackAdapter({
+        config: { ...baseConfig, liveWorkingCards: true },
+        callbackHandleStore: fakeStore(),
+        api,
+        socketClient: fakeSocket(),
+      });
+
+      await adapter.deliver(slackWorkingCardIntent(1, {
+        displayHint: "timeline",
+        key: "queued-timeline-card",
+      }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await adapter.deliver(slackWorkingCardIntent(2, {
+        isFinal: true,
+        key: "queued-timeline-card",
+      }));
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(startedStreams).toHaveLength(2);
+      expect(startedStreams.map((call) => call.taskDisplayMode)).toEqual([
+        "timeline",
+        "timeline",
+      ]);
+      expect(startedStreams[1]?.chunks).not.toContainEqual(expect.objectContaining({
+        type: "plan_update",
+      }));
       await adapter.stop();
     } finally {
       vi.useRealTimers();
