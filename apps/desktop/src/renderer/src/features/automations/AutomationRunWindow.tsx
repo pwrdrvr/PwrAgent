@@ -83,10 +83,11 @@ export function AutomationRunWindow() {
           <p className="activity-titlebar__brand">
             Pwr<span className="activity-titlebar__brand-accent">Agent</span>
           </p>
-          <div
-            className="activity-titlebar__breadcrumb"
-            aria-label="Automations > Run"
-          >
+          {/* No aria-label: the Messaging Activity, License, and Changelog
+              windows all let this breadcrumb read its own content, and a
+              label here only overrode "Automations Run" with an ASCII ">"
+              that screen readers voice as "greater than". */}
+          <div className="activity-titlebar__breadcrumb">
             <span className="activity-titlebar__eyebrow">Automations</span>
             <span aria-hidden="true" className="activity-titlebar__separator">
               ›
