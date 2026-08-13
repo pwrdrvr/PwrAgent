@@ -33,6 +33,7 @@ import {
 } from "../../lib/slack-pairing-approval";
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
+import { SettingsSwitch } from "../settings/SettingsSwitch";
 import { filterBufferedSecrets } from "./filterBufferedSecrets";
 import {
   isValidProfileName,
@@ -1897,7 +1898,9 @@ function installedOnboardingBackendNames(
       backend.id === "codex"
         ? Boolean(selectedCodexCandidate(snapshot))
         : Boolean(acpEntryFor(acpEntries, backend.id)?.installed);
-    return installed ? [backend.name] : [];
+    const enabled = backend.id === "codex"
+      || acpBackendEnabled(snapshot, backend.id);
+    return installed && enabled ? [backend.name] : [];
   });
 }
 
@@ -1919,6 +1922,16 @@ function acpEntryFor(
   return entries.find((entry) => entry.registryId === registryId);
 }
 
+function acpBackendEnabled(
+  snapshot: DesktopSettingsSnapshot | undefined,
+  registryId: Exclude<OnboardingBackendId, "codex">,
+): boolean {
+  const agents = snapshot?.acpAgents as
+    | Record<string, { enabled?: boolean } | undefined>
+    | undefined;
+  return agents?.[registryId]?.enabled !== false;
+}
+
 export function isBackendRequirementSatisfied(
   snapshot: DesktopSettingsSnapshot | undefined,
   acpEntries: readonly AcpAgentSettingsEntry[],
@@ -1935,6 +1948,12 @@ export function BackendRequirementsStep(props: {
   const [activeBackend, setActiveBackend] = useState<OnboardingBackendId>("codex");
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>();
+  const [optimisticEnabled, setOptimisticEnabled] = useState<
+    Partial<Record<Exclude<OnboardingBackendId, "codex">, boolean>>
+  >({});
+  const [geminiLoginState, setGeminiLoginState] = useState<
+    "idle" | "running" | "ready"
+  >("idle");
   const initialAcpLoadStarted = useRef(false);
   const snapshot = props.settings.snapshot;
   const discovery = snapshot?.models.codex.discovery;
@@ -1956,7 +1975,10 @@ export function BackendRequirementsStep(props: {
     try {
       const results = await Promise.allSettled([
         props.desktopApi?.refreshCodexDiscovery?.({}),
-        props.desktopApi?.listAcpAgents?.({ refresh: true, force: true }),
+        props.desktopApi?.listAcpAgents?.({
+          refresh: true,
+          probeCapabilities: false,
+        }),
       ]);
       const codexResult = results[0];
       if (
@@ -1990,7 +2012,10 @@ export function BackendRequirementsStep(props: {
       .listAcpAgents({ refresh: false })
       .then((response) => {
         updateAcpEntries(response.entries);
-        return props.desktopApi?.listAcpAgents?.({ refresh: true });
+        return props.desktopApi?.listAcpAgents?.({
+          refresh: true,
+          probeCapabilities: false,
+        });
       })
       .then((response) => {
         if (!response) return;
@@ -2016,6 +2041,11 @@ export function BackendRequirementsStep(props: {
     activeBackend === "codex"
       ? undefined
       : acpEntryFor(props.acpEntries, activeBackend);
+  const activeAcpEnabled =
+    activeBackend === "codex"
+      ? true
+      : optimisticEnabled[activeBackend]
+        ?? acpBackendEnabled(snapshot, activeBackend);
   const activeCommand =
     activeBackend === "codex"
       ? codexCandidate?.command
@@ -2024,6 +2054,57 @@ export function BackendRequirementsStep(props: {
     activeBackend === "codex"
       ? codexCandidate?.version
       : activeAcpEntry?.version;
+
+  const setActiveAcpEnabled = async (enabled: boolean): Promise<void> => {
+    if (activeBackend === "codex") return;
+    setError(undefined);
+    const saved = await props.settings.writeConfig({
+      acpAgents: { [activeBackend]: { enabled } } as NonNullable<
+        DesktopSettingsConfigPatch["acpAgents"]
+      >,
+    });
+    if (!saved) return;
+    setOptimisticEnabled((current) => ({
+      ...current,
+      [activeBackend]: enabled,
+    }));
+    if (activeBackend === "gemini" && !enabled) {
+      setGeminiLoginState("idle");
+    }
+  };
+
+  const loginToGemini = async (): Promise<void> => {
+    if (!props.desktopApi?.listAcpAgents) {
+      setError("Gemini login is unavailable in this build.");
+      return;
+    }
+    setError(undefined);
+    setGeminiLoginState("running");
+    try {
+      const response = await props.desktopApi.listAcpAgents({
+        refresh: true,
+        force: true,
+        registryIds: ["gemini"],
+      });
+      updateAcpEntries(response.entries);
+      window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+      const gemini = acpEntryFor(response.entries, "gemini");
+      const loginError =
+        gemini?.lastDiscoveryError
+        ?? (!gemini?.installed
+          ? "Gemini CLI could not be started."
+          : undefined);
+      if (loginError) {
+        setError(loginError);
+        setGeminiLoginState("idle");
+        return;
+      }
+      setGeminiLoginState("ready");
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setGeminiLoginState("idle");
+    }
+  };
 
   return (
     <div className="onboarding-wizard__prereqs">
@@ -2156,6 +2237,35 @@ export function BackendRequirementsStep(props: {
         </div>
 
         <div className="onboarding-wizard__prereq-actions">
+          {activeBackend !== "codex" ? (
+            <div className="onboarding-wizard__prereq-enable">
+              <SettingsSwitch
+                checked={activeAcpEnabled}
+                disabled={props.settings.saving}
+                label={`Enable ${activeDefinition.name}`}
+                onChange={(enabled) => {
+                  void setActiveAcpEnabled(enabled);
+                }}
+              />
+              <span>Enable {activeDefinition.name}</span>
+            </div>
+          ) : null}
+          {activeBackend === "gemini"
+          && activeAcpEnabled
+          && activeAcpEntry?.installed ? (
+              <button
+                type="button"
+                className="onboarding-wizard__btn onboarding-wizard__btn--primary"
+                disabled={geminiLoginState === "running"}
+                onClick={() => void loginToGemini()}
+              >
+                {geminiLoginState === "running"
+                  ? "Waiting for Gemini login…"
+                  : geminiLoginState === "ready"
+                    ? "Gemini CLI ready"
+                    : "Log in to Gemini CLI"}
+              </button>
+            ) : null}
           <button
             type="button"
             className="onboarding-wizard__btn onboarding-wizard__btn--ghost"

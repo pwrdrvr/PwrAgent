@@ -11,6 +11,7 @@ import type {
   AcpAgentSettingsEntry,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
+  ListAcpAgentSettingsRequest,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
@@ -161,6 +162,20 @@ describe("AI provider onboarding", () => {
     expect(
       isBackendRequirementSatisfied(noCodexSnapshot, [acpEntry("grok")]),
     ).toBe(true);
+    expect(
+      isBackendRequirementSatisfied(
+        {
+          ...noCodexSnapshot,
+          acpAgents: {
+            gemini: {
+              cliPath: { value: "", source: "default" },
+              enabled: false,
+            },
+          },
+        } as DesktopSettingsSnapshot,
+        [acpEntry("gemini")],
+      ),
+    ).toBe(false);
   });
 
   it("shows provider-specific macOS install commands without an xAI key field", () => {
@@ -191,6 +206,77 @@ describe("AI provider onboarding", () => {
     expect(screen.getByText(/x\.ai\/cli\/install\.sh/i)).toBeVisible();
     expect(screen.queryByText(/xAI API key/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("defers Gemini startup until the operator enables it and clicks login", async () => {
+    const gemini = acpEntry("gemini");
+    const listAcpAgents = vi.fn(
+      async (_request?: ListAcpAgentSettingsRequest) => ({
+        fetchedAt: 1,
+        entries: [gemini],
+        error: "Registry is temporarily unavailable.",
+      }),
+    );
+    const writeConfig = vi.fn(async () => true);
+    const settings = {
+      snapshot: {
+        ...noCodexSnapshot,
+        acpAgents: {
+          gemini: {
+            cliPath: { value: "", source: "default" },
+            enabled: false,
+          },
+        },
+      },
+      refresh: vi.fn(async () => undefined),
+      writeConfig,
+    } as unknown as DesktopSettingsState;
+
+    render(
+      <BackendRequirementsStep
+        settings={settings}
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        acpEntries={[gemini]}
+        onAcpEntriesChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: false });
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        refresh: true,
+        probeCapabilities: false,
+      });
+    });
+    expect(
+      listAcpAgents.mock.calls.some(([request]) => request?.force === true),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("tab", { name: /Gemini CLI/i }));
+    expect(
+      screen.queryByRole("button", { name: /Log in to Gemini CLI/i }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("switch", { name: /Enable Gemini CLI/i }));
+    await waitFor(() => {
+      expect(writeConfig).toHaveBeenCalledWith({
+        acpAgents: { gemini: { enabled: true } },
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Log in to Gemini CLI/i }),
+    );
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        refresh: true,
+        force: true,
+        registryIds: ["gemini"],
+      });
+      expect(
+        screen.getByRole("button", { name: /Gemini CLI ready/i }),
+      ).toBeVisible();
+    });
   });
 
   it("shows native Windows installers and Windows-only prerequisites", () => {
@@ -298,7 +384,10 @@ describe("AI provider onboarding", () => {
 
     await waitFor(() => {
       expect(refreshCodexDiscovery).toHaveBeenCalledOnce();
-      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true, force: true });
+      expect(listAcpAgents).toHaveBeenCalledWith({
+        refresh: true,
+        probeCapabilities: false,
+      });
       expect(applySnapshot).toHaveBeenCalledWith(noCodexSnapshot);
       expect(settingsRefresh).not.toHaveBeenCalled();
       expect(onAcpEntriesChange).toHaveBeenCalledWith([acpEntry("qwen")]);
