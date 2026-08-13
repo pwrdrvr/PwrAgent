@@ -190,14 +190,22 @@ export class AcpSessionReplayNormalizer {
         readContentText(update.update, "content") ??
         readString(update.update, "text") ??
         "";
-      if (text && !isModeUpdateMarker(text) && this.currentTurnId) {
+      const phase: AppServerTranscriptPhase =
+        kind === "agent_message_chunk" ? "final" : "commentary";
+      // A whitespace-only chunk at a phase boundary is a provider artifact,
+      // not a new assistant message. Ignore it before switching phase so a
+      // later chunk can keep the existing live assistant item identity.
+      if (!text.trim() && this.activeAssistantMessagePhase !== phase) {
+        return this.replay();
+      }
+      if (text.trim() && !isModeUpdateMarker(text) && this.currentTurnId) {
         this.removeAgentWaitingActivity(this.currentTurnId);
       }
       if (kind === "agent_message_chunk") {
-        this.resetAssistantMessageIfPhaseChanged("final");
+        this.resetAssistantMessageIfPhaseChanged(phase);
         this.applyAgentMessageChunk(update, createdAt);
       } else {
-        this.resetAssistantMessageIfPhaseChanged("commentary");
+        this.resetAssistantMessageIfPhaseChanged(phase);
         this.applyAgentThoughtChunk(update, createdAt);
       }
     } else if (kind === "user_message_chunk") {
@@ -317,7 +325,11 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    if (!text || isModeUpdateMarker(text)) {
+    if (
+      !text
+      || isModeUpdateMarker(text)
+      || (!this.activeAssistantMessageId && !text.trim())
+    ) {
       return;
     }
     const id = this.assistantMessageIdForChunk(update);
@@ -369,7 +381,7 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    if (!text) {
+    if (!text || (!this.activeAssistantMessageId && !text.trim())) {
       return;
     }
     const id = this.assistantMessageIdForChunk(update);
@@ -1137,9 +1149,13 @@ function isGenericActivityLabel(value: string): boolean {
     "zsh",
     "execute",
     "read",
+    "read_file",
     "write",
     "search",
+    "web_search",
+    "x_search",
     "list",
+    "list_dir",
     "tool call",
     "tool_call",
     "tool call update",
