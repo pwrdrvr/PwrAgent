@@ -4160,20 +4160,32 @@ describe("SlackAdapter", () => {
     expect(stoppedStreams).toHaveLength(1);
     expect(JSON.stringify(startedStreams[0])).not.toContain("x".repeat(257));
     expect((startedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
-      .toEqual([expect.objectContaining({
-        id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:1$/),
-        details: "0ms",
-      })]);
+      .toEqual([
+        {
+          title: "Working on your request",
+          type: "plan_update",
+        },
+        expect.objectContaining({
+          id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:1$/),
+          details: "0ms",
+        }),
+      ]);
     expect((appendedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
       .toEqual([expect.objectContaining({
         id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:2$/),
         details: "0ms",
       })]);
     expect((stoppedStreams[0] as { chunks: SlackStreamChunk[] }).chunks)
-      .toEqual([expect.objectContaining({
-        id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:3$/),
-        details: "0ms",
-      })]);
+      .toEqual([
+        {
+          title: "Work completed",
+          type: "plan_update",
+        },
+        expect.objectContaining({
+          id: expect.stringMatching(/^pwragent:[a-f0-9]{16}:3$/),
+          details: "0ms",
+        }),
+      ]);
   });
 
   it("anchors a channel-root Agent Route card to its inbound user message", async () => {
@@ -4225,7 +4237,7 @@ describe("SlackAdapter", () => {
     ]);
   });
 
-  it("renders waiting visibly and closes cancelled tasks without an error state", async () => {
+  it("renders waiting in the plan headline and closes cancelled tasks without an error state", async () => {
     const appendedStreams: unknown[] = [];
     const startedStreams: unknown[] = [];
     const adapter = new SlackAdapter({
@@ -4271,9 +4283,12 @@ describe("SlackAdapter", () => {
       chunks: SlackStreamChunk[];
     }).chunks;
     expect(appendedChunks).toContainEqual({
-      markdown_text: "*Waiting for your input*",
-      type: "markdown_text",
+      title: "Waiting for your input",
+      type: "plan_update",
     });
+    expect(appendedChunks).not.toContainEqual(expect.objectContaining({
+      type: "markdown_text",
+    }));
   });
 
   it("falls back to the classic text Working Update without stream APIs", async () => {

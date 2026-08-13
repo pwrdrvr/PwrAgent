@@ -92,6 +92,13 @@ const SLACK_DIRECTORY_MAX_PAGES = 10;
 const SLACK_WORKING_CARD_TOMBSTONE_MAX = 200;
 const SLACK_WORKING_CARD_RETRY_MS = 3_000;
 const SLACK_WORKING_CARD_STOP_MAX_FAILURES = 3;
+const SLACK_WORKING_CARD_PLAN_TITLES = {
+  queued: "Starting work",
+  working: "Working on your request",
+  waiting: "Waiting for your input",
+  completed: "Work completed",
+  failed: "Work failed",
+} as const;
 const SLACK_WORKING_CARD_BUCKETS = {
   start: { method: "chat.startStream", limit: 20 },
   append: { method: "chat.appendStream", limit: 100 },
@@ -177,6 +184,10 @@ export type SlackStreamChunk =
       status: "pending" | "in_progress" | "complete" | "error";
       title: string;
       type: "task_update";
+    }
+  | {
+      title: string;
+      type: "plan_update";
     }
   | {
       markdown_text: string;
@@ -341,6 +352,7 @@ type SlackWorkingCardQueueState = {
   pumping: boolean;
   retryMethod?: SlackWorkingCardMethod;
   retryTimer?: ReturnType<typeof setTimeout>;
+  taskDisplayMode: SlackWorkingCardIntent["card"]["displayHint"];
   target: SlackWorkingCardTarget;
   ts?: string;
 };
@@ -1898,6 +1910,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       lastDeliveredSequence: 0,
       nonRateFailureCount: 0,
       pumping: false,
+      taskDisplayMode: intent.card.displayHint,
       target: workingTarget,
     };
     if (!current) {
@@ -2124,6 +2137,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     intent: SlackWorkingCardIntent,
     state: SlackWorkingCardQueueState,
   ): SlackStreamChunk[] {
+    const phaseChanged = state.lastDeliveredPhase !== intent.card.phase;
     const chunks = intent.card.tasks
       .map((task, index) => this.workingCardTaskSlot(intent, task, index))
       .filter(
@@ -2132,8 +2146,16 @@ export class SlackAdapter implements SlackProviderAdapter {
       )
       .map(({ fingerprint: _fingerprint, ...chunk }) => chunk);
     if (
-      intent.card.phase === "waiting"
-      && state.lastDeliveredPhase !== "waiting"
+      phaseChanged
+      && state.taskDisplayMode === "plan"
+    ) {
+      chunks.unshift({
+        type: "plan_update",
+        title: SLACK_WORKING_CARD_PLAN_TITLES[intent.card.phase],
+      });
+    } else if (
+      phaseChanged
+      && intent.card.phase === "waiting"
     ) {
       chunks.unshift({
         type: "markdown_text",
