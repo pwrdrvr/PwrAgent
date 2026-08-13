@@ -92,6 +92,7 @@ const ELECTRON_TEARDOWN_TIMEOUT_MS = 20_000;
  * ELECTRON_TEARDOWN_TIMEOUT_MS alongside the Electron close budget.
  */
 const PROFILE_PROCESS_EXIT_TIMEOUT_MS = 5_000;
+/** Liveness re-check interval while waiting out PROFILE_PROCESS_EXIT_TIMEOUT_MS. */
 const PROFILE_PROCESS_EXIT_POLL_MS = 100;
 
 /**
@@ -1167,8 +1168,31 @@ async function killSpawnedProfileProcessesUnder(homeRoot: string): Promise<void>
   if (livePids.length === 0) {
     return;
   }
+  // Snapshot the helper processes before signalling, while the parent is still
+  // around to be walked. `HOME` is `homeRoot` for these runs, so an Electron
+  // instance's renderer and GPU helpers hold cache handles under the very tree
+  // the rm is about to remove — waiting only for the marker pid would declare
+  // victory while its children still had the directory open.
+  //
+  // They are watched, not signalled: on POSIX the main process takes its
+  // helpers down as it exits, so this is a wait, not a second kill, and the
+  // force-kill stays `closeElectronApplication`'s alone. `listDescendantPids`
+  // shells out to `ps`, so on Windows it yields nothing and the watch set
+  // stays the marker pids — no worse than before, but not the fix there.
+  const watched = new Set(livePids);
+  for (const pid of livePids) {
+    for (const descendant of await listDescendantPids(pid)) {
+      watched.add(descendant);
+    }
+  }
+
   for (const pid of livePids) {
     try {
+      // NB: on Windows there is no SIGTERM. Node maps it to TerminateProcess,
+      // so this is an abrupt kill with no chance to flush — the wait below is
+      // then for the OS to finish tearing the process down and release its
+      // handles, not for a graceful drain. Nothing here can make Windows
+      // graceful; a real quit would need an IPC path rather than a signal.
       process.kill(pid, "SIGTERM");
     } catch {
       // Exited between the liveness check and the signal.
@@ -1176,9 +1200,9 @@ async function killSpawnedProfileProcessesUnder(homeRoot: string): Promise<void>
   }
 
   // Wait for the processes to actually exit rather than sleeping a fixed
-  // interval and hoping. SIGTERM is async, and these children are mid-write to
-  // `<homeRoot>/.pwragent/` — the rm below races their open handles, which on
-  // Windows surfaces as EBUSY/EPERM rather than a tidy ENOTEMPTY.
+  // interval and hoping. These children are mid-write to `<homeRoot>`, and the
+  // rm below races their open handles — ENOTEMPTY on POSIX, EBUSY/EPERM on
+  // Windows.
   //
   // The budget is generous on purpose. This path only runs when a runtime
   // marker OUTLIVED its process's own cleanup (`stop()` in `main/profile.ts`
@@ -1187,7 +1211,7 @@ async function killSpawnedProfileProcessesUnder(homeRoot: string): Promise<void>
   // ordinary teardown there are no live pids and this returns immediately,
   // which is faster than the fixed 500ms sleep it replaces.
   const deadline = Date.now() + PROFILE_PROCESS_EXIT_TIMEOUT_MS;
-  let remaining = livePids;
+  let remaining = [...watched].filter(isPidAlive);
   while (remaining.length > 0 && Date.now() < deadline) {
     await new Promise((resolve) =>
       setTimeout(resolve, PROFILE_PROCESS_EXIT_POLL_MS),
