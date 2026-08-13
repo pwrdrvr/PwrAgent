@@ -5924,6 +5924,37 @@ describe("Sidebar directory pinning", () => {
     expect(onOpenLaunchpad).toHaveBeenCalledTimes(1);
   });
 
+  it("hides the whole launchpad cluster on a directory this instance cannot host", () => {
+    // The unconfigured guard wraps icon AND chevron. Offering "new chat on
+    // <machine>" from a row with no local launchpad would reintroduce the
+    // affordance that guard exists to remove, and it is not directory-scoped
+    // anyway — it opens the peer's own launchpad.
+    renderSidebar(
+      [{ ...projectADirectory, localAvailability: "unconfigured" }],
+      {
+        newThreadFederationTargets: [
+          {
+            availability: "available",
+            instanceId: "studio-work",
+            label: "Studio Mac / work",
+          },
+        ],
+        onCreateThreadOnFederationTarget: async () => undefined,
+      },
+    );
+
+    expect(
+      screen.queryByRole("button", {
+        name: "Open new thread launchpad for ProjectA",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Choose a machine for a new thread in ProjectA",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
   it("omits the chevron entirely when the federation offers no machines", () => {
     renderSidebar([projectADirectory], { newThreadFederationTargets: [] });
 

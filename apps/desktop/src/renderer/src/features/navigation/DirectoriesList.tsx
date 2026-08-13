@@ -1624,6 +1624,8 @@ export function DirectoriesList(props: DirectoriesListProps) {
             </span>
           </button>
 
+          {/* Guarded as a unit: an unconfigured row has no local launchpad, so
+              it gets no machine chevron either. */}
           {directoryUnconfigured ? null : (
             <span className="directory-row__launchpad-cluster">
               <button
