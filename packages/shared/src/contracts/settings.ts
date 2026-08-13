@@ -68,22 +68,21 @@ export const DESKTOP_APPEARANCE_DENSITY_DEFAULT: DesktopAppearanceDensity =
   "mission-control";
 
 /**
- * Sidebar text-size notches. "md" is the default 13px thread-row title;
- * each notch moves the title (and the directory label derived from it)
- * by 1px in either direction. Deliberately a discrete scale rather than
- * a free pixel value so every notch is a size the sidebar was actually
- * designed and reviewed at.
+ * Text-size notches shared by every per-surface text-size axis (sidebar
+ * titles, transcript body). "md" is each surface's tuned default; each
+ * notch moves that surface's text by 1px in either direction.
+ * Deliberately a discrete scale rather than a free pixel value so every
+ * notch is a size the surface was actually designed and reviewed at.
  */
-export const DESKTOP_SIDEBAR_TEXT_SIZES = [
+export const DESKTOP_TEXT_SIZES = [
   "xs",
   "sm",
   "md",
   "lg",
   "xl",
 ] as const;
-export type DesktopSidebarTextSize =
-  (typeof DESKTOP_SIDEBAR_TEXT_SIZES)[number];
-export const DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT: DesktopSidebarTextSize = "md";
+export type DesktopTextSize = (typeof DESKTOP_TEXT_SIZES)[number];
+export const DESKTOP_TEXT_SIZE_DEFAULT: DesktopTextSize = "md";
 
 export const DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELLS = [
   "auto",
@@ -381,7 +380,8 @@ export type DesktopIntegratedTerminalSettingsSnapshot = {
 export type DesktopAppearanceSnapshot = {
   theme: DesktopSettingsValue<DesktopAppearanceTheme>;
   density: DesktopSettingsValue<DesktopAppearanceDensity>;
-  sidebarTextSize: DesktopSettingsValue<DesktopSidebarTextSize>;
+  sidebarTextSize: DesktopSettingsValue<DesktopTextSize>;
+  transcriptTextSize: DesktopSettingsValue<DesktopTextSize>;
 };
 
 export type DesktopGeneralSettingsSnapshot = {
@@ -922,7 +922,8 @@ export type DesktopSettingsConfigPatch = {
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
-      sidebarTextSize?: DesktopSidebarTextSize;
+      sidebarTextSize?: DesktopTextSize;
+      transcriptTextSize?: DesktopTextSize;
     };
     codexProfileModel?: DesktopCodexProfileModel;
     /** `null` clears the persisted acknowledgement. */
@@ -1547,12 +1548,8 @@ export function isDesktopAppearanceDensity(
   );
 }
 
-export function isDesktopSidebarTextSize(
-  value: string,
-): value is DesktopSidebarTextSize {
-  return DESKTOP_SIDEBAR_TEXT_SIZES.includes(
-    value as DesktopSidebarTextSize,
-  );
+export function isDesktopTextSize(value: string): value is DesktopTextSize {
+  return DESKTOP_TEXT_SIZES.includes(value as DesktopTextSize);
 }
 
 export function isDesktopIntegratedTerminalWindowsShell(

@@ -16,13 +16,13 @@
 import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
-  DesktopSidebarTextSize,
+  DesktopTextSize,
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
-  DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
-  isDesktopSidebarTextSize,
+  DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopTextSize,
 } from "@pwragent/shared";
 import {
   readDesktopSettingsConfig,
@@ -32,7 +32,8 @@ import {
 export type BootstrapAppearance = {
   theme: DesktopAppearanceTheme;
   density: DesktopAppearanceDensity;
-  sidebarTextSize: DesktopSidebarTextSize;
+  sidebarTextSize: DesktopTextSize;
+  transcriptTextSize: DesktopTextSize;
 };
 
 export const BOOTSTRAP_APPEARANCE_ARG_PREFIX = "--pwragent-appearance=";
@@ -122,7 +123,10 @@ export function readBootstrapAppearance(
         ?? DESKTOP_APPEARANCE_DENSITY_DEFAULT,
       sidebarTextSize:
         config.general?.appearance?.sidebarTextSize
-        ?? DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+        ?? DESKTOP_TEXT_SIZE_DEFAULT,
+      transcriptTextSize:
+        config.general?.appearance?.transcriptTextSize
+        ?? DESKTOP_TEXT_SIZE_DEFAULT,
     };
   } catch {
     // Config missing / unreadable / malformed → fall back to defaults.
@@ -131,7 +135,8 @@ export function readBootstrapAppearance(
     return {
       theme: DESKTOP_APPEARANCE_THEME_DEFAULT,
       density: DESKTOP_APPEARANCE_DENSITY_DEFAULT,
-      sidebarTextSize: DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+      sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
+      transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
     };
   }
 }
@@ -161,10 +166,15 @@ export function parseBootstrapAppearanceArg(
           : DESKTOP_APPEARANCE_DENSITY_DEFAULT;
       const sidebarTextSize =
         raw && typeof raw.sidebarTextSize === "string"
-          && isDesktopSidebarTextSize(raw.sidebarTextSize)
+          && isDesktopTextSize(raw.sidebarTextSize)
           ? raw.sidebarTextSize
-          : DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT;
-      return { theme, density, sidebarTextSize };
+          : DESKTOP_TEXT_SIZE_DEFAULT;
+      const transcriptTextSize =
+        raw && typeof raw.transcriptTextSize === "string"
+          && isDesktopTextSize(raw.transcriptTextSize)
+          ? raw.transcriptTextSize
+          : DESKTOP_TEXT_SIZE_DEFAULT;
+      return { theme, density, sidebarTextSize, transcriptTextSize };
     } catch {
       return undefined;
     }

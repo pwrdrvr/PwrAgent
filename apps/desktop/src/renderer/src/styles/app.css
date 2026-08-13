@@ -199,10 +199,21 @@
   /* Sidebar title size — the user-adjustable text-size axis
      (Settings → General → Appearance → Sidebar text size). 13px is the
      "md" default; `:root[data-sidebar-text]` notches override it ±2px
-     (see the SIDEBAR TEXT SIZE section). Thread titles read it
+     (see the TEXT SIZE section). Thread titles read it
      directly; directory labels derive from it (−1px) so the hierarchy
      holds at every notch. */
   --sidebar-title-size: 13px;
+
+  /* Transcript body size — the second user-adjustable text-size axis
+     (Settings → General → Appearance → Transcript text size). 14px is
+     the "md" default; `:root[data-transcript-text]` notches override it
+     ±2px (see the TEXT SIZE section, which carries both axes' notch
+     blocks). Every 14px transcript BODY surface reads it: message text
+     (markdown inherits), plan summaries/steps, review bodies, request
+     prompts, questionnaire options, and expanded activity details.
+     Labels (13px) and code (12px) deliberately stay fixed so the
+     subordinate hierarchy survives every notch. */
+  --transcript-text-size: 14px;
 }
 
 /* ===========================================================================
@@ -486,20 +497,22 @@
    only in which chips render.) */
 
 /* ===========================================================================
-   SIDEBAR TEXT SIZE — user-adjustable title scale
+   TEXT SIZE — user-adjustable per-surface scales
 
-   A third appearance axis (theme, density, text size), persisted as
-   `[general.appearance] sidebar_text_size` and applied as
-   `<html data-sidebar-text>` through the same bootstrap path as theme
-   and density. Only the sidebar's title typography scales — chips,
-   timestamps, and metadata hold still so a notch reads as "bigger
-   titles", not a page zoom. "md" (13px) is the tuned default and, like
-   the other axes, carries no attribute; each notch moves titles 1px.
-   The directory label derives from the same token (see
-   `.directory-row__title`), so the header/row hierarchy is preserved at
-   every notch. The "md" default value lives with the other tokens in
-   the top-of-file `:root` block; only the notch overrides live here.
-   =========================================================================== */
+   The text-size appearance axes (sidebar titles, transcript body),
+   persisted as `[general.appearance] sidebar_text_size` /
+   `transcript_text_size` and applied as `<html data-sidebar-text>` /
+   `<html data-transcript-text>` through the same bootstrap path as
+   theme and density. Only the named surface's typography scales —
+   chips, timestamps, and labels hold still so a notch reads as "bigger
+   text there", not a page zoom. "md" is each axis's tuned default and,
+   like the other axes, carries no attribute; each notch moves the
+   surface 1px. The sidebar directory label derives from the sidebar
+   token (see `.directory-row__title`), so the header/row hierarchy is
+   preserved at every notch. The "md" default values live with the
+   other tokens in the top-of-file `:root` block; only the notch
+   overrides live here — BOTH axes' ladders, so the next axis lands in
+   this section too. */
 :root[data-sidebar-text="xs"] {
   --sidebar-title-size: 11px;
 }
@@ -514,6 +527,25 @@
 
 :root[data-sidebar-text="xl"] {
   --sidebar-title-size: 15px;
+}
+
+/* Transcript text-size notches — same contract as the sidebar axis:
+   "md" (14px) lives on the bare :root, only non-default notches carry
+   the attribute. */
+:root[data-transcript-text="xs"] {
+  --transcript-text-size: 12px;
+}
+
+:root[data-transcript-text="sm"] {
+  --transcript-text-size: 13px;
+}
+
+:root[data-transcript-text="lg"] {
+  --transcript-text-size: 15px;
+}
+
+:root[data-transcript-text="xl"] {
+  --transcript-text-size: 16px;
 }
 
 /* Thin, themed scrollbars on every scroll container — sidebar,
@@ -13485,16 +13517,21 @@ textarea,
   position: relative;
   flex: 1;
   flex-direction: column;
+  /* NOTE: this gap is inert for entry spacing — the scroller's only
+     in-flow child is `.transcript-list__content`, which owns the real
+     inter-entry gap (see that rule). Kept at the historical value so
+     nobody mistakes it for the density knob again. */
   gap: 12px;
   min-height: 0;
   overflow-anchor: none;
   overflow-y: auto;
   /* Internal padding the wrapper used to provide. Right is 12px
      (instead of 16) so the scrollbar has its own narrow gutter. The
-     bottom 24 keeps the existing over-scroll feel above the last
-     message; the top 16 puts the first message a beat below the
-     transcript-area top edge (the fade overlays this band). */
-  padding: 16px 12px 24px 16px;
+     bottom 24 stays matched to the thinking-indicator height (pinned
+     by theme-contract) so the pending row never jumps the scroll; the
+     top 12 puts the first message a beat below the transcript-area top
+     edge (the fade overlays this band). */
+  padding: 12px 12px 24px 16px;
 }
 
 /* The scroller is tabIndex=0 only so keyboard users can scroll it (axe
@@ -13572,7 +13609,12 @@ textarea,
 .transcript-list__content {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  /* 12 → 8px in the 2026-08 transcript density pass — with the message
+     cards' own padding trimmed, 12px of uniform gap read as unrelated
+     entries drifting apart. This is the element that owns inter-entry
+     spacing (the entry wrappers are display: contents); the scroller's
+     own gap above is inert. */
+  gap: 8px;
   /* Issue #240: cap reading width on wide displays. Above the cap the
      content centers and bg-app shows on either side of the column.
      The same `--chat-column-max` is applied to the composer's
@@ -13656,7 +13698,10 @@ textarea,
   width: min(100%, 760px);
   max-width: 84%;
   align-self: flex-start;
-  padding: 14px 16px;
+  /* 14px 16px → 10px 12px in the 2026-08 transcript density pass: 14px
+     above an 11px caps role label (and below the last text line) was
+     the largest single vertical spend in the transcript. */
+  padding: 10px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
@@ -14037,11 +14082,15 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .transcript-message__text {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  font-size: 14px;
+  /* Body size rides the user-adjustable transcript token (Settings →
+     General → Appearance → Transcript text size); markdown inside
+     inherits. Line-height stays relative so every notch keeps its
+     rhythm. */
+  font-size: var(--transcript-text-size);
   line-height: 1.55;
 }
 
@@ -16143,14 +16192,20 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .transcript-activity {
   width: min(100%, 760px);
-  padding: 12px 0 0;
-  border-top: 1px solid var(--border-subtle);
+  /* 2026-08 transcript density pass: the full-width `border-top`
+     hairline + 12px of padding above every activity row is gone. The
+     rule was nearly invisible on the app background (border-subtle on
+     bg-app), so it read as ~25px of dead space per row counting the
+     list gap; the chevron + label chrome already separates entries. */
+  padding: 2px 0 0;
   -webkit-user-select: text;
   user-select: text;
 }
 
 .transcript-activity--warning {
-  padding: 10px 12px;
+  /* Tracks the message cards' tightened padding (10px 12px → 8px 10px)
+     so the accent-framed notices don't become the loosest element. */
+  padding: 8px 10px;
   border: 1px solid var(--accent-border);
   border-radius: 8px;
   background: var(--accent-soft);
@@ -16158,6 +16213,14 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .transcript-activity--warning .transcript-activity__label {
   color: var(--accent-bright);
+}
+
+/* Inside the accent-framed card the toggle must sit ON the card's text
+   grid — the bare rows' negative margin (which aligns the chevron with
+   the transcript's left edge) would bleed the toggle chrome into the
+   card's 10px inset. */
+.transcript-activity--warning .transcript-activity__toggle {
+  margin-inline: 0;
 }
 
 .transcript-plan,
@@ -16190,7 +16253,7 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .transcript-plan__summary {
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--transcript-text-size);
   font-weight: 600;
   line-height: 1.4;
 }
@@ -16198,7 +16261,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-plan__explanation {
   margin-top: 6px;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: var(--transcript-text-size);
   line-height: 1.45;
 }
 
@@ -16252,7 +16315,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-plan__step-text {
   min-width: 0;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--transcript-text-size);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -16305,7 +16368,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-review__body {
   margin-top: 8px;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: var(--transcript-text-size);
   line-height: 1.5;
 }
 
@@ -16476,10 +16539,13 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 600;
 }
 
-.transcript-list__items > .transcript-activity:first-child {
-  padding-top: 0;
-  border-top: 0;
-}
+/* (A `.transcript-list__items > .transcript-activity:first-child`
+   override used to live here. It never matched — activities are
+   grandchildren of the scroller via `.transcript-list__content` and the
+   display:contents item wrappers, and `display: contents` does not
+   change selector matching — so the border/padding resets it carried
+   never fired. Removed in the 2026-08 transcript density pass rather
+   than left codifying a false belief.) */
 
 .transcript-list__pending {
   width: min(100%, 760px);
@@ -16555,7 +16621,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-request__prompt {
   margin: 0;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--transcript-text-size);
   line-height: 1.55;
   white-space: pre-wrap;
 }
@@ -16824,7 +16890,7 @@ a.transcript-message__messaging-origin:focus-visible {
   min-width: 0;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--transcript-text-size);
   font-weight: 650;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -16962,7 +17028,18 @@ a.transcript-message__messaging-origin:focus-visible {
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
-  padding: 4px 12px;
+  /* 4px 12px → 2px 4px with a matching negative inline margin: the old
+     12px inset pushed every activity label off the card grid the
+     message content sits on. The 4px that remains is click-target /
+     focus-ring breathing room, cancelled out of the layout so the
+     chevron column aligns with the transcript's left edge. min-height
+     keeps the hit target at the 24px WCAG 2.5.8 floor the repo pins for
+     equivalent row actions (see .live-strip__item-action) — and keeps
+     the -2px focus ring in the padding band instead of over the
+     label's line box. */
+  min-height: 24px;
+  padding: 2px 4px;
+  margin-inline: -4px;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -17065,7 +17142,7 @@ a.transcript-message__messaging-origin:focus-visible {
   flex-direction: column;
   gap: 8px;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--transcript-text-size);
   line-height: 1.45;
 }
 

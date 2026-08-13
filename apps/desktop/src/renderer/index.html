@@ -69,22 +69,20 @@
           if (density === "compact") {
             document.documentElement.setAttribute("data-density", "compact");
           }
-          // Sidebar text size: "md" is the default the bare :root carries;
+          // Text-size axes: "md" is the default the bare :root carries;
           // any other bridged value sets the attribute. No notch allowlist
           // here on purpose — this inline script cannot import the shared
           // enum, an unknown value is inert in CSS (no notch selector
           // matches, the :root default holds), and a stale hand-copied
           // list would downgrade future notches to md at first paint.
-          var sidebarTextSize = bridged.sidebarTextSize;
-          if (
-            typeof sidebarTextSize === "string"
-            && sidebarTextSize !== "md"
-          ) {
-            document.documentElement.setAttribute(
-              "data-sidebar-text",
-              sidebarTextSize
-            );
+          // One applier serves every axis so the contract lives once.
+          function applyTextSize(value, attribute) {
+            if (typeof value === "string" && value !== "md") {
+              document.documentElement.setAttribute(attribute, value);
+            }
           }
+          applyTextSize(bridged.sidebarTextSize, "data-sidebar-text");
+          applyTextSize(bridged.transcriptTextSize, "data-transcript-text");
         } catch (_) {
           // Bridge unavailable or shape wrong — fall back to dark + mission-
           // control defaults. The useAppearance hook will resync once the
