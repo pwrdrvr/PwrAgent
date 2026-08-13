@@ -7,6 +7,8 @@ import {
 } from "react";
 import { NewThreadIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { FederationTargetMenuSection } from "./FederationTargetMenuSection";
+import type { FederationThreadTarget } from "./federation-thread-targets";
 
 /**
  * The masthead "New thread" button with a hover/focus flyout.
@@ -18,7 +20,7 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
  *
  *   1. New chat in <directory>     → `onCreateThread` (context default)
  *   2. New chat without a directory → `onCreateThreadWithoutDirectory`
- *   3. New chat on <instance>        → open that owner's launchpad
+ *   3. New chat on → <instance>     → open that owner's launchpad
  *   4. Add a Project Directory…     → track a repo without starting a chat
  *
  * The flyout renders when there's either a meaningful directory choice or an
@@ -40,10 +42,7 @@ export type NewThreadButtonProps = {
   onCreateThread: () => void | Promise<void>;
   onCreateThreadWithoutDirectory?: () => void | Promise<void>;
   onCreateThreadOnTarget?: (instanceId: string) => void | Promise<void>;
-  remoteTargets?: readonly {
-    instanceId: string;
-    label: string;
-  }[];
+  remoteTargets?: readonly FederationThreadTarget[];
 };
 
 export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
@@ -188,26 +187,16 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                 New chat without a directory
               </button>
             )}
-            {hasRemoteTargets ? (
+            {hasRemoteTargets && props.remoteTargets ? (
               <>
                 <div className="new-thread-menu__separator" role="separator" />
-                <div className="new-thread-menu__section-label" role="presentation">
-                  Other instances
-                </div>
-                {props.remoteTargets?.map((target) => (
-                  <button
-                    key={target.instanceId}
-                    type="button"
-                    role="menuitem"
-                    className="new-thread-menu__item"
-                    onClick={() => {
-                      setOpen(false);
-                      void props.onCreateThreadOnTarget?.(target.instanceId);
-                    }}
-                  >
-                    New chat on {target.label}
-                  </button>
-                ))}
+                <FederationTargetMenuSection
+                  targets={props.remoteTargets}
+                  onSelect={(instanceId) => {
+                    setOpen(false);
+                    void props.onCreateThreadOnTarget?.(instanceId);
+                  }}
+                />
               </>
             ) : null}
             {props.onAddProjectDirectory ? (

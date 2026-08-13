@@ -5,7 +5,11 @@ import { AppTitleBar } from "../AppTitleBar";
 import { MastheadActions } from "../MastheadActions";
 
 const remoteTargets = [
-  { instanceId: "studio-work", label: "Studio Mac / work" },
+  {
+    availability: "available" as const,
+    instanceId: "studio-work",
+    label: "Studio Mac / work",
+  },
 ];
 
 afterEach(() => {
@@ -30,7 +34,7 @@ describe("federation New Thread placements", () => {
     const button = screen.getByRole("button", { name: "New thread" });
     fireEvent.mouseEnter(button.parentElement as HTMLElement);
     fireEvent.click(screen.getByRole("menuitem", {
-      name: "New chat on Studio Mac / work",
+      name: "Studio Mac / work",
     }));
 
     expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("studio-work");
@@ -60,7 +64,7 @@ describe("federation New Thread placements", () => {
     const button = screen.getByRole("button", { name: "New thread" });
     fireEvent.mouseEnter(button.parentElement as HTMLElement);
     fireEvent.click(screen.getByRole("menuitem", {
-      name: "New chat on Studio Mac / work",
+      name: "Studio Mac / work",
     }));
 
     expect(onCreateThreadOnFederationTarget).toHaveBeenCalledWith("studio-work");

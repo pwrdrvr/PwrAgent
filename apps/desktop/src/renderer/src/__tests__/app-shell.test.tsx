@@ -388,11 +388,14 @@ describe("App", () => {
 
     const button = screen.getByRole("button", { name: "New thread" });
     fireEvent.mouseEnter(button.parentElement as HTMLElement);
-    expect(screen.queryByRole("menuitem", {
-      name: "New chat on Read-only peer",
-    })).not.toBeInTheDocument();
+    // A peer whose build cannot host a thread stays listed and disabled —
+    // vanishing from the list is indistinguishable from a bug, and Settings →
+    // Federation already keeps such a peer visible with a disabled action.
+    expect(
+      await screen.findByRole("menuitem", { name: /Read-only peer/ }),
+    ).toBeDisabled();
     fireEvent.click(await screen.findByRole("menuitem", {
-      name: "New chat on Studio Mac / work",
+      name: "Studio Mac / work",
     }));
 
     expect(openFederationWindow).toHaveBeenCalledWith({
@@ -431,10 +434,10 @@ describe("App", () => {
 
     fireEvent.mouseEnter(button.parentElement as HTMLElement);
     expect(await screen.findByRole("menuitem", {
-      name: "New chat on Laptop",
+      name: "Laptop",
     })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", {
-      name: "New chat on Studio Mac / work",
+      name: "Studio Mac / work",
     })).not.toBeInTheDocument();
   });
 

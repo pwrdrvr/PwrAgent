@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { AutomationsIcon, SearchIcon, SettingsIcon } from "../../icons";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import type { FederationThreadTarget } from "./federation-thread-targets";
 import { NewThreadButton } from "./NewThreadButton";
 
 /**
@@ -18,10 +19,7 @@ export type MastheadActionsProps = {
   creatingThread?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
   newThreadDirectoryLabel?: string;
-  newThreadFederationTargets?: readonly {
-    instanceId: string;
-    label: string;
-  }[];
+  newThreadFederationTargets?: readonly FederationThreadTarget[];
   onAddProjectDirectory?: () => void | Promise<void>;
   onOpenAutomations?: () => void;
   onOpenSettings?: () => void;

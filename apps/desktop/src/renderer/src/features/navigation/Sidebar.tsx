@@ -43,6 +43,8 @@ import {
   type IconProps,
 } from "../../icons";
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
+import type { FederationThreadTarget } from "../chrome/federation-thread-targets";
+import { FederationTargetMenuSection } from "../chrome/FederationTargetMenuSection";
 import { NewThreadButton } from "../chrome/NewThreadButton";
 import type {
   ArchiveThreadOptions,
@@ -142,10 +144,7 @@ type SidebarProps = {
   onCreateThread: () => Promise<void>;
   onCreateThreadWithoutDirectory?: () => Promise<void>;
   onCreateThreadOnFederationTarget?: (instanceId: string) => Promise<void>;
-  newThreadFederationTargets?: readonly {
-    instanceId: string;
-    label: string;
-  }[];
+  newThreadFederationTargets?: readonly FederationThreadTarget[];
   onAddProjectDirectory?: () => Promise<void>;
   addingProjectDirectory?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
@@ -351,6 +350,8 @@ export function Sidebar(props: SidebarProps) {
   const federationTarget = readRendererFederationTarget();
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const directoryContextMenuRef = useRef<HTMLDivElement>(null);
+  const directoryTargetMenuRef = useRef<HTMLDivElement>(null);
+  const federationThreadTargets = props.newThreadFederationTargets ?? [];
   const renameInputRef = useRef<HTMLInputElement>(null);
   const handledRevealRequestRef = useRef(0);
   const selectionAnchorKeyRef = useRef<string | undefined>(
@@ -394,6 +395,20 @@ export function Sidebar(props: SidebarProps) {
         position?: { x: number; y: number };
         directory: NavigationDirectorySummary;
         directories: NavigationDirectorySummary[];
+      }
+    | undefined
+  >();
+  /**
+   * "New chat on <machine>" for one directory row's launchpad button. Hoisted
+   * here rather than owned by the row for the same reason the two context
+   * menus are: the row lives inside the scrolling thread list, and a popover
+   * anchored inside it gets clipped by that scroll container.
+   */
+  const [directoryTargetMenu, setDirectoryTargetMenu] = useState<
+    | {
+        requestedPosition: ThreadContextMenuPosition;
+        position?: { x: number; y: number };
+        directoryLabel: string;
       }
     | undefined
   >();
@@ -831,6 +846,28 @@ export function Sidebar(props: SidebarProps) {
   }, [directoryContextMenu]);
 
   useEffect(() => {
+    if (!directoryTargetMenu) {
+      return;
+    }
+
+    const closeMenu = (): void => setDirectoryTargetMenu(undefined);
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        closeMenu();
+      }
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("contextmenu", closeMenu, true);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("contextmenu", closeMenu, true);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [directoryTargetMenu]);
+
+  useEffect(() => {
     if (!profileMenuOpen) {
       return;
     }
@@ -909,6 +946,42 @@ export function Sidebar(props: SidebarProps) {
       position: nextPosition,
     });
   }, [directoryContextMenu]);
+
+  useLayoutEffect(() => {
+    if (!directoryTargetMenu) {
+      return;
+    }
+
+    const menu = directoryTargetMenuRef.current;
+    if (!menu) {
+      return;
+    }
+
+    // `requestedPosition.x` is the chevron's right edge. Right-align the card
+    // to it now that the card has been measured — the directory row sits at
+    // the sidebar's right edge, so a left-aligned card would hang over the
+    // thread pane instead of reading as this row's menu.
+    const menuRect = menu.getBoundingClientRect();
+    const nextPosition = placeThreadContextMenu(
+      {
+        ...directoryTargetMenu.requestedPosition,
+        x: directoryTargetMenu.requestedPosition.x - menuRect.width,
+      },
+      menuRect,
+    );
+
+    if (
+      directoryTargetMenu.position?.x === nextPosition.x &&
+      directoryTargetMenu.position.y === nextPosition.y
+    ) {
+      return;
+    }
+
+    setDirectoryTargetMenu({
+      ...directoryTargetMenu,
+      position: nextPosition,
+    });
+  }, [directoryTargetMenu]);
 
   useLayoutEffect(() => {
     if (!renameThread) {
@@ -1067,6 +1140,19 @@ export function Sidebar(props: SidebarProps) {
       requestedPosition: position,
       directory,
       directories: resolveDirectoryContextMenuDirectories(directory),
+    });
+  };
+
+  const openDirectoryTargetMenu = (
+    directory: NavigationDirectorySummary,
+    position: ThreadContextMenuPosition,
+  ): void => {
+    setContextMenu(undefined);
+    setDirectoryContextMenu(undefined);
+    setRenameThread(undefined);
+    setDirectoryTargetMenu({
+      requestedPosition: position,
+      directoryLabel: directory.label,
     });
   };
 
@@ -1777,6 +1863,11 @@ export function Sidebar(props: SidebarProps) {
               threads={props.threads}
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={props.onOpenLaunchpad}
+              onOpenFederationTargetMenu={
+                federationThreadTargets.length > 0
+                  ? openDirectoryTargetMenu
+                  : undefined
+              }
               onPrefetchPullRequests={props.onPrefetchPullRequests}
               onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
               onRevealSelectedThreadComplete={
@@ -2345,6 +2436,33 @@ export function Sidebar(props: SidebarProps) {
             void props.onDetachPullRequest?.(pending.thread, pending.pr);
           }}
         />
+      ) : null}
+
+      {directoryTargetMenu && federationThreadTargets.length > 0 ? (
+        <div
+          ref={directoryTargetMenuRef}
+          className="new-thread-menu__card new-thread-menu__card--anchored"
+          role="menu"
+          aria-label={`New thread targets for ${directoryTargetMenu.directoryLabel}`}
+          style={{
+            left:
+              directoryTargetMenu.position?.x ??
+              directoryTargetMenu.requestedPosition.x,
+            top:
+              directoryTargetMenu.position?.y ??
+              directoryTargetMenu.requestedPosition.y,
+            visibility: directoryTargetMenu.position ? undefined : "hidden",
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <FederationTargetMenuSection
+            targets={federationThreadTargets}
+            onSelect={(instanceId) => {
+              setDirectoryTargetMenu(undefined);
+              void props.onCreateThreadOnFederationTarget?.(instanceId);
+            }}
+          />
+        </div>
       ) : null}
 
       {directoryContextMenu ? (

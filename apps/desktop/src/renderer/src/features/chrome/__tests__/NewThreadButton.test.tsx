@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NewThreadButton } from "../NewThreadButton";
 
@@ -90,8 +90,16 @@ describe("NewThreadButton", () => {
         onCreateThread={onCreateThread}
         onCreateThreadOnTarget={onCreateThreadOnTarget}
         remoteTargets={[
-          { instanceId: "studio-work", label: "Studio Mac / work" },
-          { instanceId: "laptop-default", label: "Laptop" },
+          {
+            availability: "available",
+            instanceId: "studio-work",
+            label: "Studio Mac / work",
+          },
+          {
+            availability: "available",
+            instanceId: "laptop-default",
+            label: "Laptop",
+          },
         ]}
       />,
     );
@@ -99,15 +107,79 @@ describe("NewThreadButton", () => {
     const button = screen.getByRole("button", { name: "New thread" });
     fireEvent.mouseEnter(button.parentElement as HTMLElement);
 
-    expect(await screen.findByText("Other instances")).toBeInTheDocument();
+    expect(await screen.findByText("New chat on")).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: "New chat on Studio Mac / work",
-      }),
+      screen.getByRole("menuitem", { name: "Studio Mac / work" }),
     );
 
     expect(onCreateThreadOnTarget).toHaveBeenCalledWith("studio-work");
     expect(onCreateThread).not.toHaveBeenCalled();
+  });
+
+  it("carries the verb in the group label instead of repeating it per row", async () => {
+    render(
+      <NewThreadButton
+        onCreateThread={vi.fn()}
+        onCreateThreadOnTarget={vi.fn()}
+        remoteTargets={[
+          {
+            availability: "available",
+            instanceId: "studio-work",
+            label: "Studio Mac / work",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: "New thread" })
+        .parentElement as HTMLElement,
+    );
+
+    // The machine label is the whole row: rows are nowrap/ellipsis inside a
+    // 320px card, and a repeated "New chat on " prefix pushed the ` / profile`
+    // suffix — the only thing telling two rows apart — toward the clip.
+    const group = await screen.findByRole("group", { name: "New chat on" });
+    expect(
+      within(group).getByRole("menuitem", { name: "Studio Mac / work" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps unreachable instances visible and disabled rather than hiding them", async () => {
+    const onCreateThreadOnTarget = vi.fn();
+    render(
+      <NewThreadButton
+        onCreateThread={vi.fn()}
+        onCreateThreadOnTarget={onCreateThreadOnTarget}
+        remoteTargets={[
+          {
+            availability: "offline",
+            instanceId: "studio-work",
+            label: "Studio Mac",
+          },
+          {
+            availability: "unsupported",
+            instanceId: "old-build",
+            label: "Attic Mini",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.mouseEnter(
+      screen.getByRole("button", { name: "New thread" })
+        .parentElement as HTMLElement,
+    );
+
+    const offline = await screen.findByRole("menuitem", { name: /Studio Mac/ });
+    expect(offline).toBeDisabled();
+    expect(offline).toHaveTextContent("Offline");
+    const unsupported = screen.getByRole("menuitem", { name: /Attic Mini/ });
+    expect(unsupported).toBeDisabled();
+    expect(unsupported).toHaveTextContent("Unsupported");
+
+    fireEvent.click(offline);
+    expect(onCreateThreadOnTarget).not.toHaveBeenCalled();
   });
 
   it("closes the flyout on Escape while a menu item is focused (regression)", async () => {

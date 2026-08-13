@@ -29,6 +29,7 @@ import {
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import {
+  ChevronDownIcon,
   FolderIcon,
   NewThreadIcon,
   UnlinkedDotIcon,
@@ -95,6 +96,15 @@ type DirectoriesListProps = {
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
+  /**
+   * Opens the "New chat on <machine>" menu for this row's launchpad button.
+   * Absent when the federation has no peers to offer, which is what keeps the
+   * split-button chevron from rendering on a single-instance install.
+   */
+  onOpenFederationTargetMenu?: (
+    directory: NavigationDirectorySummary,
+    position: { x: number; y: number; anchorTop?: number },
+  ) => void;
   onRevealSelectedThreadComplete?: (request: number) => void;
   onSelectThread: (
     thread: NavigationThreadSummary,
@@ -1615,18 +1625,43 @@ export function DirectoriesList(props: DirectoriesListProps) {
           </button>
 
           {directoryUnconfigured ? null : (
-            <button
-              aria-label={`Open new thread launchpad for ${directory.label}`}
-              className={`directory-row__launchpad-button${
-                hasPendingLaunchpadState(directory) ? " has-draft" : ""
-              }`}
-              type="button"
-              onClick={() => {
-                void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
-              }}
-            >
-              <NewThreadIcon size={16} />
-            </button>
+            <span className="directory-row__launchpad-cluster">
+              <button
+                aria-label={`Open new thread launchpad for ${directory.label}`}
+                className={`directory-row__launchpad-button${
+                  hasPendingLaunchpadState(directory) ? " has-draft" : ""
+                }`}
+                type="button"
+                onClick={() => {
+                  void props.onOpenLaunchpad(directory, directory.launchpad?.backend);
+                }}
+              >
+                <NewThreadIcon size={16} />
+              </button>
+              {props.onOpenFederationTargetMenu ? (
+                <button
+                  aria-label={`Choose a machine for a new thread in ${directory.label}`}
+                  aria-haspopup="menu"
+                  className="directory-row__launchpad-targets-button"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    // `x` is the chevron's RIGHT edge; the sidebar right-aligns
+                    // the card to it once the card has been measured. The card's
+                    // width is a range (220–320px), so subtracting a guess here
+                    // would misplace it on the wider end.
+                    props.onOpenFederationTargetMenu?.(directory, {
+                      x: rect.right,
+                      y: rect.bottom + 4,
+                      anchorTop: rect.top,
+                    });
+                  }}
+                >
+                  <ChevronDownIcon size={12} />
+                </button>
+              ) : null}
+            </span>
           )}
         </div>
 

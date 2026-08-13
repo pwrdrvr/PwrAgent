@@ -652,6 +652,11 @@ textarea,
 .new-thread-menu__card {
   min-width: 220px;
   max-width: min(320px, calc(100vw - 32px));
+  /* The federation section grows one row per enrolled machine, and the card
+     is anchored below the trigger with no flip, so an unbounded height runs
+     off the bottom of the window on a large federation. */
+  max-height: min(420px, calc(100vh - 96px));
+  overflow-y: auto;
   padding: 6px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -698,11 +703,64 @@ textarea,
   background: var(--border-subtle);
 }
 
+/* Matches `.project-picker__section` / `.branch-picker__eyebrow`, the app's
+   other in-popover group labels. Sentence case at --text-muted reads as a
+   disabled menu item rather than a heading. */
 .new-thread-menu__section-label {
-  padding: 4px 10px 2px;
+  padding: 6px 10px 4px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The directory-row split button opens this same card, but anchored to the
+   chevron rather than nested under the masthead trigger — the row lives
+   inside the scrolling thread list, which would clip an absolute child. */
+.new-thread-menu__card--anchored {
+  position: fixed;
+  z-index: 50;
+}
+
+.new-thread-menu__item--target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-thread-menu__target-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-ok);
+}
+
+/* Reachable-but-not-now and cannot-ever read differently: a filled grey dot
+   for a peer that will come back, a hollow one for a build that can't host
+   a thread until it is upgraded. */
+.new-thread-menu__target-dot[data-availability="offline"] {
+  background: var(--status-suspended);
+}
+
+.new-thread-menu__target-dot[data-availability="unsupported"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--status-suspended);
+}
+
+.new-thread-menu__target-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-thread-menu__target-state {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 /* macOS floats the traffic lights over the cluster's left. Match the sidebar
@@ -5352,8 +5410,33 @@ textarea,
      additional margin needed here. */
 }
 
+/* Split button: the icon keeps its one-click "new thread here" meaning and the
+   chevron adds the machine choice, so the common case stays a single click. */
+.directory-row__launchpad-cluster {
+  display: inline-flex;
+  align-items: center;
+}
+
+.directory-row__launchpad-targets-button {
+  display: inline-flex;
+  width: 16px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  appearance: none;
+  cursor: pointer;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
 .directory-row__launchpad-button:hover,
-.directory-row__launchpad-button:focus-visible {
+.directory-row__launchpad-button:focus-visible,
+.directory-row__launchpad-targets-button:hover,
+.directory-row__launchpad-targets-button:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-bright);
   outline: none;
