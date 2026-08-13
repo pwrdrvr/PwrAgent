@@ -154,6 +154,7 @@ import { subscribersForChannel } from "./window-channels";
 import { requestOpenNewThread } from "./window-open-new-thread";
 import { requestOpenSettings } from "./window-open-settings";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
+import { requestCopyLocalDiagnosticsInfo } from "./window-copy-local-diagnostics-info";
 import { buildApplicationMenuTemplate } from "./menu";
 import { wireAppMenuBridge } from "./app-menu-bridge";
 import {
@@ -866,6 +867,7 @@ function installApplicationMenu(): void {
       checkForUpdates: () => {
         void checkForAppUpdatesNow("menu");
       },
+      copyLocalDiagnosticsInfo: requestCopyLocalDiagnosticsInfo,
       focusWindow: (windowId) => {
         const window = BrowserWindow.fromId(windowId);
         if (!window || window.isDestroyed()) {

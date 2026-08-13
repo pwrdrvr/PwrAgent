@@ -12,6 +12,7 @@ import {
   type CodexProtocolCaptureStatus,
 } from "../../../../shared/codex-protocol-capture";
 import { HEAP_SNAPSHOT_SECRET_WARNING } from "../../../../shared/heap-snapshot";
+import { buildTroubleshootingDiagnosticsInfo } from "../../../../shared/local-diagnostics-info";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -362,10 +363,11 @@ export function TroubleshootingSettings(props: {
             label="Process IDs"
             sub="Attach a debugger or profiler to the right process when several Electron apps are running."
             control={
-              processIds ? (
+              appMetadata && processIds ? (
                 <SettingsCopyValue
+                  copyValue={buildTroubleshootingDiagnosticsInfo(appMetadata)}
                   desktopApi={props.desktopApi}
-                  label="process IDs"
+                  label="local diagnostics info"
                   value={processIds}
                 />
               ) : (

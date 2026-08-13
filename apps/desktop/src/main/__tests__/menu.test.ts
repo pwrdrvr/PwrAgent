@@ -7,6 +7,7 @@ function buildTemplate(
   developerMode: boolean,
   options?: {
     isMac?: boolean;
+    copyLocalDiagnosticsInfo?: () => void;
     openNewThread?: () => void;
     openProfile?: (profile: string) => void;
     openProfilesSettings?: () => void;
@@ -35,6 +36,7 @@ function buildTemplate(
     ],
     actions: {
       checkForUpdates: vi.fn(),
+      copyLocalDiagnosticsInfo: options?.copyLocalDiagnosticsInfo ?? vi.fn(),
       focusWindow: vi.fn(),
       openDocumentation: vi.fn(),
       openFederationWindow: vi.fn(),
@@ -267,6 +269,7 @@ describe("buildApplicationMenuTemplate", () => {
         windows: [],
         actions: {
           checkForUpdates: vi.fn(),
+          copyLocalDiagnosticsInfo: vi.fn(),
           focusWindow: vi.fn(),
           openDocumentation: vi.fn(),
           openFederationWindow: vi.fn(),
@@ -314,6 +317,20 @@ describe("buildApplicationMenuTemplate", () => {
       const appMenu = template.find((item) => item.label === "PwrAgent");
       expect(appMenu).toBeUndefined();
     });
+  });
+
+  it("routes Help → Copy Local Diagnostics Info through the shared action", () => {
+    const copyLocalDiagnosticsInfo = vi.fn();
+    const items = findSubmenuByRole(
+      buildTemplate(false, { copyLocalDiagnosticsInfo }),
+      "help",
+    );
+
+    (items.find((item) => item.label === "Copy Local Diagnostics Info")?.click as
+      | (() => void)
+      | undefined)?.();
+
+    expect(copyLocalDiagnosticsInfo).toHaveBeenCalledOnce();
   });
 
   describe("Window menu", () => {
@@ -373,6 +390,7 @@ describe("buildApplicationMenuTemplate", () => {
         windows: [],
         actions: {
           checkForUpdates: vi.fn(),
+          copyLocalDiagnosticsInfo: vi.fn(),
           focusWindow: vi.fn(),
           openDocumentation: vi.fn(),
           openFederationWindow,
