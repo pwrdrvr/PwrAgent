@@ -466,6 +466,25 @@ function verifyPackagedGrok(resourcesDirectory) {
     cwd: dirname(bundledExecutable),
     env: { GROK_INSTALLER: "pwragent", NO_COLOR: "1" },
   });
+  if (process.platform === "darwin") {
+    runChecked("codesign", [
+      "--verify",
+      "--strict",
+      "--verbose=2",
+      bundledExecutable,
+    ]);
+  } else if (process.platform === "win32" && requireSigning) {
+    runChecked(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$signature = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_EXECUTABLE; if ($signature.Status -ne 'Valid') { throw \"Bundled Grok Authenticode signature is $($signature.Status): $($signature.StatusMessage)\" }",
+      ],
+      { env: { PWRAGENT_VERIFY_EXECUTABLE: bundledExecutable } },
+    );
+  }
   return bundledExecutable;
 }
 
