@@ -648,6 +648,127 @@ describe("DesktopMessagingRuntime", () => {
     ).toBe(false);
   });
 
+  it("records an automation-matched observed-only sender as routed", async () => {
+    await prepareRuntimeStore();
+    const automationInboundHandler = vi.fn(async () => true);
+    const automationInboundMatches = vi.fn(() => true);
+    const adapter = createAdapter("slack", {
+      authorizedActorIds: ["operator-1"],
+    });
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: bridge,
+      automationInboundHandler,
+      automationInboundMatches,
+      config: {},
+    }));
+    await runtime.start();
+
+    await adapter.listener?.({
+      id: "slack:message:datadog-1",
+      kind: "text",
+      actor: {
+        platformUserId: "B012DATADOG",
+        displayName: "Datadog",
+        isBot: true,
+      },
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C012SEARCHBOTS",
+          kind: "channel",
+          title: "t-search-bots",
+        },
+      },
+      observedOnly: true,
+      receivedAt: 1_000,
+      text: "Search pipeline alert",
+    });
+
+    expect(automationInboundMatches).toHaveBeenCalledTimes(1);
+    expect(automationInboundHandler).toHaveBeenCalledTimes(1);
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const rows = getAppStateDb().raw
+      .prepare(
+        `SELECT kind, actor_id, conversation_id
+         FROM messaging_activity_log
+         WHERE actor_id = ?
+         ORDER BY id ASC`,
+      )
+      .all("B012DATADOG") as Array<{
+        actor_id: string;
+        conversation_id: string;
+        kind: string;
+      }>;
+    expect(rows).toEqual([{
+      actor_id: "B012DATADOG",
+      conversation_id: "C012SEARCHBOTS",
+      kind: "inbound-routed",
+    }]);
+  });
+
+  it("keeps unmatched observed-only senders rejected", async () => {
+    await prepareRuntimeStore();
+    const automationInboundHandler = vi.fn(async () => true);
+    const adapter = createAdapter("slack", {
+      authorizedActorIds: ["operator-1"],
+    });
+    const bridge = createBackendBridge();
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: bridge,
+      automationInboundHandler,
+      automationInboundMatches: () => false,
+      config: {},
+    }));
+    await runtime.start();
+
+    await adapter.listener?.({
+      id: "slack:message:other-bot-1",
+      kind: "text",
+      actor: {
+        platformUserId: "B012OTHERBOT",
+        displayName: "Other Bot",
+        isBot: true,
+      },
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C012SEARCHBOTS",
+          kind: "channel",
+          title: "t-search-bots",
+        },
+      },
+      observedOnly: true,
+      receivedAt: 1_000,
+      text: "Unrelated message",
+    });
+
+    expect(automationInboundHandler).not.toHaveBeenCalled();
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const row = getAppStateDb().raw
+      .prepare(
+        `SELECT kind
+         FROM messaging_activity_log
+         WHERE actor_id = ?
+         ORDER BY id DESC
+         LIMIT 1`,
+      )
+      .get("B012OTHERBOT") as { kind: string } | undefined;
+    expect(row?.kind).toBe("inbound-rejected");
+  });
+
   it("drops ambient @mention-only messages no automation filter matches", async () => {
     const automationInboundHandler = vi.fn(async () => false);
     const automationInboundMatches = vi.fn(() => false);

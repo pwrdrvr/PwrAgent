@@ -1433,9 +1433,18 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           // Observed-only traffic exists for automations and the editor's
           // live preview; it must never reach the controller's reply/command
           // path — the sender did not clear the per-user access gate.
-          this.recordActivityFromInbound(adapter.channel, event, false);
+          // A matching automation is its own narrow authorization context:
+          // classify that event as routed without widening the sender's
+          // adapter or RBAC permissions for any interactive messaging path.
+          const automationMatched =
+            this.options.automationInboundMatches?.(event) === true;
+          this.recordActivityFromInbound(
+            adapter.channel,
+            event,
+            automationMatched,
+          );
           publishInboundPreview(event);
-          if (this.options.automationInboundMatches?.(event)) {
+          if (automationMatched) {
             await this.options.automationInboundHandler?.(event);
           } else {
             messagingLog.debug(
