@@ -1,6 +1,12 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type ElectronApplication } from "@playwright/test";
+import {
+  expect,
+  test,
+  type ElectronApplication,
+  type Page,
+} from "@playwright/test";
+import { createBoundedOutputMatcher } from "./fixtures/bounded-output-matcher";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 /**
@@ -105,16 +111,31 @@ function watchMainProcessOutputFor(
   electronApp: ElectronApplication,
   expected: string,
 ): () => boolean {
-  let matched = false;
-  let tail = "";
+  const matcher = createBoundedOutputMatcher(expected);
   const inspect = (chunk: Buffer): void => {
-    tail = `${tail}${chunk.toString()}`.slice(-(expected.length * 2));
-    matched ||= tail.includes(expected);
+    matcher.inspect(chunk.toString());
   };
   const child = electronApp.process();
   child.stdout?.on("data", inspect);
   child.stderr?.on("data", inspect);
-  return () => matched;
+  return matcher.matched;
+}
+
+async function setQuitConfirmationEnabled(
+  page: Page,
+  enabled: boolean,
+): Promise<void> {
+  await page.evaluate(async (nextEnabled) => {
+    await (
+      window as unknown as {
+        pwragent: {
+          writeSettingsConfig: (request: unknown) => Promise<unknown>;
+        };
+      }
+    ).pwragent.writeSettingsConfig({
+      patch: { general: { confirmQuitWithInProgressThreads: nextEnabled } },
+    });
+  }, enabled);
 }
 
 test("exits the process when a profile-backed session is asked to quit", async () => {
@@ -158,21 +179,12 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
     app.electronApp,
     "quit requested while confirmation is open",
   );
+  let dialog: Page | undefined;
 
   try {
     // The shared harness seeds confirmation OFF so specs close cleanly. This
     // spec is about the confirmation, so turn it back on the way the app does.
-    await app.window.evaluate(async () => {
-      await (
-        window as unknown as {
-          pwragent: {
-            writeSettingsConfig: (request: unknown) => Promise<unknown>;
-          };
-        }
-      ).pwragent.writeSettingsConfig({
-        patch: { general: { confirmQuitWithInProgressThreads: true } },
-      });
-    });
+    await setQuitConfirmationEnabled(app.window, true);
 
     await app.window
       .getByRole("button", { name: /Replay smoke thread/i })
@@ -201,17 +213,18 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
 
     const dialogPromise = app.electronApp.waitForEvent("window");
     requestQuit(app.electronApp);
-    const dialog = await dialogPromise;
+    const activeDialog = await dialogPromise;
+    dialog = activeDialog;
     await expect(
-      dialog.getByRole("heading", { name: "Quit PwrAgent?" }),
+      activeDialog.getByRole("heading", { name: "Quit PwrAgent?" }),
     ).toBeVisible();
 
     // Stand in for the impatient operator's second Cmd+Q: a keystroke on the
     // dialog cancels the auto-quit permanently, so nothing but the dialog will
     // ever settle this request.
-    await dialog.keyboard.press("ArrowDown");
+    await activeDialog.keyboard.press("ArrowDown");
     await expect
-      .poll(async () => await dialog.locator("#countdown").innerText())
+      .poll(async () => await activeDialog.locator("#countdown").innerText())
       .toBe("Auto-quit cancelled. Choose an option below.");
 
     requestQuit(app.electronApp);
@@ -226,7 +239,7 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
 
     // Answering it has to actually reach process exit — the countdown is gone,
     // so this is the only remaining path out.
-    await dialog.locator("#quit").dispatchEvent("click");
+    await activeDialog.locator("#quit").dispatchEvent("click");
     const outcome = await awaitExit(app.electronApp);
     expect(
       outcome.exited,
@@ -234,6 +247,16 @@ test("acknowledges a repeat quit request and exits once the prompt is answered",
     ).toBe(true);
     expect(outcome.signalCode).toBeNull();
   } finally {
+    // An assertion failure must not leave this spec's deliberately blocking
+    // prompt in front of fixture teardown. Restore the shared harness default,
+    // then answer an already-open prompt so cleanup remains graceful and a
+    // test failure cannot masquerade as repeated guest degradation.
+    await setQuitConfirmationEnabled(app.window, false).catch(() => undefined);
+    if (dialog && !dialog.isClosed()) {
+      await dialog.locator("#quit").dispatchEvent("click").catch(
+        () => undefined,
+      );
+    }
     await app.close();
   }
 });
