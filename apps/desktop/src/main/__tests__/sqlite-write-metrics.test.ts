@@ -366,6 +366,98 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("holds a burst of automation transcript events to one artifact write", async () => {
+    vi.useFakeTimers();
+    const automationStore = new AutomationStore(stateDb);
+    const registryListeners: Array<(event: AgentEvent) => void | Promise<void>> = [];
+    const registry = {
+      canStartThreadTurnImmediately: () => true,
+      getThreadAgentMetadata: async () => ({
+        name: "Agent",
+        instructionLineCount: 0,
+        instructionsTooLong: false,
+        updatedAt: 1,
+      }),
+      onEvent: (listener: (event: AgentEvent) => void | Promise<void>) => {
+        registryListeners.push(listener);
+        return () => {};
+      },
+      publishLocalEvent: async () => {},
+      setAutomationInspectionHandler: () => {},
+      startAutomationHeadlessTurn: async (params: {
+        agentThreadId: string;
+        automationRunId: string;
+        backend: string;
+      }) => ({
+        backend: params.backend,
+        headlessThreadId: "headless-1",
+        queueEntryId: `headless:${params.automationRunId}`,
+        threadId: params.agentThreadId,
+        turnId: "turn-1",
+      }),
+    } as unknown as ConstructorParameters<
+      typeof DesktopAutomationService
+    >[0]["registry"];
+    const service = new DesktopAutomationService({
+      registry,
+      store: automationStore,
+    });
+    try {
+      service.start();
+      const created = await service.create({
+        backend: "codex",
+        threadId: "thread-1",
+        name: "Transcript burst",
+        taskPrompt: "Check.",
+        schedule: { kind: "interval", every: 24, unit: "hours" },
+      });
+      const runNow = await service.runNow({ automationId: created.automation.id });
+
+      const { writes } = await measureSqliteWrites(async () => {
+        // Completed tool items used to rewrite the growing artifact JSON once
+        // per item. Buffer the whole burst into one periodic durability flush.
+        // The five-minute safety window caps a continuously active run at 288
+        // commits/day: 28,840 measured WAL bytes * 288 = 8,305,920 bytes/day
+        // (about 7.9 MiB). Ordinary shorter runs flush once at turn completion.
+        for (let itemIndex = 0; itemIndex < 50; itemIndex += 1) {
+          await Promise.all(
+            registryListeners.map((listener) =>
+              listener({
+                backend: "codex",
+                notification: {
+                  method: "item/completed",
+                  params: {
+                    threadId: "headless-1",
+                    turnId: "turn-1",
+                    item: {
+                      id: `tool-${itemIndex}`,
+                      type: "mcpToolCall",
+                      toolName: `tool-${itemIndex}`,
+                    },
+                  },
+                },
+              } as unknown as AgentEvent),
+            ),
+          );
+        }
+        expect(automationStore.getRunArtifact(runNow.run.id)).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+      });
+
+      expectSqliteWriteBudget({
+        note: "50 completed tool items, one buffered automation artifact write",
+        scenario: "automation-run-transcript-burst",
+        writes,
+      });
+      expect(
+        automationStore.getRunArtifact(runNow.run.id)?.transcriptEvents,
+      ).toHaveLength(50);
+    } finally {
+      service.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("budgets recurring live usage timer windows", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "clearTimeout", "setTimeout"],
