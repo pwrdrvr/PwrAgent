@@ -74,6 +74,34 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(normalizer.replay().lastAssistantMessage).toBe("Hello world");
   });
 
+  it("preserves an assistant message across a skipped whitespace thought", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { kind: "agent_message_chunk", content: "Before " },
+    });
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: { kind: "agent_thought_chunk", content: "\n" },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: { kind: "agent_message_chunk", content: "after." },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({
+        id: "assistant:session-1:0",
+        role: "assistant",
+        text: "Before after.",
+      }),
+    ]);
+  });
+
   it("prefers a provider timestamp extension over local receipt time", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

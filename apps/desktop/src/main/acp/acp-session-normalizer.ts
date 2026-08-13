@@ -190,14 +190,22 @@ export class AcpSessionReplayNormalizer {
         readContentText(update.update, "content") ??
         readString(update.update, "text") ??
         "";
+      const phase: AppServerTranscriptPhase =
+        kind === "agent_message_chunk" ? "final" : "commentary";
+      // A whitespace-only chunk at a phase boundary is a provider artifact,
+      // not a new assistant message. Ignore it before switching phase so a
+      // later chunk can keep the existing live assistant item identity.
+      if (!text.trim() && this.activeAssistantMessagePhase !== phase) {
+        return this.replay();
+      }
       if (text.trim() && !isModeUpdateMarker(text) && this.currentTurnId) {
         this.removeAgentWaitingActivity(this.currentTurnId);
       }
       if (kind === "agent_message_chunk") {
-        this.resetAssistantMessageIfPhaseChanged("final");
+        this.resetAssistantMessageIfPhaseChanged(phase);
         this.applyAgentMessageChunk(update, createdAt);
       } else {
-        this.resetAssistantMessageIfPhaseChanged("commentary");
+        this.resetAssistantMessageIfPhaseChanged(phase);
         this.applyAgentThoughtChunk(update, createdAt);
       }
     } else if (kind === "user_message_chunk") {
