@@ -126,9 +126,14 @@ export type AcpRuntimeClient = Pick<
     Pick<
       AcpAgentClient,
       | "didSessionLoadReplayHistory"
+      | "hasActiveOperations"
+      | "hasActiveTurns"
+      | "hasRetainableSessions"
+      | "ownsSession"
       | "readProviderStatus"
       | "sendControlPrompt"
       | "setRuntimeOption"
+      | "supportsSessionLoad"
     >
   >;
 
@@ -144,7 +149,9 @@ export type AcpSessionStoreLike =
 
 type AcpClientEntry = {
   client: AcpRuntimeClient;
+  launchIdentity: string;
   promise: Promise<AcpRuntimeClient>;
+  supportsSessionLoad: boolean;
   disposePromise?: Promise<void>;
 };
 
@@ -388,6 +395,25 @@ function normalizeInstalledAcpAgent(
   return runtimeCapabilities === agent.runtimeCapabilities
     ? agent
     : { ...agent, runtimeCapabilities };
+}
+
+function acpAgentLaunchIdentity(agent: AcpInstalledAgentRecord): string {
+  const descriptor = agent.launchDescriptor;
+  return JSON.stringify({
+    activeCommand: agent.activeCommand,
+    launchDescriptor: descriptor
+      ? {
+          backendId: descriptor.backendId,
+          registryId: descriptor.registryId,
+          distributionKind: descriptor.distributionKind,
+          command: descriptor.command,
+          args: descriptor.args,
+          env: Object.fromEntries(Object.entries(descriptor.env).sort()),
+          cwd: descriptor.cwd,
+          installPath: descriptor.installPath,
+        }
+      : undefined,
+  });
 }
 
 function effectiveAcpAgentCapabilities(
@@ -849,6 +875,17 @@ export class AcpBackendAdapter {
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
   private readonly acpClients = new Map<AcpBackendId, AcpClientEntry>();
+  // A non-loadable ACP session belongs to the process that created it. Launch
+  // selection may replace the current client, but these owners must remain
+  // addressable until adapter shutdown so later turns keep using that process.
+  private readonly retainedAcpClients = new Map<
+    AcpBackendId,
+    Set<AcpClientEntry>
+  >();
+  private readonly acpClientResolutions = new Map<
+    AcpBackendId,
+    Promise<AcpRuntimeClient>
+  >();
   private readonly liveNotificationFingerprints = new Map<string, string>();
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
@@ -859,6 +896,7 @@ export class AcpBackendAdapter {
   private closePromise?: Promise<void>;
   private readonly closeTimeoutMs: number;
   private readonly liveTurnUsage = new Map<string, AcpLiveTurnUsage>();
+  private localAcpAgentsRevision = 0;
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
 
   constructor(options: AcpBackendAdapterOptions) {
@@ -1086,6 +1124,7 @@ export class AcpBackendAdapter {
   }
 
   invalidateLocalAgentDiscovery(): void {
+    this.localAcpAgentsRevision += 1;
     this.localAcpAgentsPromise = undefined;
   }
 
@@ -1177,8 +1216,9 @@ export class AcpBackendAdapter {
     sessionId: string,
   ): Promise<AppServerThreadReplay> {
     const session = this.getSession(backend, sessionId);
-    const cachedClient = await this.acpClients
-      .get(backend)
+    const cachedClient = await (
+      this.findSessionOwner(backend, sessionId) ?? this.acpClients.get(backend)
+    )
       ?.promise.catch(() => undefined);
     if (cachedClient) {
       const replay = cachedClient.readReplay(sessionId);
@@ -1288,19 +1328,91 @@ export class AcpBackendAdapter {
     if (this.closed) {
       throw new Error("ACP backend adapter is closed");
     }
-    const cached = this.acpClients.get(backend);
-    if (cached) {
-      return await cached.promise;
+    const resolving = this.acpClientResolutions.get(backend);
+    if (resolving) {
+      return await resolving;
     }
 
+    const resolution = this.resolveClient(backend);
+    this.acpClientResolutions.set(backend, resolution);
+    try {
+      return await resolution;
+    } finally {
+      if (this.acpClientResolutions.get(backend) === resolution) {
+        this.acpClientResolutions.delete(backend);
+      }
+    }
+  }
+
+  async getClientForSession(
+    backend: AcpBackendId,
+    sessionId: string,
+  ): Promise<AcpRuntimeClient> {
+    let current: AcpRuntimeClient;
+    try {
+      current = await this.getClient(backend);
+    } catch (error) {
+      // A broken replacement path must not strand a session whose original
+      // process is still alive. New sessions still observe the launch failure.
+      const owner = this.findSessionOwner(backend, sessionId);
+      if (owner) {
+        return await owner.promise;
+      }
+      throw error;
+    }
+    if (current.ownsSession?.(sessionId) === true) {
+      return current;
+    }
+    const owner = this.findSessionOwner(backend, sessionId);
+    return owner ? await owner.promise : current;
+  }
+
+  private async resolveClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
     const agent = await this.resolveInstalledAgent(backend);
     if (this.closed) {
       throw new Error("ACP backend adapter is closed");
     }
+    const launchIdentity = acpAgentLaunchIdentity(agent);
+    const cached = this.acpClients.get(backend);
+    if (cached?.launchIdentity === launchIdentity) {
+      return await cached.promise;
+    }
+    if (cached) {
+      // One ACP client owns every live turn and RPC for this backend. Keep
+      // routing to that process until its last operation reaches a terminal
+      // state; the next idle lookup adopts the new path.
+      if (
+        cached.client.hasActiveTurns?.() === true
+        || cached.client.hasActiveOperations?.() === true
+      ) {
+        return await cached.promise;
+      }
+      this.acpClients.delete(backend);
+      const supportsSessionLoad =
+        cached.client.supportsSessionLoad?.() ?? cached.supportsSessionLoad;
+      if (
+        !supportsSessionLoad
+        && cached.client.hasRetainableSessions?.() === true
+      ) {
+        // Replace the launch target without replacing ownership of sessions
+        // that the new process has no protocol method to recover.
+        this.retainAcpClient(backend, cached);
+      } else {
+        await this.disposeAcpClient(cached);
+      }
+      if (this.closed) {
+        throw new Error("ACP backend adapter is closed");
+      }
+    }
+
     const client = this.createAcpClient(agent);
     const entry: AcpClientEntry = {
       client,
+      launchIdentity,
       promise: Promise.resolve(client),
+      supportsSessionLoad: acpRuntimeSupportsSessionLoad(
+        agent.runtimeCapabilities,
+      ),
     };
     entry.promise = (async () => {
       await client.initialize();
@@ -1540,24 +1652,80 @@ export class AcpBackendAdapter {
   }
 
   async listAvailableAgents(): Promise<AcpInstalledAgentRecord[]> {
+    while (true) {
+      const discovery = await this.readLocalAgentsOnce();
+      if (discovery.revision !== this.localAcpAgentsRevision) {
+        continue;
+      }
+      // Keep the revision check and all consumption synchronous. An
+      // invalidation queued after discovery settles must run before this
+      // point or after stale results have been fully merged and persisted.
+      return this.mergeAndPersistDiscoveredAgents(discovery.agents);
+    }
+  }
+
+  private mergeAndPersistDiscoveredAgents(
+    agents: AcpInstalledAgentRecord[],
+  ): AcpInstalledAgentRecord[] {
+    const discoveredAgents = agents
+      .map(normalizeInstalledAcpAgent)
+      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
+    // Discovery probes are asynchronous and can overlap runtime-capability or
+    // update-check writes. Read the durable cache only after discovery, then
+    // merge and persist synchronously so those newer fields cannot be rolled
+    // back by a snapshot captured before the probe started.
     const installedAgents = (this.acpAgentStore?.listInstalledAgents() ?? [])
       .map(normalizeInstalledAcpAgent)
       .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
-    const installedBackendIds = new Set(
-      installedAgents.map((agent) => agent.backendId),
+    const installedByBackendId = new Map(
+      installedAgents.map((agent) => [agent.backendId, agent]),
     );
-    const discoveredAgents = (await this.readLocalAgentsOnce())
-      .map(normalizeInstalledAcpAgent)
-      .filter((agent) => !isBannedAcpRegistryId(agent.registryId));
-    for (const agent of discoveredAgents) {
-      if (!installedBackendIds.has(agent.backendId)) {
+    const effectiveDiscoveredAgents = discoveredAgents.map((agent) => {
+      const cached = installedByBackendId.get(agent.backendId);
+      const sameRuntime =
+        agent.installStatus === "installed"
+        && cached?.installStatus === "installed"
+        && cached.version === agent.version
+        && acpAgentLaunchIdentity(cached) === acpAgentLaunchIdentity(agent);
+      return {
+        ...agent,
+        installedAt: cached?.installedAt ?? agent.installedAt,
+        updatedAt:
+          sameRuntime && cached
+            ? Math.max(agent.updatedAt, cached.updatedAt)
+            : agent.updatedAt,
+        ...(sameRuntime && cached?.runtimeCapabilities
+          ? { runtimeCapabilities: cached.runtimeCapabilities }
+          : {}),
+        ...(sameRuntime && cached?.lastDiscoveredAt !== undefined
+          ? { lastDiscoveredAt: cached.lastDiscoveredAt }
+          : {}),
+        ...(sameRuntime && cached?.lastDiscoveryError !== undefined
+          ? { lastDiscoveryError: cached.lastDiscoveryError }
+          : {}),
+        ...(sameRuntime && cached?.update !== undefined
+          ? { update: cached.update }
+          : {}),
+        ...(sameRuntime && cached?.updateCommand !== undefined
+          ? { updateCommand: cached.updateCommand }
+          : {}),
+      };
+    });
+    for (const agent of effectiveDiscoveredAgents) {
+      const cached = installedByBackendId.get(agent.backendId);
+      if (!cached || JSON.stringify(cached) !== JSON.stringify(agent)) {
+        // Fresh discovery owns launch selection. The durable record is a cache
+        // of that result, never an authority that can suppress a new override.
         this.acpAgentStore?.upsertInstalledAgent(agent);
       }
     }
+    const discoveredBackendIds = new Set(
+      effectiveDiscoveredAgents.map((agent) => agent.backendId),
+    );
     return [
-      ...installedAgents,
-      ...discoveredAgents.filter(
-        (agent) => !installedBackendIds.has(agent.backendId),
+      ...effectiveDiscoveredAgents,
+      ...installedAgents.filter(
+        (agent) => !discoveredBackendIds.has(agent.backendId),
       ),
     ];
   }
@@ -1567,8 +1735,17 @@ export class AcpBackendAdapter {
       return await this.closePromise;
     }
     this.closed = true;
-    const acpClients = [...this.acpClients.entries()];
+    const acpClients = [
+      ...this.acpClients.entries(),
+      ...[...this.retainedAcpClients.entries()].flatMap(([backend, entries]) =>
+        [...entries].map(
+          (entry): [AcpBackendId, AcpClientEntry] => [backend, entry],
+        ),
+      ),
+    ];
     this.acpClients.clear();
+    this.retainedAcpClients.clear();
+    this.acpClientResolutions.clear();
     this.liveNotificationFingerprints.clear();
     this.providerStatuses.clear();
     this.providerStatusRefreshAttempts.clear();
@@ -1635,6 +1812,28 @@ export class AcpBackendAdapter {
     return entry.disposePromise;
   }
 
+  private retainAcpClient(
+    backend: AcpBackendId,
+    entry: AcpClientEntry,
+  ): void {
+    const retained = this.retainedAcpClients.get(backend) ?? new Set();
+    retained.add(entry);
+    this.retainedAcpClients.set(backend, retained);
+  }
+
+  private findSessionOwner(
+    backend: AcpBackendId,
+    sessionId: string,
+  ): AcpClientEntry | undefined {
+    const current = this.acpClients.get(backend);
+    if (current?.client.ownsSession?.(sessionId) === true) {
+      return current;
+    }
+    return [...(this.retainedAcpClients.get(backend) ?? [])].find(
+      (entry) => entry.client.ownsSession?.(sessionId) === true,
+    );
+  }
+
   private shouldEmitLiveToolNotification(
     backend: AcpBackendId,
     notification: AppServerNotification,
@@ -1665,14 +1864,21 @@ export class AcpBackendAdapter {
     }
   }
 
-  private async readLocalAgentsOnce(): Promise<AcpInstalledAgentRecord[]> {
+  private async readLocalAgentsOnce(): Promise<{
+    agents: AcpInstalledAgentRecord[];
+    revision: number;
+  }> {
+    const revision = this.localAcpAgentsRevision;
     this.localAcpAgentsPromise ??= this.discoverLocalAcpAgents().catch((error) => {
       acpBackendAdapterLog.debug("local_acp_discovery_failed", {
         error: error instanceof Error ? error.message : String(error),
       });
       return [];
     });
-    return await this.localAcpAgentsPromise;
+    return {
+      agents: await this.localAcpAgentsPromise,
+      revision,
+    };
   }
 
   private createDefaultClient(agent: AcpInstalledAgentRecord): AcpRuntimeClient {

@@ -7148,7 +7148,10 @@ export class DesktopBackendRegistry {
       throw new Error("ACP turns require text or image input");
     }
 
-    const client = await this.acpBackend.getClient(params.backend);
+    const client = await this.acpBackend.getClientForSession(
+      params.backend,
+      params.threadId,
+    );
     const session = this.acpBackend.getSession(params.backend, params.threadId);
     if (!session) {
       throw new Error(`ACP session not found: ${params.threadId}`);
@@ -7410,7 +7413,10 @@ export class DesktopBackendRegistry {
     if (!session) {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
-    const client = await this.acpBackend.getClient(params.backend);
+    const client = await this.acpBackend.getClientForSession(
+      params.backend,
+      params.threadId,
+    );
     await client.ensureSession?.(session);
     const fromValue =
       options?.fromValue ?? this.readAcpRuntimeOptionValue(session.acpRuntime, params);
@@ -10157,7 +10163,10 @@ export class DesktopBackendRegistry {
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     if (isAcpBackendId(params.backend)) {
-      const client = await this.acpBackend.getClient(params.backend);
+      const client = await this.acpBackend.getClientForSession(
+        params.backend,
+        params.threadId,
+      );
       await client.cancelSession(params.threadId);
       await this.emit({
         backend: params.backend,
@@ -10823,7 +10832,10 @@ export class DesktopBackendRegistry {
       throw new Error(`ACP session not found: ${params.threadId}`);
     }
     const previousApplied = session.executionMode ?? "default";
-    const client = await this.acpBackend.getClient(params.backend);
+    const client = await this.acpBackend.getClientForSession(
+      params.backend,
+      params.threadId,
+    );
     await client.ensureSession?.(session);
     const registryId = this.acpBackend.getInstalledAgent(params.backend)
       ?.registryId;
@@ -11391,7 +11403,10 @@ export class DesktopBackendRegistry {
             if (!session) {
               throw new Error(`ACP session not found: ${params.threadId}`);
             }
-            const client = await this.acpBackend.getClient(acpBackend);
+            const client = await this.acpBackend.getClientForSession(
+              acpBackend,
+              params.threadId,
+            );
             await client.ensureSession?.(session);
             await client.setRuntimeOption?.({
               sessionId: params.threadId,

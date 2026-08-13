@@ -59,8 +59,80 @@ function readRawAcpSessionPayload(
 }
 
 describe("AcpAgentClient", () => {
+  it("tracks non-turn RPCs until their transport requests settle", async () => {
+    const sessionResponse = createDeferred<unknown>();
+    const runtimeOptionResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/new": sessionResponse.promise,
+      "session/set_model": runtimeOptionResponse.promise,
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    expect(client.hasActiveOperations()).toBe(false);
+    expect(client.hasRetainableSessions()).toBe(false);
+    expect(client.ownsSession("session-1")).toBe(false);
+
+    const session = client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      mcpServers: "none",
+    });
+    expect(client.hasActiveOperations()).toBe(true);
+    sessionResponse.resolve({ sessionId: "session-1" });
+    await expect(session).resolves.toMatchObject({ sessionId: "session-1" });
+    expect(client.hasActiveOperations()).toBe(false);
+    expect(client.hasRetainableSessions()).toBe(true);
+    expect(client.ownsSession("session-1")).toBe(true);
+
+    const runtimeOption = client.setRuntimeOption({
+      sessionId: "session-1",
+      source: "model",
+      optionId: "model",
+      value: "gemini-2.5-pro",
+    });
+    expect(client.hasActiveOperations()).toBe(true);
+    runtimeOptionResponse.resolve({});
+    await runtimeOption;
+    expect(client.hasActiveOperations()).toBe(false);
+
+    await client.dispose();
+    expect(client.hasRetainableSessions()).toBe(false);
+    expect(client.ownsSession("session-1")).toBe(false);
+  });
+
+  it("does not retain the client solely for hidden helper sessions", async () => {
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport: new FakeAcpAgentTransport({
+        "session/new": { sessionId: "hidden-session" },
+      }),
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      hidden: true,
+      mcpServers: "none",
+    });
+
+    expect(client.ownsSession("hidden-session")).toBe(true);
+    expect(client.hasRetainableSessions()).toBe(false);
+  });
+
   it("initializes, starts sessions, sends prompts, and normalizes updates", async () => {
-    const transport = new FakeAcpAgentTransport();
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
     const sessionUpdates: string[] = [];
     const client = new AcpAgentClient({
       backendId: "acp:codex-acp",
@@ -73,19 +145,24 @@ describe("AcpAgentClient", () => {
     });
 
     await client.initialize();
+    expect(client.hasActiveTurns()).toBe(false);
     const session = await client.startSession({
       cwd: "/repo",
       executionMode: "default",
       title: "Test ACP",
     });
-    const prompt = await client.prompt({
+    const promptPromise = client.prompt({
       sessionId: session.sessionId,
       prompt: "hello",
     });
+    expect(client.hasActiveTurns()).toBe(true);
     transport.emitSessionUpdate(session.sessionId, {
       kind: "agent_message_chunk",
       content: "Done",
     });
+    promptResponse.resolve({ turnId: "turn-1" });
+    const prompt = await promptPromise;
+    expect(client.hasActiveTurns()).toBe(false);
 
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
@@ -191,6 +268,7 @@ describe("AcpAgentClient", () => {
       prompt: "hello",
       turnId: "turn-1",
     });
+    expect(client.hasActiveTurns()).toBe(true);
     transport.emitSessionUpdate(session.sessionId, {
       session_update: "agent_message_chunk",
       content: { type: "text", text: "Kimi says hi." },
@@ -206,6 +284,7 @@ describe("AcpAgentClient", () => {
     });
 
     expect(sessionUpdates).toContain("agent_message_chunk");
+    expect(client.hasActiveTurns()).toBe(false);
     expect(transport.requests[2]?.timeoutMs).toBe(60 * 60_000);
   });
 
@@ -2333,6 +2412,7 @@ describe("AcpAgentClient", () => {
     });
 
     await client.initialize();
+    expect(client.supportsSessionLoad()).toBe(false);
     const replay = await client.loadSession(
       store.getSession("acp:gemini", "session-1")!,
     );

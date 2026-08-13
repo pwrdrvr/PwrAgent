@@ -98,7 +98,7 @@ export function ModelsSettings(props: {
   ) => Promise<boolean>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
   /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
-  onAcpCliPathChange: (registryId: string, cliPath: string) => Promise<void>;
+  onAcpCliPathChange: (registryId: string, cliPath: string) => Promise<boolean>;
   /** Persist a per-ACP-agent enabled flag (off = hidden from the model picker). */
   onAcpEnabledChange: (registryId: string, enabled: boolean) => Promise<void>;
 }) {
@@ -430,6 +430,7 @@ export function ModelsSettings(props: {
       ) : null}
 
       <AcpAgentsSettings
+        catalogRefreshing={refreshingCatalog}
         desktopApi={props.desktopApi}
         saving={props.saving}
         snapshot={props.snapshot}
@@ -825,7 +826,7 @@ function ProviderModelDefaultsSettings(props: {
             control={
               <button
                 className="button button--secondary"
-                disabled={props.refreshing}
+                disabled={props.refreshing || props.saving}
                 type="button"
                 onClick={() => void props.onRefresh()}
               >
@@ -844,7 +845,7 @@ function ProviderModelDefaultsSettings(props: {
             control={
               <button
                 className="button button--secondary"
-                disabled={props.refreshing}
+                disabled={props.refreshing || props.saving}
                 type="button"
                 onClick={() => void props.onRefresh()}
               >
