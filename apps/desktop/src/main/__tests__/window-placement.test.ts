@@ -113,4 +113,22 @@ describe("window placement", () => {
     });
     expect(electronMock.getDisplayNearestPoint).toHaveBeenCalledWith(cursor);
   });
+
+  it("fits oversized main-window bounds inside the cursor display work area", async () => {
+    const cursor = { x: 400, y: 200 };
+    electronMock.getCursorScreenPoint.mockReturnValue(cursor);
+    electronMock.getDisplayNearestPoint.mockReturnValue({
+      workArea: { x: 0, y: 0, width: 1152, height: 696 },
+    });
+
+    const { boundsForCursorDisplay } = await import("../window-placement");
+
+    expect(boundsForCursorDisplay(1440, 960)).toEqual({
+      x: 0,
+      y: 0,
+      width: 1152,
+      height: 696,
+    });
+    expect(electronMock.getDisplayNearestPoint).toHaveBeenCalledWith(cursor);
+  });
 });
