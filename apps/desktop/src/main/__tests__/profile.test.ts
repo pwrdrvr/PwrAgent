@@ -418,6 +418,37 @@ describe("PwrAgent profiles", () => {
       expect(fs.readFileSync(configPath, "utf8")).toContain('theme = "dark"');
     });
 
+    it("backfills missing ACP defaults without overwriting existing choices", () => {
+      const { env, root } = createRoot();
+      const configPath = path.join(root, ".bootstrap", "config.toml");
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        [
+          "[onboarding]",
+          "completed = false",
+          "",
+          "[acp_agents.gemini]",
+          "enabled = true",
+          "",
+          "[acp_agents.kimi]",
+          'cli_path = "/opt/kimi"',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      ensureBootstrapProfileDir({ env });
+
+      const contents = fs.readFileSync(configPath, "utf8");
+      expect(contents).toContain("[acp_agents.gemini]\nenabled = true");
+      expect(contents).toContain(
+        '[acp_agents.kimi]\ncli_path = "/opt/kimi"\nenabled = false',
+      );
+      expect(contents).toContain("[acp_agents.grok]\nenabled = false");
+      expect(contents).toContain("[acp_agents.qwen]\nenabled = false");
+    });
+
     it("cleanupBootstrapProfile removes the dir; subsequent existence check is false", () => {
       const { env, root } = createRoot();
       ensureBootstrapProfileDir({ env });

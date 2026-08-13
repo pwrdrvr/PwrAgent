@@ -214,6 +214,7 @@ describe("AI provider onboarding", () => {
       async (_request?: ListAcpAgentSettingsRequest) => ({
         fetchedAt: 1,
         entries: [gemini],
+        error: "Registry is temporarily unavailable.",
       }),
     );
     const writeConfig = vi.fn(async () => true);
@@ -272,6 +273,9 @@ describe("AI provider onboarding", () => {
         force: true,
         registryIds: ["gemini"],
       });
+      expect(
+        screen.getByRole("button", { name: /Gemini CLI ready/i }),
+      ).toBeVisible();
     });
   });
 

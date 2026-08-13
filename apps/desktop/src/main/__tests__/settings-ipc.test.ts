@@ -1156,11 +1156,61 @@ describe("settings ipc", () => {
       await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
       expect(probe).toHaveBeenCalledTimes(1);
 
+      localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          version: "0.43.0",
+          distributionKind: "local",
+          distributionSource: "gemini --acp --skip-trust",
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+          allowlistRuleId: "local-gemini-cli",
+          installedAt: 1234,
+          updatedAt: 1234,
+          launchDescriptor: {
+            backendId: "acp:gemini",
+            registryId: "gemini",
+            distributionKind: "local",
+            command: "gemini",
+            args: ["--acp", "--skip-trust"],
+            env: {},
+          },
+        },
+      ]);
+      const discoveredOnly = (await handlers
+        .get(ACP_AGENTS_LIST_CHANNEL)
+        ?.({}, { refresh: true, probeCapabilities: false })) as
+        | {
+            entries?: Array<{
+              registryId: string;
+              runtime?: unknown;
+              lastDiscoveredAt?: number;
+              version?: string;
+            }>;
+          }
+        | undefined;
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(
+        discoveredOnly?.entries?.find((entry) => entry.registryId === "gemini"),
+      ).toMatchObject({
+        version: "0.43.0",
+        runtime: undefined,
+        lastDiscoveredAt: undefined,
+      });
+
+      // A discovery-only version change invalidates the old runtime cache, so
+      // the next ordinary refresh must probe the upgraded CLI.
+      await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
+      expect(probe).toHaveBeenCalledTimes(2);
+
       // Forced refresh ("Discover new"): re-probe regardless of freshness.
       await handlers
         .get(ACP_AGENTS_LIST_CHANNEL)
         ?.({}, { refresh: true, force: true });
-      expect(probe).toHaveBeenCalledTimes(2);
+      expect(probe).toHaveBeenCalledTimes(3);
     } finally {
       disposeAppState();
     }
@@ -1168,7 +1218,7 @@ describe("settings ipc", () => {
     // discovery round-trips need headroom over the 5s default under CI load.
   }, 20_000);
 
-  it("coalesces concurrent forced ACP refreshes onto one probe pass", async () => {
+  it("coalesces matching forced and weaker regular ACP refreshes", async () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),
     );
@@ -1227,14 +1277,21 @@ describe("settings ipc", () => {
       const probe = acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities;
       const handler = handlers.get(ACP_AGENTS_LIST_CHANNEL);
 
-      // Two rapid "Discover new" clicks fire before the first pass resolves.
-      // Both are forced, so freshness can't gate the second — only the
-      // in-flight coalescing keeps them from launching the agent twice in
-      // parallel. The second must ride the first's forced pass: one probe.
-      await Promise.all([
-        handler?.({}, { refresh: true, force: true }),
-        handler?.({}, { refresh: true, force: true }),
-      ]);
+      let releaseProbe: (() => void) | undefined;
+      probe.mockImplementationOnce(
+        async () => await new Promise((resolve) => {
+          releaseProbe = () => resolve({});
+        }),
+      );
+
+      // A non-forced caller that arrives during a stronger forced pass must
+      // ride that pass instead of launching the same runtime in parallel.
+      const forced = handler?.({}, { refresh: true, force: true });
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+      const forcedFollower = handler?.({}, { refresh: true, force: true });
+      const regular = handler?.({}, { refresh: true });
+      releaseProbe?.();
+      await Promise.all([forced, forcedFollower, regular]);
       expect(probe).toHaveBeenCalledTimes(1);
     } finally {
       disposeAppState();

@@ -2089,7 +2089,11 @@ export function BackendRequirementsStep(props: {
       updateAcpEntries(response.entries);
       window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
       const gemini = acpEntryFor(response.entries, "gemini");
-      const loginError = gemini?.lastDiscoveryError ?? response.error;
+      const loginError =
+        gemini?.lastDiscoveryError
+        ?? (!gemini?.installed
+          ? "Gemini CLI could not be started."
+          : undefined);
       if (loginError) {
         setError(loginError);
         setGeminiLoginState("idle");

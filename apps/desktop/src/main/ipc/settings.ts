@@ -152,14 +152,15 @@ async function refreshModelBackendsIfNeeded(params: {
 // from launching every agent twice in parallel. A forced caller that arrives
 // while only a non-forced pass is in flight still starts its own pass, so
 // "Discover new" is never a no-op.
-const inFlightAcpRefreshes = new Map<
-  string,
-  Promise<ListAcpAgentSettingsResponse>
->();
+type InFlightAcpRefreshes = {
+  forced?: Promise<ListAcpAgentSettingsResponse>;
+  regular?: Promise<ListAcpAgentSettingsResponse>;
+};
+
+const inFlightAcpRefreshes = new Map<string, InFlightAcpRefreshes>();
 
 function acpRefreshKey(request: ListAcpAgentSettingsRequest): string {
   return JSON.stringify({
-    force: request.force === true,
     probeCapabilities: request.probeCapabilities !== false,
     registryIds: request.registryIds
       ? [...new Set(request.registryIds)].sort()
@@ -175,16 +176,26 @@ async function listAcpAgentSettings(
     return await listAcpAgentSettingsImpl(request, service);
   }
   const refreshKey = acpRefreshKey(request);
-  const inFlight = inFlightAcpRefreshes.get(refreshKey);
+  const wantsForce = request.force === true;
+  const inFlightForScope = inFlightAcpRefreshes.get(refreshKey);
+  const inFlight = wantsForce
+    ? inFlightForScope?.forced
+    : inFlightForScope?.forced ?? inFlightForScope?.regular;
   if (inFlight) {
     return await inFlight;
   }
+  const kind = wantsForce ? "forced" : "regular";
   const run = listAcpAgentSettingsImpl(request, service).finally(() => {
-    if (inFlightAcpRefreshes.get(refreshKey) === run) {
+    const current = inFlightAcpRefreshes.get(refreshKey);
+    if (current?.[kind] !== run) return;
+    delete current[kind];
+    if (!current.forced && !current.regular) {
       inFlightAcpRefreshes.delete(refreshKey);
     }
   });
-  inFlightAcpRefreshes.set(refreshKey, run);
+  const nextInFlight = inFlightForScope ?? {};
+  nextInFlight[kind] = run;
+  inFlightAcpRefreshes.set(refreshKey, nextInFlight);
   return await run;
 }
 
@@ -378,13 +389,23 @@ async function listInstalledAndLocalAcpAgents(
       const now = Date.now();
       for (const record of discovered) {
         const current = store.getInstalledAgent(record.backendId);
+        const runtimeVersionChanged =
+          current?.version !== undefined
+          && record.version !== undefined
+          && current.version !== record.version;
         const nextRecord = {
           ...record,
-          runtimeCapabilities: current?.runtimeCapabilities,
+          runtimeCapabilities: runtimeVersionChanged
+            ? undefined
+            : current?.runtimeCapabilities,
           update: current?.update,
           updateCommand: current?.updateCommand,
-          lastDiscoveredAt: current?.lastDiscoveredAt,
-          lastDiscoveryError: current?.lastDiscoveryError,
+          lastDiscoveredAt: runtimeVersionChanged
+            ? undefined
+            : current?.lastDiscoveredAt,
+          lastDiscoveryError: runtimeVersionChanged
+            ? undefined
+            : current?.lastDiscoveryError,
           installedAt: current?.installedAt ?? record.installedAt,
           updatedAt: Math.max(current?.updatedAt ?? 0, record.updatedAt),
         } satisfies AcpInstalledAgentRecord;

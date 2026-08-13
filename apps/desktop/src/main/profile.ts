@@ -6,6 +6,11 @@ import {
   isCanonicalProfileName,
   normalizeProfileName,
 } from "@pwragent/shared";
+import {
+  applyTomlEdits,
+  parseTomlTables,
+  type TomlEdit,
+} from "./settings/toml-editor";
 
 export { normalizeProfileName };
 
@@ -554,30 +559,24 @@ function writeInitialOnboardingMarker(configPath: string): void {
  * this throwaway config at graduation.
  */
 function writeInitialBootstrapConfig(configPath: string): void {
-  if (fs.existsSync(configPath)) {
-    return;
-  }
-  fs.writeFileSync(
-    configPath,
-    [
-      "[onboarding]",
-      "completed = false",
-      "",
-      "[acp_agents.gemini]",
-      "enabled = false",
-      "",
-      "[acp_agents.grok]",
-      "enabled = false",
-      "",
-      "[acp_agents.kimi]",
-      "enabled = false",
-      "",
-      "[acp_agents.qwen]",
-      "enabled = false",
-      "",
-    ].join("\n"),
-    "utf8",
+  const source = fs.existsSync(configPath)
+    ? fs.readFileSync(configPath, "utf8")
+    : "[onboarding]\ncompleted = false\n";
+  const tables = parseTomlTables(source, configPath);
+  const edits: TomlEdit[] = ["gemini", "grok", "kimi", "qwen"].flatMap(
+    (registryId) =>
+      tables[`acp_agents.${registryId}`]?.enabled === undefined
+        ? [{
+            op: "set" as const,
+            path: ["acp_agents", registryId, "enabled"],
+            value: false,
+          }]
+        : [],
   );
+  const next = applyTomlEdits(source, edits);
+  if (next !== source || !fs.existsSync(configPath)) {
+    fs.writeFileSync(configPath, next, "utf8");
+  }
 }
 
 export function setDefaultProfileName(
