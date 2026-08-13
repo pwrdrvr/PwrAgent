@@ -24114,11 +24114,6 @@ a.transcript-message__messaging-origin:focus-visible {
   padding: 0 16px;
   width: 100%;
   box-sizing: border-box;
-  -webkit-app-region: drag;
-}
-
-.thread-empty-state * {
-  -webkit-app-region: drag;
 }
 
 .thread-empty-state__content {

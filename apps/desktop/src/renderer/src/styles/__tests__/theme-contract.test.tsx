@@ -325,16 +325,16 @@ describe("Tangerine Terminal theme contract", () => {
     expect(actorRules[0]?.groups?.body).toContain("flex: 0 0 auto;");
   });
 
-  it("keeps unavailable thread detail surfaces draggable", () => {
+  it("keeps loading draggable without masking clicks behind the empty state", () => {
     const emptyStateRule = extractRuleBody(css, ".thread-empty-state");
     const pendingMainRule = extractRuleBody(css, ".app-main--thread-detail-pending");
 
     expect(emptyStateRule).toContain("padding: 0 16px;");
     expect(emptyStateRule).toContain("flex: 1;");
     expect(emptyStateRule).toContain("min-height: 0;");
-    expect(emptyStateRule).toContain("-webkit-app-region: drag;");
+    expect(emptyStateRule).not.toContain("-webkit-app-region: drag;");
     expect(pendingMainRule).toContain("-webkit-app-region: drag;");
-    expect(css).toMatch(
+    expect(css).not.toMatch(
       /\.thread-empty-state \*\s*\{[\s\S]*?-webkit-app-region:\s*drag;[\s\S]*?\}/
     );
   });
