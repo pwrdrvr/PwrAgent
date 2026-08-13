@@ -14,7 +14,9 @@ import type {
   CreateScheduledThreadActionRequest,
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
+  FederationPeerSummary,
   NavigationSnapshot,
+  OpenFederationWindowRequest,
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
@@ -314,6 +316,126 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { level: 2, name: "Search" }),
     ).toBeInTheDocument();
+  });
+
+  it("starts a new thread on a selected federation machine and profile", async () => {
+    const federationListeners = new Set<(event: AgentEvent) => void>();
+    const openFederationWindow = vi.fn(async (request: OpenFederationWindowRequest) => ({
+      opened: true,
+      target: request.target,
+      windowId: 7,
+    }));
+    let peers: FederationPeerSummary[] = [
+      {
+        id: "studio-work",
+        label: "Studio Mac",
+        profileName: "work",
+        role: "client" as const,
+        status: "connected" as const,
+        capabilities: [
+          "remote_window",
+          "thread_navigation",
+          "environment_actions",
+        ] as const,
+      },
+      {
+        id: "read-only",
+        label: "Read-only peer",
+        role: "client" as const,
+        status: "connected" as const,
+        capabilities: ["remote_window", "thread_navigation"] as const,
+      },
+    ];
+    const readFederationHealth = vi.fn(async () => ({
+      health: {
+        enabled: true,
+        role: "gateway" as const,
+        status: "connected" as const,
+        instanceId: "local-instance",
+        localLabel: "Studio Mac",
+        localProfileName: "default",
+        peers,
+      },
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          federationListeners.add(listener);
+          return () => federationListeners.delete(listener);
+        },
+        onWindowFocus: () => () => undefined,
+        openFederationWindow,
+        readFederationHealth,
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
+
+    const button = screen.getByRole("button", { name: "New thread" });
+    fireEvent.mouseEnter(button.parentElement as HTMLElement);
+    expect(screen.queryByRole("menuitem", {
+      name: "New chat on Read-only peer",
+    })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("menuitem", {
+      name: "New chat on Studio Mac / work",
+    }));
+
+    expect(openFederationWindow).toHaveBeenCalledWith({
+      target: { scope: "remote", instanceId: "studio-work" },
+      initialLaunchpad: true,
+    });
+
+    peers = [
+      {
+        id: "laptop-default",
+        label: "Laptop",
+        role: "client" as const,
+        status: "connected" as const,
+        capabilities: [
+          "remote_window",
+          "thread_navigation",
+          "environment_actions",
+        ] as const,
+      },
+    ];
+    act(() => {
+      for (const listener of federationListeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "federation/peerStatus/changed",
+            params: {
+              instanceId: "laptop-default",
+              status: "connected",
+            },
+          },
+        });
+      }
+    });
+    await waitFor(() => expect(readFederationHealth).toHaveBeenCalledTimes(2));
+
+    fireEvent.mouseEnter(button.parentElement as HTMLElement);
+    expect(await screen.findByRole("menuitem", {
+      name: "New chat on Laptop",
+    })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", {
+      name: "New chat on Studio Mac / work",
+    })).not.toBeInTheDocument();
   });
 
   it("surfaces GitHub organization SAML enforcement as a sticky error toast", async () => {

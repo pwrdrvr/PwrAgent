@@ -18,12 +18,19 @@ export type MastheadActionsProps = {
   creatingThread?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
   newThreadDirectoryLabel?: string;
+  newThreadFederationTargets?: readonly {
+    instanceId: string;
+    label: string;
+  }[];
   onAddProjectDirectory?: () => void | Promise<void>;
   onOpenAutomations?: () => void;
   onOpenSettings?: () => void;
   onToggleThreadSearch?: () => void;
   onCreateThread?: () => void | Promise<void>;
   onCreateThreadWithoutDirectory?: () => void | Promise<void>;
+  onCreateThreadOnFederationTarget?: (
+    instanceId: string,
+  ) => void | Promise<void>;
 };
 
 export function MastheadActions(props: MastheadActionsProps): ReactElement {
@@ -75,6 +82,8 @@ export function MastheadActions(props: MastheadActionsProps): ReactElement {
         onAddProjectDirectory={props.onAddProjectDirectory}
         onCreateThread={() => props.onCreateThread?.()}
         onCreateThreadWithoutDirectory={props.onCreateThreadWithoutDirectory}
+        onCreateThreadOnTarget={props.onCreateThreadOnFederationTarget}
+        remoteTargets={props.newThreadFederationTargets}
       />
     </div>
   );

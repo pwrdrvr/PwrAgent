@@ -18,7 +18,8 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
  *
  *   1. New chat in <directory>     → `onCreateThread` (context default)
  *   2. New chat without a directory → `onCreateThreadWithoutDirectory`
- *   3. Add a Project Directory…     → track a repo without starting a chat
+ *   3. New chat on <instance>        → open that owner's launchpad
+ *   4. Add a Project Directory…     → track a repo without starting a chat
  *
  * The flyout renders when there's either a meaningful directory choice or an
  * explicit project-registration action. That keeps "Add a Project Directory…"
@@ -38,6 +39,11 @@ export type NewThreadButtonProps = {
   onAddProjectDirectory?: () => void | Promise<void>;
   onCreateThread: () => void | Promise<void>;
   onCreateThreadWithoutDirectory?: () => void | Promise<void>;
+  onCreateThreadOnTarget?: (instanceId: string) => void | Promise<void>;
+  remoteTargets?: readonly {
+    instanceId: string;
+    label: string;
+  }[];
 };
 
 export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
@@ -50,7 +56,13 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
   const hasDirectoryChoice = Boolean(
     props.directoryLabel && props.onCreateThreadWithoutDirectory,
   );
-  const hasFlyout = hasDirectoryChoice || Boolean(props.onAddProjectDirectory);
+  const hasRemoteTargets = Boolean(
+    props.onCreateThreadOnTarget && props.remoteTargets?.length,
+  );
+  const hasFlyout =
+    hasDirectoryChoice
+    || hasRemoteTargets
+    || Boolean(props.onAddProjectDirectory);
   const menuOpen = open && hasFlyout && !props.creatingThread;
 
   // With no flyout to reveal, keep a plain "New thread" tooltip so the button
@@ -176,6 +188,28 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                 New chat without a directory
               </button>
             )}
+            {hasRemoteTargets ? (
+              <>
+                <div className="new-thread-menu__separator" role="separator" />
+                <div className="new-thread-menu__section-label" role="presentation">
+                  Other instances
+                </div>
+                {props.remoteTargets?.map((target) => (
+                  <button
+                    key={target.instanceId}
+                    type="button"
+                    role="menuitem"
+                    className="new-thread-menu__item"
+                    onClick={() => {
+                      setOpen(false);
+                      void props.onCreateThreadOnTarget?.(target.instanceId);
+                    }}
+                  >
+                    New chat on {target.label}
+                  </button>
+                ))}
+              </>
+            ) : null}
             {props.onAddProjectDirectory ? (
               <>
                 <div className="new-thread-menu__separator" role="separator" />

@@ -324,6 +324,7 @@ export function createMainWindow(options?: {
   onShown?: () => void;
   federationLabel?: string;
   federationTarget?: FederationRemoteTarget;
+  initialLaunchpad?: boolean;
   initialThread?: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -473,6 +474,8 @@ export function createMainWindow(options?: {
         WINDOW_SHOW_THREAD_CHANNEL,
         options.initialThread,
       );
+    } else if (options?.initialLaunchpad) {
+      window.webContents.send(WINDOW_OPEN_NEW_THREAD_CHANNEL);
     }
   });
   if (!isMac) {

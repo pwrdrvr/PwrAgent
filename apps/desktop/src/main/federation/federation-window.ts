@@ -14,6 +14,7 @@ export type FederationWindowPeer = {
 
 export function createFederationWindow(options: {
   peer: FederationWindowPeer;
+  initialLaunchpad?: boolean;
   initialThread?: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -29,6 +30,7 @@ export function createFederationWindow(options: {
   const window = createMainWindow({
     federationLabel: peer.label,
     federationTarget: peer.target,
+    ...(options.initialLaunchpad ? { initialLaunchpad: true } : {}),
     initialThread: options.initialThread,
   });
   const runtime = getDesktopFederationRuntime();

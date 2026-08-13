@@ -82,6 +82,34 @@ describe("NewThreadButton", () => {
     expect(onCreateThread).not.toHaveBeenCalled();
   });
 
+  it("offers connected federation instances before composition starts", async () => {
+    const onCreateThread = vi.fn();
+    const onCreateThreadOnTarget = vi.fn();
+    render(
+      <NewThreadButton
+        onCreateThread={onCreateThread}
+        onCreateThreadOnTarget={onCreateThreadOnTarget}
+        remoteTargets={[
+          { instanceId: "studio-work", label: "Studio Mac / work" },
+          { instanceId: "laptop-default", label: "Laptop" },
+        ]}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "New thread" });
+    fireEvent.mouseEnter(button.parentElement as HTMLElement);
+
+    expect(await screen.findByText("Other instances")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "New chat on Studio Mac / work",
+      }),
+    );
+
+    expect(onCreateThreadOnTarget).toHaveBeenCalledWith("studio-work");
+    expect(onCreateThread).not.toHaveBeenCalled();
+  });
+
   it("closes the flyout on Escape while a menu item is focused (regression)", async () => {
     render(
       <NewThreadButton
