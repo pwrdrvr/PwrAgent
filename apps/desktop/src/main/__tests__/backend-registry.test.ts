@@ -27632,14 +27632,15 @@ script = "printf setup"
       },
     } as AppServerPendingRequestNotification);
 
-    expect(response).toMatchObject({
-      success: false,
-      contentItems: [
-        {
-          type: "inputText",
-          text: expect.stringContaining("unsupported_workspace"),
-        },
-      ],
+    expect(response).toMatchObject({ success: false });
+    const failurePayload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(failurePayload).toMatchObject({
+      code: "unsupported_workspace",
+      message: expect.stringMatching(
+        /cwd was omitted[\s\S]*retry with cwd set to that project path[\s\S]*Do not switch to workspaceMode="none"/,
+      ),
     });
     expect(codexClient.lastStartThreadParams).toBeUndefined();
     expect(codexClient.lastStartTurnParams).toBeUndefined();
