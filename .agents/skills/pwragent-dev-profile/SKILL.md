@@ -57,9 +57,12 @@ Verify that a previously started instance is still up:
 
 ## Closing the app
 
-`close` sends SIGTERM and then **waits for the process to actually exit**,
-polling until it is gone or 30 seconds pass. Do not replace this with a fixed
-sleep, and do not `kill` the Electron PID yourself.
+`close` signals the app's own process, **waits for it to actually exit**
+(polling until gone or 30 seconds pass), and only then cleans up the `pnpm dev`
+supervisor chain. Do not replace the wait with a fixed sleep, do not `kill` the
+Electron PID yourself, and do not collapse the two phases back into one signal
+to every matched pid — SIGTERMing the supervisor or a renderer alongside the
+main process cuts short the very drain the wait exists to protect.
 
 A SIGTERM'd app does not exit promptly. Note what SIGTERM does **not** do:
 `installProcessShutdownHandlers` in `index.ts` calls `allowImmediateQuit()`, so
