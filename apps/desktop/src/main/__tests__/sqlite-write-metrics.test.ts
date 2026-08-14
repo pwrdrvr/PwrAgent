@@ -89,6 +89,40 @@ describe("sqlite write metrics", () => {
     expect(metrics?.commits).toBe(1);
   });
 
+  it("persists one explicit history analysis in one transaction", async () => {
+    const invocations = Array.from({ length: 25 }, (_, index) => ({
+      ...buildInvocation(`history-tool-${index}`),
+      findingId: `history-tool-${index}`,
+      source: "history" as const,
+    }));
+    // This runs only on an explicit Analyze/Refresh action. Even at 20 manual
+    // analyses per day, one commit each is 20 commits/day; findings scale the
+    // statements inside the transaction, never the number of WAL flushes.
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.persistThreadToolHistoryAnalysis({
+        backend: "codex",
+        coverage: {
+          analyzedAt: 1_800_000_000_000,
+          analyzerVersion: "1",
+          completeness: "complete",
+          entryCount: 50,
+          invocationCount: invocations.length,
+          missingOutputCount: 0,
+          pageCount: 2,
+          scannedThrough: "oldest-entry",
+        },
+        invocations,
+        threadId: "thread-1",
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note: "replace 25 deterministic history findings plus coverage metadata in one explicit analysis transaction",
+      scenario: "tool-output-history-analysis",
+      writes,
+    });
+  });
+
   it("holds each completed questionnaire transcript record to one commit", async () => {
     // This path runs once per completed questionnaire, never per streamed
     // event. At 100 questionnaires/day, one commit each is 100 commits/day;

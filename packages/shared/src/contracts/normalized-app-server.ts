@@ -900,6 +900,7 @@ export type ThreadToolInvocationCategory =
   | "build-test"
   | "file-io"
   | "git"
+  | "mcp"
   | "package-manager"
   | "polling"
   | "search"
@@ -914,12 +915,22 @@ export type ThreadToolInvocationStatus =
   | "failed"
   | "cancelled";
 
+export type ThreadToolInvocationSource = "history" | "live";
+
+export type ThreadToolInvocationOutputState =
+  | "available"
+  | "compacted"
+  | "truncated"
+  | "unavailable";
+
 export type ThreadToolInvocationRecord = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId?: string;
   itemId: string;
   invocationId: string;
+  /** Stable finding identity. Historical IDs are deterministic across rescans. */
+  findingId?: string;
   toolName: string;
   normalizedCommand?: string;
   category: ThreadToolInvocationCategory;
@@ -939,8 +950,11 @@ export type ThreadToolInvocationRecord = {
   infoLines: number;
   debugLines: number;
   outputTruncated: boolean;
+  outputState?: ThreadToolInvocationOutputState;
+  source?: ThreadToolInvocationSource;
   noisy: boolean;
   noisyReason?: string;
+  suggestedPrompt?: string;
 };
 
 export type ThreadToolInvocationSummary = {
@@ -971,8 +985,11 @@ export type ThreadToolInvocationAlert = {
   firstObservedAt: number;
   lastObservedAt: number;
   invocationCount: number;
+  invocationIds?: string[];
   totalOutputChars: number;
   estimatedOutputTokens: number;
+  worstInvocationId?: string;
+  worstOutputChars?: number;
   averageIntervalMs?: number;
   message: string;
   suggestedPrompt: string;
@@ -980,7 +997,20 @@ export type ThreadToolInvocationAlert = {
   updatedAt: number;
 };
 
+export type ThreadToolAnalysisCoverage = {
+  analyzerVersion: string;
+  analyzedAt: number;
+  completeness: "complete" | "partial";
+  entryCount: number;
+  invocationCount: number;
+  missingOutputCount: number;
+  pageCount: number;
+  scannedThrough?: string;
+  explanation?: string;
+};
+
 export type ThreadToolAccounting = {
+  analysis?: ThreadToolAnalysisCoverage;
   alerts: ThreadToolInvocationAlert[];
   invocations: ThreadToolInvocationRecord[];
   summaries: ThreadToolInvocationSummary[];

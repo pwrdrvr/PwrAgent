@@ -24,6 +24,7 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadOverlayState,
   ThreadToolAccounting,
+  ThreadToolAnalysisCoverage,
   ThreadToolInvocationAlert,
   ThreadToolInvocationRecord,
   ThreadToolInvocationStatus,
@@ -1588,6 +1589,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .prepare(
         `INSERT INTO thread_tool_invocations (
           invocation_id,
+          finding_id,
           backend,
           thread_id,
           turn_id,
@@ -1611,10 +1613,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           info_lines,
           debug_lines,
           output_truncated,
+          output_state,
+          source,
           noisy,
-          noisy_reason
+          noisy_reason,
+          suggested_prompt
         ) VALUES (
           @invocationId,
+          @findingId,
           @backend,
           @threadId,
           @turnId,
@@ -1638,11 +1644,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           @infoLines,
           @debugLines,
           @outputTruncated,
+          @outputState,
+          @source,
           @noisy,
-          @noisyReason
+          @noisyReason,
+          @suggestedPrompt
         )
         ON CONFLICT(invocation_id) DO UPDATE SET
           backend = excluded.backend,
+          finding_id = excluded.finding_id,
           thread_id = excluded.thread_id,
           turn_id = excluded.turn_id,
           item_id = excluded.item_id,
@@ -1669,8 +1679,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           info_lines = excluded.info_lines,
           debug_lines = excluded.debug_lines,
           output_truncated = excluded.output_truncated,
+          output_state = excluded.output_state,
+          source = excluded.source,
           noisy = excluded.noisy,
-          noisy_reason = excluded.noisy_reason`,
+          noisy_reason = excluded.noisy_reason,
+          suggested_prompt = excluded.suggested_prompt`,
       )
       .run(toThreadToolInvocationRowParams(merged));
 
@@ -1733,6 +1746,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           alert_id,
           backend,
           thread_id,
+          turn_id,
           kind,
           severity,
           tool_name,
@@ -1741,8 +1755,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           first_observed_at,
           last_observed_at,
           invocation_count,
+          invocation_ids,
           total_output_chars,
           estimated_output_tokens,
+          worst_invocation_id,
+          worst_output_chars,
           average_interval_ms,
           message,
           suggested_prompt,
@@ -1752,6 +1769,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           @alertId,
           @backend,
           @threadId,
+          @turnId,
           @kind,
           @severity,
           @toolName,
@@ -1760,8 +1778,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           @firstObservedAt,
           @lastObservedAt,
           @invocationCount,
+          @invocationIds,
           @totalOutputChars,
           @estimatedOutputTokens,
+          @worstInvocationId,
+          @worstOutputChars,
           @averageIntervalMs,
           @message,
           @suggestedPrompt,
@@ -1771,6 +1792,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         ON CONFLICT(alert_id) DO UPDATE SET
           backend = excluded.backend,
           thread_id = excluded.thread_id,
+          turn_id = excluded.turn_id,
           kind = excluded.kind,
           severity = excluded.severity,
           tool_name = excluded.tool_name,
@@ -1779,8 +1801,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           first_observed_at = MIN(thread_tool_invocation_alerts.first_observed_at, excluded.first_observed_at),
           last_observed_at = MAX(thread_tool_invocation_alerts.last_observed_at, excluded.last_observed_at),
           invocation_count = excluded.invocation_count,
+          invocation_ids = excluded.invocation_ids,
           total_output_chars = excluded.total_output_chars,
           estimated_output_tokens = excluded.estimated_output_tokens,
+          worst_invocation_id = excluded.worst_invocation_id,
+          worst_output_chars = excluded.worst_output_chars,
           average_interval_ms = excluded.average_interval_ms,
           message = excluded.message,
           suggested_prompt = excluded.suggested_prompt,
@@ -1867,12 +1892,69 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
          LIMIT 20`,
       )
       .all(params.backend, params.threadId) as ThreadToolInvocationAlertRow[];
+    const analysisRow = this.stateDb.raw
+      .prepare(
+        `SELECT * FROM thread_tool_analysis
+         WHERE backend = ? AND thread_id = ?`,
+      )
+      .get(params.backend, params.threadId) as ThreadToolAnalysisRow | undefined;
 
     return {
+      ...(analysisRow ? { analysis: threadToolAnalysisFromRow(analysisRow) } : {}),
       alerts: alertRows.map(threadToolInvocationAlertFromRow),
       invocations: invocationRows.map(threadToolInvocationFromRow),
       summaries: summaryRows.map(threadToolInvocationSummaryFromRow),
     };
+  }
+
+  async persistThreadToolHistoryAnalysis(params: {
+    backend: ThreadOverlayState["backend"];
+    coverage: ThreadToolAnalysisCoverage;
+    invocations: ThreadToolInvocationRecord[];
+    threadId: string;
+  }): Promise<void> {
+    this.stateDb.raw.transaction(() => {
+      this.stateDb.raw
+        .prepare(
+          `DELETE FROM thread_tool_invocations
+           WHERE backend = ? AND thread_id = ? AND source = 'history'`,
+        )
+        .run(params.backend, params.threadId);
+      for (const invocation of params.invocations) {
+        this.upsertThreadToolInvocationSync({ invocation });
+      }
+      this.stateDb.raw
+        .prepare(
+          `INSERT INTO thread_tool_analysis (
+            backend, thread_id, analyzer_version, analyzed_at, completeness,
+            entry_count, invocation_count, missing_output_count, page_count,
+            scanned_through, explanation
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(backend, thread_id) DO UPDATE SET
+            analyzer_version = excluded.analyzer_version,
+            analyzed_at = excluded.analyzed_at,
+            completeness = excluded.completeness,
+            entry_count = excluded.entry_count,
+            invocation_count = excluded.invocation_count,
+            missing_output_count = excluded.missing_output_count,
+            page_count = excluded.page_count,
+            scanned_through = excluded.scanned_through,
+            explanation = excluded.explanation`,
+        )
+        .run(
+          params.backend,
+          params.threadId,
+          params.coverage.analyzerVersion,
+          params.coverage.analyzedAt,
+          params.coverage.completeness,
+          params.coverage.entryCount,
+          params.coverage.invocationCount,
+          params.coverage.missingOutputCount,
+          params.coverage.pageCount,
+          params.coverage.scannedThrough ?? null,
+          params.coverage.explanation ?? null,
+        );
+    })();
   }
 
   readRecentThreadToolInvocations(params: {
@@ -5976,6 +6058,7 @@ type ThreadPricingAggregateRow = Omit<
 
 type ThreadToolInvocationRow = {
   invocation_id: string;
+  finding_id: string | null;
   backend: ThreadToolInvocationRecord["backend"];
   thread_id: string;
   turn_id: string | null;
@@ -5999,8 +6082,11 @@ type ThreadToolInvocationRow = {
   info_lines: number;
   debug_lines: number;
   output_truncated: number;
+  output_state: ThreadToolInvocationRecord["outputState"] | null;
+  source: NonNullable<ThreadToolInvocationRecord["source"]>;
   noisy: number;
   noisy_reason: string | null;
+  suggested_prompt: string | null;
 };
 
 type ThreadToolInvocationSummaryRow = {
@@ -6022,6 +6108,7 @@ type ThreadToolInvocationAlertRow = {
   alert_id: string;
   backend: ThreadToolInvocationAlert["backend"];
   thread_id: string;
+  turn_id: string | null;
   kind: ThreadToolInvocationAlert["kind"];
   severity: ThreadToolInvocationAlert["severity"];
   tool_name: string;
@@ -6030,13 +6117,28 @@ type ThreadToolInvocationAlertRow = {
   first_observed_at: number;
   last_observed_at: number;
   invocation_count: number;
+  invocation_ids: string | null;
   total_output_chars: number;
   estimated_output_tokens: number;
+  worst_invocation_id: string | null;
+  worst_output_chars: number | null;
   average_interval_ms: number | null;
   message: string;
   suggested_prompt: string;
   created_at: number;
   updated_at: number;
+};
+
+type ThreadToolAnalysisRow = {
+  analyzer_version: string;
+  analyzed_at: number;
+  completeness: ThreadToolAnalysisCoverage["completeness"];
+  entry_count: number;
+  invocation_count: number;
+  missing_output_count: number;
+  page_count: number;
+  scanned_through: string | null;
+  explanation: string | null;
 };
 
 function normalizeThreadToolInvocation(
@@ -6440,6 +6542,7 @@ function toThreadToolInvocationRowParams(
     exitCode: invocation.exitCode ?? null,
     infoLines: invocation.infoLines,
     invocationId: invocation.invocationId,
+    findingId: invocation.findingId ?? null,
     itemId: invocation.itemId,
     noisy: invocation.noisy ? 1 : 0,
     noisyReason: invocation.noisyReason ?? null,
@@ -6448,14 +6551,17 @@ function toThreadToolInvocationRowParams(
     outputChars: invocation.outputChars,
     outputLines: invocation.outputLines,
     outputTruncated: invocation.outputTruncated ? 1 : 0,
+    outputState: invocation.outputState ?? null,
     processId: invocation.processId ?? null,
     sessionId: invocation.sessionId ?? null,
+    source: invocation.source ?? "live",
     startedAt: invocation.startedAt ?? null,
     status: invocation.status,
     threadId: invocation.threadId,
     toolName: invocation.toolName,
     turnId: invocation.turnId ?? null,
     updatedAt: invocation.updatedAt,
+    suggestedPrompt: invocation.suggestedPrompt ?? null,
     warningLines: invocation.warningLines,
   };
 }
@@ -6471,6 +6577,9 @@ function toThreadToolInvocationAlertRowParams(
     estimatedOutputTokens: alert.estimatedOutputTokens,
     firstObservedAt: alert.firstObservedAt,
     invocationCount: alert.invocationCount,
+    invocationIds: alert.invocationIds
+      ? JSON.stringify(alert.invocationIds)
+      : null,
     kind: alert.kind,
     lastObservedAt: alert.lastObservedAt,
     message: alert.message,
@@ -6479,9 +6588,12 @@ function toThreadToolInvocationAlertRowParams(
     severity: alert.severity,
     suggestedPrompt: alert.suggestedPrompt,
     threadId: alert.threadId,
+    turnId: alert.turnId ?? null,
     toolName: alert.toolName,
     totalOutputChars: alert.totalOutputChars,
     updatedAt: alert.updatedAt,
+    worstInvocationId: alert.worstInvocationId ?? null,
+    worstOutputChars: alert.worstOutputChars ?? null,
   };
 }
 
@@ -6593,6 +6705,7 @@ function threadToolInvocationFromRow(
     ...(row.exit_code !== null ? { exitCode: row.exit_code } : {}),
     infoLines: row.info_lines,
     invocationId: row.invocation_id,
+    ...(row.finding_id ? { findingId: row.finding_id } : {}),
     itemId: row.item_id,
     noisy: Boolean(row.noisy),
     ...(row.noisy_reason ? { noisyReason: row.noisy_reason } : {}),
@@ -6601,14 +6714,17 @@ function threadToolInvocationFromRow(
     outputChars: row.output_chars,
     outputLines: row.output_lines,
     outputTruncated: Boolean(row.output_truncated),
+    ...(row.output_state ? { outputState: row.output_state } : {}),
     ...(row.process_id ? { processId: row.process_id } : {}),
     ...(row.session_id ? { sessionId: row.session_id } : {}),
+    source: row.source,
     ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
     status: row.status,
     threadId: row.thread_id,
     toolName: row.tool_name,
     ...(row.turn_id ? { turnId: row.turn_id } : {}),
     updatedAt: row.updated_at,
+    ...(row.suggested_prompt ? { suggestedPrompt: row.suggested_prompt } : {}),
     warningLines: row.warning_lines,
   };
 }
@@ -6645,6 +6761,9 @@ function threadToolInvocationAlertFromRow(
     estimatedOutputTokens: row.estimated_output_tokens,
     firstObservedAt: row.first_observed_at,
     invocationCount: row.invocation_count,
+    ...(row.invocation_ids
+      ? { invocationIds: readStringArrayJson(row.invocation_ids) }
+      : {}),
     kind: row.kind,
     lastObservedAt: row.last_observed_at,
     message: row.message,
@@ -6653,10 +6772,44 @@ function threadToolInvocationAlertFromRow(
     severity: row.severity,
     suggestedPrompt: row.suggested_prompt,
     threadId: row.thread_id,
+    ...(row.turn_id ? { turnId: row.turn_id } : {}),
     toolName: row.tool_name,
     totalOutputChars: row.total_output_chars,
     updatedAt: row.updated_at,
+    ...(row.worst_invocation_id
+      ? { worstInvocationId: row.worst_invocation_id }
+      : {}),
+    ...(row.worst_output_chars !== null
+      ? { worstOutputChars: row.worst_output_chars }
+      : {}),
   };
+}
+
+function threadToolAnalysisFromRow(
+  row: ThreadToolAnalysisRow,
+): ThreadToolAnalysisCoverage {
+  return {
+    analyzedAt: row.analyzed_at,
+    analyzerVersion: row.analyzer_version,
+    completeness: row.completeness,
+    entryCount: row.entry_count,
+    invocationCount: row.invocation_count,
+    missingOutputCount: row.missing_output_count,
+    pageCount: row.page_count,
+    ...(row.scanned_through ? { scannedThrough: row.scanned_through } : {}),
+    ...(row.explanation ? { explanation: row.explanation } : {}),
+  };
+}
+
+function readStringArrayJson(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function threadPricingSummaryFromRow(row: ThreadPricingSummaryRow): ThreadPricingSummary {
@@ -6699,6 +6852,7 @@ export type OverlayStoreLike = Pick<
   | "markThreadToolInvocationNoisy"
   | "upsertThreadToolInvocationAlert"
   | "readThreadToolAccounting"
+  | "persistThreadToolHistoryAnalysis"
   | "readRecentThreadToolInvocations"
   | "upsertThreadSubAgent"
   | "setThreadReaction"

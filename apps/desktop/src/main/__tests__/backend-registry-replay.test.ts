@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AppServerBackendKind } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
@@ -42,6 +42,82 @@ function createOverlayStoreMock() {
 }
 
 describe("DesktopBackendRegistry replay integration", () => {
+  it("pages normalized history and persists one completed analysis batch", async () => {
+    const replayClient = ReplayClient.fromFixture({
+      metadata: {
+        backend: "codex",
+        scenario: "tool-output-history-analysis",
+      },
+      steps: [
+        {
+          id: "initialize-analysis",
+          kind: "response",
+          method: "initialize",
+          result: {
+            serverInfo: { name: "Replay Codex", version: "1.0.0" },
+            methods: ["thread/read"],
+          },
+        },
+        {
+          id: "read-analysis-latest",
+          kind: "response",
+          method: "thread/read",
+          result: {
+            entries: [],
+            messages: [],
+            pagination: {
+              hasPreviousPage: true,
+              previousCursor: "older-page",
+              supportsPagination: true,
+            },
+          },
+        },
+        {
+          id: "read-analysis-oldest",
+          kind: "response",
+          method: "thread/read",
+          result: {
+            entries: [],
+            messages: [],
+            pagination: {
+              hasPreviousPage: false,
+              supportsPagination: true,
+            },
+          },
+        },
+      ],
+    });
+    const persistThreadToolHistoryAnalysis = vi.fn(async () => undefined);
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      persistThreadToolHistoryAnalysis,
+      readThreadToolAccounting: async () => ({
+        alerts: [],
+        invocations: [],
+        summaries: [],
+      }),
+    } as unknown as OverlayStoreLike;
+    const registry = new DesktopBackendRegistry({
+      codexClient: replayClient,
+      overlayStore,
+    });
+
+    const response = await registry.analyzeThreadToolHistory({
+      backend: "codex",
+      threadId: "fork-thread",
+    });
+
+    expect(response.coverage).toMatchObject({
+      completeness: "complete",
+      pageCount: 2,
+    });
+    expect(persistThreadToolHistoryAnalysis).toHaveBeenCalledOnce();
+    expect(persistThreadToolHistoryAnalysis).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "fork-thread" }),
+    );
+    await registry.close();
+  });
+
   it("routes replay notifications through registry events and resolves replay requests through submitServerRequest", async () => {
     const replayClient = ReplayClient.fromFixture({
       metadata: {

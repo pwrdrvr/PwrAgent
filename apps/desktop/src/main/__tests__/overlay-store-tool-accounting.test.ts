@@ -289,6 +289,54 @@ describe("SqliteOverlayStore tool invocation accounting", () => {
       deltas.reduce((sum, delta) => sum + delta.length, 0),
     );
   });
+
+  it("replaces deterministic history findings without touching live records", async () => {
+    await store.upsertThreadToolInvocation({
+      invocation: buildInvocation({ invocationId: "live-1", source: "live" }),
+    });
+    const historical = [
+      buildInvocation({
+        findingId: "history-1",
+        invocationId: "history-1",
+        source: "history",
+      }),
+      buildInvocation({
+        findingId: "history-2",
+        invocationId: "history-2",
+        source: "history",
+      }),
+    ];
+    const coverage = {
+      analyzedAt: 1_800_000_000_000,
+      analyzerVersion: "1",
+      completeness: "complete" as const,
+      entryCount: 4,
+      invocationCount: historical.length,
+      missingOutputCount: 0,
+      pageCount: 1,
+      scannedThrough: "oldest-entry",
+    };
+    await store.persistThreadToolHistoryAnalysis({
+      backend: "codex",
+      coverage,
+      invocations: historical,
+      threadId: "thread-1",
+    });
+    await store.persistThreadToolHistoryAnalysis({
+      backend: "codex",
+      coverage,
+      invocations: historical,
+      threadId: "thread-1",
+    });
+
+    const accounting = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(accounting.analysis).toEqual(coverage);
+    expect(accounting.invocations.map((entry) => entry.invocationId).sort())
+      .toEqual(["history-1", "history-2", "live-1"]);
+  });
 });
 
 function buildInvocation(

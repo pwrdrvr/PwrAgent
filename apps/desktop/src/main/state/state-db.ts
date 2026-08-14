@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 50;
+export const CURRENT_STATE_DB_USER_VERSION = 51;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -847,6 +847,7 @@ CREATE TABLE IF NOT EXISTS thread_pricing_summaries (
 const THREAD_TOOL_ACCOUNTING_SCHEMA = `
 CREATE TABLE IF NOT EXISTS thread_tool_invocations (
   invocation_id             TEXT PRIMARY KEY,
+  finding_id                TEXT,
   backend                   TEXT NOT NULL,
   thread_id                 TEXT NOT NULL,
   turn_id                   TEXT,
@@ -870,8 +871,11 @@ CREATE TABLE IF NOT EXISTS thread_tool_invocations (
   info_lines                INTEGER NOT NULL,
   debug_lines               INTEGER NOT NULL,
   output_truncated          INTEGER NOT NULL,
+  output_state              TEXT,
+  source                    TEXT NOT NULL DEFAULT 'live',
   noisy                     INTEGER NOT NULL,
-  noisy_reason              TEXT
+  noisy_reason              TEXT,
+  suggested_prompt          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_thread_tool_invocations_read_thread
   ON thread_tool_invocations(backend, thread_id, observed_at DESC, invocation_id DESC);
@@ -884,6 +888,7 @@ CREATE TABLE IF NOT EXISTS thread_tool_invocation_alerts (
   alert_id                  TEXT PRIMARY KEY,
   backend                   TEXT NOT NULL,
   thread_id                 TEXT NOT NULL,
+  turn_id                   TEXT,
   kind                      TEXT NOT NULL,
   severity                  TEXT NOT NULL,
   tool_name                 TEXT NOT NULL,
@@ -892,8 +897,11 @@ CREATE TABLE IF NOT EXISTS thread_tool_invocation_alerts (
   first_observed_at         INTEGER NOT NULL,
   last_observed_at          INTEGER NOT NULL,
   invocation_count          INTEGER NOT NULL,
+  invocation_ids            TEXT,
   total_output_chars        INTEGER NOT NULL,
   estimated_output_tokens   INTEGER NOT NULL,
+  worst_invocation_id       TEXT,
+  worst_output_chars        INTEGER,
   average_interval_ms       INTEGER,
   message                   TEXT NOT NULL,
   suggested_prompt          TEXT NOT NULL,
@@ -902,6 +910,21 @@ CREATE TABLE IF NOT EXISTS thread_tool_invocation_alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_thread_tool_invocation_alerts_read_thread
   ON thread_tool_invocation_alerts(backend, thread_id, updated_at DESC, alert_id DESC);
+
+CREATE TABLE IF NOT EXISTS thread_tool_analysis (
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  analyzer_version          TEXT NOT NULL,
+  analyzed_at               INTEGER NOT NULL,
+  completeness              TEXT NOT NULL,
+  entry_count               INTEGER NOT NULL,
+  invocation_count          INTEGER NOT NULL,
+  missing_output_count      INTEGER NOT NULL,
+  page_count                INTEGER NOT NULL,
+  scanned_through           TEXT,
+  explanation               TEXT,
+  PRIMARY KEY (backend, thread_id)
+);
 `;
 
 const THREAD_MESSAGE_ORIGIN_SCHEMA = `
@@ -1465,6 +1488,12 @@ LEFT JOIN federation_peers
         // Additive table, no data migration; the same DDL also lives in
         // `ensureCurrentSchema` so re-instantiated dbs converge.
         db.exec(ACP_AVAILABLE_COMMANDS_SCHEMA);
+        db.pragma("user_version = 50");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 51) {
+      db.transaction(() => {
+        ensureThreadToolIncidentExplorerSchema(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1944,6 +1973,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureThreadUsagePricingCumulativeColumns(db);
     ensureThreadUsagePricingIndexes(db);
     db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
+    ensureThreadToolIncidentExplorerSchema(db);
     ensureThreadMessageOriginSchema(db);
     db.exec(FEDERATION_SCHEMA);
     db.exec(REMOTE_THREAD_PIN_SCHEMA);
@@ -1961,6 +1991,62 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
   db.exec(`
 CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
   ON app_runtime_instances(profile_name, cwd_hash, heartbeat_at DESC);
+`);
+}
+
+function ensureThreadToolIncidentExplorerSchema(
+  db: BetterSqlite3.Database,
+): void {
+  const invocationColumns = new Set(
+    (db.prepare("PRAGMA table_info(thread_tool_invocations)").all() as Array<{
+      name: string;
+    }>).map((column) => column.name),
+  );
+  if (!invocationColumns.has("finding_id")) {
+    db.exec("ALTER TABLE thread_tool_invocations ADD COLUMN finding_id TEXT");
+  }
+  if (!invocationColumns.has("output_state")) {
+    db.exec("ALTER TABLE thread_tool_invocations ADD COLUMN output_state TEXT");
+  }
+  if (!invocationColumns.has("source")) {
+    db.exec("ALTER TABLE thread_tool_invocations ADD COLUMN source TEXT NOT NULL DEFAULT 'live'");
+  }
+  if (!invocationColumns.has("suggested_prompt")) {
+    db.exec("ALTER TABLE thread_tool_invocations ADD COLUMN suggested_prompt TEXT");
+  }
+
+  const alertColumns = new Set(
+    (db.prepare("PRAGMA table_info(thread_tool_invocation_alerts)").all() as Array<{
+      name: string;
+    }>).map((column) => column.name),
+  );
+  if (!alertColumns.has("turn_id")) {
+    db.exec("ALTER TABLE thread_tool_invocation_alerts ADD COLUMN turn_id TEXT");
+  }
+  if (!alertColumns.has("invocation_ids")) {
+    db.exec("ALTER TABLE thread_tool_invocation_alerts ADD COLUMN invocation_ids TEXT");
+  }
+  if (!alertColumns.has("worst_invocation_id")) {
+    db.exec("ALTER TABLE thread_tool_invocation_alerts ADD COLUMN worst_invocation_id TEXT");
+  }
+  if (!alertColumns.has("worst_output_chars")) {
+    db.exec("ALTER TABLE thread_tool_invocation_alerts ADD COLUMN worst_output_chars INTEGER");
+  }
+  db.exec(`
+CREATE TABLE IF NOT EXISTS thread_tool_analysis (
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  analyzer_version          TEXT NOT NULL,
+  analyzed_at               INTEGER NOT NULL,
+  completeness              TEXT NOT NULL,
+  entry_count               INTEGER NOT NULL,
+  invocation_count          INTEGER NOT NULL,
+  missing_output_count      INTEGER NOT NULL,
+  page_count                INTEGER NOT NULL,
+  scanned_through           TEXT,
+  explanation               TEXT,
+  PRIMARY KEY (backend, thread_id)
+);
 `);
 }
 

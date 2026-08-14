@@ -7,6 +7,7 @@ import {
   buildToolOutputMetrics,
   detectLargeToolOutput,
   detectNoisyPolling,
+  mergeLargeToolOutputIncident,
   normalizeToolInvocationCommand,
   toolInvocationFromNotification,
 } from "../app-server/tool-invocation-accounting";
@@ -461,6 +462,108 @@ describe("tool invocation accounting", () => {
     });
 
     expect(detection).toBeUndefined();
+  });
+
+  it("aggregates cases by turn and keeps a stable worst-case summary", () => {
+    const first = detectLargeToolOutput({
+      current: buildOutputInvocation(8_000),
+      previousOutputChars: 0,
+    })!;
+    const firstIncident = mergeLargeToolOutputIncident({ detection: first });
+    const second = detectLargeToolOutput({
+      current: {
+        ...buildOutputInvocation(12_000),
+        invocationId: "command-2",
+        itemId: "command-2",
+      },
+      previousOutputChars: 0,
+    })!;
+    const secondIncident = mergeLargeToolOutputIncident({
+      current: firstIncident.aggregate,
+      detection: second,
+    });
+
+    expect(secondIncident.shouldNotify).toBe(true);
+    expect(secondIncident.aggregate.alert).toMatchObject({
+      invocationCount: 2,
+      totalOutputChars: 20_000,
+      worstInvocationId: "command-2",
+      worstOutputChars: 12_000,
+    });
+  });
+
+  it("does not rewrite a live warning at terminal completion", () => {
+    const live = detectLargeToolOutput({
+      current: buildOutputInvocation(4_000),
+      previousOutputChars: 0,
+    })!;
+    const incident = mergeLargeToolOutputIncident({ detection: live });
+    const terminal = detectLargeToolOutput({
+      current: { ...buildOutputInvocation(4_000), status: "completed" },
+    })!;
+    const completed = mergeLargeToolOutputIncident({
+      current: incident.aggregate,
+      detection: terminal,
+    });
+
+    expect(completed.shouldNotify).toBe(false);
+  });
+
+  it("aggregates repeated polling cases under the turn and alert kind", () => {
+    const records = Array.from({ length: 6 }, (_, index) => ({
+      ...buildPollingInvocation(
+        `wait-${index + 1}`,
+        1_800_000_000_000 + index * 30_000,
+        (index + 1) * 10,
+      ),
+      normalizedCommand: undefined,
+      sessionId: undefined,
+      toolName: "wait",
+      turnId: "turn-1",
+    }));
+    const firstDetection = detectNoisyPolling({
+      current: records[4]!,
+      now: records[4]!.observedAt,
+      recent: records.slice(0, 4),
+    })!;
+    const firstIncident = mergeLargeToolOutputIncident({
+      detection: firstDetection,
+    });
+    const secondIncident = mergeLargeToolOutputIncident({
+      current: firstIncident.aggregate,
+      detection: detectNoisyPolling({
+        current: records[5]!,
+        now: records[5]!.observedAt,
+        recent: records.slice(0, 5),
+      })!,
+    });
+
+    expect(secondIncident.aggregate.alert).toMatchObject({
+      alertId: "noisy-polling:codex:thread-1:turn-1",
+      invocationCount: 6,
+      totalOutputChars: 210,
+      worstInvocationId: "wait-6",
+      worstOutputChars: 60,
+    });
+  });
+
+  it("reopens a case only when it escalates to critical", () => {
+    const warning = mergeLargeToolOutputIncident({
+      detection: detectLargeToolOutput({
+        current: buildOutputInvocation(4_000),
+        previousOutputChars: 0,
+      })!,
+    });
+    const critical = mergeLargeToolOutputIncident({
+      current: warning.aggregate,
+      detection: detectLargeToolOutput({
+        current: buildOutputInvocation(40_000),
+        previousOutputChars: 4_000,
+      })!,
+    });
+
+    expect(critical.shouldNotify).toBe(true);
+    expect(critical.aggregate.alert.severity).toBe("critical");
   });
 });
 

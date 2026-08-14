@@ -6,6 +6,7 @@ import type {
   ThreadToolInvocationRecord,
   ThreadToolInvocationStatus,
 } from "@pwragent/shared";
+import { buildThreadToolIncidentPrompt } from "@pwragent/shared";
 import { redactCommandText } from "../util/redact-command-text";
 
 const OUTPUT_TOKEN_CHAR_RATIO = 4;
@@ -41,14 +42,101 @@ export type NormalizedToolCommand = {
 
 export type NoisyPollingDetection = {
   alert: ThreadToolInvocationAlert;
+  cases: Record<string, { outputChars: number }>;
   invocationIds: string[];
   lookbackSince: number;
 };
 
 export type LargeToolOutputDetection = {
   alert: ThreadToolInvocationAlert;
+  cases: Record<string, { outputChars: number }>;
   invocationIds: string[];
 };
+
+export type ToolOutputIncidentAggregate = {
+  alert: ThreadToolInvocationAlert;
+  cases: Record<string, {
+    outputChars: number;
+    severity: ThreadToolInvocationAlert["severity"];
+  }>;
+};
+
+export function mergeLargeToolOutputIncident(params: {
+  current?: ToolOutputIncidentAggregate;
+  detection: LargeToolOutputDetection | NoisyPollingDetection;
+}): {
+  aggregate: ToolOutputIncidentAggregate;
+  shouldNotify: boolean;
+} {
+  const incoming = params.detection.alert;
+  const previousCases = params.current?.cases ?? {};
+  const newInvocationIds = params.detection.invocationIds.filter(
+    (invocationId) => !previousCases[invocationId],
+  );
+  const escalated = params.detection.invocationIds.some((invocationId) =>
+    previousCases[invocationId]?.severity === "warning"
+    && incoming.severity === "critical"
+  );
+  const cases = { ...previousCases };
+  for (const invocationId of params.detection.invocationIds) {
+    const incidentCase = params.detection.cases[invocationId];
+    cases[invocationId] = {
+      outputChars: incidentCase?.outputChars ?? 0,
+      severity: incoming.severity,
+    };
+  }
+  const entries = Object.entries(cases);
+  const totalOutputChars = entries.reduce(
+    (sum, [, incidentCase]) => sum + incidentCase.outputChars,
+    0,
+  );
+  const [worstInvocationId, worstCase] = entries.reduce(
+    (worst, entry) => entry[1].outputChars > worst[1].outputChars ? entry : worst,
+  );
+  const severity = entries.some(([, incidentCase]) => incidentCase.severity === "critical")
+    ? "critical" as const
+    : "warning" as const;
+  const estimatedOutputTokens = Math.ceil(totalOutputChars / OUTPUT_TOKEN_CHAR_RATIO);
+  const caseCount = entries.length;
+  const subject = incoming.kind === "noisy-polling"
+    ? `repeated queued check${caseCount === 1 ? "" : "s"}`
+    : `noisy tool-output case${caseCount === 1 ? "" : "s"}`;
+  const message = `${caseCount.toLocaleString()} ${subject} in this turn produced ${totalOutputChars.toLocaleString()} characters (~${estimatedOutputTokens.toLocaleString()} tokens). The worst case produced ${worstCase.outputChars.toLocaleString()} characters.`;
+  const alert: ThreadToolInvocationAlert = {
+    ...(params.current?.alert ?? incoming),
+    alertId: incoming.alertId,
+    estimatedOutputTokens,
+    firstObservedAt: Math.min(
+      params.current?.alert.firstObservedAt ?? incoming.firstObservedAt,
+      incoming.firstObservedAt,
+    ),
+    invocationCount: caseCount,
+    invocationIds: entries.map(([id]) => id),
+    lastObservedAt: Math.max(
+      params.current?.alert.lastObservedAt ?? incoming.lastObservedAt,
+      incoming.lastObservedAt,
+    ),
+    message,
+    severity,
+    suggestedPrompt: incoming.suggestedPrompt,
+    totalOutputChars,
+    updatedAt: incoming.updatedAt,
+    worstInvocationId,
+    worstOutputChars: worstCase.outputChars,
+  };
+  return {
+    aggregate: { alert, cases },
+    shouldNotify:
+      newInvocationIds.length > 0 || escalated,
+  };
+}
+
+export function buildToolInvocationSteeringPrompt(params: {
+  invocation: ThreadToolInvocationRecord;
+  reason: string;
+}): string {
+  return buildThreadToolIncidentPrompt(params);
+}
 
 export function toolInvocationFromNotification(params: {
   backend: AppServerBackendKind;
@@ -439,11 +527,10 @@ export function detectNoisyPolling(params: {
       : `process ${current.processId}`;
   const message =
     `${records.length.toLocaleString()} queued checks on ${sessionLabel} are repeatedly waking the model and replaying its accumulated context. The checks returned ${totalOutputChars.toLocaleString()} chars (~${estimatedOutputTokens.toLocaleString()} output tokens), but replay cost applies even when they return little or nothing.`;
-  const suggestedPrompt = [
-    "Stop polling this long-running process in the main thread.",
-    "Use PwrAgent's create_monitor_delegation tool with the durable command, cwd, log/status files, poll cadence, and terminal success/failure criteria.",
-    "Continue unrelated work here, and let the monitor report completion back to this thread.",
-  ].join(" ");
+  const suggestedPrompt = buildToolInvocationSteeringPrompt({
+    invocation: current,
+    reason: "repeated queued checks are waking the model and replaying accumulated context",
+  });
 
   return {
     alert: {
@@ -451,10 +538,7 @@ export function detectNoisyPolling(params: {
         "noisy-polling",
         current.backend,
         current.threadId,
-        current.toolName,
-        isTurnScopedPolling
-          ? current.turnId
-          : current.sessionId ?? current.processId ?? "unknown",
+        current.turnId ?? "no-turn",
       ].join(":"),
       averageIntervalMs,
       backend: current.backend,
@@ -475,6 +559,10 @@ export function detectNoisyPolling(params: {
       totalOutputChars,
       updatedAt: now,
     },
+    cases: Object.fromEntries(records.map((record) => [
+      record.invocationId,
+      { outputChars: record.outputChars },
+    ])),
     invocationIds: records.map((record) => record.invocationId),
     lookbackSince,
   };
@@ -510,15 +598,25 @@ export function detectLargeToolOutput(params: {
   const message = critical
     ? `This tool produced ${current.outputChars.toLocaleString()} characters (~${current.estimatedOutputTokens.toLocaleString()} tokens), reaching or exceeding the observed model-visible output cap. The retained portion will replay on subsequent inference items.`
     : `This tool has produced ${current.outputChars.toLocaleString()} characters (~${current.estimatedOutputTokens.toLocaleString()} tokens), about ${estimatedCapPercentage.toLocaleString()}% of the observed model-visible output cap. Continuing unfiltered will enlarge every later context replay.`;
-  const suggestedPrompt = [
-    "Treat this command as extremely noisy.",
-    "For subsequent executions, redirect full stdout and stderr to a local log and return only the command, exit code, concise summary, key failure blocks, and a bounded tail.",
-    "Use an installed output-reduction wrapper when available, and retrieve targeted raw sections only when needed.",
-  ].join(" ");
+  const noisyReason = critical
+    ? "output reached or exceeded the observed model-visible cap"
+    : "large output will be replayed on later inference items";
+  const suggestedPrompt = buildToolInvocationSteeringPrompt({
+    invocation: {
+      ...current,
+      outputState: current.outputTruncated ? "truncated" : "available",
+    },
+    reason: noisyReason,
+  });
 
   return {
     alert: {
-      alertId: ["large-output", current.invocationId].join(":"),
+      alertId: [
+        "large-output",
+        current.backend,
+        current.threadId,
+        current.turnId ?? "no-turn",
+      ].join(":"),
       backend: current.backend,
       createdAt: now,
       estimatedOutputTokens: current.estimatedOutputTokens,
@@ -536,6 +634,9 @@ export function detectLargeToolOutput(params: {
       toolName: current.toolName,
       totalOutputChars: current.outputChars,
       updatedAt: now,
+    },
+    cases: {
+      [current.invocationId]: { outputChars: current.outputChars },
     },
     invocationIds: [current.invocationId],
   };
@@ -616,6 +717,9 @@ function normalizeShellCommand(command: string | undefined): string | undefined 
 }
 
 function categoryForToolName(toolName: string): ThreadToolInvocationCategory {
+  if (/^mcp(?:__|ToolCall$)/i.test(toolName) || toolName.includes("mcp")) {
+    return "mcp";
+  }
   if (
     toolName === "read_file" ||
     toolName === "list_files" ||
