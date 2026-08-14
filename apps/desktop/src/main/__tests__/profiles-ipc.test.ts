@@ -72,6 +72,8 @@ afterEach(() => {
   // the process lifetime. Without this reset, a previous test's
   // PWRAGENT_PROFILE stub leaks into the next test's listing calls.
   resetCachedActiveProfileNameForTests();
+  getAppStateModeMock.mockReset();
+  getAppStateModeMock.mockReturnValue("active-profile");
   vi.unstubAllEnvs();
   spawnMock.mockClear();
   for (const root of roots.splice(0)) {
@@ -280,6 +282,32 @@ describe("profile IPC helpers", () => {
         env: expect.objectContaining({
           [PWRAGENT_PROFILE_ENV]: "my-work-profile",
           [SECRET_STORAGE_DISABLED_ENV]: "1",
+        }),
+      }),
+    );
+  });
+
+  it("launches the graduated profile when bootstrap requested the same profile", async () => {
+    const root = createRoot();
+    const env = {
+      [PWRAGENT_HOME_ENV]: root,
+      [PWRAGENT_PROFILE_ENV]: "test2",
+    } as NodeJS.ProcessEnv;
+    ensureNamedProfileExists("test2", { env });
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "test2");
+    getAppStateModeMock.mockReturnValue("bootstrap");
+    const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
+
+    const response = openDesktopPwrAgentProfile({ profile: "test2" });
+
+    expect(response).toEqual({ opened: true, profile: "test2" });
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      expect.arrayContaining(["--profile", "test2"]),
+      expect.objectContaining({
+        env: expect.objectContaining({
+          [PWRAGENT_PROFILE_ENV]: "test2",
         }),
       }),
     );

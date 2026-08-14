@@ -536,6 +536,55 @@ test.describe("Onboarding wizard", () => {
     }
   });
 
+  test("requested-profile bootstrap relaunches that profile after Skip", async () => {
+    test.skip(
+      process.platform === "linux",
+      "Detached profile relaunch is not reliable under headless Xvfb; the IPC regression covers Linux.",
+    );
+    test.setTimeout(60_000);
+    const app = await launchWizard({ PWRAGENT_PROFILE: "test2" });
+    try {
+      await expect(
+        app.window.getByRole("heading", { name: /Set up.+test2/i }),
+      ).toBeVisible();
+      await app.window
+        .getByRole("button", { name: /Set up.+test2/i })
+        .click();
+      await app.window
+        .getByRole("button", { name: /Skip setup/i })
+        .click();
+
+      const proc = app.electronApp.process();
+      const exitPromise = new Promise<boolean>((resolve) => {
+        if (proc.exitCode !== null) return resolve(true);
+        const timer = setTimeout(() => resolve(false), 30_000);
+        proc.once("exit", () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+      });
+
+      await app.window
+        .getByRole("button", { name: /Skip and use default/i })
+        .click();
+
+      expect(await exitPromise).toBe(true);
+      const profileConfig = fs.readFileSync(
+        path.join(
+          app.homeRoot,
+          ".pwragent",
+          "profiles",
+          "test2",
+          "config.toml",
+        ),
+        "utf8",
+      );
+      expect(profileConfig).toContain("completed = true");
+    } finally {
+      await app.close();
+    }
+  });
+
   test("Multiple-mode finish quits the bootstrap window AND doesn't materialize a phantom 'default' profile", async () => {
     // The wizard's spawn + wait-for-alive (10s timeout) + 2s grace
     // can chew through most of the default 30s. CI Linux runners

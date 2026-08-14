@@ -136,7 +136,10 @@ export function openDesktopPwrAgentProfile(
   }
 
   const activeProfile = resolveActiveProfileName();
-  if (profile === activeProfile) {
+  // Bootstrap has no active profile runtime of its own. Its requested
+  // profile name can match the profile the wizard just graduated, but that
+  // real profile still needs to be launched before bootstrap can quit.
+  if (getAppStateMode() !== "bootstrap" && profile === activeProfile) {
     return { opened: false, profile, reason: "active" };
   }
 
