@@ -146,6 +146,15 @@ export function ThreadRow(props: ThreadRowProps) {
     && props.thread.federation.peerStatus !== "connected",
   );
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
+  // One expression for "this row carries the in-title pin": the row's
+  // `--pinned` modifier class, the ", pinned" accessible-name suffix,
+  // and the in-title pin render all derive from it, so the CSS class
+  // can never disagree with the control it stands for. The modifier
+  // exists so the hover-reserve rule in app.css matches a plain class
+  // instead of a per-hover `:has()` subtree scan (same optimization the
+  // DirectoriesList header modifiers document).
+  const isPinnedRow =
+    Boolean(props.thread.pinnedRank) && !props.thread.parentThreadId;
   const [pickerOpen, setPickerOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
@@ -287,10 +296,10 @@ export function ThreadRow(props: ThreadRowProps) {
       <div
         ref={rowRef}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
-          selected ? " is-selected" : ""
-        }${isComposerSource ? " is-composer-source" : ""}${
-          isRemoteOffline ? " is-remote-offline" : ""
-        }`}
+          isPinnedRow ? " thread-row--pinned" : ""
+        }${selected ? " is-selected" : ""}${
+          isComposerSource ? " is-composer-source" : ""
+        }${isRemoteOffline ? " is-remote-offline" : ""}`}
         // The open-thread BUTTON's rect is only the title band (see
         // `.thread-row__open` in app.css for why a card-sized button
         // rect broke axe target-size and Playwright row clicks). The
@@ -328,9 +337,7 @@ export function ThreadRow(props: ThreadRowProps) {
           // (same pattern as the chip flow) so the in-title pin can be a
           // real unpin button without nesting a control inside this one.
           aria-label={
-            props.thread.pinnedRank && !props.thread.parentThreadId
-              ? `${props.thread.title}, pinned`
-              : props.thread.title
+            isPinnedRow ? `${props.thread.title}, pinned` : props.thread.title
           }
           aria-pressed={selected}
           className="thread-row__open"
@@ -373,7 +380,7 @@ export function ThreadRow(props: ThreadRowProps) {
           <span className="thread-row__heading">
             <ThreadRowStatus status={status} />
             <span className="thread-row__title">{props.thread.title}</span>
-            {props.thread.pinnedRank && !props.thread.parentThreadId ? (
+            {isPinnedRow ? (
               onSetThreadPin ? (
                 <button
                   aria-label="Unpin thread"

@@ -216,6 +216,29 @@ describe("Tangerine Terminal theme contract", () => {
       /width:\s*24px;[\s\S]*height:\s*24px;/,
     );
 
+    // A 24px target is worthless while something paints over it — the
+    // pinned-row hover reserve keeps the revealed cluster off the
+    // in-title unpin pin. Pinned (all four reveal arms + the value + the
+    // cluster-side literals it is derived from) so a cluster resize or a
+    // dropped keyboard arm revisits the derivation in the rule's comment
+    // in the same commit.
+    expect(
+      extractRuleBody(
+        css,
+        ".thread-row-shell:hover .thread-row--pinned .thread-row__heading,\n"
+          + ".thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,\n"
+          + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,\n"
+          + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading",
+      ),
+    ).toMatch(/padding-right:\s*44px;/);
+    expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
+      /right:\s*9px;[\s\S]*gap:\s*4px;/,
+    );
+    // Not extractRuleBody: the bare selector would match the shared
+    // pin+kebab chrome rule first; this anchors the standalone width
+    // rule's own body.
+    expect(css).toMatch(/(?:^|\n)\.thread-row__overflow-button \{[^}]*width:\s*26px;/);
+
     // And the open-thread overlay keeps the explicit floor the old
     // in-flow button carried: at the XS title notch a chipless card
     // computes to 23.75px, so covering the card alone is not enough.
@@ -675,8 +698,13 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("hides thread row timestamps behind focused or open row actions", () => {
+    // Pins the FULL five-selector fade list (it once silently grew a
+    // pin-button arm this regex didn't describe, so the test matched a
+    // suffix and stopped being the authoritative statement of the
+    // list). The pinned-row heading reserve mirrors this state set —
+    // its own pin lives with the target-size block above.
     expect(css).toMatch(
-      /\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
+      /\.thread-row-shell:has\(\.thread-row__pin-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
     );
   });
 
