@@ -17,6 +17,8 @@ const registerAutomationIpcHandlersMock = vi.fn();
 const disposeAutomationIpcHandlersMock = vi.fn();
 const registerAppMetadataIpcHandlersMock = vi.fn();
 const disposeAppMetadataIpcHandlersMock = vi.fn();
+const registerClipboardIpcHandlersMock = vi.fn();
+const disposeClipboardIpcHandlersMock = vi.fn();
 const registerAppUpdateIpcHandlersMock = vi.fn();
 const disposeAppUpdateIpcHandlersMock = vi.fn();
 const initAutoUpdaterMock = vi.fn();
@@ -234,6 +236,11 @@ vi.mock("../ipc/automation-ipc", () => ({
 vi.mock("../ipc/app-metadata", () => ({
   registerAppMetadataIpcHandlers: registerAppMetadataIpcHandlersMock,
   disposeAppMetadataIpcHandlers: disposeAppMetadataIpcHandlersMock,
+}));
+
+vi.mock("../ipc/clipboard", () => ({
+  registerClipboardIpcHandlers: registerClipboardIpcHandlersMock,
+  disposeClipboardIpcHandlers: disposeClipboardIpcHandlersMock,
 }));
 
 vi.mock("../auto-updater", () => ({
