@@ -16950,6 +16950,7 @@ a.transcript-message__messaging-origin:focus-visible {
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
+  overflow: hidden;
   padding: 7px 10px;
   text-align: left;
 }

@@ -4564,6 +4564,54 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.getByRole("button", { name: "Decline" })).toBeInTheDocument();
   });
 
+  it("keeps a Windows durable command prefix bounded and leads with the command", () => {
+    const powershell =
+      "C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\\pwsh.exe";
+    const command =
+      "Get-ChildItem -Force | Select-Object Name,Mode; Get-ChildItem -Recurse -Filter AGENTS.md";
+
+    render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            command,
+            availableDecisions: [
+              "accept",
+              {
+                acceptWithExecpolicyAmendment: {
+                  execpolicy_amendment: [powershell, "-Command", command],
+                },
+              },
+              "cancel",
+            ],
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const action = screen.getByRole("button", {
+      name: `Always Allow Prefix: ${powershell} -Command ${command}`,
+    });
+    expect(action).toHaveClass("button--ghost", "transcript-request__action--detailed");
+    expect(action.querySelector(".transcript-request__action-label")).toHaveTextContent(
+      "Always Allow Prefix"
+    );
+    expect(action.querySelector(".transcript-request__action-detail")).toHaveTextContent(
+      command
+    );
+    expect(action.querySelector(".transcript-request__action-detail")).not.toHaveTextContent(
+      powershell
+    );
+  });
+
   it("derives Kimi approval commands from prompt text when command is a shell title", () => {
     const { container } = render(
       <TranscriptList
