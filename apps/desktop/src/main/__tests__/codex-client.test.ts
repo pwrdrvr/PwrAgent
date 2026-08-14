@@ -242,7 +242,7 @@ class MockTransport implements JsonRpcTransport {
                       id: "thread-forked-worktree",
                       name: "Plan Slidev theme extraction",
                       updatedAt: 1_776_100_000,
-                      cwd: "/Users/huntharo/.codex/worktrees/be87/search-product",
+                      cwd: "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
                       path: "/tmp/forked-worktree-rollout.jsonl",
                     }
                   ]
@@ -264,29 +264,29 @@ class MockTransport implements JsonRpcTransport {
                   ? [
                       {
                         id: "thread-recent",
-                        name: "Recent search-product thread",
+                        name: "Recent catalog-portal thread",
                         updatedAt: 1_776_200_000,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/example/Projects/catalog-portal",
                       },
                       {
                         id: "thread-borderline",
-                        name: "Borderline search-product thread",
+                        name: "Borderline catalog-portal thread",
                         updatedAt: 1_772_510_658,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/example/Projects/catalog-portal",
                       },
                     ]
                   : [
                       {
                         id: "thread-recent",
-                        name: "Recent search-product thread",
+                        name: "Recent catalog-portal thread",
                         updatedAt: 1_776_200_000,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/example/Projects/catalog-portal",
                       },
                       {
                         id: "thread-stale-created-order",
                         name: "Stale created-order thread",
                         updatedAt: 1_772_251_018,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/example/Projects/catalog-portal",
                       },
                     ]
             }
@@ -402,7 +402,7 @@ class MockTransport implements JsonRpcTransport {
         return;
       }
 
-      if (searchTerm === "search-product-parity") {
+      if (searchTerm === "catalog-portal-parity") {
         const matchesCodexWindow =
           params.params?.limit === 50 &&
           params.params?.sortKey === "updated_at" &&
@@ -419,86 +419,86 @@ class MockTransport implements JsonRpcTransport {
                   ? [
                       {
                         id: "thread-projmgr",
-                        name: "search-product ProjMgr",
+                        name: "catalog-portal ProjMgr",
                         updatedAt: 1_776_298_236,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/example/Projects/catalog-portal",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/catalog-portal.git",
                         },
                       },
                       {
                         id: "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
                         name: "Plan Slidev theme extraction",
                         updatedAt: 1_776_179_110,
-                        cwd: "/Users/huntharo/.codex/worktrees/be87/search-product",
+                        cwd: "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
                         path: "/tmp/missing-worktree-rollout.jsonl",
                         gitInfo: {
                           branch: "codex/plan-slidev-theme-extraction",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/catalog-portal.git",
                         },
                       },
                       {
                         id: "thread-deck",
                         name: "Create Project Manager deck",
                         updatedAt: 1_776_019_529,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/example/Projects/catalog-portal",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/catalog-portal.git",
                         },
                       },
                     ]
                   : [
                       {
                         id: "thread-projmgr",
-                        name: "search-product ProjMgr",
+                        name: "catalog-portal ProjMgr",
                         updatedAt: 1_776_298_236,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/example/Projects/catalog-portal",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/catalog-portal.git",
                         },
                       },
                       {
                         id: "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
                         name: "Plan Slidev theme extraction",
                         updatedAt: 1_776_179_110,
-                        cwd: "/Users/huntharo/.codex/worktrees/be87/search-product",
+                        cwd: "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
                         path: "/tmp/missing-worktree-rollout.jsonl",
                         gitInfo: {
                           branch: "codex/plan-slidev-theme-extraction",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/catalog-portal.git",
                         },
                       },
                       {
                         id: "thread-deck",
                         name: "Create Project Manager deck",
                         updatedAt: 1_776_019_529,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/example/Projects/catalog-portal",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/catalog-portal.git",
                         },
                       },
                       {
                         id: "019cb1de-230c-71f1-a833-8880f2ea1a4a",
                         name: "is this thing on?",
                         updatedAt: 1_772_510_658,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/example/Projects/catalog-portal",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/catalog-portal.git",
                         },
                       },
                       {
                         id: "019c9cc2-6ea3-7d40-817d-9590d9118bbd",
                         name: "Gather Reddit feedback screenshots",
                         updatedAt: 1_772_391_226,
-                        cwd: "/Users/huntharo/GIPHY/search-product",
+                        cwd: "/Users/example/Projects/catalog-portal",
                         gitInfo: {
                           branch: "main",
-                          originUrl: "git@github.com:Giphy/search-product.git",
+                          originUrl: "git@github.com:ExampleOrg/catalog-portal.git",
                         },
                       },
                     ]
@@ -1433,7 +1433,7 @@ describe("CodexAppServerClient", () => {
 
   it("contains a directory enrichment failure to the affected thread", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    const managedWorktree = "/Users/vitaliy/.codex/worktrees/a21d/giphy-services";
+    const managedWorktree = "/Users/example/.codex/worktrees/tree-zeta/catalog-service";
     const localDirectory = "/Users/vitaliy/projects/healthy";
     const threadDirectoryEnricher = vi.fn(async (projectKey?: string) => {
       if (projectKey === managedWorktree) {
@@ -1479,7 +1479,7 @@ describe("CodexAppServerClient", () => {
         linkedDirectories: [
           {
             id: managedWorktree,
-            label: "giphy-services",
+            label: "catalog-service",
             path: managedWorktree,
             worktreePath: managedWorktree,
             kind: "worktree",
@@ -2037,7 +2037,7 @@ describe("CodexAppServerClient", () => {
       access: vi.fn(async (targetPath: string) => {
         // Compare against the resolved form so the mock matches the path the
         // enricher actually passes to access on both POSIX and Windows.
-        if (targetPath === path.resolve("/Users/huntharo/.codex/worktrees/be87/search-product")) {
+        if (targetPath === path.resolve("/Users/example/.codex/worktrees/tree-epsilon/catalog-portal")) {
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         }
       }),
@@ -2053,7 +2053,7 @@ describe("CodexAppServerClient", () => {
         ) => {
           if (args.includes("rev-parse")) {
             callback(null, {
-              stdout: "/Users/huntharo/GIPHY/search-product\n",
+              stdout: "/Users/example/Projects/catalog-portal\n",
               stderr: "",
             });
             return;
@@ -2061,7 +2061,7 @@ describe("CodexAppServerClient", () => {
 
           if (args.includes("worktree")) {
             callback(null, {
-              stdout: "worktree /Users/huntharo/GIPHY/search-product\n",
+              stdout: "worktree /Users/example/Projects/catalog-portal\n",
               stderr: "",
             });
             return;
@@ -2084,7 +2084,7 @@ describe("CodexAppServerClient", () => {
       expect(threads).toEqual([
         expect.objectContaining({
           id: "thread-forked-worktree",
-          projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
+          projectKey: "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
           linkedDirectories: []
         })
       ]);
@@ -2188,19 +2188,19 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("matches Codex Desktop search-product parity for stale roots and deleted worktrees", async () => {
+  it("matches Codex Desktop catalog-portal parity for stale roots and deleted worktrees", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
     const client = new CodexAppServerClient({
       command: "codex",
       threadDirectoryEnricher: async (projectKey) => {
-        if (projectKey === "/Users/huntharo/GIPHY/search-product") {
+        if (projectKey === "/Users/example/Projects/catalog-portal") {
           return {
             linkedDirectories: [
               {
-                id: "/Users/huntharo/GIPHY/search-product",
-                label: "search-product",
-                path: "/Users/huntharo/GIPHY/search-product",
+                id: "/Users/example/Projects/catalog-portal",
+                label: "catalog-portal",
+                path: "/Users/example/Projects/catalog-portal",
                 kind: "local",
               },
             ],
@@ -2214,7 +2214,7 @@ describe("CodexAppServerClient", () => {
       },
     });
 
-    const threads = await client.listThreads({ filter: "search-product-parity" });
+    const threads = await client.listThreads({ filter: "catalog-portal-parity" });
 
     expect(threads.map((thread) => thread.id)).toEqual([
       "thread-projmgr",
@@ -2226,13 +2226,13 @@ describe("CodexAppServerClient", () => {
     expect(
       threads.find((thread) => thread.id === "019d88a2-0e0b-77f0-bfce-130ae8e37d8f")
     ).toMatchObject({
-      projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
+      projectKey: "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
       linkedDirectories: [
         {
-          id: "/Users/huntharo/GIPHY/search-product",
-          label: "search-product",
-          path: "/Users/huntharo/GIPHY/search-product",
-          worktreePath: "/Users/huntharo/.codex/worktrees/be87/search-product",
+          id: "/Users/example/Projects/catalog-portal",
+          label: "catalog-portal",
+          path: "/Users/example/Projects/catalog-portal",
+          worktreePath: "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
           kind: "worktree",
         },
       ],
@@ -2246,7 +2246,7 @@ describe("CodexAppServerClient", () => {
       expect.arrayContaining([
         expect.objectContaining({
           params: expect.objectContaining({
-            searchTerm: "search-product-parity",
+            searchTerm: "catalog-portal-parity",
             limit: 50,
             sortKey: "updated_at",
             sourceKinds: ["cli", "vscode"],
@@ -2350,9 +2350,9 @@ describe("CodexAppServerClient", () => {
         linkedDirectories: projectKey
           ? [
               {
-                id: "/Users/huntharo/GIPHY/search-product",
-                label: "search-product",
-                path: "/Users/huntharo/GIPHY/search-product",
+                id: "/Users/example/Projects/catalog-portal",
+                label: "catalog-portal",
+                path: "/Users/example/Projects/catalog-portal",
                 worktreePath: projectKey,
                 kind: "worktree",
               },
@@ -2362,7 +2362,7 @@ describe("CodexAppServerClient", () => {
       }),
     });
 
-    const threads = await client.listThreads({ filter: "search-product-parity" });
+    const threads = await client.listThreads({ filter: "catalog-portal-parity" });
     const thread = threads.find((entry) => entry.id === "thread-projmgr");
 
     expect(thread).toMatchObject({
@@ -2395,7 +2395,7 @@ describe("CodexAppServerClient", () => {
       }),
     });
 
-    const threads = await client.listThreads({ filter: "search-product-parity" });
+    const threads = await client.listThreads({ filter: "catalog-portal-parity" });
     const thread = threads.find(
       (entry) => entry.id === "019d88a2-0e0b-77f0-bfce-130ae8e37d8f"
     );

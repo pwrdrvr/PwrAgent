@@ -395,3 +395,4 @@ export const PROFILES_WRITE_SECRETS_CHANNEL = "profiles:write-secrets";
 // native submenu at a button. Unused on macOS/Linux.
 export const APP_MENU_MODEL_CHANNEL = "app-menu:model";
 export const APP_MENU_POPUP_CHANNEL = "app-menu:popup";
+export const CLIPBOARD_WRITE_TEXT_CHANNEL = "clipboard:write-text";

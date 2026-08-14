@@ -1,4 +1,4 @@
-import { clipboard, contextBridge, ipcRenderer, webUtils } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   AgentEvent,
   ApplyThreadModelMigrationRequest,
@@ -336,6 +336,7 @@ import {
   APP_UPDATE_RELEASES_READ_CHANNEL,
   APP_UPDATE_STATUS_EVENT_CHANNEL,
   APP_UPDATE_STATUS_READ_CHANNEL,
+  CLIPBOARD_WRITE_TEXT_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
@@ -580,7 +581,7 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 const desktopApi = Object.freeze({
   ping: () => "pong",
   copyText: async (text: string): Promise<void> => {
-    clipboard.writeText(text);
+    await ipcRenderer.invoke(CLIPBOARD_WRITE_TEXT_CHANNEL, text);
   },
   readAppMetadata: async (): Promise<AppMetadata> =>
     await ipcRenderer.invoke(APP_METADATA_READ_CHANNEL),

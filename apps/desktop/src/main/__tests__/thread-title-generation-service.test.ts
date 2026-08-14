@@ -193,7 +193,7 @@ describe("ThreadTitleGenerationService", () => {
       service.generateTitle({
         backend: "codex",
         userPrompt:
-          "> PRs created: > - #12998: https://github.com/Giphy/giphy-services/pull/12998 > - #12999 stacked on it: https://github.com/Giphy/giphy-services/pull/12999 Why could the agent not attach the PR to the thread?",
+          "> PRs created: > - #12998: https://github.com/ExampleOrg/catalog-service/pull/12998 > - #12999 stacked on it: https://github.com/ExampleOrg/catalog-service/pull/12999 Why could the agent not attach the PR to the thread?",
       })
     ).resolves.toMatchObject({
       status: "generated",

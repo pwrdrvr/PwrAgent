@@ -434,7 +434,7 @@ describe("Codex review start", () => {
   it("runs base-branch reviews from the requested cwd without changing thread metadata", async () => {
     const temp = await createTemporaryTestDirectory();
     try {
-      const originalCwd = path.join(temp.path, "giphy-services");
+      const originalCwd = path.join(temp.path, "catalog-service");
       const selectedCwd = path.join(temp.path, "svc-infra");
       await fs.mkdir(originalCwd);
       await fs.mkdir(selectedCwd);

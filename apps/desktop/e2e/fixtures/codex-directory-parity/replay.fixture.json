@@ -28,15 +28,15 @@
       "result": [
         {
           "id": "thread-projmgr",
-          "title": "search-product ProjMgr",
+          "title": "catalog-portal ProjMgr",
           "titleSource": "explicit",
-          "projectKey": "/Users/huntharo/GIPHY/search-product",
+          "projectKey": "/Users/example/Projects/catalog-portal",
           "updatedAt": 1776298236000,
           "linkedDirectories": [
             {
-              "id": "/Users/huntharo/GIPHY/search-product",
-              "label": "search-product",
-              "path": "/Users/huntharo/GIPHY/search-product",
+              "id": "/Users/example/Projects/catalog-portal",
+              "label": "catalog-portal",
+              "path": "/Users/example/Projects/catalog-portal",
               "kind": "local"
             }
           ],
@@ -47,14 +47,14 @@
           "id": "019d88a2-0e0b-77f0-bfce-130ae8e37d8f",
           "title": "Plan Slidev theme extraction",
           "titleSource": "explicit",
-          "projectKey": "/Users/huntharo/.codex/worktrees/be87/search-product",
+          "projectKey": "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
           "updatedAt": 1776179110000,
           "linkedDirectories": [
             {
-              "id": "/Users/huntharo/GIPHY/search-product",
-              "label": "search-product",
-              "path": "/Users/huntharo/GIPHY/search-product",
-              "worktreePath": "/Users/huntharo/.codex/worktrees/be87/search-product",
+              "id": "/Users/example/Projects/catalog-portal",
+              "label": "catalog-portal",
+              "path": "/Users/example/Projects/catalog-portal",
+              "worktreePath": "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
               "kind": "worktree"
             }
           ],
@@ -65,13 +65,13 @@
           "id": "thread-deck",
           "title": "Create Project Manager deck",
           "titleSource": "explicit",
-          "projectKey": "/Users/huntharo/GIPHY/search-product",
+          "projectKey": "/Users/example/Projects/catalog-portal",
           "updatedAt": 1776019529000,
           "linkedDirectories": [
             {
-              "id": "/Users/huntharo/GIPHY/search-product",
-              "label": "search-product",
-              "path": "/Users/huntharo/GIPHY/search-product",
+              "id": "/Users/example/Projects/catalog-portal",
+              "label": "catalog-portal",
+              "path": "/Users/example/Projects/catalog-portal",
               "kind": "local"
             }
           ],

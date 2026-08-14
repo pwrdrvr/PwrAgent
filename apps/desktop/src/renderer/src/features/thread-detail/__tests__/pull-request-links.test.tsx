@@ -8,14 +8,14 @@ import {
 } from "../../../lib/pull-request-links";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
-const PR_URL = "https://github.com/Giphy/giphy-services/pull/13290";
+const PR_URL = "https://github.com/ExampleOrg/catalog-service/pull/13290";
 
 function prSummary(overrides: Partial<PrSummary> = {}): PrSummary {
   return {
     provider: "github.com",
     number: 13290,
-    org: "Giphy",
-    repo: "giphy-services",
+    org: "ExampleOrg",
+    repo: "catalog-service",
     title: "Document JDK 17 for EMR jobs",
     state: "pending",
     checkState: "pending",
@@ -84,15 +84,15 @@ afterEach(() => {
 describe("pull request links in transcript markdown", () => {
   it("renders a known GitHub PR link with the shared live status chip", () => {
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
-    renderWithPullRequests(`Draft PR: [Giphy/giphy-services#13290](${PR_URL})`, [
+    renderWithPullRequests(`Draft PR: [ExampleOrg/catalog-service#13290](${PR_URL})`, [
       prSummary(),
     ]);
 
     const chip = screen.getByRole("button", {
-      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
+      name: /Open ExampleOrg\/catalog-service#13290 \(draft · checks pending\) in browser/,
     });
     expect(chip).toHaveClass("pr-chip", "pr-chip--pending", "pr-chip--draft");
-    expect(chip).toHaveTextContent("Giphy/giphy-services#13290");
+    expect(chip).toHaveTextContent("ExampleOrg/catalog-service#13290");
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
 
     fireEvent.click(chip);
@@ -106,8 +106,8 @@ describe("pull request links in transcript markdown", () => {
     );
 
     expect(screen.getByRole("button", {
-      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
-    })).toHaveTextContent("Giphy/giphy-services#13290");
+      name: /Open ExampleOrg\/catalog-service#13290 \(draft · checks pending\) in browser/,
+    })).toHaveTextContent("ExampleOrg/catalog-service#13290");
     expect(screen.queryByRole("link", {
       name: "#13290 — Document JDK 17 for EMR jobs",
     })).not.toBeInTheDocument();
@@ -119,18 +119,18 @@ describe("pull request links in transcript markdown", () => {
     ]);
 
     expect(screen.getByRole("button", {
-      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
+      name: /Open ExampleOrg\/catalog-service#13290 \(draft · checks pending\) in browser/,
     })).toBeInTheDocument();
   });
 
   it("hydrates a bare PR number known by a sibling thread in the same repository", () => {
     const activeThread = projectThread({
       id: "thread-active",
-      path: "/repos/giphy-services",
+      path: "/repos/catalog-service",
     });
     const siblingThread = projectThread({
       id: "thread-sibling",
-      path: "/repos/giphy-services",
+      path: "/repos/catalog-service",
       prs: [prSummary()],
     });
 
@@ -144,30 +144,30 @@ describe("pull request links in transcript markdown", () => {
     );
 
     expect(screen.getByRole("button", {
-      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
+      name: /Open ExampleOrg\/catalog-service#13290 \(draft · checks pending\) in browser/,
     })).toBeInTheDocument();
   });
 
   it("excludes PRs from a sibling that also links repositories outside the active scope", () => {
     const activeThread = projectThread({
       id: "thread-active",
-      path: "/repos/giphy-services",
+      path: "/repos/catalog-service",
     });
     const multiRepositorySibling = threadSummary([
       prSummary({
-        org: "Giphy",
+        org: "ExampleOrg",
         repo: "analytics",
-        url: "https://github.com/Giphy/analytics/pull/13290",
+        url: "https://github.com/ExampleOrg/analytics/pull/13290",
       }),
     ], {
       id: "thread-multi-repository",
       linkedDirectories: [
         {
-          id: "sibling-giphy-services",
+          id: "sibling-catalog-service",
           kind: "worktree",
-          label: "giphy-services",
-          path: "/repos/giphy-services",
-          worktreePath: "/worktrees/sibling-giphy-services",
+          label: "catalog-service",
+          path: "/repos/catalog-service",
+          worktreePath: "/worktrees/sibling-catalog-service",
         },
         {
           id: "sibling-analytics",
@@ -189,7 +189,7 @@ describe("pull request links in transcript markdown", () => {
     );
 
     expect(screen.queryByRole("button", {
-      name: /Giphy\/analytics#13290/,
+      name: /ExampleOrg\/analytics#13290/,
     })).not.toBeInTheDocument();
     expect(screen.getByText(/#13290/)).toBeInTheDocument();
   });
@@ -201,7 +201,7 @@ describe("pull request links in transcript markdown", () => {
     });
     const unrelatedThread = projectThread({
       id: "thread-unrelated",
-      path: "/repos/giphy-services",
+      path: "/repos/catalog-service",
       prs: [prSummary()],
     });
 
@@ -215,13 +215,13 @@ describe("pull request links in transcript markdown", () => {
     );
 
     expect(screen.queryByRole("button", {
-      name: /Giphy\/giphy-services#13290/,
+      name: /ExampleOrg\/catalog-service#13290/,
     })).not.toBeInTheDocument();
     expect(screen.getByText(/#13290/)).toBeInTheDocument();
   });
 
   it("leaves a bare number plain when it is ambiguous across linked repositories", () => {
-    const firstPath = "/repos/giphy-services";
+    const firstPath = "/repos/catalog-service";
     const secondPath = "/repos/analytics";
     const activeThread = threadSummary([], {
       id: "thread-active",
@@ -229,7 +229,7 @@ describe("pull request links in transcript markdown", () => {
         {
           id: "active-first",
           kind: "worktree",
-          label: "giphy-services",
+          label: "catalog-service",
           path: firstPath,
           worktreePath: "/worktrees/active-first",
         },
@@ -252,9 +252,9 @@ describe("pull request links in transcript markdown", () => {
       path: secondPath,
       prs: [
         prSummary({
-          org: "Giphy",
+          org: "ExampleOrg",
           repo: "analytics",
-          url: "https://github.com/Giphy/analytics/pull/13290",
+          url: "https://github.com/ExampleOrg/analytics/pull/13290",
         }),
       ],
     });
@@ -274,7 +274,7 @@ describe("pull request links in transcript markdown", () => {
 
   it("does not hydrate PR-style text inside code or an authored non-PR link", () => {
     renderWithPullRequests(
-      "Keep `#13290` literal and [issue #13290](https://github.com/Giphy/giphy-services/issues/13290) linked.",
+      "Keep `#13290` literal and [issue #13290](https://github.com/ExampleOrg/catalog-service/issues/13290) linked.",
       [prSummary()],
     );
 
@@ -286,11 +286,11 @@ describe("pull request links in transcript markdown", () => {
   it("hydrates a bare number when same-project PR metadata arrives later", () => {
     const activeThread = projectThread({
       id: "thread-active",
-      path: "/repos/giphy-services",
+      path: "/repos/catalog-service",
     });
     const siblingWithoutPr = projectThread({
       id: "thread-sibling",
-      path: "/repos/giphy-services",
+      path: "/repos/catalog-service",
     });
     const { rerender } = render(
       <PullRequestLinkProvider
@@ -304,7 +304,7 @@ describe("pull request links in transcript markdown", () => {
 
     const siblingWithPr = projectThread({
       id: "thread-sibling",
-      path: "/repos/giphy-services",
+      path: "/repos/catalog-service",
       prs: [prSummary()],
     });
     rerender(
@@ -317,12 +317,12 @@ describe("pull request links in transcript markdown", () => {
     );
 
     expect(screen.getByRole("button", {
-      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
+      name: /Open ExampleOrg\/catalog-service#13290 \(draft · checks pending\) in browser/,
     })).toBeInTheDocument();
   });
 
   it("updates chip modes and a visible tooltip from live PR status metadata", () => {
-    const text = `Draft PR: [Giphy/giphy-services#13290](${PR_URL})`;
+    const text = `Draft PR: [ExampleOrg/catalog-service#13290](${PR_URL})`;
     const { rerender } = renderWithPullRequests(text, [prSummary()]);
 
     const markdownNode = screen.getByText("Draft PR:").parentElement;
@@ -362,7 +362,7 @@ describe("pull request links in transcript markdown", () => {
       "Document JDK 17 for EMR and Spark jobs",
     );
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "Giphy/giphy-services#13290",
+      "ExampleOrg/catalog-service#13290",
     );
     expect(
       screen.getByRole("tooltip").querySelector(".pr-status-card__phase"),
@@ -371,7 +371,7 @@ describe("pull request links in transcript markdown", () => {
   });
 
   it("updates a visible tooltip when only structured card metadata changes", () => {
-    const text = `Draft PR: [Giphy/giphy-services#13290](${PR_URL})`;
+    const text = `Draft PR: [ExampleOrg/catalog-service#13290](${PR_URL})`;
     const initialPr = prSummary({
       additions: 10,
       deletions: 5,
@@ -423,7 +423,7 @@ describe("pull request links in transcript markdown", () => {
     ]);
 
     const chip = screen.getByRole("button", {
-      name: /Open Giphy\/giphy-services#13290 \(draft · checks pending\) in browser/,
+      name: /Open ExampleOrg\/catalog-service#13290 \(draft · checks pending\) in browser/,
     });
     expect(chip).toHaveClass("pr-chip--pending", "pr-chip--draft");
 
@@ -436,7 +436,7 @@ describe("pull request links in transcript markdown", () => {
   });
 
   it("returns to unknown status when the last matching PR metadata disappears", () => {
-    const text = `Draft PR: [Giphy/giphy-services#13290](${PR_URL})`;
+    const text = `Draft PR: [ExampleOrg/catalog-service#13290](${PR_URL})`;
     const { rerender } = renderWithPullRequests(text, [prSummary()]);
 
     const hydratedChip = screen.getByRole("button", {
@@ -454,12 +454,12 @@ describe("pull request links in transcript markdown", () => {
     );
 
     const fallbackChip = screen.getByRole("button", {
-      name: /Open Giphy\/giphy-services#13290 \(status unknown\) in browser/,
+      name: /Open ExampleOrg\/catalog-service#13290 \(status unknown\) in browser/,
     });
     expect(fallbackChip).toHaveClass("pr-chip--unknown");
     expect(fallbackChip).not.toHaveClass("pr-chip--draft");
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "Giphy/giphy-services#13290",
+      "ExampleOrg/catalog-service#13290",
     );
     expect(screen.getByRole("tooltip")).toHaveTextContent("status unknown");
     expect(screen.getByRole("tooltip")).not.toHaveTextContent(
@@ -471,21 +471,21 @@ describe("pull request links in transcript markdown", () => {
     renderWithPullRequests(`Draft PR: ${PR_URL}`, []);
 
     const chip = screen.getByRole("button", {
-      name: /Open Giphy\/giphy-services#13290 \(status unknown\) in browser/,
+      name: /Open ExampleOrg\/catalog-service#13290 \(status unknown\) in browser/,
     });
     expect(chip).toHaveClass("pr-chip--unknown");
-    expect(chip).toHaveTextContent("Giphy/giphy-services#13290");
+    expect(chip).toHaveTextContent("ExampleOrg/catalog-service#13290");
   });
 
   it("leaves non-PR GitHub links as normal transcript links", () => {
     renderWithPullRequests(
-      "Issue: [Giphy/giphy-services#13290](https://github.com/Giphy/giphy-services/issues/13290)",
+      "Issue: [ExampleOrg/catalog-service#13290](https://github.com/ExampleOrg/catalog-service/issues/13290)",
       [],
     );
 
-    expect(screen.queryByRole("button", { name: /Giphy\/giphy-services#13290/ }))
+    expect(screen.queryByRole("button", { name: /ExampleOrg\/catalog-service#13290/ }))
       .not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Giphy/giphy-services#13290" }))
+    expect(screen.getByRole("link", { name: "ExampleOrg/catalog-service#13290" }))
       .toBeInTheDocument();
   });
 
@@ -510,8 +510,8 @@ describe("parseGitHubPullRequestUrl", () => {
     const href = `${PR_URL}/files?diff=split#discussion_r1`;
     expect(parseGitHubPullRequestUrl(href)).toMatchObject({
       provider: "github.com",
-      org: "Giphy",
-      repo: "giphy-services",
+      org: "ExampleOrg",
+      repo: "catalog-service",
       number: 13290,
       state: "unknown",
       url: href,
@@ -520,19 +520,19 @@ describe("parseGitHubPullRequestUrl", () => {
 
   it("rejects issues, invalid numbers, non-GitHub hosts, and insecure URLs", () => {
     expect(parseGitHubPullRequestUrl(
-      "https://github.com/Giphy/giphy-services/issues/13290",
+      "https://github.com/ExampleOrg/catalog-service/issues/13290",
     )).toBeUndefined();
     expect(parseGitHubPullRequestUrl(
-      "https://github.com/Giphy/giphy-services/pull/not-a-number",
+      "https://github.com/ExampleOrg/catalog-service/pull/not-a-number",
     )).toBeUndefined();
     expect(parseGitHubPullRequestUrl(
-      "https://gitlab.com/Giphy/giphy-services/pull/13290",
+      "https://gitlab.com/ExampleOrg/catalog-service/pull/13290",
     )).toBeUndefined();
     expect(parseGitHubPullRequestUrl(
-      "http://github.com/Giphy/giphy-services/pull/13290",
+      "http://github.com/ExampleOrg/catalog-service/pull/13290",
     )).toBeUndefined();
     expect(parseGitHubPullRequestUrl(
-      "https://github.com/%E0%A4%A/giphy-services/pull/13290",
+      "https://github.com/%E0%A4%A/catalog-service/pull/13290",
     )).toBeUndefined();
   });
 });

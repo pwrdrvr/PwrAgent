@@ -179,7 +179,7 @@ describe("createThreadDirectoryEnricher", () => {
       error: Object.assign(new Error("git timed out"), { code: "ETIMEDOUT", killed: true }),
     },
   ])("preserves a managed worktree identity when $failure", async ({ error }) => {
-    const projectPath = "/Users/vitaliy/.codex/worktrees/a21d/giphy-services";
+    const projectPath = "/Users/example/.codex/worktrees/tree-zeta/catalog-service";
     const execFileMock = vi.fn(
       (
         _file: string,
@@ -212,7 +212,7 @@ describe("createThreadDirectoryEnricher", () => {
           id: expectedDir(projectPath),
           path: expectedDir(projectPath),
           worktreePath: expectedDir(projectPath),
-          label: "giphy-services",
+          label: "catalog-service",
           kind: "worktree",
         },
       ],

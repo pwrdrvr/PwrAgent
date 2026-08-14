@@ -6708,14 +6708,14 @@ describe("useThreadNavigation", () => {
     const initialPr: PrSummary = {
       provider: "github.com",
       number: 255,
-      org: "Giphy",
-      repo: "GifGrabber",
+      org: "ExampleOrg",
+      repo: "ExampleApp",
       state: "passing",
       checkState: "passing",
       lifecycleState: "open",
       reviewState: "draft",
       mergeState: "mergeable",
-      url: "https://github.com/Giphy/GifGrabber/pull/255",
+      url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
     };
     const updatedPr: PrSummary = {
       ...initialPr,
@@ -6726,7 +6726,7 @@ describe("useThreadNavigation", () => {
     const unrelatedPr: PrSummary = {
       ...initialPr,
       number: 256,
-      url: "https://github.com/Giphy/GifGrabber/pull/256",
+      url: "https://github.com/ExampleOrg/ExampleApp/pull/256",
     };
     const getNavigationSnapshot = vi
       .fn()

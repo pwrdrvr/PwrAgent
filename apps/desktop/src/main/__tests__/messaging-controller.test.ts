@@ -2773,11 +2773,11 @@ describe("MessagingController", () => {
         latestUpdatedAt: 1_000,
       },
       {
-        key: "directory:giphy-demo",
+        key: "directory:catalog-demo",
         kind: "directory",
-        label: "giphy-demo",
-        path: "/repo/giphy-demo",
-        threadKeys: ["codex:giphy-thread"],
+        label: "catalog-demo",
+        path: "/repo/catalog-demo",
+        threadKeys: ["codex:catalog-thread"],
         needsAttentionCount: 0,
         latestUpdatedAt: 8_000,
       },
@@ -2809,7 +2809,7 @@ describe("MessagingController", () => {
       }),
       expect.objectContaining({
         id: "browse:select-project",
-        label: "3. giphy-demo (1)",
+        label: "3. catalog-demo (1)",
       }),
     ]);
   });
@@ -5361,7 +5361,7 @@ describe("MessagingController", () => {
           id: "1786469165.289979",
           kind: "thread",
           parentId: "C05RKSBL1QF",
-          parentTitle: "giphy-services",
+          parentTitle: "catalog-service",
         },
       },
     });
