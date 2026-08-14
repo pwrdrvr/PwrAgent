@@ -36,7 +36,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
         with:
-          node-version: 24.x
+          node-version: 24.18.0
           cache-electron: "true"
 
       - name: Check release metadata
@@ -180,7 +180,7 @@ jobs:
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
         with:
-          node-version: 24.x
+          node-version: 24.18.0
           cache-electron: "true"
 
       - name: Check release metadata
