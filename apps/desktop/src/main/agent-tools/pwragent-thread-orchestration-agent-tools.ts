@@ -185,7 +185,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "handoff_task":
-      return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend spawning unless the user requests it or needs an unsupported feature. Agent settings inherit from the current turn. By default, same-project handoffs create grouped subthreads in new worktrees. Omit cwd to inherit the workspace source. Set cwd only for a user-selected project or directory. Task text never selects cwd. Cross-project handoffs are not grouped. Use fork or same_workspace only when the user requests them. Use project_local for the project checkout and none for no workspace. Provider overrides need a registered backend and exact model ID. Do not retry while startup is pending. Inspect pendingHandoffs and return threadLink verbatim.";
+      return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend spawning unless the user requests it or needs an unsupported feature. Agent settings inherit from the current turn. Same-project handoffs create grouped subthreads in new worktrees by default. When the user names another local project, pass its path as cwd. Also pass cwd when the user links or references a local directory. Never put the target path only in task or context. For an isolated worktree in that project, set workspaceMode=new_worktree. Set branchName only to an existing base ref. Omit cwd only to inherit the current project. Cross-project handoffs are not grouped. Use fork or same_workspace only when the user requests them. Use project_local for the project checkout. workspaceMode=none creates an unscoped scratch workspace. Do not use none as a fallback for work in a named project. Provider overrides need a registered backend and exact model ID. Do not retry while startup is pending. Inspect pendingHandoffs and return threadLink verbatim.";
     case "attach_thread_directory":
       return "Attach another Git directory to the current PwrAgent thread. Use this for user-requested cross-project work. Omit backend for the current thread. Use workspaceMode=local for the repository or new_worktree for a managed worktree. Default Access requires confirmation for an untrusted path. This tool does not change the primary cwd. Use detach_thread_directory to remove a temporary link.";
     case "detach_thread_directory":
@@ -275,7 +275,7 @@ function inputSchemaForOperation(
           task: {
             type: "string",
             description:
-              "The concrete task for the created thread to perform. Include the user's requested work, not the parent transcript.",
+              "Give the new thread a concrete task. Include the user's requested work, not the parent transcript. Select the workspace with cwd and workspaceMode.",
           },
           title: {
             type: "string",
@@ -303,12 +303,12 @@ function inputSchemaForOperation(
             type: "string",
             enum: HANDOFF_TASK_WORKSPACE_MODES,
             description:
-              "`new_worktree` is the default for workspace handoffs. `same_workspace` requires groupingMode=subthread. `project_local` uses the project checkout. `none` uses no workspace. `same` aliases `same_workspace`.",
+              "`new_worktree` is the default for workspace handoffs. Combine it with cwd when the user selects another local project. `same_workspace` requires groupingMode=subthread. `project_local` uses the selected project checkout. `none` creates an unscoped scratch workspace. Do not use `none` as a fallback for work in a named project. `same` aliases `same_workspace`.",
           },
           cwd: {
             type: "string",
             description:
-              "Omit cwd to inherit the current workspace. Set it only for a user-selected project or directory. Task text does not select cwd.",
+              "Filesystem path of the workspace source. This field is required when the user names another local project. It is also required when the user links or references a local directory. Combine it with workspaceMode=new_worktree for an isolated worktree. Omit it only to inherit the current project. A path in task or context does not select cwd.",
           },
           messagingAttachment: {
             type: "string",
@@ -335,7 +335,7 @@ function inputSchemaForOperation(
           branchName: {
             type: "string",
             description:
-              "Existing base ref for workspaceMode=new_worktree, such as `origin/main`. This is not a new branch name. Put branch creation in the task.",
+              "Existing base ref for workspaceMode=new_worktree, such as `origin/main`. PwrAgent resolves this ref in cwd when you provide cwd. This is not a new branch name. Put branch creation in task.",
           },
         },
       };

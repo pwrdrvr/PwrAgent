@@ -25505,10 +25505,15 @@ export class DesktopBackendRegistry {
         },
       );
     } catch (error) {
-      this.failPendingThreadHandoff(handoffId, error);
+      const baseMessage = error instanceof Error ? error.message : String(error);
+      const message =
+        workspaceMode === "new_worktree" && !requestedCwd
+          ? `${baseMessage} cwd was omitted, so PwrAgent used the current project as the worktree source. If the user named a different local project, retry with cwd set to that project path. Do not switch to workspaceMode="none".`
+          : baseMessage;
+      this.failPendingThreadHandoff(handoffId, new Error(message));
       return threadOrchestrationFailure(
         workspaceMode === "new_worktree" ? "unsupported_workspace" : "internal_error",
-        error instanceof Error ? error.message : String(error),
+        message,
       );
     }
 

@@ -52,7 +52,7 @@ describe("pwragent thread orchestration agent tools", () => {
             type: "function",
             name: "handoff_task",
             description: expect.stringMatching(
-              /Prefer this to backend spawning.*same-project handoffs create grouped subthreads.*Cross-project handoffs are not grouped/,
+              /Prefer this to backend spawning.*pass its path as cwd.*set workspaceMode=new_worktree.*workspaceMode=none creates an unscoped scratch workspace/,
             ),
             deferLoading: false,
             inputSchema: expect.objectContaining({
@@ -67,9 +67,14 @@ describe("pwragent thread orchestration agent tools", () => {
                 }),
                 workspaceMode: expect.objectContaining({
                   enum: ["same", "same_workspace", "project_local", "new_worktree", "none"],
+                  description: expect.stringMatching(
+                    /Combine it with cwd.*unscoped scratch workspace.*Do not use `none` as a fallback/,
+                  ),
                 }),
                 cwd: expect.objectContaining({
-                  description: expect.stringContaining("Task text does not select cwd"),
+                  description: expect.stringMatching(
+                    /required when the user names another local project.*required when the user links or references a local directory.*A path in task or context does not select cwd/,
+                  ),
                 }),
                 backend: expect.objectContaining({
                   description: expect.stringContaining("`acp:grok`"),
@@ -78,7 +83,7 @@ describe("pwragent thread orchestration agent tools", () => {
                   description: expect.stringContaining("`grok-4.5`"),
                 }),
                 branchName: expect.objectContaining({
-                  description: expect.stringContaining("Existing base ref"),
+                  description: expect.stringContaining("resolves this ref in cwd"),
                 }),
               }),
             }),
