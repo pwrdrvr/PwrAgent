@@ -631,6 +631,19 @@ describe("ThreadMarkdown", () => {
       .toBeInTheDocument();
   });
 
+  it("labels a SKILL.md link with its skill directory name", () => {
+    const skillPath = [
+      "/Users/huntharo/pwrdrvr/PwrSuiteLab/.agents/skills",
+      "restart-wedged-macos-gha-runner/SKILL.md",
+    ].join("/");
+
+    render(<ThreadMarkdown text={`[SKILL.md](${skillPath})`} />);
+
+    expect(screen.getByText("restart-wedged-macos-gha-runner"))
+      .toBeInTheDocument();
+    expect(screen.queryByText("SKILL.md")).not.toBeInTheDocument();
+  });
+
   it("shows skill paths and replaces text selection with skill file actions", async () => {
     const skillPath = "/Users/huntharo/.codex/skills/frontend-design/SKILL.md";
     const openApplication = vi.fn(async () => ({ opened: true as const }));
