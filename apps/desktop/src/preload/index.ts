@@ -20,6 +20,8 @@ import type {
   ForkThreadResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  StopSubAgentRequest,
+  StopSubAgentResponse,
   ListAutomationCardsRequest,
   ListAutomationCardsResponse,
   ListAutomationLoadIssuesResponse,
@@ -288,6 +290,7 @@ import {
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
@@ -1073,6 +1076,10 @@ const desktopApi = Object.freeze({
     request: InterruptTurnRequest
   ): Promise<InterruptTurnResponse> =>
     await ipcRenderer.invoke(AGENT_INTERRUPT_TURN_CHANNEL, request),
+  stopSubAgent: async (
+    request: StopSubAgentRequest,
+  ): Promise<StopSubAgentResponse> =>
+    await ipcRenderer.invoke(AGENT_STOP_SUB_AGENT_CHANNEL, request),
   steerTurn: async (
     request: SteerTurnRequest
   ): Promise<SteerTurnResponse> =>

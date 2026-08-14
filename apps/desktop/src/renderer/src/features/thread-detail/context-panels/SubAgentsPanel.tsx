@@ -18,8 +18,11 @@ import {
   subAgentOriginSentence,
   subAgentUsageLabel,
 } from "./subagent-kind";
+import type { DesktopApi } from "../../../lib/desktop-api";
 
 type SubAgentsPanelProps = {
+  desktopApi?: DesktopApi;
+  onRefreshNavigation?: () => Promise<void>;
   pricingDisplayOptions?: PricingDisplayOptions;
   thread: NavigationThreadSummary;
 };
@@ -28,6 +31,40 @@ type SubAgentsPanelProps = {
 export function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
   const [detailsFor, setDetailsFor] = useState<ThreadSubAgentSummary | null>(null);
+  const [stoppingIds, setStoppingIds] = useState<Set<string>>(() => new Set());
+  const [stopErrors, setStopErrors] = useState<Record<string, string>>({});
+
+  const stopSubAgent = async (subAgent: ThreadSubAgentSummary): Promise<void> => {
+    if (!props.desktopApi?.stopSubAgent) {
+      return;
+    }
+    setStopErrors((current) => {
+      const next = { ...current };
+      delete next[subAgent.monitorId];
+      return next;
+    });
+    setStoppingIds((current) => new Set(current).add(subAgent.monitorId));
+    try {
+      await props.desktopApi.stopSubAgent({
+        backend: props.thread.source,
+        threadId: props.thread.id,
+        monitorId: subAgent.monitorId,
+      });
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      setStopErrors((current) => ({
+        ...current,
+        [subAgent.monitorId]:
+          error instanceof Error ? error.message : "Could not stop sub-agent.",
+      }));
+    } finally {
+      setStoppingIds((current) => {
+        const next = new Set(current);
+        next.delete(subAgent.monitorId);
+        return next;
+      });
+    }
+  };
 
   return (
     <section className="context-panel__section">
@@ -44,6 +81,12 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
               subAgent.lastMessage && subAgent.lastMessage !== originSentence
                 ? subAgent.lastMessage
                 : undefined;
+            const stopping = stoppingIds.has(subAgent.monitorId);
+            const canStop =
+              subAgent.status === "running"
+              && Boolean(subAgent.monitorThreadId)
+              && Boolean(subAgent.monitorTurnId)
+              && Boolean(props.desktopApi?.stopSubAgent);
             return (
               <li key={subAgent.monitorId} className="rail-card">
                 {/* Status on its own line so it never competes with the
@@ -98,13 +141,30 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                     })}
                   </p>
                 ) : null}
-                <button
-                  className="context-list__action"
-                  type="button"
-                  onClick={() => setDetailsFor(subAgent)}
-                >
-                  Details
-                </button>
+                <div className="context-list__actions rail-card__actions">
+                  <button
+                    className="context-list__action rail-card__details-action"
+                    type="button"
+                    onClick={() => setDetailsFor(subAgent)}
+                  >
+                    Details
+                  </button>
+                  {canStop ? (
+                    <button
+                      className="context-list__action context-list__action--danger"
+                      type="button"
+                      disabled={stopping}
+                      onClick={() => void stopSubAgent(subAgent)}
+                    >
+                      {stopping ? "Stopping…" : "Stop"}
+                    </button>
+                  ) : null}
+                </div>
+                {stopErrors[subAgent.monitorId] ? (
+                  <p className="rail-card__error" role="alert">
+                    {stopErrors[subAgent.monitorId]}
+                  </p>
+                ) : null}
               </li>
             );
           })}

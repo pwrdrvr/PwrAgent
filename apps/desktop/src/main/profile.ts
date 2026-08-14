@@ -33,6 +33,7 @@ export const PWRAGENT_PROFILE_AUTO_CREATE_ENV = "PWRAGENT_PROFILE_AUTO_CREATE";
 
 const PROFILE_RUNTIME_HEARTBEAT_INTERVAL_MS = 10_000;
 const PROFILE_RUNTIME_HEARTBEAT_TTL_MS = 45_000;
+const PROFILE_RUNTIME_IDENTITY_PREFIX = "runtime-v2-";
 
 /**
  * Disk location for the throwaway "bootstrap" profile the wizard
@@ -88,7 +89,23 @@ export type ProfileRuntimeMarker = {
   heartbeatAt: number;
 };
 
+export type ProfileRuntimeIdentity = Pick<
+  ProfileRuntimeMarker,
+  "instanceId" | "processId" | "startedAt"
+>;
+
 let cachedProcessActiveProfileName: string | undefined;
+let processRuntimeIdentity: Omit<ProfileRuntimeIdentity, "processId"> | undefined;
+
+export function getProcessRuntimeIdentity(): Omit<ProfileRuntimeIdentity, "processId"> {
+  if (!processRuntimeIdentity) {
+    processRuntimeIdentity = {
+      instanceId: `${PROFILE_RUNTIME_IDENTITY_PREFIX}${randomUUID()}`,
+      startedAt: Date.now(),
+    };
+  }
+  return processRuntimeIdentity;
+}
 
 export function isValidProfileName(name: string): boolean {
   return isCanonicalProfileName(name);
@@ -652,6 +669,7 @@ export function startProfileRuntimeHeartbeat(
     intervalMs?: number;
     now?: () => number;
     processId?: number;
+    startedAt?: number;
   },
 ): ProfileRuntimeHeartbeat {
   const normalizedProfileName = normalizeProfileName(profileName);
@@ -664,7 +682,7 @@ export function startProfileRuntimeHeartbeat(
     instanceId: options?.instanceId ?? randomUUID(),
     processId,
     profileName: normalizedProfileName,
-    startedAt: now(),
+    startedAt: options?.startedAt ?? now(),
     heartbeatAt: now(),
   };
   const markerDir = resolveProfileRuntimeMarkerDir(normalizedProfileName, options);

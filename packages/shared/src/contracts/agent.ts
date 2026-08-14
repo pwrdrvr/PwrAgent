@@ -272,6 +272,19 @@ export type InterruptTurnResponse = {
   turnId: string;
 };
 
+export type StopSubAgentRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  monitorId: string;
+};
+
+export type StopSubAgentResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  monitorId: string;
+  stoppedAt: number;
+};
+
 export type CompactThreadRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
