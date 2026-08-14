@@ -37,6 +37,7 @@ import {
   resolveThreadIdText,
   useThreadLinks,
   type ThreadLinkContextValue,
+  type ThreadLinkSource,
 } from "../../lib/thread-links";
 import {
   resolvePullRequestHref,
@@ -72,6 +73,7 @@ type ThreadMarkdownProps = {
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   skills?: AppServerSkillSummary[];
   text: string;
+  threadLinkSource?: ThreadLinkSource;
   variant?: "message" | "summary";
 };
 
@@ -158,7 +160,7 @@ function TranscriptCode(props: {
     // so an unrelated uuid stays plain code.
     const threadLink = resolveThreadIdText(
       extractTextContent(props.children),
-      props.threadLinks
+      props.threadLinks,
     );
     if (threadLink) {
       return <ThreadChip link={threadLink} onOpen={props.threadLinks.show} />;
@@ -335,7 +337,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         }
 
         if (isThreadUrl(href)) {
-          const threadLink = resolveThreadHref(href, threadLinks);
+          const threadLink = resolveThreadHref(
+            href,
+            threadLinks,
+            props.threadLinkSource,
+          );
           if (threadLink && threadLinks) {
             return (
               <ThreadChip
@@ -641,6 +647,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       props.desktopApi,
       props.imageParts,
       props.onOpenImage,
+      props.threadLinkSource,
       pullRequestLinks,
       sourceMarkdownText,
       skillsByPath,

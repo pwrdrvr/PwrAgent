@@ -4,6 +4,7 @@ import type {
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadLinkSource } from "../../lib/thread-links";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type TranscriptPlanProps = {
@@ -14,6 +15,7 @@ type TranscriptPlanProps = {
   >;
   entry: AppServerThreadPlanEntry;
   fileViewerContext?: MarkdownFileViewerContext;
+  threadLinkSource?: ThreadLinkSource;
 };
 
 function formatPlanSummary(completedCount: number, totalCount: number): string {
@@ -83,6 +85,7 @@ export function TranscriptPlan(props: TranscriptPlanProps) {
           desktopApi={props.desktopApi}
           fileViewerContext={props.fileViewerContext}
           text={props.entry.markdown}
+          threadLinkSource={props.threadLinkSource}
         />
       ) : null}
     </aside>

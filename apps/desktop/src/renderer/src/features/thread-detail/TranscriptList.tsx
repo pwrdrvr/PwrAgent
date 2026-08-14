@@ -41,6 +41,7 @@ import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
 import { injectTurnFailures } from "./turn-failure-entries";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadLinkSource } from "../../lib/thread-links";
 import {
   isSidebarResizing,
   subscribeSidebarResizing,
@@ -113,6 +114,7 @@ type TranscriptListProps = {
   restoredViewport?: TranscriptViewport;
   reglueRequestKey?: number;
   threadId?: string;
+  threadLinkSource?: ThreadLinkSource;
   fileViewerContext?: MarkdownFileViewerContext;
   skills?: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
@@ -1444,6 +1446,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   parentThreadId={props.parentThreadId ?? ""}
                   skills={skills}
                   subAgents={props.subAgents}
+                  threadLinkSource={props.threadLinkSource}
                   onActivityExpandedChange={setActivityExpanded}
                   onOpenImage={props.onOpenImage}
                   onToggle={() => {
@@ -1463,6 +1466,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   }}
                   onOpenImage={props.onOpenImage}
                   skills={skills}
+                  threadLinkSource={props.threadLinkSource}
                 />
               ) : item.entry.type === "plan" ? (
                 <TranscriptPlan
@@ -1470,6 +1474,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   entry={item.entry}
                   fileViewerContext={props.fileViewerContext}
+                  threadLinkSource={props.threadLinkSource}
                 />
               ) : item.entry.type === "review" ? (
                 <TranscriptReview
@@ -1478,6 +1483,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   entry={item.entry}
                   fileViewerContext={props.fileViewerContext}
+                  threadLinkSource={props.threadLinkSource}
                 />
               ) : (
                 <TranscriptMessage
@@ -1488,6 +1494,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   fileViewerContext={props.fileViewerContext}
                   skills={skills}
                   subAgents={props.subAgents}
+                  threadLinkSource={props.threadLinkSource}
                   onOpenImage={props.onOpenImage}
                 />
               );
@@ -1583,6 +1590,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   props.pendingRequest,
                   pendingApprovalContext,
                 )}
+                threadLinkSource={props.threadLinkSource}
               />
               <ApprovalDiffDisclosures context={pendingApprovalContext} />
               <div className="transcript-request__actions">

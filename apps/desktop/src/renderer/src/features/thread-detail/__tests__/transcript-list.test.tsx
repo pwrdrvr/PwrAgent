@@ -243,6 +243,69 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("qualifies links in every markdown-bearing remote transcript entry", () => {
+    const onShowThread = vi.fn();
+    render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+        <TranscriptList
+          entries={[
+            {
+              type: "activity",
+              id: "activity-link",
+              summary: "Activity reference",
+              details: [{
+                id: "activity-detail",
+                kind: "command",
+                label: "Activity child",
+                markdown:
+                  "[Activity child](pwragent://thread/activity-child?backend=codex)",
+              }],
+              turn: { id: "remote-turn", status: "completed" },
+            },
+            {
+              type: "plan",
+              id: "plan-link",
+              markdown: "[Plan child](pwragent://thread/plan-child?backend=codex)",
+              steps: [],
+              turn: { id: "remote-turn", status: "completed" },
+            },
+            {
+              type: "review",
+              id: "review-link",
+              review: "[Review child](pwragent://thread/review-child?backend=codex)",
+            },
+          ]}
+          loading={false}
+          loadingMore={false}
+          threadLinkSource={{ backend: "codex", instanceId: "pwr_remote" }}
+          onLoadOlder={async () => undefined}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Activity reference" }));
+    for (const title of ["Activity child", "Plan child", "Review child"]) {
+      fireEvent.click(screen.getByRole("button", { name: `Open thread ${title}` }));
+    }
+
+    expect(onShowThread).toHaveBeenNthCalledWith(1, {
+      backend: "codex",
+      instanceId: "pwr_remote",
+      threadId: "activity-child",
+    });
+    expect(onShowThread).toHaveBeenNthCalledWith(2, {
+      backend: "codex",
+      instanceId: "pwr_remote",
+      threadId: "plan-child",
+    });
+    expect(onShowThread).toHaveBeenNthCalledWith(3, {
+      backend: "codex",
+      instanceId: "pwr_remote",
+      threadId: "review-child",
+    });
+  });
+
   it("prefers hydrated provenance over a cached fallback thread title", () => {
     const sourceThreadId = "019fde92-318a-7541-9281-029bdc1508b5";
     const sourceThread = {

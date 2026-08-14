@@ -37,7 +37,15 @@ function renderWithLinks(
       messageId?: string;
       threadId: string;
     }) => void;
-    onShowThread?: (request: { backend: AppServerBackendKind; threadId: string }) => void;
+    onShowThread?: (request: {
+      backend: AppServerBackendKind;
+      instanceId?: string;
+      threadId: string;
+    }) => void;
+    threadLinkSource?: {
+      backend: AppServerBackendKind;
+      instanceId: string;
+    };
     threads?: NavigationThreadSummary[];
   } = {},
 ) {
@@ -49,7 +57,10 @@ function renderWithLinks(
       onShowThread={onShowThread}
       threads={options.threads ?? [threadSummary()]}
     >
-      <ThreadMarkdown text={text} />
+      <ThreadMarkdown
+        text={text}
+        threadLinkSource={options.threadLinkSource}
+      />
     </ThreadLinkProvider>,
   );
 }
@@ -285,6 +296,45 @@ describe("thread links in transcript markdown", () => {
       threadId: CHILD_THREAD_ID,
     });
     expect(onShowThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an unqualified handoff link actionable in a remote transcript", () => {
+    const onShowThread = vi.fn();
+    renderWithLinks(
+      `See [Remote handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`,
+      {
+        onShowThread,
+        threadLinkSource: {
+          backend: "codex",
+          instanceId: "pwr_harold",
+        },
+        threads: [],
+      },
+    );
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Open thread Remote handoff",
+    }));
+
+    expect(onShowThread).toHaveBeenCalledWith({
+      backend: "codex",
+      instanceId: "pwr_harold",
+      threadId: CHILD_THREAD_ID,
+    });
+  });
+
+  it("does not treat unrelated inline code as a remote thread", () => {
+    renderWithLinks("Use `useState` for local component state.", {
+      threadLinkSource: {
+        backend: "codex",
+        instanceId: "pwr_harold",
+      },
+      threads: [],
+    });
+
+    expect(screen.queryByRole("button", { name: /Open thread/ }))
+      .not.toBeInTheDocument();
+    expect(screen.getByText("useState")).toBeInTheDocument();
   });
 
   it("labels a remote thread's pop-out action with its instance name", () => {

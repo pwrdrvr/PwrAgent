@@ -1375,6 +1375,22 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.activeTurnId]);
 
   const selectedThread = props.selectedThread;
+  const transcriptThreadLinkTarget =
+    selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
+  const transcriptThreadLinkInstanceId =
+    transcriptThreadLinkTarget && isRemoteFederationTarget(transcriptThreadLinkTarget)
+      ? transcriptThreadLinkTarget.instanceId
+      : undefined;
+  const transcriptThreadLinkBackend = selectedThread?.source;
+  const transcriptThreadLinkSource = useMemo(
+    () => transcriptThreadLinkBackend && transcriptThreadLinkInstanceId
+      ? {
+          backend: transcriptThreadLinkBackend,
+          instanceId: transcriptThreadLinkInstanceId,
+        }
+      : undefined,
+    [transcriptThreadLinkBackend, transcriptThreadLinkInstanceId],
+  );
   const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
   // Owning instance's identity mark: remote threads show their instance's
   // icon, local threads (and the local viewer) show the local icon.
@@ -3219,6 +3235,7 @@ export function ThreadView(props: ThreadViewProps) {
               linkedMessageRequestKey={props.linkedMessageRequestKey}
               pagination={visibleTranscriptPagination}
               parentThreadId={selectedThread!.id}
+              threadLinkSource={transcriptThreadLinkSource}
               // File-diff activity renders in the LiveWorkRail above
               // the composer (issue #495). Generic tool activity has no
               // rail body, so keep it in the transcript while the turn

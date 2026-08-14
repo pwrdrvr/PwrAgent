@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import {
   isAppServerBackendKind,
-  parseThreadUrl,
   type AppServerSkillSummary,
   formatPathRelativeToDirectories,
   type AppServerThreadActivityDetail,
@@ -10,7 +9,12 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
-import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
+import {
+  resolveThreadHref,
+  useThreadLinks,
+  type ResolvedThreadLink,
+  type ThreadLinkSource,
+} from "../../lib/thread-links";
 import { ThreadChip } from "./ThreadChip";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptSubAgentCall } from "./TranscriptSubAgentCall";
@@ -25,6 +29,7 @@ type TranscriptCommandOutputProps = {
   directoryPaths?: string[];
   fileViewerContext?: MarkdownFileViewerContext;
   skills?: AppServerSkillSummary[];
+  threadLinkSource?: ThreadLinkSource;
 };
 
 const PREVIEW_LINE_LIMIT = 12;
@@ -70,12 +75,17 @@ export function TranscriptThreadToolActivity(props: {
   expanded: boolean;
   fileViewerContext?: MarkdownFileViewerContext;
   skills?: AppServerSkillSummary[];
+  threadLinkSource?: ThreadLinkSource;
   onExpandedChange: (expanded: boolean) => void;
 }) {
   const threadLinks = useThreadLinks();
   const presentation = useMemo(
-    () => buildThreadToolPresentation(props.detail, threadLinks),
-    [props.detail, threadLinks],
+    () => buildThreadToolPresentation(
+      props.detail,
+      threadLinks,
+      props.threadLinkSource,
+    ),
+    [props.detail, props.threadLinkSource, threadLinks],
   );
   if (!presentation) {
     return <TranscriptCommandOutput {...props} />;
@@ -129,6 +139,7 @@ export function TranscriptThreadToolActivity(props: {
                 fileViewerContext={props.fileViewerContext}
                 skills={props.skills}
                 text={presentation.prompt}
+                threadLinkSource={props.threadLinkSource}
                 variant="summary"
               />
             </section>
@@ -137,6 +148,7 @@ export function TranscriptThreadToolActivity(props: {
             const messageLink = resolveThreadToolLink(
               message.messageUrl,
               threadLinks,
+              props.threadLinkSource,
             );
             return (
               <section
@@ -163,6 +175,7 @@ export function TranscriptThreadToolActivity(props: {
                   fileViewerContext={props.fileViewerContext}
                   skills={props.skills}
                   text={message.text}
+                  threadLinkSource={props.threadLinkSource}
                   variant="summary"
                 />
               </section>
@@ -182,6 +195,7 @@ export function TranscriptThreadToolActivity(props: {
 function buildThreadToolPresentation(
   detail: AppServerThreadActivityDetail,
   threadLinks: ReturnType<typeof useThreadLinks>,
+  threadLinkSource?: ThreadLinkSource,
 ): ThreadToolPresentation | undefined {
   const command = detail.command;
   if (!command || !isThreadReferenceToolDetail(detail)) {
@@ -206,11 +220,18 @@ function buildThreadToolPresentation(
   const preferredUrl = tool === "send_message_to_thread"
     ? readString(result, "messageUrl") ?? readString(result, "threadUrl")
     : readString(result, "threadUrl");
-  let link = resolveThreadToolLink(preferredUrl, threadLinks);
-  if (!link && threadLinks && backendValue && isAppServerBackendKind(backendValue)) {
+  let link = resolveThreadToolLink(preferredUrl, threadLinks, threadLinkSource);
+  const backend = backendValue && isAppServerBackendKind(backendValue)
+    ? backendValue
+    : threadLinkSource?.backend;
+  if (!link && threadLinks && backend) {
     link = threadLinks.resolve({
-      backend: backendValue,
-      ...(instanceId ? { instanceId } : {}),
+      backend,
+      ...(instanceId
+        ? { instanceId }
+        : threadLinkSource
+          ? { instanceId: threadLinkSource.instanceId }
+          : {}),
       ...(tool === "send_message_to_thread"
         ? { messageId: readString(result, "messageId") }
         : {}),
@@ -254,9 +275,9 @@ function buildThreadToolPresentation(
 function resolveThreadToolLink(
   value: string | undefined,
   threadLinks: ReturnType<typeof useThreadLinks>,
+  threadLinkSource?: ThreadLinkSource,
 ): ResolvedThreadLink | undefined {
-  const ref = value ? parseThreadUrl(value) : undefined;
-  return ref && threadLinks ? threadLinks.resolve(ref) : undefined;
+  return value ? resolveThreadHref(value, threadLinks, threadLinkSource) : undefined;
 }
 
 function parseJsonPayload(value: string | undefined): Record<string, unknown> | undefined {

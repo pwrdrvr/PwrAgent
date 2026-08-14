@@ -8,6 +8,7 @@ import type {
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadLinkSource } from "../../lib/thread-links";
 import { TranscriptActivity } from "./TranscriptActivity";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { TranscriptPlan } from "./TranscriptPlan";
@@ -31,6 +32,7 @@ type TranscriptWorkPhaseGroupProps = {
   parentThreadId?: string;
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
+  threadLinkSource?: ThreadLinkSource;
   onActivityExpandedChange?: (activityId: string, expanded: boolean) => void;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   onToggle: () => void;
@@ -83,6 +85,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
               parentThreadId: props.parentThreadId ?? "",
               skills: props.skills,
               subAgents: props.subAgents,
+              threadLinkSource: props.threadLinkSource,
             })
           )}
         </div>
@@ -134,6 +137,7 @@ function renderEntry(params: {
   parentThreadId: string;
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
+  threadLinkSource?: ThreadLinkSource;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
 }) {
   const entry = params.entry;
@@ -151,6 +155,7 @@ function renderEntry(params: {
       }}
       onOpenImage={params.onOpenImage}
       skills={params.skills}
+      threadLinkSource={params.threadLinkSource}
     />
   ) : entry.type === "plan" ? (
     <TranscriptPlan
@@ -159,6 +164,7 @@ function renderEntry(params: {
       desktopApi={params.desktopApi}
       entry={entry}
       fileViewerContext={params.fileViewerContext}
+      threadLinkSource={params.threadLinkSource}
     />
   ) : entry.type === "review" ? (
     <TranscriptReview
@@ -168,6 +174,7 @@ function renderEntry(params: {
       desktopApi={params.desktopApi}
       entry={entry}
       fileViewerContext={params.fileViewerContext}
+      threadLinkSource={params.threadLinkSource}
     />
   ) : (
     <TranscriptMessage
@@ -179,6 +186,7 @@ function renderEntry(params: {
       parentThreadId={params.parentThreadId}
       skills={params.skills}
       subAgents={params.subAgents}
+      threadLinkSource={params.threadLinkSource}
       onOpenImage={params.onOpenImage}
     />
   );

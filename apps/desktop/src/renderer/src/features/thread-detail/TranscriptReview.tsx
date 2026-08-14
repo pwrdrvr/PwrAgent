@@ -8,6 +8,7 @@ import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadLinkSource } from "../../lib/thread-links";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type TranscriptReviewProps = {
@@ -19,6 +20,7 @@ type TranscriptReviewProps = {
   >;
   entry: AppServerThreadReviewEntry;
   fileViewerContext?: MarkdownFileViewerContext;
+  threadLinkSource?: ThreadLinkSource;
 };
 
 function formatConfidence(value: number | undefined): string | undefined {
@@ -182,6 +184,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
               desktopApi={props.desktopApi}
               fileViewerContext={props.fileViewerContext}
               text={body}
+              threadLinkSource={props.threadLinkSource}
             />
           ) : null}
         </div>
@@ -242,6 +245,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                   desktopApi={props.desktopApi}
                   fileViewerContext={props.fileViewerContext}
                   text={finding.body}
+                  threadLinkSource={props.threadLinkSource}
                 />
                 <div className="transcript-review__location">
                   <a
