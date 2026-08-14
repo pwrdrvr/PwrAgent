@@ -10,6 +10,12 @@ test("keeps a Windows title-bar flyout open while the pointer crosses into it", 
     process.platform !== "win32",
     "The custom app title bar is rendered only on Windows.",
   );
+  // The lab controller accepts Playwright arguments but deliberately exposes no
+  // arbitrary environment-variable or command escape hatch. An explicit
+  // `--timeout=0` therefore doubles as the manual-inspection signal: ordinary
+  // suite runs retain their bounded timeout and self-close, while an operator
+  // can keep this exact scene visible until Electron is closed.
+  const inspectionMode = test.info().timeout === 0;
 
   const app = await launchElectronApp({
     fixturePath: path.resolve(
@@ -55,7 +61,27 @@ test("keeps a Windows title-bar flyout open while the pointer crosses into it", 
       "-webkit-app-region",
       "no-drag",
     );
+
+    if (inspectionMode) {
+      console.log(
+        [
+          "",
+          "Windows title-bar hover inspection is ready.",
+          "The pointer crossed from New thread into the open flyout.",
+          "Close the Electron window or quit the app to finish this command.",
+          "",
+        ].join("\n"),
+      );
+      await Promise.race([
+        app.window.waitForEvent("close", { timeout: 0 }).then(() => undefined),
+        app.electronApp.waitForEvent("close", { timeout: 0 }).then(() => undefined),
+      ]);
+    }
   } finally {
-    await app.close();
+    if (inspectionMode) {
+      await app.close().catch(() => undefined);
+    } else {
+      await app.close();
+    }
   }
 });
