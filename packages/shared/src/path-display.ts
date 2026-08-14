@@ -1,11 +1,13 @@
 type NormalizedDirectoryPath = {
   caseInsensitive: boolean;
   normalized: string;
+  separator: "/" | "\\";
 };
 
 /**
  * Display an absolute path relative to the longest known directory that
- * contains it. Paths outside the known directories are returned unchanged.
+ * contains it. Relative paths use the separator style of a known Windows
+ * directory; absolute paths outside the known directories are unchanged.
  */
 export function formatPathRelativeToDirectories(
   value: string,
@@ -22,6 +24,7 @@ export function formatPathRelativeToDirectories(
     .map((root): NormalizedDirectoryPath => ({
       caseInsensitive: valueIsWindowsPath || isWindowsPath(root),
       normalized: normalizePath(root),
+      separator: isWindowsPath(root) ? "\\" : "/",
     }))
     .filter((root) => Boolean(root.normalized))
     .sort((left, right) => right.normalized.length - left.normalized.length);
@@ -41,11 +44,30 @@ export function formatPathRelativeToDirectories(
       : comparisonValue.startsWith(`${comparisonRoot}/`);
     if (isContained) {
       const relativeStart = comparisonRoot === "/" ? 1 : root.normalized.length + 1;
-      return trimmed.slice(relativeStart) || ".";
+      return formatSeparators(
+        normalizedValue.slice(relativeStart) || ".",
+        root.separator,
+      );
+    }
+  }
+
+  if (!isAbsolutePath(trimmed)) {
+    const windowsRoot = roots.find((root) => root.separator === "\\");
+    if (windowsRoot) {
+      return formatSeparators(trimmed, windowsRoot.separator);
     }
   }
 
   return trimmed;
+}
+
+function formatSeparators(value: string, separator: "/" | "\\"): string {
+  return separator === "\\" ? value.replace(/\//g, "\\") : value;
+}
+
+function isAbsolutePath(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("/") || isWindowsPath(trimmed);
 }
 
 function isWindowsPath(value: string): boolean {

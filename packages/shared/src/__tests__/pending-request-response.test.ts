@@ -543,4 +543,41 @@ describe("buildPendingRequestApprovalContext", () => {
       ],
     });
   });
+
+  it("normalizes raw Codex Windows add contents into a unified diff", () => {
+    const request = createRequest({
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        changes: [
+          {
+            path: "C:\\repo\\pwragent\\breakfasts\\eggs\\sunny-side-up.md",
+            kind: { type: "add" },
+            diff: [
+              "- Fry the eggs until their edges are crisp.",
+              "- Serve with toast.",
+              "",
+            ].join("\r\n"),
+          },
+        ],
+      },
+    });
+
+    expect(
+      buildPendingRequestApprovalContext(request, {
+        directoryPaths: ["C:\\repo\\pwragent"],
+      }),
+    ).toMatchObject({
+      action: "add",
+      displayPath: "breakfasts\\eggs\\sunny-side-up.md",
+      diff: [
+        "--- /dev/null",
+        "+++ b/C:\\repo\\pwragent\\breakfasts\\eggs\\sunny-side-up.md",
+        "@@ -0,0 +1,2 @@",
+        "+- Fry the eggs until their edges are crisp.",
+        "+- Serve with toast.",
+      ].join("\n"),
+    });
+  });
 });

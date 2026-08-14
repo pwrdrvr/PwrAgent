@@ -18586,6 +18586,120 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("normalizes file-change approval diffs and omits empty placeholders", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+    const unifiedDiff = [
+      "--- /dev/null",
+      "+++ b/breakfasts/croissants/croissants.md",
+      "@@ -0,0 +1,1 @@",
+      "+# Butter Croissants",
+    ].join("\n");
+    const rawWindowsAddContent = [
+      "# Sunny-Side-Up Eggs",
+      "",
+      "Eggs with crisp edges make an easy breakfast.",
+      "",
+    ].join("\n");
+    const normalizedWindowsAddDiff = [
+      "--- /dev/null",
+      "+++ b/breakfasts/eggs/sunny-side-up.md",
+      "@@ -0,0 +1,3 @@",
+      "+# Sunny-Side-Up Eggs",
+      "+",
+      "+Eggs with crisp edges make an easy breakfast.",
+    ].join("\n");
+
+    await emit({
+      backend: "codex",
+      notification: {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "file-change-1",
+            type: "fileChange",
+            changes: [
+              {
+                path: "breakfasts/eggs/sunny-side-up.md",
+                kind: { type: "add" },
+                diff: rawWindowsAddContent,
+              },
+              {
+                path: "breakfasts/croissants/croissants.md",
+                kind: { type: "add", content: "" },
+                diff: unifiedDiff,
+              },
+              {
+                path: "breakfasts/pancakes/pancakes.md",
+                kind: { type: "add", content: "" },
+              },
+            ],
+          },
+        },
+      },
+    } as AgentEvent);
+    await emit({
+      backend: "codex",
+      notification: {
+        method: "item/fileChange/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "file-change-1",
+          requestId: "approval-1",
+        },
+      },
+    } as AgentEvent);
+
+    const approval = events.find(
+      (event) => event.notification.method === "item/fileChange/requestApproval",
+    );
+    expect(approval?.notification.params).toMatchObject({
+      _pwragentApprovalContext: {
+        files: [
+          {
+            action: "add",
+            path: "breakfasts/eggs/sunny-side-up.md",
+            diff: normalizedWindowsAddDiff,
+          },
+          {
+            action: "add",
+            path: "breakfasts/croissants/croissants.md",
+            diff: unifiedDiff,
+          },
+          {
+            action: "add",
+            path: "breakfasts/pancakes/pancakes.md",
+          },
+        ],
+      },
+    });
+    const approvalParams = approval?.notification.params as
+      | Record<string, unknown>
+      | undefined;
+    const approvalContext = approvalParams?._pwragentApprovalContext as
+      | { files?: Array<{ diff?: string }> }
+      | undefined;
+    expect(approvalContext?.files?.[2]?.diff).toBeUndefined();
+
+    unsubscribe();
+    await registry.close();
+  });
+
   it("mirrors managed review tool activity onto the reviewed thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
