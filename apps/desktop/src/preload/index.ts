@@ -461,6 +461,7 @@ import {
   THREAD_MIGRATION_START_CHANNEL,
   WINDOW_FOCUS_SYNC_CHANNEL,
   WINDOW_FULLSCREEN_SYNC_CHANNEL,
+  WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
   WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_POINTER_SNAPSHOT_CHANNEL,
@@ -1436,6 +1437,13 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(WINDOW_REPLAY_ONBOARDING_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_REPLAY_ONBOARDING_CHANNEL, listener);
+    };
+  },
+  onCopyLocalDiagnosticsInfoRequested: (callback: () => void): (() => void) => {
+    const listener = () => callback();
+    ipcRenderer.on(WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL, listener);
     };
   },
   getWindowPointerSnapshot: async (): Promise<WindowPointerSnapshot> =>

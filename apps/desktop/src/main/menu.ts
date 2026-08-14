@@ -3,6 +3,7 @@ import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
 
 export type ApplicationMenuActions = {
   checkForUpdates: () => void;
+  copyLocalDiagnosticsInfo: () => void;
   focusWindow: (windowId: number) => void;
   openDocumentation: () => void | Promise<void>;
   openIssueReporter: () => void | Promise<void>;
@@ -256,6 +257,10 @@ function buildHelpMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
       {
         label: "Report an Issue",
         click: options.actions.openIssueReporter,
+      },
+      {
+        label: "Copy Local Diagnostics Info",
+        click: options.actions.copyLocalDiagnosticsInfo,
       },
       {
         label: "PwrAgent Website",
