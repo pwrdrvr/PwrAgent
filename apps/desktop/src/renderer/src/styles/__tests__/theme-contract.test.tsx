@@ -764,6 +764,11 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.settings-nav__masthead\s*\{[\s\S]*?padding-left:\s*0;[\s\S]*?\}/,
     );
+    // Settings and Automations use the same Windows title strip as the main
+    // shell, so their in-nav wordmarks would duplicate the one visible there.
+    expect(css).toMatch(
+      /:root\[data-platform="win32"\]\s*:is\(\.settings-screen,\s*\.automations-screen\)\s*\.settings-nav__masthead\s*\{[\s\S]*?display:\s*none;[\s\S]*?\}/,
+    );
   });
 
   it("mirrors thread-row drop-indicator + recents divider tokens for directory pinning", () => {

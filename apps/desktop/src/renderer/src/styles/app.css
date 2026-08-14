@@ -5877,6 +5877,15 @@ textarea,
   padding-left: 0;
 }
 
+/* Windows already carries the PwrAgent wordmark in its custom title strip.
+   Drop the duplicate overlay masthead so the Exit row starts at the top of
+   both navs, mirroring the main sidebar's Windows treatment. */
+:root[data-platform="win32"]
+  :is(.settings-screen, .automations-screen)
+  .settings-nav__masthead {
+  display: none;
+}
+
 /* macOS fullscreen drops the stoplights, so the Settings nav masthead
    collapses its 80px reservation to the left edge too — mirrors the main
    `.sidebar__masthead` fullscreen behavior so the two screens stay aligned. */
