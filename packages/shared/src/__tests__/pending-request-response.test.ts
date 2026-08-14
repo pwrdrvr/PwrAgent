@@ -555,9 +555,8 @@ describe("buildPendingRequestApprovalContext", () => {
             path: "C:\\repo\\pwragent\\breakfasts\\eggs\\sunny-side-up.md",
             kind: { type: "add" },
             diff: [
-              "# Sunny-Side-Up Eggs",
-              "",
-              "Eggs with crisp edges make an easy breakfast.",
+              "- Fry the eggs until their edges are crisp.",
+              "- Serve with toast.",
               "",
             ].join("\r\n"),
           },
@@ -575,10 +574,9 @@ describe("buildPendingRequestApprovalContext", () => {
       diff: [
         "--- /dev/null",
         "+++ b/C:\\repo\\pwragent\\breakfasts\\eggs\\sunny-side-up.md",
-        "@@ -0,0 +1,3 @@",
-        "+# Sunny-Side-Up Eggs",
-        "+",
-        "+Eggs with crisp edges make an easy breakfast.",
+        "@@ -0,0 +1,2 @@",
+        "+- Fry the eggs until their edges are crisp.",
+        "+- Serve with toast.",
       ].join("\n"),
     });
   });

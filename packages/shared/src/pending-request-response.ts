@@ -298,27 +298,16 @@ function looksLikeUnifiedDiff(value: string): boolean {
   if (
     lines.some(
       (line) =>
-        line.startsWith("diff --git ")
-        || line.startsWith("@@ ")
-        || line.startsWith("@@@ "),
+        /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(?: |$)/.test(line)
+        || /^@@@ (?:-\d+(?:,\d+)? ){2,}\+\d+(?:,\d+)? @@@(?: |$)/.test(line),
     )
   ) {
     return true;
   }
-  if (
-    lines.some((line) => line.startsWith("--- "))
-    && lines.some((line) => line.startsWith("+++ "))
-  ) {
-    return true;
-  }
-  const meaningfulLines = lines.filter(Boolean);
-  return meaningfulLines.length > 0
-    && meaningfulLines.every(
-      (line) =>
-        line.startsWith("+")
-        || line.startsWith("-")
-        || line.startsWith("\\ No newline at end of file"),
-    );
+  return lines.some(
+    (line, index) =>
+      line.startsWith("--- ") && lines[index + 1]?.startsWith("+++ "),
+  );
 }
 
 function activityMatchesItem(

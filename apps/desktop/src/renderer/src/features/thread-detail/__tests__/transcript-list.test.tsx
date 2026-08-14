@@ -4663,7 +4663,7 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.queryByRole("button", { name: /diff/ })).not.toBeInTheDocument();
   });
 
-  it("renders raw Codex Windows add contents as a counted diff", () => {
+  it("renders raw Codex Windows Markdown lists as added lines", () => {
     render(
       <TranscriptList
         directoryPaths={["C:\\repo\\pwragent"]}
@@ -4680,9 +4680,8 @@ Implementation notes remain in a readable bubble.`;
                 path: "C:\\repo\\pwragent\\breakfasts\\eggs\\sunny-side-up.md",
                 kind: { type: "add" },
                 diff: [
-                  "# Sunny-Side-Up Eggs",
-                  "",
-                  "Eggs with crisp edges make an easy breakfast.",
+                  "- Fry the eggs until their edges are crisp.",
+                  "- Serve with toast.",
                   "",
                 ].join("\n"),
               },
@@ -4698,9 +4697,9 @@ Implementation notes remain in a readable bubble.`;
       screen.getByText(/File: breakfasts\\eggs\\sunny-side-up\.md/),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /Hide diff.*\+3.*-0/ }),
+      screen.getByRole("button", { name: /Hide diff.*\+2.*-0/ }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Eggs with crisp edges/)).toBeInTheDocument();
+    expect(screen.getByText(/Fry the eggs until their edges are crisp/)).toBeInTheDocument();
   });
 
   it("shows file-change approval context inferred from the matching activity", () => {
