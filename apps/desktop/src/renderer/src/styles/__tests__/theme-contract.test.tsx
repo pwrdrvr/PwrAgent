@@ -550,6 +550,19 @@ describe("Tangerine Terminal theme contract", () => {
     expect(messagingTooltipRule).toContain("z-index: 140;");
   });
 
+  it("keeps every Windows title-bar control and hover bridge interactive", () => {
+    const appTitlebarRuleIndex = css.indexOf(".app-titlebar {");
+    const titlebarControlsRuleIndex = css.indexOf(
+      ".app-titlebar__left,\n.app-titlebar__left *,",
+    );
+
+    expect(appTitlebarRuleIndex).toBeGreaterThan(-1);
+    expect(titlebarControlsRuleIndex).toBeGreaterThan(appTitlebarRuleIndex);
+    expect(css).toMatch(
+      /\.app-titlebar__left,\s*\.app-titlebar__left \*,\s*\.app-titlebar__right,\s*\.app-titlebar__right \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+    );
+  });
+
   it("keeps the thread title reveal hit target to the rendered title text", () => {
     const compactTitleRule = extractRuleBody(css, ".thread-header__compact-title");
     const titleButtonRule = extractRuleBody(css, ".thread-header__title-button");
