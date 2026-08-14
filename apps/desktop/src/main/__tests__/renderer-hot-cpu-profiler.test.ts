@@ -109,9 +109,21 @@ function deferred<T = void>() {
 
 describe("RendererHotCpuProfiler", () => {
   const cleanups: Array<() => Promise<void>> = [];
+  const profilers: RendererHotCpuProfiler[] = [];
+
+  function createProfiler(
+    options: ConstructorParameters<typeof RendererHotCpuProfiler>[0],
+  ): RendererHotCpuProfiler {
+    const profiler = new RendererHotCpuProfiler(options);
+    profilers.push(profiler);
+    return profiler;
+  }
 
   afterEach(async () => {
     vi.useRealTimers();
+    await Promise.all(
+      profilers.splice(0).map((profiler) => profiler.stop("test-cleanup")),
+    );
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
 
@@ -142,7 +154,7 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(4, 101.5),
       createMetric(4, 103),
     ];
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
       session: sessionResult.session,
@@ -257,7 +269,7 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(4, 101.5),
       createMetric(4, 103),
     ];
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
       session: sessionResult.session,
@@ -286,6 +298,91 @@ describe("RendererHotCpuProfiler", () => {
     profileWritten.resolve();
     await stopPromise;
     expect(stopResolved).toBe(true);
+  });
+
+  it("waits for an in-flight sample before allowing session cleanup", async () => {
+    const workspace = await createTemporaryTestDirectory();
+    cleanups.push(workspace.cleanup);
+
+    const config = createEnabledConfig(workspace.path, {
+      PWRAGENT_HOT_CPU_PROFILING_START_DELAY_MS: "0",
+      PWRAGENT_HOT_CPU_PROFILING_THRESHOLD_PERCENT: "100",
+    });
+    const sessionResult = await createHotCpuProfileSession({
+      config,
+      createdAt: new Date(2026, 5, 1, 15, 30, 0),
+      sessionId: "abc123",
+      versions: {
+        appVersion: "1.0.0",
+        electronVersion: "41.2.1",
+        chromeVersion: "146.0.0.0",
+        nodeVersion: "24.0.0",
+      },
+    });
+    expect(sessionResult.ok).toBe(true);
+    if (!sessionResult.ok) return;
+
+    vi.useFakeTimers();
+
+    const sampleWrite = deferred();
+    const originalAppendSample = sessionResult.session.appendSample;
+    sessionResult.session.appendSample = vi.fn(async (sample) => {
+      await sampleWrite.promise;
+      await originalAppendSample(sample);
+    });
+    const appendEvent = vi.spyOn(sessionResult.session, "appendEvent");
+    const { target } = createTarget();
+    const profiler = createProfiler({
+      config,
+      getAppMetrics: () => [createMetric(0, 100)],
+      session: sessionResult.session,
+      target,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    await profiler.start();
+    vi.advanceTimersByTime(0);
+    expect(sessionResult.session.appendSample).toHaveBeenCalledTimes(1);
+
+    const stopPromise = profiler.stop("test-complete");
+    let concurrentStopResolved = false;
+    const concurrentStopPromise = profiler.stop("duplicate-stop").then(() => {
+      concurrentStopResolved = true;
+    });
+    await Promise.resolve();
+    const waitedForSample = !appendEvent.mock.calls.some(
+      ([event]) => event.type === "monitor-stopped",
+    );
+    const concurrentStopWaited = !concurrentStopResolved;
+    sampleWrite.resolve();
+    await Promise.all([stopPromise, concurrentStopPromise]);
+    expect(waitedForSample).toBe(true);
+    expect(concurrentStopWaited).toBe(true);
+    expect(
+      appendEvent.mock.calls.filter(([event]) => event.type === "monitor-stopped"),
+    ).toEqual([
+      [
+        expect.objectContaining({
+          detail: { reason: "test-complete" },
+        }),
+      ],
+    ]);
+
+    const appendSampleCalls = vi.mocked(sessionResult.session.appendSample).mock
+      .calls.length;
+    const appendEventCalls = appendEvent.mock.calls.length;
+    await workspace.cleanup();
+    await vi.advanceTimersByTimeAsync(config.intervalMs * 2);
+
+    expect(sessionResult.session.appendSample).toHaveBeenCalledTimes(appendSampleCalls);
+    expect(appendEvent).toHaveBeenCalledTimes(appendEventCalls);
+    await expect(fs.access(sessionResult.session.directoryPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("pauses process metric sampling while the renderer CPU profiler is active", async () => {
@@ -322,7 +419,7 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(0, 110),
     ];
     const getAppMetrics = vi.fn(() => [metrics.shift() ?? createMetric(0, 101)]);
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics,
       session: sessionResult.session,
@@ -346,6 +443,9 @@ describe("RendererHotCpuProfiler", () => {
 
       expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.start");
       expect(getAppMetrics).toHaveBeenCalledTimes(3);
+      // `Profiler.start` precedes async profile-start bookkeeping. Wait until
+      // its duration timer is registered before asking fake timers to run it.
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
 
       await vi.advanceTimersByTimeAsync(config.intervalMs * 4);
       expect(getAppMetrics).toHaveBeenCalledTimes(3);
@@ -414,7 +514,7 @@ describe("RendererHotCpuProfiler", () => {
 
     const { target } = createTarget();
     const getAppMetrics = vi.fn(() => [createMetric(0, 100)]);
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics,
       session: sessionResult.session,
@@ -463,7 +563,7 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(0, 100),
       createMetric(4, 101.2),
     ];
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
       session: sessionResult.session,
@@ -528,7 +628,7 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(2, 100.4),
       createMetric(2, 100.8),
     ];
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
       session: sessionResult.session,
@@ -599,7 +699,7 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(4, 103),
     ];
     const getAppMetrics = vi.fn(() => [metrics.shift() ?? createMetric(0)]);
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics,
       onHeapSnapshotLimitReached,
@@ -725,7 +825,7 @@ describe("RendererHotCpuProfiler", () => {
       }
     });
     const onProfileWritten = vi.fn();
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics: () => [createMetric(89)],
       onProfileWritten,
@@ -834,7 +934,7 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(4, 101.5),
       createMetric(4, 103),
     ];
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
       session: sessionResult.session,
@@ -896,7 +996,7 @@ describe("RendererHotCpuProfiler", () => {
       createMetric(4, 101.5),
       createMetric(4, 103),
     ];
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics: () => [metrics.shift() ?? createMetric(0)],
       session: sessionResult.session,
@@ -970,7 +1070,7 @@ describe("RendererHotCpuProfiler", () => {
     vi.useFakeTimers();
 
     const { target, debuggerApi } = createTarget();
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics: () => [createMetric(89)],
       session: sessionResult.session,
@@ -1038,7 +1138,7 @@ describe("RendererHotCpuProfiler", () => {
 
       return {};
     });
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics: () => [createMetric(89)],
       session: sessionResult.session,
@@ -1112,7 +1212,7 @@ describe("RendererHotCpuProfiler", () => {
       return {};
     });
 
-    const profiler = new RendererHotCpuProfiler({
+    const profiler = createProfiler({
       config,
       getAppMetrics: () => [createMetric(89)],
       session: sessionResult.session,
