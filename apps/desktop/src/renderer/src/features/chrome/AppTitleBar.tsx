@@ -130,12 +130,9 @@ export function AppTitleBar(props: {
           {props.starMap && !isFederationWindow ? (
             <button
               type="button"
-              aria-label={props.starMap.active ? "Close Star Map" : "Open Star Map"}
-              aria-pressed={props.starMap.active}
-              className={`thread-header__star-map-toggle${
-                props.starMap.active ? " is-open" : ""
-              }`}
-              onClick={props.starMap.onToggle}
+              aria-label="Open Star Map"
+              className="thread-header__star-map-toggle"
+              onClick={props.starMap.onOpen}
             >
               <StarMapIcon size={14} />
             </button>

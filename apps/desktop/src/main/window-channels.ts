@@ -34,6 +34,7 @@ import type { FederationRemoteTarget } from "@pwragent/shared";
  *  per-window registration sites. */
 export const WINDOW_KIND_MAIN = "main" as const;
 export const WINDOW_KIND_MESSAGING_ACTIVITY = "messaging-activity" as const;
+export const WINDOW_KIND_STAR_MAP = "star-map" as const;
 export const WINDOW_KIND_CHANGELOG = "changelog" as const;
 export const WINDOW_KIND_LICENSE_DOCUMENT = "license-document" as const;
 export const WINDOW_KIND_APP_LOGS = "app-logs" as const;
@@ -43,6 +44,7 @@ export const WINDOW_KIND_AUTOMATION_RUN = "automation-run" as const;
 export type WindowKind =
   | typeof WINDOW_KIND_MAIN
   | typeof WINDOW_KIND_MESSAGING_ACTIVITY
+  | typeof WINDOW_KIND_STAR_MAP
   | typeof WINDOW_KIND_CHANGELOG
   | typeof WINDOW_KIND_LICENSE_DOCUMENT
   | typeof WINDOW_KIND_APP_LOGS

@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import {
   startInProcessFederationGateway,
@@ -43,6 +43,31 @@ const TOTAL_TRANSCRIPT_BYTES = ENTRY_COUNT * BYTES_PER_ENTRY;
 const MAX_TRANSCRIPT_NODES = 4_000;
 /** Likewise: a bounded open is well under a megabyte. */
 const MAX_OPEN_BYTES = 4_000_000;
+
+/**
+ * Poll `electronApp.windows()` for the dedicated Star Map window. The
+ * BrowserWindow is created with `show: false`, so Playwright's `window`
+ * event fires before the URL has loaded; polling sidesteps the race
+ * (same pattern as `appearance-broadcast.spec.ts`).
+ */
+async function waitForStarMapWindow(
+  app: Awaited<ReturnType<typeof launchElectronApp>>,
+): Promise<Page> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    for (const candidate of app.electronApp.windows()) {
+      if (candidate.url().includes("#star-map")) {
+        return candidate;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(
+    `Star Map window did not open; current windows: ${app.electronApp
+      .windows()
+      .map((win) => win.url())
+      .join(", ")}`,
+  );
+}
 
 async function createLocalControlFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -138,9 +163,11 @@ test.describe("star map chat card history", () => {
     ).toBeVisible({ timeout: 30_000 });
     await window.getByRole("button", { name: "Exit Settings" }).click();
 
-    // Open the map and the peer's thread as a floating chat card.
+    // Open the map — a dedicated OS window — and the peer's thread as a
+    // floating chat card inside it.
     await window.getByRole("button", { name: "Open Star Map" }).click();
-    const starMap = window.getByRole("region", {
+    const mapWindow = await waitForStarMapWindow(app);
+    const starMap = mapWindow.getByRole("region", {
       name: "Star Map",
       exact: true,
     });
@@ -152,7 +179,7 @@ test.describe("star map chat card history", () => {
     await expect(card).toBeVisible({ timeout: 30_000 });
     await card.click();
 
-    const chatCard = window.getByRole("region", {
+    const chatCard = mapWindow.getByRole("region", {
       name: `Chat: ${THREAD_TITLE}`,
     });
     await expect(chatCard).toBeVisible();

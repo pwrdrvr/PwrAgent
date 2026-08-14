@@ -860,18 +860,14 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
-  it("layers app toasts above the full-window Star Map", () => {
-    const starMapLayerRule = extractRuleBody(
-      css,
-      ".app-shell__star-map-layer",
-    );
-    const toastStackRule = extractRuleBody(css, ".app-toast-stack");
-    const readZIndex = (rule: string): number =>
-      Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
-
-    expect(readZIndex(toastStackRule)).toBeGreaterThan(
-      readZIndex(starMapLayerRule),
-    );
+  it("scopes the Star Map window's card z-scale inside its own stacking context", () => {
+    // The dedicated map window's root must open a stacking context: the
+    // map's internal card z-scale runs to STAR_MAP_CARD_MAX_Z (4000), and
+    // without the containment those cards would out-stack every
+    // body-portaled tooltip in the window.
+    const windowRule = extractRuleBody(css, ".star-map-window");
+    expect(windowRule).toContain("position: relative;");
+    expect(windowRule).toMatch(/z-index:\s*\d+;/);
   });
 
   it("right-aligns the keyboard shortcut hint chip on context menu items", () => {
@@ -1449,16 +1445,16 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(/\n\.pr-status-card__dot--\w+\s*[,{]/);
   });
 
-  it("layers the PR hover card above the full-window Star Map", () => {
-    // PR chips render inside `.app-shell__star-map-layer` (z-index 120), and
-    // `.app-shell` opens no stacking context, so a portal at the usual 90
-    // paints underneath the map.
-    const layer = extractRuleBody(css, ".app-shell__star-map-layer");
+  it("layers the PR hover card above the Star Map window root", () => {
+    // PR chips render on cards inside `.star-map-window`, whose stacking
+    // context scopes the card z-scale — the portal only has to beat the
+    // window root's own z-index, not the cards inside it.
+    const windowRule = extractRuleBody(css, ".star-map-window");
     const card = extractRuleBody(css, ".pr-status-card");
-    const layerZ = Number(layer.match(/z-index:\s*(\d+);/)?.[1]);
+    const windowZ = Number(windowRule.match(/z-index:\s*(\d+);/)?.[1]);
     const cardZ = Number(card.match(/z-index:\s*(\d+);/)?.[1]);
-    expect(Number.isFinite(layerZ)).toBe(true);
-    expect(cardZ).toBeGreaterThan(layerZ);
+    expect(Number.isFinite(windowZ)).toBe(true);
+    expect(cardZ).toBeGreaterThan(windowZ);
   });
 
   it("keeps thinking scanner variants on one shared visible sweep", () => {

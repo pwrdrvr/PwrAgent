@@ -36,9 +36,13 @@ type ThreadHeaderLayoutControls = {
   onToggleTerminal: () => void;
 };
 
+/**
+ * The header's Star Map control. The map lives in its own OS window, so
+ * this is a launcher, not a toggle — opening again focuses the existing
+ * window instead of closing anything.
+ */
 export type StarMapToggleControls = {
-  active: boolean;
-  onToggle: () => void;
+  onOpen: () => void;
 };
 
 type ThreadHeaderProps = {
@@ -109,7 +113,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // slow, edge-clipping native `title`.
   const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const starMapTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const starMapLabel = props.starMap?.active ? "Close Star Map" : "Open Star Map";
+  const starMapLabel = "Open Star Map";
   // A collapsed-but-running terminal gets its own affordance: the toggle wears
   // a live dot and says so, otherwise the shell is invisible from here.
   const terminalCollapsedRunning =
@@ -244,14 +248,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           {props.starMap ? (
             <button
               type="button"
-              className={`thread-header__star-map-toggle${
-                props.starMap.active ? " is-open" : ""
-              }`}
+              className="thread-header__star-map-toggle"
               aria-label={starMapLabel}
-              aria-pressed={props.starMap.active}
               onClick={() => {
                 starMapTooltip.hide();
-                props.starMap?.onToggle();
+                props.starMap?.onOpen();
               }}
               onMouseEnter={(event) =>
                 starMapTooltip.show(event.currentTarget, starMapLabel)

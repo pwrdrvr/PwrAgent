@@ -49,8 +49,6 @@ function screen(threads: readonly NavigationThreadSummary[]) {
       desktopApi={buildDesktopApi()}
       localThreads={threads}
       sessionKeys={{}}
-      floating={false}
-      onClose={() => undefined}
       onOpenLocalThread={() => undefined}
       onFocusLocalInstance={() => undefined}
     />
