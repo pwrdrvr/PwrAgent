@@ -198,6 +198,7 @@ describe("buildPendingRequestResponse", () => {
         decision: "accept_with_execpolicy_amendment",
         label: "Always allow: npm view",
         response: { decision: "allow-always-command" },
+        style: "secondary",
       }),
       expect.objectContaining({
         decision: "decline",
@@ -255,6 +256,7 @@ describe("buildPendingRequestResponse", () => {
         decision: "accept_with_execpolicy_amendment",
         label: "Always Allow Prefix: pnpm test",
         response: { decision: structuredDecision },
+        style: "secondary",
       }),
       expect.objectContaining({
         decision: "cancel",

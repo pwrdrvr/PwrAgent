@@ -339,6 +339,97 @@ function isGenericShellToolTitle(command: string): boolean {
   return /^(?:bash|shell|sh|zsh|terminal|tool)$/i.test(command.trim());
 }
 
+function isKnownShellExecutable(command: string): boolean {
+  const executable = command
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .split(/[\\/]/)
+    .at(-1)
+    ?.toLowerCase();
+
+  return Boolean(
+    executable
+    && [
+      "bash",
+      "bash.exe",
+      "cmd.exe",
+      "dash",
+      "fish",
+      "ksh",
+      "powershell.exe",
+      "pwsh.exe",
+      "sh",
+      "tcsh",
+      "zsh",
+    ].includes(executable),
+  );
+}
+
+function execpolicyPrefixDetail(rawPrefix: unknown): string {
+  if (!Array.isArray(rawPrefix)) {
+    return "";
+  }
+
+  const prefix = rawPrefix
+    .filter((part): part is string => typeof part === "string" && Boolean(part.trim()))
+    .map((part) => part.trim());
+  const commandFlagIndex = isKnownShellExecutable(prefix[0] ?? "")
+    ? prefix.findIndex((part, index) =>
+        index > 0 && /^(?:-command|-c|-lc|\/c)$/i.test(part),
+      )
+    : -1;
+  const displayParts = commandFlagIndex > 0
+    ? prefix.slice(commandFlagIndex + 1)
+    : prefix;
+  const detail = displayParts.join(" ").trim();
+  const quote = detail[0];
+
+  if (
+    detail.length > 1
+    && (quote === "\"" || quote === "'")
+    && detail.at(-1) === quote
+  ) {
+    return detail.slice(1, -1).trim();
+  }
+
+  return detail || prefix.join(" ");
+}
+
+function pendingRequestActionPresentation(action: PendingRequestAction): {
+  detail?: string;
+  label: string;
+} {
+  if (action.decision !== "accept_with_execpolicy_amendment") {
+    return { label: action.label };
+  }
+
+  const responseDecision = asRecord(action.response.decision);
+  const amendment = asRecord(
+    responseDecision?.acceptWithExecpolicyAmendment
+    ?? responseDecision?.accept_with_execpolicy_amendment,
+  );
+  const detail = execpolicyPrefixDetail(
+    amendment?.execpolicy_amendment
+    ?? amendment?.proposed_execpolicy_amendment,
+  );
+  if (detail) {
+    return {
+      detail,
+      label: "Always Allow Prefix",
+    };
+  }
+
+  const separatorIndex = action.label.indexOf(": ");
+  if (separatorIndex > 0) {
+    return {
+      detail: action.label.slice(separatorIndex + 2),
+      label: action.label.slice(0, separatorIndex),
+    };
+  }
+
+  return { label: action.label };
+}
+
 function pendingRequestPrompt(
   request: AppServerPendingRequestNotification,
   context: PendingRequestApprovalContext | undefined,
@@ -1313,23 +1404,37 @@ export function TranscriptList(props: TranscriptListProps) {
               />
               <ApprovalDiffDisclosures context={pendingApprovalContext} />
               <div className="transcript-request__actions">
-                {pendingRequestActions.map((action) => (
-                  <button
-                    className={
-                      action.style === "primary"
-                        ? "button button--primary"
-                        : "button button--ghost"
-                    }
-                    disabled={props.pendingRequestBusy}
-                    key={action.id}
-                    type="button"
-                    onClick={() => {
-                      void props.onRespondToPendingRequest?.(action);
-                    }}
-                  >
-                    {action.label}
-                  </button>
-                ))}
+                {pendingRequestActions.map((action) => {
+                  const presentation = pendingRequestActionPresentation(action);
+                  return (
+                    <button
+                      aria-label={presentation.detail ? action.label : undefined}
+                      className={[
+                        "button",
+                        action.style === "primary" ? "button--primary" : "button--ghost",
+                        presentation.detail
+                          ? "transcript-request__action--detailed"
+                          : "",
+                      ].filter(Boolean).join(" ")}
+                      disabled={props.pendingRequestBusy}
+                      key={action.id}
+                      title={presentation.detail ? action.label : undefined}
+                      type="button"
+                      onClick={() => {
+                        void props.onRespondToPendingRequest?.(action);
+                      }}
+                    >
+                      <span className="transcript-request__action-label">
+                        {presentation.label}
+                      </span>
+                      {presentation.detail ? (
+                        <code className="transcript-request__action-detail">
+                          {presentation.detail}
+                        </code>
+                      ) : null}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ) : null}

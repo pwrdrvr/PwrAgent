@@ -241,10 +241,12 @@ test("keeps workflow states and narrow desktop layout readable", async ({}, test
     await expect(composer).toBeVisible();
     await expect(approval).toContainText("Approval needed");
     await expect(approval).toContainText(
-      "Do you want to allow network access so I can query npm metadata for the dive package?"
+      "Do you want to allow a read-only agent instruction discovery command outside the sandbox?"
     );
     await expect(approval.getByText("Command:")).toBeVisible();
-    await expect(approval.locator("pre code")).toHaveText("npm view dive");
+    await expect(approval.locator("pre code")).toHaveText(
+      "Get-ChildItem -Force | Select-Object Name,Mode; Get-ChildItem -Recurse -Filter AGENTS.md -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName"
+    );
     await expect(app.window.getByRole("status")).toContainText("Waiting for approval");
     await expect(app.window.locator(".thinking-scanner").first()).toBeVisible();
 
