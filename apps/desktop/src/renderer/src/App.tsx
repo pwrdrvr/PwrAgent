@@ -104,7 +104,11 @@ import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNo
 import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
-import { buildToolAccountingNotice } from "./features/notifications/tool-accounting-notice";
+import {
+  buildToolAccountingNotice,
+  resolveDismissedToolIncident,
+  toolAccountingNoticeId,
+} from "./features/notifications/tool-accounting-notice";
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
@@ -333,6 +337,10 @@ function DesktopAppShell(props: {
   // every navigation change. Kept fresh by an effect below, once
   // `navigation` is defined.
   const backendErrorThreadsRef = useRef<NavigationThreadSummary[]>([]);
+  const dismissedToolIncidentSeverityRef = useRef(new Map<
+    string,
+    ThreadToolInvocationAlert["severity"]
+  >());
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -653,12 +661,20 @@ function DesktopAppShell(props: {
           triggeredAlerts?: ThreadToolInvocationAlert[];
         };
         for (const alert of params.triggeredAlerts ?? []) {
-          const noticeId = [
-            "tool-accounting",
-            alert.backend,
-            alert.threadId,
-            alert.kind,
-          ].join(":");
+          const noticeId = toolAccountingNoticeId(alert);
+          const dismissedSeverity = dismissedToolIncidentSeverityRef.current.get(
+            noticeId,
+          );
+          const dismissalResolution = resolveDismissedToolIncident({
+            dismissedSeverity,
+            incomingSeverity: alert.severity,
+          });
+          if (dismissalResolution === "suppress") {
+            continue;
+          }
+          if (dismissalResolution === "escalate") {
+            dismissedToolIncidentSeverityRef.current.delete(noticeId);
+          }
           const matchingThread = backendErrorThreadsRef.current.find(
             (thread) =>
               thread.source === event.backend
@@ -681,41 +697,34 @@ function DesktopAppShell(props: {
               }
             : undefined;
           const dismiss = (): void => {
+            dismissedToolIncidentSeverityRef.current.set(
+              noticeId,
+              alert.severity,
+            );
             dispatchAppNotice({ type: "dismiss", id: noticeId });
           };
-          let steer: (() => void) | undefined;
-          const showNotice = (detail?: string): void => {
+          const examine = (): void => {
+            void desktopApi?.openToolOutputIncidentExplorerWindow?.({
+              backend: event.backend,
+              threadId: params.threadId,
+              title: matchingThread?.title ?? labelForThread(
+                event.backend,
+                params.threadId,
+              ),
+            });
+          };
+          const showNotice = (): void => {
             const notice = buildToolAccountingNotice({
               alert,
+              onExamine: examine,
               onDismiss: dismiss,
-              onSteer: steer,
               threadLink,
             });
             dispatchAppNotice({
               type: "show",
-              notice: detail ? { ...notice, detail } : notice,
+              notice,
             });
           };
-          if (alert.turnId && desktopApi.steerTurn) {
-            steer = (): void => {
-              void desktopApi.steerTurn?.({
-                backend: event.backend,
-                federationTarget: event.federationTarget,
-                threadId: params.threadId,
-                expectedTurnId: alert.turnId!,
-                input: [{ type: "text", text: alert.suggestedPrompt }],
-                requestId: [
-                  "tool-accounting",
-                  alert.alertId,
-                  alert.updatedAt,
-                ].join(":"),
-              }).then(dismiss).catch((error) => {
-                showNotice(
-                  `Steering failed: ${error instanceof Error ? error.message : String(error)}`,
-                );
-              });
-            };
-          }
           showNotice();
         }
         return;

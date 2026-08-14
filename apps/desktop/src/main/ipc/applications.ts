@@ -10,6 +10,8 @@ import {
   type OpenMarkdownFileViewerResponse,
   type OpenSubAgentTranscriptWindowRequest,
   type OpenSubAgentTranscriptWindowResponse,
+  type OpenToolOutputIncidentExplorerWindowRequest,
+  type OpenToolOutputIncidentExplorerWindowResponse,
   type OpenPathRequest,
   type OpenPathResponse,
   type ReadMarkdownFileRequest,
@@ -26,6 +28,7 @@ import {
   PATH_OPEN_CHANNEL,
   PATH_REVEAL_CHANNEL,
   SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL,
+  TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
 } from "../../shared/ipc";
 import {
   readMarkdownFileViewerSnapshot,
@@ -33,6 +36,7 @@ import {
 } from "../markdown-files-window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { showSubAgentTranscriptWindow } from "../subagent-transcript-window";
+import { showToolOutputIncidentExplorerWindow } from "../tool-output-incident-explorer-window";
 import {
   discoverDesktopApplications,
   openDesktopApplication,
@@ -217,6 +221,19 @@ export function registerApplicationIpcHandlers(): void {
       return { opened: true };
     },
   );
+  ipcMain.removeHandler(TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL);
+  ipcMain.handle(
+    TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
+    async (
+      event,
+      request: OpenToolOutputIncidentExplorerWindowRequest,
+    ): Promise<OpenToolOutputIncidentExplorerWindowResponse> => {
+      showToolOutputIncidentExplorerWindow(request, {
+        sourceWindow: BrowserWindow.fromWebContents(event.sender),
+      });
+      return { opened: true };
+    },
+  );
 }
 
 export function disposeApplicationIpcHandlers(): void {
@@ -227,4 +244,5 @@ export function disposeApplicationIpcHandlers(): void {
   ipcMain.removeHandler(MARKDOWN_FILE_VIEWER_OPEN_CHANNEL);
   ipcMain.removeHandler(MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL);
   ipcMain.removeHandler(SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL);
+  ipcMain.removeHandler(TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL);
 }

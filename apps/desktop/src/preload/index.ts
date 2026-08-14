@@ -98,6 +98,8 @@ import type {
   ThreadSearchResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  AnalyzeThreadToolHistoryRequest,
+  AnalyzeThreadToolHistoryResponse,
   GetThreadFileDiffRequest,
   GetThreadFileDiffResponse,
   PersistThreadUsageActivityRequest,
@@ -309,6 +311,8 @@ import type {
   OpenMarkdownFileViewerResponse,
   OpenSubAgentTranscriptWindowRequest,
   OpenSubAgentTranscriptWindowResponse,
+  OpenToolOutputIncidentExplorerWindowRequest,
+  OpenToolOutputIncidentExplorerWindowResponse,
   OpenPathRequest,
   OpenPathResponse,
   ReadMarkdownFileRequest,
@@ -505,6 +509,7 @@ import {
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
+  APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
@@ -513,6 +518,7 @@ import {
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
   SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL,
+  TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
   DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
   DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL,
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
@@ -1200,6 +1206,13 @@ const desktopApi = Object.freeze({
     request: OpenSubAgentTranscriptWindowRequest,
   ): Promise<OpenSubAgentTranscriptWindowResponse> =>
     await ipcRenderer.invoke(SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL, request),
+  openToolOutputIncidentExplorerWindow: async (
+    request: OpenToolOutputIncidentExplorerWindowRequest,
+  ): Promise<OpenToolOutputIncidentExplorerWindowResponse> =>
+    await ipcRenderer.invoke(
+      TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
+      request,
+    ),
   createIntegratedTerminal: async (
     request: IntegratedTerminalCreateRequest,
   ): Promise<IntegratedTerminalCreateResponse> =>
@@ -1327,6 +1340,13 @@ const desktopApi = Object.freeze({
     await invokeWithStartupProfileTiming(
       "readThread",
       APP_SERVER_READ_THREAD_CHANNEL,
+      request,
+    ),
+  analyzeThreadToolHistory: async (
+    request: AnalyzeThreadToolHistoryRequest,
+  ): Promise<AnalyzeThreadToolHistoryResponse> =>
+    await ipcRenderer.invoke(
+      APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
       request,
     ),
   getThreadFileDiff: async (
