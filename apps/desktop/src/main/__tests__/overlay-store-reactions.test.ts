@@ -407,3 +407,150 @@ describe("SqliteOverlayStore — thread reactions", () => {
     expect(overlay?.reactions).toEqual(["👀", "✅"]);
   });
 });
+
+describe("SqliteOverlayStore — orphaned sub-agents", () => {
+  async function seedSubAgent(
+    threadId: string,
+    subAgent: ThreadSubAgentSummary,
+  ): Promise<void> {
+    await store.upsertThreadSubAgent({
+      backend: "codex",
+      threadId,
+      subAgent,
+    });
+  }
+
+  it("repairs dead owners without touching another live instance or ambiguous legacy work", async () => {
+    await seedSubAgent("dead-owner", {
+      monitorId: "monitor-dead-owner",
+      task: "Owned by a stopped runtime",
+      status: "running",
+      createdAt: 1_000,
+      updatedAt: 1_500,
+      ownerRuntimeInstanceId: "runtime-dead",
+    });
+    await seedSubAgent("live-owner", {
+      monitorId: "monitor-live-owner",
+      task: "Owned by another live runtime",
+      status: "running",
+      createdAt: 1_000,
+      updatedAt: 1_500,
+      ownerRuntimeInstanceId: "runtime-other",
+    });
+    await seedSubAgent("legacy-ownerless", {
+      monitorId: "monitor-legacy",
+      task: "Legacy work with no owner metadata",
+      status: "running",
+      createdAt: 1_000,
+      updatedAt: 1_500,
+    });
+    await seedSubAgent("terminal-missing-time", {
+      monitorId: "monitor-terminal",
+      task: "Terminal work missing its stop time",
+      status: "success",
+      createdAt: 1_000,
+      updatedAt: 1_600,
+      outcome: "success",
+      ownerRuntimeInstanceId: "runtime-dead",
+    });
+
+    await expect(store.reconcileOrphanedThreadSubAgents({
+      currentRuntimeInstanceId: "runtime-current",
+      liveRuntimeInstanceIds: ["runtime-current", "runtime-other"],
+      sessionStartedAt: 2_000,
+    })).resolves.toEqual({
+      repairedSubAgents: 2,
+      repairedThreads: 2,
+      skippedLiveOwners: 1,
+      skippedOwnerlessWithOtherRuntimes: 1,
+    });
+
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "dead-owner",
+    })).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          monitorId: "monitor-dead-owner",
+          status: "failure",
+          outcome: "failure",
+          completedAt: 1_500,
+          updatedAt: 1_500,
+          completionSource: expect.objectContaining({
+            type: "pwragent_fallback",
+            reason: "owner_runtime_stopped",
+          }),
+        }),
+      ],
+    });
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "live-owner",
+    })).resolves.toMatchObject({
+      subAgents: [expect.objectContaining({ status: "running" })],
+    });
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "legacy-ownerless",
+    })).resolves.toMatchObject({
+      subAgents: [expect.objectContaining({ status: "running" })],
+    });
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "terminal-missing-time",
+    })).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          status: "success",
+          outcome: "success",
+          completedAt: 1_600,
+        }),
+      ],
+    });
+  });
+
+  it("repairs old ownerless work only when this is the sole runtime", async () => {
+    await seedSubAgent("thread-1", {
+      monitorId: "monitor-old",
+      task: "Legacy work from before startup",
+      status: "running",
+      createdAt: 1_000,
+      updatedAt: 900,
+    });
+    await seedSubAgent("thread-1", {
+      monitorId: "monitor-new",
+      task: "Work created during this runtime",
+      status: "running",
+      createdAt: 2_100,
+      updatedAt: 2_100,
+    });
+
+    await expect(store.reconcileOrphanedThreadSubAgents({
+      currentRuntimeInstanceId: "runtime-current",
+      liveRuntimeInstanceIds: ["runtime-current"],
+      sessionStartedAt: 2_000,
+    })).resolves.toMatchObject({
+      repairedSubAgents: 1,
+      repairedThreads: 1,
+    });
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const oldSubAgent = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === "monitor-old",
+    );
+    const newSubAgent = overlay?.subAgents?.find(
+      (subAgent) => subAgent.monitorId === "monitor-new",
+    );
+    expect(oldSubAgent).toMatchObject({
+      status: "failure",
+      outcome: "failure",
+      completedAt: 1_000,
+      updatedAt: 1_000,
+    });
+    expect(newSubAgent).toMatchObject({ status: "running" });
+    expect(newSubAgent?.completedAt).toBeUndefined();
+  });
+});

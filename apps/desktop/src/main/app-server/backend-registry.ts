@@ -14,6 +14,11 @@ import type {
   MessagingBindingRecord,
 } from "@pwragent/messaging-interface";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import {
+  findLiveProfileRuntimeMarkers,
+  getProcessRuntimeIdentity,
+  resolveActiveProfileName,
+} from "../profile";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { requestShowThread } from "../window-show-thread";
@@ -167,6 +172,8 @@ import {
   type StartReviewToolResult,
   type StartThreadRequest,
   type StartThreadResponse,
+  type StopSubAgentRequest,
+  type StopSubAgentResponse,
   type SubmitServerRequestRequest,
   type SubmitServerRequestResponse,
   type TrustCodexProjectRequest,
@@ -2818,6 +2825,15 @@ function codexNativeSubAgentOutcome(
 
 function codexNativeSubAgentIsTerminal(status: ThreadSubAgentSummary["status"]): boolean {
   return status === "success" || status === "failure" || status === "cancelled";
+}
+
+function reliableSubAgentCompletionBoundary(
+  subAgent: ThreadSubAgentSummary,
+): number {
+  return Number.isFinite(subAgent.updatedAt)
+    && subAgent.updatedAt >= subAgent.createdAt
+    ? subAgent.updatedAt
+    : subAgent.createdAt;
 }
 
 function codexNativeSubAgentNextReconciliationDelayMs(attempts: number): number {
@@ -5634,6 +5650,9 @@ export class DesktopBackendRegistry {
     TaskMonitorDelegationRecord
   >();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
+  private readonly runtimeInstanceId: string;
+  private readonly resolveLiveProfileRuntimeInstanceIdsFn: () => string[];
+  private readonly subAgentStartupReconciliation: Promise<void>;
   /** Streamed command-output counters waiting for the next bounded flush. */
   private readonly pendingToolInvocationDeltas = new Map<
     string,
@@ -5809,10 +5828,21 @@ export class DesktopBackendRegistry {
     >;
     resolveCodexFastAllowed?: () => boolean;
     resolveGrokApiKey?: () => string | undefined;
+    runtimeInstanceId?: string;
+    resolveLiveProfileRuntimeInstanceIds?: () => string[];
     acpWorktreeRepositoryResolver?: (
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
+    const processRuntimeIdentity = getProcessRuntimeIdentity();
+    this.runtimeInstanceId =
+      options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
+    this.resolveLiveProfileRuntimeInstanceIdsFn =
+      options?.resolveLiveProfileRuntimeInstanceIds ??
+      (() =>
+        findLiveProfileRuntimeMarkers(resolveActiveProfileName()).map(
+          (marker) => marker.instanceId,
+        ));
     const replayClients = createReplayClientsFromEnv();
     const codexCapture = options?.codexClient
       || replayClients
@@ -6119,6 +6149,13 @@ export class DesktopBackendRegistry {
     this.subscribeClient("codex", this.codexClient);
     this.subscribeClient("grok", this.grokClient);
 
+    this.subAgentStartupReconciliation =
+      this.reconcileOrphanedThreadSubAgentsAtStartup().catch((error) => {
+        backendRegistryLog.warn("sub-agent-startup-reconciliation-failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+
     // Kick off a one-shot scan of persisted codexEnvironmentRuntime
     // entries: zombie "started" runs from a prior session become
     // "failed", and output bytes get cleared on anything finished
@@ -6140,6 +6177,44 @@ export class DesktopBackendRegistry {
    * process didn't survive the parent restart.
    */
   private readonly registrySessionStartedAt = Date.now();
+
+  private liveProfileRuntimeInstanceIds(): string[] | undefined {
+    const instanceIds = new Set<string>([this.runtimeInstanceId]);
+    try {
+      for (const instanceId of this.resolveLiveProfileRuntimeInstanceIdsFn()) {
+        const normalized = instanceId.trim();
+        if (normalized) {
+          instanceIds.add(normalized);
+        }
+      }
+    } catch (error) {
+      backendRegistryLog.warn("live-profile-runtime-read-failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+    return Array.from(instanceIds);
+  }
+
+  private async reconcileOrphanedThreadSubAgentsAtStartup(): Promise<void> {
+    const reconcile = this.overlayStore.reconcileOrphanedThreadSubAgents;
+    if (!reconcile) {
+      return;
+    }
+    const liveRuntimeInstanceIds = this.liveProfileRuntimeInstanceIds();
+    if (!liveRuntimeInstanceIds) {
+      return;
+    }
+    const result = await reconcile.call(this.overlayStore, {
+      currentRuntimeInstanceId: this.runtimeInstanceId,
+      liveRuntimeInstanceIds,
+      sessionStartedAt: this.registrySessionStartedAt,
+    });
+    if (result.repairedSubAgents > 0) {
+      backendRegistryLog.info("sub-agent-startup-reconciliation", result);
+      this.invalidateThreadListCache();
+    }
+  }
 
   private async cleanupStaleCodexEnvironmentRuntimes(): Promise<void> {
     const lister = this.overlayStore.listThreadOverlaysWithCodexEnvironmentRuntime;
@@ -6575,6 +6650,7 @@ export class DesktopBackendRegistry {
     maxPages?: number;
     skipArchivedMetadataRefresh?: boolean;
   } = {}): Promise<AppServerThreadSummary[]> {
+    await this.subAgentStartupReconciliation;
     // Hard gate: the bootstrap profile MUST NEVER serve thread data,
     // regardless of what the bootstrap config.toml's onboarding
     // flags say. Concretely this guards the post-wizard dev window:
@@ -10233,6 +10309,200 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: result.threadId,
       turnId: result.turnId,
+    };
+  }
+
+  async stopSubAgent(
+    params: StopSubAgentRequest,
+  ): Promise<StopSubAgentResponse> {
+    await this.subAgentStartupReconciliation;
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const subAgent = overlay?.subAgents?.find(
+      (candidate) => candidate.monitorId === params.monitorId,
+    );
+    if (!subAgent) {
+      throw new Error("Sub-agent was not found on this thread.");
+    }
+    if (subAgent.status !== "running") {
+      throw new Error("Sub-agent is no longer running.");
+    }
+    const taskMonitor = this.taskMonitorDelegations.get(params.monitorId);
+    if (
+      taskMonitor
+      && taskMonitor.parentBackend === params.backend
+      && taskMonitor.parentThreadId === params.threadId
+    ) {
+      if (!taskMonitor.monitorThreadId || !taskMonitor.monitorTurnId) {
+        throw new Error("Sub-agent does not expose an active turn to stop.");
+      }
+      // A terminal notification from an interrupted monitor normally starts a
+      // recovery turn. Remove an intentionally stopped monitor first so the
+      // terminal handler cannot mistake this user action for a crash.
+      this.taskMonitorDelegations.delete(params.monitorId);
+      try {
+        const executionMode = taskMonitor.executionMode ?? "default";
+        await this.getClient("codex", executionMode).interruptTurn({
+          threadId: taskMonitor.monitorThreadId,
+          turnId: taskMonitor.monitorTurnId,
+        });
+      } catch (error) {
+        this.taskMonitorDelegations.set(params.monitorId, taskMonitor);
+        throw error;
+      }
+
+      const stoppedAt = Date.now();
+      await this.persistTaskMonitorSubAgent(taskMonitor, {
+        completedAt: stoppedAt,
+        lastMessage: "Stopped by user.",
+        outcome: "cancelled",
+        status: "cancelled",
+        updatedAt: stoppedAt,
+      });
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        monitorId: params.monitorId,
+        stoppedAt,
+      };
+    }
+
+    const ownerRuntimeInstanceId = subAgent.ownerRuntimeInstanceId?.trim();
+    const resolvedLiveRuntimeInstanceIds =
+      this.liveProfileRuntimeInstanceIds();
+    if (!resolvedLiveRuntimeInstanceIds) {
+      throw new Error(
+        "PwrAgent could not determine which runtime owns this sub-agent. Try again after checking the other PwrAgent instances using this profile.",
+      );
+    }
+    const liveRuntimeInstanceIds = new Set(resolvedLiveRuntimeInstanceIds);
+    const hasOtherLiveRuntime = Array.from(liveRuntimeInstanceIds).some(
+      (instanceId) => instanceId !== this.runtimeInstanceId,
+    );
+    if (
+      ownerRuntimeInstanceId
+      && ownerRuntimeInstanceId !== this.runtimeInstanceId
+      && liveRuntimeInstanceIds.has(ownerRuntimeInstanceId)
+    ) {
+      throw new Error(
+        "Sub-agent is controlled by another live PwrAgent instance.",
+      );
+    }
+    if (!ownerRuntimeInstanceId && hasOtherLiveRuntime) {
+      throw new Error(
+        "Sub-agent predates runtime ownership tracking, and another PwrAgent instance is live. Close the other instance and try again.",
+      );
+    }
+    const ownerIsOrphaned = ownerRuntimeInstanceId
+      ? !liveRuntimeInstanceIds.has(ownerRuntimeInstanceId)
+      : true;
+    if (ownerIsOrphaned) {
+      const stoppedAt = Date.now();
+      const completedAt = reliableSubAgentCompletionBoundary(subAgent);
+      await this.overlayStore.upsertThreadSubAgent({
+        backend: params.backend,
+        threadId: params.threadId,
+        subAgent: {
+          ...subAgent,
+          status: "cancelled",
+          outcome: "cancelled",
+          completedAt,
+          updatedAt: completedAt,
+          lastMessage:
+            "Stop was requested after its owning PwrAgent runtime had already stopped.",
+          completionSource: {
+            type: "parent_cancel",
+          },
+        },
+      });
+      if (
+        subAgent.monitorId.startsWith("codex-native:")
+        && subAgent.monitorThreadId
+      ) {
+        this.clearCodexNativeSubAgentReconciliation(subAgent.monitorThreadId);
+      }
+      this.invalidateThreadListCache(params.backend);
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/subAgents/updated",
+          params: {
+            threadId: params.threadId,
+          },
+        },
+      });
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        monitorId: params.monitorId,
+        stoppedAt,
+      };
+    }
+
+    if (!subAgent.monitorThreadId || !subAgent.monitorTurnId) {
+      throw new Error("Sub-agent does not expose an active turn to stop.");
+    }
+
+    let turnId = subAgent.monitorTurnId;
+    if (subAgent.monitorId.startsWith("codex-native:")) {
+      try {
+        const child = await this.readThread({
+          backend: "codex",
+          threadId: subAgent.monitorThreadId,
+          includeTurns: true,
+        });
+        const activeEntry = [...child.replay.entries]
+          .reverse()
+          .find((entry) => entry.turn?.status === "in_progress");
+        turnId = activeEntry?.turn?.id ?? turnId;
+      } catch (error) {
+        backendRegistryLog.debug("native sub-agent active turn read failed", {
+          error: error instanceof Error ? error.message : String(error),
+          monitorId: subAgent.monitorId,
+          monitorThreadId: subAgent.monitorThreadId,
+        });
+      }
+    }
+
+    await this.interruptTurn({
+      backend: subAgent.backend ?? params.backend,
+      threadId: subAgent.monitorThreadId,
+      turnId,
+    });
+
+    const stoppedAt = Date.now();
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: params.backend,
+      threadId: params.threadId,
+      subAgent: {
+        ...subAgent,
+        status: "cancelled",
+        outcome: "cancelled",
+        completedAt: stoppedAt,
+        updatedAt: stoppedAt,
+        lastMessage: "Stopped by user.",
+      },
+    });
+    if (subAgent.monitorId.startsWith("codex-native:")) {
+      this.clearCodexNativeSubAgentReconciliation(subAgent.monitorThreadId);
+    }
+    this.invalidateThreadListCache(params.backend);
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: params.threadId,
+        },
+      },
+    });
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      monitorId: params.monitorId,
+      stoppedAt,
     };
   }
 
@@ -15857,6 +16127,8 @@ export class DesktopBackendRegistry {
       status,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      ownerRuntimeInstanceId:
+        existing?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
       backend: "codex",
       monitorThreadId: params.receiverThreadId,
       ...(params.call.parentTurnId
@@ -16151,6 +16423,8 @@ export class DesktopBackendRegistry {
         (record.monitorThreadId ? "running" : "pending"),
       createdAt: record.createdAt,
       updatedAt: patch.updatedAt ?? Date.now(),
+      ownerRuntimeInstanceId:
+        existing?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
       backend: record.backend,
       preferredModel: record.preferredModel,
       preferredReasoningEffort: record.preferredReasoningEffort,
@@ -16223,6 +16497,8 @@ export class DesktopBackendRegistry {
       status: patch.status ?? existing?.status ?? "running",
       createdAt: record.createdAt,
       updatedAt: patch.updatedAt ?? Date.now(),
+      ownerRuntimeInstanceId:
+        existing?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
       backend: record.backend,
       monitorThreadId: record.reviewThreadId,
       monitorTurnId: record.turnId,
@@ -17661,6 +17937,16 @@ export class DesktopBackendRegistry {
       params.status === "success" ||
       params.status === "failed" ||
       params.status === "cancelled";
+    const startsNewAttempt =
+      (params.status === "pending" || params.status === "running")
+      && existing !== undefined
+      && (
+        existing.completedAt !== undefined
+        || existing.outcome !== undefined
+        || existing.completionSource !== undefined
+        || codexNativeSubAgentIsTerminal(existing.status)
+        || existing.status === "failed"
+      );
     const outcome =
       params.status === "success"
         ? "success"
@@ -17673,8 +17959,11 @@ export class DesktopBackendRegistry {
       monitorId,
       task: "Name this thread",
       status: params.status,
-      createdAt: existing?.createdAt ?? now,
+      createdAt: startsNewAttempt ? now : existing?.createdAt ?? now,
       updatedAt: now,
+      ownerRuntimeInstanceId: startsNewAttempt
+        ? this.runtimeInstanceId
+        : existing?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
       backend: params.backend,
       agentName: "PwrAgent",
       ...(preferredModel ? { preferredModel } : {}),

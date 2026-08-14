@@ -73,6 +73,9 @@ export type TaskMonitorCompletionSource =
       type: "monitor_tool";
     }
   | {
+      type: "parent_cancel";
+    }
+  | {
       type: "pwragent_fallback";
       reason: string;
       recoveryAttempted: boolean;
