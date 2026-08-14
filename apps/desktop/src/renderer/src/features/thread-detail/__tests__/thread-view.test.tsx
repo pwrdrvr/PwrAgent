@@ -536,11 +536,11 @@ describe("ThreadView", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
-    const giphyDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+    const exampleDirectory: NavigationDirectorySummary = {
+      key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory",
-      label: "giphy-services",
-      path: "/Users/huntharo/GIPHY/giphy-services",
+      label: "catalog-service",
+      path: "/Users/example/Projects/catalog-service",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -586,13 +586,13 @@ describe("ThreadView", () => {
           onAgentEvent: () => () => undefined,
           startReview,
         }}
-        directories={[giphyDirectory, kubeDirectory]}
+        directories={[exampleDirectory, kubeDirectory]}
         loading={false}
         loadingMore={false}
         messageCount={1}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        selectedDirectory={giphyDirectory}
+        selectedDirectory={exampleDirectory}
         selectedThread={{
           id: "thread-1",
           title: "Build Search gRPC",
@@ -603,12 +603,12 @@ describe("ThreadView", () => {
           updatedAt: Date.now(),
           linkedDirectories: [
             {
-              id: "/Users/huntharo/GIPHY/giphy-services",
+              id: "/Users/example/Projects/catalog-service",
               kind: "worktree",
-              label: "giphy-services",
-              path: "/Users/huntharo/GIPHY/giphy-services",
+              label: "catalog-service",
+              path: "/Users/example/Projects/catalog-service",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/giphy-services",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-delta/catalog-service",
             },
             {
               id: "/Users/huntharo/infra/kube-manifests",
@@ -2554,7 +2554,7 @@ describe("ThreadView", () => {
           title: "Plan Slidev theme extraction",
           titleSource: "explicit",
           source: "codex",
-          projectKey: "/Users/huntharo/.codex/worktrees/be87/search-product",
+          projectKey: "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
@@ -2577,18 +2577,18 @@ describe("ThreadView", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "This thread is linked to a directory that no longer exists: /Users/huntharo/.codex/worktrees/be87/search-product"
+      "This thread is linked to a directory that no longer exists: /Users/example/.codex/worktrees/tree-epsilon/catalog-portal"
     );
 
     expect(screen.getByText("Recorded working directory is no longer available.")).toBeInTheDocument();
-    expect(screen.getByText("search-product")).toBeInTheDocument();
+    expect(screen.getByText("catalog-portal")).toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Copy recorded working directory" }),
     );
 
     expect(copyText).toHaveBeenCalledWith(
-      "/Users/huntharo/.codex/worktrees/be87/search-product",
+      "/Users/example/.codex/worktrees/tree-epsilon/catalog-portal",
     );
   });
 

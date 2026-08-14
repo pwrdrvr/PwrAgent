@@ -166,18 +166,18 @@ async function pasteIntoReply(
 // Prose paragraphs whose only paragraph-break signal lives in text/html. The
 // text/plain flavor flattens them to single newlines (as many rich sources do).
 const PROSE_LINES = [
-  "We reproduced and fixed the upload bug.",
+  "We reproduced and fixed the cereal-pouring bug.",
   "Root cause:",
-  "After selecting multiple reel items, the click silently fell through.",
+  "After selecting multiple cereal boxes, the click silently fell through.",
   "Fix:",
-  "Handle upload by command/title as well as object identity:",
+  "Handle cereal pouring by command/title as well as object identity:",
 ];
 const PROSE_PLAIN_SINGLE_NL = PROSE_LINES.join("\n");
 const PROSE_HTML = PROSE_LINES.map((line) => `<p>${line}</p>`).join("");
 
 const CODE_LINES = [
-  "} else if button === uploadButton {",
-  "    uploadButtonClicked()",
+  "} else if button === pourButton {",
+  "    pourCerealIntoBowl()",
   "}",
 ];
 const CODE_PLAIN = ["```swift", ...CODE_LINES, "```"].join("\n");
@@ -296,13 +296,8 @@ test("a copied transcript table pastes and sends as Markdown source", async () =
 
     const reply = app.window.getByRole("textbox", { name: "Reply" });
     const composerInput = app.window.getByTestId("composer-tiptap-input");
-    await app.electronApp.evaluate(({ clipboard }, markdown) => {
-      clipboard.writeText(markdown);
-    }, TABLE_MARKDOWN);
     await reply.focus();
-    await app.window.keyboard.press(
-      process.platform === "darwin" ? "Meta+V" : "Control+V",
-    );
+    await pasteIntoReply(app.window, { text: TABLE_MARKDOWN });
     await expect(composerInput).toHaveAttribute("data-value", TABLE_MARKDOWN);
     await app.window.keyboard.press(
       process.platform === "darwin" ? "Meta+A" : "Control+A",
@@ -312,22 +307,16 @@ test("a copied transcript table pastes and sends as Markdown source", async () =
 
     await sourceMessage.getByRole("button", { name: "Copy message" }).click();
     await expect
-      .poll(async () =>
-        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
-      )
-      .toBe(TABLE_MARKDOWN);
-    const clipboardSnapshot = await app.electronApp.evaluate(({ clipboard }) => ({
-      formats: clipboard.availableFormats(),
-      html: clipboard.readHTML(),
-    }));
-    expect(clipboardSnapshot.formats).toContain("text/plain");
-    expect(clipboardSnapshot.formats).toContain("text/html");
-    expect(clipboardSnapshot.html).toContain("<table>");
+      .poll(async () => await app.getClipboardSnapshot())
+      .toMatchObject({ text: TABLE_MARKDOWN });
+    const clipboardSnapshot = await app.getClipboardSnapshot();
+    expect(clipboardSnapshot?.html).toContain("<table>");
 
     await reply.focus();
-    await app.window.keyboard.press(
-      process.platform === "darwin" ? "Meta+V" : "Control+V",
-    );
+    await pasteIntoReply(app.window, {
+      html: clipboardSnapshot?.html,
+      text: clipboardSnapshot?.text ?? "",
+    });
 
     await expect(composerInput).toHaveAttribute("data-value", TABLE_MARKDOWN);
     await expect(
@@ -362,19 +351,19 @@ test("a copied transcript table pastes and sends as Markdown source", async () =
 // both feed the same markdown serializer. A divergence here is invisible to the
 // per-flavor tests above; only pasting both flavors of one source catches it.
 const SOURCE_PARAGRAPHS = [
-  "We reproduced and fixed the upload bug.",
+  "We reproduced and fixed the cereal-pouring bug.",
   "Root cause:",
-  "After selecting multiple reel items, the click silently fell through.",
+  "After selecting multiple cereal boxes, the click silently fell through.",
   "Fix:",
-  "Handle upload by command/title as well as object identity:",
+  "Handle cereal pouring by command/title as well as object identity:",
 ];
 const SOURCE_LIST = [
-  "Create several ready recordings.",
-  "Add them to the GGDataStore.",
+  "Create several cereal boxes.",
+  "Add them to the BreakfastPantry.",
 ];
 const SOURCE_CODE = [
-  "} else if button === uploadButton {",
-  "    uploadButtonClicked()",
+  "} else if button === pourButton {",
+  "    pourCerealIntoBowl()",
   "}",
 ];
 

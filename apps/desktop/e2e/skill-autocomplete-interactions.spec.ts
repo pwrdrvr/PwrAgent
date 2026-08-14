@@ -283,14 +283,32 @@ test("thread reply Tiptap Tab insertion keeps caret after chip and copy-paste pr
     await app.window.keyboard.press(
       process.platform === "darwin" ? "Meta+A" : "Control+A",
     );
-    await app.window.keyboard.press(
-      process.platform === "darwin" ? "Meta+C" : "Control+C",
-    );
+    const copied = await textbox.evaluate((element) => {
+      const dataTransfer = new DataTransfer();
+      element.dispatchEvent(new ClipboardEvent("copy", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dataTransfer,
+      }));
+      return {
+        html: dataTransfer.getData("text/html"),
+        text: dataTransfer.getData("text/plain"),
+      };
+    });
+    expect(copied.text).toContain("$ce:plan");
+    expect(copied.html).toContain("data-skill-path");
     await app.window.keyboard.press("Delete");
     await expect(tiptapInput).toHaveAttribute("data-value", "");
-    await app.window.keyboard.press(
-      process.platform === "darwin" ? "Meta+V" : "Control+V",
-    );
+    await textbox.evaluate((element, clipboardPayload) => {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.setData("text/plain", clipboardPayload.text);
+      dataTransfer.setData("text/html", clipboardPayload.html);
+      element.dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dataTransfer,
+      }));
+    }, copied);
 
     const pastedChip = tiptapInput.locator(".composer-tiptap-input__mention", {
       hasText: "$ce:plan",

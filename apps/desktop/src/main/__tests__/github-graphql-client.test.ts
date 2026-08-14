@@ -679,13 +679,13 @@ describe("GithubGraphqlPrClient", () => {
     await client(request, { onRepositoryAccess })
       .fetchPullRequestsForBranches([
         { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/a" },
-        { owner: "GIPHY", repo: "giphy-services", branch: "main" },
+        { owner: "EXAMPLE", repo: "catalog-service", branch: "main" },
       ]);
 
     expect(onRepositoryAccess).toHaveBeenCalledWith({
       branch: "main",
-      owner: "GIPHY",
-      repo: "giphy-services",
+      owner: "EXAMPLE",
+      repo: "catalog-service",
       status: "saml-enforced",
     });
     expect(onRepositoryAccess).toHaveBeenCalledWith({
@@ -706,7 +706,7 @@ describe("GithubGraphqlPrClient", () => {
       .mockResolvedValueOnce({ r0: { pullRequests: { nodes: [] } } });
     const graphqlClient = client(request, { onRepositoryAccess });
     const branchRefs = [
-      { owner: "GIPHY", repo: "giphy-services", branch: "main" },
+      { owner: "EXAMPLE", repo: "catalog-service", branch: "main" },
     ];
 
     await graphqlClient.fetchPullRequestsForBranches(branchRefs);

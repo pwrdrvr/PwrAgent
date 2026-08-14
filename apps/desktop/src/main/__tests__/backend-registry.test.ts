@@ -24038,7 +24038,7 @@ command = "pnpm dev"
       path.join(worktreePath, ".codex", "environments", "environment.toml"),
       `
 version = 1
-name = "GifGrabber"
+name = "ExampleApp"
 
 [setup]
 script = "printf setup"
@@ -24052,7 +24052,7 @@ command = "pnpm dev"
 
     const sourceRuntime: CodexThreadEnvironmentRuntime = {
       environmentId: "environment",
-      environmentName: "GifGrabber",
+      environmentName: "ExampleApp",
       executionTarget: "local",
       cwd: callerWorktreePath,
       setupStatus: "completed",
@@ -24259,7 +24259,7 @@ command = "pnpm dev"
       path.join(worktreePath, ".codex", "environments", "environment.toml"),
       `
 version = 1
-name = "GifGrabber"
+name = "ExampleApp"
 
 [setup]
 script = "printf setup"
@@ -24271,7 +24271,7 @@ script = "printf setup"
     const setupRelease = createDeferred<void>();
     const sourceRuntime: CodexThreadEnvironmentRuntime = {
       environmentId: "environment",
-      environmentName: "GifGrabber",
+      environmentName: "ExampleApp",
       executionTarget: "local",
       cwd: repoPath,
       setupStatus: "completed",
@@ -25877,7 +25877,7 @@ script = "printf setup"
     await mkdir(worktreePath, { recursive: true });
     const sourceRuntime: CodexThreadEnvironmentRuntime = {
       environmentId: "environment",
-      environmentName: "GifGrabber",
+      environmentName: "ExampleApp",
       executionTarget: "local",
       cwd: repoPath,
       setupStatus: "completed",
@@ -25992,7 +25992,7 @@ script = "printf setup"
     expect(codexClient.lastStartThreadParams?.cwd).toBe(worktreePath);
     expect(codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toMatchObject({
       environmentId: "environment",
-      environmentName: "GifGrabber",
+      environmentName: "ExampleApp",
       cwd: worktreePath,
       setupStatus: "failed",
       setupOutput: expect.stringContaining("is not available in the forked worktree"),
@@ -27470,7 +27470,7 @@ script = "printf setup"
 
   it("does not inherit a project Codex environment runtime for no-workspace handoffs", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-none-env-"));
-    const repoPath = path.join(root, "search-compare");
+    const repoPath = path.join(root, "catalog-review");
     const ignoredCwd = path.join(root, "other-project");
     const scratchPath = path.join(root, "profiles", "sstk", "projects", "2026-06-30-c2acd2");
     try {
@@ -27497,7 +27497,7 @@ script = "printf setup"
 
       const sourceRuntime: CodexThreadEnvironmentRuntime = {
         environmentId: "environment",
-        environmentName: "search-compare",
+        environmentName: "catalog-review",
         executionTarget: "local",
         cwd: repoPath,
         setupStatus: "completed",
@@ -27506,7 +27506,7 @@ script = "printf setup"
       const linkedDirectory = {
         id: expectedDir(repoPath),
         kind: "local" as const,
-        label: "search-compare",
+        label: "catalog-review",
         path: expectedDir(repoPath),
       };
       const codexClient = new MockBackendClient({
@@ -27561,7 +27561,7 @@ script = "printf setup"
           namespace: "pwragent",
           tool: "handoff_task",
           arguments: {
-            task: "Use /Users/huntharo/GIPHY/giphy-services from the prompt only.",
+            task: "Use /Users/example/Projects/catalog-service from the prompt only.",
             title: "Prompt-only target",
             groupingMode: "subthread",
             workspaceMode: "none",
@@ -33668,7 +33668,7 @@ script = "printf setup"
         namespace: "pwragent_task_monitors",
         tool: "create_monitor_delegation",
         arguments: {
-          task: "Monitor exec session 89902 until ./scripts/verify-giphy-button-swift.sh exits.",
+          task: "Monitor exec session 89902 until ./scripts/verify-example-button-swift.sh exits.",
           monitorContext:
             "Poll write_stdin with session_id: 89902 and collect stdout/stderr.",
         },

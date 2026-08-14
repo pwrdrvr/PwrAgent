@@ -27,28 +27,28 @@ const sanitizedReviewFindingsTable = `| # | Sev | File | Issue | Fix |
 | 5 | P3 | [LedgerController.scala (line 72)](/Users/ana/signal-shop/src/jvm/shared/public-api/src/main/scala/billing/window/LedgerController.scala:72) | The deterministic sampling key is customer/page scoped and has no per-opportunity component. Why it matters: repeated requests from the same customer for the same bucket in one interval all make the same allow/throttle decision, and missing/shared customer ids can turn a configured probability into all-or-nothing behavior. | Include a stable opportunity/request identifier, or at least the full targeting tuple, in the sampling key and add tests for repeated same-customer requests. |`;
 
 const malformedHandoffBody = [
-  "We reproduced and fixed the upload bug.",
+  "We reproduced and fixed the cereal-pouring bug.",
   "",
   "Root cause:",
   "The editor button still had a delegate and received mouseUp.",
   "",
   "Fix:",
-  "In `GGEditorOptionsViewController.giphyButtonClicked(_:)`, handle upload by",
+  "In `BreakfastEditorViewController.pourCerealButtonClicked(_:)`, handle cereal pouring by",
   "command/title as well as object identity:",
   "",
   "```swift",
-  "} else if button === uploadButton || button.titleText == \"UPLOAD TO GIPHY\" {",
-  "    uploadButtonClicked()",
+  "} else if button === pourButton || button.titleText == \"POUR CEREAL\" {",
+  "    pourCerealIntoBowl()",
   "}",
   "```",
   "",
   "Regression test:",
-  "1. Creates several ready recordings.",
-  "2. Sends mouseDown/mouseUp to the visible editor `UPLOAD TO GIPHY` button.",
-  "3. Asserts the upload sheet opens.",
+  "1. Creates several cereal boxes.",
+  "2. Sends mouseDown/mouseUp to the visible editor `POUR CEREAL` button.",
+  "3. Asserts the serving-size sheet opens.",
   "",
   "Related hardening:",
-  "- Add diagnostic logs for upload button mouseUp.",
+  "- Add diagnostic logs for pour button mouseUp.",
 ].join("\n");
 
 const malformedHandoff = `\`\`\`text\n${malformedHandoffBody}\n\`\`\``;

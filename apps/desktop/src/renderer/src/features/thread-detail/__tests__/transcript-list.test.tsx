@@ -608,7 +608,7 @@ describe("TranscriptList", () => {
               messaging: {
                 platform: "slack",
                 sourceUrl:
-                  "https://giphy.slack.com/archives/D012ABCDEF0/p1785945048967109",
+                  "https://example.slack.com/archives/D012ABCDEF0/p1785945048967109",
                 surface: {
                   id: "D012ABCDEF0",
                   kind: "dm",
@@ -1243,9 +1243,9 @@ Implementation notes remain in a readable bubble.`;
       "Committed and pushed `5b286a74da` to `codex/migrate-media-fingerprint-sessions`.";
     const messageText = `${visibleText}
 
-::git-stage{cwd="/Users/vitaliy/giphy/giphy-services"}
-::git-commit{cwd="/Users/vitaliy/giphy/giphy-services"}
-::git-push{cwd="/Users/vitaliy/giphy/giphy-services" branch="codex/migrate-media-fingerprint-sessions"}`;
+::git-stage{cwd="/Users/example/Projects/catalog-service"}
+::git-commit{cwd="/Users/example/Projects/catalog-service"}
+::git-push{cwd="/Users/example/Projects/catalog-service" branch="codex/migrate-media-fingerprint-sessions"}`;
 
     render(
       <TranscriptList

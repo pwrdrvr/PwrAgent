@@ -18,6 +18,18 @@ async function expectVisibleBlockGap(
   ).toBeGreaterThan(6);
 }
 
+async function pasteText(target: Locator, text: string): Promise<void> {
+  await target.evaluate((element, value) => {
+    const dataTransfer = new DataTransfer();
+    dataTransfer.setData("text/plain", value);
+    element.dispatchEvent(new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: dataTransfer,
+    }));
+  }, text);
+}
+
 test("renders markdown edge cases without breaking transcript boundaries", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
@@ -69,15 +81,10 @@ test("renders markdown edge cases without breaking transcript boundaries", async
       )
       .toBe("1");
 
-    await app.electronApp.evaluate(({ clipboard }) => {
-      clipboard.writeText("");
-    });
     await inlineCopyButton.click();
     await expect
-      .poll(async () =>
-        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
-      )
-      .toBe("inline code");
+      .poll(async () => await app.getClipboardSnapshot())
+      .toMatchObject({ text: "inline code" });
     await expect(inlineCopyButton).toHaveAccessibleName("Copied inline code");
 
     const markdownLiteralBlock = transcript.locator("pre code").filter({
@@ -104,82 +111,77 @@ test("renders markdown edge cases without breaking transcript boundaries", async
       transcript.locator(".transcript-message__paragraph", { hasText: "Regression test:" })
     ).toHaveCount(0);
 
-    await app.electronApp.evaluate(({ clipboard }) => {
-      clipboard.writeText("");
-    });
-
     await transcript
       .locator(".transcript-message__pre-wrap")
       .filter({ hasText: "Root cause:" })
       .getByRole("button", { name: "Copy code" })
       .click();
     await expect
-      .poll(async () =>
-        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
-      )
-      .toContain("8. Asserts `representedRecording` is the currently selected recording.");
+      .poll(async () => (await app.getClipboardSnapshot())?.text)
+      .toContain("8. Asserts `selectedCereal` is the currently selected cereal box.");
 
     const reply = app.window.getByRole("textbox", { name: "Reply" });
     await reply.focus();
-    await app.window.keyboard.press(process.platform === "darwin" ? "Meta+V" : "Control+V");
+    const copiedCode = await app.getClipboardSnapshot();
+    await pasteText(reply, copiedCode?.text ?? "");
 
     const composerInput = app.window.getByTestId("composer-tiptap-input");
     const composerEditor = app.window.locator(".composer-tiptap-input__editor");
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /```swift\n\} else if button === uploadButton/,
+      /```swift\n\} else if button === pourButton/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /```swift\n\n\} else if button === uploadButton/,
+      /```swift\n\n\} else if button === pourButton/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /uploadButtonClicked\(\)\n\n\}/,
+      /pourCerealIntoBowl\(\)\n\n\}/,
     );
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /videos" bug\.\n\nRoot cause:\n\nAfter selecting multiple reel items/,
+      /boxes" bug\.\n\nRoot cause:\n\nAfter selecting multiple cereal boxes/,
     );
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /silently fell through and did nothing\.\n\nFix:\n\nIn `GGEditorOptionsViewController\.giphyButtonClicked\(_:\)`/,
+      /silently fell through and did nothing\.\n\nFix:\n\nIn `BreakfastEditorViewController\.pourCerealButtonClicked\(_:\)`/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /videos" bug\.\n\nRoot cause:\nAfter selecting multiple reel items/,
+      /boxes" bug\.\n\nRoot cause:\nAfter selecting multiple cereal boxes/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /silently fell through and did nothing\.\n\nFix:\nIn `GGEditorOptionsViewController\.giphyButtonClicked\(_:\)`/,
+      /silently fell through and did nothing\.\n\nFix:\nIn `BreakfastEditorViewController\.pourCerealButtonClicked\(_:\)`/,
     );
     await expectVisibleBlockGap(
       composerEditor.locator("> p", { hasText: /^Root cause:$/ }),
-      composerEditor.locator("> p", { hasText: /^After selecting multiple reel items/ }),
+      composerEditor.locator("> p", { hasText: /^After selecting multiple cereal boxes/ }),
     );
     await expectVisibleBlockGap(
       composerEditor.locator("> p", { hasText: /^Fix:$/ }),
       composerEditor.locator("> p", {
-        hasText: /^In GGEditorOptionsViewController\.giphyButtonClicked/,
+        hasText: /^In BreakfastEditorViewController\.pourCerealButtonClicked/,
       }),
     );
     await expect(composerEditor.locator("ol > li")).toHaveCount(8);
     await expect(composerEditor.locator("ul > li")).toHaveCount(3);
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /Add a test that:\n\n1\. Creates several ready recordings\.\n2\. Adds them to `GGDataStore`\./,
+      /Add a test that:\n\n1\. Creates several cereal boxes\.\n2\. Adds them to `BreakfastPantry`\./,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /1\. Creates several ready recordings\.\n\n2\. Adds them to `GGDataStore`\./,
+      /1\. Creates several cereal boxes\.\n\n2\. Adds them to `BreakfastPantry`\./,
     );
     await expect(composerInput).toHaveAttribute(
       "data-value",
-      /Related hardening from this investigation:\n\n- Add diagnostic logs[\s\S]*\n- Make `GGUploadWindowController\.close\(\)`/,
+      /Related hardening from this investigation:\n\n- Add diagnostic logs[\s\S]*\n- Make `ServingSizeWindowController\.close\(\)`/,
     );
     await expect(composerInput).not.toHaveAttribute(
       "data-value",
-      /- Add diagnostic logs[\s\S]*\n\n- Make `GGUploadWindowController\.close\(\)`/,
+      /- Add diagnostic logs[\s\S]*\n\n- Make `ServingSizeWindowController\.close\(\)`/,
     );
   } finally {
     await app.close();

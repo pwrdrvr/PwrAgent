@@ -65,7 +65,7 @@ describe("expandTildePath", () => {
 
   it("round-trips with tildifyPath", () => {
     const home = "/Users/huntharo";
-    const absolute = "/Users/huntharo/GIPHY/search-product";
+    const absolute = "/Users/example/Projects/catalog-portal";
     expect(expandTildePath(tildifyPath(absolute, home), home)).toBe(absolute);
   });
 });

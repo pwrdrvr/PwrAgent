@@ -101,10 +101,10 @@ describe("detectPullRequestsForThread", () => {
     });
     const expectedPr = {
       number: 13268,
-      org: "Giphy",
-      repo: "giphy-services",
+      org: "ExampleOrg",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/Giphy/giphy-services/pull/13268",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13268",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
@@ -135,10 +135,10 @@ describe("detectPullRequestsForThread", () => {
     await git(repo, "branch", "-D", "main");
     const expectedPr = {
       number: 13269,
-      org: "Giphy",
-      repo: "giphy-services",
+      org: "ExampleOrg",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/Giphy/giphy-services/pull/13269",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13269",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
@@ -167,10 +167,10 @@ describe("detectPullRequestsForThread", () => {
     });
     const expectedPr = {
       number: 13271,
-      org: "Giphy",
-      repo: "giphy-services",
+      org: "ExampleOrg",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/Giphy/giphy-services/pull/13271",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13271",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
@@ -207,10 +207,10 @@ describe("detectPullRequestsForThread", () => {
     await git(repo, "checkout", branch);
     const expectedPr = {
       number: 13272,
-      org: "Giphy",
-      repo: "giphy-services",
+      org: "ExampleOrg",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/Giphy/giphy-services/pull/13272",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13272",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async ({ branch: lookupBranch }) =>
@@ -239,10 +239,10 @@ describe("detectPullRequestsForThread", () => {
     });
     const expectedPr = {
       number: 13269,
-      org: "Giphy",
-      repo: "giphy-services",
+      org: "ExampleOrg",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/Giphy/giphy-services/pull/13269",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13269",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
@@ -271,10 +271,10 @@ describe("detectPullRequestsForThread", () => {
     await git(repo, "checkout", branch);
     const expectedPr = {
       number: 13270,
-      org: "Giphy",
-      repo: "giphy-services",
+      org: "ExampleOrg",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/Giphy/giphy-services/pull/13270",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13270",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async () => [expectedPr]),
@@ -520,7 +520,7 @@ async function addGitHubRemote(cwd: string): Promise<void> {
 }
 
 function githubRemoteUrl(): string {
-  return "git@github.com:Giphy/giphy-services.git";
+  return "git@github.com:ExampleOrg/catalog-service.git";
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {

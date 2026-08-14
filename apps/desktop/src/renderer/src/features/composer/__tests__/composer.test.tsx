@@ -9266,20 +9266,20 @@ describe("Composer", () => {
           executionMode: "default",
           linkedDirectories: [
             {
-              id: "/Users/huntharo/GIPHY/giphy-services",
+              id: "/Users/example/Projects/catalog-service",
               kind: "worktree",
-              label: "giphy-services",
-              path: "/Users/huntharo/GIPHY/giphy-services",
+              label: "catalog-service",
+              path: "/Users/example/Projects/catalog-service",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9mnf9z/giphy-services",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-beta/catalog-service",
             },
             {
-              id: "/Users/huntharo/GIPHY/gif-recommendations",
+              id: "/Users/example/Projects/tea-recommendations",
               kind: "worktree",
-              label: "gif-recommendations",
-              path: "/Users/huntharo/GIPHY/gif-recommendations",
+              label: "tea-recommendations",
+              path: "/Users/example/Projects/tea-recommendations",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9motar/gif-recommendations",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-gamma/tea-recommendations",
             },
           ],
           inbox: { inInbox: false },
@@ -9299,7 +9299,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
         value:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9motar/gif-recommendations",
+          "/Users/example/.codex/profiles/sample/worktrees/tree-gamma/tea-recommendations",
       },
     });
     await clickButton("Start review");
@@ -9310,7 +9310,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
-        cwd: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9motar/gif-recommendations",
+        cwd: "/Users/example/.codex/profiles/sample/worktrees/tree-gamma/tea-recommendations",
       });
     });
   });
@@ -9429,11 +9429,11 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
-    const giphyDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+    const exampleDirectory: NavigationDirectorySummary = {
+      key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory",
-      label: "giphy-services",
-      path: "/Users/huntharo/GIPHY/giphy-services",
+      label: "catalog-service",
+      path: "/Users/example/Projects/catalog-service",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -9474,8 +9474,8 @@ describe("Composer", () => {
           onAgentEvent: () => () => undefined,
           startReview,
         }}
-        directory={giphyDirectory}
-        directories={[giphyDirectory, kubeDirectory]}
+        directory={exampleDirectory}
+        directories={[exampleDirectory, kubeDirectory]}
         disabled={false}
         skills={[]}
         thread={{
@@ -9487,12 +9487,12 @@ describe("Composer", () => {
           executionMode: "default",
           linkedDirectories: [
             {
-              id: "/Users/huntharo/GIPHY/giphy-services",
+              id: "/Users/example/Projects/catalog-service",
               kind: "worktree",
-              label: "giphy-services",
-              path: "/Users/huntharo/GIPHY/giphy-services",
+              label: "catalog-service",
+              path: "/Users/example/Projects/catalog-service",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/giphy-services",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-delta/catalog-service",
             },
             {
               id: "/Users/huntharo/infra/kube-manifests",
@@ -9555,11 +9555,11 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
-    const giphyCommit = {
+    const exampleCommit = {
       sha: "1111111111111111111111111111111111111111",
       shortSha: "1111111",
       committedAt: 1_700_000_000,
-      subject: "Update giphy service",
+      subject: "Update example service",
     };
     const kubeCommit = {
       sha: "2222222222222222222222222222222222222222",
@@ -9567,18 +9567,18 @@ describe("Composer", () => {
       committedAt: 1_700_000_500,
       subject: "Update kube manifest",
     };
-    const giphyDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+    const exampleDirectory: NavigationDirectorySummary = {
+      key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory",
-      label: "giphy-services",
-      path: "/Users/huntharo/GIPHY/giphy-services",
+      label: "catalog-service",
+      path: "/Users/example/Projects/catalog-service",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
         currentBranch: "fix-channels-tagged-magic-tags-table",
         defaultBranch: "main",
         branches: ["fix-channels-tagged-magic-tags-table", "main"],
-        recentCommits: [giphyCommit],
+        recentCommits: [exampleCommit],
         syncState: "untracked",
       },
     };
@@ -9604,8 +9604,8 @@ describe("Composer", () => {
           onAgentEvent: () => () => undefined,
           startReview,
         }}
-        directory={giphyDirectory}
-        directories={[giphyDirectory, kubeDirectory]}
+        directory={exampleDirectory}
+        directories={[exampleDirectory, kubeDirectory]}
         disabled={false}
         skills={[]}
         thread={{
@@ -9617,12 +9617,12 @@ describe("Composer", () => {
           executionMode: "default",
           linkedDirectories: [
             {
-              id: "/Users/huntharo/GIPHY/giphy-services",
+              id: "/Users/example/Projects/catalog-service",
               kind: "worktree",
-              label: "giphy-services",
-              path: "/Users/huntharo/GIPHY/giphy-services",
+              label: "catalog-service",
+              path: "/Users/example/Projects/catalog-service",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/giphy-services",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-delta/catalog-service",
             },
             {
               id: "/Users/huntharo/infra/kube-manifests",
@@ -9658,7 +9658,7 @@ describe("Composer", () => {
         .toBeInTheDocument();
     });
     expect(
-      screen.queryByRole("option", { name: /1111111 Update giphy service/i }),
+      screen.queryByRole("option", { name: /1111111 Update example service/i }),
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("option", { name: /2222222 Update kube manifest/i }));
@@ -10958,10 +10958,10 @@ describe("Composer", () => {
           startReview: vi.fn(),
         }}
         directory={{
-          key: "directory:/Users/huntharo/GIPHY/giphy-services",
+          key: "directory:/Users/example/Projects/catalog-service",
           kind: "directory",
-          label: "giphy-services",
-          path: "/Users/huntharo/GIPHY/giphy-services",
+          label: "catalog-service",
+          path: "/Users/example/Projects/catalog-service",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11078,10 +11078,10 @@ describe("Composer", () => {
           startReview,
         }}
         directory={{
-          key: "directory:/Users/huntharo/GIPHY/giphy-services",
+          key: "directory:/Users/example/Projects/catalog-service",
           kind: "directory",
-          label: "giphy-services",
-          path: "/Users/huntharo/GIPHY/giphy-services",
+          label: "catalog-service",
+          path: "/Users/example/Projects/catalog-service",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11149,10 +11149,10 @@ describe("Composer", () => {
           startReview: vi.fn(),
         }}
         directory={{
-          key: "directory:/Users/huntharo/GIPHY/giphy-services",
+          key: "directory:/Users/example/Projects/catalog-service",
           kind: "directory",
-          label: "giphy-services",
-          path: "/Users/huntharo/GIPHY/giphy-services",
+          label: "catalog-service",
+          path: "/Users/example/Projects/catalog-service",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11181,12 +11181,12 @@ describe("Composer", () => {
           executionMode: "default",
           linkedDirectories: [
             {
-              id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+              id: "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
               kind: "worktree",
-              label: "giphy-services",
-              path: "/Users/huntharo/GIPHY/giphy-services",
+              label: "catalog-service",
+              path: "/Users/example/Projects/catalog-service",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
             },
           ],
           inbox: { inInbox: false },
@@ -11222,21 +11222,21 @@ describe("Composer", () => {
       executionMode: "default" as const,
       linkedDirectories: [
         {
-          id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+          id: "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
           kind: "worktree" as const,
-          label: "giphy-services",
-          path: "/Users/huntharo/GIPHY/giphy-services",
+          label: "catalog-service",
+          path: "/Users/example/Projects/catalog-service",
           worktreePath:
-            "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+            "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
         },
       ],
       inbox: { inInbox: false },
     };
     const hydratedDirectory = {
-      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+      key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory" as const,
-      label: "giphy-services",
-      path: "/Users/huntharo/GIPHY/giphy-services",
+      label: "catalog-service",
+      path: "/Users/example/Projects/catalog-service",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -11296,7 +11296,7 @@ describe("Composer", () => {
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
         cwd:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services",
+          "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
       });
     });
   });
@@ -11323,10 +11323,10 @@ describe("Composer", () => {
       inbox: { inInbox: false },
     };
     const hydratedDirectory = {
-      key: "directory:/Users/huntharo/GIPHY/giphy-services",
+      key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory" as const,
-      label: "giphy-services",
-      path: "/Users/huntharo/GIPHY/giphy-services",
+      label: "catalog-service",
+      path: "/Users/example/Projects/catalog-service",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -13512,8 +13512,8 @@ describe("Composer", () => {
         directory={{
           key: "subthread:codex:thread-parent:new-worktree",
           kind: "directory",
-          label: "giphy-services",
-          path: "/missing/giphy-services",
+          label: "catalog-service",
+          path: "/missing/catalog-service",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13524,8 +13524,8 @@ describe("Composer", () => {
         launchpad={{
           directoryKey: "subthread:codex:thread-parent:new-worktree",
           directoryKind: "directory",
-          directoryLabel: "giphy-services",
-          directoryPath: "/missing/giphy-services",
+          directoryLabel: "catalog-service",
+          directoryPath: "/missing/catalog-service",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13545,7 +13545,7 @@ describe("Composer", () => {
         autoDismiss: false,
         id: expect.stringContaining("launchpad-branches-unavailable:"),
         title: "Branches unavailable",
-        message: "PwrAgent couldn't load branches for giphy-services.",
+        message: "PwrAgent couldn't load branches for catalog-service.",
         detail: "fatal: unable to enumerate refs",
         tone: "warning",
       });
@@ -13687,8 +13687,8 @@ describe("Composer", () => {
         directory={{
           key: "subthread:codex:thread-parent:new-worktree",
           kind: "directory",
-          label: "GifGrabber",
-          path: "/Users/huntharo/.codex/profiles/sstk/worktrees/mqs3ew3f/GifGrabber",
+          label: "ExampleApp",
+          path: "/Users/huntharo/.codex/profiles/sstk/worktrees/mqs3ew3f/ExampleApp",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13726,15 +13726,15 @@ describe("Composer", () => {
         launchpad={{
           directoryKey: "subthread:codex:thread-parent:new-worktree",
           directoryKind: "directory",
-          directoryLabel: "GifGrabber",
-          directoryPath: "/Users/huntharo/.codex/profiles/sstk/worktrees/mqs3ew3f/GifGrabber",
+          directoryLabel: "ExampleApp",
+          directoryPath: "/Users/huntharo/.codex/profiles/sstk/worktrees/mqs3ew3f/ExampleApp",
           backend: "codex",
           executionMode: "default",
           prompt: "",
           workMode: "worktree",
           branchName: "fix/upload-mp4-compression",
           parentThreadId: "thread-parent",
-          parentThreadTitle: "Fix oversized GIPHY uploads",
+          parentThreadTitle: "Fix oversized EXAMPLE uploads",
           createdAt: 1,
           updatedAt: 1,
         }}
@@ -14614,7 +14614,7 @@ describe("Composer", () => {
 
   it("inserts a tilde path from the @ directory autocomplete and links it on start", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/example";
     try {
       const launchpad: NavigationLaunchpadDraft = {
         directoryKey: "directory:/repo",
@@ -14638,11 +14638,11 @@ describe("Composer", () => {
         needsAttentionCount: 0,
         latestUpdatedAt: 20,
       };
-      const searchProductDirectory: NavigationDirectorySummary = {
-        key: "directory:/Users/huntharo/GIPHY/search-product",
+      const catalogPortalDirectory: NavigationDirectorySummary = {
+        key: "directory:/Users/example/Projects/catalog-portal",
         kind: "directory",
-        label: "search-product",
-        path: "/Users/huntharo/GIPHY/search-product",
+        label: "catalog-portal",
+        path: "/Users/example/Projects/catalog-portal",
         threadKeys: [],
         needsAttentionCount: 0,
         latestUpdatedAt: 10,
@@ -14653,7 +14653,7 @@ describe("Composer", () => {
         <Composer
           backends={[backendSummary("codex")]}
           directory={repoDirectory}
-          directories={[repoDirectory, searchProductDirectory]}
+          directories={[repoDirectory, catalogPortalDirectory]}
           draftStore={createComposerDraftStore()}
           launchpad={launchpad}
           onMaterializeLaunchpad={onMaterializeLaunchpad}
@@ -14663,13 +14663,13 @@ describe("Composer", () => {
       );
 
       fireEvent.change(screen.getByLabelText("New thread"), {
-        target: { value: "Read SEARCH-4803 in @search" },
+        target: { value: "Read MARKET-4803 in @catalog" },
       });
 
       const listbox = screen.getByRole("listbox", { name: "Directories" });
       expect(listbox).toHaveClass("composer__autocomplete--directories");
       fireEvent.click(
-        within(listbox).getByRole("button", { name: /search-product/ })
+        within(listbox).getByRole("button", { name: /catalog-portal/ })
       );
 
       // The commit mints a zero-width chip: the plain draft keeps only
@@ -14678,7 +14678,7 @@ describe("Composer", () => {
       // (asserted on materialize below) carries the markdown link.
       await waitFor(() => {
         expect(screen.getByLabelText("New thread")).toHaveValue(
-          "Read SEARCH-4803 in  "
+          "Read MARKET-4803 in  "
         );
       });
       // Caret parks after the guaranteed post-chip space (set in a
@@ -14687,14 +14687,14 @@ describe("Composer", () => {
         expect(
           (screen.getByLabelText("New thread") as HTMLInputElement)
             .selectionStart
-        ).toBe("Read SEARCH-4803 in  ".length);
+        ).toBe("Read MARKET-4803 in  ".length);
       });
       const richInput = screen.getByTestId("composer-tiptap-input");
-      const chip = within(richInput).getByText("@search-product");
+      const chip = within(richInput).getByText("@catalog-portal");
       expect(chip).toHaveAttribute("data-mention-kind", "directory");
       expect(chip).toHaveAttribute(
         "data-skill-path",
-        "/Users/huntharo/GIPHY/search-product"
+        "/Users/example/Projects/catalog-portal"
       );
       expect(
         screen.queryByRole("listbox", { name: "Directories" })
@@ -14708,12 +14708,12 @@ describe("Composer", () => {
           [
             {
               type: "text",
-              text: "Read SEARCH-4803 in [@search-product](~/GIPHY/search-product)",
+              text: "Read MARKET-4803 in [@catalog-portal](~/Projects/catalog-portal)",
             },
           ],
           undefined,
           undefined,
-          ["/Users/huntharo/GIPHY/search-product"]
+          ["/Users/example/Projects/catalog-portal"]
         );
       });
     } finally {
@@ -14798,7 +14798,7 @@ describe("Composer", () => {
 
   it("links a hand-typed directory reference after sending a reply", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/example";
     try {
       const startTurn = vi.fn(async () => ({
         backend: "codex" as const,
@@ -14806,11 +14806,11 @@ describe("Composer", () => {
         turnId: "turn-1",
       }));
       const onAttachDirectoryReferences = vi.fn();
-      const searchProductDirectory: NavigationDirectorySummary = {
-        key: "directory:/Users/huntharo/GIPHY/search-product",
+      const catalogPortalDirectory: NavigationDirectorySummary = {
+        key: "directory:/Users/example/Projects/catalog-portal",
         kind: "directory",
-        label: "search-product",
-        path: "/Users/huntharo/GIPHY/search-product",
+        label: "catalog-portal",
+        path: "/Users/example/Projects/catalog-portal",
         threadKeys: [],
         needsAttentionCount: 0,
         latestUpdatedAt: 10,
@@ -14822,13 +14822,13 @@ describe("Composer", () => {
             onAgentEvent: () => () => undefined,
             startTurn,
           }}
-          directories={[searchProductDirectory]}
+          directories={[catalogPortalDirectory]}
           disabled={false}
           skills={[]}
           onAttachDirectoryReferences={onAttachDirectoryReferences}
           thread={{
             id: "thread-1",
-            title: "Search cleanup",
+            title: "Catalog cleanup",
             titleSource: "explicit",
             source: "codex",
             executionMode: "default",
@@ -14839,7 +14839,7 @@ describe("Composer", () => {
       );
 
       fireEvent.change(screen.getByLabelText("Reply"), {
-        target: { value: "It might be in ~/GIPHY/search-product." },
+        target: { value: "It might be in ~/Projects/catalog-portal." },
       });
       await clickButton("Send");
 
@@ -14847,7 +14847,7 @@ describe("Composer", () => {
         expect(startTurn).toHaveBeenCalled();
       });
       expect(onAttachDirectoryReferences).toHaveBeenCalledWith(
-        ["/Users/huntharo/GIPHY/search-product"],
+        ["/Users/example/Projects/catalog-portal"],
         { backend: "codex", threadId: "thread-1" },
       );
     } finally {

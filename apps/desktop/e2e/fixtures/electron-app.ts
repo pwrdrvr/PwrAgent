@@ -165,6 +165,10 @@ type LaunchResult = {
   electronApp: ElectronApplication;
   homeRoot: string;
   window: Page;
+  getClipboardSnapshot: () => Promise<{
+    html?: string;
+    text: string;
+  } | undefined>;
   advance: (params?: {
     executionMode?: ThreadExecutionMode;
     stepId?: string;
@@ -493,6 +497,8 @@ async function finishElectronLaunch(args: {
     electronApp,
     homeRoot,
     window,
+    getClipboardSnapshot: async () =>
+      await electronApp.evaluate(() => globalThis.__PWRAGENT_E2E_CLIPBOARD__),
     advance: async (advanceParams) => {
       await electronApp.evaluate(async (_electron, value) => {
         await globalThis.__PWRAGENT_REPLAY_DRIVER__?.advance(value);

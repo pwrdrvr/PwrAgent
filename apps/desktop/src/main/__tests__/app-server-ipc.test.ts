@@ -4772,17 +4772,17 @@ describe("app server ipc", () => {
     });
     const firstStalePr = githubPr({
       number: 255,
-      org: "Giphy",
-      repo: "GifGrabber",
+      org: "ExampleOrg",
+      repo: "ExampleApp",
       state: "passing",
-      url: "https://github.com/Giphy/GifGrabber/pull/255",
+      url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
     });
     const secondStalePr = githubPr({
       number: 256,
-      org: "Giphy",
-      repo: "GifGrabber",
+      org: "ExampleOrg",
+      repo: "ExampleApp",
       state: "pending",
-      url: "https://github.com/Giphy/GifGrabber/pull/256",
+      url: "https://github.com/ExampleOrg/ExampleApp/pull/256",
     });
     const firstMergedPr = githubPr({
       ...firstStalePr,
@@ -4871,11 +4871,11 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
         cwd: "/repo",
-        url: "https://github.com/Giphy/GifGrabber/pull/255",
+        url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
       });
       expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
         cwd: "/repo",
-        url: "https://github.com/Giphy/GifGrabber/pull/256",
+        url: "https://github.com/ExampleOrg/ExampleApp/pull/256",
       });
     });
     await vi.waitFor(() => {
@@ -5503,11 +5503,11 @@ describe("app server ipc", () => {
     });
     const stalePr = githubPr({
       number: 255,
-      org: "Giphy",
-      repo: "GifGrabber",
+      org: "ExampleOrg",
+      repo: "ExampleApp",
       title: "[codex] Fix upload button after reel switching",
       state: "passing",
-      url: "https://github.com/Giphy/GifGrabber/pull/255",
+      url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
     });
     const mergedPr = githubPr({
       ...stalePr,
@@ -5552,7 +5552,7 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
         cwd: "/repo",
-        url: "https://github.com/Giphy/GifGrabber/pull/255",
+        url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
       });
     });
     await vi.waitFor(() => {
@@ -5567,7 +5567,7 @@ describe("app server ipc", () => {
     expect(writePrStatusCacheEntries).toHaveBeenCalledWith([
       {
         provider: "github.com",
-        prKey: "github.com/giphy/gifgrabber#255",
+        prKey: "github.com/exampleorg/exampleapp#255",
         fetchedAt: expect.any(Number),
         pr: mergedPr,
       },
@@ -5577,7 +5577,7 @@ describe("app server ipc", () => {
       notification: {
         method: "pullRequest/status/updated",
         params: {
-          prKey: "github.com/giphy/gifgrabber#255",
+          prKey: "github.com/exampleorg/exampleapp#255",
           pr: mergedPr,
         },
       },
@@ -5618,11 +5618,11 @@ describe("app server ipc", () => {
     });
     const detachedPr = githubPr({
       number: 255,
-      org: "Giphy",
-      repo: "GifGrabber",
+      org: "ExampleOrg",
+      repo: "ExampleApp",
       title: "[codex] Fix upload button after reel switching",
       state: "passing",
-      url: "https://github.com/Giphy/GifGrabber/pull/255",
+      url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
     });
     const mergedDetachedPr = githubPr({
       ...detachedPr,
@@ -5635,7 +5635,7 @@ describe("app server ipc", () => {
       threadId: "thread-1",
       executionMode: "default",
       extraLinkedDirectories: [],
-      detachedPrKeys: ["github.com/giphy/gifgrabber#255"],
+      detachedPrKeys: ["github.com/exampleorg/exampleapp#255"],
       detachedPrs: [detachedPr],
       prs: [],
       prsFetchedAt: Date.now() - 120_000,
@@ -5661,7 +5661,7 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
         cwd: "/repo",
-        url: "https://github.com/Giphy/GifGrabber/pull/255",
+        url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
       });
     });
     await vi.waitFor(() => {
@@ -5691,11 +5691,11 @@ describe("app server ipc", () => {
     });
     const unchangedPr = githubPr({
       number: 255,
-      org: "Giphy",
-      repo: "GifGrabber",
+      org: "ExampleOrg",
+      repo: "ExampleApp",
       title: "[codex] Fix upload button after reel switching",
       state: "passing",
-      url: "https://github.com/Giphy/GifGrabber/pull/255",
+      url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
     });
     getThreadOverlayState.mockResolvedValueOnce({
       backend: "codex",
@@ -5716,13 +5716,13 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(fetchPullRequestByUrl).toHaveBeenCalledWith({
         cwd: "/repo",
-        url: "https://github.com/Giphy/GifGrabber/pull/255",
+        url: "https://github.com/ExampleOrg/ExampleApp/pull/255",
       });
     });
     expect(writePrStatusCacheEntries).toHaveBeenCalledWith([
       {
         provider: "github.com",
-        prKey: "github.com/giphy/gifgrabber#255",
+        prKey: "github.com/exampleorg/exampleapp#255",
         fetchedAt: expect.any(Number),
         pr: unchangedPr,
       },
@@ -5732,7 +5732,7 @@ describe("app server ipc", () => {
       notification: {
         method: "pullRequest/status/updated",
         params: {
-          prKey: "github.com/giphy/gifgrabber#255",
+          prKey: "github.com/exampleorg/exampleapp#255",
           pr: unchangedPr,
         },
       },
@@ -6755,7 +6755,7 @@ describe("app server ipc", () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const worktreePath =
-      "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/giphy-services";
+      "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service";
     const gitWorkingState = {
       dirtyFiles: 0,
       dirtyAdditions: 0,
@@ -6773,8 +6773,8 @@ describe("app server ipc", () => {
         linkedDirectories: [
           {
             id: worktreePath,
-            label: "giphy-services",
-            path: "/Users/huntharo/GIPHY/giphy-services",
+            label: "catalog-service",
+            path: "/Users/example/Projects/catalog-service",
             worktreePath,
             kind: "worktree",
           },
