@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
-import { launchElectronApp } from "./fixtures/electron-app";
+import { launchElectronApp, threadRowCard } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1075,9 +1075,10 @@ test("directory launchpad keeps new worktree as the sticky default after startin
       ownerThreadId: "thread-new-worktree",
     });
 
-    const startedThreadRow = app.window
-      .getByRole("button", { name: /Use a sticky worktree default/ })
-      .first();
+    const startedThreadRow = threadRowCard(
+      app.window,
+      /Use a sticky worktree default/,
+    ).first();
     // Renamed in the chip-flow refactor: meta + PR + binding + reactions
     // chips all share a single `.thread-row__chips` flex-wrap container.
     const startedThreadChips = startedThreadRow.locator(".thread-row__chips");
