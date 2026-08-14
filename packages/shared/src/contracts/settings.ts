@@ -1766,7 +1766,7 @@ export function isDesktopFederationMode(
  * - `discord`   → HTTP GET https://discord.com/api/v10/users/@me
  * - `codex`     → spawn `<resolved-path> --version`
  * - `mattermost` → GET <serverUrl>/api/v4/users/me with bot token
- * - `slack`     → Slack Web API `auth.test` with bot token
+ * - `slack`     → Slack Web API `auth.test` plus Socket Mode `apps.connections.open`
  */
 export const SETTINGS_CREDENTIAL_TEST_KINDS = [
   "telegram",
@@ -1809,4 +1809,18 @@ export type SettingsCredentialTestResult = {
 
 export type SettingsCredentialTestRequest = {
   kind: SettingsCredentialTestKind;
+};
+
+/** Open Slack's create-from-manifest page in the system browser. */
+export type SlackCreateAppRequest = {
+  /** When true (default), also open the URL via the OS browser. */
+  open?: boolean;
+};
+
+export type SlackCreateAppResponse = {
+  url: string;
+  oversized: boolean;
+  /** Raw official manifest JSON. Present so an oversized URL can still be pasted. */
+  manifestJson: string;
+  opened: boolean;
 };

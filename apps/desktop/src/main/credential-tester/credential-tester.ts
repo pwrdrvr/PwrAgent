@@ -44,6 +44,7 @@ export interface CredentialTesterDependencies {
   resolveDiscordBotToken: () => string | undefined;
   resolveMattermostBotToken: () => string | undefined;
   resolveSlackBotToken: () => string | undefined;
+  resolveSlackAppToken: () => string | undefined;
   resolveFeishuAppId: () => string | undefined;
   resolveFeishuAppSecret: () => string | undefined;
   resolveFeishuTenantUrl: () => string | undefined;
@@ -120,6 +121,7 @@ export class CredentialTester {
       resolveDiscordBotToken: dependencies.resolveDiscordBotToken,
       resolveMattermostBotToken: dependencies.resolveMattermostBotToken,
       resolveSlackBotToken: dependencies.resolveSlackBotToken,
+      resolveSlackAppToken: dependencies.resolveSlackAppToken,
       resolveFeishuAppId: dependencies.resolveFeishuAppId,
       resolveFeishuAppSecret: dependencies.resolveFeishuAppSecret,
       resolveFeishuTenantUrl: dependencies.resolveFeishuTenantUrl,
@@ -254,9 +256,13 @@ export class CredentialTester {
     if (!botToken) {
       return unset("slack", startedAt);
     }
+    const appToken = this.deps.resolveSlackAppToken();
     const result = await this.deps.validateMessagingCredentials({
       channel: "slack",
-      credential: { botToken },
+      credential: {
+        botToken,
+        ...(appToken ? { appToken } : {}),
+      },
     });
     return liftMessagingResult("slack", result);
   }

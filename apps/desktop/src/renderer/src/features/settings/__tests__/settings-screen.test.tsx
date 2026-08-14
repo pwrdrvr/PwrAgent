@@ -4143,6 +4143,55 @@ describe("SettingsScreen", () => {
     expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
   });
 
+  it("offers Connect Slack as the primary create-from-manifest path", async () => {
+    const settings = createSettingsState();
+    const openSlackCreateApp = vi.fn(async () => ({
+      url: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
+      oversized: false,
+      manifestJson: "{}",
+      opened: true,
+    }));
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        desktopApi={{ openSlackCreateApp }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeEnabled();
+    expect(screen.getAllByText(/customer-owned Slack app/i).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Create Slack app" }));
+    await waitFor(() => {
+      expect(openSlackCreateApp).toHaveBeenCalledWith({ open: true });
+    });
+  });
+
+  it("shows a leftover Events API notice and keeps Socket Mode selected", () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.slack.inboundMode = { value: "events", source: "config" };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByText("Events API is not implemented. PwrAgent will use Socket Mode."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Socket Mode" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
+  });
+
   it("sanitizes manually entered messaging display names before saving", async () => {
     const settings = createSettingsState();
 

@@ -343,7 +343,7 @@ export type CredentialValidationRequest =
       channel: "mattermost";
       credential: { botToken: string; serverUrl: string };
     }
-  | { channel: "slack"; credential: { botToken: string } }
+  | { channel: "slack"; credential: { botToken: string; appToken?: string } }
   | {
       channel: "feishu";
       credential: { appId: string; appSecret: string; tenantUrl: string };

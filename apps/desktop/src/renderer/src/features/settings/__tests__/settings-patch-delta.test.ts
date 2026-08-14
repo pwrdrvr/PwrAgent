@@ -4,6 +4,7 @@ import {
   buildDiscordPatchDelta,
   buildFeishuPatchDelta,
   buildMattermostPatchDelta,
+  buildSlackPatchDelta,
   buildTelegramPatchDelta,
 } from "../settings-patch-delta";
 
@@ -11,6 +12,7 @@ type Telegram = DesktopSettingsSnapshot["messaging"]["telegram"];
 type Discord = DesktopSettingsSnapshot["messaging"]["discord"];
 type Feishu = DesktopSettingsSnapshot["messaging"]["feishu"];
 type Mattermost = DesktopSettingsSnapshot["messaging"]["mattermost"];
+type Slack = DesktopSettingsSnapshot["messaging"]["slack"];
 
 function telegramSnapshot(overrides: Partial<Telegram> = {}): Telegram {
   return {
@@ -49,6 +51,31 @@ function mattermostSnapshot(overrides: Partial<Mattermost> = {}): Mattermost {
     authorizedUserIds: { value: [], source: "default" },
     authorizedTeams: { value: [], source: "default" },
     authorizedConversations: { value: [], source: "default" },
+    ...overrides,
+  };
+}
+
+function slackSnapshot(overrides: Partial<Slack> = {}): Slack {
+  return {
+    enabled: { value: false, source: "default" },
+    liveWorkingCards: { value: false, source: "default" },
+    responseMode: { value: "mention_only", source: "default" },
+    streamingResponses: { value: false, source: "default" },
+    botToken: { configured: false, source: "unset", writable: true },
+    appToken: { configured: false, source: "unset", writable: true },
+    signingSecret: { configured: false, source: "unset", writable: true },
+    workspaceUrl: { value: "", source: "default" },
+    inboundMode: { value: "socket", source: "default" },
+    teamAuthorizationMode: { value: "approved_only", source: "default" },
+    channelAuthorizationMode: { value: "approved_only", source: "default" },
+    dmAccessMode: { value: "authorized_users", source: "default" },
+    groupDmAccessMode: { value: "none", source: "default" },
+    channelUserAccessMode: { value: "authorized_users", source: "default" },
+    slashCommandPrefix: { value: "pwragent_", source: "default" },
+    registerSlashCommands: { value: false, source: "default" },
+    authorizedUserIds: { value: [], source: "default" },
+    authorizedWorkspaces: { value: [], source: "default" },
+    authorizedChannels: { value: [], source: "default" },
     ...overrides,
   };
 }
@@ -273,5 +300,21 @@ describe("buildFeishuPatchDelta", () => {
 
     expect(delta).toEqual({ enabled: true });
     expect(delta).not.toHaveProperty("tenantUrl");
+  });
+});
+
+describe("buildSlackPatchDelta", () => {
+  it("returns undefined when nothing changed", () => {
+    const snapshot = slackSnapshot();
+    expect(buildSlackPatchDelta(snapshot, snapshot)).toBeUndefined();
+  });
+
+  it("coerces leftover Events API inbound mode to Socket Mode", () => {
+    const snapshot = slackSnapshot({
+      inboundMode: { value: "events", source: "config" },
+    });
+    expect(buildSlackPatchDelta(snapshot, snapshot)).toEqual({
+      inboundMode: "socket",
+    });
   });
 });

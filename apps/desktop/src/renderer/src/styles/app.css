@@ -8391,6 +8391,57 @@ textarea,
   line-height: 1.45;
 }
 
+.settings-inline-notice {
+  margin: 0 18px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--warning-surface, var(--bg-panel-elevated));
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.slack-connect {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.slack-connect__intro,
+.slack-connect__admin,
+.slack-connect__status,
+.slack-connect__error {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.slack-connect__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.slack-connect__checklist {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.slack-connect__status {
+  color: var(--text-secondary);
+}
+
+.slack-connect__error {
+  color: var(--danger-text);
+}
+
 .settings-update-channel {
   display: flex;
   flex-direction: column;
@@ -28900,6 +28951,29 @@ a.transcript-message__messaging-origin:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+.onboarding-wizard__notice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--warning-surface, var(--bg-panel-elevated));
+  color: var(--text-secondary);
+  font: 500 12px/1.45 var(--font-sans, sans-serif);
+}
+.onboarding-wizard__advanced {
+  background: var(--bg-panel-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.onboarding-wizard__advanced > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font: 650 12px/1.4 var(--font-sans, sans-serif);
+}
+.onboarding-wizard__advanced[open] > summary {
+  margin-bottom: 10px;
 }
 .onboarding-wizard__field {
   background: var(--bg-panel-elevated);

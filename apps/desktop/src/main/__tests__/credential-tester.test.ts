@@ -9,6 +9,7 @@ type TesterOptions = {
   resolveMattermostBotToken?: () => string | undefined;
   resolveMattermostServerUrl?: () => string | undefined;
   resolveSlackBotToken?: () => string | undefined;
+  resolveSlackAppToken?: () => string | undefined;
   resolveFeishuAppId?: () => string | undefined;
   resolveFeishuAppSecret?: () => string | undefined;
   resolveFeishuTenantUrl?: () => string | undefined;
@@ -47,6 +48,7 @@ function buildTester(options: TesterOptions = {}) {
       options.resolveMattermostServerUrl
       ?? (() => "https://mm.example.com"),
     resolveSlackBotToken: options.resolveSlackBotToken ?? (() => "slack-token"),
+    resolveSlackAppToken: options.resolveSlackAppToken ?? (() => "slack-app-token"),
     resolveFeishuAppId: options.resolveFeishuAppId ?? (() => "cli_feishu"),
     resolveFeishuAppSecret: options.resolveFeishuAppSecret ?? (() => "feishu-secret"),
     resolveFeishuTenantUrl:
@@ -207,6 +209,85 @@ describe("CredentialTester", () => {
       const result = await tester.test("mattermost");
       expect(result.status).toBe("unset");
       expect(validateMessagingCredentials).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("slack", () => {
+    it("dispatches bot and app tokens through the runtime", async () => {
+      const validateMessagingCredentials = vi.fn(async () => ({
+        status: "ok" as const,
+        durationMs: 28,
+        testedAt: Date.now(),
+        account: "pwragent",
+        detail: "PwrDrvr · Socket Mode ok",
+      }));
+      const { tester } = buildTester({ validateMessagingCredentials });
+      const result = await tester.test("slack");
+      expect(validateMessagingCredentials).toHaveBeenCalledWith({
+        channel: "slack",
+        credential: {
+          botToken: "slack-token",
+          appToken: "slack-app-token",
+        },
+      });
+      expect(result.status).toBe("ok");
+      expect(result.account).toBe("pwragent");
+      expect(result.detail).toBe("PwrDrvr · Socket Mode ok");
+    });
+
+    it("still probes when only the bot token is present", async () => {
+      const validateMessagingCredentials = vi.fn(async () => ({
+        status: "failed" as const,
+        durationMs: 12,
+        testedAt: Date.now(),
+        account: "pwragent",
+        errorMessage:
+          "Socket Mode needs an App-Level Token (xapp-) with connections:write, generated under Basic Information.",
+      }));
+      const { tester } = buildTester({
+        resolveSlackAppToken: () => undefined,
+        validateMessagingCredentials,
+      });
+      const result = await tester.test("slack");
+      expect(validateMessagingCredentials).toHaveBeenCalledWith({
+        channel: "slack",
+        credential: { botToken: "slack-token" },
+      });
+      expect(result.status).toBe("failed");
+      expect(result.account).toBe("pwragent");
+      expect(result.errorMessage).toMatch(/xapp-/);
+    });
+
+    it("returns unset when no bot token is configured — no provider load", async () => {
+      const validateMessagingCredentials = vi.fn(async () => ({
+        status: "ok" as const,
+        durationMs: 1,
+        testedAt: Date.now(),
+      }));
+      const { tester } = buildTester({
+        resolveSlackBotToken: () => undefined,
+        validateMessagingCredentials,
+      });
+      const result = await tester.test("slack");
+      expect(result.status).toBe("unset");
+      expect(validateMessagingCredentials).not.toHaveBeenCalled();
+    });
+
+    it("lifts a bot-ok / socket-fail result from the provider", async () => {
+      const validateMessagingCredentials = vi.fn(async () => ({
+        status: "failed" as const,
+        durationMs: 40,
+        testedAt: Date.now(),
+        account: "pwragent",
+        detail: "PwrDrvr",
+        errorMessage:
+          "The bot token is valid, but PwrAgent could not open Slack Socket Mode. Check that Socket Mode is enabled and the xapp- token has connections:write.",
+      }));
+      const { tester } = buildTester({ validateMessagingCredentials });
+      const result = await tester.test("slack");
+      expect(result.status).toBe("failed");
+      expect(result.account).toBe("pwragent");
+      expect(result.errorMessage).toMatch(/Socket Mode/);
     });
   });
 

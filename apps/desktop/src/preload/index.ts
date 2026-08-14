@@ -365,6 +365,8 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  SlackCreateAppRequest,
+  SlackCreateAppResponse,
   DesktopBootInfo,
   GraduateDesktopBootstrapConfigToProfileRequest,
   GraduateDesktopBootstrapConfigToProfileResponse,
@@ -681,6 +683,7 @@ import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
+  SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
@@ -1173,6 +1176,10 @@ const desktopApi = Object.freeze({
     request: SettingsCredentialTestRequest,
   ): Promise<SettingsCredentialTestResult> =>
     await ipcRenderer.invoke(SETTINGS_TEST_CREDENTIALS_CHANNEL, request),
+  openSlackCreateApp: async (
+    request?: SlackCreateAppRequest,
+  ): Promise<SlackCreateAppResponse> =>
+    await ipcRenderer.invoke(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL, request),
   readLastSettingsCredentialTest: async (
     request: { kind: SettingsCredentialTestKind },
   ): Promise<SettingsCredentialTestResult | undefined> =>

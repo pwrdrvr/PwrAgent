@@ -62,6 +62,8 @@ import {
   type SettingsChipTone,
 } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { SlackConnectCard } from "../messaging/SlackConnectCard";
+import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connect-copy";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import {
   ApprovedSurfaceDefaultAgent,
@@ -1042,19 +1044,20 @@ export function MessagingSettings(props: {
             }}
           />
           <SettingsGroupLabel>Connection</SettingsGroupLabel>
-          <TextField
-            disabled={props.saving}
-            label="Workspace URL"
-            sub="Display URL for the Slack workspace, e.g. so links back to Slack resolve."
-            help={<code>https://example.slack.com</code>}
-            source={optionalStringSourceBadge(slack.workspaceUrl)}
-            value={slack.workspaceUrl.value}
-            onSave={(workspaceUrl) => {
-              void props.onSaveSlack({
-                ...slack,
-                workspaceUrl: { ...slack.workspaceUrl, value: workspaceUrl },
-              });
-            }}
+          {slack.inboundMode.value === "events" ? (
+            <p className="settings-inline-notice" role="status">
+              {SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE}
+            </p>
+          ) : null}
+          <SettingsField
+            label="Connect Slack"
+            sub="Create a customer-owned Slack app from PwrAgent's official manifest, then paste the two tokens."
+            control={
+              <SlackConnectCard
+                desktopApi={props.desktopApi}
+                variant="settings"
+              />
+            }
           />
           <SecretField
             disabled={props.saving || !slack.botToken.writable}
@@ -1074,25 +1077,16 @@ export function MessagingSettings(props: {
             onClearSecret={props.onClearSecret}
             onReplaceSecret={props.onReplaceSecret}
           />
-          <SecretField
-            disabled={props.saving || !slack.signingSecret.writable}
-            label="Signing Secret (Optional)"
-            sub="Optional for Socket Mode button validation. Required for future Events API mode."
-            secret="slackSigningSecret"
-            state={slack.signingSecret}
-            onClearSecret={props.onClearSecret}
-            onReplaceSecret={props.onReplaceSecret}
-          />
           <SettingsField
             label="Connection test"
-            sub="Validates the bot token with Slack auth.test."
+            sub="Validates the bot token with Slack auth.test and opens a Socket Mode handshake."
             control={
               <SettingsTestBlock
                 kind="slack"
                 desktopApi={props.desktopApi}
                 icon={<SlackIcon size={14} />}
                 defaultName="Your bot"
-                defaultSub="auth.test"
+                defaultSub="auth.test + Socket Mode"
                 prerequisites={[
                   { label: "Bot Token", met: slack.botToken.configured },
                   { label: "App Token", met: slack.appToken.configured },
@@ -1306,10 +1300,33 @@ export function MessagingSettings(props: {
           </div>
 
           <SettingsGroupLabel>Advanced</SettingsGroupLabel>
+          <TextField
+            disabled={props.saving}
+            label="Workspace URL"
+            sub="Display URL for the Slack workspace, e.g. so links back to Slack resolve."
+            help={<code>https://example.slack.com</code>}
+            source={optionalStringSourceBadge(slack.workspaceUrl)}
+            value={slack.workspaceUrl.value}
+            onSave={(workspaceUrl) => {
+              void props.onSaveSlack({
+                ...slack,
+                workspaceUrl: { ...slack.workspaceUrl, value: workspaceUrl },
+              });
+            }}
+          />
+          <SecretField
+            disabled={props.saving || !slack.signingSecret.writable}
+            label="Signing Secret (Optional)"
+            sub="Optional. Used to sign in-app button callbacks. Not required for Socket Mode."
+            secret="slackSigningSecret"
+            state={slack.signingSecret}
+            onClearSecret={props.onClearSecret}
+            onReplaceSecret={props.onReplaceSecret}
+          />
           <SegmentedField
             disabled={props.saving}
             label="Inbound Mode"
-            sub="Socket Mode keeps Slack callbacks on an outbound WebSocket. Events API is reserved for a future HTTP callback path."
+            sub="Socket Mode is the only implemented inbound path. Events API is not available."
             options={SLACK_INBOUND_MODE_OPTIONS}
             source={sourceBadge(slack.inboundMode)}
             value={slack.inboundMode.value === "events" ? "socket" : slack.inboundMode.value}
