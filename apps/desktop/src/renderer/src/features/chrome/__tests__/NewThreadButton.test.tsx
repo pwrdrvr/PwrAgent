@@ -1,9 +1,13 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { NewThreadButton } from "../NewThreadButton";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("NewThreadButton", () => {
   it("clicking runs the default action and shows no flyout without a directory", () => {
@@ -25,7 +29,10 @@ describe("NewThreadButton", () => {
     fireEvent.mouseEnter(button.parentElement as HTMLElement);
     expect((await screen.findByRole("tooltip")).textContent).toBe("New thread");
 
+    vi.useFakeTimers();
     fireEvent.mouseLeave(button.parentElement as HTMLElement);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS));
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
@@ -54,6 +61,35 @@ describe("NewThreadButton", () => {
     );
     expect(onCreateThreadWithoutDirectory).toHaveBeenCalledTimes(1);
     expect(onCreateThread).not.toHaveBeenCalled();
+  });
+
+  it("keeps the flyout mounted while the pointer crosses and cancels dismissal on re-entry", () => {
+    vi.useFakeTimers();
+    render(
+      <NewThreadButton
+        directoryLabel="PwrAgent"
+        onCreateThread={vi.fn()}
+        onCreateThreadWithoutDirectory={vi.fn()}
+      />,
+    );
+
+    const wrapper = screen.getByRole("button", { name: "New thread" })
+      .parentElement as HTMLElement;
+    fireEvent.mouseEnter(wrapper);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    // Windows can report leave at the native title-bar/content boundary even
+    // though the pointer is travelling into the descendant flyout.
+    fireEvent.mouseLeave(wrapper);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.mouseEnter(screen.getByRole("menu").parentElement as HTMLElement);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.mouseLeave(wrapper);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("offers project registration without starting or selecting a chat", async () => {

@@ -13,6 +13,7 @@ import {
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useFederationPeerConnectivity } from "../../lib/useFederationPeerConnectivity";
 import { SettingsIcon } from "../../icons/SettingsIcon";
@@ -111,6 +112,14 @@ export function MessagingStatusBar(props: {
     tooltipNode: settingsTooltipNode,
   } = useViewportTooltip({
     className: "viewport-tooltip messaging-status-tooltip",
+  });
+  const {
+    cancelHoverDismiss,
+    dismissAfterGrace,
+    dismissImmediately,
+  } = useHoverTransitionGrace(() => {
+    hideSettingsTooltip();
+    setOpen(false);
   });
 
   const runtimeMessagingEnabled =
@@ -221,14 +230,12 @@ export function MessagingStatusBar(props: {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
       if (rootRef.current?.contains(event.target as Node)) return;
-      hideSettingsTooltip();
-      setOpen(false);
+      dismissImmediately();
       setPinned(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      hideSettingsTooltip();
-      setOpen(false);
+      dismissImmediately();
       setPinned(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
@@ -237,7 +244,7 @@ export function MessagingStatusBar(props: {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [hideSettingsTooltip, open]);
+  }, [dismissImmediately, open]);
 
   const handleToggleMessaging = async (): Promise<void> => {
     if (!desktopApi?.setMessagingEnabled) {
@@ -317,11 +324,13 @@ export function MessagingStatusBar(props: {
       className="messaging-status-bar"
       role="group"
       aria-label="Messaging platform status"
-      onPointerEnter={() => setOpen(true)}
+      onPointerEnter={() => {
+        cancelHoverDismiss();
+        setOpen(true);
+      }}
       onPointerLeave={() => {
         if (!pinned) {
-          hideSettingsTooltip();
-          setOpen(false);
+          dismissAfterGrace();
         }
       }}
     >
@@ -337,11 +346,11 @@ export function MessagingStatusBar(props: {
         } messaging status.`}
         onClick={() => {
           if (pinned) {
-            hideSettingsTooltip();
-            setOpen(false);
+            dismissImmediately();
             setPinned(false);
             return;
           }
+          cancelHoverDismiss();
           setOpen(true);
           setPinned(true);
         }}
@@ -366,6 +375,7 @@ export function MessagingStatusBar(props: {
           className="messaging-status-popover"
           role="dialog"
           aria-label="Messaging platforms"
+          onPointerEnter={cancelHoverDismiss}
         >
           <div className="messaging-status-popover__panel">
             <div className="messaging-status-popover__head">
@@ -385,8 +395,7 @@ export function MessagingStatusBar(props: {
                     aria-label="Open Messaging Settings"
                     onBlur={hideSettingsTooltip}
                     onClick={() => {
-                      hideSettingsTooltip();
-                      setOpen(false);
+                      dismissImmediately();
                       setPinned(false);
                       props.onOpenSettings?.();
                     }}
@@ -467,8 +476,7 @@ export function MessagingStatusBar(props: {
                 type="button"
                 className="messaging-status-popover__activity"
                 onClick={() => {
-                  hideSettingsTooltip();
-                  setOpen(false);
+                  dismissImmediately();
                   setPinned(false);
                   props.onOpenActivity?.();
                 }}

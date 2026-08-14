@@ -63,11 +63,17 @@ test("keeps a Windows title-bar flyout open while the pointer crosses into it", 
     );
 
     if (inspectionMode) {
+      await app.window.mouse.move(
+        triggerBox.x + triggerBox.width / 2,
+        triggerBox.y + triggerBox.height / 2,
+        { steps: 12 },
+      );
+      await expect(menu).toBeVisible();
       console.log(
         [
           "",
           "Windows title-bar hover inspection is ready.",
-          "The pointer crossed from New thread into the open flyout.",
+          "The pointer is on New thread; move it directly down into the flyout.",
           "Close the Electron window or quit the app to finish this command.",
           "",
         ].join("\n"),

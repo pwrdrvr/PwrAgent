@@ -6,6 +6,7 @@ import {
   type ReactElement,
 } from "react";
 import { NewThreadIcon } from "../../icons";
+import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { FederationTargetMenuSection } from "./FederationTargetMenuSection";
 import type { FederationThreadTarget } from "./federation-thread-targets";
@@ -51,6 +52,14 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuId = useId();
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const {
+    cancelHoverDismiss,
+    dismissAfterGrace,
+    dismissImmediately,
+  } = useHoverTransitionGrace(() => {
+    setOpen(false);
+    tooltip.hide();
+  });
 
   const hasDirectoryChoice = Boolean(
     props.directoryLabel && props.onCreateThreadWithoutDirectory,
@@ -80,7 +89,7 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
       if (event.key !== "Escape") {
         return;
       }
-      setOpen(false);
+      dismissImmediately();
       // Only pull focus back to the trigger when focus is actually inside the
       // flyout (keyboard-driven). A hover-opened menu must close without
       // stealing focus. The onFocus guard below then keeps this refocus from
@@ -91,7 +100,7 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [menuOpen]);
+  }, [dismissImmediately, menuOpen]);
 
   return (
     <span
@@ -99,13 +108,11 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
       className="new-thread-button"
       data-state={menuOpen ? "open" : "closed"}
       onMouseEnter={() => {
+        cancelHoverDismiss();
         setOpen(true);
         showTooltip();
       }}
-      onMouseLeave={() => {
-        setOpen(false);
-        tooltip.hide();
-      }}
+      onMouseLeave={dismissAfterGrace}
       onFocus={(event) => {
         // Only react to focus entering the wrapper from outside. Focus moving
         // within the wrapper (e.g. Escape refocusing the trigger from a menu
@@ -113,13 +120,13 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
         if (wrapperRef.current?.contains(event.relatedTarget as Node)) {
           return;
         }
+        cancelHoverDismiss();
         setOpen(true);
         showTooltip();
       }}
       onBlur={(event) => {
         if (!wrapperRef.current?.contains(event.relatedTarget as Node)) {
-          setOpen(false);
-          tooltip.hide();
+          dismissImmediately();
         }
       }}
     >
@@ -133,8 +140,7 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
         className="sidebar__icon-button"
         disabled={Boolean(props.creatingThread)}
         onClick={() => {
-          setOpen(false);
-          tooltip.hide();
+          dismissImmediately();
           void props.onCreateThread();
         }}
       >
@@ -142,7 +148,10 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
       </button>
 
       {menuOpen ? (
-        <div className="new-thread-menu">
+        <div
+          className="new-thread-menu"
+          onMouseEnter={cancelHoverDismiss}
+        >
           <div
             className="new-thread-menu__card"
             id={menuId}
@@ -156,7 +165,7 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                   role="menuitem"
                   className="new-thread-menu__item"
                   onClick={() => {
-                    setOpen(false);
+                    dismissImmediately();
                     void props.onCreateThread();
                   }}
                 >
@@ -167,7 +176,7 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                   role="menuitem"
                   className="new-thread-menu__item"
                   onClick={() => {
-                    setOpen(false);
+                    dismissImmediately();
                     void props.onCreateThreadWithoutDirectory?.();
                   }}
                 >
@@ -180,7 +189,7 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                 role="menuitem"
                 className="new-thread-menu__item"
                 onClick={() => {
-                  setOpen(false);
+                  dismissImmediately();
                   void props.onCreateThread();
                 }}
               >
@@ -193,7 +202,7 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                 <FederationTargetMenuSection
                   targets={props.remoteTargets}
                   onSelect={(instanceId) => {
-                    setOpen(false);
+                    dismissImmediately();
                     void props.onCreateThreadOnTarget?.(instanceId);
                   }}
                 />
@@ -208,7 +217,7 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
                   className="new-thread-menu__item"
                   disabled={props.addingProjectDirectory}
                   onClick={() => {
-                    setOpen(false);
+                    dismissImmediately();
                     void props.onAddProjectDirectory?.();
                   }}
                 >
