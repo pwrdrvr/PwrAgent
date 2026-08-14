@@ -1232,6 +1232,8 @@ export type DesktopApi = {
    * without flipping the persisted `onboarding.completed` flag.
    */
   onReplayOnboardingRequested?: (callback: () => void) => () => void;
+  /** Main → renderer push from Help → Copy Local Diagnostics Info. */
+  onCopyLocalDiagnosticsInfoRequested?: (callback: () => void) => () => void;
   getWindowPointerSnapshot?: () => Promise<WindowPointerSnapshot>;
   /**
    * Windows custom title-bar menu bar (win32 only). `getAppMenuModel`

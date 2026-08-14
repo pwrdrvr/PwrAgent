@@ -89,6 +89,8 @@ import { useScheduledThreadActionProjection } from "./lib/useScheduledThreadActi
 import { useQueuedTurnProjection } from "./lib/useQueuedTurnProjection";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
 import { useThreadDraftIndicators } from "./lib/useThreadDraftIndicators";
+import { copyText } from "./lib/copy-text";
+import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
@@ -115,6 +117,7 @@ import {
   type GithubPrAuthenticationFailureEvent,
   type GithubPrSamlEnforcementEvent,
 } from "../../shared/github-pr-access";
+import { buildLocalThreadDiagnosticsInfo } from "../../shared/local-diagnostics-info";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 import {
@@ -863,6 +866,30 @@ function DesktopAppShell(props: {
       settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     threadViewVisible: mainView === "thread",
   });
+  useEffect(() => {
+    if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
+      return;
+    }
+    return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
+      const thread = navigation.selectedThread;
+      void desktopApi.readAppMetadata?.().then((metadata) => {
+        void copyText(
+          buildLocalThreadDiagnosticsInfo(
+            thread
+              ? {
+                  backend: thread.source,
+                  projectPath: resolveThreadWorkingStatePath(thread),
+                  threadId: thread.id,
+                  title: thread.title,
+                }
+              : {},
+            metadata,
+          ),
+          desktopApi,
+        );
+      });
+    });
+  }, [desktopApi, navigation.selectedThread]);
   const scheduledActionFederationTargets = useFederationThreadEventSubscriptions({
     desktopApi,
     enabled: !readRendererFederationTarget(),

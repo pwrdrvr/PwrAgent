@@ -1519,6 +1519,9 @@ describe("DesktopSettingsService", () => {
 
     const snapshot = await service.readSettings();
     expect(snapshot.models.codex.profile.value).toBe("personal");
+    expect(service.resolveStartupCodexHome()).toBe(
+      path.join(root, "codex", "profiles", "work"),
+    );
     expect(service.resolveCodexSpawnEnv().CODEX_HOME).toBe(
       path.join(root, "codex", "profiles", "work"),
     );

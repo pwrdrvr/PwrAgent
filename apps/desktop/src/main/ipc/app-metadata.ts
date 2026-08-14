@@ -32,6 +32,8 @@ import {
   isMainLogDebugCollectionEnabled,
   setMainLogDebugCollectionEnabled,
 } from "../log";
+import { resolveActiveProfileName } from "../profile";
+import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { subscribersForChannel } from "../window-channels";
 
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -49,6 +51,9 @@ function readDecoratedAppLogSnapshot(): AppLogSnapshot {
 export function resolveAppMetadata(
   rendererProcessId?: number,
 ): AppMetadata {
+  const activeProfileName = resolveActiveProfileName();
+  const logFilePath = getMainLogFilePath();
+  const codexProfilePath = getDesktopSettingsService().resolveStartupCodexHome();
   return {
     applicationName: app.getName(),
     applicationVersion: resolveApplicationVersion(app.getVersion()),
@@ -60,6 +65,9 @@ export function resolveAppMetadata(
     nodeVersion: process.versions.node ?? "",
     mainProcessId: process.pid,
     ...(rendererProcessId === undefined ? {} : { rendererProcessId }),
+    activeProfileName,
+    ...(logFilePath ? { logFilePath } : {}),
+    ...(codexProfilePath ? { codexProfilePath } : {}),
   };
 }
 
