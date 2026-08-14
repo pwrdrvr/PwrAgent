@@ -255,17 +255,18 @@ export class AppRuntimeInstanceStore {
           if (params.now < reclaimAt) {
             return this.heldResult(params, this.readLease(params.leaseKey)!);
           }
+        } else if (owner && (params.isOwnerAlive?.(owner) ?? true)) {
+          // Liveness is authoritative even when wall-clock correction makes
+          // the persisted start time appear to predate the inferred boot.
+          return this.heldResult(params, existing);
         } else if (owner && reclaimImmediately) {
           // An owner from before this OS boot cannot still be running, even
-          // if a stale marker and recycled PID make its identity look live.
-          // Replace it in this same transaction instead of imposing the
-          // hung-process safety grace.
+          // if its PID has since been recycled. Replace it in this same
+          // transaction instead of imposing the hung-process safety grace.
           this.markInstanceExited({
             instanceId: owner.instanceId,
             now: params.now,
           });
-        } else if (owner && (params.isOwnerAlive?.(owner) ?? true)) {
-          return this.heldResult(params, existing);
         } else if (
           !owner
           && existing.expiresAt !== PID_OWNED_LEASE_EXPIRES_AT

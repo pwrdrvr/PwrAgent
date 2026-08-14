@@ -154,9 +154,7 @@ describe("RuntimeLeaseManager", () => {
       systemBootedAt: 10_000,
     });
     owner.acquire("federation");
-
-    // The old marker and recycled PID can still make the runtime identity
-    // look live. Its pre-boot start time is the conclusive signal.
+    liveRuntimeIdentities.set(123, "unrelated-process:1_500");
 
     expect(challenger.acquire("federation")).toEqual({ acquired: true });
     expect(store.getFederationLease()).toMatchObject({

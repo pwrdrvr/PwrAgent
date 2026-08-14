@@ -53,12 +53,14 @@ export type RuntimeLeaseManagerOptions = {
  *
  * Ownership is registered once in sqlite and remains valid while the owning
  * process has a fresh profile marker matching its PID, instance ID, and start
- * time. An owner from before the current OS boot is conclusively dead and can
- * be replaced immediately. Otherwise the first challenger that observes the
- * identity absent persists that fact; after a one-minute safety grace, a
- * challenger may replace the dead owner inside the store's atomic acquisition
- * transaction. This deliberately favors single-owner safety over taking work
- * away from a process that is alive but temporarily hung.
+ * time. A matching live identity remains authoritative across wall-clock
+ * corrections. Once that identity is absent, an owner from before the current
+ * OS boot is conclusively dead and can be replaced immediately. Otherwise the
+ * first challenger persists the absent identity observation; after a one-
+ * minute safety grace, a challenger may replace the dead owner inside the
+ * store's atomic acquisition transaction. This deliberately favors single-
+ * owner safety over taking work away from a process that is alive but
+ * temporarily hung.
  */
 export class RuntimeLeaseManager {
   private readonly instanceId: string;
