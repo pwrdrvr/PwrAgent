@@ -65,7 +65,7 @@ describe("expandTildePath", () => {
 
   it("round-trips with tildifyPath", () => {
     const home = "/Users/huntharo";
-    const absolute = "/Users/example/Projects/catalog-portal";
+    const absolute = `${home}/Projects/catalog-portal`;
     expect(expandTildePath(tildifyPath(absolute, home), home)).toBe(absolute);
   });
 });
