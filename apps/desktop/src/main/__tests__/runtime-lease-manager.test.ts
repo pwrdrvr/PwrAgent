@@ -139,6 +139,27 @@ describe("RuntimeLeaseManager", () => {
     });
   });
 
+  it("immediately reclaims a federation owner from before the current boot", () => {
+    const owner = createManager({
+      instanceId: "instance-a",
+      processId: 123,
+      now: () => 1_000,
+    });
+    const challenger = createManager({
+      instanceId: "instance-b",
+      processId: 456,
+      now: Date.now,
+    });
+    owner.acquire("federation");
+    liveRuntimeIdentities.delete(123);
+
+    expect(challenger.acquire("federation")).toEqual({ acquired: true });
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-b",
+      status: "active",
+    });
+  });
+
   it("starts reclaim grace when a PID was recycled before observation", () => {
     let now = 2_000;
     const owner = createManager({ instanceId: "instance-a", processId: 123 });
