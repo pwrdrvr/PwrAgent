@@ -7549,9 +7549,11 @@ textarea,
 }
 
 /* Windows already carries the PwrAgent wordmark in its custom title strip.
-   Drop the duplicate Settings masthead so Exit Settings starts at the top of
-   the nav, mirroring the main sidebar's Windows treatment. */
-:root[data-platform="win32"] .settings-screen .settings-nav__masthead {
+   Drop the duplicate overlay masthead so the Exit row starts at the top of
+   both navs, mirroring the main sidebar's Windows treatment. */
+:root[data-platform="win32"]
+  :is(.settings-screen, .automations-screen)
+  .settings-nav__masthead {
   display: none;
 }
 
