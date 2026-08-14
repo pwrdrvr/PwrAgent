@@ -29,6 +29,7 @@ export * from "./directory-navigation";
 export * from "./inbox";
 export * from "./navigation-state";
 export * from "./pending-request-response";
+export * from "./path-display";
 export * from "./renderer-payload-boundary";
 export * from "./review-branches";
 export * from "./subthreads";

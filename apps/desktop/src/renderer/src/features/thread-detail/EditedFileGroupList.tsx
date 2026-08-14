@@ -14,6 +14,7 @@ import type {
   DesktopApplicationDiscoveryCandidate,
   EditGroupCommitState,
 } from "@pwragent/shared";
+import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { EditorIcon } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import { TranscriptDiff } from "./TranscriptDiff";
@@ -57,12 +58,7 @@ function toRepoRelativePath(
   if (!worktreeRoot) {
     return absolutePath;
   }
-  const root = normalizePath(worktreeRoot).replace(/\/+$/, "");
-  const full = normalizePath(absolutePath);
-  if (full === root) {
-    return absolutePath;
-  }
-  return full.startsWith(`${root}/`) ? full.slice(root.length + 1) : absolutePath;
+  return formatPathRelativeToDirectories(absolutePath, [worktreeRoot]);
 }
 
 type EditedFileGroupListProps = {
