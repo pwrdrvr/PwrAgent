@@ -180,6 +180,7 @@ export async function launchElectronApp(params: {
   Object.assign(env, {
     HOME: homeRoot,
     NODE_ENV: "production",
+    PWRAGENT_E2E: "1",
     PWRAGENT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS: "15000",
     ...(params.fixturePath
       ? { PWRAGENT_REPLAY_FIXTURE_PATH: params.fixturePath }
