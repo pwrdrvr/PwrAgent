@@ -177,6 +177,15 @@ export type ThreadSubAgentSummary = {
    * Older summaries omit it and use the conservative sole-runtime fallback.
    */
   ownerRuntimeInstanceId?: string;
+  /**
+   * Backend-registry generation that created this sub-agent attempt.
+   *
+   * A settings-driven registry replacement stays in the same process and
+   * therefore keeps the same runtime UUID. This generation id lets the new
+   * registry retire only work from its replaced predecessor. Other live
+   * processes remain authoritative through ownerRuntimeInstanceId.
+   */
+  ownerRegistrySessionId?: string;
   backend?: AppServerBackendKind;
   agentName?: string;
   preferredModel?: string;

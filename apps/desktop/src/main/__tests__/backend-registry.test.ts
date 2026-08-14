@@ -26245,6 +26245,7 @@ script = "printf setup"
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       runtimeInstanceId: "runtime-current",
+      registrySessionId: "registry-current",
       resolveLiveProfileRuntimeInstanceIds: () => [
         "runtime-current",
         "runtime-other",
@@ -26255,6 +26256,7 @@ script = "printf setup"
     expect(reconcileOrphanedThreadSubAgents).toHaveBeenCalledOnce();
     expect(reconcileOrphanedThreadSubAgents).toHaveBeenCalledWith({
       currentRuntimeInstanceId: "runtime-current",
+      currentRegistrySessionId: "registry-current",
       liveRuntimeInstanceIds: ["runtime-current", "runtime-other"],
       sessionStartedAt: expect.any(Number),
     });
@@ -26285,7 +26287,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("stops active task monitors without starting recovery", async () => {
+  it("stops blocked active task monitors without starting recovery", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/interrupt"] },
       models: TEST_TASK_MONITOR_MODELS,
@@ -26299,6 +26301,7 @@ script = "printf setup"
       }),
       overlayStore,
       runtimeInstanceId: "runtime-current",
+      registrySessionId: "registry-current",
       resolveLiveProfileRuntimeInstanceIds: () => ["runtime-current"],
     });
     await registry.publishLocalEvent({
@@ -26331,6 +26334,28 @@ script = "printf setup"
       (delegationResponse as { contentItems: Array<{ text: string }> })
         .contentItems[0]?.text ?? "{}",
     ).monitorId as string;
+    await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "turn-1",
+        callId: "call-2",
+        requestId: "call-2",
+        namespace: "pwragent_task_monitors",
+        tool: "inject_progress",
+        arguments: {
+          monitorId,
+          status: "blocked",
+          message: "Waiting for an external dependency.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    await expect(overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    })).resolves.toMatchObject({
+      subAgents: [expect.objectContaining({ status: "blocked" })],
+    });
 
     await expect(registry.stopSubAgent({
       backend: "codex",
@@ -26357,6 +26382,7 @@ script = "printf setup"
           outcome: "cancelled",
           lastMessage: "Stopped by user.",
           ownerRuntimeInstanceId: "runtime-current",
+          ownerRegistrySessionId: "registry-current",
         }),
       ],
     });
