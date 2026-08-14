@@ -209,6 +209,7 @@ const mainLog = getMainLogger("pwragent:main");
 const mainProcessStartedAt = Date.now();
 const RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
+const INTEGRATED_TERMINAL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
 const FEDERATION_SHUTDOWN_TIMEOUT_MS = 4_000;
 const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 7_500;
@@ -237,6 +238,7 @@ let mainProcessResourcesDisposed = false;
 let federationLeaseReleasedSync = false;
 let mainProcessShutdownComplete = false;
 let mainProcessShutdownPromise: Promise<void> | undefined;
+let integratedTerminalShutdownPromise: Promise<void> | undefined;
 let rendererWindowShutdownPromise: Promise<void> | undefined;
 let finalQuitPromise: Promise<void> | undefined;
 let quitInProgress = false;
@@ -501,7 +503,9 @@ function disposeMainProcessResourcesSync(options?: {
   disposeFederationIpcHandlers();
   disposeStarMapIpcHandlers();
   disposeImageNormalizationIpcHandlers();
-  disposeIntegratedTerminalIpcHandlers();
+  integratedTerminalShutdownPromise ??= Promise.resolve(
+    disposeIntegratedTerminalIpcHandlers(),
+  );
   disposeMcpConnectionIpcHandlers();
   // Detached env-action trees (`pnpm dev` and friends) were previously just
   // abandoned here. They keep their stdio pipes, so they *usually* died of
@@ -653,6 +657,15 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
     },
   },
   phases: [
+    {
+      name: "integrated-terminal",
+      timeoutMs: INTEGRATED_TERMINAL_SHUTDOWN_TIMEOUT_MS,
+      run: async () => {
+        await (integratedTerminalShutdownPromise ??= Promise.resolve(
+          disposeIntegratedTerminalIpcHandlers(),
+        ));
+      },
+    },
     {
       name: "messaging",
       timeoutMs: MESSAGING_SHUTDOWN_TIMEOUT_MS,

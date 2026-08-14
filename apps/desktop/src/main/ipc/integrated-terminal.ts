@@ -33,6 +33,7 @@ import {
 
 let service: IntegratedTerminalService | undefined;
 let federationBridge: FederationTerminalBridge | undefined;
+let serviceDisposalPromise: Promise<void> | undefined;
 
 function broadcastSessions(
   sessions: IntegratedTerminalSessionSummary[],
@@ -56,9 +57,12 @@ function broadcastSessions(
 }
 
 export function registerIntegratedTerminalIpcHandlers(): void {
-  service ??= new IntegratedTerminalService({
-    onSessionsChanged: broadcastSessions,
-  });
+  if (!service) {
+    service = new IntegratedTerminalService({
+      onSessionsChanged: broadcastSessions,
+    });
+    serviceDisposalPromise = undefined;
+  }
   federationBridge ??= new FederationTerminalBridge({
     localSessionsFor: () => service?.listSessions() ?? [],
   });
@@ -163,20 +167,21 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   );
 }
 
-export function disposeIntegratedTerminalIpcHandlers(): void {
+export function disposeIntegratedTerminalIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CREATE_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_WRITE_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_RESIZE_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CLOSE_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_LIST_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL);
-  service?.dispose();
+  serviceDisposalPromise ??= service?.dispose() ?? Promise.resolve();
   service = undefined;
   // Drops the viewer-side registry without sending pty.close for each
   // session: this runs at app shutdown, where the federation runtime is
   // tearing down anyway and the owner's disconnect reap ends the shells.
   federationBridge?.dispose();
   federationBridge = undefined;
+  return serviceDisposalPromise;
 }
 
 export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnapshot {

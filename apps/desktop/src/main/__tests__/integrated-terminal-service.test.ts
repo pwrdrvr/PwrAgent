@@ -564,11 +564,18 @@ describe("resolveTerminalShell", () => {
     expect(service.listSessions()).toHaveLength(1);
   });
 
-  it("removes pty listeners before killing sessions during shutdown", async () => {
+  it("closes the pty master and awaits shell exit during shutdown", async () => {
     const disposable = { dispose: vi.fn() };
+    const shutdownExitDisposable = { dispose: vi.fn() };
+    const exitListeners: Array<(event: { exitCode: number }) => void> = [];
     const pty = fakePty({
       onData: vi.fn(() => disposable),
-      onExit: vi.fn(() => disposable),
+      onExit: vi.fn((listener) => {
+        exitListeners.push(listener);
+        return exitListeners.length === 1
+          ? disposable
+          : shutdownExitDisposable;
+      }),
     });
     const service = new IntegratedTerminalService({
       loadNodePty: async () => ({
@@ -586,15 +593,28 @@ describe("resolveTerminalShell", () => {
       fakeWebContents(),
     );
 
-    service.dispose();
+    const disposing = service.dispose();
+    let disposed = false;
+    void disposing.then(() => {
+      disposed = true;
+    });
+    await Promise.resolve();
 
     expect(disposable.dispose).toHaveBeenCalledTimes(2);
-    expect(pty.kill).toHaveBeenCalledTimes(1);
+    expect((pty as TestPty).destroy).toHaveBeenCalledTimes(1);
+    expect(pty.kill).not.toHaveBeenCalled();
+    expect(disposed).toBe(false);
     expect(service.getQuitSnapshot()).toEqual({
       count: 0,
       sessionIds: [],
       threads: [],
     });
+
+    exitListeners[1]?.({ exitCode: 0 });
+    await disposing;
+
+    expect(disposed).toBe(true);
+    expect(shutdownExitDisposable.dispose).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -612,7 +632,11 @@ function fakeWebContents(): WebContents & {
   };
 }
 
-function fakePty(overrides: Partial<IPty> = {}): IPty {
+type TestPty = IPty & {
+  destroy: ReturnType<typeof vi.fn>;
+};
+
+function fakePty(overrides: Partial<IPty> = {}): TestPty {
   return {
     pid: 123,
     cols: 80,
@@ -620,6 +644,7 @@ function fakePty(overrides: Partial<IPty> = {}): IPty {
     process: "sh",
     handleFlowControl: false,
     clear: vi.fn(),
+    destroy: vi.fn(),
     kill: vi.fn(),
     onData: vi.fn(() => ({ dispose: vi.fn() })),
     onExit: vi.fn(() => ({ dispose: vi.fn() })),
@@ -628,5 +653,5 @@ function fakePty(overrides: Partial<IPty> = {}): IPty {
     resize: vi.fn(),
     write: vi.fn(),
     ...overrides,
-  };
+  } as TestPty;
 }

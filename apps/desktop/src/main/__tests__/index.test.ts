@@ -1468,6 +1468,7 @@ describe("bootstrapApp", () => {
     appEventHandlers.get("activate")?.();
 
     expect(createMainWindowMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
   });
 
   it("does not recreate a window from Dock activation during an update install", async () => {
@@ -1506,9 +1507,16 @@ describe("bootstrapApp", () => {
     onFocus();
 
     expect(createMainWindowMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
   });
 
   it("awaits async resource disposal before completing quit", async () => {
+    let finishTerminalShutdown!: () => void;
+    disposeIntegratedTerminalIpcHandlersMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishTerminalShutdown = resolve;
+      }),
+    );
     startupProfilerInstance.start.mockResolvedValue();
 
     await import("../index");
@@ -1516,9 +1524,16 @@ describe("bootstrapApp", () => {
 
     const event = { preventDefault: vi.fn() };
     appEventHandlers.get("before-quit")?.(event);
-    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1),
+    );
 
     expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(quitMock).not.toHaveBeenCalled();
+
+    finishTerminalShutdown();
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledTimes(1));
+
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeFederationIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -1969,8 +1984,9 @@ describe("bootstrapApp", () => {
     }
 
     sigtermHandler("SIGTERM");
-    await flushMicrotasks();
-    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1),
+    );
 
     // The federation phase runs out its timeout (and the barrier its
     // global deadline) without ever reaching the post-stop release.
