@@ -10,7 +10,6 @@ import type {
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
 import { SECRET_STORAGE_DISABLED_ENV } from "../../src/main/settings/desktop-secret-store";
-import { E2E_CLIPBOARD_WRITE_CHANNEL } from "../../src/shared/ipc";
 import {
   isPidAlive,
   listDescendantPids,
@@ -225,15 +224,6 @@ export async function launchElectronApp(params: {
     cwd: path.resolve(fixtureDir, "../.."),
     env,
   });
-  await electronApp.evaluate(({ ipcMain }, channel) => {
-    ipcMain.removeHandler(channel);
-    ipcMain.handle(channel, async (_event, text: unknown) => {
-      if (typeof text !== "string") {
-        throw new Error("e2e clipboard writes require a string payload");
-      }
-      globalThis.__PWRAGENT_E2E_CLIPBOARD__ = { text };
-    });
-  }, E2E_CLIPBOARD_WRITE_CHANNEL);
   const window = await electronApp.firstWindow();
 
   const requiresReplayDriver = params.requiresReplayDriver ?? true;
@@ -325,9 +315,6 @@ export async function launchElectronApp(params: {
       }, requestParams);
     },
     close: async () => {
-      await electronApp.evaluate(({ ipcMain }, channel) => {
-        ipcMain.removeHandler(channel);
-      }, E2E_CLIPBOARD_WRITE_CHANNEL).catch(() => undefined);
       await electronApp.close();
       // The wizard's graduation path can spawn a detached child
       // Electron process for the operator's chosen profile (see
