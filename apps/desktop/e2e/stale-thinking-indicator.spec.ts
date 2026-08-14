@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
-import { launchElectronApp } from "./fixtures/electron-app";
+import { launchElectronApp, threadRowCard } from "./fixtures/electron-app";
 
 const staleThinkingSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -17,9 +17,12 @@ test("clears the thread-list thinking indicator after completed retained activit
     const threadButton = app.window
       .getByRole("button", { name: /Stale thinking replay/i })
       .first();
-    const thinkingIndicator = threadButton.locator(
-      '[data-thread-status="thinking"]'
-    );
+    // The status indicator is a sibling of the open-thread overlay
+    // button — query it on the row card.
+    const thinkingIndicator = threadRowCard(
+      app.window,
+      /Stale thinking replay/i,
+    ).locator('[data-thread-status="thinking"]');
 
     await expect(threadButton).toBeVisible();
     await expect(thinkingIndicator).toHaveCount(0);

@@ -201,17 +201,44 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toContain("168, 255, 63");
   });
 
+  it("keeps thread-row controls at the target floor and clears the reveal cluster", () => {
+    expect(
+      extractRuleBody(css, ".thread-row__pin-button,\n.thread-row__overflow-button"),
+    ).toMatch(/height:\s*24px;/);
+    expect(
+      extractRuleBody(css, ".thread-row__actions .thread-row__chip--add-reaction"),
+    ).toMatch(/height:\s*24px;[\s\S]*min-width:\s*24px;/);
+    expect(extractRuleBody(css, ".thread-row__heading-pin")).toMatch(
+      /width:\s*24px;[\s\S]*height:\s*24px;/,
+    );
+    expect(extractRuleBody(css, ".thread-row__open")).toMatch(
+      /min-height:\s*24px;/,
+    );
+    expect(
+      extractRuleBody(
+        css,
+        ".thread-row-shell:hover .thread-row--pinned .thread-row__heading,\n"
+          + ".thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,\n"
+          + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,\n"
+          + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading",
+      ),
+    ).toMatch(/padding-right:\s*44px;/);
+    expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
+      /right:\s*9px;[\s\S]*gap:\s*4px;/,
+    );
+    expect(css).toMatch(
+      /(?:^|\n)\.thread-row__overflow-button \{[^}]*width:\s*26px;/,
+    );
+  });
+
   it("keeps transcript bottom reserve close to the thinking indicator height", () => {
     // The items rule may declare bottom padding either explicitly
-    // (`padding-bottom: 24px`) or via the `padding` shorthand
-    // (`padding: T R 24px L`). Both are equivalent; the lock here is
-    // that the bottom value stays at 24 (the over-scroll feel above
-    // the last message / thinking indicator) and that the pending
-    // override still drops to 4px.
+    // (`padding-bottom: 10px`) or via the `padding` shorthand
+    // (`padding: T R 10px L`). The pending override still drops to 4px.
     const itemsRule = css.match(/\.transcript-list__items\s*\{[\s\S]*?\}/)?.[0];
     expect(itemsRule).toBeDefined();
     expect(itemsRule).toMatch(
-      /padding-bottom:\s*24px;|padding:\s*\S+\s+\S+\s+24px(?:\s+\S+)?;/,
+      /padding-bottom:\s*10px;|padding:\s*\S+\s+\S+\s+10px(?:\s+\S+)?;/,
     );
     expect(css).toMatch(
       /\.transcript-list__items:has\(\.transcript-list__pending:last-child\)\s*\{[\s\S]*?padding-bottom:\s*4px;[\s\S]*?\}/
@@ -498,7 +525,7 @@ describe("Tangerine Terminal theme contract", () => {
 
   it("hides thread row timestamps behind focused or open row actions", () => {
     expect(css).toMatch(
-      /\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
+      /\.thread-row-shell:has\(\.thread-row__pin-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:hover \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__overflow-button:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction:focus-visible\) \.thread-row__time,\s*\.thread-row-shell:has\(\.thread-row__chip--add-reaction\.is-open\) \.thread-row__time\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?\}/
     );
   });
 

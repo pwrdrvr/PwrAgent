@@ -25,7 +25,7 @@ import {
   parseThreadIdentityKey,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
-import { NewThreadIcon, UnlinkedDotIcon, WorkspaceIcon } from "../../icons";
+import { NewThreadIcon, UnlinkedDotIcon } from "../../icons";
 import {
   didDragLeaveCurrentTarget,
   getDropIndicatorPosition,
@@ -938,13 +938,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 aria-hidden="true"
                 className={`directory-row__chevron${expanded ? " is-open" : ""}`}
               />
-              {directory.kind === "workspace" || directory.kind === "unlinked" ? (
+              {directory.kind === "unlinked" ? (
                 <span aria-hidden="true" className="directory-row__icon">
-                  {directory.kind === "workspace" ? (
-                    <WorkspaceIcon size={14} />
-                  ) : (
-                    <UnlinkedDotIcon size={14} />
-                  )}
+                  <UnlinkedDotIcon size={14} />
                 </span>
               ) : null}
               <span className="directory-row__title-wrap">

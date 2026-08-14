@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { launchElectronApp } from "./fixtures/electron-app";
+import { launchElectronApp, threadRowCard } from "./fixtures/electron-app";
 
 async function createUnreadRegressionFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -158,6 +158,9 @@ test("does not make the selected read thread unread after a metadata-only refres
     const readRow = browseSection.getByRole("button", {
       name: /Read thread/i,
     });
+    // Status indicators are siblings of the open-thread overlay button —
+    // scope unread checks to the row card.
+    const readCard = threadRowCard(browseSection, /Read thread/i);
 
     await expect(readRow).toBeVisible();
     await readRow.click();
@@ -167,18 +170,18 @@ test("does not make the selected read thread unread after a metadata-only refres
         name: "Read thread",
       })
     ).toBeVisible();
-    await expect(readRow.locator('[data-thread-status="unread"]')).toHaveCount(0);
+    await expect(readCard.locator('[data-thread-status="unread"]')).toHaveCount(0);
 
     await app.advance({ stepId: "unrelated-turn-completed" });
     await expect(
       browseSection.getByRole("button", { name: /Other thread refreshed/i })
     ).toBeVisible();
-    await expect(readRow.locator('[data-thread-status="unread"]')).toHaveCount(0);
+    await expect(readCard.locator('[data-thread-status="unread"]')).toHaveCount(0);
 
     await browseSection
       .getByRole("button", { name: /Other thread refreshed/i })
       .click();
-    await expect(readRow.locator('[data-thread-status="unread"]')).toHaveCount(0);
+    await expect(readCard.locator('[data-thread-status="unread"]')).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();

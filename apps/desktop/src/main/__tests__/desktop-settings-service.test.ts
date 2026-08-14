@@ -522,6 +522,7 @@ describe("DesktopSettingsService", () => {
       theme: "system",
       density: "mission-control",
       sidebarTextSize: "md",
+      transcriptTextSize: "md",
     });
 
     // Write non-default values. The byte-preserving patch path should
@@ -559,6 +560,7 @@ describe("DesktopSettingsService", () => {
       theme: "light",
       density: "compact",
       sidebarTextSize: "lg",
+      transcriptTextSize: "md",
     });
 
     // Restore to defaults: the patch path should DELETE all three keys
@@ -588,6 +590,7 @@ describe("DesktopSettingsService", () => {
       theme: "system",
       density: "mission-control",
       sidebarTextSize: "md",
+      transcriptTextSize: "md",
     });
   });
 
@@ -625,6 +628,7 @@ describe("DesktopSettingsService", () => {
       theme: "light",
       density: "compact",
       sidebarTextSize: "md",
+      transcriptTextSize: "md",
     });
 
     // Patch that restores defaults still fires (the renderer needs to
@@ -645,6 +649,7 @@ describe("DesktopSettingsService", () => {
       theme: "system",
       density: "mission-control",
       sidebarTextSize: "md",
+      transcriptTextSize: "md",
     });
 
     // Patch with `general` but only developerMode (not appearance) must
@@ -668,6 +673,7 @@ describe("DesktopSettingsService", () => {
       theme: "dark",
       density: "mission-control",
       sidebarTextSize: "md",
+      transcriptTextSize: "md",
     });
   });
 
