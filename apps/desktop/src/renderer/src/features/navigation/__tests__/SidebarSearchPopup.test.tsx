@@ -194,6 +194,48 @@ describe("SidebarSearchPopup", () => {
     await settleRemoteSearch();
   });
 
+  it("renders every PR and moves an exact match into the visible pair", async () => {
+    render(
+      <SidebarSearchPopup
+        threads={[
+          localThread({
+            id: "stacked",
+            title: "Stacked pull requests",
+            prs: [
+              pr(16, "PwrSuiteLab"),
+              pr(18, "PwrSuiteLab"),
+              pr(21, "PwrSuiteLab"),
+            ],
+          }),
+        ]}
+        onJumpToThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Jump to thread" }), {
+      target: { value: "18" },
+    });
+
+    const chips = Array.from(document.querySelectorAll("[data-pr-chip]"));
+    expect(chips).toHaveLength(3);
+    expect(chips.map((chip) => chip.textContent)).toEqual(["#18", "#16", "#21"]);
+    expect(document.querySelector(".jump-palette__row-prs")).toHaveAttribute(
+      "data-overflow",
+      "true",
+    );
+
+    const strip = screen.getByLabelText("Pull requests");
+    Object.defineProperties(strip, {
+      clientWidth: { configurable: true, value: 126 },
+      scrollWidth: { configurable: true, value: 260 },
+      scrollLeft: { configurable: true, value: 0, writable: true },
+    });
+    fireEvent.wheel(strip, { cancelable: true, deltaY: 40 });
+    expect(strip.scrollLeft).toBe(40);
+    await settleRemoteSearch();
+  });
+
   it("arrows from local into remote rows and Enter selects the remote thread", async () => {
     const onJumpToThread = vi.fn();
     const onJumpToRemoteThread = vi.fn();
