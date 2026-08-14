@@ -327,6 +327,7 @@ export type DesktopMessagingDefaultAgentScope =
         kind: MessagingConversationKind;
         parentId?: string;
         parentConversationId?: string;
+        parentConversationParentId?: string;
         workspaceId?: string;
         title?: string;
         parentTitle?: string;
@@ -381,6 +382,7 @@ export type DesktopMessagingObservedSurface = {
     kind: MessagingConversationKind;
     parentId?: string;
     parentConversationId?: string;
+    parentConversationParentId?: string;
     workspaceId?: string;
     title?: string;
     parentTitle?: string;

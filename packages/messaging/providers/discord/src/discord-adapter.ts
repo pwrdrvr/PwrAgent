@@ -1612,7 +1612,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         parentId: guildId,
         workspaceId: guildId,
         ...(options?.isThread && breadcrumbs.parentChannelId
-          ? { parentConversationId: breadcrumbs.parentChannelId }
+          ? {
+              parentConversationId: breadcrumbs.parentChannelId,
+              parentConversationParentId: guildId,
+            }
           : {}),
         title: breadcrumbs.channelName,
         parentTitle: breadcrumbs.parentChannelName ?? breadcrumbs.guildName,

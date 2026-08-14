@@ -258,6 +258,34 @@ describe("SqliteMessagingStore", () => {
     ]);
   });
 
+  it("preserves normalized parent identity on observed Discord threads", async () => {
+    const store = await createStore();
+    await store.upsertObservedSurface({
+      channel: "discord",
+      conversation: {
+        id: "thread-channel-1",
+        kind: "thread",
+        parentConversationId: "parent-channel-1",
+        parentConversationParentId: "guild-1",
+        parentId: "guild-1",
+        workspaceId: "guild-1",
+      },
+    }, 1000);
+
+    await expect(store.findObservedSurfaces()).resolves.toEqual([
+      expect.objectContaining({
+        channel: {
+          channel: "discord",
+          conversation: expect.objectContaining({
+            id: "thread-channel-1",
+            parentConversationId: "parent-channel-1",
+            parentConversationParentId: "guild-1",
+          }),
+        },
+      }),
+    ]);
+  });
+
   it("remembers bound conversations as observed surfaces", async () => {
     const store = await createStore();
     await store.upsertBinding(buildBinding({
@@ -640,6 +668,49 @@ describe("SqliteMessagingStore", () => {
         {
           id: "parent-channel-default",
           target: { threadId: "parent-channel-agent" },
+        },
+      ]);
+  });
+
+  it("preserves Discord parent identity when inheriting a channel default", async () => {
+    const store = await createStore();
+    const parentChannel = {
+      channel: "discord" as const,
+      conversation: {
+        id: "parent-channel-1",
+        kind: "channel" as const,
+        parentId: "guild-1",
+        workspaceId: "guild-1",
+      },
+    };
+    const threadChannel = {
+      channel: "discord" as const,
+      conversation: {
+        id: "thread-channel-1",
+        kind: "thread" as const,
+        parentConversationId: "parent-channel-1",
+        parentConversationParentId: "guild-1",
+        parentId: "guild-1",
+        workspaceId: "guild-1",
+      },
+    };
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "discord-parent-channel-default",
+        scope: { kind: "conversation", channel: parentChannel },
+        target: {
+          kind: "agent",
+          backend: "codex",
+          threadId: "discord-parent-channel-agent",
+        },
+      }),
+    );
+
+    await expect(store.findActiveDefaultAgentAssignmentsForChannel(threadChannel))
+      .resolves.toMatchObject([
+        {
+          id: "discord-parent-channel-default",
+          target: { threadId: "discord-parent-channel-agent" },
         },
       ]);
   });

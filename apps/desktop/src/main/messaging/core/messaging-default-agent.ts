@@ -82,6 +82,9 @@ export function buildDefaultAgentScopeLookup(
           ...(channel.conversation.isDirectMessage === true
             ? { isDirectMessage: true }
             : {}),
+          ...(channel.conversation.parentConversationParentId
+            ? { parentId: channel.conversation.parentConversationParentId }
+            : {}),
           ...(channel.conversation.workspaceId
             ? { workspaceId: channel.conversation.workspaceId }
             : {}),

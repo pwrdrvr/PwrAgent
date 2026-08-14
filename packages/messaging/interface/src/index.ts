@@ -321,6 +321,13 @@ export type MessagingConversationRef = {
    */
   parentConversationId?: string;
   /**
+   * The containing conversation's own `parentId` identity component. Some
+   * providers include that value in persisted channel keys, so inheriting an
+   * exact parent-conversation route must preserve it rather than infer it from
+   * the child's differently-scoped `parentId`.
+   */
+  parentConversationParentId?: string;
+  /**
    * Normalized workspace/server/team identifier. Providers populate this at
    * their boundary; workflow code must not recover it from opaque state.
    */

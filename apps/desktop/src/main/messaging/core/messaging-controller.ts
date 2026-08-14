@@ -3332,6 +3332,16 @@ export class MessagingController {
     if (assignments.length === 0) {
       return false;
     }
+    if (
+      !(await this.requirePermission(
+        event,
+        "message.reply",
+        event.kind === "media" ? "media:reply" : "message:reply",
+        { notify: false },
+      ))
+    ) {
+      return true;
+    }
 
     let navigation: NavigationSnapshot;
     try {

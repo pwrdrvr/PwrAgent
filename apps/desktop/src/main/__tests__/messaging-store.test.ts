@@ -669,6 +669,49 @@ describe("MessagingStore", () => {
       ]);
   });
 
+  it("preserves Discord parent identity when inheriting a channel default", async () => {
+    const { store } = await createStore();
+    const parentChannel = {
+      channel: "discord" as const,
+      conversation: {
+        id: "parent-channel-1",
+        kind: "channel" as const,
+        parentId: "guild-1",
+        workspaceId: "guild-1",
+      },
+    };
+    const threadChannel = {
+      channel: "discord" as const,
+      conversation: {
+        id: "thread-channel-1",
+        kind: "thread" as const,
+        parentConversationId: "parent-channel-1",
+        parentConversationParentId: "guild-1",
+        parentId: "guild-1",
+        workspaceId: "guild-1",
+      },
+    };
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "discord-parent-channel-default",
+        scope: { kind: "conversation", channel: parentChannel },
+        target: {
+          kind: "agent",
+          backend: "codex",
+          threadId: "discord-parent-channel-agent",
+        },
+      }),
+    );
+
+    await expect(store.findActiveDefaultAgentAssignmentsForChannel(threadChannel))
+      .resolves.toMatchObject([
+        {
+          id: "discord-parent-channel-default",
+          target: { threadId: "discord-parent-channel-agent" },
+        },
+      ]);
+  });
+
   it("rejects malformed persisted assignment scopes instead of widening them", () => {
     const migrated = migrateMessagingStoreData({
       version: 2,
