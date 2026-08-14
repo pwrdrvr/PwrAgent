@@ -1,6 +1,9 @@
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import type {
   DesktopAppearanceDensity,
@@ -11,12 +14,42 @@ import { _electron as electron, expect, type ElectronApplication, type Locator, 
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
 import { SECRET_STORAGE_DISABLED_ENV } from "../../src/main/settings/desktop-secret-store";
 import {
+  E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
+  E2E_SHUTDOWN_LAUNCH_ID_ENV,
+  readE2eShutdownPhaseEvents,
+} from "../../src/main/e2e-shutdown-diagnostics";
+import {
   isPidAlive,
   listDescendantPids,
   waitForPidsToExit,
 } from "./process-exit";
+import {
+  appendElectronShutdownSummary,
+  assertElectronShutdownCircuitClosed,
+  buildElectronShutdownSummary,
+  classifyElectronClose,
+  E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV,
+  E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV,
+  ElectronFixtureTeardownTimeoutError,
+  ElectronShutdownCircuitOpenError,
+  executeElectronClose,
+  finalizeElectronFixtureTeardown,
+  memoizeElectronClose,
+  observedOverallShutdownDuration,
+  recordElectronShutdownCircuit,
+  type ElectronCloseExecution,
+  type ElectronShutdownSummary,
+} from "./electron-shutdown-policy";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
+export const DESKTOP_MAIN_ENTRY = path.resolve(
+  fixtureDir,
+  "../../out/main/index.js",
+);
+const ELECTRON_EVALUATE_QUIT_TIMEOUT_MS = 1_000;
+const ELECTRON_CLOSE_TIMEOUT_MS = 6_000;
+const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
+const ELECTRON_TEARDOWN_TIMEOUT_MS = 20_000;
 /**
  * How long teardown waits for a leftover profile process to exit after
  * SIGTERM before giving up and letting the rm report the leak.
@@ -28,6 +61,16 @@ const PROFILE_PROCESS_EXIT_POLL_MS = 100;
 declare global {
   var __PWRAGENT_E2E_CLIPBOARD__: { text: string } | undefined;
 }
+
+type ElectronChildProcess = ReturnType<ElectronApplication["process"]>;
+type CloseResult = "closed" | "rejected" | "timeout";
+
+type ElectronCloseOptions = {
+  circuitEnabled?: boolean;
+  circuitStateFile?: string;
+  diagnosticsFile?: string;
+  launchId?: string;
+};
 
 type LaunchResult = {
   electronApp: ElectronApplication;
@@ -61,6 +104,7 @@ type LaunchResult = {
     executionMode?: ThreadExecutionMode;
     requestId: string;
   }) => Promise<void>;
+  closeApplication: () => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -126,6 +170,17 @@ export async function launchElectronApp(params: {
    */
   requiresReplayDriver?: boolean;
 }): Promise<LaunchResult> {
+  const circuitEnabled =
+    process.env[E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV] === "1";
+  const circuitStateFile =
+    process.env[E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV];
+  assertElectronShutdownCircuitClosed({
+    enabled: circuitEnabled,
+    stateFile: circuitStateFile,
+  });
+  const diagnosticsFile =
+    process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV];
+  const launchId = randomUUID();
   const homeRoot =
     params.homeRoot ??
     await mkdtemp(path.join(os.tmpdir(), "pwragent-desktop-e2e-home-"));
@@ -193,6 +248,12 @@ export async function launchElectronApp(params: {
       env[key] = value;
     }
   }
+  env[E2E_SHUTDOWN_LAUNCH_ID_ENV] = launchId;
+  if (diagnosticsFile) {
+    env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] = diagnosticsFile;
+  } else {
+    delete env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV];
+  }
   // Every desktop E2E runs an unsigned development Electron binary. On
   // macOS, allowing that binary to reach safeStorage can open a native
   // "Keychain Not Found" modal that Playwright cannot observe or dismiss.
@@ -204,7 +265,7 @@ export async function launchElectronApp(params: {
 
   const electronApp = await electron.launch({
     args: [
-      path.resolve(fixtureDir, "../../out/main/index.js"),
+      DESKTOP_MAIN_ENTRY,
       // Hardware video codecs leak kernel objects inside a
       // Virtualization.framework guest (the Tart macOS VMs): every
       // VideoToolbox init creates an
@@ -224,115 +285,134 @@ export async function launchElectronApp(params: {
     cwd: path.resolve(fixtureDir, "../.."),
     env,
   });
-  const window = await electronApp.firstWindow();
+  const closeApplicationOnce = memoizeElectronClose(async () =>
+    await closeElectronApplication(electronApp, {
+      circuitEnabled,
+      circuitStateFile,
+      diagnosticsFile,
+      launchId,
+    }),
+  );
+  let window: Page;
+  try {
+    window = await electronApp.firstWindow();
 
-  const requiresReplayDriver = params.requiresReplayDriver ?? true;
-  if (requiresReplayDriver) {
-    await expect
-      .poll(async () =>
-        await electronApp.evaluate(() =>
-          Boolean(globalThis.__PWRAGENT_REPLAY_DRIVER__)
+    const requiresReplayDriver = params.requiresReplayDriver ?? true;
+    if (requiresReplayDriver) {
+      await expect
+        .poll(async () =>
+          await electronApp.evaluate(() =>
+            Boolean(globalThis.__PWRAGENT_REPLAY_DRIVER__)
+          )
         )
-      )
-      .toBe(true);
-  } else {
-    // Wizard specs: just wait for the renderer to mount. We don't
-    // care about the replay driver — there's no thread to replay.
-    await window.waitForLoadState("domcontentloaded");
-  }
+        .toBe(true);
+    } else {
+      // Wizard specs: just wait for the renderer to mount. We don't
+      // care about the replay driver — there's no thread to replay.
+      await window.waitForLoadState("domcontentloaded");
+    }
 
-  if (params.windowSize) {
-    await electronApp.evaluate(
-      ({ BrowserWindow }, size) => {
-        const window = BrowserWindow.getAllWindows()[0];
-        if (!window) {
-          throw new Error("Expected an Electron BrowserWindow for replay E2E sizing");
-        }
+    if (params.windowSize) {
+      await electronApp.evaluate(
+        ({ BrowserWindow }, size) => {
+          const window = BrowserWindow.getAllWindows()[0];
+          if (!window) {
+            throw new Error("Expected an Electron BrowserWindow for replay E2E sizing");
+          }
 
-        window.setMinimumSize(0, 0);
-        window.setContentSize(size.width, size.height);
+          window.setMinimumSize(0, 0);
+          window.setContentSize(size.width, size.height);
+        },
+        params.windowSize
+      );
+
+      await expect
+        .poll(async () =>
+          await window.evaluate(() => ({
+            innerHeight: globalThis.innerHeight,
+            innerWidth: globalThis.innerWidth,
+          }))
+        )
+        .toMatchObject({
+          innerHeight: params.windowSize.height,
+          innerWidth: params.windowSize.width,
+        });
+    }
+
+    return {
+      electronApp,
+      homeRoot,
+      window,
+      getClipboardSnapshot: async () =>
+        await electronApp.evaluate(() => globalThis.__PWRAGENT_E2E_CLIPBOARD__),
+      advance: async (advanceParams) => {
+        await electronApp.evaluate(async (_electron, value) => {
+          await globalThis.__PWRAGENT_REPLAY_DRIVER__?.advance(value);
+        }, advanceParams);
       },
-      params.windowSize
-    );
-
-    await expect
-      .poll(async () =>
-        await window.evaluate(() => ({
-          innerHeight: globalThis.innerHeight,
-          innerWidth: globalThis.innerWidth,
-        }))
-      )
-      .toMatchObject({
-        innerHeight: params.windowSize.height,
-        innerWidth: params.windowSize.width,
-      });
+      getPendingRequest: async (requestParams) =>
+        await electronApp.evaluate(
+          (_electron, value) =>
+            globalThis.__PWRAGENT_REPLAY_DRIVER__?.getPendingRequest(value),
+          requestParams
+        ),
+      getLastStartTurn: async (requestParams) =>
+        await electronApp.evaluate(
+          (_electron, value) =>
+            globalThis.__PWRAGENT_REPLAY_DRIVER__?.getLastStartTurn(value),
+          requestParams
+        ),
+      getLastStartReview: async (requestParams) =>
+        await electronApp.evaluate(
+          (_electron, value) =>
+            globalThis.__PWRAGENT_REPLAY_DRIVER__?.getLastStartReview(value),
+          requestParams
+        ),
+      getLastRenameThread: async (requestParams) =>
+        await electronApp.evaluate(
+          (_electron, value) =>
+            globalThis.__PWRAGENT_REPLAY_DRIVER__?.getLastRenameThread(value),
+          requestParams
+        ),
+      getInterruptTurnCalls: async (requestParams) =>
+        await electronApp.evaluate(
+          (_electron, value) =>
+            globalThis.__PWRAGENT_REPLAY_DRIVER__?.getInterruptTurnCalls(value),
+          requestParams
+        ),
+      respondToPendingRequest: async (requestParams) => {
+        await electronApp.evaluate(async (_electron, value) => {
+          await globalThis.__PWRAGENT_REPLAY_DRIVER__?.respondToPendingRequest(value);
+        }, requestParams);
+      },
+      closeApplication: async () => {
+        const summary = await closeApplicationOnce();
+        if (summary.circuit.tripped) {
+          throw new ElectronShutdownCircuitOpenError();
+        }
+      },
+      close: async () => {
+        const running = finalizeElectronFixtureTeardown({
+          closeApplication: closeApplicationOnce,
+          cleanupProfileProcesses: async () => {
+            await killSpawnedProfileProcessesUnder(homeRoot);
+          },
+          removeHomeRoot: async () => {
+            await rm(homeRoot, { recursive: true, force: true });
+          },
+        }).then(() => undefined);
+        await awaitElectronFixtureTeardown({
+          closeApplication: closeApplicationOnce,
+          running,
+          timeoutMs: ELECTRON_TEARDOWN_TIMEOUT_MS,
+        });
+      },
+    };
+  } catch (error) {
+    await closeApplicationOnce().catch(() => undefined);
+    await killSpawnedProfileProcessesUnder(homeRoot).catch(() => undefined);
+    throw error;
   }
-
-  return {
-    electronApp,
-    homeRoot,
-    window,
-    getClipboardSnapshot: async () =>
-      await electronApp.evaluate(() => globalThis.__PWRAGENT_E2E_CLIPBOARD__),
-    advance: async (advanceParams) => {
-      await electronApp.evaluate(async (_electron, value) => {
-        await globalThis.__PWRAGENT_REPLAY_DRIVER__?.advance(value);
-      }, advanceParams);
-    },
-    getPendingRequest: async (requestParams) =>
-      await electronApp.evaluate(
-        (_electron, value) =>
-          globalThis.__PWRAGENT_REPLAY_DRIVER__?.getPendingRequest(value),
-        requestParams
-      ),
-    getLastStartTurn: async (requestParams) =>
-      await electronApp.evaluate(
-        (_electron, value) =>
-          globalThis.__PWRAGENT_REPLAY_DRIVER__?.getLastStartTurn(value),
-        requestParams
-      ),
-    getLastStartReview: async (requestParams) =>
-      await electronApp.evaluate(
-        (_electron, value) =>
-          globalThis.__PWRAGENT_REPLAY_DRIVER__?.getLastStartReview(value),
-        requestParams
-      ),
-    getLastRenameThread: async (requestParams) =>
-      await electronApp.evaluate(
-        (_electron, value) =>
-          globalThis.__PWRAGENT_REPLAY_DRIVER__?.getLastRenameThread(value),
-        requestParams
-      ),
-    getInterruptTurnCalls: async (requestParams) =>
-      await electronApp.evaluate(
-        (_electron, value) =>
-          globalThis.__PWRAGENT_REPLAY_DRIVER__?.getInterruptTurnCalls(value),
-        requestParams
-      ),
-    respondToPendingRequest: async (requestParams) => {
-      await electronApp.evaluate(async (_electron, value) => {
-        await globalThis.__PWRAGENT_REPLAY_DRIVER__?.respondToPendingRequest(value);
-      }, requestParams);
-    },
-    close: async () => {
-      await electronApp.close();
-      // The wizard's graduation path can spawn a detached child
-      // Electron process for the operator's chosen profile (see
-      // `openPwrAgentProfile` in `ipc/profiles.ts`). That child
-      // outlives the test's bootstrap Electron and keeps writing
-      // to `<homeRoot>/.pwragent/profiles/<name>/` (state.db
-      // heartbeats, Codex plugin clones, etc.). If we rm the
-      // tmpdir while the child is mid-write, rm races and ENOTEMPTYs.
-      //
-      // Find any live PwrAgent instances under this tmpdir via
-      // their runtime-instance heartbeat markers, kill them, then
-      // proceed with cleanup. Each marker file is a JSON blob
-      // containing the process's PID; the marker dir layout matches
-      // `startProfileRuntimeHeartbeat` in `main/profile.ts`.
-      await killSpawnedProfileProcessesUnder(homeRoot);
-      await rm(homeRoot, { recursive: true, force: true });
-    },
-  };
 }
 
 /** Locate the thread card that owns the named empty open-thread button. */
@@ -347,6 +427,259 @@ export function threadRowCard(
   return scope
     .locator(".thread-row")
     .filter({ has: page.getByRole("button", { name }) });
+}
+
+export async function awaitElectronFixtureTeardown(params: {
+  closeApplication(): Promise<ElectronShutdownSummary>;
+  running: Promise<void>;
+  timeoutMs: number;
+}): Promise<void> {
+  if (!await raceTeardownTimeout(params.running, params.timeoutMs)) {
+    return;
+  }
+
+  // The bounded close finishes before profile cleanup begins, so its memoized
+  // summary remains available even when the overall teardown budget expires.
+  // Observe the detached cleanup promise, then surface a deterministic failure
+  // instead of allowing the fixture (and potentially the shard) to pass.
+  params.running.catch(() => undefined);
+  const summary = await params.closeApplication();
+  if (summary.circuit.tripped) {
+    throw new ElectronShutdownCircuitOpenError();
+  }
+  throw new ElectronFixtureTeardownTimeoutError(params.timeoutMs);
+}
+
+/**
+ * Close a Playwright-owned Electron app within fixed budgets. A degraded
+ * persistent runner must not turn every remaining fixture teardown into a
+ * long delay, but the complete process tree is killed only after the graceful
+ * close budget expires.
+ */
+export async function closeElectronApplication(
+  electronApp: ElectronApplication,
+  options: ElectronCloseOptions = {},
+): Promise<ElectronShutdownSummary> {
+  let child: ElectronChildProcess | undefined;
+  try {
+    child = electronApp.process();
+  } catch {
+    return recordElectronCloseSummary(
+      alreadyExitedCloseExecution(),
+      options,
+    );
+  }
+  if (!child) {
+    return recordElectronCloseSummary(
+      alreadyExitedCloseExecution(),
+      options,
+    );
+  }
+  const execution = await executeElectronClose({
+    now: performance.now.bind(performance),
+    requestQuit: async () => {
+      await withTimeout(
+        electronApp.evaluate(({ app }) => {
+          app.quit();
+        }),
+        ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
+        "Electron quit evaluation timed out",
+      );
+    },
+    startClose: () => {
+      const closePromise = electronApp.close();
+      closePromise.catch(() => undefined);
+      return closePromise;
+    },
+    waitForGracefulClose: async (closePromise) => await waitForClose(
+      closePromise,
+      ELECTRON_CLOSE_TIMEOUT_MS,
+    ),
+    hasExited: () => hasExited(child),
+    forceKillTree: async () => {
+      await killProcessTree(child);
+    },
+    waitForForcedExit: async () => await waitForProcessExit(
+      child,
+      ELECTRON_FORCE_EXIT_TIMEOUT_MS,
+    ),
+    waitForPostKillClose: async (closePromise) => {
+      await waitForClose(closePromise, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
+    },
+  });
+  return recordElectronCloseSummary(execution, options);
+}
+
+function alreadyExitedCloseExecution(): ElectronCloseExecution {
+  return {
+    elapsedMs: 0,
+    forceExitOutcome: "not-needed",
+    forced: false,
+    gracefulCloseOutcome: "closed",
+    quitRequestOutcome: "completed",
+  };
+}
+
+function recordElectronCloseSummary(
+  execution: ElectronCloseExecution,
+  options: ElectronCloseOptions,
+): ElectronShutdownSummary {
+  const diagnosticsFile = options.diagnosticsFile
+    ?? process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV];
+  const launchId = options.launchId ?? "untracked";
+  const events = readE2eShutdownPhaseEvents(diagnosticsFile, launchId);
+  const classification = classifyElectronClose({
+    ...execution,
+    shutdownElapsedMs: observedOverallShutdownDuration(events),
+  });
+  const circuit = recordElectronShutdownCircuit({
+    classification,
+    enabled: options.circuitEnabled
+      ?? process.env[E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV] === "1",
+    stateFile: options.circuitStateFile
+      ?? process.env[E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV],
+  });
+  const summary = buildElectronShutdownSummary({
+    circuit,
+    classification,
+    events,
+    execution,
+    launchId,
+  });
+  appendElectronShutdownSummary(diagnosticsFile, summary);
+  console.log(`[pwragent-e2e-shutdown] ${JSON.stringify(summary)}`);
+  return summary;
+}
+
+export async function raceTeardownTimeout(
+  running: Promise<void>,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<boolean>([
+      running.then(() => false),
+      new Promise<true>((resolve) => {
+        timeout = setTimeout(() => resolve(true), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  promise.catch(() => undefined);
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function waitForClose(
+  promise: Promise<void>,
+  timeoutMs: number,
+): Promise<CloseResult> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<CloseResult>([
+      promise.then(
+        () => "closed",
+        () => "rejected",
+      ),
+      new Promise<"timeout">((resolve) => {
+        timeout = setTimeout(() => resolve("timeout"), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function hasExited(child: ElectronChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForProcessExit(
+  child: ElectronChildProcess,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (hasExited(child)) {
+    return true;
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<boolean>([
+      new Promise<true>((resolve) => {
+        child.once("exit", () => resolve(true));
+      }),
+      new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function killProcessTree(child: ElectronChildProcess): Promise<void> {
+  if (hasExited(child)) {
+    return;
+  }
+  const pid = child.pid;
+  if (pid === undefined) {
+    if (!child.killed) {
+      child.kill("SIGKILL");
+    }
+    return;
+  }
+  if (process.platform === "win32") {
+    await new Promise<void>((resolve) => {
+      execFile(
+        "taskkill",
+        ["/pid", String(pid), "/T", "/F"],
+        { timeout: 5_000 },
+        (error) => {
+          if (error && !child.killed) {
+            child.kill("SIGKILL");
+          }
+          resolve();
+        },
+      );
+    });
+    return;
+  }
+
+  const descendants = await listDescendantPids(pid);
+  if (!child.killed) {
+    child.kill("SIGKILL");
+  }
+  for (const descendant of descendants) {
+    try {
+      process.kill(descendant, "SIGKILL");
+    } catch {
+      // The descendant already exited between the ps snapshot and this kill.
+    }
+  }
 }
 
 async function killSpawnedProfileProcessesUnder(homeRoot: string): Promise<void> {

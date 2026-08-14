@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, nativeImage, shell } from "electron";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
@@ -148,6 +149,12 @@ import {
   setUpdateInstallPreparationHandler,
 } from "./update-install-state";
 import { createShutdownBarrier } from "./shutdown-barrier";
+import {
+  createE2eShutdownDiagnosticsRecorder,
+  E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
+  E2E_SHUTDOWN_LAUNCH_ID_ENV,
+  type E2eShutdownPhase,
+} from "./e2e-shutdown-diagnostics";
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -161,6 +168,11 @@ const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
 const RENDERER_WINDOW_CLOSE_TIMEOUT_MS = 2_000;
 const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
 const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 7_500;
+const e2eShutdownDiagnostics = createE2eShutdownDiagnosticsRecorder({
+  enabled: process.env.PWRAGENT_E2E === "1" && !app.isPackaged,
+  filePath: process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV],
+  launchId: process.env[E2E_SHUTDOWN_LAUNCH_ID_ENV],
+});
 let mainProcessResourcesDisposed = false;
 let mainProcessShutdownComplete = false;
 let mainProcessShutdownPromise: Promise<void> | undefined;
@@ -424,6 +436,24 @@ function disposeMainProcessResourcesSync(): void {
 const runMainProcessShutdownBarrier = createShutdownBarrier({
   globalTimeoutMs: MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS,
   logger: mainLog,
+  observer: {
+    phaseStarted: (phase) => {
+      const diagnosticPhase = toE2eShutdownPhase(phase);
+      if (diagnosticPhase) {
+        e2eShutdownDiagnostics.beginPhase(diagnosticPhase);
+      }
+    },
+    phaseFinished: (outcome) => {
+      const diagnosticPhase = toE2eShutdownPhase(outcome.name);
+      if (diagnosticPhase) {
+        e2eShutdownDiagnostics.finishPhase(
+          diagnosticPhase,
+          outcome.outcome,
+          outcome.durationMs,
+        );
+      }
+    },
+  },
   phases: [
     {
       name: "messaging",
@@ -442,6 +472,9 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
 });
 
 async function closeRendererWindowsBeforeShutdown(): Promise<void> {
+  const startedAt = performance.now();
+  let timedOut = false;
+  e2eShutdownDiagnostics.beginPhase("renderer-window");
   const windows = BrowserWindow.getAllWindows().filter(
     (window) => !window.isDestroyed(),
   );
@@ -457,6 +490,7 @@ async function closeRendererWindowsBeforeShutdown(): Promise<void> {
             resolve();
           };
           const timeout = setTimeout(() => {
+            timedOut = true;
             mainLog.warn("renderer window close timed out; destroying", {
               windowId: window.id,
             });
@@ -492,20 +526,44 @@ async function closeRendererWindowsBeforeShutdown(): Promise<void> {
         }),
     ),
   );
+  e2eShutdownDiagnostics.finishPhase(
+    "renderer-window",
+    timedOut ? "timed-out" : "completed",
+    performance.now() - startedAt,
+  );
 }
 
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
-    // Renderer cleanup flushes debounced composer drafts over IPC. Keep every
-    // handler alive until all windows have closed, then tear down runtimes and
-    // finally remove the synchronous IPC surface.
-    await closeRendererWindowsBeforeShutdown();
-    await runMainProcessShutdownBarrier(source);
-    disposeMainProcessResourcesSync();
-    disposeAppState();
-    mainProcessShutdownComplete = true;
+    e2eShutdownDiagnostics.beginOverall();
+    try {
+      // Renderer cleanup flushes debounced composer drafts over IPC. Keep every
+      // handler alive until all windows have closed, then tear down runtimes and
+      // finally remove the synchronous IPC surface.
+      await closeRendererWindowsBeforeShutdown();
+      await runMainProcessShutdownBarrier(source);
+      disposeMainProcessResourcesSync();
+      disposeAppState();
+      mainProcessShutdownComplete = true;
+      e2eShutdownDiagnostics.finishOverall("completed");
+    } catch (error) {
+      e2eShutdownDiagnostics.finishOverall("failed");
+      throw error;
+    }
   })();
   await mainProcessShutdownPromise;
+}
+
+function toE2eShutdownPhase(
+  phase: string,
+): Exclude<E2eShutdownPhase, "overall" | "renderer-window"> | undefined {
+  switch (phase) {
+    case "messaging":
+    case "app-server":
+      return phase;
+    default:
+      return undefined;
+  }
 }
 
 async function prepareForUpdateInstallShutdown(): Promise<void> {
