@@ -216,6 +216,55 @@ describe("sqlite write metrics", () => {
     await registry.close();
   });
 
+  it("holds five deferred checks and their first alert to one commit", async () => {
+    vi.useFakeTimers();
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 5; index += 1) {
+          vi.setSystemTime(1_800_000_000_000 + index * 30_000);
+          await emit({
+            backend: "codex",
+            notification: {
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  id: `wait-${index + 1}`,
+                  type: "functionCall",
+                  name: "wait",
+                  status: "completed",
+                  arguments: {
+                    cell_id: `cell-${index + 1}`,
+                    yield_time_ms: 30_000,
+                  },
+                  functionCallOutput: "still running",
+                },
+              },
+            },
+          } as AgentEvent);
+        }
+      });
+
+      expectSqliteWriteBudget({
+        note: "five in-memory 30-second deferred checks and one persisted alert boundary",
+        scenario: "deferred-check-alert",
+        writes,
+      });
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("holds a burst of live token usage to one commit", async () => {
     vi.useFakeTimers();
     const registry = new DesktopBackendRegistry({

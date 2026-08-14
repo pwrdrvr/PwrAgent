@@ -1572,6 +1572,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   async upsertThreadToolInvocation(params: {
     invocation: ThreadToolInvocationRecord;
   }): Promise<ThreadToolInvocationRecord> {
+    return this.upsertThreadToolInvocationSync(params);
+  }
+
+  private upsertThreadToolInvocationSync(params: {
+    invocation: ThreadToolInvocationRecord;
+  }): ThreadToolInvocationRecord {
     const invocation = normalizeThreadToolInvocation(params.invocation);
     const existing = this.readThreadToolInvocationSync(invocation.invocationId);
     const merged = existing
@@ -1684,9 +1690,42 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .run(params.reason, Date.now(), params.invocationId);
   }
 
+  async markThreadToolInvocationsNoisy(params: {
+    invocationIds: string[];
+    reason: string;
+  }): Promise<void> {
+    if (params.invocationIds.length === 0) {
+      return;
+    }
+    this.stateDb.raw.transaction(() => {
+      this.markThreadToolInvocationsNoisySync(params);
+    })();
+  }
+
+  private markThreadToolInvocationsNoisySync(params: {
+    invocationIds: string[];
+    reason: string;
+  }): void {
+    const update = this.stateDb.raw.prepare(
+      `UPDATE thread_tool_invocations
+       SET noisy = 1, noisy_reason = ?, updated_at = ?
+       WHERE invocation_id = ?`,
+    );
+    const updatedAt = Date.now();
+    for (const invocationId of new Set(params.invocationIds)) {
+      update.run(params.reason, updatedAt, invocationId);
+    }
+  }
+
   async upsertThreadToolInvocationAlert(params: {
     alert: ThreadToolInvocationAlert;
   }): Promise<ThreadToolInvocationAlert> {
+    return this.upsertThreadToolInvocationAlertSync(params);
+  }
+
+  private upsertThreadToolInvocationAlertSync(params: {
+    alert: ThreadToolInvocationAlert;
+  }): ThreadToolInvocationAlert {
     const alert = normalizeThreadToolInvocationAlert(params.alert);
     this.stateDb.raw
       .prepare(
@@ -1749,6 +1788,36 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       )
       .run(toThreadToolInvocationAlertRowParams(alert));
     return alert;
+  }
+
+  async persistThreadToolInvocationBoundary(params: {
+    alerts: ThreadToolInvocationAlert[];
+    invocation: ThreadToolInvocationRecord;
+    noisyInvocationIds?: string[];
+    noisyReason?: string;
+  }): Promise<ThreadToolInvocationRecord> {
+    let stored: ThreadToolInvocationRecord | undefined;
+    this.stateDb.raw.transaction(() => {
+      stored = this.upsertThreadToolInvocationSync({
+        invocation: params.invocation,
+      });
+      if (
+        params.noisyInvocationIds?.length
+        && params.noisyReason
+      ) {
+        this.markThreadToolInvocationsNoisySync({
+          invocationIds: params.noisyInvocationIds,
+          reason: params.noisyReason,
+        });
+      }
+      for (const alert of params.alerts) {
+        this.upsertThreadToolInvocationAlertSync({ alert });
+      }
+    })();
+    if (!stored) {
+      throw new Error("Tool invocation boundary transaction did not run");
+    }
+    return stored;
   }
 
   async readThreadToolAccounting(params: {
