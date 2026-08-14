@@ -85,6 +85,26 @@ describe("codex environment runtime", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("does not throw when the command is already gone at the timeout boundary", async () => {
+    await expect(
+      waitForCodexEnvironmentDetachedCommandGone({
+        runId: "missing-run",
+        timeoutMs: 0,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("throws at the timeout boundary only when a tracked pid is still alive", async () => {
+    await expect(
+      waitForCodexEnvironmentDetachedCommandGone({
+        knownPids: [process.pid],
+        pid: process.pid,
+        runId: "missing-run",
+        timeoutMs: 0,
+      }),
+    ).rejects.toThrow(/did not exit within 0ms/);
+  });
+
   it("rejects detached actions with a clear missing-cwd error before spawn", async () => {
     await expect(
       startLocalCodexEnvironmentAction({

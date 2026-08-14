@@ -322,9 +322,7 @@ export async function waitForCodexEnvironmentDetachedCommandGone(
     }
   }
 
-  while (Date.now() - startedAt < timeoutMs) {
-    const entry = detachedCommandProcesses.get(params.runId);
-    const closed = !entry || entry.closed();
+  while (true) {
     for (const pid of [...tracked]) {
       if (isProcessIdAlive(pid)) {
         for (const childPid of collectProcessTreeIds(pid)) {
@@ -332,20 +330,26 @@ export async function waitForCodexEnvironmentDetachedCommandGone(
         }
       }
     }
+    // Blocking CIM walks stall the event loop, so a close handler queued
+    // during the walk cannot run until we yield.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const entry = detachedCommandProcesses.get(params.runId);
+    const closed = !entry || entry.closed();
     const alive = [...tracked].filter((pid) => isProcessIdAlive(pid));
     if (closed && alive.length === 0) {
       return;
     }
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(
+        `Detached environment command ${params.runId} did not exit within ${timeoutMs}ms`
+          + ` (closed=${closed}, alive=[${alive.join(", ")}], pid=${String(params.pid)})`,
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-
-  const entry = detachedCommandProcesses.get(params.runId);
-  const closed = !entry || entry.closed();
-  const alive = [...tracked].filter((pid) => isProcessIdAlive(pid));
-  throw new Error(
-    `Detached environment command ${params.runId} did not exit within ${timeoutMs}ms`
-      + ` (closed=${closed}, alive=[${alive.join(", ")}], pid=${String(params.pid)})`,
-  );
 }
 
 export function stopCodexEnvironmentDetachedCommand(
