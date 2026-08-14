@@ -3323,7 +3323,7 @@ export class MessagingController {
   }
 
   private async bootstrapDefaultAgentForAcceptedMessage(
-    event: MessagingInboundTextEvent,
+    event: MessagingInboundTextEvent | MessagingInboundMediaEvent,
   ): Promise<boolean> {
     const assignments =
       await this.options.store.findActiveDefaultAgentAssignmentsForChannel(
@@ -3331,6 +3331,16 @@ export class MessagingController {
       );
     if (assignments.length === 0) {
       return false;
+    }
+    if (
+      !(await this.requirePermission(
+        event,
+        "message.reply",
+        event.kind === "media" ? "media:reply" : "message:reply",
+        { notify: false },
+      ))
+    ) {
+      return true;
     }
 
     let navigation: NavigationSnapshot;
@@ -3457,6 +3467,9 @@ export class MessagingController {
     binding = await this.revokeExpiredPrivateReplyContinuation(binding);
     if (!binding) {
       if (!await this.shouldHandleAmbientSharedMessage(event)) {
+        return;
+      }
+      if (await this.bootstrapDefaultAgentForAcceptedMessage(event)) {
         return;
       }
       await this.deliver(

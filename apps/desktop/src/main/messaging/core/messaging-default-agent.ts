@@ -68,6 +68,32 @@ export function buildDefaultAgentScopeLookup(
       channel: channel.channel,
       conversationId: channel.conversation.parentConversationId,
     });
+    // A conversation default selected on a parent channel also governs its
+    // child threads/topics unless the child has a more-specific exact or
+    // explicit parent assignment. Adapters provide parentConversationId so
+    // core can reconstruct this normalized lookup without reading opaque IDs.
+    scopes.push({
+      kind: "conversation",
+      channel: {
+        channel: channel.channel,
+        conversation: {
+          id: channel.conversation.parentConversationId,
+          kind: channel.conversation.isDirectMessage === true ? "dm" : "channel",
+          ...(channel.conversation.isDirectMessage === true
+            ? { isDirectMessage: true }
+            : {}),
+          ...(channel.conversation.parentConversationParentId
+            ? { parentId: channel.conversation.parentConversationParentId }
+            : {}),
+          ...(channel.conversation.workspaceId
+            ? { workspaceId: channel.conversation.workspaceId }
+            : {}),
+          ...(channel.conversation.parentTitle
+            ? { title: channel.conversation.parentTitle }
+            : {}),
+        },
+      },
+    });
   }
   if (channel.conversation.workspaceId) {
     scopes.push({

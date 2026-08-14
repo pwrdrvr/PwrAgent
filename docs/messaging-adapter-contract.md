@@ -284,6 +284,18 @@ returns user-visible rejection reasons for unsupported or oversized files.
 Downloaded bytes and extracted file contents are not persisted in messaging
 state.
 
+After authorization and shared-conversation response-mode checks, inbound media
+uses the same routing hierarchy as accepted text: an active binding first, then
+the effective default Agent, and only then the unbound conversation picker. A
+child thread or topic can inherit the exact conversation default configured on
+its normalized parent channel, after any exact-child or explicit-parent
+assignment. Providers must therefore preserve mention state and normalized
+`parentConversationId` metadata on media events just as they do on text events.
+When a parent's persisted conversation identity has its own `parentId`, the
+child also carries that value as `parentConversationParentId`; this keeps route
+inheritance provider-neutral without treating the child's `parentId` as though
+it belonged to the parent.
+
 For outbound final responses, desktop messaging core resolves structured
 assistant image parts and local Markdown image links before constructing the
 provider intent. Local files and signed loopback media are copied into the

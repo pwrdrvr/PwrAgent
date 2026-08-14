@@ -1248,6 +1248,7 @@ function mergeObservedChannel(
   for (const key of [
     "ancestorTitle",
     "parentConversationId",
+    "parentConversationParentId",
     "parentId",
     "parentTitle",
     "title",

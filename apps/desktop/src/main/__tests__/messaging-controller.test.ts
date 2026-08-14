@@ -1807,6 +1807,236 @@ describe("MessagingController", () => {
     expect(JSON.stringify(harness.delivered)).toContain("find the thread");
   });
 
+  it("routes an addressed image through an unbound conversation default Agent", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Search Agent",
+      agent: {
+        name: "Search Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      channel: "slack",
+      downloadAttachment: vi.fn(async ({ attachment }) => ({
+        data: new Uint8Array([137, 80, 78, 71]),
+        fileName: attachment.name,
+        mimeType: "image/png",
+        sizeBytes: 4,
+      })),
+      navigation,
+    });
+    const channel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SEARCH",
+        kind: "channel" as const,
+        title: "t-search-bots",
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    await seedConversationDefaultAgent(harness.store, channel);
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("What am I seeing?", {
+        botMention: true,
+        channel,
+      }),
+      id: "event-default-agent-image",
+      kind: "media",
+      attachments: [
+        {
+          id: "image-1",
+          kind: "image",
+          name: "search-dashboard.png",
+          disposition: "available",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        },
+      ],
+      disposition: "available",
+    });
+
+    await expect(
+      harness.store.findActiveBindingForChannel(channel),
+    ).resolves.toBeUndefined();
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        input: [
+          { type: "text", text: "What am I seeing?" },
+          {
+            type: "image",
+            name: "search-dashboard.png",
+            url: "data:image/png;base64,AQID",
+          },
+        ],
+        threadId: "thread-1",
+      }),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ title: "Choose a thread" }),
+    );
+  });
+
+  it("denies default Agent media when the actor lacks message.reply", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Search Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const records: unknown[] = [];
+    const downloadAttachment = vi.fn(async () => ({
+      data: new Uint8Array([137, 80, 78, 71]),
+      fileName: "search-dashboard.png",
+      mimeType: "image/png",
+      sizeBytes: 4,
+    }));
+    const harness = await createHarness({
+      activityLog: () =>
+        ({ record: (entry: unknown) => records.push(entry) }) as never,
+      channel: "slack",
+      downloadAttachment,
+      navigation,
+      rbacPolicy: rbacProviderGranting(["thread.status.view"]),
+    });
+    const channel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SEARCH",
+        kind: "channel" as const,
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    await seedConversationDefaultAgent(harness.store, channel);
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("What am I seeing?", {
+        botMention: true,
+        channel,
+      }),
+      id: "event-denied-default-agent-image",
+      kind: "media",
+      attachments: [
+        {
+          id: "image-1",
+          kind: "image",
+          name: "search-dashboard.png",
+          disposition: "available",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        },
+      ],
+      disposition: "available",
+    });
+
+    expect(downloadAttachment).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        kind: "inbound-rejected",
+        payload: expect.objectContaining({
+          permission: "message.reply",
+          reason: "unauthorized-capability",
+        }),
+      }),
+    );
+  });
+
+  it("routes an addressed Slack thread image through its parent channel default Agent", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Search Agent",
+      agent: {
+        name: "Search Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      channel: "slack",
+      downloadAttachment: vi.fn(async ({ attachment }) => ({
+        data: new Uint8Array([137, 80, 78, 71]),
+        fileName: attachment.name,
+        mimeType: "image/png",
+        sizeBytes: 4,
+      })),
+      navigation,
+    });
+    const parentChannel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SEARCH",
+        kind: "channel" as const,
+        title: "t-search-bots",
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    const threadChannel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SEARCH",
+        kind: "thread" as const,
+        parentId: "1786655046.300089",
+        parentConversationId: "C012SEARCH",
+        parentTitle: "t-search-bots",
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    await seedConversationDefaultAgent(harness.store, parentChannel);
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("What am I seeing?", {
+        botMention: true,
+        channel: threadChannel,
+      }),
+      id: "event-thread-default-agent-image",
+      kind: "media",
+      attachments: [
+        {
+          id: "image-1",
+          kind: "image",
+          name: "search-dashboard.png",
+          disposition: "available",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        },
+      ],
+      disposition: "available",
+    });
+
+    await expect(
+      harness.store.findActiveBindingForChannel(threadChannel),
+    ).resolves.toBeUndefined();
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        input: [
+          { type: "text", text: "What am I seeing?" },
+          {
+            type: "image",
+            name: "search-dashboard.png",
+            url: "data:image/png;base64,AQID",
+          },
+        ],
+        threadId: "thread-1",
+      }),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ title: "PwrAgent commands" }),
+    );
+  });
+
   it("anchors Slack Agent Route working cards to the inbound channel message", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {

@@ -1564,6 +1564,7 @@ describe("discord adapter", () => {
             id: TEST_CHANNEL_ID,
             kind: "thread",
             parentConversationId: parentChannelId,
+            parentConversationParentId: TEST_GUILD_ID,
             parentTitle: "p-search-signals-project",
             workspaceId: TEST_GUILD_ID,
           },
