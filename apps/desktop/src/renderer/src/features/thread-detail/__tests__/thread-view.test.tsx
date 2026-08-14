@@ -18,6 +18,7 @@ import type {
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { ThreadLinkProvider } from "../../../lib/thread-links";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
 import type { PendingQuestionnaireState } from "../questionnaire";
 
@@ -1343,6 +1344,67 @@ describe("ThreadView", () => {
     expect(pane).toHaveAttribute("data-thread-key", "codex:remote-thread-1");
     // The owner resolves the cwd; the viewer must not pick one.
     expect(pane).toHaveAttribute("data-cwd", "");
+  });
+
+  it("renders unqualified handoff links as chips in a remote transcript", () => {
+    const onShowThread = vi.fn();
+    const remoteThread: NavigationThreadSummary = {
+      id: "remote-parent",
+      title: "Remote parent",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-a" },
+          threadId: "remote-parent",
+        },
+        instanceLabel: "Peer Mac",
+        peerStatus: "connected",
+      },
+    };
+
+    render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[remoteThread]}>
+        <ThreadView
+          {...({
+            addOptimisticUserMessage: () => "optimistic-1",
+            backends: [],
+            clearPendingRequest: () => undefined,
+            composerDisabled: false,
+            desktopApi: {},
+            loading: false,
+            loadingMore: false,
+            messageCount: 1,
+            onLoadOlder: async () => undefined,
+            removeOptimisticMessage: () => undefined,
+            skills: [],
+            transcriptEntries: [{
+              type: "message",
+              id: "assistant-handoff",
+              role: "assistant",
+              text:
+                "See [Remote handoff](pwragent://thread/remote-child?backend=codex)",
+            }],
+          } as unknown as Omit<ThreadViewProps, "terminals" | "selectedThread">)}
+          selectedThread={remoteThread}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Open thread Remote handoff",
+    }));
+
+    expect(onShowThread).toHaveBeenCalledWith({
+      backend: "codex",
+      instanceId: "peer-a",
+      threadId: "remote-child",
+    });
   });
 
   it("disables the remote terminal toggle with a reason when the peer lacks remote_pty", () => {

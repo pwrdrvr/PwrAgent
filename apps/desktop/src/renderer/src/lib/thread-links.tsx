@@ -33,6 +33,11 @@ export type ResolvedThreadLink = {
   linkedDirectories?: LinkedDirectorySummary[];
 };
 
+export type ThreadLinkSource = {
+  backend: AppServerBackendKind;
+  instanceId: FederationInstanceId;
+};
+
 export type ThreadLinkContextValue = {
   /**
    * Returns the thread a link points at, or undefined when it names a thread
@@ -382,13 +387,14 @@ export function ThreadLinkProvider(props: {
 export function resolveThreadHref(
   href: string,
   links: ThreadLinkContextValue | undefined,
+  source?: ThreadLinkSource,
 ): ResolvedThreadLink | undefined {
   const ref = parseThreadUrl(href);
   if (!ref || !links) {
     return undefined;
   }
 
-  return links.resolve(ref);
+  return links.resolve(qualifyThreadLinkRef(ref, source));
 }
 
 /**
@@ -403,6 +409,7 @@ export function resolveThreadHref(
 export function resolveThreadIdText(
   text: string,
   links: ThreadLinkContextValue | undefined,
+  source?: ThreadLinkSource,
 ): ResolvedThreadLink | undefined {
   if (!links) {
     return undefined;
@@ -413,5 +420,20 @@ export function resolveThreadIdText(
     return undefined;
   }
 
-  return links.resolve({ threadId: trimmed });
+  return links.resolve(qualifyThreadLinkRef({ threadId: trimmed }, source));
+}
+
+function qualifyThreadLinkRef(
+  ref: ThreadLinkRef,
+  source: ThreadLinkSource | undefined,
+): ThreadLinkRef {
+  if (!source || ref.instanceId) {
+    return ref;
+  }
+
+  return {
+    ...ref,
+    backend: ref.backend ?? source.backend,
+    instanceId: source.instanceId,
+  };
 }

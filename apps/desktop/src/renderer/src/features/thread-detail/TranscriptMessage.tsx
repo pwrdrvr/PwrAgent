@@ -25,7 +25,11 @@ import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
-import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
+import {
+  useThreadLinks,
+  type ResolvedThreadLink,
+  type ThreadLinkSource,
+} from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { ThreadChip } from "./ThreadChip";
@@ -52,6 +56,7 @@ type TranscriptMessageProps = {
   parentThreadId: string;
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
+  threadLinkSource?: ThreadLinkSource;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
 };
 
@@ -170,6 +175,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
                   fileViewerContext: props.fileViewerContext,
                   onOpenImage: props.onOpenImage,
                   skills: props.skills,
+                  threadLinkSource: props.threadLinkSource,
                 }),
               )}
             </div>
@@ -238,6 +244,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
                   imageParts,
                   onOpenImage: props.onOpenImage,
                   skills: props.skills,
+                  threadLinkSource: props.threadLinkSource,
                 }),
               )}
             </div>
@@ -315,6 +322,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
               imageParts,
               onOpenImage: props.onOpenImage,
               skills: props.skills,
+              threadLinkSource: props.threadLinkSource,
             })}
           </div>
         </article>
@@ -611,6 +619,7 @@ function renderMessageSegment(params: {
   index: number;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   skills: AppServerSkillSummary[];
+  threadLinkSource?: ThreadLinkSource;
 }): ReactNode {
   if (params.segment.type === "images") {
     const imageSegment = params.segment;
@@ -663,6 +672,7 @@ function renderMessageSegment(params: {
       onOpenImage={params.onOpenImage}
       skills={params.skills}
       text={params.segment.type === "table" ? params.segment.text : params.segment.part.text}
+      threadLinkSource={params.threadLinkSource}
     />
   );
 }
