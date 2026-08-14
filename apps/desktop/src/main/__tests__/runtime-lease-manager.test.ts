@@ -25,6 +25,7 @@ function createManager(params: {
   instanceId: string;
   processId: number;
   now?: () => number;
+  systemBootedAt?: number;
 }): RuntimeLeaseManager {
   const now = params.now ?? (() => 1_000);
   const startedAt = now();
@@ -43,6 +44,7 @@ function createManager(params: {
       === runtimeIdentityKey(owner),
     startedAt,
     store,
+    systemBootedAt: params.systemBootedAt,
   });
 }
 
@@ -148,10 +150,35 @@ describe("RuntimeLeaseManager", () => {
     const challenger = createManager({
       instanceId: "instance-b",
       processId: 456,
-      now: Date.now,
+      now: () => 20_000,
+      systemBootedAt: 10_000,
     });
     owner.acquire("federation");
-    liveRuntimeIdentities.delete(123);
+
+    // The old marker and recycled PID can still make the runtime identity
+    // look live. Its pre-boot start time is the conclusive signal.
+
+    expect(challenger.acquire("federation")).toEqual({ acquired: true });
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-b",
+      status: "active",
+    });
+  });
+
+  it("reclaims a pre-boot owner after an earlier dead observation", () => {
+    const owner = createManager({
+      instanceId: "instance-a",
+      processId: 123,
+      now: () => 1_000,
+    });
+    const challenger = createManager({
+      instanceId: "instance-b",
+      processId: 456,
+      now: () => 20_000,
+      systemBootedAt: 10_000,
+    });
+    owner.acquire("federation");
+    store.markInstanceExited({ instanceId: "instance-a", now: 2_000 });
 
     expect(challenger.acquire("federation")).toEqual({ acquired: true });
     expect(store.getFederationLease()).toMatchObject({

@@ -268,7 +268,8 @@ function hasCustomLeaseManagerOptions(
     || options.now
     || options.store
     || options.processIsAlive
-    || options.runtimeIdentityIsAlive,
+    || options.runtimeIdentityIsAlive
+    || options.systemBootedAt !== undefined,
   );
 }
 

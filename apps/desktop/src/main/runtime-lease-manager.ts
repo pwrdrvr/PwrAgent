@@ -1,3 +1,4 @@
+import os from "node:os";
 import {
   getProcessRuntimeIdentity,
   isProfileRuntimeIdentityLive,
@@ -12,6 +13,7 @@ import type {
 } from "./state/app-runtime-instance-store";
 
 export const PWRAGENT_INSTANCE_ROOT_ENV = "PWRAGENT_INSTANCE_ROOT";
+const RUNTIME_BOOT_TIME_TOLERANCE_MS = 5_000;
 
 export type RuntimeLeaseKind = "messaging" | "federation";
 
@@ -43,6 +45,7 @@ export type RuntimeLeaseManagerOptions = {
   env?: NodeJS.ProcessEnv;
   processIsAlive?: (processId: number) => boolean;
   runtimeIdentityIsAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
+  systemBootedAt?: number;
 };
 
 /**
@@ -50,11 +53,12 @@ export type RuntimeLeaseManagerOptions = {
  *
  * Ownership is registered once in sqlite and remains valid while the owning
  * process has a fresh profile marker matching its PID, instance ID, and start
- * time. The first challenger that observes the identity absent persists that
- * fact; after a one-minute safety grace, a challenger may replace the dead
- * owner inside the store's atomic acquisition transaction. This deliberately
- * favors single-owner safety over taking work away from a process that is
- * alive but temporarily hung.
+ * time. An owner from before the current OS boot is conclusively dead and can
+ * be replaced immediately. Otherwise the first challenger that observes the
+ * identity absent persists that fact; after a one-minute safety grace, a
+ * challenger may replace the dead owner inside the store's atomic acquisition
+ * transaction. This deliberately favors single-owner safety over taking work
+ * away from a process that is alive but temporarily hung.
  */
 export class RuntimeLeaseManager {
   private readonly instanceId: string;
@@ -67,6 +71,7 @@ export class RuntimeLeaseManager {
   private readonly runtimeIdentityIsAlive: (
     owner: AppRuntimeInstanceRecord,
   ) => boolean;
+  private readonly systemBootedAt: number;
   private readonly heldLeases = new Set<RuntimeLeaseKind>();
   private instanceRecorded = false;
   private instanceExited = false;
@@ -86,6 +91,9 @@ export class RuntimeLeaseManager {
       ?? process.env[PWRAGENT_INSTANCE_ROOT_ENV]
       ?? process.cwd();
     this.store = options.store ?? getAppRuntimeInstanceStore();
+    this.systemBootedAt =
+      options.systemBootedAt
+      ?? this.now() - os.uptime() * 1_000;
     this.runtimeIdentityIsAlive =
       options.runtimeIdentityIsAlive
       ?? (options.processIsAlive
@@ -140,6 +148,8 @@ export class RuntimeLeaseManager {
       instanceId: this.instanceId,
       isOwnerAlive: (owner: AppRuntimeInstanceRecord) =>
         this.isOwnerAlive(owner),
+      canReclaimOwnerImmediately: (owner: AppRuntimeInstanceRecord) =>
+        this.ownerPredatesCurrentBoot(owner),
       now: this.now(),
     };
     const result =
@@ -228,6 +238,11 @@ export class RuntimeLeaseManager {
       return owner.instanceId === this.instanceId;
     }
     return this.runtimeIdentityIsAlive(owner);
+  }
+
+  private ownerPredatesCurrentBoot(owner: AppRuntimeInstanceRecord): boolean {
+    return owner.startedAt
+      < this.systemBootedAt - RUNTIME_BOOT_TIME_TOLERANCE_MS;
   }
 
   private readLease(kind: RuntimeLeaseKind): MessagingRuntimeLeaseRecord | undefined {

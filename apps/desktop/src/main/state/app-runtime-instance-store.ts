@@ -161,6 +161,7 @@ export class AppRuntimeInstanceStore {
   acquireMessagingLease(params: {
     instanceId: string;
     isOwnerAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
+    canReclaimOwnerImmediately?: (owner: AppRuntimeInstanceRecord) => boolean;
     now: number;
   }): MessagingLeaseAcquireResult {
     return this.acquireLease({
@@ -187,6 +188,7 @@ export class AppRuntimeInstanceStore {
   acquireFederationLease(params: {
     instanceId: string;
     isOwnerAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
+    canReclaimOwnerImmediately?: (owner: AppRuntimeInstanceRecord) => boolean;
     now: number;
   }): FederationLeaseAcquireResult {
     return this.acquireLease({ leaseKey: FEDERATION_LEASE_KEY, ...params });
@@ -223,6 +225,7 @@ export class AppRuntimeInstanceStore {
     leaseKey: string;
     instanceId: string;
     isOwnerAlive?: (owner: AppRuntimeInstanceRecord) => boolean;
+    canReclaimOwnerImmediately?: (owner: AppRuntimeInstanceRecord) => boolean;
     now: number;
     onHeld?: () => void;
     onAcquired?: () => void;
@@ -235,8 +238,13 @@ export class AppRuntimeInstanceStore {
         && existing.ownerInstanceId !== params.instanceId
       ) {
         const owner = this.getInstance(existing.ownerInstanceId);
+        const reclaimImmediately = owner
+          ? params.canReclaimOwnerImmediately?.(owner) ?? false
+          : false;
         if (owner?.exitedAt !== undefined) {
-          const reclaimAt = owner.exitedAt + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
+          const reclaimAt = reclaimImmediately
+            ? owner.exitedAt
+            : owner.exitedAt + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
           if (existing.expiresAt !== reclaimAt) {
             this.setLeaseExpiry({
               leaseKey: params.leaseKey,
@@ -247,6 +255,15 @@ export class AppRuntimeInstanceStore {
           if (params.now < reclaimAt) {
             return this.heldResult(params, this.readLease(params.leaseKey)!);
           }
+        } else if (owner && reclaimImmediately) {
+          // An owner from before this OS boot cannot still be running, even
+          // if a stale marker and recycled PID make its identity look live.
+          // Replace it in this same transaction instead of imposing the
+          // hung-process safety grace.
+          this.markInstanceExited({
+            instanceId: owner.instanceId,
+            now: params.now,
+          });
         } else if (owner && (params.isOwnerAlive?.(owner) ?? true)) {
           return this.heldResult(params, existing);
         } else if (
@@ -257,13 +274,13 @@ export class AppRuntimeInstanceStore {
             return this.heldResult(params, existing);
           }
         } else {
-          const reclaimAt = params.now + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
           if (owner) {
             this.markInstanceExited({
               instanceId: owner.instanceId,
               now: params.now,
             });
           }
+          const reclaimAt = params.now + RUNTIME_LEASE_DEAD_OWNER_GRACE_MS;
           this.setLeaseExpiry({
             leaseKey: params.leaseKey,
             ownerInstanceId: existing.ownerInstanceId,
