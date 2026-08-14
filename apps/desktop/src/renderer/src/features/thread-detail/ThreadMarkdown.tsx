@@ -257,7 +257,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
 
         if (
           skillPath &&
-          (skillsByPath.has(skillPath) || label.startsWith("$"))
+          (
+            isSkillMarkdownPath(skillPath)
+            || skillsByPath.has(skillPath)
+            || label.startsWith("$")
+          )
         ) {
           const skill = skillsByPath.get(skillPath) ?? {
             name: skillNameFromPath(skillPath, label),
@@ -885,6 +889,10 @@ function normalizeSkillPath(href: string): string | undefined {
   }
 
   return undefined;
+}
+
+function isSkillMarkdownPath(filePath: string): boolean {
+  return /(?:^|\/)SKILL\.md$/i.test(filePath);
 }
 
 function skillNameFromPath(filePath: string, label: string): string {

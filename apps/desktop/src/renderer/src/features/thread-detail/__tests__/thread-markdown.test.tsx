@@ -42,16 +42,16 @@ describe("ThreadMarkdown", () => {
   it("renders markdown formatting and local file links", () => {
     render(
       <ThreadMarkdown
-        text={"Use **bold** text and open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)."}
+        text={"Use **bold** text and open [`AGENTS.md`](/Users/huntharo/PwrAgent/AGENTS.md)."}
       />
     );
 
     expect(screen.getByText("bold", { selector: "strong" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "href",
-      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
+      "file:///Users/huntharo/PwrAgent/AGENTS.md"
     );
-    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "title",
       "Open in PwrAgent"
     );
@@ -317,14 +317,6 @@ describe("ThreadMarkdown", () => {
 
     render(
       <ThreadMarkdown
-        skills={[
-          {
-            name: "restart-wedged-macos-gha-runner",
-            description: "Restart a wedged macOS GitHub Actions runner.",
-            path: skillPath,
-            enabled: true,
-          },
-        ]}
         text={`[SKILL.md](${skillPath}) and [runner recovery guide](${skillPath})`}
       />
     );
