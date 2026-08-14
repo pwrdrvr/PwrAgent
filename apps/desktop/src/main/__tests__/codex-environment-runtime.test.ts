@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -95,14 +96,27 @@ describe("codex environment runtime", () => {
   });
 
   it("throws at the timeout boundary only when a tracked pid is still alive", async () => {
-    await expect(
-      waitForCodexEnvironmentDetachedCommandGone({
-        knownPids: [process.pid],
-        pid: process.pid,
-        runId: "missing-run",
-        timeoutMs: 0,
-      }),
-    ).rejects.toThrow(/did not exit within 0ms/);
+    // Use a leaf child. process.pid on Windows desktop-main is the Vitest
+    // worker; collecting that tree does a CIM query per descendant and
+    // overruns the 30s test timeout before timeoutMs: 0 can throw.
+    const child = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => undefined, 1000)"],
+      { stdio: "ignore" },
+    );
+    try {
+      expect(child.pid).toEqual(expect.any(Number));
+      await expect(
+        waitForCodexEnvironmentDetachedCommandGone({
+          knownPids: [child.pid!],
+          pid: child.pid,
+          runId: "missing-run",
+          timeoutMs: 0,
+        }),
+      ).rejects.toThrow(/did not exit within 0ms/);
+    } finally {
+      child.kill("SIGKILL");
+    }
   });
 
   it("rejects detached actions with a clear missing-cwd error before spawn", async () => {
