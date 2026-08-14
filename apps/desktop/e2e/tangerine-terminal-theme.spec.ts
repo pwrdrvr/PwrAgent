@@ -253,19 +253,19 @@ test("keeps workflow states, scanner phases, and narrow desktop layout stable", 
     await expect(composer).toBeVisible();
     await expect(approval).toContainText("Approval needed");
     await expect(approval).toContainText(
-      "Do you want to allow a read-only validation command outside the sandbox?"
+      "Do you want to allow a read-only agent instruction discovery command outside the sandbox?"
     );
     await expect(approval.getByText("Command:")).toBeVisible();
-    await expect(approval.locator("pre code")).toContainText(
-      "/opt/homebrew/bin/python3.13 -m unittest"
+    await expect(approval.locator("pre code")).toHaveText(
+      "Get-ChildItem -Force | Select-Object Name,Mode; Get-ChildItem -Recurse -Filter AGENTS.md -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName"
     );
     const allowPrefix = approval.getByRole("button", {
-      name: /Always Allow Prefix: \/opt\/homebrew\/bin\/python3\.13 -m unittest/,
+      name: /Always Allow Prefix: C:\\Program Files\\WindowsApps\\Microsoft\.PowerShell_.*\\pwsh\.exe -Command Get-ChildItem/,
     });
     await expect(allowPrefix).toBeVisible();
     await expect(allowPrefix).toHaveClass(/button--ghost/);
     await expect(allowPrefix.locator("code")).toContainText(
-      "scripts.github_actions.tests.test_classify_changes"
+      "Get-ChildItem -Force"
     );
     await expect(app.window.getByRole("status")).toContainText("Waiting for approval");
     await expect(app.window.locator(".thinking-scanner").first()).toBeVisible();

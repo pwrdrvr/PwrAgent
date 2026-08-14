@@ -5,8 +5,10 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const approvalPendingSpecDir = path.dirname(fileURLToPath(import.meta.url));
 const approvalCommand =
-  "/opt/homebrew/bin/python3.13 -m unittest scripts.github_actions.tests.test_spin_scala_environments scripts.github_actions.tests.test_spin_scala_metadata scripts.github_actions.tests.test_ci_config_contract scripts.github_actions.tests.test_classify_changes";
-const approvalPrefix = approvalCommand;
+  "Get-ChildItem -Force | Select-Object Name,Mode; Get-ChildItem -Recurse -Filter AGENTS.md -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName";
+const powershell =
+  "C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\\pwsh.exe";
+const approvalPrefix = `${powershell} -Command ${approvalCommand}`;
 
 async function openApprovalPendingReplay() {
   const app = await launchElectronApp({
@@ -53,7 +55,6 @@ async function openApprovalPendingReplay() {
   await expect(
     pendingApproval.locator("pre code")
   ).toHaveText(approvalCommand);
-  await expect(app.window.getByText(/\/bin\/zsh -lc/)).toHaveCount(0);
   await expect(
     app.window.getByText("Waiting for approval before this turn can continue.")
   ).toBeVisible();
@@ -70,24 +71,37 @@ async function openApprovalPendingReplay() {
     "title",
     `Always Allow Prefix: ${approvalPrefix}`
   );
-  await expect(
-    allowPrefix.locator(".transcript-request__action-detail")
-  ).toHaveText(approvalPrefix);
+  const detail = allowPrefix.locator(".transcript-request__action-detail");
+  await expect(detail).toHaveText(approvalCommand);
+  await expect(detail).not.toContainText("PowerShell");
   const prefixLayout = await allowPrefix.evaluate((element) => {
+    const actions = element.closest(".transcript-request__actions");
     const detail = element.querySelector("code");
+    const actionRect = element.getBoundingClientRect();
+    const actionsRect = actions?.getBoundingClientRect();
     const style = detail ? window.getComputedStyle(detail) : undefined;
     return {
-      actionHeight: element.getBoundingClientRect().height,
+      actionHeight: actionRect.height,
+      actionScrollWidth: element.scrollWidth,
+      actionClientWidth: element.clientWidth,
+      fitsActions:
+        Boolean(actionsRect)
+        && actionRect.left >= actionsRect!.left
+        && actionRect.right <= actionsRect!.right,
       overflow: style?.overflow,
       textOverflow: style?.textOverflow,
       whiteSpace: style?.whiteSpace,
     };
   });
   expect(prefixLayout).toMatchObject({
+    fitsActions: true,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   });
+  expect(prefixLayout.actionScrollWidth).toBeLessThanOrEqual(
+    prefixLayout.actionClientWidth
+  );
   expect(prefixLayout.actionHeight).toBeLessThan(60);
   await expect(
     app.window.getByRole("button", { name: "Cancel Turn" })
