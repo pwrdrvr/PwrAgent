@@ -4,6 +4,7 @@ import { graphql } from "@octokit/graphql";
 import type { PrSummary } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
+import { discoverGhCommands } from "../settings/gh-discovery";
 import {
   deriveChipStateFromRollup,
   deriveLifecycleState,
@@ -633,6 +634,8 @@ export type GithubGraphqlPrClientOptions = {
   ) => Promise<unknown>;
   /** Override token acquisition — tests inject a fixed token. */
   getToken?: () => Promise<string | null>;
+  /** Read the desktop's configured gh command without coupling this module to Electron. */
+  getConfiguredGhCommand?: () => string | undefined;
   /** Override the retry sleep — tests make backoff instant. */
   sleep?: (ms: number) => Promise<void>;
   batchSize?: number;
@@ -655,6 +658,9 @@ export type GithubAuthenticationFailureEvent = {
 export class GithubGraphqlPrClient {
   private readonly requestOverride: GithubGraphqlPrClientOptions["request"];
   private readonly getTokenOverride: GithubGraphqlPrClientOptions["getToken"];
+  private readonly getConfiguredGhCommand:
+    | NonNullable<GithubGraphqlPrClientOptions["getConfiguredGhCommand"]>
+    | undefined;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly batchSize: number;
   private readonly onRepositoryAccess:
@@ -668,6 +674,7 @@ export class GithubGraphqlPrClient {
   constructor(options: GithubGraphqlPrClientOptions = {}) {
     this.requestOverride = options.request;
     this.getTokenOverride = options.getToken;
+    this.getConfiguredGhCommand = options.getConfiguredGhCommand;
     this.sleep =
       options.sleep
       ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -1107,17 +1114,8 @@ export class GithubGraphqlPrClient {
     }
 
     try {
-      // Imported lazily: gh discovery reaches the desktop settings singleton,
-      // which pulls Electron-only packages into the module graph. Keeping it
-      // out of the top-level imports means this client can be exercised (and
-      // unit-tested) as a plain Node module.
-      const [{ discoverGhCommands }, { getDesktopSettingsService }] =
-        await Promise.all([
-          import("../settings/gh-discovery"),
-          import("../settings/desktop-settings-singleton"),
-        ]);
       const discovery = await discoverGhCommands({
-        configuredCommand: getDesktopSettingsService().resolveGhCommandPreference(),
+        configuredCommand: this.getConfiguredGhCommand?.(),
         env: buildPwrAgentChildProcessEnv(process.env),
       });
       const command = discovery.selectedCommand;

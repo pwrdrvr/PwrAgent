@@ -134,7 +134,12 @@ export class GithubPrFetcher {
   >();
 
   constructor(options: GithubPrFetcherOptions = {}) {
-    this.graphqlClient = options.graphqlClient ?? new GithubGraphqlPrClient();
+    this.graphqlClient =
+      options.graphqlClient
+      ?? new GithubGraphqlPrClient({
+        getConfiguredGhCommand: () =>
+          getDesktopSettingsService().resolveGhCommandPreference(),
+      });
     this.resolveGitHubRepos =
       options.resolveGitHubRepos ?? resolveGitHubReposForDirectory;
     this.probeGhAvailable = options.probeGhAvailable;

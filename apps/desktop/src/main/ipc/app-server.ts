@@ -4927,6 +4927,8 @@ class DesktopAppServerService {
   private getPrGraphqlClient(): GithubGraphqlPrClient {
     if (!this.prGraphqlClient) {
       this.prGraphqlClient = new GithubGraphqlPrClient({
+        getConfiguredGhCommand: () =>
+          getDesktopSettingsService().resolveGhCommandPreference(),
         onAuthenticationFailure: (event) => {
           if (this.githubPrAuthenticationFailureNotified) {
             return;
