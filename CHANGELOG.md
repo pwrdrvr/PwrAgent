@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.1-prerelease.5 - 2026-08-14
+
+- Sub-agent Activity - Reconciled orphaned sub-agent lifecycle records and preserved correct ownership as thread activity refreshes.
+- Approvals - Moved approval status into the thread header, with safer Windows approval diffs, paths, and action handling.
+- Onboarding - Deferred Gemini login until it is needed and reliably relaunched the selected profile after onboarding completes.
+- Thread Experience - Improved transcript density, pin controls, branch-picker layering, skill-file directory labels, and sidebar typography.
+- Desktop Reliability - Kept the main window within the usable display area; hardened shutdown, hot-CPU profiling, clipboard, and abnormal-shutdown recovery.
+- Windows - Corrected overlay branding and worktree/approval behaviors on Windows.
+- Maintenance - Updated Electron and strengthened E2E cleanup and shutdown diagnostics.
+
 ## v1.0.1-prerelease.4 - 2026-08-13
 
 - Windows Installer - Fixed the protected Windows signing handoff so packaging excludes pnpm workspace links while retaining the ASAR-verification toolchain, enabling signed installer builds.
