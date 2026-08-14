@@ -598,7 +598,7 @@ test("directory launchpad keeps selected environment controls after snapshot rel
       { directoryKey, repoDir: fixture.repoDir },
     );
 
-    await firstApp.electronApp.close();
+    await firstApp.closeApplication();
     firstApp = undefined;
 
     secondApp = await launchElectronApp({
