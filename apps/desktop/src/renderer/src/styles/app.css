@@ -4095,6 +4095,12 @@ textarea,
   min-width: 24px;
 }
 
+/* Timestamp fade — the union of every state that reveals a cluster
+   control over the time's lane. Adding a reveal state here? The pinned
+   rows' heading-reserve rule below keeps the in-title unpin pin clear
+   of the revealed cluster and mirrors this state set (minus the
+   cluster pin, which pinned rows never render) — extend it in the same
+   commit or the new state re-covers the pin. */
 .thread-row-shell:has(.thread-row__pin-button:focus-visible) .thread-row__time,
 .thread-row-shell:hover .thread-row__time,
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row__time,
@@ -4103,12 +4109,56 @@ textarea,
   opacity: 0;
 }
 
+/* Cluster reveal. New reveal states must also join the fade list above
+   and the pinned-row heading-reserve rule below — see the fade list's
+   comment. */
 .thread-row-shell:hover .thread-row__pin-button,
 .thread-row__pin-button:focus-visible,
 .thread-row-shell:hover .thread-row__overflow-button,
 .thread-row__overflow-button:focus-visible {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* Keep the in-title unpin pin clickable while the hover cluster is
+   shown. The pin sits after the title, so a long (truncated) title
+   parks it at the heading's right edge — exactly where the revealed
+   add-reaction + kebab cluster paints, covering the unpin control at
+   the moment the pointer arrives to use it. Reserving heading padding
+   during the reveal re-truncates the title and docks the pin left of
+   the cluster. Short titles never reach the boundary, so nothing moves
+   for them; the transition on `.thread-row__heading` glides the dock
+   in step with the cluster's 120ms fade.
+
+   44px derivation, all border-box worst case. The cluster zone spans
+   69px from the card's right border: 9px offset + 26px kebab + 4px gap
+   + the add-reaction chip's RENDERED width of 30px (its `min-width:
+   24px` is a floor — the 14px smiley plus the base chip's 0 8px
+   padding is what actually paints). The pin's border box must clear
+   that zone: card padding 10px + header gap 12px + timestamp + reserve
+   − the pin's 3px `margin-right: -3px` overhang ≥ 69px + 4px air. The
+   narrowest timestamp ("1h"/"2d") measures ~13px at its fixed 12px
+   font, giving reserve ≥ 41px; 44px leaves 3px of real slack at every
+   title-size notch. The cluster-side literals in this arithmetic are
+   pinned by theme-contract next to this rule's own pin, so a cluster
+   resize fails a test instead of silently re-covering the pin.
+
+   Scoped by the row's `--pinned` modifier (set by ThreadRow from the
+   same expression that renders the pin — a plain class match instead
+   of a per-hover `:has()` subtree scan, same optimization as the
+   directory-row header modifiers). The selector list mirrors the
+   cluster's reveal states in the fade/reveal rules above (the cluster
+   pin's states are absent because pinned rows never render it).
+   Deliberate over-reserve: on a surface without a reaction handler the
+   revealed cluster is kebab-only (35px zone) and the rest-state gap
+   already clears it, so the reserve protects nothing there — accepted,
+   since every production surface wires reactions and a narrower
+   conditional would re-add the `:has()` scan this class avoids. */
+.thread-row-shell:hover .thread-row--pinned .thread-row__heading,
+.thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,
+.thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,
+.thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading {
+  padding-right: 44px;
 }
 
 .thread-row__pin-button:hover,
@@ -4430,6 +4480,12 @@ textarea,
      brings the two surfaces to parity. */
   gap: 2px;
   flex: 1 1 auto;
+  /* Glides the pinned-row hover reserve (see the `--pinned` rule near
+     the reveal lists) in step with the cluster's 120ms opacity fade,
+     instead of the title/pin snapping while the buttons are still
+     fading in. Inert on unpinned rows — nothing changes their
+     padding. */
+  transition: padding-right 120ms ease;
 }
 
 /* Always-visible in-title pin on pinned rows — and since the

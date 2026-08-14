@@ -992,11 +992,14 @@ export function threadRowCard(
  *
  * Do NOT right-click the open-thread button for this: on a PINNED row
  * the in-title unpin button can sit exactly at the open button's
- * center-x (it depends on title width), and since it is a SIBLING of
- * the open button, Playwright's hit-target check reports "subtree
- * intercepts pointer events" and times out — while the real app is
- * fine, because contextmenu bubbles from any row element to the
- * shell's onContextMenu. Clicking the CARD instead always passes the
+ * center-x — it depends on title width, AND on hover state: the
+ * `--pinned` heading reserve re-truncates a long title the moment the
+ * approach hover lands, shifting the pin left of where rest-state
+ * geometry puts it. Since the pin is a SIBLING of the open button,
+ * Playwright's hit-target check reports "subtree intercepts pointer
+ * events" and times out — while the real app is fine, because
+ * contextmenu bubbles from any row element to the shell's
+ * onContextMenu. Clicking the CARD instead always passes the
  * hit-target check (everything at the point is a card descendant).
  * The fixed position keeps the point in the title band, above the chip
  * flow, so a PR chip's own context menu can never swallow it.
