@@ -322,6 +322,7 @@ export class SqliteOverlayStore {
    */
   async reconcileOrphanedThreadSubAgents(params: {
     currentRuntimeInstanceId: string;
+    currentRegistrySessionId: string;
     liveRuntimeInstanceIds: string[];
     sessionStartedAt: number;
   }): Promise<{
@@ -385,9 +386,15 @@ export class SqliteOverlayStore {
           }
 
           const ownerRuntimeInstanceId = subAgent.ownerRuntimeInstanceId?.trim();
+          const ownerRegistrySessionId = subAgent.ownerRegistrySessionId?.trim();
+          const belongsToReplacedCurrentRegistry =
+            ownerRuntimeInstanceId === params.currentRuntimeInstanceId
+            && Boolean(ownerRegistrySessionId)
+            && ownerRegistrySessionId !== params.currentRegistrySessionId;
           if (
             ownerRuntimeInstanceId
             && liveRuntimeInstanceIds.has(ownerRuntimeInstanceId)
+            && !belongsToReplacedCurrentRegistry
           ) {
             result.skippedLiveOwners += 1;
             return subAgent;
@@ -411,11 +418,14 @@ export class SqliteOverlayStore {
             outcome: "failure" as const,
             completedAt,
             updatedAt: completedAt,
-            lastMessage:
-              "Interrupted when its owning PwrAgent runtime stopped before reporting completion.",
+            lastMessage: belongsToReplacedCurrentRegistry
+              ? "Interrupted when its owning PwrAgent backend registry was replaced before reporting completion."
+              : "Interrupted when its owning PwrAgent runtime stopped before reporting completion.",
             completionSource: {
               type: "pwragent_fallback" as const,
-              reason: "owner_runtime_stopped",
+              reason: belongsToReplacedCurrentRegistry
+                ? "owner_registry_replaced"
+                : "owner_runtime_stopped",
               recoveryAttempted: false,
               terminalStatus: "failed" as const,
             },
