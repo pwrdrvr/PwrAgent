@@ -1367,30 +1367,31 @@ describe("ThreadView", () => {
         peerStatus: "connected",
       },
     };
+    const transcriptEntries = [{
+      type: "message" as const,
+      id: "assistant-handoff",
+      role: "assistant" as const,
+      text: "See [Remote handoff](pwragent://thread/remote-child?backend=codex)",
+    }];
+    const threadViewProps = {
+      addOptimisticUserMessage: () => "optimistic-1",
+      backends: [],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      desktopApi: {},
+      loading: false,
+      loadingMore: false,
+      messageCount: 1,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: () => undefined,
+      skills: [],
+      transcriptEntries,
+    } as unknown as Omit<ThreadViewProps, "terminals" | "selectedThread">;
 
-    render(
+    const { rerender } = render(
       <ThreadLinkProvider onShowThread={onShowThread} threads={[remoteThread]}>
         <ThreadView
-          {...({
-            addOptimisticUserMessage: () => "optimistic-1",
-            backends: [],
-            clearPendingRequest: () => undefined,
-            composerDisabled: false,
-            desktopApi: {},
-            loading: false,
-            loadingMore: false,
-            messageCount: 1,
-            onLoadOlder: async () => undefined,
-            removeOptimisticMessage: () => undefined,
-            skills: [],
-            transcriptEntries: [{
-              type: "message",
-              id: "assistant-handoff",
-              role: "assistant",
-              text:
-                "See [Remote handoff](pwragent://thread/remote-child?backend=codex)",
-            }],
-          } as unknown as Omit<ThreadViewProps, "terminals" | "selectedThread">)}
+          {...threadViewProps}
           selectedThread={remoteThread}
         />
       </ThreadLinkProvider>,
@@ -1405,6 +1406,18 @@ describe("ThreadView", () => {
       instanceId: "peer-a",
       threadId: "remote-child",
     });
+
+    const markdownParagraph = screen.getByText("See").closest("p");
+    rerender(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[remoteThread]}>
+        <ThreadView
+          {...threadViewProps}
+          selectedThread={{ ...remoteThread, updatedAt: remoteThread.updatedAt! + 1 }}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    expect(screen.getByText("See").closest("p")).toBe(markdownParagraph);
   });
 
   it("disables the remote terminal toggle with a reason when the peer lacks remote_pty", () => {

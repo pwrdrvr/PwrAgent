@@ -323,6 +323,20 @@ describe("thread links in transcript markdown", () => {
     });
   });
 
+  it("does not treat unrelated inline code as a remote thread", () => {
+    renderWithLinks("Use `useState` for local component state.", {
+      threadLinkSource: {
+        backend: "codex",
+        instanceId: "pwr_harold",
+      },
+      threads: [],
+    });
+
+    expect(screen.queryByRole("button", { name: /Open thread/ }))
+      .not.toBeInTheDocument();
+    expect(screen.getByText("useState")).toBeInTheDocument();
+  });
+
   it("labels a remote thread's pop-out action with its instance name", () => {
     const onOpenRemoteViewer = vi.fn();
     renderWithLinks(

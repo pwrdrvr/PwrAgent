@@ -1377,15 +1377,20 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThread = props.selectedThread;
   const transcriptThreadLinkTarget =
     selectedThread?.federation?.ref.target ?? readRendererFederationTarget();
-  const transcriptThreadLinkSource =
-    selectedThread
-    && transcriptThreadLinkTarget
-    && isRemoteFederationTarget(transcriptThreadLinkTarget)
-      ? {
-          backend: selectedThread.source,
-          instanceId: transcriptThreadLinkTarget.instanceId,
-        }
+  const transcriptThreadLinkInstanceId =
+    transcriptThreadLinkTarget && isRemoteFederationTarget(transcriptThreadLinkTarget)
+      ? transcriptThreadLinkTarget.instanceId
       : undefined;
+  const transcriptThreadLinkBackend = selectedThread?.source;
+  const transcriptThreadLinkSource = useMemo(
+    () => transcriptThreadLinkBackend && transcriptThreadLinkInstanceId
+      ? {
+          backend: transcriptThreadLinkBackend,
+          instanceId: transcriptThreadLinkInstanceId,
+        }
+      : undefined,
+    [transcriptThreadLinkBackend, transcriptThreadLinkInstanceId],
+  );
   const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
   // Owning instance's identity mark: remote threads show their instance's
   // icon, local threads (and the local viewer) show the local icon.

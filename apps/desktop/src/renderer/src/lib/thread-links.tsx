@@ -409,7 +409,6 @@ export function resolveThreadHref(
 export function resolveThreadIdText(
   text: string,
   links: ThreadLinkContextValue | undefined,
-  source?: ThreadLinkSource,
 ): ResolvedThreadLink | undefined {
   if (!links) {
     return undefined;
@@ -420,7 +419,7 @@ export function resolveThreadIdText(
     return undefined;
   }
 
-  return links.resolve(qualifyThreadLinkRef({ threadId: trimmed }, source));
+  return links.resolve({ threadId: trimmed });
 }
 
 function qualifyThreadLinkRef(

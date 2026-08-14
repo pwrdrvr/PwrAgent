@@ -1466,6 +1466,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   }}
                   onOpenImage={props.onOpenImage}
                   skills={skills}
+                  threadLinkSource={props.threadLinkSource}
                 />
               ) : item.entry.type === "plan" ? (
                 <TranscriptPlan
@@ -1473,6 +1474,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   entry={item.entry}
                   fileViewerContext={props.fileViewerContext}
+                  threadLinkSource={props.threadLinkSource}
                 />
               ) : item.entry.type === "review" ? (
                 <TranscriptReview
@@ -1481,6 +1483,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   entry={item.entry}
                   fileViewerContext={props.fileViewerContext}
+                  threadLinkSource={props.threadLinkSource}
                 />
               ) : (
                 <TranscriptMessage

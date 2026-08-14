@@ -155,6 +155,7 @@ function renderEntry(params: {
       }}
       onOpenImage={params.onOpenImage}
       skills={params.skills}
+      threadLinkSource={params.threadLinkSource}
     />
   ) : entry.type === "plan" ? (
     <TranscriptPlan
@@ -163,6 +164,7 @@ function renderEntry(params: {
       desktopApi={params.desktopApi}
       entry={entry}
       fileViewerContext={params.fileViewerContext}
+      threadLinkSource={params.threadLinkSource}
     />
   ) : entry.type === "review" ? (
     <TranscriptReview
@@ -172,6 +174,7 @@ function renderEntry(params: {
       desktopApi={params.desktopApi}
       entry={entry}
       fileViewerContext={params.fileViewerContext}
+      threadLinkSource={params.threadLinkSource}
     />
   ) : (
     <TranscriptMessage

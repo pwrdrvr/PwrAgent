@@ -143,7 +143,6 @@ function TranscriptCode(props: {
   children: ReactNode;
   className?: string;
   desktopApi?: Pick<DesktopApi, "copyText">;
-  threadLinkSource?: ThreadLinkSource;
   threadLinks: ThreadLinkContextValue | undefined;
 }) {
   const insideCodeBlock = useContext(CodeBlockContext);
@@ -162,7 +161,6 @@ function TranscriptCode(props: {
     const threadLink = resolveThreadIdText(
       extractTextContent(props.children),
       props.threadLinks,
-      props.threadLinkSource,
     );
     if (threadLink) {
       return <ThreadChip link={threadLink} onOpen={props.threadLinks.show} />;
@@ -522,7 +520,6 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           <TranscriptCode
             className={codeProps.className}
             desktopApi={props.desktopApi}
-            threadLinkSource={props.threadLinkSource}
             threadLinks={threadLinks}
           >
             {codeProps.children}

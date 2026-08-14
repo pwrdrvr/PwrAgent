@@ -8,6 +8,7 @@ import type {
 } from "@pwragent/shared";
 import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadLinkSource } from "../../lib/thread-links";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import {
   isThreadReferenceToolDetail,
@@ -31,6 +32,7 @@ type TranscriptActivityProps = {
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   onExpandedChange?: (expanded: boolean) => void;
   skills?: AppServerSkillSummary[];
+  threadLinkSource?: ThreadLinkSource;
 };
 
 export function TranscriptActivity(props: TranscriptActivityProps) {
@@ -62,6 +64,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
         expanded={isExpanded}
         fileViewerContext={props.fileViewerContext}
         skills={props.skills}
+        threadLinkSource={props.threadLinkSource}
         onExpandedChange={(expanded) => {
           if (props.expanded !== undefined) {
             props.onExpandedChange?.(expanded);
@@ -173,6 +176,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
             directoryPaths={props.directoryPaths}
             fileViewerContext={props.fileViewerContext}
             skills={props.skills}
+            threadLinkSource={props.threadLinkSource}
           />
         </div>
       ) : hasDetails && isExpanded ? (
@@ -196,6 +200,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                   fileViewerContext={props.fileViewerContext}
                   skills={props.skills}
                   text={markdown}
+                  threadLinkSource={props.threadLinkSource}
                   variant="summary"
                 />
               ) : null;
@@ -275,6 +280,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                         directoryPaths={props.directoryPaths}
                         fileViewerContext={props.fileViewerContext}
                         skills={props.skills}
+                        threadLinkSource={props.threadLinkSource}
                       />
                     ) : null}
                   </div>
