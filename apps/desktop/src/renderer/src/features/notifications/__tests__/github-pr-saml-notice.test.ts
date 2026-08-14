@@ -12,7 +12,7 @@ describe("buildGithubPrSamlEnforcementNotice", () => {
         target: {
           kind: "github-repository",
           owner: "EXAMPLE",
-          repo: "example-services",
+          repo: "catalog-service",
         },
       },
       onDismiss,
@@ -21,8 +21,8 @@ describe("buildGithubPrSamlEnforcementNotice", () => {
 
     expect(notice).toMatchObject({
       autoDismiss: false,
-      detail: "Repository: github.com/EXAMPLE/example-services · Branch: main",
-      id: "github-pr-saml:github:example/example-services",
+      detail: "Repository: github.com/EXAMPLE/catalog-service · Branch: main",
+      id: "github-pr-saml:github:example/catalog-service",
       title: "GitHub access blocked by SSO",
       tone: "error",
     });

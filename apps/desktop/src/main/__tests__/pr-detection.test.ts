@@ -102,9 +102,9 @@ describe("detectPullRequestsForThread", () => {
     const expectedPr = {
       number: 13268,
       org: "ExampleOrg",
-      repo: "example-services",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/ExampleOrg/example-services/pull/13268",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13268",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
@@ -136,9 +136,9 @@ describe("detectPullRequestsForThread", () => {
     const expectedPr = {
       number: 13269,
       org: "ExampleOrg",
-      repo: "example-services",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/ExampleOrg/example-services/pull/13269",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13269",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
@@ -168,9 +168,9 @@ describe("detectPullRequestsForThread", () => {
     const expectedPr = {
       number: 13271,
       org: "ExampleOrg",
-      repo: "example-services",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/ExampleOrg/example-services/pull/13271",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13271",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
@@ -208,9 +208,9 @@ describe("detectPullRequestsForThread", () => {
     const expectedPr = {
       number: 13272,
       org: "ExampleOrg",
-      repo: "example-services",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/ExampleOrg/example-services/pull/13272",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13272",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async ({ branch: lookupBranch }) =>
@@ -240,9 +240,9 @@ describe("detectPullRequestsForThread", () => {
     const expectedPr = {
       number: 13269,
       org: "ExampleOrg",
-      repo: "example-services",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/ExampleOrg/example-services/pull/13269",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13269",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async ({ branch }) =>
@@ -272,9 +272,9 @@ describe("detectPullRequestsForThread", () => {
     const expectedPr = {
       number: 13270,
       org: "ExampleOrg",
-      repo: "example-services",
+      repo: "catalog-service",
       state: "pending" as const,
-      url: "https://github.com/ExampleOrg/example-services/pull/13270",
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13270",
     };
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async () => [expectedPr]),
@@ -520,7 +520,7 @@ async function addGitHubRemote(cwd: string): Promise<void> {
 }
 
 function githubRemoteUrl(): string {
-  return "git@github.com:ExampleOrg/example-services.git";
+  return "git@github.com:ExampleOrg/catalog-service.git";
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {

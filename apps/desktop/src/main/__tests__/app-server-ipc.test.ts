@@ -6755,7 +6755,7 @@ describe("app server ipc", () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
     const worktreePath =
-      "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/example-services";
+      "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service";
     const gitWorkingState = {
       dirtyFiles: 0,
       dirtyAdditions: 0,
@@ -6773,8 +6773,8 @@ describe("app server ipc", () => {
         linkedDirectories: [
           {
             id: worktreePath,
-            label: "example-services",
-            path: "/Users/huntharo/EXAMPLE/example-services",
+            label: "catalog-service",
+            path: "/Users/example/Projects/catalog-service",
             worktreePath,
             kind: "worktree",
           },

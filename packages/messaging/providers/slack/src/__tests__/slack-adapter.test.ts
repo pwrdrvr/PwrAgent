@@ -508,7 +508,7 @@ describe("SlackAdapter", () => {
       actor: source.actor,
       parent: source.channel,
       routingState: source.routingState,
-      title: "EXAMPLE-services PR status",
+      title: "CATALOG API PR status",
     });
     expect(created).toMatchObject({
       channel: "slack",
@@ -518,7 +518,7 @@ describe("SlackAdapter", () => {
         parentId: "1712023030.000000",
         parentConversationId: "C012ABCDEF0",
         parentTitle: "signals-chat",
-        title: "EXAMPLE-services PR status",
+        title: "CATALOG API PR status",
         workspaceId: "T012ABCDEF0",
       },
       outcome: "created",
@@ -1469,8 +1469,8 @@ describe("SlackAdapter", () => {
         text: "",
         attachments: [
           {
-            title: "Pipeline failed for SEARCHGRPC",
-            text: "Searchgrpc's searchgrpc-prod pipeline has failed",
+            title: "Pipeline failed for CATALOGAPI",
+            text: "Catalog API's catalog-api-prod pipeline has failed",
           },
         ],
       },
@@ -1483,8 +1483,8 @@ describe("SlackAdapter", () => {
     expect(event?.actor.isBot).toBe(true);
     expect(event?.observedOnly).toBe(true);
     if (event?.kind === "text") {
-      expect(event.text).toContain("Pipeline failed for SEARCHGRPC");
-      expect(event.text).toContain("searchgrpc-prod pipeline has failed");
+      expect(event.text).toContain("Pipeline failed for CATALOGAPI");
+      expect(event.text).toContain("catalog-api-prod pipeline has failed");
     }
   });
 

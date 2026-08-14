@@ -4468,7 +4468,7 @@ describe("MessagingController", () => {
           kind: "thread",
           parentId: "C05RKSBL1QF",
           parentConversationId: "C05RKSBL1QF",
-          parentTitle: "example-services",
+          parentTitle: "catalog-service",
           workspaceId: "T012PWRDRVR",
         },
       },

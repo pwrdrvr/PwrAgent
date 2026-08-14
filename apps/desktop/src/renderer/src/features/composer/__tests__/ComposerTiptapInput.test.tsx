@@ -138,20 +138,20 @@ const canonicalHandoffPrefixWithCodeBlock = [
   "```",
 ].join("\n");
 
-const pastedSearchSql = [
-  "SELECT a.api_key, m.company, endpoint, SUM(count) AS _count",
+const pastedCatalogSql = [
+  "SELECT s.item_code, m.category, aisle, SUM(units) AS _units",
   "",
-  "FROM \"spectrumdb\".\"api_aggregates_by_endpoint\" a",
+  "FROM \"orcharddb\".\"catalog_sales_by_aisle\" s",
   "",
-  "  LEFT JOIN api_key_metadata m",
+  "  LEFT JOIN catalog_item_metadata m",
   "",
-  "    ON a.api_key = m.api_key",
+  "    ON s.item_code = m.item_code",
   "",
-  "WHERE endpoint LIKE '%search%'",
+  "WHERE aisle LIKE '%seasonal%'",
   "",
-  "  AND date(dt) = date '2024-08-05'",
+  "  AND date(day) = date '2024-08-05'",
   "",
-  "GROUP BY a.api_key, endpoint, m.company",
+  "GROUP BY s.item_code, aisle, m.category",
   "",
   "ORDER BY 4 DESC",
 ].join("\n");
@@ -389,7 +389,7 @@ describe("ComposerTiptapInput", () => {
         files: [],
         getData: (type: string) => {
           if (type === "text/html") {
-            return pastedSearchSql
+            return pastedCatalogSql
               .split("\n")
               .map((line) => line ? `<div>${line}</div>` : "<div><br></div>")
               .join("");
@@ -403,7 +403,7 @@ describe("ComposerTiptapInput", () => {
 
     await waitFor(() => {
       expect(onChange).toHaveBeenLastCalledWith(
-        `\`\`\`\n${pastedSearchSql}\n\`\`\``,
+        `\`\`\`\n${pastedCatalogSql}\n\`\`\``,
         [],
       );
     });
@@ -453,7 +453,7 @@ describe("ComposerTiptapInput", () => {
         files: [],
         getData: (type: string) => {
           if (type === "text/html") {
-            return pastedSearchSql
+            return pastedCatalogSql
               .split("\n")
               .map((line) => line ? `<div>${line}</div>` : "<div><br></div>")
               .join("");
@@ -470,7 +470,7 @@ describe("ComposerTiptapInput", () => {
         [
           "> Query:",
           "> ",
-          ...pastedSearchSql.split("\n").map((line) => `> ${line}`),
+          ...pastedCatalogSql.split("\n").map((line) => `> ${line}`),
         ].join("\n"),
         [],
         expect.any(Object),

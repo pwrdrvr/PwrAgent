@@ -1243,9 +1243,9 @@ Implementation notes remain in a readable bubble.`;
       "Committed and pushed `5b286a74da` to `codex/migrate-media-fingerprint-sessions`.";
     const messageText = `${visibleText}
 
-::git-stage{cwd="/Users/vitaliy/example/example-services"}
-::git-commit{cwd="/Users/vitaliy/example/example-services"}
-::git-push{cwd="/Users/vitaliy/example/example-services" branch="codex/migrate-media-fingerprint-sessions"}`;
+::git-stage{cwd="/Users/example/Projects/catalog-service"}
+::git-commit{cwd="/Users/example/Projects/catalog-service"}
+::git-push{cwd="/Users/example/Projects/catalog-service" branch="codex/migrate-media-fingerprint-sessions"}`;
 
     render(
       <TranscriptList

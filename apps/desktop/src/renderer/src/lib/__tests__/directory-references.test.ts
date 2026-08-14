@@ -11,7 +11,7 @@ import {
   listReferencedDirectories,
 } from "../directory-references";
 
-const HOME = "/Users/huntharo";
+const HOME = "/Users/example";
 
 function makeDirectory(
   overrides: Partial<NavigationDirectorySummary> & { key: string },
@@ -25,16 +25,16 @@ function makeDirectory(
   };
 }
 
-const EXAMPLE = makeDirectory({
-  key: "dir:example-services",
-  label: "example-services",
-  path: `${HOME}/EXAMPLE/example-services`,
+const CATALOG_SERVICE = makeDirectory({
+  key: "dir:catalog-service",
+  label: "catalog-service",
+  path: `${HOME}/Projects/catalog-service`,
   latestUpdatedAt: 300,
 });
-const SEARCH = makeDirectory({
-  key: "dir:search-product",
-  label: "search-product",
-  path: `${HOME}/EXAMPLE/search-product`,
+const CATALOG_PORTAL = makeDirectory({
+  key: "dir:catalog-portal",
+  label: "catalog-portal",
+  path: `${HOME}/Projects/catalog-portal`,
   latestUpdatedAt: 200,
 });
 const PWRAGNT = makeDirectory({
@@ -60,18 +60,18 @@ describe("findDirectoryReferenceTrigger", () => {
   });
 
   it("matches @ after whitespace and captures the query", () => {
-    const text = "check out @gip";
+    const text = "check out @cat";
     expect(findDirectoryReferenceTrigger(text, text.length)).toEqual({
       start: 10,
       end: text.length,
-      query: "gip",
+      query: "cat",
     });
   });
 
   it("allows path-ish query characters", () => {
-    const text = "see @~/EXAMPLE/search";
+    const text = "see @~/Projects/catalog";
     expect(findDirectoryReferenceTrigger(text, text.length)?.query).toBe(
-      "~/EXAMPLE/search",
+      "~/Projects/catalog",
     );
   });
 
@@ -81,29 +81,29 @@ describe("findDirectoryReferenceTrigger", () => {
   });
 
   it("does not trigger when the caret is before the @", () => {
-    expect(findDirectoryReferenceTrigger("@gip", 0)).toBeUndefined();
+    expect(findDirectoryReferenceTrigger("@cat", 0)).toBeUndefined();
   });
 });
 
 describe("filterDirectoryReferenceCandidates", () => {
-  const directories = [PWRAGNT, SEARCH, EXAMPLE, UNLINKED];
+  const directories = [PWRAGNT, CATALOG_PORTAL, CATALOG_SERVICE, UNLINKED];
 
   it("returns referenceable directories most recently updated first", () => {
     expect(
       filterDirectoryReferenceCandidates(directories, "").map((d) => d.key),
-    ).toEqual([EXAMPLE.key, SEARCH.key, PWRAGNT.key]);
+    ).toEqual([CATALOG_SERVICE.key, CATALOG_PORTAL.key, PWRAGNT.key]);
   });
 
   it("filters by label", () => {
     expect(
-      filterDirectoryReferenceCandidates(directories, "search").map((d) => d.key),
-    ).toEqual([SEARCH.key]);
+      filterDirectoryReferenceCandidates(directories, "portal").map((d) => d.key),
+    ).toEqual([CATALOG_PORTAL.key]);
   });
 
   it("filters by path substring", () => {
     expect(
-      filterDirectoryReferenceCandidates(directories, "EXAMPLE/").map((d) => d.key),
-    ).toEqual([EXAMPLE.key, SEARCH.key]);
+      filterDirectoryReferenceCandidates(directories, "Projects/").map((d) => d.key),
+    ).toEqual([CATALOG_SERVICE.key, CATALOG_PORTAL.key]);
   });
 
   it("excludes unlinked pseudo-directories and path-less entries", () => {
@@ -162,8 +162,8 @@ describe("buildFileReferenceTooltip", () => {
 
 describe("buildDirectoryReferenceInsertText", () => {
   it("tildifies the directory path", () => {
-    expect(buildDirectoryReferenceInsertText(SEARCH, HOME)).toBe(
-      "~/EXAMPLE/search-product",
+    expect(buildDirectoryReferenceInsertText(CATALOG_PORTAL, HOME)).toBe(
+      "~/Projects/catalog-portal",
     );
   });
 
@@ -178,22 +178,22 @@ describe("buildDirectoryReferenceMarkdown", () => {
   it("builds a bounded markdown link with the tilde path", () => {
     expect(
       buildDirectoryReferenceMarkdown(
-        { label: "search-product", path: `${HOME}/EXAMPLE/search-product` },
+        { label: "catalog-portal", path: `${HOME}/Projects/catalog-portal` },
         HOME,
       ),
-    ).toBe("[@search-product](~/EXAMPLE/search-product)");
+    ).toBe("[@catalog-portal](~/Projects/catalog-portal)");
   });
 
   it("stays scannable when text glues onto the link", () => {
     const markdown = buildDirectoryReferenceMarkdown(
-      { label: "search-product", path: `${HOME}/EXAMPLE/search-product` },
+      { label: "catalog-portal", path: `${HOME}/Projects/catalog-portal` },
       HOME,
     );
     expect(
-      listReferencedDirectories(`${markdown}are two of my fave projects`, [SEARCH], {
+      listReferencedDirectories(`${markdown}are two of my fave projects`, [CATALOG_PORTAL], {
         homeDir: HOME,
       }).map((d) => d.key),
-    ).toEqual([SEARCH.key]);
+    ).toEqual([CATALOG_PORTAL.key]);
   });
 
   it("percent-encodes parens, spaces, and percents in the destination", () => {
@@ -208,8 +208,8 @@ describe("buildDirectoryReferenceMarkdown", () => {
   });
 
   it("leaves never-encoded destinations unchanged when decoding", () => {
-    expect(decodeMarkdownDestination("~/EXAMPLE/search-product")).toBe(
-      "~/EXAMPLE/search-product",
+    expect(decodeMarkdownDestination("~/Projects/catalog-portal")).toBe(
+      "~/Projects/catalog-portal",
     );
     expect(decodeMarkdownDestination("~/100%-legit")).toBe("~/100%-legit");
   });
@@ -225,16 +225,16 @@ describe("buildDirectoryReferenceMarkdown", () => {
 });
 
 describe("listReferencedDirectories", () => {
-  const directories = [EXAMPLE, SEARCH, PWRAGNT, UNLINKED];
+  const directories = [CATALOG_SERVICE, CATALOG_PORTAL, PWRAGNT, UNLINKED];
 
   it("finds a tilde-path reference", () => {
     expect(
       listReferencedDirectories(
-        "You might be able to see it in ~/EXAMPLE/search-product.",
+        "You might be able to see it in ~/Projects/catalog-portal.",
         directories,
         { homeDir: HOME },
       ).map((d) => d.key),
-    ).toEqual([SEARCH.key]);
+    ).toEqual([CATALOG_PORTAL.key]);
   });
 
   it("finds an absolute-path reference", () => {
@@ -250,17 +250,17 @@ describe("listReferencedDirectories", () => {
   it("resolves a deeper file path to its tracked repo", () => {
     expect(
       listReferencedDirectories(
-        "look at ~/EXAMPLE/example-services/build.sbt",
+        "look at ~/Projects/catalog-service/build.sbt",
         directories,
         { homeDir: HOME },
       ).map((d) => d.key),
-    ).toEqual([EXAMPLE.key]);
+    ).toEqual([CATALOG_SERVICE.key]);
   });
 
   it("does not match a sibling directory whose name extends the path", () => {
     expect(
       listReferencedDirectories(
-        "see ~/EXAMPLE/search-product-v2 for details",
+        "see ~/Projects/catalog-portal-v2 for details",
         directories,
         { homeDir: HOME },
       ),
@@ -270,7 +270,7 @@ describe("listReferencedDirectories", () => {
   it("returns each directory once for repeated mentions", () => {
     expect(
       listReferencedDirectories(
-        "~/EXAMPLE/search-product and again ~/EXAMPLE/search-product",
+        "~/Projects/catalog-portal and again ~/Projects/catalog-portal",
         directories,
         { homeDir: HOME },
       ),
@@ -280,33 +280,33 @@ describe("listReferencedDirectories", () => {
   it("honors excludePaths for already-linked directories", () => {
     expect(
       listReferencedDirectories(
-        "work in ~/EXAMPLE/example-services and read ~/EXAMPLE/search-product",
+        "work in ~/Projects/catalog-service and read ~/Projects/catalog-portal",
         directories,
-        { homeDir: HOME, excludePaths: [`${HOME}/EXAMPLE/example-services`] },
+        { homeDir: HOME, excludePaths: [`${HOME}/Projects/catalog-service`] },
       ).map((d) => d.key),
-    ).toEqual([SEARCH.key]);
+    ).toEqual([CATALOG_PORTAL.key]);
   });
 
   it("keeps only the deepest match for nested tracked repos", () => {
     const parent = makeDirectory({
-      key: "dir:example-root",
-      label: "EXAMPLE",
-      path: `${HOME}/EXAMPLE`,
+      key: "dir:projects-root",
+      label: "Projects",
+      path: `${HOME}/Projects`,
     });
     expect(
       listReferencedDirectories(
-        "fetch ~/EXAMPLE/search-product",
+        "fetch ~/Projects/catalog-portal",
         [...directories, parent],
         { homeDir: HOME },
       ).map((d) => d.key),
-    ).toEqual([SEARCH.key]);
+    ).toEqual([CATALOG_PORTAL.key]);
   });
 
   it("accepts punctuation boundaries after the path", () => {
     for (const draft of [
-      "(~/EXAMPLE/search-product)",
-      "~/EXAMPLE/search-product, then more",
-      "~/EXAMPLE/search-product? yes",
+      "(~/Projects/catalog-portal)",
+      "~/Projects/catalog-portal, then more",
+      "~/Projects/catalog-portal? yes",
     ]) {
       expect(
         listReferencedDirectories(draft, directories, { homeDir: HOME }),

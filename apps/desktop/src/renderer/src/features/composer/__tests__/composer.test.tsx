@@ -9266,20 +9266,20 @@ describe("Composer", () => {
           executionMode: "default",
           linkedDirectories: [
             {
-              id: "/Users/huntharo/EXAMPLE/example-services",
+              id: "/Users/example/Projects/catalog-service",
               kind: "worktree",
-              label: "example-services",
-              path: "/Users/huntharo/EXAMPLE/example-services",
+              label: "catalog-service",
+              path: "/Users/example/Projects/catalog-service",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9mnf9z/example-services",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-beta/catalog-service",
             },
             {
-              id: "/Users/huntharo/EXAMPLE/gif-recommendations",
+              id: "/Users/example/Projects/tea-recommendations",
               kind: "worktree",
-              label: "gif-recommendations",
-              path: "/Users/huntharo/EXAMPLE/gif-recommendations",
+              label: "tea-recommendations",
+              path: "/Users/example/Projects/tea-recommendations",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9motar/gif-recommendations",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-gamma/tea-recommendations",
             },
           ],
           inbox: { inInbox: false },
@@ -9299,7 +9299,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
         value:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9motar/gif-recommendations",
+          "/Users/example/.codex/profiles/sample/worktrees/tree-gamma/tea-recommendations",
       },
     });
     await clickButton("Start review");
@@ -9310,7 +9310,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
-        cwd: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9motar/gif-recommendations",
+        cwd: "/Users/example/.codex/profiles/sample/worktrees/tree-gamma/tea-recommendations",
       });
     });
   });
@@ -9430,10 +9430,10 @@ describe("Composer", () => {
       turnId: "turn-review-1",
     }));
     const exampleDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/EXAMPLE/example-services",
+      key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory",
-      label: "example-services",
-      path: "/Users/huntharo/EXAMPLE/example-services",
+      label: "catalog-service",
+      path: "/Users/example/Projects/catalog-service",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -9487,12 +9487,12 @@ describe("Composer", () => {
           executionMode: "default",
           linkedDirectories: [
             {
-              id: "/Users/huntharo/EXAMPLE/example-services",
+              id: "/Users/example/Projects/catalog-service",
               kind: "worktree",
-              label: "example-services",
-              path: "/Users/huntharo/EXAMPLE/example-services",
+              label: "catalog-service",
+              path: "/Users/example/Projects/catalog-service",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/example-services",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-delta/catalog-service",
             },
             {
               id: "/Users/huntharo/infra/kube-manifests",
@@ -9568,10 +9568,10 @@ describe("Composer", () => {
       subject: "Update kube manifest",
     };
     const exampleDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/EXAMPLE/example-services",
+      key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory",
-      label: "example-services",
-      path: "/Users/huntharo/EXAMPLE/example-services",
+      label: "catalog-service",
+      path: "/Users/example/Projects/catalog-service",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -9617,12 +9617,12 @@ describe("Composer", () => {
           executionMode: "default",
           linkedDirectories: [
             {
-              id: "/Users/huntharo/EXAMPLE/example-services",
+              id: "/Users/example/Projects/catalog-service",
               kind: "worktree",
-              label: "example-services",
-              path: "/Users/huntharo/EXAMPLE/example-services",
+              label: "catalog-service",
+              path: "/Users/example/Projects/catalog-service",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/example-services",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-delta/catalog-service",
             },
             {
               id: "/Users/huntharo/infra/kube-manifests",
@@ -10958,10 +10958,10 @@ describe("Composer", () => {
           startReview: vi.fn(),
         }}
         directory={{
-          key: "directory:/Users/huntharo/EXAMPLE/example-services",
+          key: "directory:/Users/example/Projects/catalog-service",
           kind: "directory",
-          label: "example-services",
-          path: "/Users/huntharo/EXAMPLE/example-services",
+          label: "catalog-service",
+          path: "/Users/example/Projects/catalog-service",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11078,10 +11078,10 @@ describe("Composer", () => {
           startReview,
         }}
         directory={{
-          key: "directory:/Users/huntharo/EXAMPLE/example-services",
+          key: "directory:/Users/example/Projects/catalog-service",
           kind: "directory",
-          label: "example-services",
-          path: "/Users/huntharo/EXAMPLE/example-services",
+          label: "catalog-service",
+          path: "/Users/example/Projects/catalog-service",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11149,10 +11149,10 @@ describe("Composer", () => {
           startReview: vi.fn(),
         }}
         directory={{
-          key: "directory:/Users/huntharo/EXAMPLE/example-services",
+          key: "directory:/Users/example/Projects/catalog-service",
           kind: "directory",
-          label: "example-services",
-          path: "/Users/huntharo/EXAMPLE/example-services",
+          label: "catalog-service",
+          path: "/Users/example/Projects/catalog-service",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11181,12 +11181,12 @@ describe("Composer", () => {
           executionMode: "default",
           linkedDirectories: [
             {
-              id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/example-services",
+              id: "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
               kind: "worktree",
-              label: "example-services",
-              path: "/Users/huntharo/EXAMPLE/example-services",
+              label: "catalog-service",
+              path: "/Users/example/Projects/catalog-service",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/example-services",
+                "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
             },
           ],
           inbox: { inInbox: false },
@@ -11222,21 +11222,21 @@ describe("Composer", () => {
       executionMode: "default" as const,
       linkedDirectories: [
         {
-          id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/example-services",
+          id: "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
           kind: "worktree" as const,
-          label: "example-services",
-          path: "/Users/huntharo/EXAMPLE/example-services",
+          label: "catalog-service",
+          path: "/Users/example/Projects/catalog-service",
           worktreePath:
-            "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/example-services",
+            "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
         },
       ],
       inbox: { inInbox: false },
     };
     const hydratedDirectory = {
-      key: "directory:/Users/huntharo/EXAMPLE/example-services",
+      key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory" as const,
-      label: "example-services",
-      path: "/Users/huntharo/EXAMPLE/example-services",
+      label: "catalog-service",
+      path: "/Users/example/Projects/catalog-service",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -11296,7 +11296,7 @@ describe("Composer", () => {
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
         cwd:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mr3qwmcx/example-services",
+          "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
       });
     });
   });
@@ -11323,10 +11323,10 @@ describe("Composer", () => {
       inbox: { inInbox: false },
     };
     const hydratedDirectory = {
-      key: "directory:/Users/huntharo/EXAMPLE/example-services",
+      key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory" as const,
-      label: "example-services",
-      path: "/Users/huntharo/EXAMPLE/example-services",
+      label: "catalog-service",
+      path: "/Users/example/Projects/catalog-service",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -13380,8 +13380,8 @@ describe("Composer", () => {
         directory={{
           key: "subthread:codex:thread-parent:new-worktree",
           kind: "directory",
-          label: "example-services",
-          path: "/missing/example-services",
+          label: "catalog-service",
+          path: "/missing/catalog-service",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13392,8 +13392,8 @@ describe("Composer", () => {
         launchpad={{
           directoryKey: "subthread:codex:thread-parent:new-worktree",
           directoryKind: "directory",
-          directoryLabel: "example-services",
-          directoryPath: "/missing/example-services",
+          directoryLabel: "catalog-service",
+          directoryPath: "/missing/catalog-service",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13413,7 +13413,7 @@ describe("Composer", () => {
         autoDismiss: false,
         id: expect.stringContaining("launchpad-branches-unavailable:"),
         title: "Branches unavailable",
-        message: "PwrAgent couldn't load branches for example-services.",
+        message: "PwrAgent couldn't load branches for catalog-service.",
         detail: "fatal: unable to enumerate refs",
         tone: "warning",
       });
@@ -14482,7 +14482,7 @@ describe("Composer", () => {
 
   it("inserts a tilde path from the @ directory autocomplete and links it on start", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/example";
     try {
       const launchpad: NavigationLaunchpadDraft = {
         directoryKey: "directory:/repo",
@@ -14506,11 +14506,11 @@ describe("Composer", () => {
         needsAttentionCount: 0,
         latestUpdatedAt: 20,
       };
-      const searchProductDirectory: NavigationDirectorySummary = {
-        key: "directory:/Users/huntharo/EXAMPLE/search-product",
+      const catalogPortalDirectory: NavigationDirectorySummary = {
+        key: "directory:/Users/example/Projects/catalog-portal",
         kind: "directory",
-        label: "search-product",
-        path: "/Users/huntharo/EXAMPLE/search-product",
+        label: "catalog-portal",
+        path: "/Users/example/Projects/catalog-portal",
         threadKeys: [],
         needsAttentionCount: 0,
         latestUpdatedAt: 10,
@@ -14521,7 +14521,7 @@ describe("Composer", () => {
         <Composer
           backends={[backendSummary("codex")]}
           directory={repoDirectory}
-          directories={[repoDirectory, searchProductDirectory]}
+          directories={[repoDirectory, catalogPortalDirectory]}
           draftStore={createComposerDraftStore()}
           launchpad={launchpad}
           onMaterializeLaunchpad={onMaterializeLaunchpad}
@@ -14531,13 +14531,13 @@ describe("Composer", () => {
       );
 
       fireEvent.change(screen.getByLabelText("New thread"), {
-        target: { value: "Read SEARCH-4803 in @search" },
+        target: { value: "Read MARKET-4803 in @catalog" },
       });
 
       const listbox = screen.getByRole("listbox", { name: "Directories" });
       expect(listbox).toHaveClass("composer__autocomplete--directories");
       fireEvent.click(
-        within(listbox).getByRole("button", { name: /search-product/ })
+        within(listbox).getByRole("button", { name: /catalog-portal/ })
       );
 
       // The commit mints a zero-width chip: the plain draft keeps only
@@ -14546,7 +14546,7 @@ describe("Composer", () => {
       // (asserted on materialize below) carries the markdown link.
       await waitFor(() => {
         expect(screen.getByLabelText("New thread")).toHaveValue(
-          "Read SEARCH-4803 in  "
+          "Read MARKET-4803 in  "
         );
       });
       // Caret parks after the guaranteed post-chip space (set in a
@@ -14555,14 +14555,14 @@ describe("Composer", () => {
         expect(
           (screen.getByLabelText("New thread") as HTMLInputElement)
             .selectionStart
-        ).toBe("Read SEARCH-4803 in  ".length);
+        ).toBe("Read MARKET-4803 in  ".length);
       });
       const richInput = screen.getByTestId("composer-tiptap-input");
-      const chip = within(richInput).getByText("@search-product");
+      const chip = within(richInput).getByText("@catalog-portal");
       expect(chip).toHaveAttribute("data-mention-kind", "directory");
       expect(chip).toHaveAttribute(
         "data-skill-path",
-        "/Users/huntharo/EXAMPLE/search-product"
+        "/Users/example/Projects/catalog-portal"
       );
       expect(
         screen.queryByRole("listbox", { name: "Directories" })
@@ -14576,12 +14576,12 @@ describe("Composer", () => {
           [
             {
               type: "text",
-              text: "Read SEARCH-4803 in [@search-product](~/EXAMPLE/search-product)",
+              text: "Read MARKET-4803 in [@catalog-portal](~/Projects/catalog-portal)",
             },
           ],
           undefined,
           undefined,
-          ["/Users/huntharo/EXAMPLE/search-product"]
+          ["/Users/example/Projects/catalog-portal"]
         );
       });
     } finally {
@@ -14666,7 +14666,7 @@ describe("Composer", () => {
 
   it("links a hand-typed directory reference after sending a reply", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/example";
     try {
       const startTurn = vi.fn(async () => ({
         backend: "codex" as const,
@@ -14674,11 +14674,11 @@ describe("Composer", () => {
         turnId: "turn-1",
       }));
       const onAttachDirectoryReferences = vi.fn();
-      const searchProductDirectory: NavigationDirectorySummary = {
-        key: "directory:/Users/huntharo/EXAMPLE/search-product",
+      const catalogPortalDirectory: NavigationDirectorySummary = {
+        key: "directory:/Users/example/Projects/catalog-portal",
         kind: "directory",
-        label: "search-product",
-        path: "/Users/huntharo/EXAMPLE/search-product",
+        label: "catalog-portal",
+        path: "/Users/example/Projects/catalog-portal",
         threadKeys: [],
         needsAttentionCount: 0,
         latestUpdatedAt: 10,
@@ -14690,13 +14690,13 @@ describe("Composer", () => {
             onAgentEvent: () => () => undefined,
             startTurn,
           }}
-          directories={[searchProductDirectory]}
+          directories={[catalogPortalDirectory]}
           disabled={false}
           skills={[]}
           onAttachDirectoryReferences={onAttachDirectoryReferences}
           thread={{
             id: "thread-1",
-            title: "Search cleanup",
+            title: "Catalog cleanup",
             titleSource: "explicit",
             source: "codex",
             executionMode: "default",
@@ -14707,7 +14707,7 @@ describe("Composer", () => {
       );
 
       fireEvent.change(screen.getByLabelText("Reply"), {
-        target: { value: "It might be in ~/EXAMPLE/search-product." },
+        target: { value: "It might be in ~/Projects/catalog-portal." },
       });
       await clickButton("Send");
 
@@ -14715,7 +14715,7 @@ describe("Composer", () => {
         expect(startTurn).toHaveBeenCalled();
       });
       expect(onAttachDirectoryReferences).toHaveBeenCalledWith(
-        ["/Users/huntharo/EXAMPLE/search-product"],
+        ["/Users/example/Projects/catalog-portal"],
         { backend: "codex", threadId: "thread-1" },
       );
     } finally {

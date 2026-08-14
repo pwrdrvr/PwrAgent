@@ -1223,7 +1223,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       ts: ids.ts,
     });
     // Classic app messages carry their content in attachments (title/text)
-    // with an empty top-level text — "Pipeline failed for SEARCHGRPC" lives
+    // with an empty top-level text — "Pipeline failed for CATALOGAPI" lives
     // there. Fold it in so text filters and automation prompts see what the
     // operator sees in Slack.
     const rawText = [event.text ?? "", slackAttachmentText(event.attachments)]
