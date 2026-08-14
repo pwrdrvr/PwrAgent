@@ -20,6 +20,46 @@ afterEach(() => {
 });
 
 describe("ToolOutputIncidentExplorerWindow", () => {
+  it("uses standard thread identity chrome without exposing the raw thread id", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const showThreadFromToolOutputIncidentExplorer = vi.fn(async () => undefined);
+    installApi({
+      copyText,
+      readThread: async () => buildResponse(),
+      showThreadFromToolOutputIncidentExplorer,
+    });
+    window.location.hash =
+      "#tool-output-incidents/acp%3Agrok/thread-1/Noisy%20work/PwrAgent";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    expect(await screen.findByLabelText(
+      "PwrAgent > Noisy work > Tool Output Incidents",
+    )).toBeInTheDocument();
+    expect(screen.getByText("Grok")).toHaveClass("chip--backend");
+    expect(screen.queryByText("acp:grok")).not.toBeInTheDocument();
+    expect(screen.queryByText("thread-1")).not.toBeInTheDocument();
+
+    const threadChip = screen.getByRole("button", { name: "Open thread Noisy work" });
+    fireEvent.click(threadChip);
+    await waitFor(() => expect(showThreadFromToolOutputIncidentExplorer)
+      .toHaveBeenCalledWith({ backend: "acp:grok", threadId: "thread-1" }));
+
+    fireEvent.contextMenu(threadChip);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Thread ID" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith("thread-1"));
+  });
+
+  it("shows Codex output whose normalized detail id extends the invocation item id", async () => {
+    installApi({ readThread: async () => buildResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    expect(await screen.findByText("failure")).toBeInTheDocument();
+    expect(screen.getByText("warning")).toBeInTheDocument();
+    expect(screen.queryByText(/Only the truncated output retained/))
+      .not.toBeInTheDocument();
+  });
+
   it("steers only when the finding belongs to the exact active turn", async () => {
     const steerTurn = vi.fn(async () => ({
       backend: "codex" as const,
@@ -141,10 +181,10 @@ function buildResponse(
     replay: {
       entries: [{
         type: "activity",
-        id: "item-1",
+        id: "activity-1",
         createdAt: 1_800_000_000_000,
         details: [{
-          id: "detail-1",
+          id: "item-1-output",
           kind: "command",
           label: "pnpm test",
           command: {

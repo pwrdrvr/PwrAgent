@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => {
     ),
     remoteBackend,
     remoteBackendForTarget: vi.fn(() => remoteBackend),
+    showThreadFromToolOutputIncidentExplorer: vi.fn(),
     showToolOutputIncidentExplorerWindow: vi.fn(),
   };
 });
@@ -88,6 +89,8 @@ vi.mock("../subagent-transcript-window", () => ({
 }));
 
 vi.mock("../tool-output-incident-explorer-window", () => ({
+  showThreadFromToolOutputIncidentExplorer:
+    mocks.showThreadFromToolOutputIncidentExplorer,
   showToolOutputIncidentExplorerWindow:
     mocks.showToolOutputIncidentExplorerWindow,
 }));
@@ -100,6 +103,7 @@ describe("application IPC", () => {
     mocks.discoverDesktopApplications.mockClear();
     mocks.openDesktopApplication.mockClear();
     mocks.remoteBackendForTarget.mockClear();
+    mocks.showThreadFromToolOutputIncidentExplorer.mockClear();
     mocks.showToolOutputIncidentExplorerWindow.mockClear();
   });
 
@@ -172,5 +176,22 @@ describe("application IPC", () => {
       { sourceWindow: undefined },
     );
     expect(response).toEqual({ opened: true });
+  });
+
+  it("routes incident-explorer thread navigation through its owner", async () => {
+    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
+    const { TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    registerApplicationIpcHandlers();
+    const sender = { id: 42 };
+    const request = { backend: "codex" as const, threadId: "thread-1" };
+
+    await mocks.handlers.get(
+      TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL,
+    )?.({ sender }, request);
+
+    expect(mocks.showThreadFromToolOutputIncidentExplorer)
+      .toHaveBeenCalledWith(sender, request);
   });
 });

@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electron";
+import { BrowserWindow, type WebContents } from "electron";
 import {
   buildThreadIdentityKey,
   type OpenToolOutputIncidentExplorerWindowRequest,
@@ -29,6 +29,8 @@ import {
   WINDOW_KIND_TOOL_OUTPUT_INCIDENT_EXPLORER,
   registerWindowChannels,
 } from "./window-channels";
+import type { WindowShowThreadRequest } from "../shared/window-show-thread";
+import { requestShowThread } from "./window-show-thread";
 import {
   placementForSourceDisplay,
   positionWindowForSourceDisplay,
@@ -41,6 +43,10 @@ const WIDTH = 1_180;
 const HEIGHT = 820;
 const TITLE_MAX_LENGTH = 240;
 const incidentWindows = new Map<string, BrowserWindow>();
+const incidentWindowContexts = new Map<number, {
+  owner: WebContents;
+  threadKey: string;
+}>();
 
 export function showToolOutputIncidentExplorerWindow(
   request: OpenToolOutputIncidentExplorerWindowRequest,
@@ -54,9 +60,16 @@ export function showToolOutputIncidentExplorerWindow(
   const windowKey = buildThreadIdentityKey(request.backend, threadId);
   const current = incidentWindows.get(windowKey);
   if (current && !current.isDestroyed()) {
+    if (source.sourceWindow && !source.sourceWindow.isDestroyed()) {
+      incidentWindowContexts.set(current.webContents.id, {
+        owner: source.sourceWindow.webContents,
+        threadKey: windowKey,
+      });
+    }
     positionWindowForSourceDisplay(current, source);
     current.webContents.send(
       TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
+      request,
     );
     showAndFocusAuxiliaryWindow(current);
     return;
@@ -95,6 +108,7 @@ export function showToolOutputIncidentExplorerWindow(
     encodeURIComponent(request.backend),
     encodeURIComponent(threadId),
     encodeURIComponent(title.slice(0, TITLE_MAX_LENGTH)),
+    encodeURIComponent(request.projectLabel?.trim() ?? ""),
   ].join("/");
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {
@@ -104,11 +118,35 @@ export function showToolOutputIncidentExplorerWindow(
   }
   showAuxiliaryWindowWhenReady(window);
   incidentWindows.set(windowKey, window);
+  if (source.sourceWindow && !source.sourceWindow.isDestroyed()) {
+    incidentWindowContexts.set(window.webContents.id, {
+      owner: source.sourceWindow.webContents,
+      threadKey: windowKey,
+    });
+  }
   window.on("closed", () => {
     if (incidentWindows.get(windowKey) === window) {
       incidentWindows.delete(windowKey);
     }
+    incidentWindowContexts.delete(window.webContents.id);
     log.debug("tool-output incident explorer closed", { windowKey });
   });
   log.debug("tool-output incident explorer created", { windowKey });
+}
+
+export function showThreadFromToolOutputIncidentExplorer(
+  sender: WebContents,
+  request: WindowShowThreadRequest,
+): void {
+  const context = incidentWindowContexts.get(sender.id);
+  if (!context || context.owner.isDestroyed()) {
+    throw new Error("Tool-output incident explorer has no active owner window.");
+  }
+  if (
+    buildThreadIdentityKey(request.backend, request.threadId)
+    !== context.threadKey
+  ) {
+    throw new Error("Tool-output incident explorer can only open its own thread.");
+  }
+  requestShowThread(request, { preferWebContents: context.owner });
 }

@@ -843,8 +843,11 @@ export type DesktopApi = {
     request: OpenToolOutputIncidentExplorerWindowRequest
   ) => Promise<OpenToolOutputIncidentExplorerWindowResponse>;
   onToolOutputIncidentExplorerRefresh?: (
-    callback: () => void
+    callback: (request?: OpenToolOutputIncidentExplorerWindowRequest) => void
   ) => () => void;
+  showThreadFromToolOutputIncidentExplorer?: (
+    request: WindowShowThreadRequest
+  ) => Promise<void>;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;

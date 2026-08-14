@@ -29,14 +29,19 @@ import {
   PATH_REVEAL_CHANNEL,
   SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL,
   TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
+  TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL,
 } from "../../shared/ipc";
+import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 import {
   readMarkdownFileViewerSnapshot,
   showMarkdownFileViewerWindow,
 } from "../markdown-files-window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { showSubAgentTranscriptWindow } from "../subagent-transcript-window";
-import { showToolOutputIncidentExplorerWindow } from "../tool-output-incident-explorer-window";
+import {
+  showThreadFromToolOutputIncidentExplorer,
+  showToolOutputIncidentExplorerWindow,
+} from "../tool-output-incident-explorer-window";
 import {
   discoverDesktopApplications,
   openDesktopApplication,
@@ -234,6 +239,13 @@ export function registerApplicationIpcHandlers(): void {
       return { opened: true };
     },
   );
+  ipcMain.removeHandler(TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL);
+  ipcMain.handle(
+    TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL,
+    async (event, request: WindowShowThreadRequest): Promise<void> => {
+      showThreadFromToolOutputIncidentExplorer(event.sender, request);
+    },
+  );
 }
 
 export function disposeApplicationIpcHandlers(): void {
@@ -245,4 +257,5 @@ export function disposeApplicationIpcHandlers(): void {
   ipcMain.removeHandler(MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL);
   ipcMain.removeHandler(SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL);
   ipcMain.removeHandler(TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL);
+  ipcMain.removeHandler(TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL);
 }

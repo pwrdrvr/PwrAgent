@@ -476,6 +476,8 @@ export const TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL =
   "tool-output-incident-explorer:open-window";
 export const TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL =
   "tool-output-incident-explorer:refresh";
+export const TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL =
+  "tool-output-incident-explorer:show-thread";
 export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
   "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";

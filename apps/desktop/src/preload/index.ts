@@ -520,6 +520,7 @@ import {
   SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL,
   TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
   TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
+  TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL,
   DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
   DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL,
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
@@ -1215,9 +1216,14 @@ const desktopApi = Object.freeze({
       request,
     ),
   onToolOutputIncidentExplorerRefresh: (
-    callback: () => void,
+    callback: (
+      request?: OpenToolOutputIncidentExplorerWindowRequest,
+    ) => void,
   ): (() => void) => {
-    const listener = () => callback();
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      request?: OpenToolOutputIncidentExplorerWindowRequest,
+    ) => callback(request);
     ipcRenderer.on(
       TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
       listener,
@@ -1228,6 +1234,14 @@ const desktopApi = Object.freeze({
         listener,
       );
     };
+  },
+  showThreadFromToolOutputIncidentExplorer: async (
+    request: WindowShowThreadRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(
+      TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL,
+      request,
+    );
   },
   createIntegratedTerminal: async (
     request: IntegratedTerminalCreateRequest,

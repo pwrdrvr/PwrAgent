@@ -704,8 +704,10 @@ function DesktopAppShell(props: {
             dispatchAppNotice({ type: "dismiss", id: noticeId });
           };
           const examine = (): void => {
+            const projectLabel = matchingThread?.linkedDirectories[0]?.label;
             void desktopApi?.openToolOutputIncidentExplorerWindow?.({
               backend: event.backend,
+              ...(projectLabel ? { projectLabel } : {}),
               threadId: params.threadId,
               title: matchingThread?.title ?? labelForThread(
                 event.backend,

@@ -7,6 +7,7 @@ import type {
 
 export type OpenToolOutputIncidentExplorerWindowRequest = {
   backend: AppServerBackendKind;
+  projectLabel?: string;
   threadId: string;
   title: string;
 };

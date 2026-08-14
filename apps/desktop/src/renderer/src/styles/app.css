@@ -15125,17 +15125,19 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-primary);
 }
 
-.incident-explorer__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-panel-elevated);
+.incident-explorer .activity-titlebar__breadcrumb {
+  flex: 0 1 auto;
+  max-width: min(62vw, 720px);
 }
 
-.incident-explorer__header h1,
+.incident-explorer .activity-titlebar__crumb {
+  max-width: min(20vw, 220px);
+}
+
+.incident-explorer .thread-chip-group {
+  flex: 0 1 auto;
+}
+
 .incident-explorer__section-heading h2,
 .incident-explorer__evidence h2,
 .incident-explorer__prompt h2,
@@ -15146,7 +15148,6 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 650;
 }
 
-.incident-explorer__header p,
 .incident-explorer__prompt p {
   margin: 4px 0 0;
   color: var(--text-muted);

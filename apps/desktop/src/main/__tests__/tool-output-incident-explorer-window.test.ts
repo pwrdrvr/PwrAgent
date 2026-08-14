@@ -5,7 +5,11 @@ const mocks = vi.hoisted(() => {
     isDestroyed: ReturnType<typeof vi.fn>;
     loadFile: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
-    webContents: { send: ReturnType<typeof vi.fn> };
+    webContents: {
+      id: number;
+      isDestroyed: ReturnType<typeof vi.fn>;
+      send: ReturnType<typeof vi.fn>;
+    };
   }> = [];
   const BrowserWindow = vi.fn(function BrowserWindowMock(
     this: unknown,
@@ -15,7 +19,11 @@ const mocks = vi.hoisted(() => {
       isDestroyed: vi.fn(() => false),
       loadFile: vi.fn(async () => undefined),
       on: vi.fn(),
-      webContents: { send: vi.fn() },
+      webContents: {
+        id: windows.length + 1,
+        isDestroyed: vi.fn(() => false),
+        send: vi.fn(),
+      },
     };
     windows.push(window);
     return window;
@@ -25,6 +33,7 @@ const mocks = vi.hoisted(() => {
     BrowserWindow,
     registerWindowChannels: vi.fn(),
     showAndFocusAuxiliaryWindow: vi.fn(),
+    requestShowThread: vi.fn(),
     windows,
   };
 });
@@ -58,6 +67,9 @@ vi.mock("../window-placement", () => ({
   placementForSourceDisplay: () => ({ x: 10, y: 20 }),
   positionWindowForSourceDisplay: vi.fn(),
 }));
+vi.mock("../window-show-thread", () => ({
+  requestShowThread: mocks.requestShowThread,
+}));
 
 describe("tool-output incident explorer window", () => {
   beforeEach(() => {
@@ -66,6 +78,7 @@ describe("tool-output incident explorer window", () => {
     mocks.applyWindowSecurityHardening.mockClear();
     mocks.registerWindowChannels.mockClear();
     mocks.showAndFocusAuxiliaryWindow.mockClear();
+    mocks.requestShowThread.mockClear();
   });
 
   it("creates one hardened inspection-only window per thread", async () => {
@@ -76,6 +89,7 @@ describe("tool-output incident explorer window", () => {
       backend: "codex" as const,
       threadId: "thread-1",
       title: "Noisy work",
+      projectLabel: "PwrAgent",
     };
     showToolOutputIncidentExplorerWindow(request);
     showToolOutputIncidentExplorerWindow(request);
@@ -97,12 +111,47 @@ describe("tool-output incident explorer window", () => {
     expect(mocks.windows[0]?.loadFile).toHaveBeenCalledWith(
       "/renderer.html",
       {
-        hash: "tool-output-incidents/codex/thread-1/Noisy%20work",
+        hash: "tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent",
       },
     );
     expect(mocks.showAndFocusAuxiliaryWindow).toHaveBeenCalledOnce();
     expect(mocks.windows[0]?.webContents.send).toHaveBeenCalledWith(
       "tool-output-incident-explorer:refresh",
+      request,
     );
+  });
+
+  it("routes a thread-chip click back to the explorer's exact owner window", async () => {
+    const {
+      showThreadFromToolOutputIncidentExplorer,
+      showToolOutputIncidentExplorerWindow,
+    } = await import("../tool-output-incident-explorer-window");
+    const ownerWebContents = {
+      isDestroyed: vi.fn(() => false),
+      send: vi.fn(),
+    };
+    const sourceWindow = {
+      isDestroyed: vi.fn(() => false),
+      webContents: ownerWebContents,
+    };
+    showToolOutputIncidentExplorerWindow({
+      backend: "acp:grok",
+      threadId: "thread-owned",
+      title: "Owned thread",
+    }, { sourceWindow } as never);
+
+    showThreadFromToolOutputIncidentExplorer(
+      mocks.windows[0]!.webContents as never,
+      { backend: "acp:grok", threadId: "thread-owned" },
+    );
+
+    expect(mocks.requestShowThread).toHaveBeenCalledWith(
+      { backend: "acp:grok", threadId: "thread-owned" },
+      { preferWebContents: ownerWebContents },
+    );
+    expect(() => showThreadFromToolOutputIncidentExplorer(
+      mocks.windows[0]!.webContents as never,
+      { backend: "acp:grok", threadId: "another-thread" },
+    )).toThrow("can only open its own thread");
   });
 });

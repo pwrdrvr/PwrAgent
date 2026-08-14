@@ -8,13 +8,16 @@ import type {
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import { buildThreadToolIncidentPrompt } from "@pwragent/shared";
+import { formatBackendLabel } from "../../lib/backend-label";
 import { useDesktopApi } from "../../lib/desktop-api";
+import { ThreadChip } from "./ThreadChip";
+import { detailMatchesInvocationItem } from "./tool-call-details";
 
 const HISTORY_PAGE_LIMIT = 100;
 
 export function ToolOutputIncidentExplorerWindow() {
   const desktopApi = useDesktopApi();
-  const route = useMemo(readIncidentRoute, []);
+  const [route, setRoute] = useState(readIncidentRoute);
   const [accounting, setAccounting] = useState<ThreadToolAccounting>();
   const [latest, setLatest] = useState<AppServerReadThreadResponse>();
   const [selectedId, setSelectedId] = useState<string>();
@@ -54,7 +57,15 @@ export function ToolOutputIncidentExplorerWindow() {
 
   useEffect(() => {
     if (!desktopApi?.onToolOutputIncidentExplorerRefresh) return;
-    return desktopApi.onToolOutputIncidentExplorerRefresh(() => {
+    return desktopApi.onToolOutputIncidentExplorerRefresh((request) => {
+      if (request) {
+        setRoute({
+          backend: request.backend,
+          projectLabel: request.projectLabel,
+          threadId: request.threadId,
+          title: request.title,
+        });
+      }
       void refresh();
     });
   }, [desktopApi, refresh]);
@@ -181,18 +192,45 @@ export function ToolOutputIncidentExplorerWindow() {
         <p className="activity-titlebar__brand">
           Pwr<span className="activity-titlebar__brand-accent">Agent</span>
         </p>
-        <div className="activity-titlebar__breadcrumb">
-          <span className="activity-titlebar__eyebrow">Thread</span>
+        <div
+          aria-label={[
+            route.projectLabel,
+            route.title,
+            "Tool Output Incidents",
+          ].filter(Boolean).join(" > ")}
+          className="activity-titlebar__breadcrumb"
+        >
+          {route.projectLabel ? (
+            <>
+              <span className="activity-titlebar__crumb" title={route.projectLabel}>
+                {route.projectLabel}
+              </span>
+              <span aria-hidden="true" className="activity-titlebar__separator">›</span>
+            </>
+          ) : null}
+          <ThreadChip
+            link={{
+              backend: route.backend,
+              inThreadList: true,
+              threadId: route.threadId,
+              title: route.title,
+            }}
+            onOpen={() => {
+              void desktopApi?.showThreadFromToolOutputIncidentExplorer?.({
+                backend: route.backend,
+                threadId: route.threadId,
+              }).catch((error: unknown) => {
+                setStatus(error instanceof Error ? error.message : String(error));
+              });
+            }}
+          />
           <span aria-hidden="true" className="activity-titlebar__separator">›</span>
-          <span className="activity-titlebar__current">Tool-output incidents</span>
+          <span className="activity-titlebar__current">Tool Output Incidents</span>
         </div>
+        <span className="chip chip--backend">
+          {formatBackendLabel(route.backend)}
+        </span>
         <div className="activity-titlebar__spacer" />
-      </header>
-      <header className="incident-explorer__header">
-        <div>
-          <h1>{route.title}</h1>
-          <p>{route.backend} · {route.threadId}</p>
-        </div>
         <div className="incident-explorer__actions">
           <button type="button" onClick={() => void analyze()} disabled={analyzing}>
             {accounting?.analysis ? "Refresh analysis" : "Analyze history"}
@@ -336,13 +374,19 @@ function Metric(props: { label: string; value: string }) {
 
 function readIncidentRoute(): {
   backend: AppServerBackendKind;
+  projectLabel?: string;
   threadId: string;
   title: string;
 } | undefined {
-  const [kind, backend, threadId, title] = window.location.hash.replace(/^#/, "").split("/");
+  const [kind, backend, threadId, title, projectLabel] = window.location.hash
+    .replace(/^#/, "")
+    .split("/");
   if (kind !== "tool-output-incidents" || !backend || !threadId) return undefined;
   return {
     backend: decodeURIComponent(backend) as AppServerBackendKind,
+    ...(projectLabel
+      ? { projectLabel: decodeURIComponent(projectLabel) }
+      : {}),
     threadId: decodeURIComponent(threadId),
     title: title ? decodeURIComponent(title) : "Thread",
   };
@@ -413,15 +457,19 @@ function findInvocationDetail(
   response: AppServerReadThreadResponse,
   invocation: ThreadToolInvocationRecord,
 ): AppServerThreadActivityDetail | undefined {
+  let matched: AppServerThreadActivityDetail | undefined;
   for (const entry of response.replay.entries) {
-    if (entry.type !== "activity" || entry.id !== invocation.itemId) continue;
-    const commandDetails = entry.details.filter((detail) => detail.command);
-    return commandDetails.find((detail) =>
-      detail.command?.displayCommand === invocation.normalizedCommand
-      || detail.label === invocation.toolName
-    ) ?? commandDetails[0];
+    if (entry.type !== "activity") continue;
+    for (const detail of entry.details) {
+      if (
+        !detail.command
+        || !detailMatchesInvocationItem(detail.id, invocation.itemId)
+      ) continue;
+      if (detail.command.output !== undefined) return detail;
+      matched ??= detail;
+    }
   }
-  return undefined;
+  return matched;
 }
 
 function filterOutputLines(output: string | undefined, query: string) {

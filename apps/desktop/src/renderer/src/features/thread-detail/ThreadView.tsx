@@ -2305,12 +2305,16 @@ export function ThreadView(props: ThreadViewProps) {
   );
   const handleOpenToolOutputIncidentExplorer = useCallback(() => {
     if (!selectedThread) return;
+    const projectLabel =
+      props.selectedDirectory?.label
+      ?? selectedThread.linkedDirectories[0]?.label;
     void desktopApi?.openToolOutputIncidentExplorerWindow?.({
       backend: selectedThread.source,
+      ...(projectLabel ? { projectLabel } : {}),
       threadId: selectedThread.id,
       title: selectedThread.title,
     });
-  }, [desktopApi, selectedThread]);
+  }, [desktopApi, props.selectedDirectory?.label, selectedThread]);
   const handleAnalyzeToolHistory = useCallback(() => {
     if (!selectedThread) return;
     void desktopApi?.analyzeThreadToolHistory?.({
