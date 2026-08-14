@@ -28,7 +28,7 @@ overrides:
   tmp: 0.2.7
   undici@6: 6.28.0
   undici@7: 7.29.0
-  ws: 8.21.0
+  ws: 8.21.3
 
 pnpmfileChecksum: sha256-ENVI4WvTe5sygYLw830xNJB8CimBQgr6EM0Oi3TR7os=
 
@@ -193,8 +193,8 @@ importers:
         specifier: ^6.0.0
         version: 6.0.0
       ws:
-        specifier: 8.21.0
-        version: 8.21.0
+        specifier: 8.21.3
+        version: 8.21.3
     devDependencies:
       '@axe-core/playwright':
         specifier: ^4.11.3
@@ -4368,8 +4368,8 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  ws@8.21.0:
-    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
+  ws@8.21.3:
+    resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -4661,7 +4661,7 @@ snapshots:
       '@vladfrangu/async_event_emitter': 2.4.7
       discord-api-types: 0.38.50
       tslib: 2.8.1
-      ws: 8.21.0
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -4961,7 +4961,7 @@ snapshots:
       lodash.pickby: 4.6.0
       protobufjs: 7.6.5
       qs: 6.15.2
-      ws: 8.21.0
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - debug
@@ -5339,7 +5339,7 @@ snapshots:
       '@types/node': 24.13.3
       '@types/ws': 8.18.1
       eventemitter3: 5.0.4
-      ws: 8.21.0
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - debug
@@ -8939,7 +8939,7 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  ws@8.21.0: {}
+  ws@8.21.3: {}
 
   xml-name-validator@5.0.0: {}
 
