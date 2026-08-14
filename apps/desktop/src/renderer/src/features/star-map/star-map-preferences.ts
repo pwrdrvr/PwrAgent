@@ -38,7 +38,13 @@ export type StarMapViewPreferences = {
  * scannable at a glance.
  */
 export const DEFAULT_STAR_MAP_PREFERENCES: StarMapViewPreferences = {
-  layout: "lanes",
+  /**
+   * Orbit, not lanes. Lanes were the first layout and read as a list of
+   * columns; orbit is the one that shows the fleet as a fleet, which is
+   * what the map is for. The stored preference wins after the first
+   * visit, so this only decides what a new operator sees.
+   */
+  layout: "orbit",
   cardFields: {
     provider: false,
     branch: false,
