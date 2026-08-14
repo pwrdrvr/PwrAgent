@@ -62,10 +62,12 @@ import {
   combineTranscriptMessages,
   combineTranscriptResponse,
   createTranscriptHistoryIndex,
+  createTranscriptReviewPresentation,
   prependTranscriptHistoryPage,
   type LoadedTranscriptHistory,
   type TranscriptHistoryIndex,
 } from "./segmented-transcript";
+import { normalizeTranscriptText } from "./transcript-review-presentation";
 
 const MAX_VIEW_ONLY_THREADS = 10;
 const EMPTY_EXPANDED_TRANSCRIPT_ACTIVITY_IDS: string[] = [];
@@ -1404,123 +1406,6 @@ function reviewEntryLabels(entry: AppServerThreadReviewEntry): string[] {
   return [entry.displayText, entry.review]
     .filter((value): value is string => Boolean(value?.trim()))
     .map((value) => normalizeReviewDisplayText(value).toLocaleLowerCase());
-}
-
-function normalizeTranscriptText(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-}
-
-function isPlainReviewFindingText(text: string): boolean {
-  return (
-    /\b(?:full\s+)?review comments?:/i.test(text) &&
-    /(?:^|\n)\s*-\s*\[P[0-3]\]\s+.+(?:\s+—\s+|\s+-\s+).+:\d+/u.test(text)
-  );
-}
-
-function shouldUseAssistantReviewText(params: {
-  assistantText: string;
-  reviewText: string;
-}): boolean {
-  if (!isPlainReviewFindingText(params.assistantText)) {
-    return false;
-  }
-
-  const normalizedAssistant = normalizeTranscriptText(params.assistantText);
-  const normalizedReview = normalizeTranscriptText(params.reviewText);
-  return (
-    !normalizedReview ||
-    normalizedAssistant === normalizedReview ||
-    normalizedAssistant.startsWith(normalizedReview) ||
-    normalizedAssistant.includes(normalizedReview)
-  );
-}
-
-function coalesceReviewAssistantMessages(
-  entries: AppServerThreadEntry[]
-): AppServerThreadEntry[] {
-  let output: AppServerThreadEntry[] | undefined;
-  let entryIndex = 0;
-
-  for (const entry of entries) {
-    if (
-      entry.type === "message" &&
-      entry.role === "assistant" &&
-      shouldUseAssistantReviewText({
-        assistantText: entry.text,
-        reviewText: "",
-      })
-    ) {
-      const candidates = output ?? entries.slice(0, entryIndex);
-      const matchingReviewIndex = candidates.findLastIndex((candidate) => {
-        if (candidate.type !== "review") {
-          return false;
-        }
-        if (
-          entry.turn?.id &&
-          candidate.turn?.id &&
-          entry.turn.id !== candidate.turn.id
-        ) {
-          return false;
-        }
-        return shouldUseAssistantReviewText({
-          assistantText: entry.text,
-          reviewText: candidate.review,
-        });
-      });
-
-      if (matchingReviewIndex !== -1) {
-        output = candidates;
-        const reviewEntry = output[matchingReviewIndex] as AppServerThreadReviewEntry;
-        output[matchingReviewIndex] = {
-          ...reviewEntry,
-          review: entry.text,
-        };
-        entryIndex += 1;
-        continue;
-      }
-    }
-
-    output?.push(entry);
-    entryIndex += 1;
-  }
-
-  return output ?? entries;
-}
-
-function reviewResultTexts(entries: AppServerThreadEntry[]): Set<string> {
-  const output = new Set<string>();
-  for (const entry of entries) {
-    if (entry.type !== "review") {
-      continue;
-    }
-
-    const text = entry.output?.overall_explanation ?? entry.review;
-    if (text.trim()) {
-      output.add(normalizeTranscriptText(text));
-    }
-  }
-  return output;
-}
-
-function suppressReviewDuplicateMessages<T extends AppServerThreadMessage | AppServerThreadEntry>(
-  messagesOrEntries: T[],
-  reviewTexts: Set<string>
-): T[] {
-  if (reviewTexts.size === 0) {
-    return messagesOrEntries;
-  }
-
-  return messagesOrEntries.filter((entry) => {
-    if (
-      "role" in entry &&
-      entry.role === "assistant" &&
-      "text" in entry &&
-      typeof entry.text === "string"
-    ) {
-      return !reviewTexts.has(normalizeTranscriptText(entry.text));
-    }
-    return true;
-  });
 }
 
 function optimisticMessageEntries(
@@ -6102,55 +5987,64 @@ export function useThreadSessionState(params: {
     ],
   );
 
-  const entries = useMemo(
-    () => {
-      const mergedTailEntries = mergeTranscriptEntries(
-        selectedSession?.response?.replay.entries ?? [],
-        visibleOptimisticEntries
-      );
-      const mergedEntries = combineTranscriptEntries(
-        selectedSession?.loadedHistory,
-        selectedHistoryIndex,
-        mergedTailEntries,
-      );
-      const coalescedEntries = coalesceReviewAssistantMessages(mergedEntries);
-      return suppressReviewDuplicateMessages(
-        coalescedEntries,
-        reviewResultTexts(coalescedEntries)
-      );
-    },
+  const mergedTailEntries = useMemo(
+    () => mergeTranscriptEntries(
+      selectedSession?.response?.replay.entries ?? [],
+      visibleOptimisticEntries,
+    ),
+    [selectedSession?.response?.replay.entries, visibleOptimisticEntries],
+  );
+  const mergedTailMessages = useMemo(
+    () => mergeTranscriptMessages(
+      selectedSession?.response?.replay.messages ?? [],
+      visibleOptimisticEntries
+        .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
+        .map(({ type: _type, ...message }) => message),
+    ),
+    [selectedSession?.response?.replay.messages, visibleOptimisticEntries],
+  );
+  const reviewPresentation = useMemo(
+    () => createTranscriptReviewPresentation({
+      history: selectedSession?.loadedHistory,
+      index: selectedHistoryIndex,
+      tailEntries: mergedTailEntries,
+      tailMessages: mergedTailMessages,
+    }),
     [
+      mergedTailEntries,
+      mergedTailMessages,
       selectedHistoryIndex,
       selectedSession?.loadedHistory,
-      selectedSession?.response?.replay.entries,
-      visibleOptimisticEntries,
+    ],
+  );
+
+  const entries = useMemo(
+    () =>
+      combineTranscriptEntries(
+        selectedSession?.loadedHistory,
+        selectedHistoryIndex,
+        reviewPresentation.tailEntries,
+        reviewPresentation,
+      ),
+    [
+      reviewPresentation,
+      selectedHistoryIndex,
+      selectedSession?.loadedHistory,
     ]
   );
 
   const messages = useMemo(
-    () => {
-      const mergedTailMessages = mergeTranscriptMessages(
-        selectedSession?.response?.replay.messages ?? [],
-        visibleOptimisticEntries
-          .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
-          .map(({ type: _type, ...message }) => message)
-      );
-      const mergedMessages = combineTranscriptMessages(
+    () =>
+      combineTranscriptMessages(
         selectedSession?.loadedHistory,
         selectedHistoryIndex,
-        mergedTailMessages,
-      );
-      return suppressReviewDuplicateMessages(
-        mergedMessages,
-        reviewResultTexts(entries)
-      );
-    },
+        reviewPresentation.tailMessages,
+        reviewPresentation,
+      ),
     [
-      entries,
+      reviewPresentation,
       selectedHistoryIndex,
       selectedSession?.loadedHistory,
-      selectedSession?.response?.replay.messages,
-      visibleOptimisticEntries,
     ]
   );
 

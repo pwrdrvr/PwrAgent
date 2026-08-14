@@ -8,6 +8,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
+  AppServerThreadReviewEntry,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
@@ -62,6 +63,28 @@ function messageEntry(params: {
     role: params.role ?? "assistant",
     text: params.text,
     createdAt: params.createdAt,
+  };
+}
+
+function reviewEntry(params: {
+  createdAt: number;
+  id: string;
+  review: string;
+  turnId?: string;
+}): AppServerThreadReviewEntry {
+  return {
+    type: "review",
+    id: params.id,
+    review: params.review,
+    createdAt: params.createdAt,
+    ...(params.turnId
+      ? {
+          turn: {
+            id: params.turnId,
+            status: "completed",
+          },
+        }
+      : {}),
   };
 }
 
@@ -463,6 +486,399 @@ describe("useThreadSessionState", () => {
       "tail",
     ]);
     expect(result.current.response?.replay.pagination.hasPreviousPage).toBe(false);
+  });
+
+  it("keeps hook-level paging linear and live appends independent of retained history", async () => {
+    const pageCount = 100;
+    const entriesPerPage = 50;
+    let retainedEntryClassificationReads = 0;
+    const retainedEntry = (
+      id: string,
+      createdAt: number,
+    ): AppServerThreadEntry =>
+      new Proxy(
+        messageEntry({ id, text: id, createdAt }),
+        {
+          get(target, property, receiver) {
+            if (property === "type") {
+              retainedEntryClassificationReads += 1;
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        },
+      );
+    const responses = [
+      readThreadResponse({
+        entries: [messageEntry({ id: "tail", text: "Tail", createdAt: 10_000 })],
+        hasPreviousPage: true,
+        previousCursor: "page-0",
+      }),
+      ...Array.from({ length: pageCount }, (_value, pageIndex) =>
+        readThreadResponse({
+          entries: Array.from({ length: entriesPerPage }, (_entry, entryIndex) =>
+            retainedEntry(
+              `history-${pageIndex}-${entryIndex}`,
+              5_000 - pageIndex * entriesPerPage - entryIndex,
+            )
+          ),
+          hasPreviousPage: pageIndex + 1 < pageCount,
+          ...(pageIndex + 1 < pageCount
+            ? { previousCursor: `page-${pageIndex + 1}` }
+            : {}),
+        })
+      ),
+    ];
+    retainedEntryClassificationReads = 0;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: vi.fn(async () => responses.shift()!),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+      await act(async () => {
+        await result.current.loadOlder();
+      });
+    }
+
+    const pagingClassificationReads = retainedEntryClassificationReads;
+    expect(result.current.entries.map((entry) => entry.id)).toHaveLength(5_001);
+    retainedEntryClassificationReads = 0;
+
+    for (let liveIndex = 0; liveIndex < 100; liveIndex += 1) {
+      act(() => {
+        result.current.upsertLiveTranscriptEntry(messageEntry({
+          id: `live-${liveIndex}`,
+          text: `Live ${liveIndex}`,
+          createdAt: 20_000 + liveIndex,
+        }));
+      });
+      expect(result.current.entries.slice(-1)[0]?.id).toBe(`live-${liveIndex}`);
+    }
+
+    const loadedEntries = pageCount * entriesPerPage;
+    const legacyTriangularHistorySlots =
+      entriesPerPage * pageCount * (pageCount + 1) / 2;
+    const parentHookPagingClassificationReads =
+      loadedEntries + 3 * legacyTriangularHistorySlots;
+    const parentHookLiveClassificationReads = 3 * loadedEntries * 100;
+    expect({
+      legacyTriangularHistorySlots,
+      liveAppendClassificationReads: retainedEntryClassificationReads,
+      loadedEntries,
+      parentHookLiveClassificationReads,
+      parentHookPagingClassificationReads,
+      pagingClassificationReads,
+    }).toEqual({
+      legacyTriangularHistorySlots: 252_500,
+      liveAppendClassificationReads: 0,
+      loadedEntries: 5_000,
+      parentHookLiveClassificationReads: 1_500_000,
+      parentHookPagingClassificationReads: 762_500,
+      // One classification builds replay messages and one builds the compact
+      // review summary. Neither revisits a page after it has been retained.
+      pagingClassificationReads: 10_000,
+    });
+  });
+
+  it("coalesces reviews and suppresses duplicates across page-tail boundaries", async () => {
+    const fullReview = [
+      "Full review comments:",
+      "- [P1] Keep exact ID ordering — src/thread.ts:42",
+    ].join("\n");
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          messageEntry({
+            id: "review-assistant",
+            text: fullReview,
+            createdAt: 500,
+          }),
+          messageEntry({
+            id: "duplicate-assistant",
+            text: "Duplicate review summary",
+            createdAt: 600,
+          }),
+          messageEntry({ id: "repeat-a", text: "Repeated", createdAt: 700 }),
+          messageEntry({ id: "repeat-b", text: "Repeated", createdAt: 800 }),
+        ],
+        hasPreviousPage: true,
+        previousCursor: "older",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          reviewEntry({
+            id: "review-base",
+            review: "Full review comments:",
+            createdAt: 100,
+          }),
+          reviewEntry({
+            id: "review-duplicate",
+            review: "Duplicate review summary",
+            createdAt: 200,
+          }),
+        ],
+        hasPreviousPage: false,
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "review-base",
+      "review-duplicate",
+      "repeat-a",
+      "repeat-b",
+    ]);
+    expect(result.current.entries[0]).toMatchObject({
+      type: "review",
+      review: fullReview,
+    });
+    expect(result.current.messages.map((message) => message.id)).toEqual([
+      "repeat-a",
+      "repeat-b",
+    ]);
+    expect(result.current.messages.map((message) => message.text)).toEqual([
+      "Repeated",
+      "Repeated",
+    ]);
+  });
+
+  it("uses a live tail review to suppress a matching retained assistant message", async () => {
+    const duplicateText = "Review result delivered from the live tail";
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          messageEntry({ id: "recent-anchor", text: "Recent", createdAt: 300 }),
+        ],
+        hasPreviousPage: true,
+        previousCursor: "older",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          messageEntry({ id: "retained-duplicate", text: duplicateText, createdAt: 100 }),
+        ],
+        hasPreviousPage: false,
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "retained-duplicate",
+      "recent-anchor",
+    ]);
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry(
+        reviewEntry({
+          id: "live-review",
+          review: duplicateText,
+          createdAt: 500,
+        }),
+      );
+    });
+
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "recent-anchor",
+      "live-review",
+    ]);
+    expect(result.current.messages.map((message) => message.id)).toEqual([
+      "recent-anchor",
+    ]);
+  });
+
+  it("drops retained review indexes when compaction resets loaded history", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const duplicateText = "Historical review summary";
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          messageEntry({ id: "before-compact", text: duplicateText, createdAt: 300 }),
+        ],
+        hasPreviousPage: true,
+        previousCursor: "older",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          reviewEntry({ id: "historical-review", review: duplicateText, createdAt: 100 }),
+        ],
+        hasPreviousPage: false,
+      }))
+      .mockResolvedValue(readThreadResponse({
+        entries: [
+          messageEntry({ id: "after-compact", text: duplicateText, createdAt: 500 }),
+        ],
+        hasPreviousPage: false,
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventHandler = listener;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "historical-review",
+    ]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/compacted",
+          params: { threadId: "thread-1" },
+        },
+      });
+    });
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.id)).toEqual([
+        "after-compact",
+      ]);
+    });
+  });
+
+  it("keeps cross-page review coalescing ordered across lagging hydration", async () => {
+    let resolveRefresh:
+      | ((response: AppServerReadThreadResponse) => void)
+      | undefined;
+    const fullReview = [
+      "Full review comments:",
+      "- [P2] Preserve the loaded prefix — src/history.ts:9",
+    ].join("\n");
+    const initialTail = readThreadResponse({
+      entries: [
+        messageEntry({ id: "recent-anchor", text: "Recent", createdAt: 300 }),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "older",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        messageEntry({ id: "oldest-anchor", text: "Oldest", createdAt: 50 }),
+        reviewEntry({
+          id: "historical-review",
+          review: "Full review comments:",
+          createdAt: 100,
+        }),
+      ],
+      hasPreviousPage: false,
+    });
+    const refreshPromise = new Promise<AppServerReadThreadResponse>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage)
+      .mockImplementation(async () => await refreshPromise);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    rerender({ updatedAt: 2_000 });
+    await waitFor(() => {
+      expect(resolveRefresh).toBeDefined();
+    });
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry(messageEntry({
+        id: "live-review-output",
+        text: fullReview,
+        createdAt: 500,
+      }));
+    });
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "oldest-anchor",
+      "historical-review",
+      "recent-anchor",
+    ]);
+    expect(result.current.entries[1]).toMatchObject({ review: fullReview });
+
+    await act(async () => {
+      resolveRefresh?.(readThreadResponse({
+        entries: [
+          messageEntry({ id: "recent-anchor", text: "Recent", createdAt: 300 }),
+        ],
+        hasPreviousPage: true,
+        previousCursor: "older-again",
+      }));
+      await Promise.resolve();
+    });
+
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "oldest-anchor",
+      "historical-review",
+      "recent-anchor",
+    ]);
+    expect(result.current.entries[1]).toMatchObject({ review: fullReview });
   });
 
   it("replaces an overlapping live tail when hydrated message ids change", async () => {
