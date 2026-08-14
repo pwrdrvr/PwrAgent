@@ -24,6 +24,11 @@ import {
   waitForPidsToExit,
 } from "./process-exit";
 import {
+  captureFirstElectronShutdownFailure,
+  E2E_SHUTDOWN_FIRST_FAILURE_ARTIFACT_DIR_ENV,
+  type ElectronProcessTreeSnapshot,
+} from "./electron-shutdown-artifacts";
+import {
   appendElectronShutdownSummary,
   assertElectronShutdownCircuitClosed,
   buildElectronShutdownSummary,
@@ -69,6 +74,8 @@ type ElectronCloseOptions = {
   circuitEnabled?: boolean;
   circuitStateFile?: string;
   diagnosticsFile?: string;
+  failureArtifactDir?: string;
+  homeRoot?: string;
   launchId?: string;
 };
 
@@ -180,6 +187,9 @@ export async function launchElectronApp(params: {
   });
   const diagnosticsFile =
     process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV];
+  const failureArtifactDir = circuitEnabled
+    ? process.env[E2E_SHUTDOWN_FIRST_FAILURE_ARTIFACT_DIR_ENV]
+    : undefined;
   const launchId = randomUUID();
   const homeRoot =
     params.homeRoot ??
@@ -290,6 +300,8 @@ export async function launchElectronApp(params: {
       circuitEnabled,
       circuitStateFile,
       diagnosticsFile,
+      failureArtifactDir,
+      homeRoot,
       launchId,
     }),
   );
@@ -475,6 +487,7 @@ export async function closeElectronApplication(
       options,
     );
   }
+  let processTreeSnapshot: ElectronProcessTreeSnapshot | undefined;
   const execution = await executeElectronClose({
     now: performance.now.bind(performance),
     requestQuit: async () => {
@@ -497,7 +510,7 @@ export async function closeElectronApplication(
     ),
     hasExited: () => hasExited(child),
     forceKillTree: async () => {
-      await killProcessTree(child);
+      processTreeSnapshot = await killProcessTree(child);
     },
     waitForForcedExit: async () => await waitForProcessExit(
       child,
@@ -507,7 +520,33 @@ export async function closeElectronApplication(
       await waitForClose(closePromise, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
     },
   });
-  return recordElectronCloseSummary(execution, options);
+  const summary = recordElectronCloseSummary(execution, options);
+  const artifactDir = options.failureArtifactDir
+    ?? process.env[E2E_SHUTDOWN_FIRST_FAILURE_ARTIFACT_DIR_ENV];
+  if (
+    artifactDir
+    && options.homeRoot
+    && summary.classification !== "healthy"
+  ) {
+    try {
+      const captured = await captureFirstElectronShutdownFailure({
+        artifactDir,
+        homeRoot: options.homeRoot,
+        processTree: processTreeSnapshot,
+        summary,
+      });
+      if (captured) {
+        console.log(
+          `[pwragent-e2e-shutdown] captured first abnormal shutdown artifact at ${artifactDir}`,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `[pwragent-e2e-shutdown] failed to capture first abnormal shutdown artifact: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return summary;
 }
 
 function alreadyExitedCloseExecution(): ElectronCloseExecution {
@@ -641,16 +680,27 @@ async function waitForProcessExit(
   }
 }
 
-async function killProcessTree(child: ElectronChildProcess): Promise<void> {
+async function killProcessTree(
+  child: ElectronChildProcess,
+): Promise<ElectronProcessTreeSnapshot> {
+  const snapshot: ElectronProcessTreeSnapshot = {
+    capturedAt: new Date().toISOString(),
+    descendantPids: [],
+    exitCode: child.exitCode,
+    killed: child.killed,
+    platform: process.platform,
+    rootPid: child.pid ?? null,
+    signalCode: child.signalCode,
+  };
   if (hasExited(child)) {
-    return;
+    return snapshot;
   }
   const pid = child.pid;
   if (pid === undefined) {
     if (!child.killed) {
       child.kill("SIGKILL");
     }
-    return;
+    return snapshot;
   }
   if (process.platform === "win32") {
     await new Promise<void>((resolve) => {
@@ -666,10 +716,11 @@ async function killProcessTree(child: ElectronChildProcess): Promise<void> {
         },
       );
     });
-    return;
+    return snapshot;
   }
 
   const descendants = await listDescendantPids(pid);
+  snapshot.descendantPids = descendants;
   if (!child.killed) {
     child.kill("SIGKILL");
   }
@@ -680,6 +731,7 @@ async function killProcessTree(child: ElectronChildProcess): Promise<void> {
       // The descendant already exited between the ps snapshot and this kill.
     }
   }
+  return snapshot;
 }
 
 async function killSpawnedProfileProcessesUnder(homeRoot: string): Promise<void> {
