@@ -68,6 +68,19 @@ describe("ThreadHeader", () => {
     expect(chip).toHaveAttribute("title", "Inbox Triage, 1 instruction line");
   });
 
+  it("shows the approval CTA beside the thread title", () => {
+    render(
+      <ThreadHeader
+        hasApprovalRequest
+        thread={thread}
+      />,
+    );
+
+    expect(screen.getByText("Waiting for approval", { exact: true })).toHaveClass(
+      "thread-row__chip--approval",
+    );
+  });
+
   it("renders the terminal toggle as an icon-only affordance with a tooltip", () => {
     render(
       <ThreadHeader
