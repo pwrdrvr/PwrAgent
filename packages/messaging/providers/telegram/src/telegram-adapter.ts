@@ -670,7 +670,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       });
     }
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
       return;
     }
 
@@ -685,14 +684,12 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       throw error;
     }
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
       return;
     }
     await this.bot.api.deleteWebhook({
       drop_pending_updates: false,
     });
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
       return;
     }
     await this.bot.api.setMyCommands({
@@ -702,7 +699,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       })),
     });
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
       return;
     }
 

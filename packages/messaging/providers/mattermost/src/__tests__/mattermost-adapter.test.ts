@@ -177,6 +177,50 @@ describe("MattermostAdapter — capability profile", () => {
     await expect(startPromise).rejects.toThrow("identity rejected after stop");
   });
 
+  it("does not let stale identity lookup stop a newer lifecycle", async () => {
+    let resolveFirstGetMe!: (value: { id: string; username: string }) => void;
+    const firstGetMe = new Promise<{ id: string; username: string }>((resolve) => {
+      resolveFirstGetMe = resolve;
+    });
+    const client = fakeClient4({ createdPosts: [], patchedPosts: [] });
+    const identity = { id: "bot-user-id", username: "pwragent" };
+    client.getMe = vi.fn()
+      .mockImplementationOnce(async () => await firstGetMe)
+      .mockResolvedValueOnce(identity) as never;
+    let callbackServerOpen = false;
+    const callbackServer = {
+      start: vi.fn(async () => {
+        callbackServerOpen = true;
+      }),
+      stop: vi.fn(async () => {
+        callbackServerOpen = false;
+      }),
+      signContext: () => ({ hmac: "x", issuedAt: 0 }),
+    };
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      callbackServer: callbackServer as never,
+      client,
+      config: baseConfig,
+      logger: silentLogger,
+      websocketClient: fakeWebSocketClient(),
+    });
+
+    const staleStart = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(client.getMe).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+
+    const currentStart = adapter.start(async () => undefined);
+    await currentStart;
+    resolveFirstGetMe(identity);
+    await staleStart;
+
+    expect(callbackServer.stop).toHaveBeenCalledTimes(1);
+    expect(callbackServerOpen).toBe(true);
+  });
+
   it("declares Mattermost capability profile with documented limits", () => {
     const adapter = new MattermostAdapter({
       callbackHandleStore: fakeStore,

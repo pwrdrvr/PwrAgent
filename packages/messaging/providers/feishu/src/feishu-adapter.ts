@@ -316,7 +316,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private readonly config: FeishuMessagingConfig;
   private readonly logger: FeishuProviderLogger;
   private readonly now: () => number;
-  private readonly server: Server;
+  private server: Server | undefined;
   private readonly signingSecret: string;
   private readonly wsClientFactory: FeishuWsClientFactory;
   private authorizedActorIdsValue: string[];
@@ -325,7 +325,6 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private botOpenId: string | undefined;
   private listener: FeishuInboundListener | undefined;
   private started = false;
-  private webhookListening = false;
   private wsClient: FeishuWsClient | undefined;
   private lifecycleGeneration = 0;
   private readonly diagnosticListeners = new Set<MessagingAdapterDiagnosticListener>();
@@ -369,9 +368,6 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         loggerLevel: lark.LoggerLevel.info,
         source: "pwragent",
       });
-    });
-    this.server = createServer((request, response) => {
-      void this.handleWebhookRequest(request, response);
     });
   }
 
@@ -443,19 +439,17 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     this.listener = listener;
     const botInfo = await this.api.getBotInfo();
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
       return;
     }
     this.botAccount = botInfo.appName ?? botInfo.openId;
     this.botAccountDetail = botInfo.tenantKey ?? hostFromUrl(this.config.tenantUrl);
     this.botOpenId = botInfo.openId;
     if (this.config.inboundMode === "webhook") {
-      await this.listenForCallbacks();
+      await this.listenForCallbacks(lifecycleGeneration);
     } else {
       await this.startPersistentConnection(lifecycleGeneration);
     }
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
       return;
     }
     this.started = true;
@@ -469,17 +463,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       this.logger.warn?.("feishu persistent connection close failed", { error });
     }
     this.wsClient = undefined;
-    if (this.webhookListening || this.server.listening) {
-      await new Promise<void>((resolve, reject) => {
-        this.server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      }).catch((error) => {
-        this.logger.warn?.("feishu webhook listener close failed", { error });
-      });
-      this.webhookListening = false;
-    }
+    const server = this.server;
+    this.server = undefined;
+    await this.closeServer(server);
     this.listener = undefined;
     this.started = false;
   }
@@ -1661,19 +1647,42 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     return info;
   }
 
-  private async listenForCallbacks(): Promise<void> {
+  private async listenForCallbacks(lifecycleGeneration: number): Promise<void> {
     if (!this.config.callbackBaseUrl) return;
     const url = new URL(this.config.callbackBaseUrl);
     const port = url.port ? Number(url.port) : DEFAULT_CALLBACK_PORT;
     const host = url.hostname || DEFAULT_CALLBACK_HOST;
+    const server = createServer((request, response) => {
+      void this.handleWebhookRequest(request, response);
+    });
+    this.server = server;
     await new Promise<void>((resolve, reject) => {
-      this.server.once("error", reject);
-      this.server.listen(port, host, () => {
-        this.server.off("error", reject);
+      server.once("error", reject);
+      server.listen(port, host, () => {
+        server.off("error", reject);
         resolve();
       });
     });
-    this.webhookListening = true;
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      await this.closeServer(server);
+      if (this.server === server) {
+        this.server = undefined;
+      }
+    }
+  }
+
+  private async closeServer(server: Server | undefined): Promise<void> {
+    if (!server?.listening) {
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    }).catch((error) => {
+      this.logger.warn?.("feishu webhook listener close failed", { error });
+    });
   }
 
   private async startPersistentConnection(

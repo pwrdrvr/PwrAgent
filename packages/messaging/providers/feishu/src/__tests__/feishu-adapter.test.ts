@@ -140,6 +140,50 @@ describe("FeishuAdapter", () => {
     );
   });
 
+  it("does not let stale identity lookup stop a newer lifecycle", async () => {
+    let resolveFirstBotInfo!: (value: Awaited<ReturnType<FeishuApi["getBotInfo"]>>) => void;
+    const firstBotInfo = new Promise<Awaited<ReturnType<FeishuApi["getBotInfo"]>>>(
+      (resolve) => {
+        resolveFirstBotInfo = resolve;
+      },
+    );
+    const api = fakeApi({});
+    const botInfo = await api.getBotInfo();
+    api.getBotInfo = vi.fn()
+      .mockImplementationOnce(async () => await firstBotInfo)
+      .mockResolvedValueOnce(botInfo);
+    let connectionOpen = false;
+    const close = vi.fn(() => {
+      connectionOpen = false;
+    });
+    const { inboundMode: _inboundMode, ...persistentConfig } = baseConfig;
+    const adapter = new FeishuAdapter({
+      config: persistentConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      wsClientFactory: () => ({
+        close,
+        start: vi.fn(async () => {
+          connectionOpen = true;
+        }),
+      }),
+    });
+
+    const staleStart = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(api.getBotInfo).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+
+    const currentStart = adapter.start(async () => undefined);
+    await currentStart;
+    resolveFirstBotInfo(botInfo);
+    await staleStart;
+
+    expect(close).not.toHaveBeenCalled();
+    expect(connectionOpen).toBe(true);
+  });
+
   it("declares Feishu capabilities", () => {
     const adapter = new FeishuAdapter({
       config: baseConfig,

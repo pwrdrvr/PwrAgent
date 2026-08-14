@@ -547,6 +547,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   private listener: SlackInboundListener | undefined;
   private started = false;
   private lifecycleGeneration = 0;
+  private socketLifecycleGeneration: number | undefined;
   private socketListenersAttached = false;
   private socketStartPending = false;
 
@@ -705,7 +706,6 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.listener = listener;
     const auth = await this.api.authTest();
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
       return;
     }
     this.botId = auth.bot_id;
@@ -721,6 +721,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       throw new Error("Slack Socket Mode requires an app token");
     }
 
+    this.socketLifecycleGeneration = lifecycleGeneration;
     this.socketClient.on("slack_event", this.handleSlackEvent);
     this.socketClient.on("interactive", this.handleInteractive);
     this.socketClient.on("slash_commands", this.handleSlashCommand);
@@ -728,8 +729,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.socketStartPending = true;
     await this.socketClient.start();
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
-      this.socketStartPending = false;
+      await this.stopSocketLifecycle(lifecycleGeneration);
       return;
     }
     this.socketStartPending = false;
@@ -740,7 +740,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     // the event handler below keeps the view fresh for apps that do subscribe.
     await this.publishAppHomes(this.authorizedActorIdsValue);
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
+      await this.stopSocketLifecycle(lifecycleGeneration);
     }
   }
 
@@ -753,10 +753,24 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.workingCardStreams.clear();
     this.workingCardTombstones.clear();
     this.workingCardRateLimits.clear();
+    await this.stopSocketLifecycle();
+    this.listener = undefined;
+  }
+
+  private async stopSocketLifecycle(
+    lifecycleGeneration?: number,
+  ): Promise<void> {
+    if (
+      lifecycleGeneration !== undefined
+      && this.socketLifecycleGeneration !== lifecycleGeneration
+    ) {
+      return;
+    }
+    const socketStartPending = this.socketStartPending;
     const shouldDisconnect =
       this.started
       || this.socketListenersAttached
-      || this.socketStartPending;
+      || socketStartPending;
     try {
       if (this.socketListenersAttached) {
         this.socketClient?.off?.("slack_event", this.handleSlackEvent);
@@ -769,7 +783,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       }
     } finally {
       this.started = false;
-      this.listener = undefined;
+      if (lifecycleGeneration !== undefined || !socketStartPending) {
+        this.socketStartPending = false;
+        this.socketLifecycleGeneration = undefined;
+      }
     }
   }
 

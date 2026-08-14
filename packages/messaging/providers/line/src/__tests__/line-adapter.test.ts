@@ -56,6 +56,48 @@ describe("LineAdapter", () => {
     await new Promise<void>((resolve) => probe.close(() => resolve()));
   });
 
+  it("does not let stale identity lookup stop a newer lifecycle", async () => {
+    const port = await getFreePort();
+    let resolveFirstBotInfo!: (value: {
+      displayName?: string;
+      userId: string;
+    }) => void;
+    const firstBotInfo = new Promise<{
+      displayName?: string;
+      userId: string;
+    }>((resolve) => {
+      resolveFirstBotInfo = resolve;
+    });
+    const api = createApi();
+    const botInfo = {
+      displayName: "PwrAgent",
+      userId: "Uffffffffffffffffffffffffffffffff",
+    };
+    api.getBotInfo = vi.fn()
+      .mockImplementationOnce(async () => await firstBotInfo)
+      .mockResolvedValueOnce(botInfo);
+    const adapter = new LineAdapter({
+      api,
+      callbackHandleStore: createCallbackStore(),
+      config: createConfig({ callbackBaseUrl: `http://127.0.0.1:${port}/` }),
+    });
+    adapters.push(adapter);
+
+    const staleStart = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(api.getBotInfo).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+
+    const currentStart = adapter.start(async () => undefined);
+    await currentStart;
+    resolveFirstBotInfo(botInfo);
+    await staleStart;
+
+    const response = await fetch(`http://127.0.0.1:${port}/`);
+    expect(response.status).toBe(405);
+  });
+
   it("verifies X-Line-Signature before processing webhook bodies", () => {
     const body = Buffer.from(JSON.stringify({ events: [] }));
     const signature = createHmac("sha256", "secret").update(body).digest("base64");

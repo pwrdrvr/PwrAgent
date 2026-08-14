@@ -196,7 +196,7 @@ export class LineAdapter implements LineProviderAdapter {
   private readonly config: LineMessagingConfig;
   private readonly logger: LineProviderLogger;
   private readonly now: () => number;
-  private readonly server: Server;
+  private server: Server | undefined;
   private readonly signingSecret: string;
   private authorizedActorIdsValue: string[];
   private listener: LineInboundListener | undefined;
@@ -219,9 +219,6 @@ export class LineAdapter implements LineProviderAdapter {
       .update(options.config.channelSecret)
       .digest("hex");
     this.botUserId = options.config.botUserId;
-    this.server = createServer((request, response) => {
-      void this.handleWebhookRequest(request, response);
-    });
   }
 
   get authorizedActorIds(): readonly string[] {
@@ -259,6 +256,9 @@ export class LineAdapter implements LineProviderAdapter {
     if (!this.botUserId && this.api) {
       try {
         const botInfo = await this.api.getBotInfo();
+        if (lifecycleGeneration !== this.lifecycleGeneration) {
+          return;
+        }
         this.botUserId = botInfo.userId;
       } catch (error) {
         this.logger.warn?.("line getBotInfo failed during startup", {
@@ -267,19 +267,25 @@ export class LineAdapter implements LineProviderAdapter {
       }
     }
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
       return;
     }
     const bindAddress = bindAddressFromCallbackUrl(this.config.callbackBaseUrl);
+    const server = createServer((request, response) => {
+      void this.handleWebhookRequest(request, response);
+    });
+    this.server = server;
     await new Promise<void>((resolve, reject) => {
-      this.server.once("error", reject);
-      this.server.listen(bindAddress.port, bindAddress.host, () => {
-        this.server.off("error", reject);
+      server.once("error", reject);
+      server.listen(bindAddress.port, bindAddress.host, () => {
+        server.off("error", reject);
         resolve();
       });
     });
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
+      await this.closeServer(server);
+      if (this.server === server) {
+        this.server = undefined;
+      }
       return;
     }
     this.started = true;
@@ -294,19 +300,26 @@ export class LineAdapter implements LineProviderAdapter {
 
   async stop(): Promise<void> {
     this.lifecycleGeneration += 1;
+    const server = this.server;
+    this.server = undefined;
     try {
-      if (this.server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          this.server.close((error) => {
-            if (error) reject(error);
-            else resolve();
-          });
-        });
-      }
+      await this.closeServer(server);
     } finally {
       this.listener = undefined;
       this.started = false;
     }
+  }
+
+  private async closeServer(server: Server | undefined): Promise<void> {
+    if (!server?.listening) {
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
   }
 
   onInboundRejected(listener: MessagingInboundRejectedListener): () => void {
