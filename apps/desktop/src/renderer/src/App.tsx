@@ -24,6 +24,7 @@ import {
   type FederationInstanceId,
   type FederationTarget,
   type MessagingChannelKind,
+  type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
   type ThreadToolInvocationAlert,
@@ -332,11 +333,12 @@ function DesktopAppShell(props: {
     useState<GithubPrSamlEnforcementEvent[]>([]);
   const [githubPrAuthenticationFailure, setGithubPrAuthenticationFailure] =
     useState<GithubPrAuthenticationFailureEvent>();
-  // Latest thread list, mirrored into a ref so the backend-error toast
-  // subscription can resolve a thread's title without re-subscribing on
-  // every navigation change. Kept fresh by an effect below, once
-  // `navigation` is defined.
+  // Latest navigation identity, mirrored into refs so the backend-error toast
+  // subscription can resolve a thread's title and configured project label
+  // without re-subscribing on every navigation change. Kept fresh by an
+  // effect below, once `navigation` is defined.
   const backendErrorThreadsRef = useRef<NavigationThreadSummary[]>([]);
+  const backendErrorDirectoriesRef = useRef<NavigationDirectorySummary[]>([]);
   const dismissedToolIncidentSeverityRef = useRef(new Map<
     string,
     ThreadToolInvocationAlert["severity"]
@@ -704,7 +706,22 @@ function DesktopAppShell(props: {
             dispatchAppNotice({ type: "dismiss", id: noticeId });
           };
           const examine = (): void => {
-            const projectLabel = matchingThread?.linkedDirectories[0]?.label;
+            const threadKey = buildThreadIdentityKey(
+              event.backend,
+              params.threadId,
+            );
+            const matchingDirectory =
+              backendErrorDirectoriesRef.current.find(
+                (directory) =>
+                  directory.kind === "directory"
+                  && directory.threadKeys.includes(threadKey),
+              )
+              ?? backendErrorDirectoriesRef.current.find((directory) =>
+                directory.threadKeys.includes(threadKey)
+              );
+            const projectLabel =
+              matchingDirectory?.label
+              ?? matchingThread?.linkedDirectories[0]?.label;
             void desktopApi?.openToolOutputIncidentExplorerWindow?.({
               backend: event.backend,
               ...(projectLabel ? { projectLabel } : {}),
@@ -1031,7 +1048,8 @@ function DesktopAppShell(props: {
   // toast subscription depend on (and re-subscribe to) the thread list.
   useEffect(() => {
     backendErrorThreadsRef.current = navigation.threads;
-  }, [navigation.threads]);
+    backendErrorDirectoriesRef.current = navigation.directories;
+  }, [navigation.directories, navigation.threads]);
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
     federationTarget: activeFederationTarget,
