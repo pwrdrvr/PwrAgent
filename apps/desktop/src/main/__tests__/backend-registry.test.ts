@@ -18586,6 +18586,143 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("completes a Codex review child against its ACP parent", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const parentThreadId = "grok-parent-with-codex-review";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "codex-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`${acpBackendId}:${parentThreadId}`]: {
+          backend: acpBackendId,
+          threadId: parentThreadId,
+          executionMode: "full-access",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      codexClient,
+      overlayStore,
+      sessionId: parentThreadId,
+      sessions: [{
+        backendId: acpBackendId,
+        sessionId: parentThreadId,
+        title: "Grok parent",
+        cwd: "/repo/worktree",
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        executionMode: "full-access",
+        status: "idle",
+      }],
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const response = await registry.startReview({
+      backend: acpBackendId,
+      reviewBackend: "codex",
+      threadId: parentThreadId,
+      target: { type: "baseBranch", branch: "origin/main" },
+      delivery: "inline",
+    });
+    expect(response).toMatchObject({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      reviewThreadId: "codex-review-child",
+      turnId: "turn-1",
+    });
+
+    const approvalResponse = codexClient.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        itemId: "review-command",
+        requestId: "review-approval",
+        command: "git diff origin/main...HEAD",
+      },
+    } as AppServerPendingRequestNotification);
+    await waitForCondition(() => events.some((event) =>
+      event.notification.method === "item/commandExecution/requestApproval"
+    ));
+    expect(events.find((event) =>
+      event.notification.method === "item/commandExecution/requestApproval"
+    )).toMatchObject({
+      backend: acpBackendId,
+      notification: {
+        params: {
+          threadId: parentThreadId,
+          turnId: response.turnId,
+          requestId: "review-approval",
+        },
+      },
+    });
+    await registry.submitServerRequest({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: response.turnId,
+      requestId: "review-approval",
+      response: { decision: "accept" },
+    });
+    await expect(approvalResponse).resolves.toEqual({ decision: "accept" });
+
+    const reviewOutput = JSON.stringify({
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: "No blocking findings.",
+      overall_confidence_score: 0.98,
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        turn: {
+          id: response.turnId,
+          status: "completed",
+          output: [{ type: "text", text: reviewOutput }],
+        },
+      },
+    });
+
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+    });
+    expect(overlay?.subAgents).toEqual([
+      expect.objectContaining({
+        backend: "codex",
+        monitorThreadId: response.reviewThreadId,
+        monitorTurnId: response.turnId,
+        outcome: "success",
+        status: "success",
+      }),
+    ]);
+    expect(overlay?.managedReviewEntries).toEqual([
+      expect.objectContaining({
+        id: `managed-review:${response.turnId}:started`,
+      }),
+      expect.objectContaining({
+        id: `managed-review:${response.turnId}:result`,
+        output: expect.objectContaining({
+          overall_correctness: "patch is correct",
+        }),
+        turn: expect.objectContaining({
+          id: response.turnId,
+          status: "completed",
+        }),
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("normalizes file-change approval diffs and omits empty placeholders", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
