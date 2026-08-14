@@ -114,8 +114,11 @@ export function ThreadRow(props: ThreadRowProps) {
     threadKey === props.selectedThreadKey;
   const isComposerSource = threadKey === props.composerSourceThreadKey;
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
+  const isPinnedRow =
+    Boolean(props.thread.pinnedRank) && !props.thread.parentThreadId;
   const [pickerOpen, setPickerOpen] = useState(false);
-  const rowButtonRef = useRef<HTMLButtonElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const openButtonRef = useRef<HTMLButtonElement>(null);
   const addReactionRef = useRef<HTMLSpanElement>(null);
   const reactions = props.thread.reactions ?? [];
   const canReact = Boolean(props.onSetReaction);
@@ -143,11 +146,11 @@ export function ThreadRow(props: ThreadRowProps) {
       return;
     }
 
-    if (typeof rowButtonRef.current?.scrollIntoView !== "function") {
+    if (typeof rowRef.current?.scrollIntoView !== "function") {
       return;
     }
 
-    rowButtonRef.current.scrollIntoView({
+    rowRef.current.scrollIntoView({
       block: "nearest",
     });
   }, [selected, threadKey]);
@@ -215,51 +218,78 @@ export function ThreadRow(props: ThreadRowProps) {
           }}
         />
       ) : null}
-      <button
-        ref={rowButtonRef}
-        aria-label={
-          props.thread.pinnedRank && !props.thread.parentThreadId
-            ? `${props.thread.title}, pinned`
-            : props.thread.title
-        }
-        aria-pressed={selected}
+      <div
+        ref={rowRef}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
-          selected ? " is-selected" : ""
-        }${isComposerSource ? " is-composer-source" : ""}`}
-        type="button"
-        onKeyDown={(event) => {
-          // Reorder a pinned thread within its backend's pinned
-          // slice. Unified with the directory-pin shortcut
-          // (Cmd+Shift+Arrow) so users learn one keybind. Plain
-          // Cmd+Arrow used to drive this — that collided with
-          // macOS Finder's "go to parent folder" mental model and
-          // diverged from the directory shortcut.
-          if (
-            props.onMovePinnedThread &&
-            props.thread.pinnedRank &&
-            event.metaKey &&
-            event.shiftKey &&
-            !event.altKey &&
-            !event.ctrlKey &&
-            (event.key === "ArrowUp" || event.key === "ArrowDown")
-          ) {
-            event.preventDefault();
-            props.onMovePinnedThread(
-              props.thread,
-              event.key === "ArrowUp" ? "up" : "down",
-            );
+          isPinnedRow ? " thread-row--pinned" : ""
+        }${selected ? " is-selected" : ""}${
+          isComposerSource ? " is-composer-source" : ""
+        }`}
+        onClick={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("button, [role='button'], a")) {
+            return;
           }
+          props.onSelectThread(props.thread);
         }}
-        onClick={() => props.onSelectThread(props.thread)}
       >
+        <button
+          ref={openButtonRef}
+          aria-label={
+            isPinnedRow ? `${props.thread.title}, pinned` : props.thread.title
+          }
+          aria-pressed={selected}
+          className="thread-row__open"
+          type="button"
+          onKeyDown={(event) => {
+            if (
+              props.onMovePinnedThread &&
+              props.thread.pinnedRank &&
+              event.metaKey &&
+              event.shiftKey &&
+              !event.altKey &&
+              !event.ctrlKey &&
+              (event.key === "ArrowUp" || event.key === "ArrowDown")
+            ) {
+              event.preventDefault();
+              props.onMovePinnedThread(
+                props.thread,
+                event.key === "ArrowUp" ? "up" : "down",
+              );
+            }
+          }}
+          onClick={() => props.onSelectThread(props.thread)}
+        />
+
         <span className="thread-row__header">
           <span className="thread-row__heading">
             <ThreadRowStatus status={status} />
             <span className="thread-row__title">{props.thread.title}</span>
-            {props.thread.pinnedRank && !props.thread.parentThreadId ? (
-              <span aria-hidden="true" className="thread-row__heading-pin">
-                <PinIcon size={11} />
-              </span>
+            {isPinnedRow ? (
+              onSetThreadPin ? (
+                <button
+                  aria-label="Unpin thread"
+                  className="thread-row__heading-pin"
+                  title="Unpin thread"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (event.detail === 0) {
+                      openButtonRef.current?.focus();
+                    }
+                    void onSetThreadPin(props.thread, false);
+                  }}
+                >
+                  <PinIcon size={11} aria-hidden="true" />
+                </button>
+              ) : (
+                <span
+                  aria-hidden="true"
+                  className="thread-row__heading-pin thread-row__heading-pin--static"
+                >
+                  <PinIcon size={11} />
+                </span>
+              )
             ) : null}
           </span>
           <span className="thread-row__time">
@@ -335,23 +365,22 @@ export function ThreadRow(props: ThreadRowProps) {
           ))}
         </span>
 
-      </button>
+      </div>
 
       <div className="thread-row__actions">
-        {onSetThreadPin && !props.thread.parentThreadId ? (
+        {onSetThreadPin && !props.thread.parentThreadId && !isPinnedRow ? (
           <button
-            aria-label={
-              props.thread.pinnedRank ? "Unpin thread" : "Pin thread"
-            }
-            aria-pressed={Boolean(props.thread.pinnedRank)}
-            className={`thread-row__pin-button${
-              props.thread.pinnedRank ? " is-pinned" : ""
-            }`}
-            title={props.thread.pinnedRank ? "Unpin thread" : "Pin thread"}
+            aria-label="Pin thread"
+            aria-pressed={false}
+            className="thread-row__pin-button"
+            title="Pin thread"
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              void onSetThreadPin(props.thread, !props.thread.pinnedRank);
+              if (event.detail === 0) {
+                openButtonRef.current?.focus();
+              }
+              void onSetThreadPin(props.thread, true);
             }}
           >
             <PinIcon size={12} aria-hidden="true" />

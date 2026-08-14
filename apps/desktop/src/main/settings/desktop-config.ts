@@ -23,7 +23,7 @@ import type {
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsConfigPatch,
-  DesktopSidebarTextSize,
+  DesktopTextSize,
   DesktopUpdateChannel,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
@@ -31,13 +31,13 @@ import type {
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
-  DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+  DESKTOP_TEXT_SIZE_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   isDesktopAppearanceDensity,
   isDesktopAppearanceTheme,
-  isDesktopSidebarTextSize,
+  isDesktopTextSize,
   isDesktopCodexProfileModel,
   isDesktopHotCpuProfileStartDelayMs,
   isDesktopHotCpuProfileTriggerMode,
@@ -95,7 +95,8 @@ export type DesktopSettingsConfig = {
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
-      sidebarTextSize?: DesktopSidebarTextSize;
+      sidebarTextSize?: DesktopTextSize;
+      transcriptTextSize?: DesktopTextSize;
     };
     codexProfileModel?: DesktopCodexProfileModel;
     messagingAcknowledgment?: DesktopMessagingAcknowledgment | null;
@@ -751,7 +752,7 @@ export function desktopSettingsPatchToEdits(
   if (patch.general?.appearance?.sidebarTextSize !== undefined) {
     if (
       patch.general.appearance.sidebarTextSize
-        === DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT
+        === DESKTOP_TEXT_SIZE_DEFAULT
     ) {
       edits.push({
         op: "delete",
@@ -761,6 +762,23 @@ export function desktopSettingsPatchToEdits(
       set(
         ["general", "appearance", "sidebar_text_size"],
         patch.general.appearance.sidebarTextSize,
+      );
+    }
+  }
+
+  if (patch.general?.appearance?.transcriptTextSize !== undefined) {
+    if (
+      patch.general.appearance.transcriptTextSize
+        === DESKTOP_TEXT_SIZE_DEFAULT
+    ) {
+      edits.push({
+        op: "delete",
+        path: ["general", "appearance", "transcript_text_size"],
+      });
+    } else {
+      set(
+        ["general", "appearance", "transcript_text_size"],
+        patch.general.appearance.transcriptTextSize,
       );
     }
   }
@@ -1398,8 +1416,11 @@ function normalizeDesktopConfig(
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
         density: readAppearanceDensity(generalAppearance?.density),
-        sidebarTextSize: readSidebarTextSize(
+        sidebarTextSize: readTextSize(
           generalAppearance?.sidebar_text_size,
+        ),
+        transcriptTextSize: readTextSize(
+          generalAppearance?.transcript_text_size,
         ),
       },
       codexProfileModel: readCodexProfileModel(general?.codex_profile_model),
@@ -1981,10 +2002,10 @@ function readAppearanceDensity(
     : undefined;
 }
 
-function readSidebarTextSize(
+function readTextSize(
   value: TomlScalar | undefined,
-): DesktopSidebarTextSize | undefined {
-  return typeof value === "string" && isDesktopSidebarTextSize(value)
+): DesktopTextSize | undefined {
+  return typeof value === "string" && isDesktopTextSize(value)
     ? value
     : undefined;
 }

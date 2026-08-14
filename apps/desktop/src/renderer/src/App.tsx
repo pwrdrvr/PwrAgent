@@ -130,6 +130,8 @@ export function App() {
         density: settings.snapshot.general.appearance.density.value,
         sidebarTextSize:
           settings.snapshot.general.appearance.sidebarTextSize.value,
+        transcriptTextSize:
+          settings.snapshot.general.appearance.transcriptTextSize.value,
       }
       : undefined,
     writeConfig: settings.writeConfig,

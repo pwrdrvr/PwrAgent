@@ -18,7 +18,6 @@ import {
   SmileyIcon,
   TelegramIcon,
   UnlinkedDotIcon,
-  WorkspaceIcon,
   WorktreeIcon,
 } from "../index";
 
@@ -30,7 +29,6 @@ const ALL_ICONS = [
   ["FolderIcon", FolderIcon],
   ["FileCodeIcon", FileCodeIcon],
   ["BranchIcon", BranchIcon],
-  ["WorkspaceIcon", WorkspaceIcon],
   ["WorktreeIcon", WorktreeIcon],
   ["UnlinkedDotIcon", UnlinkedDotIcon],
   ["SettingsIcon", SettingsIcon],

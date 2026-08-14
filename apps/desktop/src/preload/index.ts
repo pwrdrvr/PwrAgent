@@ -11,7 +11,7 @@ import type {
   ArchiveThreadResponse,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
-  DesktopSidebarTextSize,
+  DesktopTextSize,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -250,8 +250,8 @@ import type {
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
 import {
-  DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
-  isDesktopSidebarTextSize,
+  DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopTextSize,
 } from "@pwragent/shared";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
@@ -1467,7 +1467,8 @@ const desktopApi = Object.freeze({
     callback: (appearance: {
       theme: DesktopAppearanceTheme;
       density: DesktopAppearanceDensity;
-      sidebarTextSize: DesktopSidebarTextSize;
+      sidebarTextSize: DesktopTextSize;
+      transcriptTextSize: DesktopTextSize;
     }) => void,
   ): (() => void) => {
     const listener = (
@@ -1475,7 +1476,8 @@ const desktopApi = Object.freeze({
       payload: {
         theme: DesktopAppearanceTheme;
         density: DesktopAppearanceDensity;
-        sidebarTextSize: DesktopSidebarTextSize;
+        sidebarTextSize: DesktopTextSize;
+        transcriptTextSize: DesktopTextSize;
       },
     ) => callback(payload);
     ipcRenderer.on(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);
@@ -1626,7 +1628,8 @@ const APPEARANCE_ARG_PREFIX = "--pwragent-appearance=";
 function readBootstrapAppearance(): {
   theme: "system" | "dark" | "light";
   density: "mission-control" | "compact";
-  sidebarTextSize: DesktopSidebarTextSize;
+  sidebarTextSize: DesktopTextSize;
+  transcriptTextSize: DesktopTextSize;
 } {
   for (const arg of process.argv) {
     if (!arg.startsWith(APPEARANCE_ARG_PREFIX)) continue;
@@ -1640,12 +1643,20 @@ function readBootstrapAppearance(): {
         raw && (raw.density === "mission-control" || raw.density === "compact")
           ? raw.density
           : "mission-control";
+      // Shared guard, not a hand-copied literal list: a notch added to
+      // DESKTOP_TEXT_SIZES must not silently coerce to "md" on
+      // first paint only (the flash this bootstrap exists to prevent).
       const sidebarTextSize =
         raw && typeof raw.sidebarTextSize === "string"
-          && isDesktopSidebarTextSize(raw.sidebarTextSize)
+          && isDesktopTextSize(raw.sidebarTextSize)
           ? raw.sidebarTextSize
-          : DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT;
-      return { theme, density, sidebarTextSize };
+          : DESKTOP_TEXT_SIZE_DEFAULT;
+      const transcriptTextSize =
+        raw && typeof raw.transcriptTextSize === "string"
+          && isDesktopTextSize(raw.transcriptTextSize)
+          ? raw.transcriptTextSize
+          : DESKTOP_TEXT_SIZE_DEFAULT;
+      return { theme, density, sidebarTextSize, transcriptTextSize };
     } catch {
       break;
     }
@@ -1653,7 +1664,8 @@ function readBootstrapAppearance(): {
   return {
     theme: "system",
     density: "mission-control",
-    sidebarTextSize: DESKTOP_SIDEBAR_TEXT_SIZE_DEFAULT,
+    sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
+    transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
   };
 }
 const bootstrapAppearance = readBootstrapAppearance();

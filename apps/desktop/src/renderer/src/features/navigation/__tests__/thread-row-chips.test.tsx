@@ -197,9 +197,9 @@ describe("ThreadRow chip flow", () => {
     expect(onUnbindMessagingBinding).not.toHaveBeenCalled();
   });
 
-  it("toggles the pin from the hover actions button without selecting the row", () => {
+  it("unpins from the always-visible in-title pin without selecting the row", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
-    const { onSelectThread } = renderRow({
+    const { container, onSelectThread } = renderRow({
       thread: {
         ...baseThread,
         pinnedRank: "1024",
@@ -209,8 +209,11 @@ describe("ThreadRow chip flow", () => {
     });
 
     const pin = screen.getByRole("button", { name: "Unpin thread" });
-    expect(pin).toHaveClass("thread-row__pin-button");
-    expect(pin).toHaveAttribute("aria-pressed", "true");
+    expect(pin).toHaveClass("thread-row__heading-pin");
+    expect(document.querySelector(".thread-row__pin-button")).toBeNull();
+    expect(container.querySelector(".thread-row")).toHaveClass(
+      "thread-row--pinned",
+    );
     expect(
       screen.getByRole("button", { name: "Chip flow thread, pinned" }),
     ).toBeInTheDocument();
@@ -225,7 +228,27 @@ describe("ThreadRow chip flow", () => {
     expect(onSelectThread).not.toHaveBeenCalled();
   });
 
-  it("pins an unpinned thread from the same actions button", () => {
+  it("parks keyboard focus on the persistent open control before unpinning", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    renderRow({
+      thread: {
+        ...baseThread,
+        pinnedRank: "1024",
+        reactions: [],
+      },
+      onSetThreadPin,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Unpin thread" }), {
+      detail: 0,
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Chip flow thread, pinned" }),
+    ).toHaveFocus();
+  });
+
+  it("pins an unpinned thread from the hover actions button", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     renderRow({
       thread: {
@@ -237,6 +260,7 @@ describe("ThreadRow chip flow", () => {
 
     const pin = screen.getByRole("button", { name: "Pin thread" });
     expect(pin).toHaveAttribute("aria-pressed", "false");
+    expect(pin).toHaveClass("thread-row__pin-button");
     expect(document.querySelector(".thread-row__heading-pin")).toBeNull();
 
     fireEvent.click(pin);

@@ -17,7 +17,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type {
   AppearanceController,
   DensityPreference,
-  SidebarTextSizePreference,
+  TextSizePreference,
   ThemePreference,
 } from "../../lib/useAppearance";
 import {
@@ -53,9 +53,11 @@ const DENSITY_OPTIONS: Array<{
   { label: "Compact", meta: "Metadata chips hidden", value: "compact" },
 ];
 
-const SIDEBAR_TEXT_SIZE_OPTIONS: Array<{
+/* One notch scale serves both text-size axes (sidebar titles,
+   transcript body). */
+const TEXT_SIZE_OPTIONS: Array<{
   label: string;
-  value: SidebarTextSizePreference;
+  value: TextSizePreference;
 }> = [
   { label: "XS", value: "xs" },
   { label: "S", value: "sm" },
@@ -63,6 +65,46 @@ const SIDEBAR_TEXT_SIZE_OPTIONS: Array<{
   { label: "L", value: "lg" },
   { label: "XL", value: "xl" },
 ];
+
+/* One field per text-size axis — a shared control so a radiogroup fix
+   (keyboard handling, aria, styling) lands once for every axis. */
+function TextSizeField(props: {
+  label: string;
+  sub: string;
+  value: TextSizePreference;
+  onChange: (value: TextSizePreference) => void;
+}) {
+  return (
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      control={
+        <div
+          className="settings-segmented"
+          role="radiogroup"
+          aria-label={props.label}
+        >
+          {TEXT_SIZE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              aria-checked={props.value === option.value}
+              className={`settings-segmented__button${
+                props.value === option.value ? " is-active" : ""
+              }`}
+              role="radio"
+              type="button"
+              onClick={() => {
+                props.onChange(option.value);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      }
+    />
+  );
+}
 
 const PASTED_IMAGE_PATCH_OPTIONS: Array<{
   description: string;
@@ -499,39 +541,21 @@ export function GeneralSettings(props: {
                 </div>
               }
             />
-            <SettingsField
+            <TextSizeField
               label="Sidebar text size"
               sub="Scales the thread and directory titles in the left sidebar. M is the tuned default; each notch moves the titles one pixel."
-              control={
-                <div
-                  className="settings-segmented"
-                  role="radiogroup"
-                  aria-label="Sidebar text size"
-                >
-                  {SIDEBAR_TEXT_SIZE_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      aria-checked={
-                        appearance.sidebarTextSize === option.value
-                      }
-                      className={`settings-segmented__button${
-                        appearance.sidebarTextSize === option.value
-                          ? " is-active"
-                          : ""
-                      }`}
-                      role="radio"
-                      type="button"
-                      onClick={() => {
-                        props.appearanceController?.setSidebarTextSize(
-                          option.value,
-                        );
-                      }}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              }
+              value={appearance.sidebarTextSize}
+              onChange={(value) => {
+                props.appearanceController?.setSidebarTextSize(value);
+              }}
+            />
+            <TextSizeField
+              label="Transcript text size"
+              sub="Scales body text in the thread transcript — messages, plans, reviews, and prompts. M is the tuned default; each notch moves the text one pixel."
+              value={appearance.transcriptTextSize}
+              onChange={(value) => {
+                props.appearanceController?.setTranscriptTextSize(value);
+              }}
             />
           </div>
         </SettingsSection>

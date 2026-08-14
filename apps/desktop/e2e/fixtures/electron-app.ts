@@ -7,7 +7,7 @@ import type {
   DesktopAppearanceTheme,
   ThreadExecutionMode,
 } from "@pwragent/shared";
-import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
+import { _electron as electron, expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
 import { SECRET_STORAGE_DISABLED_ENV } from "../../src/main/settings/desktop-secret-store";
 import {
@@ -322,6 +322,20 @@ export async function launchElectronApp(params: {
       await rm(homeRoot, { recursive: true, force: true });
     },
   };
+}
+
+/** Locate the thread card that owns the named empty open-thread button. */
+export function threadRowCard(
+  scope: Page | Locator,
+  name: string | RegExp,
+): Locator {
+  const page =
+    typeof (scope as Locator).page === "function"
+      ? (scope as Locator).page()
+      : (scope as Page);
+  return scope
+    .locator(".thread-row")
+    .filter({ has: page.getByRole("button", { name }) });
 }
 
 async function killSpawnedProfileProcessesUnder(homeRoot: string): Promise<void> {
