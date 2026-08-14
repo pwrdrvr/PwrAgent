@@ -244,11 +244,18 @@ test("shows initiated background turns as thinking, then unread once they finish
 
     // The aggregate activity signal lives on the Attention tab now, not on
     // Directories — a live turn counts as active, never as to-review.
-    await expect(
-      app.window.getByRole("tab", {
-        name: "Attention, 1 active thread, 0 threads to review",
-      }),
-    ).toBeVisible();
+    const attentionTab = app.window.getByRole("tab", {
+      name: "Attention, 1 active thread, 0 threads to review",
+    });
+    await expect(attentionTab).toBeVisible();
+    await attentionTab.hover();
+    const attentionTooltip = app.window.getByRole("tooltip");
+    await expect(attentionTooltip).toBeVisible();
+    const appShellBounds = await app.window.locator(".app-shell").boundingBox();
+    const tooltipBounds = await attentionTooltip.boundingBox();
+    expect(appShellBounds).not.toBeNull();
+    expect(tooltipBounds).not.toBeNull();
+    expect(tooltipBounds!.y).toBeGreaterThanOrEqual(appShellBounds!.y + 12);
 
     await app.window.getByRole("tab", { name: "Directories" }).click();
     // The counts are indicator + number now; the words moved into a hover

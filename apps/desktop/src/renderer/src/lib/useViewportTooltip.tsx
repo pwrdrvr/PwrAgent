@@ -17,6 +17,17 @@ const VIEWPORT_PADDING = 12;
 /** Gap between the tooltip and the target element (above or below). */
 const TOOLTIP_GAP = 10;
 
+function tooltipViewportTop(): number {
+  // On Windows the fixed custom title bar occupies the top of the renderer,
+  // while `.app-shell` begins immediately below it. Portal tooltips live on
+  // document.body, so the raw viewport top would let them render underneath
+  // that higher title-bar layer. The shell boundary is also zero on platforms
+  // without the custom strip, preserving the ordinary viewport behavior.
+  const appShell = document.querySelector<HTMLElement>(".app-shell");
+  const appShellTop = appShell?.getBoundingClientRect().top ?? 0;
+  return Math.max(VIEWPORT_PADDING, appShellTop + VIEWPORT_PADDING);
+}
+
 type TooltipState = {
   content: ReactNode;
   targetTop: number;
@@ -102,11 +113,31 @@ export function useViewportTooltip(options: {
       window.innerWidth - rect.width - VIEWPORT_PADDING,
       Math.max(VIEWPORT_PADDING, state.targetCenter - rect.width / 2),
     );
-    const fitsAbove =
-      state.targetTop - rect.height - TOOLTIP_GAP >= VIEWPORT_PADDING;
-    const top = fitsAbove
-      ? state.targetTop - rect.height - TOOLTIP_GAP
-      : state.targetBottom + TOOLTIP_GAP;
+    const viewportTop = tooltipViewportTop();
+    const viewportBottom = window.innerHeight - VIEWPORT_PADDING;
+    const aboveTop = state.targetTop - rect.height - TOOLTIP_GAP;
+    const belowTop = state.targetBottom + TOOLTIP_GAP;
+    const fitsAbove = aboveTop >= viewportTop;
+    const fitsBelow = belowTop + rect.height <= viewportBottom;
+    let top: number;
+    if (fitsAbove) {
+      top = aboveTop;
+    } else if (fitsBelow) {
+      top = belowTop;
+    } else {
+      const availableAbove = Math.max(
+        0,
+        state.targetTop - TOOLTIP_GAP - viewportTop,
+      );
+      const availableBelow = Math.max(
+        0,
+        viewportBottom - state.targetBottom - TOOLTIP_GAP,
+      );
+      const preferredTop =
+        availableAbove >= availableBelow ? aboveTop : belowTop;
+      const maximumTop = Math.max(viewportTop, viewportBottom - rect.height);
+      top = Math.min(maximumTop, Math.max(viewportTop, preferredTop));
+    }
     if (state.left !== left || state.top !== top) {
       setState({ ...state, left, top });
     }
