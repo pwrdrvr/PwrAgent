@@ -15,6 +15,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
+import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { Sidebar } from "../Sidebar";
 
 /**
@@ -275,6 +276,7 @@ afterEach(() => {
     __pwragentFederationTarget?: unknown;
   }).__pwragentFederationTarget;
   vi.restoreAllMocks();
+  vi.useRealTimers();
   document
     .querySelectorAll(".thread-row--drag-image")
     .forEach((element) => element.remove());
@@ -848,7 +850,10 @@ describe("Sidebar", () => {
     fireEvent.mouseEnter(newThreadButton.parentElement as HTMLElement);
     expect((await screen.findByRole("tooltip")).textContent).toBe("New thread");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    vi.useFakeTimers();
     fireEvent.mouseLeave(newThreadButton.parentElement as HTMLElement);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS));
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     fireEvent.click(newThreadButton);
     expect(onCreateThread).toHaveBeenCalledTimes(1);
