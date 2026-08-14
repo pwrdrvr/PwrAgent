@@ -7,6 +7,9 @@ import {
   E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV,
   E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV,
 } from "./e2e/fixtures/electron-shutdown-policy";
+import {
+  E2E_SHUTDOWN_FIRST_FAILURE_ARTIFACT_DIR_ENV,
+} from "./e2e/fixtures/electron-shutdown-artifacts";
 
 process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV] ??= path.join(
   import.meta.dirname,
@@ -17,6 +20,11 @@ process.env[E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV] ??= path.join(
   import.meta.dirname,
   "test-results",
   "electron-shutdown-circuit.json",
+);
+process.env[E2E_SHUTDOWN_FIRST_FAILURE_ARTIFACT_DIR_ENV] ??= path.join(
+  import.meta.dirname,
+  "test-results",
+  "electron-shutdown-first-failure",
 );
 
 const electronShutdownCircuitEnabled =

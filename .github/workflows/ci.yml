@@ -499,6 +499,16 @@ jobs:
             apps/desktop/test-results/
           retention-days: 30
 
+      - name: Upload first abnormal Electron shutdown logs
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          name: desktop-e2e-macos-lane-${{ matrix.lane }}-first-shutdown-failure
+          path: apps/desktop/test-results/electron-shutdown-first-failure/
+          if-no-files-found: ignore
+          retention-days: 30
+
   live-agent-core:
     name: Live Agent Core
     if: ${{ github.event_name == 'pull_request' }}
