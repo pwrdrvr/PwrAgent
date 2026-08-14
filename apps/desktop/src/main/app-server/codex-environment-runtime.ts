@@ -175,6 +175,17 @@ export const DETACHED_OUTPUT_SNAPSHOT_MS = 500;
 const DETACHED_STOP_SIGKILL_GRACE_MS = 2_000;
 const WINDOWS_JOB_STARTUP_DIAGNOSTICS_ENV =
   "PWRAGENT_WINDOWS_JOB_STARTUP_DIAGNOSTICS";
+const CAPTURED_COMMAND_TERMINAL_ENV_KEYS = new Set([
+  "CLICOLOR_FORCE",
+  "COLORTERM",
+  "FORCE_COLOR",
+  "ITERM_SESSION_ID",
+  "NO_COLOR",
+  "TERM",
+  "TERM_PROGRAM",
+  "TERM_PROGRAM_VERSION",
+  "TERM_SESSION_ID",
+]);
 
 export type CodexEnvironmentCommandResult = {
   durationMs?: number;
@@ -1184,10 +1195,21 @@ function sanitizeLocalEnvironmentCommandEnv(
 ): NodeJS.ProcessEnv {
   const sanitized = buildPwrAgentChildProcessEnv(env);
   for (const key of Object.keys(sanitized)) {
-    if (isParentElectronRuntimeEnvKey(key)) {
+    const upperKey = key.toUpperCase();
+    if (
+      isParentElectronRuntimeEnvKey(upperKey)
+      || CAPTURED_COMMAND_TERMINAL_ENV_KEYS.has(upperKey)
+    ) {
       delete sanitized[key];
     }
   }
+  // These commands write to pipes, not a PTY. Remove terminal-emulator
+  // identity inherited by PwrAgent so shell startup integrations do not emit
+  // terminal-only control sequences (for example Terminal.app's OSC 7 cwd
+  // update), and give tools that consult environment variables the same
+  // non-terminal signal they get from isatty(3).
+  sanitized.TERM = "dumb";
+  sanitized.NO_COLOR = "1";
   return sanitized;
 }
 
