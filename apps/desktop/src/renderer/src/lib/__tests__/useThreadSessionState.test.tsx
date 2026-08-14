@@ -389,6 +389,82 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("stitches many older pages without weakening exact-id overlap rules", async () => {
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          messageEntry({
+            id: "tail",
+            text: "Authoritative tail",
+            createdAt: 500,
+          }),
+        ],
+        hasPreviousPage: true,
+        previousCursor: "page-1",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          messageEntry({ id: "page-1", text: "Repeated", createdAt: 400 }),
+          messageEntry({ id: "tail", text: "Stale tail", createdAt: 500 }),
+        ],
+        hasPreviousPage: true,
+        previousCursor: "page-2",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          messageEntry({ id: "page-2", text: "Repeated", createdAt: 300 }),
+          messageEntry({ id: "page-1", text: "Stale page 1", createdAt: 400 }),
+        ],
+        hasPreviousPage: true,
+        previousCursor: "page-3",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          messageEntry({ id: "page-3", text: "Oldest", createdAt: 200 }),
+        ],
+        hasPreviousPage: false,
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
+      await act(async () => {
+        await result.current.loadOlder();
+      });
+    }
+
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "page-3",
+      "page-2",
+      "page-1",
+      "tail",
+    ]);
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Oldest",
+      "message:Repeated",
+      "message:Repeated",
+      "message:Authoritative tail",
+    ]);
+    expect(result.current.messages.map((message) => message.id)).toEqual([
+      "page-3",
+      "page-2",
+      "page-1",
+      "tail",
+    ]);
+    expect(result.current.response?.replay.pagination.hasPreviousPage).toBe(false);
+  });
+
   it("replaces an overlapping live tail when hydrated message ids change", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
