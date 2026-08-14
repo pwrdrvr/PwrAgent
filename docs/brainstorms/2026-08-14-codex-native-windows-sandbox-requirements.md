@@ -187,10 +187,17 @@ sandbox wrapper. Its known-notification set does not contain
 notifications are currently logged as unhandled before being forwarded through
 the generic notification path.
 
-The initialize response already retains `platformFamily`, `platformOs`, and
-supported methods. Those should gate native-Windows UI and capability checks.
-`process.platform === "win32"` alone is not enough to distinguish the actual
-Codex execution environment from WSL, a remote backend, or a future bridge.
+The initialize response contains `userAgent`, `codexHome`, `platformFamily`, and
+`platformOs`; it does **not** advertise supported request methods. The platform
+fields should gate native-Windows UI. Capability detection must be separate:
+probe the read-only `windowsSandbox/readiness` request and classify JSON-RPC
+method-not-found/unknown-method responses as unsupported. Use a pinned
+`userAgent` version/schema compatibility table to decide whether setup may be
+offered, then still handle method-unavailable from the operator-confirmed
+`windowsSandbox/setupStart` call. Do not invoke that state-changing method just
+to probe it. `process.platform === "win32"` alone is not enough to distinguish
+the actual Codex execution environment from WSL, a remote backend, or a future
+bridge.
 
 ### Slash commands
 
@@ -207,10 +214,11 @@ and can be sent to the model. Merely adding `/setup-default-sandbox` to command
 discovery would therefore be incorrect.
 
 PwrAgent should synthesize `/setup-default-sandbox` only when the active backend
-is Codex, the initialize result says native Windows, and readiness/setup methods
-are supported. Composer execution must intercept it and open the Windows
-sandbox settings/setup confirmation. It must never begin privileged setup as a
-side effect of typing or selecting the command.
+is Codex, the initialize result says native Windows, the read-only readiness
+probe establishes sandbox API support, and the pinned compatibility table says
+the installed Codex version supports setup. Composer execution must intercept
+it and open the Windows sandbox settings/setup confirmation. It must never
+begin privileged setup as a side effect of typing or selecting the command.
 
 PwrAgent should not expose `/sandbox-add-read-dir` yet. Its documented lifetime
 is the current CLI session, and there is no equivalent App Server request in the
@@ -245,9 +253,10 @@ an ambiguous profile label are unacceptable for a privileged operation.
 
 Show this section only when the active Codex App Server reports native Windows.
 Do not warn or show setup controls on macOS, Linux, or WSL. If the installed
-Codex is too old to advertise the methods, show a neutral “Unavailable in this
-Codex version” row with an upgrade action or guidance; do not call it
-`notConfigured`.
+Codex returns method-unavailable for the read-only readiness probe, show a
+neutral “Unavailable in this Codex version” row with an upgrade action or
+guidance; do not call it `notConfigured`. This is a probe result, not an
+initialize capability advertisement.
 
 The section should contain:
 
@@ -319,7 +328,7 @@ PwrAgent needs a normalized, renderer-safe state rather than exposing raw JSON:
 
 | PwrAgent state | Evidence | Primary action |
 |---|---|---|
-| `unsupported` | not native Windows or methods absent | none or upgrade Codex |
+| `unsupported` | not native Windows or readiness probe returns method-unavailable | none or upgrade Codex |
 | `checking` | probe in flight | none |
 | `notConfigured` | readiness says so | set up elevated; offer unelevated fallback |
 | `readyElevated` | ready plus effective elevated config | none |
@@ -340,8 +349,9 @@ config through `config/read` and managed constraints through
 ```text
 PwrAgent startup / Settings open / cooled-down focus
   → active Codex App Server initialize result
-  → capability + native-Windows gate
+  → initialize platform fields gate native Windows
   → windowsSandbox/readiness (read-only)
+  → method-unavailable: unsupported; otherwise sandbox API support established
   → config/read + configRequirements/read
   → main-process normalized active-profile snapshot
   → typed IPC snapshot/event
@@ -458,7 +468,9 @@ slice, but it was not necessary to implement it to establish this design.
 ### Phase 0: Protocol contract and upstream clarification
 
 - Pin schema fixtures for the installed/supported Codex versions.
-- Add compatibility probes for readiness and setup methods.
+- Add a read-only readiness probe with explicit method-unavailable handling.
+- Add a pinned version/schema compatibility rule for whether setup may be
+  offered; do not probe support by calling the state-changing setup method.
 - Ask upstream to document readiness, runtime reload/restart semantics, and the
   world-writable snapshot gap.
 - Validate the disabled-sandbox approval explanation through a protocol capture
@@ -507,7 +519,8 @@ App Server proves it.
 ### Unit and contract tests
 
 - Parse all readiness values and reject unknown/malformed responses safely.
-- Treat missing methods as unsupported, not not-configured.
+- Treat method-unavailable from the readiness probe as unsupported, not
+  not-configured; do not consult a nonexistent initialize method list.
 - Merge readiness, config mode, managed requirements, platform, and completion
   into every normalized state.
 - Verify `ready` never becomes “Elevated” without effective config evidence.
