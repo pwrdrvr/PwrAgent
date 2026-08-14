@@ -120,6 +120,7 @@ export function toolInvocationFromNotification(params: {
   const toolName =
     readString(item, "toolName") ??
     readString(item, "tool_name") ??
+    readString(item, "tool") ??
     readString(item, "name") ??
     readString(item, "type") ??
     "commandExecution";
@@ -696,18 +697,21 @@ function readToolOutput(
   item: Record<string, unknown> | undefined,
 ): { text?: string; truncated?: boolean } {
   const data = readRecord(item?.data);
-  const text =
-    readString(item, "aggregatedOutput") ??
-    readString(item, "aggregated_output") ??
-    readString(item, "functionCallOutput") ??
-    readString(data, "aggregatedOutput") ??
-    readString(data, "aggregated_output") ??
-    readString(data, "output") ??
-    readString(data, "text") ??
-    readString(data, "result") ??
-    readString(item, "output") ??
-    readString(item, "stdout") ??
-    readString(item, "stderr");
+  const value = [
+    item?.aggregatedOutput,
+    item?.aggregated_output,
+    item?.functionCallOutput,
+    data?.aggregatedOutput,
+    data?.aggregated_output,
+    data?.output,
+    data?.text,
+    data?.result,
+    item?.result,
+    item?.output,
+    item?.stdout,
+    item?.stderr,
+  ].find((candidate) => candidate !== undefined && candidate !== null);
+  const text = serializeToolOutputValue(value);
   const truncated =
     readBoolean(data, "outputTruncated") ??
     readBoolean(data, "output_truncated") ??
@@ -716,6 +720,23 @@ function readToolOutput(
     readBoolean(item, "output_truncated") ??
     readBoolean(item, "truncated");
   return { text, truncated };
+}
+
+function serializeToolOutputValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    // App-server notifications are JSON, so this is defensive only. If a
+    // malformed in-process test double supplies a cyclic or otherwise
+    // unserializable result, skip accounting instead of breaking event fanout.
+    return undefined;
+  }
 }
 
 function readExitCode(

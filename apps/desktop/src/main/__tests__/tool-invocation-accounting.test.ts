@@ -214,6 +214,53 @@ describe("tool invocation accounting", () => {
     },
   );
 
+  it.each([
+    {
+      label: "structured object result",
+      result: {
+        tabs: [{ title: "x".repeat(4_100) }],
+      },
+    },
+    {
+      label: "MCP content array",
+      result: {
+        content: [{ type: "text", text: "x".repeat(4_100) }],
+      },
+    },
+  ])("accounts a large $label", ({ result }) => {
+    const invocation = toolInvocationFromNotification({
+      backend: "codex",
+      now: 1_800_000_030_000,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "mcp-1",
+            type: "mcpToolCall",
+            server: "playwright",
+            tool: "browser_tabs",
+            status: "completed",
+            arguments: { action: "list" },
+            result,
+          },
+        },
+      } as AppServerNotification,
+    });
+
+    expect(invocation).toMatchObject({
+      outputChars: JSON.stringify(result).length,
+      status: "completed",
+      toolName: "browser_tabs",
+    });
+    expect(detectLargeToolOutput({ current: invocation! })?.alert).toMatchObject({
+      kind: "large-output",
+      severity: "warning",
+      toolName: "browser_tabs",
+    });
+  });
+
   it("marks completed command invocations failed from success false or exit code", () => {
     const successFalseInvocation = toolInvocationFromNotification({
       backend: "codex",

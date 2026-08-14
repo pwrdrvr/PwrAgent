@@ -265,6 +265,48 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("holds one large structured MCP result and its alert to one commit", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "mcp-1",
+              type: "mcpToolCall",
+              server: "playwright",
+              tool: "browser_tabs",
+              status: "completed",
+              arguments: { action: "list" },
+              result: {
+                content: [{ type: "text", text: "x".repeat(4_100) }],
+              },
+            },
+          },
+        },
+      } as AgentEvent);
+    });
+
+    expectSqliteWriteBudget({
+      note: "one large structured MCP result and its alert in one boundary",
+      scenario: "structured-mcp-output-alert",
+      writes,
+    });
+
+    await registry.close();
+  });
+
   it("holds a burst of live token usage to one commit", async () => {
     vi.useFakeTimers();
     const registry = new DesktopBackendRegistry({

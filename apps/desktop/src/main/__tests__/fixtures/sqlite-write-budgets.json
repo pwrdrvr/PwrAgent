@@ -103,5 +103,12 @@
     "observedWalBytes": 49440,
     "rowsChanged": 3,
     "statements": 3
+  },
+  "structured-mcp-output-alert": {
+    "commits": 1,
+    "note": "one large structured MCP result and its alert in one boundary",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
   }
 }
