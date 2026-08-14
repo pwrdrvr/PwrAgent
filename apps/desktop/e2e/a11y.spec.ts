@@ -78,7 +78,8 @@ async function launchAuditApp(options?: {
 // cards are exactly what carries the contrast risk (title and status
 // indicator over the star field, meta chips, the low-opacity instance
 // watermark behind them), so the map audits run against a fixture whose
-// threads are `threadStatus: "active"` and therefore populate a lane.
+// threads are `threadStatus: "active"` and therefore reach the map in
+// every lens (orbit clouds by default, lanes/projects when chosen).
 //
 // Both themes ship, so both themes are gated. See the header note.
 // `as const`, not `readonly DesktopAppearanceTheme[]` — that type also
@@ -451,7 +452,7 @@ for (const theme of AUDIT_THEMES) {
           await expect(attentionThread).toBeVisible();
           await app.window.getByRole("button", { name: "Open Star Map" }).click();
           await expect(starMap).toBeVisible();
-          // Gate on a card rather than only the map body: the lane populates
+          // Gate on a card rather than only the map body: cards populate
           // after the layer mounts, and an empty map skips the card contrast.
           await expect(starMapCard).toBeVisible();
           await runAxe(app.window, "star map layer");

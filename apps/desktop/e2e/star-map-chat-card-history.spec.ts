@@ -105,7 +105,7 @@ test.describe("star map chat card history", () => {
           title: THREAD_TITLE,
           updatedAt: Date.now(),
           // Without this the thread matches no attention category and
-          // never reaches a lane, so the card would never be clickable.
+          // never reaches the map, so the card would never be clickable.
           threadStatus: "active",
           transcript: {
             entryCount: ENTRY_COUNT,
