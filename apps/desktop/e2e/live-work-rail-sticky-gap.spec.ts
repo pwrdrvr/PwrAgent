@@ -51,31 +51,35 @@ test("LiveWorkRail sticky edit header and file-toggle pin without a gap", async 
 
     // Scroll inside the rail body so the file-toggle engages sticky.
     const railBody = rail.locator("css=.live-work-rail__body");
-    await railBody.evaluate((el) => {
+    await expect.poll(async () => railBody.evaluate((el) => {
       el.scrollTop = 200;
-    });
+      return el.scrollTop;
+    })).toBeGreaterThan(0);
 
     // After scrolling, the edit-group header should pin at the rail body's
     // top edge, and the file toggle should pin flush beneath that header. The
     // no-gap assertion now targets the header->row seam because the transcript
     // rail keeps the edit-group header even for a single group.
     const groupHeader = rail.locator("css=.edited-file-groups__group-header");
-    const toggleTop = await fileToggle.evaluate(
-      (el) => el.getBoundingClientRect().top,
-    );
-    const bodyTop = await railBody.evaluate(
-      (el) => el.getBoundingClientRect().top,
-    );
-    const headerTop = await groupHeader.evaluate(
-      (el) => el.getBoundingClientRect().top,
-    );
-    const headerBottom = await groupHeader.evaluate(
-      (el) => el.getBoundingClientRect().bottom,
-    );
-
     // Allow 1px slack for sub-pixel rounding.
-    expect(Math.abs(headerTop - bodyTop)).toBeLessThanOrEqual(1);
-    expect(Math.abs(toggleTop - headerBottom)).toBeLessThanOrEqual(1);
+    await expect.poll(async () => {
+      const bodyTop = await railBody.evaluate(
+        (el) => el.getBoundingClientRect().top,
+      );
+      const headerTop = await groupHeader.evaluate(
+        (el) => el.getBoundingClientRect().top,
+      );
+      return Math.abs(headerTop - bodyTop);
+    }).toBeLessThanOrEqual(1);
+    await expect.poll(async () => {
+      const toggleTop = await fileToggle.evaluate(
+        (el) => el.getBoundingClientRect().top,
+      );
+      const headerBottom = await groupHeader.evaluate(
+        (el) => el.getBoundingClientRect().bottom,
+      );
+      return Math.abs(toggleTop - headerBottom);
+    }).toBeLessThanOrEqual(1);
   } finally {
     await app.close();
   }
