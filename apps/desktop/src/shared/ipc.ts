@@ -304,6 +304,9 @@ export const WINDOW_OPEN_SETTINGS_CHANNEL = "window:open-settings";
  * flag — re-entry is transient.
  */
 export const WINDOW_REPLAY_ONBOARDING_CHANNEL = "window:replay-onboarding";
+/** Main → renderer push: copy the selected thread's local diagnostics info. */
+export const WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL =
+  "window:copy-local-diagnostics-info";
 export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";
 export const SETTINGS_READ_CHANNEL = "settings:read";
 export const SETTINGS_WRITE_CONFIG_CHANNEL = "settings:write-config";

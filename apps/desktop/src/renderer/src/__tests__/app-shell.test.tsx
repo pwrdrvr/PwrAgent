@@ -1764,6 +1764,116 @@ describe("App", () => {
     expect(await screen.findByRole("textbox", { name: "New thread" })).toBeInTheDocument();
   });
 
+  it("copies the selected thread's local diagnostics from the Help menu push", async () => {
+    let copyDiagnosticsListener: (() => void) | undefined;
+    const copyText = vi.fn(async () => undefined);
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        copyText,
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-1"],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+          threads: [
+            {
+              id: "thread-1",
+              title: "Fix handoff project paths and diagnostics",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              executionMode: "default" as const,
+              linkedDirectories: [
+                {
+                  id: "/Users/operator/pwrdrvr/PwrAgent",
+                  label: "PwrAgent",
+                  path: "/Users/operator/pwrdrvr/PwrAgent",
+                  worktreePath:
+                    "/Users/operator/.codex/worktrees/abc/PwrAgent",
+                  kind: "worktree" as const,
+                },
+              ],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+              updatedAt: Date.now(),
+            },
+          ],
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        markThreadSeen: async () => ({
+          backend: "codex" as const,
+          threadId: "thread-1",
+          seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onCopyLocalDiagnosticsInfoRequested: (listener: () => void) => {
+          copyDiagnosticsListener = listener;
+          return () => {
+            copyDiagnosticsListener = undefined;
+          };
+        },
+        readAppMetadata: async () => ({
+          applicationName: "PwrAgent",
+          applicationVersion: "1.0.0",
+          copyright: "Copyright © 2026 PwrDrvr LLC.",
+          homepage: "https://pwragent.ai",
+          documentationUrl: "https://docs.pwragent.ai",
+          electronVersion: "41.2.1",
+          chromeVersion: "142.0.0.0",
+          nodeVersion: "24.0.0",
+          mainProcessId: 4100,
+          rendererProcessId: 4101,
+          activeProfileName: "work",
+          logFilePath:
+            "/Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+          codexProfilePath: "/Users/operator/.codex/profiles/work",
+        }),
+        readThread: async () => ({
+          backend: "codex" as const,
+          threadId: "thread-1",
+          messages: [],
+          turns: [],
+        }),
+      },
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "Fix handoff project paths and diagnostics",
+      }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(copyDiagnosticsListener).toBeDefined());
+
+    act(() => {
+      copyDiagnosticsListener?.();
+    });
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith([
+        "Thread ID: thread-1",
+        "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
+        "Provider/backend: codex",
+        "Thread title: Fix handoff project paths and diagnostics",
+        "PwrAgent profile: work",
+        "Main process PID: 4100",
+        "Renderer process PID: 4101",
+        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+        "Codex profile path: /Users/operator/.codex/profiles/work",
+      ].join("\n"));
+    });
+  });
+
   it("releases a queued review for a thread after navigating away", async () => {
     const agentEventListeners = new Set<
       (event: {

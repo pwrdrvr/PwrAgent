@@ -65,6 +65,7 @@ import { useIntegratedTerminals } from "./lib/useIntegratedTerminals";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
+import { copyText } from "./lib/copy-text";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
@@ -80,6 +81,10 @@ import {
   buildHotCpuProfileHandoffMessage,
   formatHotCpuProfileTriggerSummary,
 } from "../../shared/hot-cpu-profile";
+import {
+  buildLocalThreadDiagnosticsInfo,
+  resolveLocalThreadDiagnosticsProjectPath,
+} from "../../shared/local-diagnostics-info";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 import {
@@ -891,6 +896,30 @@ function DesktopAppShell(props: {
       void navigation.createThread();
     });
   }, [desktopApi, navigation]);
+  useEffect(() => {
+    if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
+      return;
+    }
+    return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
+      const thread = navigation.selectedThread;
+      void desktopApi.readAppMetadata?.().then((metadata) => {
+        void copyText(
+          buildLocalThreadDiagnosticsInfo(
+            thread
+              ? {
+                  backend: thread.source,
+                  projectPath: resolveLocalThreadDiagnosticsProjectPath(thread),
+                  threadId: thread.id,
+                  title: thread.title,
+                }
+              : {},
+            metadata,
+          ),
+          desktopApi,
+        );
+      });
+    });
+  }, [desktopApi, navigation.selectedThread]);
   useEffect(() => {
     if (!desktopApi?.onShowThreadRequested) {
       return;

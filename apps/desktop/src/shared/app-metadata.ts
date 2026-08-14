@@ -17,6 +17,10 @@ export type AppMetadata = {
    */
   mainProcessId: number;
   rendererProcessId?: number;
+  /** Active PwrAgent profile and its corresponding local support paths. */
+  activeProfileName: string;
+  logFilePath?: string;
+  codexProfilePath?: string;
 };
 
 export type AppLicenseDocumentKind = "license" | "third-party-licenses";
