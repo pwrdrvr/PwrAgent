@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -8,6 +9,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -25,6 +27,7 @@ import {
 import { threadMatchesQuery } from "../thread-search/thread-match";
 import { AgentThreadChip } from "./AgentThreadChip";
 import { InstanceChip } from "../federation/InstanceGlyph";
+import { PrChip } from "../pr-status/PrChip";
 
 const MAX_RESULTS = 8;
 
@@ -146,17 +149,53 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     props.onClose();
   };
 
+  const openPullRequest = (url: string): void => {
+    window.open(url, "_blank", "noopener,noreferrer");
+    props.onClose();
+  };
+
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key === "Escape") {
       event.preventDefault();
       props.onClose();
       return;
     }
-    // The palette is modal: the only tab stop inside it is the field (rows are
-    // driven by aria-activedescendant, not focus), so Tab must not walk out
-    // into the dimmed app behind the scrim.
     if (event.key === "Tab") {
       event.preventDefault();
+      const target = event.target instanceof HTMLElement
+        ? event.target
+        : undefined;
+      const targetRow = target?.closest<HTMLElement>('[role="option"]');
+      const activeRow = listRef.current?.querySelector<HTMLElement>(
+        '[role="option"][aria-selected="true"]',
+      );
+      const row = targetRow ?? activeRow;
+      const chips = Array.from(
+        row?.querySelectorAll<HTMLElement>("[data-pr-chip]") ?? [],
+      );
+
+      // The field owns listbox steering through aria-activedescendant. Tab
+      // temporarily enters the active row's PR actions; once the row's chips
+      // are exhausted, focus returns to the field instead of escaping the
+      // modal into the dimmed app.
+      if (target === inputRef.current) {
+        const chip = event.shiftKey ? chips.at(-1) : chips[0];
+        (chip ?? inputRef.current)?.focus();
+        return;
+      }
+
+      const chipIndex = target ? chips.indexOf(target) : -1;
+      const nextIndex = chipIndex + (event.shiftKey ? -1 : 1);
+      const nextChip = chipIndex >= 0 ? chips[nextIndex] : undefined;
+      (nextChip ?? inputRef.current)?.focus();
+      return;
+    }
+    // Arrow and Enter steer the aria-activedescendant list only while the
+    // field owns focus. A focused PR chip handles its own activation keys.
+    if (
+      event.target !== inputRef.current
+      && document.activeElement !== inputRef.current
+    ) {
       return;
     }
     if (event.key === "ArrowDown") {
@@ -182,7 +221,14 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     thread: NavigationThreadSummary,
     index: number,
   ): ReactElement => {
-    const description = describeThread(thread, trimmed);
+    const description = describeThread(thread);
+    const prs = orderPullRequestsForQuery(thread, trimmed);
+    const exactPrQuery = threadHasExactPrNumberMatch(thread, trimmed)
+      ? String(Number(trimmed.replace(/^#/, "")))
+      : "";
+    const prStripResetKey = `${exactPrQuery}|${prs
+      .map((pr) => pr.url)
+      .join("|")}`;
     const key = thread.federation
       ? federatedThreadIdentityKey(thread.federation.ref)
       : buildThreadIdentityKey(thread.source, thread.id);
@@ -217,8 +263,12 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
             />
           ) : null}
           {thread.agent ? <AgentThreadChip /> : null}
-          {description.pr ? (
-            <span className="jump-palette__row-pr">{description.pr}</span>
+          {prs.length > 0 ? (
+            <PullRequestStrip
+              prs={prs}
+              resetKey={prStripResetKey}
+              onOpen={openPullRequest}
+            />
           ) : null}
           {description.branch ? (
             // Clipped from the LEFT (`direction: rtl` in CSS) so a long
@@ -356,26 +406,83 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
 }
 
 type ThreadDescription = {
-  /** Rendered with its `#`, e.g. `#1483`. */
-  pr?: string;
   branch?: string;
   directory?: string;
 };
 
-function describeThread(
+function PullRequestStrip(props: {
+  prs: NonNullable<NavigationThreadSummary["prs"]>;
+  resetKey: string;
+  onOpen: (url: string) => void;
+}): ReactElement {
+  const stripRef = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    if (stripRef.current) {
+      stripRef.current.scrollLeft = 0;
+    }
+  }, [props.resetKey]);
+
+  return (
+    <span
+      ref={stripRef}
+      className="jump-palette__row-prs"
+      data-overflow={props.prs.length > 2 ? "true" : undefined}
+      aria-label="Pull requests"
+      onWheel={scrollPullRequestsHorizontally}
+    >
+      {props.prs.map((pr) => (
+        <PrChip
+          key={pr.url}
+          pr={pr}
+          showRepoPrefix={false}
+          onOpen={props.onOpen}
+        />
+      ))}
+    </span>
+  );
+}
+
+function orderPullRequestsForQuery(
   thread: NavigationThreadSummary,
   query: string,
+): NonNullable<NavigationThreadSummary["prs"]> {
+  const prs = thread.prs ?? [];
+  if (!threadHasExactPrNumberMatch(thread, query)) {
+    return prs;
+  }
+  const number = Number(query.trim().replace(/^#/, ""));
+  return [
+    ...prs.filter((pr) => pr.number === number),
+    ...prs.filter((pr) => pr.number !== number),
+  ];
+}
+
+function scrollPullRequestsHorizontally(
+  event: ReactWheelEvent<HTMLSpanElement>,
+): void {
+  const strip = event.currentTarget;
+  const delta = event.deltaX || event.deltaY;
+  if (delta === 0 || strip.scrollWidth <= strip.clientWidth) {
+    return;
+  }
+  const maxScrollLeft = strip.scrollWidth - strip.clientWidth;
+  const nextScrollLeft = Math.max(
+    0,
+    Math.min(maxScrollLeft, strip.scrollLeft + delta),
+  );
+  if (nextScrollLeft === strip.scrollLeft) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  strip.scrollLeft = nextScrollLeft;
+}
+
+function describeThread(
+  thread: NavigationThreadSummary,
 ): ThreadDescription {
   const description: ThreadDescription = {};
-  const pr = threadHasExactPrNumberMatch(thread, query)
-    ? (thread.prs ?? []).find(
-        (candidate) =>
-          candidate.number === Number(query.trim().replace(/^#/, "")),
-      )
-    : (thread.prs ?? [])[0];
-  if (pr) {
-    description.pr = `#${pr.number}`;
-  }
   if (thread.gitBranch) {
     description.branch = thread.gitBranch;
   }

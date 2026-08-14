@@ -1206,13 +1206,36 @@ textarea,
   white-space: nowrap;
 }
 
-.jump-palette__row-pr {
+.jump-palette__row-prs {
   flex: none;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+
+.jump-palette__row-prs[data-overflow="true"] {
+  max-width: 126px;
+}
+
+.jump-palette__row-prs::-webkit-scrollbar {
+  display: none;
+}
+
+.jump-palette__row-prs .pr-chip {
+  flex: none;
+  height: 19px;
+  gap: 4px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.jump-palette__row-prs .pr-chip__dot {
+  width: 6px;
+  height: 6px;
 }
 
 /* `direction: rtl` puts the ellipsis at the START, so a long `agent/…` prefix

@@ -92,6 +92,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -191,6 +192,126 @@ describe("SidebarSearchPopup", () => {
     expect(rows[0]).toHaveTextContent("#49");
     expect(rows[1]).toHaveTextContent("Newer substring");
     expect(rows[1]).toHaveTextContent("#349");
+    await settleRemoteSearch();
+  });
+
+  it("renders every PR and moves an exact match into the visible pair", async () => {
+    render(
+      <SidebarSearchPopup
+        threads={[
+          localThread({
+            id: "stacked",
+            title: "Stacked pull requests",
+            prs: [
+              pr(16, "PwrSuiteLab"),
+              pr(18, "PwrSuiteLab"),
+              pr(21, "PwrSuiteLab"),
+            ],
+          }),
+        ]}
+        onJumpToThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Jump to thread" }), {
+      target: { value: "18" },
+    });
+
+    const chips = Array.from(document.querySelectorAll("[data-pr-chip]"));
+    expect(chips).toHaveLength(3);
+    expect(chips.map((chip) => chip.textContent)).toEqual(["#18", "#16", "#21"]);
+    expect(document.querySelector(".jump-palette__row-prs")).toHaveAttribute(
+      "data-overflow",
+      "true",
+    );
+
+    const strip = screen.getByLabelText("Pull requests");
+    Object.defineProperties(strip, {
+      clientWidth: { configurable: true, value: 126 },
+      scrollWidth: { configurable: true, value: 260 },
+      scrollLeft: { configurable: true, value: 0, writable: true },
+    });
+    fireEvent.wheel(strip, { cancelable: true, deltaY: 40 });
+    expect(strip.scrollLeft).toBe(40);
+    await settleRemoteSearch();
+  });
+
+  it("resets a retained PR strip when the query moves an exact match first", async () => {
+    render(
+      <SidebarSearchPopup
+        threads={[
+          localThread({
+            id: "stacked",
+            title: "Stacked pull requests",
+            prs: [pr(16), pr(18), pr(21)],
+          }),
+        ]}
+        onJumpToThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Jump to thread" });
+    fireEvent.change(input, { target: { value: "Stacked" } });
+    const strip = screen.getByLabelText("Pull requests");
+    Object.defineProperty(strip, "scrollLeft", {
+      configurable: true,
+      value: 40,
+      writable: true,
+    });
+
+    fireEvent.change(input, { target: { value: "18" } });
+
+    const chips = Array.from(document.querySelectorAll("[data-pr-chip]"));
+    expect(chips.map((chip) => chip.textContent)).toEqual(["#18", "#16", "#21"]);
+    expect(strip.scrollLeft).toBe(0);
+    await settleRemoteSearch();
+  });
+
+  it("tabs through the active row PR chips and activates one without jumping", async () => {
+    const onJumpToThread = vi.fn();
+    const onClose = vi.fn();
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    render(
+      <SidebarSearchPopup
+        threads={[
+          localThread({
+            id: "stacked",
+            title: "Stacked pull requests",
+            prs: [pr(16), pr(18)],
+          }),
+        ]}
+        onJumpToThread={onJumpToThread}
+        onClose={onClose}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Jump to thread" });
+    fireEvent.change(input, { target: { value: "Stacked" } });
+    const chips = screen.getAllByRole("button", {
+      name: /Open pwrdrvr\/PwrAgent#/,
+    });
+    const firstChip = chips[0]!;
+    const secondChip = chips[1]!;
+
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(firstChip).toHaveFocus();
+    fireEvent.keyDown(firstChip, { key: "Tab" });
+    expect(secondChip).toHaveFocus();
+    fireEvent.keyDown(secondChip, { key: "Tab" });
+    expect(input).toHaveFocus();
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    expect(secondChip).toHaveFocus();
+
+    fireEvent.keyDown(secondChip, { key: "Enter" });
+    expect(open).toHaveBeenCalledWith(
+      "https://github.com/pwrdrvr/PwrAgent/pull/18",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(onJumpToThread).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
     await settleRemoteSearch();
   });
 
