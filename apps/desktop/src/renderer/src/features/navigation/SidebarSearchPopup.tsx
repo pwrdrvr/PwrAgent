@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -159,11 +160,42 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       props.onClose();
       return;
     }
-    // The palette is modal: the only tab stop inside it is the field (rows are
-    // driven by aria-activedescendant, not focus), so Tab must not walk out
-    // into the dimmed app behind the scrim.
     if (event.key === "Tab") {
       event.preventDefault();
+      const target = event.target instanceof HTMLElement
+        ? event.target
+        : undefined;
+      const targetRow = target?.closest<HTMLElement>('[role="option"]');
+      const activeRow = listRef.current?.querySelector<HTMLElement>(
+        '[role="option"][aria-selected="true"]',
+      );
+      const row = targetRow ?? activeRow;
+      const chips = Array.from(
+        row?.querySelectorAll<HTMLElement>("[data-pr-chip]") ?? [],
+      );
+
+      // The field owns listbox steering through aria-activedescendant. Tab
+      // temporarily enters the active row's PR actions; once the row's chips
+      // are exhausted, focus returns to the field instead of escaping the
+      // modal into the dimmed app.
+      if (target === inputRef.current) {
+        const chip = event.shiftKey ? chips.at(-1) : chips[0];
+        (chip ?? inputRef.current)?.focus();
+        return;
+      }
+
+      const chipIndex = target ? chips.indexOf(target) : -1;
+      const nextIndex = chipIndex + (event.shiftKey ? -1 : 1);
+      const nextChip = chipIndex >= 0 ? chips[nextIndex] : undefined;
+      (nextChip ?? inputRef.current)?.focus();
+      return;
+    }
+    // Arrow and Enter steer the aria-activedescendant list only while the
+    // field owns focus. A focused PR chip handles its own activation keys.
+    if (
+      event.target !== inputRef.current
+      && document.activeElement !== inputRef.current
+    ) {
       return;
     }
     if (event.key === "ArrowDown") {
@@ -191,6 +223,12 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   ): ReactElement => {
     const description = describeThread(thread);
     const prs = orderPullRequestsForQuery(thread, trimmed);
+    const exactPrQuery = threadHasExactPrNumberMatch(thread, trimmed)
+      ? String(Number(trimmed.replace(/^#/, "")))
+      : "";
+    const prStripResetKey = `${exactPrQuery}|${prs
+      .map((pr) => pr.url)
+      .join("|")}`;
     const key = thread.federation
       ? federatedThreadIdentityKey(thread.federation.ref)
       : buildThreadIdentityKey(thread.source, thread.id);
@@ -226,21 +264,11 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           ) : null}
           {thread.agent ? <AgentThreadChip /> : null}
           {prs.length > 0 ? (
-            <span
-              className="jump-palette__row-prs"
-              data-overflow={prs.length > 2 ? "true" : undefined}
-              aria-label="Pull requests"
-              onWheel={scrollPullRequestsHorizontally}
-            >
-              {prs.map((pr) => (
-                <PrChip
-                  key={pr.url}
-                  pr={pr}
-                  showRepoPrefix={false}
-                  onOpen={openPullRequest}
-                />
-              ))}
-            </span>
+            <PullRequestStrip
+              prs={prs}
+              resetKey={prStripResetKey}
+              onOpen={openPullRequest}
+            />
           ) : null}
           {description.branch ? (
             // Clipped from the LEFT (`direction: rtl` in CSS) so a long
@@ -381,6 +409,39 @@ type ThreadDescription = {
   branch?: string;
   directory?: string;
 };
+
+function PullRequestStrip(props: {
+  prs: NonNullable<NavigationThreadSummary["prs"]>;
+  resetKey: string;
+  onOpen: (url: string) => void;
+}): ReactElement {
+  const stripRef = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    if (stripRef.current) {
+      stripRef.current.scrollLeft = 0;
+    }
+  }, [props.resetKey]);
+
+  return (
+    <span
+      ref={stripRef}
+      className="jump-palette__row-prs"
+      data-overflow={props.prs.length > 2 ? "true" : undefined}
+      aria-label="Pull requests"
+      onWheel={scrollPullRequestsHorizontally}
+    >
+      {props.prs.map((pr) => (
+        <PrChip
+          key={pr.url}
+          pr={pr}
+          showRepoPrefix={false}
+          onOpen={props.onOpen}
+        />
+      ))}
+    </span>
+  );
+}
 
 function orderPullRequestsForQuery(
   thread: NavigationThreadSummary,
