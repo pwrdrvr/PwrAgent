@@ -730,6 +730,7 @@ function toE2eShutdownPhase(
   phase: string,
 ): Exclude<E2eShutdownPhase, "overall" | "renderer-window"> | undefined {
   switch (phase) {
+    case "integrated-terminal":
     case "messaging":
     case "federation":
     case "app-server":

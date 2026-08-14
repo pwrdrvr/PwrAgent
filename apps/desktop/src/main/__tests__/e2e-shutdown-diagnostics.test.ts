@@ -71,7 +71,7 @@ describe("E2E shutdown diagnostics", () => {
           schemaVersion: 1,
           kind: "phase",
           launchId: "launch-2",
-          phase: "app-server",
+          phase: "integrated-terminal",
           outcome: "timed-out",
           durationMs: 7_500,
           homeRoot: "/Users/alice/private-home",
@@ -88,7 +88,7 @@ describe("E2E shutdown diagnostics", () => {
         schemaVersion: 1,
         kind: "phase",
         launchId: "launch-2",
-        phase: "app-server",
+        phase: "integrated-terminal",
         outcome: "timed-out",
         durationMs: 7_500,
       }]);

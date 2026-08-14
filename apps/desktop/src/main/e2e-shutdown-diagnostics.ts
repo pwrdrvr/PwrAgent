@@ -14,6 +14,7 @@ export const E2E_SHUTDOWN_LAUNCH_ID_ENV =
 export const E2E_SHUTDOWN_PHASES = [
   "overall",
   "renderer-window",
+  "integrated-terminal",
   "messaging",
   "federation",
   "app-server",

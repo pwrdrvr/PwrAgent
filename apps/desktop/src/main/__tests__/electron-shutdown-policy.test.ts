@@ -166,6 +166,7 @@ describe("Electron shutdown policy", () => {
       events: [
         phaseEvent("overall", "started", 0),
         phaseEvent("renderer-window", "completed", 8),
+        phaseEvent("integrated-terminal", "timed-out", 2_000),
         phaseEvent("messaging", "started", 0),
         phaseEvent("federation", "started", 0),
         phaseEvent("mcp-connections", "completed", 12),
@@ -182,6 +183,7 @@ describe("Electron shutdown policy", () => {
 
     expect(summary.phases).toEqual({
       rendererWindow: { durationMs: 8, outcome: "completed" },
+      integratedTerminal: { durationMs: 2_000, outcome: "timed-out" },
       messaging: { durationMs: null, outcome: "interrupted" },
       federation: { durationMs: null, outcome: "interrupted" },
       mcpConnections: { durationMs: 12, outcome: "completed" },
@@ -216,10 +218,11 @@ function phaseEvent(
   phase:
     | "overall"
     | "renderer-window"
+    | "integrated-terminal"
     | "messaging"
     | "federation"
     | "mcp-connections",
-  outcome: "started" | "completed",
+  outcome: "started" | "completed" | "timed-out",
   durationMs: number,
 ) {
   return {
@@ -245,6 +248,7 @@ function trippedSummary(): ElectronShutdownSummary {
     forceExitOutcome: "exited",
     phases: {
       rendererWindow: phase,
+      integratedTerminal: phase,
       messaging: phase,
       federation: phase,
       mcpConnections: phase,
