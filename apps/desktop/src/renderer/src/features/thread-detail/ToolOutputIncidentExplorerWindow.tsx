@@ -52,6 +52,13 @@ export function ToolOutputIncidentExplorerWindow() {
     void refresh();
   }, [refresh, route]);
 
+  useEffect(() => {
+    if (!desktopApi?.onToolOutputIncidentExplorerRefresh) return;
+    return desktopApi.onToolOutputIncidentExplorerRefresh(() => {
+      void refresh();
+    });
+  }, [desktopApi, refresh]);
+
   const invocations = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     return (accounting?.invocations ?? []).filter((invocation) =>

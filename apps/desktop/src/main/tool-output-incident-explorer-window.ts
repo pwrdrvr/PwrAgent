@@ -3,7 +3,10 @@ import {
   buildThreadIdentityKey,
   type OpenToolOutputIncidentExplorerWindowRequest,
 } from "@pwragent/shared";
-import { APPEARANCE_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
+import {
+  APPEARANCE_CHANGED_EVENT_CHANNEL,
+  TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
+} from "../shared/ipc";
 import {
   auxiliaryWindowChromeOptions,
   hideAuxiliaryWindowMenuBar,
@@ -52,6 +55,9 @@ export function showToolOutputIncidentExplorerWindow(
   const current = incidentWindows.get(windowKey);
   if (current && !current.isDestroyed()) {
     positionWindowForSourceDisplay(current, source);
+    current.webContents.send(
+      TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
+    );
     showAndFocusAuxiliaryWindow(current);
     return;
   }
@@ -81,6 +87,7 @@ export function showToolOutputIncidentExplorerWindow(
   applyWindowSecurityHardening(window);
   registerWindowChannels(window, WINDOW_KIND_TOOL_OUTPUT_INCIDENT_EXPLORER, [
     APPEARANCE_CHANGED_EVENT_CHANNEL,
+    TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
   ]);
 
   const hash = [

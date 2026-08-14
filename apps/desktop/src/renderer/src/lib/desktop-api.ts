@@ -842,6 +842,9 @@ export type DesktopApi = {
   openToolOutputIncidentExplorerWindow?: (
     request: OpenToolOutputIncidentExplorerWindowRequest
   ) => Promise<OpenToolOutputIncidentExplorerWindowResponse>;
+  onToolOutputIncidentExplorerRefresh?: (
+    callback: () => void
+  ) => () => void;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;

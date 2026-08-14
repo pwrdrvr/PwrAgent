@@ -519,6 +519,7 @@ import {
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
   SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL,
   TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
+  TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
   DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
   DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL,
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
@@ -1213,6 +1214,21 @@ const desktopApi = Object.freeze({
       TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
       request,
     ),
+  onToolOutputIncidentExplorerRefresh: (
+    callback: () => void,
+  ): (() => void) => {
+    const listener = () => callback();
+    ipcRenderer.on(
+      TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
+      listener,
+    );
+    return () => {
+      ipcRenderer.off(
+        TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
+        listener,
+      );
+    };
+  },
   createIntegratedTerminal: async (
     request: IntegratedTerminalCreateRequest,
   ): Promise<IntegratedTerminalCreateResponse> =>

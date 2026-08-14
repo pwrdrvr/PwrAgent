@@ -474,6 +474,8 @@ export const SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL =
   "sub-agent-transcript:open-window";
 export const TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL =
   "tool-output-incident-explorer:open-window";
+export const TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL =
+  "tool-output-incident-explorer:refresh";
 export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
   "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";

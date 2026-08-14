@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => {
     isDestroyed: ReturnType<typeof vi.fn>;
     loadFile: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
-    webContents: object;
+    webContents: { send: ReturnType<typeof vi.fn> };
   }> = [];
   const BrowserWindow = vi.fn(function BrowserWindowMock(
     this: unknown,
@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => {
       isDestroyed: vi.fn(() => false),
       loadFile: vi.fn(async () => undefined),
       on: vi.fn(),
-      webContents: {},
+      webContents: { send: vi.fn() },
     };
     windows.push(window);
     return window;
@@ -101,5 +101,8 @@ describe("tool-output incident explorer window", () => {
       },
     );
     expect(mocks.showAndFocusAuxiliaryWindow).toHaveBeenCalledOnce();
+    expect(mocks.windows[0]?.webContents.send).toHaveBeenCalledWith(
+      "tool-output-incident-explorer:refresh",
+    );
   });
 });

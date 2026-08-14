@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type {
   AppServerReadThreadResponse,
   ThreadToolInvocationRecord,
@@ -78,6 +85,31 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     ));
     expect(steerTurn).not.toHaveBeenCalled();
   });
+
+  it("refreshes the visible case snapshot when an existing window is examined again", async () => {
+    let refreshListener: (() => void) | undefined;
+    let readCount = 0;
+    installApi({
+      onToolOutputIncidentExplorerRefresh: (callback: () => void) => {
+        refreshListener = callback;
+        return () => {
+          refreshListener = undefined;
+        };
+      },
+      readThread: async () => {
+        readCount += 1;
+        return buildResponse(undefined, readCount === 1 ? 1 : 2);
+      },
+    });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+    const metrics = await screen.findByLabelText("Incident metrics");
+
+    expect(within(metrics).getByText("1")).toBeInTheDocument();
+    await act(async () => refreshListener?.());
+    await waitFor(() => expect(within(metrics).getByText("2")).toBeInTheDocument());
+    expect(readCount).toBe(2);
+  });
 });
 
 function installApi(api: Record<string, unknown>): void {
@@ -87,15 +119,23 @@ function installApi(api: Record<string, unknown>): void {
   });
 }
 
-function buildResponse(activeTurnId?: string): AppServerReadThreadResponse {
-  const invocation = buildInvocation();
+function buildResponse(
+  activeTurnId?: string,
+  invocationCount = 1,
+): AppServerReadThreadResponse {
+  const invocations = Array.from({ length: invocationCount }, (_, index) => ({
+    ...buildInvocation(),
+    invocationId: `invocation-${index + 1}`,
+    itemId: `item-${index + 1}`,
+    outputChars: 8_000 + index * 1_000,
+  }));
   return {
     backend: "codex",
     fetchedAt: 1,
     threadId: "thread-1",
     toolAccounting: {
       alerts: [],
-      invocations: [invocation],
+      invocations,
       summaries: [],
     },
     replay: {
