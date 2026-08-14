@@ -4663,6 +4663,46 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.queryByRole("button", { name: /diff/ })).not.toBeInTheDocument();
   });
 
+  it("renders raw Codex Windows add contents as a counted diff", () => {
+    render(
+      <TranscriptList
+        directoryPaths={["C:\\repo\\pwragent"]}
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/fileChange/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            changes: [
+              {
+                path: "C:\\repo\\pwragent\\breakfasts\\eggs\\sunny-side-up.md",
+                kind: { type: "add" },
+                diff: [
+                  "# Sunny-Side-Up Eggs",
+                  "",
+                  "Eggs with crisp edges make an easy breakfast.",
+                  "",
+                ].join("\n"),
+              },
+            ],
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(
+      screen.getByText(/File: breakfasts\\eggs\\sunny-side-up\.md/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Hide diff.*\+3.*-0/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Eggs with crisp edges/)).toBeInTheDocument();
+  });
+
   it("shows file-change approval context inferred from the matching activity", () => {
     render(
       <TranscriptList

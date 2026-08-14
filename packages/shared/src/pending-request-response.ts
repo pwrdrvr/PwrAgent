@@ -216,12 +216,22 @@ function fileContextFromApprovalRecord(
     readFirstString(kind ?? {}, ["type", "action", "operation"]) ??
     readFirstString(record, ["action", "operation", "kind", "type"]);
   const directDiff =
-    readFirstString(kind ?? {}, ["diff", "patch", "unifiedDiff", "unified_diff"]) ??
-    readFirstString(record, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+    readFirstNonEmptyRawString(
+      kind ?? {},
+      ["unifiedDiff", "unified_diff", "patch", "diff"],
+    ) ??
+    readFirstNonEmptyRawString(
+      record,
+      ["unifiedDiff", "unified_diff", "patch", "diff"],
+    );
   const content =
     readOptionalString(kind?.content) ?? readOptionalString(record.content);
-  const generatedDiff =
-    directDiff ?? contentDiffForApproval({ action, content, path });
+  const generatedDiff = normalizeFileChangeApprovalDiff({
+    action,
+    content,
+    directDiff,
+    path,
+  });
 
   return {
     ...(action ? { action } : {}),
@@ -244,19 +254,30 @@ function fileContextFromApprovalRecord(
   };
 }
 
-function contentDiffForApproval(params: {
+export function normalizeFileChangeApprovalDiff(params: {
   action: string | undefined;
   content: string | undefined;
+  directDiff: string | undefined;
   path: string;
 }): string | undefined {
   if (
-    params.content === undefined ||
+    params.directDiff
+    && (
+      (params.action !== "add" && params.action !== "delete")
+      || looksLikeUnifiedDiff(params.directDiff)
+    )
+  ) {
+    return params.directDiff;
+  }
+  const content = params.directDiff ?? params.content;
+  if (
+    content === undefined ||
     (params.action !== "add" && params.action !== "delete")
   ) {
     return undefined;
   }
   const path = params.path.replace(/^\/+/, "") || "file";
-  const lines = params.content.length ? params.content.split("\n") : [];
+  const lines = content.length ? content.split(/\r?\n/) : [];
   if (lines.at(-1) === "") {
     lines.pop();
   }
@@ -270,6 +291,34 @@ function contentDiffForApproval(params: {
       : [`--- a/${path}`, `+++ /dev/null`, `@@ -1,${hunkLineCount} +0,0 @@`];
   const prefix = params.action === "add" ? "+" : "-";
   return [...header, ...lines.map((line) => `${prefix}${line}`)].join("\n");
+}
+
+function looksLikeUnifiedDiff(value: string): boolean {
+  const lines = value.split(/\r?\n/);
+  if (
+    lines.some(
+      (line) =>
+        line.startsWith("diff --git ")
+        || line.startsWith("@@ ")
+        || line.startsWith("@@@ "),
+    )
+  ) {
+    return true;
+  }
+  if (
+    lines.some((line) => line.startsWith("--- "))
+    && lines.some((line) => line.startsWith("+++ "))
+  ) {
+    return true;
+  }
+  const meaningfulLines = lines.filter(Boolean);
+  return meaningfulLines.length > 0
+    && meaningfulLines.every(
+      (line) =>
+        line.startsWith("+")
+        || line.startsWith("-")
+        || line.startsWith("\\ No newline at end of file"),
+    );
 }
 
 function activityMatchesItem(
@@ -962,6 +1011,19 @@ function readFirstString(
   for (const key of keys) {
     const value = readString(record[key]);
     if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readFirstNonEmptyRawString(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
       return value;
     }
   }

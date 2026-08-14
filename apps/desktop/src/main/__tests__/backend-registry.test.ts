@@ -18516,7 +18516,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("prefers a real file-change approval diff over empty streamed content", async () => {
+  it("normalizes file-change approval diffs and omits empty placeholders", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
@@ -18531,11 +18531,25 @@ command = "pnpm dev"
     const emit = (registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
     }).emit.bind(registry);
-    const diff = [
+    const unifiedDiff = [
+      "--- /dev/null",
+      "+++ b/breakfasts/croissants/croissants.md",
+      "@@ -0,0 +1,1 @@",
+      "+# Butter Croissants",
+    ].join("\n");
+    const rawWindowsAddContent = [
+      "# Sunny-Side-Up Eggs",
+      "",
+      "Eggs with crisp edges make an easy breakfast.",
+      "",
+    ].join("\n");
+    const normalizedWindowsAddDiff = [
       "--- /dev/null",
       "+++ b/breakfasts/eggs/sunny-side-up.md",
-      "@@ -0,0 +1,1 @@",
+      "@@ -0,0 +1,3 @@",
       "+# Sunny-Side-Up Eggs",
+      "+",
+      "+Eggs with crisp edges make an easy breakfast.",
     ].join("\n");
 
     await emit({
@@ -18551,8 +18565,13 @@ command = "pnpm dev"
             changes: [
               {
                 path: "breakfasts/eggs/sunny-side-up.md",
+                kind: { type: "add" },
+                diff: rawWindowsAddContent,
+              },
+              {
+                path: "breakfasts/croissants/croissants.md",
                 kind: { type: "add", content: "" },
-                diff,
+                diff: unifiedDiff,
               },
               {
                 path: "breakfasts/pancakes/pancakes.md",
@@ -18585,7 +18604,12 @@ command = "pnpm dev"
           {
             action: "add",
             path: "breakfasts/eggs/sunny-side-up.md",
-            diff,
+            diff: normalizedWindowsAddDiff,
+          },
+          {
+            action: "add",
+            path: "breakfasts/croissants/croissants.md",
+            diff: unifiedDiff,
           },
           {
             action: "add",
@@ -18600,7 +18624,7 @@ command = "pnpm dev"
     const approvalContext = approvalParams?._pwragentApprovalContext as
       | { files?: Array<{ diff?: string }> }
       | undefined;
-    expect(approvalContext?.files?.[1]?.diff).toBeUndefined();
+    expect(approvalContext?.files?.[2]?.diff).toBeUndefined();
 
     unsubscribe();
     await registry.close();
