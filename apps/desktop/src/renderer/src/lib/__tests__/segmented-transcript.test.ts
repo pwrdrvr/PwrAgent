@@ -207,4 +207,47 @@ describe("segmented transcript history", () => {
 
     expect(retainedHistoryIdReads).toBe(0);
   });
+
+  it("pins linear work for reverse numeric-index searches", () => {
+    const index = createTranscriptHistoryIndex();
+    let history: LoadedTranscriptHistory | undefined;
+    let retainedHistoryIdReads = 0;
+
+    for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+      const entries = Array.from(
+        { length: 50 },
+        (_value, entryIndex): AppServerThreadMessageEntry => {
+          const id = `history-${pageIndex}-${entryIndex}`;
+          return {
+            type: "message",
+            get id() {
+              retainedHistoryIdReads += 1;
+              return id;
+            },
+            role: "assistant",
+            text: id,
+          };
+        },
+      );
+      history = prependTranscriptHistoryPage({
+        history,
+        index,
+        page: response(entries, `cursor-${pageIndex}`),
+        tailEntries: [],
+      });
+    }
+
+    retainedHistoryIdReads = 0;
+    const entries = combineTranscriptEntries(history, index, []);
+    let found = false;
+    for (let entryIndex = entries.length - 1; entryIndex >= 0; entryIndex -= 1) {
+      if (entries[entryIndex]?.id === "missing-entry") {
+        found = true;
+        break;
+      }
+    }
+
+    expect(found).toBe(false);
+    expect(retainedHistoryIdReads).toBe(2_000);
+  });
 });

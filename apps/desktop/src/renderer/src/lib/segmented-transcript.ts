@@ -378,8 +378,10 @@ function createSegmentedArray<T extends { id: string }>(
         };
       }
       if (isArrayIndex(property)) {
-        return materialized?.[Number(property)]
-          ?? readSegmentedIndex(source, Number(property), length);
+        // Existing renderer searches walk this array backwards with numeric
+        // indexing. Materialize on the first indexed read so that one scan is
+        // O(n) rather than traversing the page chain once per entry (O(n²)).
+        return materialize()[Number(property)];
       }
       return Reflect.get(target, property, proxy);
     },
