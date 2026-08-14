@@ -322,15 +322,14 @@ describe("TranscriptList", () => {
       />
     );
 
-    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
-      "href",
-      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
-    );
+    const skillChip = screen.getByText("ce:work").closest(".skill-chip");
+    expect(skillChip).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "ce:work" })).not.toBeInTheDocument();
     expect(screen.getByText("Check Unit 4", { selector: "strong" })).toBeInTheDocument();
     expect(screen.getByText("Keep Unit 3 isolated")).toBeInTheDocument();
     expect(screen.getByText("pnpm test -- --project desktop-renderer")).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "ce:work" }).closest("article")
+      skillChip?.closest("article")
     ).toHaveClass("transcript-message--user");
     expect(
       screen.getByText("pnpm test -- --project desktop-renderer").closest("article")

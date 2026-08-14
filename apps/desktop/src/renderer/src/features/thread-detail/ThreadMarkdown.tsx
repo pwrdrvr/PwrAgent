@@ -257,14 +257,21 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
 
         if (
           skillPath &&
-          (skillsByPath.has(skillPath) || label.startsWith("$"))
+          (
+            isSkillMarkdownPath(skillPath)
+            || skillsByPath.has(skillPath)
+            || label.startsWith("$")
+          )
         ) {
           const skill = skillsByPath.get(skillPath) ?? {
-            name: label.replace(/^\$/, "") || skillPath.split("/").pop() || "skill",
+            name: skillNameFromPath(skillPath, label),
             path: skillPath,
           };
+          const chipLabel = label.toLowerCase() === "skill.md"
+            ? skillNameFromPath(skillPath, label)
+            : label;
 
-          return <SkillChip label={label || undefined} skill={skill} />;
+          return <SkillChip label={chipLabel || undefined} skill={skill} />;
         }
 
         if (!href) {
@@ -882,6 +889,18 @@ function normalizeSkillPath(href: string): string | undefined {
   }
 
   return undefined;
+}
+
+function isSkillMarkdownPath(filePath: string): boolean {
+  return /(?:^|\/)SKILL\.md$/i.test(filePath);
+}
+
+function skillNameFromPath(filePath: string, label: string): string {
+  const segments = filePath.split("/").filter(Boolean);
+  if (segments.at(-1)?.toLowerCase() === "skill.md" && segments.length > 1) {
+    return segments.at(-2) ?? "skill";
+  }
+  return label.replace(/^\$/, "") || segments.at(-1) || "skill";
 }
 
 function localFileTargetFromHref(

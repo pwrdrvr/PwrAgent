@@ -42,16 +42,16 @@ describe("ThreadMarkdown", () => {
   it("renders markdown formatting and local file links", () => {
     render(
       <ThreadMarkdown
-        text={"Use **bold** text and open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)."}
+        text={"Use **bold** text and open [`AGENTS.md`](/Users/huntharo/PwrAgent/AGENTS.md)."}
       />
     );
 
     expect(screen.getByText("bold", { selector: "strong" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "href",
-      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
+      "file:///Users/huntharo/PwrAgent/AGENTS.md"
     );
-    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "title",
       "Open in PwrAgent"
     );
@@ -307,6 +307,24 @@ describe("ThreadMarkdown", () => {
 
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "$frontend-design" })).not.toBeInTheDocument();
+  });
+
+  it("labels a SKILL.md link with its skill directory name", () => {
+    const skillPath = [
+      "/Users/huntharo/pwrdrvr/PwrSuiteLab/.agents/skills",
+      "restart-wedged-macos-gha-runner/SKILL.md",
+    ].join("/");
+
+    render(
+      <ThreadMarkdown
+        text={`[SKILL.md](${skillPath}) and [runner recovery guide](${skillPath})`}
+      />
+    );
+
+    expect(screen.getByText("restart-wedged-macos-gha-runner"))
+      .toBeInTheDocument();
+    expect(screen.getByText("runner recovery guide")).toBeInTheDocument();
+    expect(screen.queryByText("SKILL.md")).not.toBeInTheDocument();
   });
 
   it("renders emoji, italic, strikethrough, and inline code", () => {
