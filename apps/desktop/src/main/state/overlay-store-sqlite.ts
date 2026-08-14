@@ -526,6 +526,130 @@ function stripFederationStamp(
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
   constructor(private readonly stateDb: StateDb) {}
 
+  /**
+   * Finalize sub-agents whose creating PwrAgent runtime no longer exists.
+   *
+   * Every repair is committed in one transaction. New summaries identify
+   * their owner exactly. Legacy ownerless summaries are repaired only when
+   * this is the profile's sole live runtime, so opening a second PwrAgent
+   * window can never fail work still owned by the first one.
+   */
+  async reconcileOrphanedThreadSubAgents(params: {
+    currentRuntimeInstanceId: string;
+    liveRuntimeInstanceIds: string[];
+    sessionStartedAt: number;
+  }): Promise<{
+    repairedSubAgents: number;
+    repairedThreads: number;
+    skippedLiveOwners: number;
+    skippedOwnerlessWithOtherRuntimes: number;
+  }> {
+    const liveRuntimeInstanceIds = new Set(params.liveRuntimeInstanceIds);
+    liveRuntimeInstanceIds.add(params.currentRuntimeInstanceId);
+    const hasOtherLiveRuntime = Array.from(liveRuntimeInstanceIds).some(
+      (instanceId) => instanceId !== params.currentRuntimeInstanceId,
+    );
+    const result = {
+      repairedSubAgents: 0,
+      repairedThreads: 0,
+      skippedLiveOwners: 0,
+      skippedOwnerlessWithOtherRuntimes: 0,
+    };
+
+    const reconcile = this.stateDb.raw.transaction(() => {
+      const rows = this.stateDb.raw
+        .prepare(
+          `SELECT payload
+           FROM threads
+           WHERE payload LIKE '%"subAgents"%'`,
+        )
+        .all() as Array<{ payload: string }>;
+
+      for (const row of rows) {
+        let overlay: ThreadOverlayState;
+        try {
+          overlay = normalizeThreadOverlayState(
+            JSON.parse(row.payload) as ThreadOverlayState,
+          );
+        } catch {
+          continue;
+        }
+        if (!overlay.subAgents?.length) {
+          continue;
+        }
+
+        let changed = false;
+        const subAgents = overlay.subAgents.map((subAgent) => {
+          if (subAgent.completedAt !== undefined) {
+            return subAgent;
+          }
+
+          const completedAt = reliableSubAgentCompletionBoundary(subAgent);
+          if (subAgentHasTerminalEvidence(subAgent)) {
+            changed = true;
+            result.repairedSubAgents += 1;
+            return {
+              ...subAgent,
+              completedAt,
+              updatedAt: completedAt,
+              ...(subAgent.status === "failed"
+                ? { status: "failure" as const, outcome: "failure" as const }
+                : {}),
+            };
+          }
+
+          const ownerRuntimeInstanceId = subAgent.ownerRuntimeInstanceId?.trim();
+          if (
+            ownerRuntimeInstanceId
+            && liveRuntimeInstanceIds.has(ownerRuntimeInstanceId)
+          ) {
+            result.skippedLiveOwners += 1;
+            return subAgent;
+          }
+          if (!ownerRuntimeInstanceId && hasOtherLiveRuntime) {
+            result.skippedOwnerlessWithOtherRuntimes += 1;
+            return subAgent;
+          }
+          if (
+            !ownerRuntimeInstanceId
+            && subAgent.createdAt >= params.sessionStartedAt
+          ) {
+            return subAgent;
+          }
+
+          changed = true;
+          result.repairedSubAgents += 1;
+          return {
+            ...subAgent,
+            status: "failure" as const,
+            outcome: "failure" as const,
+            completedAt,
+            updatedAt: completedAt,
+            lastMessage:
+              "Interrupted when its owning PwrAgent runtime stopped before reporting completion.",
+            completionSource: {
+              type: "pwragent_fallback" as const,
+              reason: "owner_runtime_stopped",
+              recoveryAttempted: false,
+              terminalStatus: "failed" as const,
+            },
+          };
+        });
+        if (!changed) {
+          continue;
+        }
+
+        result.repairedThreads += 1;
+        this.putThread(buildThreadIdentityKey(overlay.backend, overlay.threadId), {
+          ...overlay,
+          subAgents,
+        });
+      }
+    });
+    reconcile();
+    return result;
+  }
+
   async reconcileNavigationSnapshot(params: {
     backend: AppServerBackendScope;
     fetchedAt: number;
@@ -6579,3 +6703,23 @@ export type OverlayStoreLike = Pick<
   upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];
   readThreadMessageOrigins?: SqliteOverlayStore["readThreadMessageOrigins"];
 };
+
+function reliableSubAgentCompletionBoundary(
+  subAgent: ThreadSubAgentSummary,
+): number {
+  return Number.isFinite(subAgent.updatedAt)
+    && subAgent.updatedAt >= subAgent.createdAt
+    ? subAgent.updatedAt
+    : subAgent.createdAt;
+}
+
+function subAgentHasTerminalEvidence(subAgent: ThreadSubAgentSummary): boolean {
+  return (
+    subAgent.status === "success"
+    || subAgent.status === "failure"
+    || subAgent.status === "cancelled"
+    || subAgent.status === "failed"
+    || subAgent.outcome !== undefined
+    || subAgent.completionSource !== undefined
+  );
+}

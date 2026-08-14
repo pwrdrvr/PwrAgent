@@ -16605,6 +16605,7 @@ command = "pnpm dev"
         status: "running",
         backend: "codex",
         agentName: "PwrAgent",
+        ownerRuntimeInstanceId: expect.any(String),
         preferredModel: "gpt-5.6-luna",
         preferredReasoningEffort: "low",
         lastMessage: "Generating a title.",
@@ -16871,6 +16872,75 @@ command = "pnpm dev"
       }),
     });
 
+    await registry.close();
+  });
+
+  it("starts a fresh title-helper duration after an earlier attempt is terminal", async () => {
+    const monitorId = "system:title-helper:codex:thread-title-helper-parent";
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-title-helper-parent": {
+          backend: "codex",
+          threadId: "thread-title-helper-parent",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [
+            {
+              monitorId,
+              task: "Name this thread",
+              status: "failure",
+              createdAt: 1_000,
+              updatedAt: 2_000,
+              completedAt: 2_000,
+              outcome: "failure",
+              ownerRuntimeInstanceId: "runtime-old",
+              completionSource: {
+                type: "pwragent_fallback",
+                reason: "system_title_helper",
+                recoveryAttempted: false,
+                terminalStatus: "failed",
+              },
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      runtimeInstanceId: "runtime-current",
+      resolveLiveProfileRuntimeInstanceIds: () => ["runtime-current"],
+    });
+
+    await (registry as unknown as {
+      persistTitleHelperSubAgent(params: {
+        backend: "codex";
+        threadId: string;
+        status: "running";
+      }): Promise<void>;
+    }).persistTitleHelperSubAgent({
+      backend: "codex",
+      threadId: "thread-title-helper-parent",
+      status: "running",
+    });
+
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-title-helper-parent",
+    });
+    const subAgent = overlay?.subAgents?.find(
+      (candidate) => candidate.monitorId === monitorId,
+    );
+    expect(subAgent).toMatchObject({
+      status: "running",
+      ownerRuntimeInstanceId: "runtime-current",
+      lastMessage: "Generating a title.",
+    });
+    expect(subAgent?.createdAt).toBeGreaterThan(2_000);
+    expect(subAgent?.updatedAt).toBe(subAgent?.createdAt);
+    expect(subAgent?.completedAt).toBeUndefined();
+    expect(subAgent?.outcome).toBeUndefined();
+    expect(subAgent?.completionSource).toBeUndefined();
     await registry.close();
   });
 
@@ -34719,6 +34789,37 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("reconciles orphaned sub-agents before serving threads after startup", async () => {
+    const reconcileOrphanedThreadSubAgents = vi.fn(async () => ({
+      repairedSubAgents: 0,
+      repairedThreads: 0,
+      skippedLiveOwners: 1,
+      skippedOwnerlessWithOtherRuntimes: 1,
+    }));
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      reconcileOrphanedThreadSubAgents,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      runtimeInstanceId: "runtime-current",
+      resolveLiveProfileRuntimeInstanceIds: () => [
+        "runtime-current",
+        "runtime-other",
+      ],
+    });
+
+    await expect(registry.listThreads({ backend: "codex" })).resolves.toEqual([]);
+    expect(reconcileOrphanedThreadSubAgents).toHaveBeenCalledOnce();
+    expect(reconcileOrphanedThreadSubAgents).toHaveBeenCalledWith({
+      currentRuntimeInstanceId: "runtime-current",
+      liveRuntimeInstanceIds: ["runtime-current", "runtime-other"],
+      sessionStartedAt: expect.any(Number),
+    });
+    await registry.close();
+  });
+
   it("stops active task monitors without starting recovery", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/interrupt"] },
@@ -34729,6 +34830,8 @@ script = "printf setup"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
+      runtimeInstanceId: "runtime-current",
+      resolveLiveProfileRuntimeInstanceIds: () => ["runtime-current"],
     });
     await registry.publishLocalEvent({
       backend: "codex",
@@ -34797,6 +34900,7 @@ script = "printf setup"
           status: "cancelled",
           outcome: "cancelled",
           lastMessage: "Stopped by user.",
+          ownerRuntimeInstanceId: "runtime-current",
         }),
       ],
     });
@@ -34960,6 +35064,7 @@ script = "printf setup"
               status: "running",
               createdAt: 1,
               updatedAt: 1,
+              ownerRuntimeInstanceId: "runtime-current",
               backend: "codex",
               monitorThreadId: "child-thread",
               monitorTurnId: "parent-turn",
@@ -34971,6 +35076,8 @@ script = "printf setup"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
+      runtimeInstanceId: "runtime-current",
+      resolveLiveProfileRuntimeInstanceIds: () => ["runtime-current"],
     });
 
     await registry.stopSubAgent({
@@ -34999,6 +35106,121 @@ script = "printf setup"
         }),
       ],
     });
+    await registry.close();
+  });
+
+  it("locally closes an orphaned sub-agent when Stop cannot reach its old runtime", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/interrupt"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [
+            {
+              monitorId: "monitor-orphaned",
+              task: "Monitor work from before a reboot",
+              status: "running",
+              createdAt: 1_000,
+              updatedAt: 1_500,
+              ownerRuntimeInstanceId: "runtime-dead",
+              backend: "codex",
+              monitorThreadId: "monitor-thread",
+              monitorTurnId: "monitor-turn",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      runtimeInstanceId: "runtime-current",
+      resolveLiveProfileRuntimeInstanceIds: () => ["runtime-current"],
+    });
+
+    await expect(registry.stopSubAgent({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId: "monitor-orphaned",
+    })).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId: "monitor-orphaned",
+    });
+
+    expect(codexClient.interruptTurnCallCount).toBe(0);
+    await expect(overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    })).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          monitorId: "monitor-orphaned",
+          status: "cancelled",
+          outcome: "cancelled",
+          completedAt: 1_500,
+          updatedAt: 1_500,
+          lastMessage:
+            "Stop was requested after its owning PwrAgent runtime had already stopped.",
+          completionSource: {
+            type: "parent_cancel",
+          },
+        }),
+      ],
+    });
+    await registry.close();
+  });
+
+  it("does not stop a sub-agent owned by another live PwrAgent instance", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/interrupt"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [
+            {
+              monitorId: "monitor-other-runtime",
+              task: "Monitor work owned elsewhere",
+              status: "running",
+              createdAt: 1_000,
+              updatedAt: 1_500,
+              ownerRuntimeInstanceId: "runtime-other",
+              backend: "codex",
+              monitorThreadId: "monitor-thread",
+              monitorTurnId: "monitor-turn",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      runtimeInstanceId: "runtime-current",
+      resolveLiveProfileRuntimeInstanceIds: () => [
+        "runtime-current",
+        "runtime-other",
+      ],
+    });
+
+    await expect(registry.stopSubAgent({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId: "monitor-other-runtime",
+    })).rejects.toThrow(
+      "Sub-agent is controlled by another live PwrAgent instance.",
+    );
+    expect(codexClient.interruptTurnCallCount).toBe(0);
     await registry.close();
   });
 
