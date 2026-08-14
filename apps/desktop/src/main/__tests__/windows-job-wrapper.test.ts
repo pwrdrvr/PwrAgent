@@ -226,13 +226,15 @@ describe("wrapCommandInWindowsJob", () => {
   });
 
   it("reports a PowerShell host-start timeout before wrapper code runs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-07T00:00:00.000Z"));
     const wrapped = wrapCommandInWindowsJob({
       args: ["/c", "exit 0"],
       command: "C:\\Windows\\System32\\cmd.exe",
       env: { SystemRoot: "C:\\Windows" },
     });
     try {
-      const startupTimeout = await new Promise<WindowsJobStartupTimeout>(
+      const startupTimeoutPromise = new Promise<WindowsJobStartupTimeout>(
         (resolve, reject) => {
           startWindowsJobReadyPoll({
             launch: wrapped,
@@ -244,6 +246,8 @@ describe("wrapCommandInWindowsJob", () => {
           });
         },
       );
+      await vi.runAllTimersAsync();
+      const startupTimeout = await startupTimeoutPromise;
       expect(startupTimeout).toMatchObject({
         stage: "powershell-start",
         timeoutMs: 40,
@@ -256,10 +260,13 @@ describe("wrapCommandInWindowsJob", () => {
       );
     } finally {
       wrapped.cleanup();
+      vi.useRealTimers();
     }
   });
 
   it("reports the last startup phase when progress stalls", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-07T00:00:00.000Z"));
     const wrapped = wrapCommandInWindowsJob({
       args: ["/c", "exit 0"],
       command: "C:\\Windows\\System32\\cmd.exe",
@@ -270,7 +277,7 @@ describe("wrapCommandInWindowsJob", () => {
         wrapped.startupStatusFilePath,
         "12\tpowershell-started\t\n18\thelper-compile-started\t\n",
       );
-      const startupTimeout = await new Promise<WindowsJobStartupTimeout>(
+      const startupTimeoutPromise = new Promise<WindowsJobStartupTimeout>(
         (resolve, reject) => {
           startWindowsJobReadyPoll({
             launch: wrapped,
@@ -282,6 +289,8 @@ describe("wrapCommandInWindowsJob", () => {
           });
         },
       );
+      await vi.runAllTimersAsync();
+      const startupTimeout = await startupTimeoutPromise;
       expect(startupTimeout).toMatchObject({
         stage: "progress-stall",
         timeoutMs: 40,
@@ -295,10 +304,13 @@ describe("wrapCommandInWindowsJob", () => {
       );
     } finally {
       wrapped.cleanup();
+      vi.useRealTimers();
     }
   });
 
   it("keeps progress extensions inside the overall readiness bound", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-07T00:00:00.000Z"));
     const wrapped = wrapCommandInWindowsJob({
       args: ["/c", "exit 0"],
       command: "C:\\Windows\\System32\\cmd.exe",
@@ -309,7 +321,7 @@ describe("wrapCommandInWindowsJob", () => {
         wrapped.startupStatusFilePath,
         "12\tpowershell-started\t\n18\thelper-compile-started\t\n25\thelper-ready\t\n",
       );
-      const startupTimeout = await new Promise<WindowsJobStartupTimeout>(
+      const startupTimeoutPromise = new Promise<WindowsJobStartupTimeout>(
         (resolve, reject) => {
           startWindowsJobReadyPoll({
             launch: wrapped,
@@ -321,6 +333,8 @@ describe("wrapCommandInWindowsJob", () => {
           });
         },
       );
+      await vi.runAllTimersAsync();
+      const startupTimeout = await startupTimeoutPromise;
       expect(startupTimeout).toMatchObject({
         stage: "overall-ready",
         timeoutMs: 40,
@@ -330,14 +344,15 @@ describe("wrapCommandInWindowsJob", () => {
       );
     } finally {
       wrapped.cleanup();
+      vi.useRealTimers();
     }
   });
 
   it.skipIf(process.platform !== "win32")(
-    "executes both native and Git Bash commands inside the Job",
+    "executes a native command inside the Job",
     async () => {
       const root = await mkdtemp(
-        path.join(os.tmpdir(), "pwragent-windows-job-test-"),
+        path.join(os.tmpdir(), "pwragent-windows-native-job-test-"),
       );
       try {
         const nativeResult = await runWrappedCommand({
@@ -354,12 +369,38 @@ describe("wrapCommandInWindowsJob", () => {
           stderr: "",
         });
         expect(nativeResult.stdout).toContain("job-native");
+      } finally {
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+    30_000,
+  );
 
+  it.skipIf(process.platform !== "win32")(
+    "executes Git inside the Job",
+    async () => {
+      const root = await mkdtemp(
+        path.join(os.tmpdir(), "pwragent-windows-git-job-test-"),
+      );
+      try {
         const gitResult = await runGitCommand(root, ["init", "-b", "main"], {
           ownProcessTree: true,
         });
         expect(gitResult.stderr).toBe("");
+      } finally {
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+    30_000,
+  );
 
+  it.skipIf(process.platform !== "win32")(
+    "executes Git Bash inside the Job",
+    async () => {
+      const root = await mkdtemp(
+        path.join(os.tmpdir(), "pwragent-windows-bash-job-test-"),
+      );
+      try {
         const bashResult = await runWrappedCommand({
           args: [
             "-lc",
