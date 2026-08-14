@@ -589,6 +589,77 @@ describe("codex environment runtime", () => {
     }
   });
 
+  it("marks captured environment commands as non-terminal", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-non-terminal-"));
+    const shellPath = path.join(root, "test-shell.sh");
+
+    try {
+      await writeFile(
+        shellPath,
+        [
+          "#!/bin/sh",
+          'if [ "$1" != "-lc" ]; then exit 64; fi',
+          'exec /bin/sh -c "$2"',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      await chmod(shellPath, 0o755);
+
+      const runtime = await applyLocalCodexEnvironmentSelection({
+        cwd: root,
+        env: {
+          ...process.env,
+          CLICOLOR_FORCE: "1",
+          COLORTERM: "truecolor",
+          FORCE_COLOR: "3",
+          ITERM_SESSION_ID: "w0t0p0:session",
+          NO_COLOR: "0",
+          SHELL: spawnableShell(shellPath),
+          TERM: "xterm-256color",
+          TERM_PROGRAM: "Apple_Terminal",
+          TERM_PROGRAM_VERSION: "455",
+          TERM_SESSION_ID: "session-id",
+        },
+        selection: {
+          environment: {
+            id: "env",
+            name: "Env",
+            sourcePath: path.join(root, "environment.toml"),
+            setupScript: [
+              `printf 'term=%s\\n' "$TERM"`,
+              `printf 'no_color=%s\\n' "$NO_COLOR"`,
+              `printf 'term_program=%s\\n' "\${TERM_PROGRAM-unset}"`,
+              `printf 'term_program_version=%s\\n' "\${TERM_PROGRAM_VERSION-unset}"`,
+              `printf 'term_session_id=%s\\n' "\${TERM_SESSION_ID-unset}"`,
+              `printf 'iterm_session_id=%s\\n' "\${ITERM_SESSION_ID-unset}"`,
+              `printf 'colorterm=%s\\n' "\${COLORTERM-unset}"`,
+              `printf 'force_color=%s\\n' "\${FORCE_COLOR-unset}"`,
+              `printf 'clicolor_force=%s\\n' "\${CLICOLOR_FORCE-unset}"`,
+            ].join("\n"),
+            actions: [],
+          },
+          executionTarget: "local",
+          runSetup: true,
+        },
+      });
+
+      expect(runtime?.setupOutput).toBe([
+        "term=dumb",
+        "no_color=1",
+        "term_program=unset",
+        "term_program_version=unset",
+        "term_session_id=unset",
+        "iterm_session_id=unset",
+        "colorterm=unset",
+        "force_color=unset",
+        "clicolor_force=unset",
+      ].join("\n"));
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("runs setup commands in an interactive login shell so startup-defined functions are available", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-nvm-"));
     const shellPath = path.join(root, "test-shell.sh");
