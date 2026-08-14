@@ -851,6 +851,206 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("keeps the latest page authoritative across dirty older-page overlap", async () => {
+    const initialTail = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "tail-first",
+          role: "user",
+          text: "Tail first",
+          createdAt: 200,
+        }),
+        messageEntry({
+          id: "tail-last",
+          text: "Tail last",
+          createdAt: 300,
+        }),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "tail-first",
+    });
+    const dirtyOlderPage = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "older-entry",
+          role: "user",
+          text: "Older entry",
+          createdAt: 100,
+        }),
+        messageEntry({
+          id: "tail-last",
+          text: "Tail last",
+          createdAt: 300,
+        }),
+      ],
+      hasPreviousPage: false,
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(dirtyOlderPage);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Older entry",
+      "message:Tail first",
+      "message:Tail last",
+    ]);
+  });
+
+  it("does not prepend a post-compaction live turn ahead of refreshed history", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const completedTurn = {
+      id: "turn-after-compaction",
+      status: "completed" as const,
+      startedAt: 500,
+      completedAt: 700,
+    };
+    const initialTail = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "recent-before-compaction",
+          role: "user",
+          text: "Recent history",
+          createdAt: 300,
+        }),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "recent-before-compaction",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "older-before-compaction",
+          role: "user",
+          text: "Older history",
+          createdAt: 100,
+        }),
+      ],
+      hasPreviousPage: false,
+    });
+    const refreshedTail = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "recent-before-compaction",
+          role: "user",
+          text: "Recent history",
+          createdAt: 300,
+        }),
+        {
+          ...messageEntry({
+            id: "auto-fix-user",
+            role: "user",
+            text: "Auto-fix started",
+            createdAt: 500,
+          }),
+          turn: completedTurn,
+        },
+        {
+          ...messageEntry({
+            id: "auto-fix-final",
+            text: "Auto-fix finished",
+            createdAt: 700,
+          }),
+          phase: "final" as const,
+          turn: completedTurn,
+        },
+      ],
+      hasPreviousPage: true,
+      previousCursor: "recent-before-compaction",
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage)
+      .mockResolvedValue(refreshedTail);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const { result, rerender, unmount } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Older history",
+      "message:Recent history",
+    ]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/compacted",
+          params: { threadId: "thread-1" },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: completedTurn.id,
+            item: {
+              id: "auto-fix-user",
+              type: "userMessage",
+              text: "Auto-fix started",
+            },
+          },
+        },
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Auto-fix started",
+    ]);
+
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Recent history",
+        "message:Auto-fix started",
+        "message:Auto-fix finished",
+      ]);
+    });
+    unmount();
+  });
+
   it("releases older-history loading when a fresher hydration supersedes it", async () => {
     const initialTail = readThreadResponse({
       entries: [
