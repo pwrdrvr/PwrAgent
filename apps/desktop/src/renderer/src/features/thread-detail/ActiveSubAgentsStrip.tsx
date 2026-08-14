@@ -204,7 +204,7 @@ export function ActiveSubAgentsStrip(props: {
             const blockedRow = isBlockedSubAgent(subAgent);
             const stopping = stoppingIds.has(subAgent.monitorId);
             const canStop =
-              subAgent.status === "running"
+              (subAgent.status === "running" || blockedRow)
               && Boolean(subAgent.monitorThreadId)
               && Boolean(subAgent.monitorTurnId)
               && Boolean(props.desktopApi?.stopSubAgent);
@@ -246,10 +246,10 @@ export function ActiveSubAgentsStrip(props: {
                     screen reader — and page-wide `name: "Stop"` is the
                     established E2E handle for the composer's stop-the-turn
                     button, which this must not shadow. */}
-                {/* Always rendered, even when empty. A blocked row has no
-                    action, and without a reserved slot its state text slid
-                    right to the edge while every neighbour's stopped short —
-                    the right rail stopped being a column. */}
+                {/* Always rendered, even when empty. A row without a stoppable
+                    monitor turn has no action, and without a reserved slot its
+                    state text slid right to the edge while every neighbour's
+                    stopped short — the right rail stopped being a column. */}
                 <span className="live-strip__item-slot">
                   {failedRow ? (
                     <button
