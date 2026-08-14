@@ -418,6 +418,27 @@ describe("ActiveSubAgentsStrip", () => {
         screen.getByRole("button", { name: "Active sub-agents (1)" }),
       ).toBeInTheDocument();
     });
+
+    it("allows a blocked monitor with an active turn to be stopped", async () => {
+      const stopSubAgent = vi.fn().mockResolvedValue({ ok: true });
+      render(
+        <ActiveSubAgentsStrip
+          desktopApi={{ stopSubAgent } as unknown as DesktopApi}
+          thread={buildThread([
+            buildSubAgent({ monitorId: "a", status: "blocked" }),
+          ])}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /^Stop sub-agent:/ }));
+      await waitFor(() => {
+        expect(stopSubAgent).toHaveBeenCalledWith({
+          backend: "codex",
+          threadId: "parent-thread",
+          monitorId: "a",
+        });
+      });
+    });
   });
 
   describe("liveness", () => {
