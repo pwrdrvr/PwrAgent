@@ -3980,7 +3980,12 @@ describe("ThreadView", () => {
     );
 
     expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
-    expect(screen.getByText("Waiting for approval")).toBeInTheDocument();
+    expect(
+      within(document.querySelector(".thread-header")!).getByText(
+        "Waiting for approval",
+        { exact: true },
+      ),
+    ).toBeInTheDocument();
 
     rerender(
       <ThreadView
@@ -4052,6 +4057,12 @@ describe("ThreadView", () => {
 
     expect(
       screen.queryByRole("group", { name: "Pending approval" })
+    ).not.toBeInTheDocument();
+    expect(
+      within(document.querySelector(".thread-header")!).queryByText(
+        "Waiting for approval",
+        { exact: true },
+      ),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.getByText("The request was handled.")).toBeInTheDocument();

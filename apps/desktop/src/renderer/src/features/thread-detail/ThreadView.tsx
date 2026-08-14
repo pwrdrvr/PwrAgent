@@ -2687,6 +2687,7 @@ export function ThreadView(props: ThreadViewProps) {
     >
       <ThreadHeader
         desktopApi={props.desktopApi}
+        hasApprovalRequest={Boolean(props.pendingRequest)}
         projectLabel={props.selectedDirectory?.label}
         thread={selectedThread!}
         backends={props.backends}
