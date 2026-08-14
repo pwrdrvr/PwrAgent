@@ -148,7 +148,7 @@ type ThreadSessionEntry = {
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
-  loadedHistoryEntryCount: number;
+  loadedHistoryEntries: AppServerThreadEntry[];
   loading: boolean;
   loadingMore: boolean;
   needsHydrationAfterCompletion: boolean;
@@ -200,7 +200,7 @@ function createEmptyThreadSessionEntry(): ThreadSessionEntry {
     expectOwnUpdate: false,
     interacted: false,
     lastTouchedAt: Date.now(),
-    loadedHistoryEntryCount: 0,
+    loadedHistoryEntries: [],
     loading: false,
     loadingMore: false,
     needsHydrationAfterCompletion: false,
@@ -218,6 +218,58 @@ function mergeItems<T extends { id: string }>(olderItems: T[], newerItems: T[]):
   }
 
   return [...deduped.values()];
+}
+
+function stitchOrderedTranscriptSegments(
+  olderEntries: AppServerThreadEntry[],
+  newerEntries: AppServerThreadEntry[]
+): AppServerThreadEntry[] {
+  // Page reads can overlap a moving tail. Only stable IDs prove that entries
+  // overlap; repeated content with different IDs is legitimate transcript.
+  const newerEntryIds = new Set(newerEntries.map((entry) => entry.id));
+
+  return [
+    ...olderEntries.filter((entry) => !newerEntryIds.has(entry.id)),
+    ...newerEntries,
+  ];
+}
+
+function excludeTranscriptSegment(
+  entries: AppServerThreadEntry[],
+  excludedSegment: AppServerThreadEntry[]
+): AppServerThreadEntry[] {
+  const excludedEntryIds = new Set(excludedSegment.map((entry) => entry.id));
+
+  return entries.filter((entry) => !excludedEntryIds.has(entry.id));
+}
+
+function transcriptMessagesForEntries(
+  entries: AppServerThreadEntry[],
+  ...messageSources: AppServerThreadMessage[][]
+): AppServerThreadMessage[] {
+  const messagesById = new Map(
+    messageSources.flat().map((message) => [message.id, message] as const)
+  );
+
+  return entries.flatMap((entry) => {
+    if (entry.type !== "message") {
+      return [];
+    }
+
+    const message = messagesById.get(entry.id);
+    return message
+      ? [message]
+      : [{
+          id: entry.id,
+          role: entry.role,
+          text: entry.text,
+          ...(entry.parts ? { parts: entry.parts } : {}),
+          ...(entry.origin ? { origin: entry.origin } : {}),
+          ...(entry.createdAt !== undefined
+            ? { createdAt: entry.createdAt }
+            : {}),
+        }];
+  });
 }
 
 function mergeFinalizedUsageEntry(
@@ -586,24 +638,21 @@ function mergeTranscriptMessages(
 function preserveLoadedTranscriptHistory(
   response: AppServerReadThreadResponse,
   retainedResponse: AppServerReadThreadResponse | undefined,
-  loadedHistoryEntryCount: number
+  loadedHistoryEntries: AppServerThreadEntry[]
 ): AppServerReadThreadResponse {
   if (
-    loadedHistoryEntryCount === 0 ||
+    loadedHistoryEntries.length === 0 ||
     !retainedResponse ||
     !response.replay.pagination.supportsPagination
   ) {
     return response;
   }
 
-  // The explicit boundary keeps a latest page that starts mid-turn from
-  // claiming entries that were loaded by an older-page request.
-  const retainedPrefix = retainedResponse.replay.entries.slice(
-    0,
-    loadedHistoryEntryCount
-  );
-  const retainedTail = retainedResponse.replay.entries.slice(
-    loadedHistoryEntryCount
+  // History provenance is explicit. A positional prefix becomes stale as soon
+  // as live items or a refresh mutate the combined response.
+  const retainedTail = excludeTranscriptSegment(
+    retainedResponse.replay.entries,
+    loadedHistoryEntries
   );
   // A refresh can lag the live stream. Replace only exact or uniquely
   // equivalent retained entries; keep anything the refresh omitted.
@@ -620,15 +669,9 @@ function preserveLoadedTranscriptHistory(
   const retainedTailRemainder = retainedTail.filter(
     (entry) => !matchedRetainedEntries.has(entry)
   );
-  const entries = mergeItems(
-    retainedPrefix,
+  const entries = stitchOrderedTranscriptSegments(
+    loadedHistoryEntries,
     mergeTranscriptEntries(response.replay.entries, retainedTailRemainder)
-  );
-  const messagesById = new Map(
-    [
-      ...retainedResponse.replay.messages,
-      ...response.replay.messages,
-    ].map((message) => [message.id, message] as const)
   );
 
   return {
@@ -636,25 +679,11 @@ function preserveLoadedTranscriptHistory(
     replay: {
       ...response.replay,
       entries,
-      messages: entries.flatMap((entry) => {
-        if (entry.type !== "message") {
-          return [];
-        }
-
-        const message = messagesById.get(entry.id);
-        return message
-          ? [message]
-          : [{
-              id: entry.id,
-              role: entry.role,
-              text: entry.text,
-              ...(entry.parts ? { parts: entry.parts } : {}),
-              ...(entry.origin ? { origin: entry.origin } : {}),
-              ...(entry.createdAt !== undefined
-                ? { createdAt: entry.createdAt }
-                : {}),
-            }];
-      }),
+      messages: transcriptMessagesForEntries(
+        entries,
+        retainedResponse.replay.messages,
+        response.replay.messages
+      ),
       pagination: retainedResponse.replay.pagination,
     },
   };
@@ -693,21 +722,6 @@ function findUniqueTranscriptRefreshMatch(
   });
 
   return logicalMatches.length === 1 ? logicalMatches[0] : undefined;
-}
-
-function loadedHistoryPrefixGrowth(
-  currentEntries: AppServerThreadEntry[],
-  mergedEntries: AppServerThreadEntry[]
-): number {
-  const currentFirstEntryId = currentEntries[0]?.id;
-  if (!currentFirstEntryId) {
-    return mergedEntries.length;
-  }
-
-  const currentBoundaryIndex = mergedEntries.findIndex(
-    (entry) => entry.id === currentFirstEntryId
-  );
-  return currentBoundaryIndex === -1 ? 0 : currentBoundaryIndex;
 }
 
 function isCodexImageBoundaryText(value: string): boolean {
@@ -3946,7 +3960,7 @@ export function useThreadSessionState(params: {
           const responseWithLoadedHistory = preserveLoadedTranscriptHistory(
             orderedResponse,
             current.response,
-            current.loadedHistoryEntryCount
+            current.loadedHistoryEntries
           );
           const hydratedPendingRequest = response.pendingRequest;
           const hydratedPendingUserInput =
@@ -4081,6 +4095,11 @@ export function useThreadSessionState(params: {
             initialLoadDurationMs:
               current.initialLoadDurationMs ?? response.readDurationMs,
             lastTouchedAt: Date.now(),
+            loadedHistoryEntries:
+              response.replay.pagination.supportsPagination
+              && response.replay.pagination.hasPreviousPage
+                ? current.loadedHistoryEntries
+                : [],
             loading: false,
             completionHydrationRetries,
             needsHydrationAfterCompletion,
@@ -5460,6 +5479,7 @@ export function useThreadSessionState(params: {
             failedHydrationVersion: undefined,
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
+            loadedHistoryEntries: [],
             pendingUsageActivityEntry: undefined,
             pendingTurnUsage: undefined,
             pendingStatusText: undefined,
@@ -5686,25 +5706,33 @@ export function useThreadSessionState(params: {
           };
         }
 
-        const mergedEntries = mergeItems(
-          olderResponse.replay.entries,
-          current.response.replay.entries
+        const retainedTail = excludeTranscriptSegment(
+          current.response.replay.entries,
+          current.loadedHistoryEntries
+        );
+        const loadedHistoryEntries = excludeTranscriptSegment(
+          stitchOrderedTranscriptSegments(
+            olderResponse.replay.entries,
+            current.loadedHistoryEntries
+          ),
+          retainedTail
+        );
+        const mergedEntries = stitchOrderedTranscriptSegments(
+          loadedHistoryEntries,
+          retainedTail
         );
         return {
           ...current,
           lastTouchedAt: Date.now(),
-          loadedHistoryEntryCount:
-            current.loadedHistoryEntryCount + loadedHistoryPrefixGrowth(
-              current.response.replay.entries,
-              mergedEntries
-            ),
+          loadedHistoryEntries,
           loadingMore: false,
           response: {
             ...olderResponse,
             replay: {
               ...olderResponse.replay,
               entries: mergedEntries,
-              messages: mergeItems(
+              messages: transcriptMessagesForEntries(
+                mergedEntries,
                 olderResponse.replay.messages,
                 current.response.replay.messages
               ),
