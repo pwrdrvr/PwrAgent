@@ -756,12 +756,24 @@ export class AutomationStore {
     event: AutomationRunTranscriptEvent;
     now?: number;
   }): AutomationRunArtifact | undefined {
+    return this.appendRunTranscriptEvents({
+      runId: params.runId,
+      events: [params.event],
+      now: params.now,
+    });
+  }
+
+  appendRunTranscriptEvents(params: {
+    runId: string;
+    events: AutomationRunTranscriptEvent[];
+    now?: number;
+  }): AutomationRunArtifact | undefined {
     const run = this.getRun(params.runId);
     if (!run) return undefined;
     const existing = this.getRunArtifact(params.runId);
     const transcriptEvents = mergeTranscriptEvents(
       existing?.transcriptEvents ?? [],
-      [params.event],
+      params.events,
     );
     return this.upsertRunArtifact({
       runId: params.runId,

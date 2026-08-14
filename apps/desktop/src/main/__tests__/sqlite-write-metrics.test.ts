@@ -366,6 +366,101 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("holds a long automation transcript to one boundary artifact write", async () => {
+    vi.useFakeTimers();
+    const automationStore = new AutomationStore(stateDb);
+    const registryListeners: Array<(event: AgentEvent) => void | Promise<void>> = [];
+    const registry = {
+      canStartThreadTurnImmediately: () => true,
+      getThreadAgentMetadata: async () => ({
+        name: "Agent",
+        instructionLineCount: 0,
+        instructionsTooLong: false,
+        updatedAt: 1,
+      }),
+      onEvent: (listener: (event: AgentEvent) => void | Promise<void>) => {
+        registryListeners.push(listener);
+        return () => {};
+      },
+      publishLocalEvent: async () => {},
+      setAutomationInspectionHandler: () => {},
+      startAutomationHeadlessTurn: async (params: {
+        agentThreadId: string;
+        automationRunId: string;
+        backend: string;
+      }) => ({
+        backend: params.backend,
+        headlessThreadId: "headless-1",
+        queueEntryId: `headless:${params.automationRunId}`,
+        threadId: params.agentThreadId,
+        turnId: "turn-1",
+      }),
+    } as unknown as ConstructorParameters<
+      typeof DesktopAutomationService
+    >[0]["registry"];
+    const service = new DesktopAutomationService({
+      registry,
+      store: automationStore,
+    });
+    try {
+      service.start();
+      const created = await service.create({
+        backend: "codex",
+        threadId: "thread-1",
+        name: "Transcript burst",
+        taskPrompt: "Check.",
+        schedule: { kind: "interval", every: 24, unit: "hours" },
+      });
+      const runNow = await service.runNow({ automationId: created.automation.id });
+
+      const { writes } = await measureSqliteWrites(async () => {
+        // Fifty five-minute windows with fifty items each model a long-running,
+        // tool-heavy automation. Periodic whole-artifact rewrites would make
+        // WAL growth quadratic as every window rewrote all prior windows.
+        // One 2,500-item boundary write measures 704,520 WAL bytes; even ten
+        // such extreme runs/day stay linear at 7,045,200 bytes (about 6.7 MiB).
+        for (let windowIndex = 0; windowIndex < 50; windowIndex += 1) {
+          for (let itemIndex = 0; itemIndex < 50; itemIndex += 1) {
+            await Promise.all(
+              registryListeners.map((listener) =>
+                listener({
+                  backend: "codex",
+                  notification: {
+                    method: "item/completed",
+                    params: {
+                      threadId: "headless-1",
+                      turnId: "turn-1",
+                      item: {
+                        id: `tool-${windowIndex}-${itemIndex}`,
+                        type: "mcpToolCall",
+                        toolName: `tool-${windowIndex}-${itemIndex}`,
+                      },
+                    },
+                  },
+                } as unknown as AgentEvent),
+              ),
+            );
+          }
+          await vi.advanceTimersByTimeAsync(5 * 60_000);
+          expect(automationStore.getRunArtifact(runNow.run.id)).toBeUndefined();
+        }
+        service.dispose();
+      });
+
+      expectSqliteWriteBudget({
+        note: "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
+        scenario: "automation-run-transcript-burst",
+        writes,
+      });
+      expect(
+        automationStore.getRunArtifact(runNow.run.id)?.transcriptEvents,
+      ).toHaveLength(2_500);
+    } finally {
+      service.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("budgets recurring live usage timer windows", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "clearTimeout", "setTimeout"],

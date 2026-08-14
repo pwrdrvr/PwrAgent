@@ -448,6 +448,7 @@ type RelayedEventSubscription = IncomingEventSubscription & {
 };
 
 const NAVIGATION_EVENT_METHODS = new Set<string>([
+  "automation/run/transcript/updated",
   "automation/run/updated",
   "directory/pin/added",
   "directory/pin/removed",

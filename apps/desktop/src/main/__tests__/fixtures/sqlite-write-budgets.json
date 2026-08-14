@@ -1,4 +1,11 @@
 {
+  "automation-run-transcript-burst": {
+    "commits": 1,
+    "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",
+    "observedWalBytes": 704520,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "automation-run-usage": {
     "commits": 1,
     "note": "50 cumulative pricing snapshots for one run, one debounced payload write",
