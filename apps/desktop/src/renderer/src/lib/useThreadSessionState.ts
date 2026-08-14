@@ -224,21 +224,12 @@ function stitchOrderedTranscriptSegments(
   olderEntries: AppServerThreadEntry[],
   newerEntries: AppServerThreadEntry[]
 ): AppServerThreadEntry[] {
-  // Page reads can overlap a moving tail. Remove only unambiguous overlap from
-  // the older segment, then preserve the newer segment's authoritative order.
-  const matchedOlderEntries = new Set<AppServerThreadEntry>();
-  for (const newerEntry of newerEntries) {
-    const olderMatch = findUniqueTranscriptRefreshMatch(
-      newerEntry,
-      olderEntries.filter((entry) => !matchedOlderEntries.has(entry))
-    );
-    if (olderMatch) {
-      matchedOlderEntries.add(olderMatch);
-    }
-  }
+  // Page reads can overlap a moving tail. Only stable IDs prove that entries
+  // overlap; repeated content with different IDs is legitimate transcript.
+  const newerEntryIds = new Set(newerEntries.map((entry) => entry.id));
 
   return [
-    ...olderEntries.filter((entry) => !matchedOlderEntries.has(entry)),
+    ...olderEntries.filter((entry) => !newerEntryIds.has(entry.id)),
     ...newerEntries,
   ];
 }
@@ -247,18 +238,9 @@ function excludeTranscriptSegment(
   entries: AppServerThreadEntry[],
   excludedSegment: AppServerThreadEntry[]
 ): AppServerThreadEntry[] {
-  const excludedEntries = new Set<AppServerThreadEntry>();
-  for (const excludedEntry of excludedSegment) {
-    const match = findUniqueTranscriptRefreshMatch(
-      excludedEntry,
-      entries.filter((entry) => !excludedEntries.has(entry))
-    );
-    if (match) {
-      excludedEntries.add(match);
-    }
-  }
+  const excludedEntryIds = new Set(excludedSegment.map((entry) => entry.id));
 
-  return entries.filter((entry) => !excludedEntries.has(entry));
+  return entries.filter((entry) => !excludedEntryIds.has(entry.id));
 }
 
 function transcriptMessagesForEntries(
@@ -5724,13 +5706,16 @@ export function useThreadSessionState(params: {
           };
         }
 
-        const loadedHistoryEntries = stitchOrderedTranscriptSegments(
-          olderResponse.replay.entries,
-          current.loadedHistoryEntries
-        );
         const retainedTail = excludeTranscriptSegment(
           current.response.replay.entries,
           current.loadedHistoryEntries
+        );
+        const loadedHistoryEntries = excludeTranscriptSegment(
+          stitchOrderedTranscriptSegments(
+            olderResponse.replay.entries,
+            current.loadedHistoryEntries
+          ),
+          retainedTail
         );
         const mergedEntries = stitchOrderedTranscriptSegments(
           loadedHistoryEntries,

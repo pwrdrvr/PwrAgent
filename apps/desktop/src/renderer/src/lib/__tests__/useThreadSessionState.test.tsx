@@ -879,8 +879,86 @@ describe("useThreadSessionState", () => {
         }),
         messageEntry({
           id: "tail-last",
-          text: "Tail last",
+          text: "Stale tail last",
           createdAt: 300,
+        }),
+      ],
+      hasPreviousPage: false,
+    });
+    const laggingRefreshedTail = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "tail-later",
+          text: "Tail later",
+          createdAt: 400,
+        }),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "tail-later",
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(dirtyOlderPage)
+      .mockResolvedValueOnce(laggingRefreshedTail);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } }
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Older entry",
+      "message:Tail first",
+      "message:Tail last",
+    ]);
+
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Older entry",
+        "message:Tail first",
+        "message:Tail last",
+        "message:Tail later",
+      ]);
+    });
+  });
+
+  it("preserves repeated transcript content with distinct entry ids", async () => {
+    const initialTail = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "repeat-newer",
+          text: "Still working.",
+          createdAt: 300,
+        }),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "repeat-newer",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "repeat-older",
+          text: "Still working.",
+          createdAt: 200,
         }),
       ],
       hasPreviousPage: false,
@@ -888,7 +966,7 @@ describe("useThreadSessionState", () => {
     const readThread = vi
       .fn()
       .mockResolvedValueOnce(initialTail)
-      .mockResolvedValueOnce(dirtyOlderPage);
+      .mockResolvedValueOnce(olderPage);
     const desktopApi: DesktopApi = {
       onAgentEvent: () => () => undefined,
       readThread,
@@ -906,10 +984,9 @@ describe("useThreadSessionState", () => {
       await result.current.loadOlder();
     });
 
-    expect(transcriptLabels(result.current.entries)).toEqual([
-      "message:Older entry",
-      "message:Tail first",
-      "message:Tail last",
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "repeat-older",
+      "repeat-newer",
     ]);
   });
 
