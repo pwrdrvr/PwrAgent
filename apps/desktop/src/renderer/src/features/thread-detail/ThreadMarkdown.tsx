@@ -411,11 +411,14 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
             name: skillNameFromPath(skillPath, label),
             path: skillPath,
           };
+          const chipLabel = label.toLowerCase() === "skill.md"
+            ? skillNameFromPath(skillPath, label)
+            : label;
 
           return (
             <SkillChip
               editorName={editorApplication?.name}
-              label={label || undefined}
+              label={chipLabel || undefined}
               onOpenInEditor={editorApplication && props.desktopApi?.openApplication
                 ? openSkillMarkdownInEditor
                 : undefined}
