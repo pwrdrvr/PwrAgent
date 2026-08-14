@@ -30,6 +30,7 @@ import {
   classifyElectronClose,
   E2E_SHUTDOWN_CIRCUIT_BREAKER_ENV,
   E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV,
+  ElectronFixtureTeardownTimeoutError,
   ElectronShutdownCircuitOpenError,
   executeElectronClose,
   finalizeElectronFixtureTeardown,
@@ -400,12 +401,11 @@ export async function launchElectronApp(params: {
             await rm(homeRoot, { recursive: true, force: true });
           },
         }).then(() => undefined);
-        if (await raceTeardownTimeout(running, ELECTRON_TEARDOWN_TIMEOUT_MS)) {
-          running.catch(() => undefined);
-          console.warn(
-            `[pwragent-e2e-teardown] teardown exceeded ${ELECTRON_TEARDOWN_TIMEOUT_MS}ms`,
-          );
-        }
+        await awaitElectronFixtureTeardown({
+          closeApplication: closeApplicationOnce,
+          running,
+          timeoutMs: ELECTRON_TEARDOWN_TIMEOUT_MS,
+        });
       },
     };
   } catch (error) {
@@ -427,6 +427,27 @@ export function threadRowCard(
   return scope
     .locator(".thread-row")
     .filter({ has: page.getByRole("button", { name }) });
+}
+
+export async function awaitElectronFixtureTeardown(params: {
+  closeApplication(): Promise<ElectronShutdownSummary>;
+  running: Promise<void>;
+  timeoutMs: number;
+}): Promise<void> {
+  if (!await raceTeardownTimeout(params.running, params.timeoutMs)) {
+    return;
+  }
+
+  // The bounded close finishes before profile cleanup begins, so its memoized
+  // summary remains available even when the overall teardown budget expires.
+  // Observe the detached cleanup promise, then surface a deterministic failure
+  // instead of allowing the fixture (and potentially the shard) to pass.
+  params.running.catch(() => undefined);
+  const summary = await params.closeApplication();
+  if (summary.circuit.tripped) {
+    throw new ElectronShutdownCircuitOpenError();
+  }
+  throw new ElectronFixtureTeardownTimeoutError(params.timeoutMs);
 }
 
 /**

@@ -18,6 +18,8 @@ export const E2E_SHUTDOWN_CIRCUIT_STATE_FILE_ENV =
   "PWRAGENT_E2E_SHUTDOWN_CIRCUIT_STATE_FILE";
 export const ELECTRON_SHUTDOWN_CIRCUIT_ERROR_NAME =
   "ElectronShutdownCircuitOpenError";
+export const ELECTRON_FIXTURE_TEARDOWN_TIMEOUT_ERROR_NAME =
+  "ElectronFixtureTeardownTimeoutError";
 
 /**
  * A healthy replay-backed app normally closes well below the renderer's own
@@ -311,6 +313,15 @@ export class ElectronShutdownCircuitOpenError extends Error {
       ].join(" "),
     );
     this.name = ELECTRON_SHUTDOWN_CIRCUIT_ERROR_NAME;
+  }
+}
+
+export class ElectronFixtureTeardownTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(
+      `Electron fixture teardown exceeded its ${timeoutMs}ms cleanup budget`,
+    );
+    this.name = ELECTRON_FIXTURE_TEARDOWN_TIMEOUT_ERROR_NAME;
   }
 }
 
