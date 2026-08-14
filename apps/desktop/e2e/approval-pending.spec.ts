@@ -56,8 +56,13 @@ async function openApprovalPendingReplay() {
     pendingApproval.locator("pre code")
   ).toHaveText(approvalCommand);
   await expect(
-    app.window.getByText("Waiting for approval before this turn can continue.")
+    app.window
+      .locator(".thread-header")
+      .getByText("Waiting for approval", { exact: true })
   ).toBeVisible();
+  await expect(
+    app.window.getByText("Waiting for approval before this turn can continue.")
+  ).toHaveCount(0);
   await expect(
     app.window.getByRole("button", { name: "Approve Once" })
   ).toBeVisible();
@@ -124,8 +129,13 @@ test("shows pending approval UI without duplicating the turn elsewhere", async (
       pendingApproval.locator("pre code")
     ).toHaveText(approvalCommand);
     await expect(
-      app.window.getByText("Waiting for approval before this turn can continue.")
+      app.window
+        .locator(".thread-header")
+        .getByText("Waiting for approval", { exact: true })
     ).toBeVisible();
+    await expect(
+      app.window.getByText("Waiting for approval before this turn can continue.")
+    ).toHaveCount(0);
     await expect(
       app.window.getByRole("button", { name: "Approve Once" })
     ).toBeVisible();
@@ -144,7 +154,9 @@ test("dismisses the pending approval UI after approval", async () => {
       app.window.getByRole("group", { name: "Pending approval" })
     ).toHaveCount(0);
     await expect(
-      app.window.getByText("Waiting for approval before this turn can continue.")
+      app.window
+        .locator(".thread-header")
+        .getByText("Waiting for approval", { exact: true })
     ).toHaveCount(0);
     await expect(
       app.window.getByRole("button", { name: "Decline" })

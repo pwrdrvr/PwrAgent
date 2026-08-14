@@ -8692,11 +8692,7 @@ export function Composer(props: ComposerProps) {
             ? "This backend is unavailable right now. Your draft stays here until send is available again."
             : "This thread's backend is unavailable right now. You can keep drafting, but send is unavailable."}
         </p>
-      ) : props.pendingRequestActive ? (
-        <p className="composer__meta">
-          Waiting for approval before this turn can continue.
-        </p>
-      ) : props.pendingUserInputActive ? (
+      ) : !props.pendingRequestActive && props.pendingUserInputActive ? (
         <p className="composer__meta">
           Waiting for input before this turn can continue.
         </p>

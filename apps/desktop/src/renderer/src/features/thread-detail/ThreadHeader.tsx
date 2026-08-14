@@ -30,6 +30,7 @@ type ThreadHeaderLayoutControls = {
 
 type ThreadHeaderProps = {
   desktopApi?: DesktopApi;
+  hasApprovalRequest?: boolean;
   projectLabel?: string;
   thread: NavigationThreadSummary;
   backends?: BackendSummary[];
@@ -143,6 +144,14 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             <span className="chip chip--backend">
               {formatBackendLabel(props.thread.source)}
             </span>
+            {props.hasApprovalRequest ? (
+              <span
+                aria-label="Waiting for approval"
+                className="thread-row__chip thread-row__chip--approval"
+              >
+                Waiting for approval
+              </span>
+            ) : null}
             {props.thread.agent ? (
               <span className="chip chip--mode" title={formatThreadAgentTitle(props.thread)}>
                 Agent: {props.thread.agent.name}

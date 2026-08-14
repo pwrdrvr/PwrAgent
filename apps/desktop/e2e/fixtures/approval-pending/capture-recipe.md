@@ -6,7 +6,7 @@ Capture a live Codex thread that reaches a pending approval request so replay
 tests can assert both of these user-visible states:
 
 - transcript approval block with `Approval needed`
-- composer copy that says `Waiting for approval before this turn can continue.`
+- thread-header chip that says `Waiting for approval`
 
 ## Backend and Mode
 
@@ -38,7 +38,7 @@ pnpm dev
 6. Wait for all of these cues:
    - the transcript shows a pending approval group
    - the transcript includes the `Approval needed` chip
-   - the composer shows `Waiting for approval before this turn can continue.`
+   - the thread header shows the `Waiting for approval` chip
 7. Do not approve, decline, or cancel the request.
 8. Open the context rail and record the thread id before closing the app or
    exporting the capture.
@@ -57,7 +57,7 @@ for approval. Do not let the turn continue past the pending request.
 - Expected replay assertion surface:
   - `Pending approval` group is visible
   - approval prompt text is visible
-  - composer remains in waiting state
+  - thread-header approval chip is visible
 
 ## Promotion Commands
 
