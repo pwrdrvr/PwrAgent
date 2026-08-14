@@ -309,6 +309,32 @@ describe("ThreadMarkdown", () => {
     expect(screen.queryByRole("link", { name: "$frontend-design" })).not.toBeInTheDocument();
   });
 
+  it("labels a SKILL.md link with its skill directory name", () => {
+    const skillPath = [
+      "/Users/huntharo/pwrdrvr/PwrSuiteLab/.agents/skills",
+      "restart-wedged-macos-gha-runner/SKILL.md",
+    ].join("/");
+
+    render(
+      <ThreadMarkdown
+        skills={[
+          {
+            name: "restart-wedged-macos-gha-runner",
+            description: "Restart a wedged macOS GitHub Actions runner.",
+            path: skillPath,
+            enabled: true,
+          },
+        ]}
+        text={`[SKILL.md](${skillPath}) and [runner recovery guide](${skillPath})`}
+      />
+    );
+
+    expect(screen.getByText("restart-wedged-macos-gha-runner"))
+      .toBeInTheDocument();
+    expect(screen.getByText("runner recovery guide")).toBeInTheDocument();
+    expect(screen.queryByText("SKILL.md")).not.toBeInTheDocument();
+  });
+
   it("renders emoji, italic, strikethrough, and inline code", () => {
     render(
       <ThreadMarkdown
