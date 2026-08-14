@@ -452,14 +452,12 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     this.listener = listener;
     await this.callbackServer.start();
     if (lifecycleGeneration !== this.lifecycleGeneration) {
-      await this.stop();
       return;
     }
 
     try {
       const me = (await this.client.getMe()) as { id: string; username?: string };
       if (lifecycleGeneration !== this.lifecycleGeneration) {
-        await this.stop();
         return;
       }
       this.botUserId = me.id;
@@ -551,7 +549,6 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (this.config.registerSlashCommands === true) {
       await this.reconcileSlashCommandsAcrossTeams();
       if (lifecycleGeneration !== this.lifecycleGeneration) {
-        await this.stop();
         return;
       }
     } else {

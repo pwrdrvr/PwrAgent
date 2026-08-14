@@ -284,6 +284,49 @@ describe("SlackAdapter", () => {
     await expect(startPromise).rejects.toThrow("socket rejected after stop");
   });
 
+  it("does not let stale identity lookup stop a newer lifecycle", async () => {
+    let resolveFirstAuth!: (value: Awaited<ReturnType<SlackApi["authTest"]>>) => void;
+    const firstAuth = new Promise<Awaited<ReturnType<SlackApi["authTest"]>>>((resolve) => {
+      resolveFirstAuth = resolve;
+    });
+    const api = fakeApi({});
+    const auth = await api.authTest();
+    api.authTest = vi.fn()
+      .mockImplementationOnce(async () => await firstAuth)
+      .mockResolvedValueOnce(auth);
+    let socketOpen = false;
+    const socket: SlackSocketClient = {
+      disconnect: vi.fn(async () => {
+        socketOpen = false;
+      }),
+      off: vi.fn(),
+      on: vi.fn(),
+      start: vi.fn(async () => {
+        socketOpen = true;
+      }),
+    };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: socket,
+    });
+
+    const staleStart = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(api.authTest).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+
+    const currentStart = adapter.start(async () => undefined);
+    await currentStart;
+    resolveFirstAuth(auth);
+    await staleStart;
+
+    expect(socket.disconnect).not.toHaveBeenCalled();
+    expect(socketOpen).toBe(true);
+  });
+
   it("declares Slack capabilities", () => {
     const adapter = new SlackAdapter({
       config: baseConfig,

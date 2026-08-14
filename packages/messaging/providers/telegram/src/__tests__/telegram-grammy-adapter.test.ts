@@ -202,6 +202,50 @@ describe("TelegramAdapter lifecycle", () => {
 
     expect(api.getWebhookInfo).not.toHaveBeenCalled();
   });
+
+  it("does not let stale identity lookup stop a newer lifecycle", async () => {
+    let resolveFirstGetMe!: (value: {
+      id: number;
+      is_bot: true;
+      username: string;
+    }) => void;
+    const firstGetMe = new Promise<{
+      id: number;
+      is_bot: true;
+      username: string;
+    }>((resolve) => {
+      resolveFirstGetMe = resolve;
+    });
+    const api = fakeTelegramApi();
+    const identity = { id: 123, is_bot: true as const, username: "TestBot" };
+    api.getMe = vi.fn()
+      .mockImplementationOnce(async () => await firstGetMe)
+      .mockResolvedValueOnce(identity);
+    const stop = vi.fn(async () => undefined);
+    const adapter = new TelegramAdapter({
+      bot: { api, stop },
+      config: {
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      pollOnStart: false,
+      store: fakeCallbackStore(),
+    });
+
+    const staleStart = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(api.getMe).toHaveBeenCalledTimes(1);
+    });
+    await adapter.stop();
+
+    const currentStart = adapter.start(async () => undefined);
+    await currentStart;
+    resolveFirstGetMe(identity);
+    await staleStart;
+
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("TelegramAdapter callback persistence", () => {

@@ -75,6 +75,15 @@ settles, whether that promise resolves or rejects. Providers must therefore not
 gate cleanup solely on a final `started` flag, and repeated cleanup must not
 leave listeners or connections behind.
 
+A cancelled startup may settle after `stop()` and after a newer `start()` has
+begun on the same adapter instance. A generation-stale startup must never call
+the adapter-wide public `stop()`: that would invalidate and tear down the newer
+lifecycle. It may clean up only resources it created and still owns. Track that
+ownership with the captured lifecycle generation or resource identity, and make
+late resource acquisition close that specific socket, server, subscription, or
+polling loop. If the stale startup has not acquired a resource, it simply
+returns.
+
 ## Opaque State
 
 Adapters own routing and surface state. PwrAgent may persist and echo
