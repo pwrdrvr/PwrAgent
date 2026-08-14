@@ -24,6 +24,10 @@ import {
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
+  collectProcessTreeIds,
+  isProcessIdAlive,
+} from "../process-tree";
+import {
   formatWindowsJobStartupTelemetry,
   formatWindowsJobStartupTimeout,
   readWindowsJobStartupTelemetry,
@@ -288,6 +292,61 @@ export type CodexEnvironmentDetachedCommandStopResult = {
   found: boolean;
   alreadyClosed: boolean;
 };
+
+export type CodexEnvironmentDetachedCommandGoneParams = {
+  knownPids?: Iterable<number>;
+  pid?: number;
+  runId: string;
+  timeoutMs?: number;
+};
+
+/**
+ * After `stop`/`terminate`, wait for the Node close bit AND the OS process
+ * tree to die. `taskkill /T /F` returning 0 and `child.kill` on the Windows
+ * Job PowerShell launcher both race handle release; callers that `rm` the
+ * action cwd must wait here first.
+ */
+export async function waitForCodexEnvironmentDetachedCommandGone(
+  params: CodexEnvironmentDetachedCommandGoneParams,
+): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 5_000;
+  const startedAt = Date.now();
+  const tracked = new Set<number>(
+    [...(params.knownPids ?? [])].filter(
+      (pid) => Number.isInteger(pid) && pid > 0,
+    ),
+  );
+  if (params.pid) {
+    for (const pid of collectProcessTreeIds(params.pid)) {
+      tracked.add(pid);
+    }
+  }
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const entry = detachedCommandProcesses.get(params.runId);
+    const closed = !entry || entry.closed();
+    for (const pid of [...tracked]) {
+      if (isProcessIdAlive(pid)) {
+        for (const childPid of collectProcessTreeIds(pid)) {
+          tracked.add(childPid);
+        }
+      }
+    }
+    const alive = [...tracked].filter((pid) => isProcessIdAlive(pid));
+    if (closed && alive.length === 0) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  const entry = detachedCommandProcesses.get(params.runId);
+  const closed = !entry || entry.closed();
+  const alive = [...tracked].filter((pid) => isProcessIdAlive(pid));
+  throw new Error(
+    `Detached environment command ${params.runId} did not exit within ${timeoutMs}ms`
+      + ` (closed=${closed}, alive=[${alive.join(", ")}], pid=${String(params.pid)})`,
+  );
+}
 
 export function stopCodexEnvironmentDetachedCommand(
   terminationKey: string,
