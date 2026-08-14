@@ -6635,6 +6635,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
   private readonly runtimeInstanceId: string;
+  private readonly registrySessionId: string;
   private readonly resolveLiveProfileRuntimeInstanceIdsFn: () => string[];
   private readonly subAgentStartupReconciliation: Promise<void>;
   /**
@@ -6890,6 +6891,7 @@ export class DesktopBackendRegistry {
     resolveCodexFastAllowed?: () => boolean;
     resolvePdfAnalysisEnabled?: () => boolean;
     runtimeInstanceId?: string;
+    registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
     acpWorktreeRepositoryResolver?: (
       cwd: string,
@@ -6898,6 +6900,7 @@ export class DesktopBackendRegistry {
     const processRuntimeIdentity = getProcessRuntimeIdentity();
     this.runtimeInstanceId =
       options?.runtimeInstanceId ?? processRuntimeIdentity.instanceId;
+    this.registrySessionId = options?.registrySessionId ?? randomUUID();
     this.resolveLiveProfileRuntimeInstanceIdsFn =
       options?.resolveLiveProfileRuntimeInstanceIds ??
       (() =>
@@ -7336,6 +7339,7 @@ export class DesktopBackendRegistry {
     }
     const result = await reconcile.call(this.overlayStore, {
       currentRuntimeInstanceId: this.runtimeInstanceId,
+      currentRegistrySessionId: this.registrySessionId,
       liveRuntimeInstanceIds,
       sessionStartedAt: this.registrySessionStartedAt,
     });
@@ -13767,7 +13771,7 @@ export class DesktopBackendRegistry {
     if (!subAgent) {
       throw new Error("Sub-agent was not found on this thread.");
     }
-    if (subAgent.status !== "running") {
+    if (subAgent.status !== "running" && subAgent.status !== "blocked") {
       throw new Error("Sub-agent is no longer running.");
     }
     const taskMonitor = this.taskMonitorDelegations.get(params.monitorId);
@@ -20839,6 +20843,8 @@ export class DesktopBackendRegistry {
       updatedAt: now,
       ownerRuntimeInstanceId:
         existing?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
+      ownerRegistrySessionId:
+        existing?.ownerRegistrySessionId ?? this.registrySessionId,
       backend: "codex",
       monitorThreadId: params.receiverThreadId,
       ...(params.call.parentTurnId
@@ -21135,6 +21141,8 @@ export class DesktopBackendRegistry {
       updatedAt: patch.updatedAt ?? Date.now(),
       ownerRuntimeInstanceId:
         existing?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
+      ownerRegistrySessionId:
+        existing?.ownerRegistrySessionId ?? this.registrySessionId,
       backend: record.backend,
       preferredModel: record.preferredModel,
       preferredReasoningEffort: record.preferredReasoningEffort,
@@ -21209,6 +21217,8 @@ export class DesktopBackendRegistry {
       updatedAt: patch.updatedAt ?? Date.now(),
       ownerRuntimeInstanceId:
         existing?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
+      ownerRegistrySessionId:
+        existing?.ownerRegistrySessionId ?? this.registrySessionId,
       backend: record.backend,
       monitorThreadId: record.reviewThreadId,
       monitorTurnId: record.turnId,
@@ -22967,6 +22977,9 @@ export class DesktopBackendRegistry {
       ownerRuntimeInstanceId: startsNewAttempt
         ? this.runtimeInstanceId
         : existing?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
+      ownerRegistrySessionId: startsNewAttempt
+        ? this.registrySessionId
+        : existing?.ownerRegistrySessionId ?? this.registrySessionId,
       backend: params.backend,
       agentName: "PwrAgent",
       ...(preferredModel ? { preferredModel } : {}),

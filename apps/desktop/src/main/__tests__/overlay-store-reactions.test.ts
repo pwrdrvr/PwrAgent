@@ -448,6 +448,7 @@ describe("SqliteOverlayStore — orphaned sub-agents", () => {
 
     await expect(store.reconcileOrphanedThreadSubAgents({
       currentRuntimeInstanceId: "runtime-current",
+      currentRegistrySessionId: "registry-current",
       liveRuntimeInstanceIds: ["runtime-current", "runtime-other"],
       sessionStartedAt: 2_000,
     })).resolves.toEqual({
@@ -501,6 +502,77 @@ describe("SqliteOverlayStore — orphaned sub-agents", () => {
     });
   });
 
+  it("repairs a replaced registry without touching another live process", async () => {
+    await seedSubAgent("replaced-registry", {
+      monitorId: "monitor-replaced-registry",
+      task: "Owned by the replaced registry",
+      status: "running",
+      createdAt: 1_000,
+      updatedAt: 1_500,
+      ownerRuntimeInstanceId: "runtime-current",
+      ownerRegistrySessionId: "registry-replaced",
+    });
+    await seedSubAgent("current-registry", {
+      monitorId: "monitor-current-registry",
+      task: "Owned by the current registry",
+      status: "running",
+      createdAt: 2_100,
+      updatedAt: 2_200,
+      ownerRuntimeInstanceId: "runtime-current",
+      ownerRegistrySessionId: "registry-current",
+    });
+    await seedSubAgent("other-live-process", {
+      monitorId: "monitor-other-process",
+      task: "Owned by another live process",
+      status: "running",
+      createdAt: 1_000,
+      updatedAt: 1_500,
+      ownerRuntimeInstanceId: "runtime-other",
+      ownerRegistrySessionId: "registry-other-replaced",
+    });
+
+    await expect(store.reconcileOrphanedThreadSubAgents({
+      currentRuntimeInstanceId: "runtime-current",
+      currentRegistrySessionId: "registry-current",
+      liveRuntimeInstanceIds: ["runtime-current", "runtime-other"],
+      sessionStartedAt: 2_000,
+    })).resolves.toEqual({
+      repairedSubAgents: 1,
+      repairedThreads: 1,
+      skippedLiveOwners: 2,
+      skippedOwnerlessWithOtherRuntimes: 0,
+    });
+
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "replaced-registry",
+    })).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          status: "failure",
+          outcome: "failure",
+          ownerRuntimeInstanceId: "runtime-current",
+          ownerRegistrySessionId: "registry-replaced",
+          completionSource: expect.objectContaining({
+            reason: "owner_registry_replaced",
+          }),
+        }),
+      ],
+    });
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "current-registry",
+    })).resolves.toMatchObject({
+      subAgents: [expect.objectContaining({ status: "running" })],
+    });
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "other-live-process",
+    })).resolves.toMatchObject({
+      subAgents: [expect.objectContaining({ status: "running" })],
+    });
+  });
+
   it("repairs old ownerless work only when this is the sole runtime", async () => {
     await seedSubAgent("thread-1", {
       monitorId: "monitor-old",
@@ -519,6 +591,7 @@ describe("SqliteOverlayStore — orphaned sub-agents", () => {
 
     await expect(store.reconcileOrphanedThreadSubAgents({
       currentRuntimeInstanceId: "runtime-current",
+      currentRegistrySessionId: "registry-current",
       liveRuntimeInstanceIds: ["runtime-current"],
       sessionStartedAt: 2_000,
     })).resolves.toMatchObject({

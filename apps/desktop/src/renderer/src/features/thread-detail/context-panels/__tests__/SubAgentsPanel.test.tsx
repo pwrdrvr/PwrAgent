@@ -92,6 +92,42 @@ describe("SubAgentsPanel", () => {
     expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
   });
 
+  it("allows an active blocked monitor to be stopped", async () => {
+    const activeSubAgent = thread.subAgents?.[0];
+    expect(activeSubAgent).toBeDefined();
+    const stopSubAgent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "parent-thread",
+      monitorId: "monitor-1",
+      stoppedAt: 1_800_000_000_100,
+    }));
+
+    render(
+      <SubAgentsPanel
+        desktopApi={{ stopSubAgent } as DesktopApi}
+        thread={{
+          ...thread,
+          subAgents: [
+            {
+              ...activeSubAgent!,
+              status: "blocked",
+            },
+          ],
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    await waitFor(() => {
+      expect(stopSubAgent).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "parent-thread",
+        monitorId: "monitor-1",
+      });
+    });
+  });
+
   it("targets the owning instance when stopping a remote sub-agent", async () => {
     const stopSubAgent = vi.fn(async () => ({
       backend: "codex" as const,
