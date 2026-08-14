@@ -1260,6 +1260,13 @@ describe("StarMapScreen", () => {
     // property of the cloud, not of where a card happens to start. Drives
     // it through the real wiring, so a per-card radius would fail here
     // even though the pure geometry tests pass.
+    // The expected drop coordinates were computed under the lanes
+    // geometry; the default lens is orbit now, so pin the layout the
+    // numbers assume rather than inheriting whatever the default is.
+    window.localStorage.setItem(
+      "pwragent.starMap.viewPreferences",
+      JSON.stringify({ layout: "lanes" }),
+    );
     const committed = new Map<string, { dx: number; dy: number }>();
     const setStarMapCardPosition = vi.fn(
       async (request: {
