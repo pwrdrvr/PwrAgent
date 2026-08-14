@@ -259,6 +259,7 @@ import type {
   ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
 import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
+import { shouldWriteSystemClipboard } from "./clipboard-policy";
 import type { GithubPrAuthenticationFailureEvent } from "../shared/github-pr-authentication";
 import type {
   CaptureHeapSnapshotRequest,
@@ -333,6 +334,7 @@ import {
   APP_UPDATE_RELEASES_READ_CHANNEL,
   APP_UPDATE_STATUS_EVENT_CHANNEL,
   APP_UPDATE_STATUS_READ_CHANNEL,
+  E2E_CLIPBOARD_WRITE_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
@@ -577,7 +579,12 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 const desktopApi = Object.freeze({
   ping: () => "pong",
   copyText: async (text: string): Promise<void> => {
-    clipboard.writeText(text);
+    if (process.env.PWRAGENT_E2E === "1") {
+      await ipcRenderer.invoke(E2E_CLIPBOARD_WRITE_CHANNEL, text);
+    }
+    if (shouldWriteSystemClipboard(process.env)) {
+      clipboard.writeText(text);
+    }
   },
   readAppMetadata: async (): Promise<AppMetadata> =>
     await ipcRenderer.invoke(APP_METADATA_READ_CHANNEL),

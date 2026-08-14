@@ -3,7 +3,7 @@
 ## Goal
 
 Capture the live Codex startup `thread/list` traffic that determines whether the
-`search-product` directory shows the same threads as Codex Desktop.
+`catalog-portal` directory shows the same threads as Codex Desktop.
 
 This scenario exists to prove three concrete cases:
 
@@ -11,7 +11,7 @@ This scenario exists to prove three concrete cases:
   `019c9cc2-6ea3-7d40-817d-9590d9118bbd`
 - keep deleted-worktree thread `019d88a2-0e0b-77f0-bfce-130ae8e37d8f`
 - group that deleted-worktree thread back under
-  `/Users/huntharo/GIPHY/search-product`
+  `/Users/example/Projects/catalog-portal`
 
 ## Backend and Mode
 
@@ -42,9 +42,9 @@ pnpm --filter @pwragent/desktop preview
 
 1. Wait for the desktop shell to show the `Threads` heading.
 2. Open the `directories` browse lens.
-3. Expand `search-product`.
+3. Expand `catalog-portal`.
 4. Confirm the visible rows are:
-   - `search-product ProjMgr`
+   - `catalog-portal ProjMgr`
    - `Plan Slidev theme extraction`
    - `Create Project Manager deck`
 5. Confirm the stale rows do not appear:
@@ -53,7 +53,7 @@ pnpm --filter @pwragent/desktop preview
 
 ## Stop Point
 
-Stop once the `search-product` directory contents match Codex Desktop.
+Stop once the `catalog-portal` directory contents match Codex Desktop.
 
 ## Export Hints
 

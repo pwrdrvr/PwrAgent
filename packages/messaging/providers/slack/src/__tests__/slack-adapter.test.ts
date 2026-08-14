@@ -281,7 +281,7 @@ describe("SlackAdapter", () => {
       actor: source.actor,
       parent: source.channel,
       routingState: source.routingState,
-      title: "GIPHY-services PR status",
+      title: "CATALOG API PR status",
     });
     expect(created).toMatchObject({
       channel: "slack",
@@ -290,7 +290,7 @@ describe("SlackAdapter", () => {
         kind: "thread",
         parentId: "1712023030.000000",
         parentTitle: "signals-chat",
-        title: "GIPHY-services PR status",
+        title: "CATALOG API PR status",
       },
       outcome: "created",
       routingState: {

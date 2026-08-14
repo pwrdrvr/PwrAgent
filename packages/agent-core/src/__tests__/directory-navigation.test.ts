@@ -845,7 +845,7 @@ describe("buildDirectorySummaries", () => {
         buildThread({
           id: "thread-1",
           createdAt: 2_000,
-          gitOriginUrl: "git@github.com:Giphy/svc-infra.git",
+          gitOriginUrl: "git@github.com:ExampleOrg/svc-infra.git",
           linkedDirectories: [
             {
               id: "dir-1",
@@ -858,7 +858,7 @@ describe("buildDirectorySummaries", () => {
         buildThread({
           id: "thread-2",
           createdAt: 1_000,
-          gitOriginUrl: "https://github.com/Giphy/svc-infra.git",
+          gitOriginUrl: "https://github.com/ExampleOrg/svc-infra.git",
           linkedDirectories: [
             {
               id: "dir-2",
@@ -888,7 +888,7 @@ describe("buildDirectorySummaries", () => {
         buildThread({
           id: "thread-1",
           createdAt: 2_000,
-          gitOriginUrl: "git@github.com:Giphy/svc-infra.git",
+          gitOriginUrl: "git@github.com:ExampleOrg/svc-infra.git",
           linkedDirectories: [
             {
               id: "dir-1",
@@ -1431,9 +1431,9 @@ describe("materializeNavigationThreads", () => {
         buildThread({
           linkedDirectories: [
             {
-              id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
-              label: "GifGrabber",
-              path: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
+              id: "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/ExampleApp",
+              label: "ExampleApp",
+              path: "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/ExampleApp",
               kind: "local",
             },
           ],
@@ -1443,10 +1443,10 @@ describe("materializeNavigationThreads", () => {
 
     expect(thread?.linkedDirectories).toEqual([
       {
-        id: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
-        label: "GifGrabber",
-        path: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
-        worktreePath: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75j7bn/GifGrabber",
+        id: "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/ExampleApp",
+        label: "ExampleApp",
+        path: "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/ExampleApp",
+        worktreePath: "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/ExampleApp",
         kind: "worktree",
       },
     ]);

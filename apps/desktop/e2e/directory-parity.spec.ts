@@ -5,7 +5,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("shows only the Codex Desktop search-product threads in directory browse mode", async () => {
+test("shows only the Codex Desktop catalog-portal threads in directory browse mode", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       specDir,
@@ -18,7 +18,7 @@ test("shows only the Codex Desktop search-product threads in directory browse mo
 
     await app.window.getByRole("tab", { name: "directories" }).click();
 
-    await expect(sidebar.getByText("search-product ProjMgr")).toBeVisible();
+    await expect(sidebar.getByText("catalog-portal ProjMgr")).toBeVisible();
     await expect(sidebar.getByText("Plan Slidev theme extraction")).toBeVisible();
     await expect(sidebar.getByText("Create Project Manager deck")).toBeVisible();
 

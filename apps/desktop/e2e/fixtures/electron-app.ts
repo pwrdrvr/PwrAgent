@@ -10,6 +10,7 @@ import type {
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
 import { SECRET_STORAGE_DISABLED_ENV } from "../../src/main/settings/desktop-secret-store";
+import { E2E_CLIPBOARD_WRITE_CHANNEL } from "../../src/shared/ipc";
 import {
   isPidAlive,
   listDescendantPids,
@@ -25,10 +26,18 @@ const PROFILE_PROCESS_EXIT_TIMEOUT_MS = 5_000;
 /** Liveness re-check interval while waiting out PROFILE_PROCESS_EXIT_TIMEOUT_MS. */
 const PROFILE_PROCESS_EXIT_POLL_MS = 100;
 
+declare global {
+  var __PWRAGENT_E2E_CLIPBOARD__: { text: string } | undefined;
+}
+
 type LaunchResult = {
   electronApp: ElectronApplication;
   homeRoot: string;
   window: Page;
+  getClipboardSnapshot: () => Promise<{
+    html?: string;
+    text: string;
+  } | undefined>;
   advance: (params?: {
     executionMode?: ThreadExecutionMode;
     stepId?: string;
@@ -215,6 +224,15 @@ export async function launchElectronApp(params: {
     cwd: path.resolve(fixtureDir, "../.."),
     env,
   });
+  await electronApp.evaluate(({ ipcMain }, channel) => {
+    ipcMain.removeHandler(channel);
+    ipcMain.handle(channel, async (_event, text: unknown) => {
+      if (typeof text !== "string") {
+        throw new Error("e2e clipboard writes require a string payload");
+      }
+      globalThis.__PWRAGENT_E2E_CLIPBOARD__ = { text };
+    });
+  }, E2E_CLIPBOARD_WRITE_CHANNEL);
   const window = await electronApp.firstWindow();
 
   const requiresReplayDriver = params.requiresReplayDriver ?? true;
@@ -263,6 +281,8 @@ export async function launchElectronApp(params: {
     electronApp,
     homeRoot,
     window,
+    getClipboardSnapshot: async () =>
+      await electronApp.evaluate(() => globalThis.__PWRAGENT_E2E_CLIPBOARD__),
     advance: async (advanceParams) => {
       await electronApp.evaluate(async (_electron, value) => {
         await globalThis.__PWRAGENT_REPLAY_DRIVER__?.advance(value);
@@ -304,6 +324,9 @@ export async function launchElectronApp(params: {
       }, requestParams);
     },
     close: async () => {
+      await electronApp.evaluate(({ ipcMain }, channel) => {
+        ipcMain.removeHandler(channel);
+      }, E2E_CLIPBOARD_WRITE_CHANNEL).catch(() => undefined);
       await electronApp.close();
       // The wizard's graduation path can spawn a detached child
       // Electron process for the operator's chosen profile (see

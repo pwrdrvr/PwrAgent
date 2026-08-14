@@ -176,24 +176,19 @@ test("renders a wide assistant markdown findings table without crushing the colu
     await expect(harnessTableMessage.locator(".transcript-message__rule")).toBeVisible();
     await expect(harnessTableMessage.locator("table")).toContainText("Grok Build");
 
-    await app.electronApp.evaluate(({ clipboard }) => clipboard.writeText(""));
     await harnessTableMessage
       .getByRole("button", { name: "Copy table block" })
       .click();
     await expect
-      .poll(async () =>
-        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
-      )
-      .toBe(harnessTableBlock);
+      .poll(async () => await app.getClipboardSnapshot())
+      .toMatchObject({ text: harnessTableBlock });
 
     await harnessProseMessage
       .getByRole("button", { name: "Copy message" })
       .click();
     await expect
-      .poll(async () =>
-        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
-      )
-      .toBe(harnessMessage);
+      .poll(async () => await app.getClipboardSnapshot())
+      .toMatchObject({ text: harnessMessage });
   } finally {
     await app.close();
   }

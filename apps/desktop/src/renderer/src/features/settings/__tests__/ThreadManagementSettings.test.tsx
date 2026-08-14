@@ -145,7 +145,7 @@ describe("ThreadManagementSettings", () => {
   it("uses direct action buttons and tolerates threads without linked directories", async () => {
     const threadsResponse = migrationThreadsResponse("", "GIFusion thread");
     threadsResponse.projects[0]!.label = "GIFusion";
-    threadsResponse.projects[0]!.path = "/Users/alice/GIPHY/GIFusion";
+    threadsResponse.projects[0]!.path = "/Users/alice/EXAMPLE/GIFusion";
     threadsResponse.projects[0]!.threads[0]!.linkedDirectories = [null] as never;
     const logRendererDiagnostic = vi.fn(async () => undefined);
     const desktopApi: DesktopApi = {
