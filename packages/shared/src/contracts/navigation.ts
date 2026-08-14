@@ -255,6 +255,15 @@ export type ThreadSubAgentSummary = {
   status: ThreadSubAgentStatus;
   createdAt: number;
   updatedAt: number;
+  /**
+   * PwrAgent process-runtime UUID that created this sub-agent attempt.
+   *
+   * This lives in the existing thread-overlay JSON rather than its own sqlite
+   * column. A replacement process can therefore distinguish its own work from
+   * work still owned by another live PwrAgent instance sharing the profile.
+   * Older summaries omit it and use the conservative sole-runtime fallback.
+   */
+  ownerRuntimeInstanceId?: string;
   backend?: AppServerBackendKind;
   agentName?: string;
   preferredModel?: string;
