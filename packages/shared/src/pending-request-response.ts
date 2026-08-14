@@ -5,6 +5,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadFileDiffRef,
 } from "./contracts/normalized-app-server";
+import { formatPathRelativeToDirectories } from "./path-display";
 
 export type PendingRequestDecision = "approve" | "decline" | "cancel";
 export type PendingRequestActionDecision =
@@ -215,12 +216,22 @@ function fileContextFromApprovalRecord(
     readFirstString(kind ?? {}, ["type", "action", "operation"]) ??
     readFirstString(record, ["action", "operation", "kind", "type"]);
   const directDiff =
-    readFirstString(kind ?? {}, ["diff", "patch", "unifiedDiff", "unified_diff"]) ??
-    readFirstString(record, ["diff", "patch", "unifiedDiff", "unified_diff"]);
+    readFirstNonEmptyRawString(
+      kind ?? {},
+      ["unifiedDiff", "unified_diff", "patch", "diff"],
+    ) ??
+    readFirstNonEmptyRawString(
+      record,
+      ["unifiedDiff", "unified_diff", "patch", "diff"],
+    );
   const content =
     readOptionalString(kind?.content) ?? readOptionalString(record.content);
-  const generatedDiff =
-    directDiff ?? contentDiffForApproval({ action, content, path });
+  const generatedDiff = normalizeFileChangeApprovalDiff({
+    action,
+    content,
+    directDiff,
+    path,
+  });
 
   return {
     ...(action ? { action } : {}),
@@ -243,29 +254,60 @@ function fileContextFromApprovalRecord(
   };
 }
 
-function contentDiffForApproval(params: {
+export function normalizeFileChangeApprovalDiff(params: {
   action: string | undefined;
   content: string | undefined;
+  directDiff: string | undefined;
   path: string;
 }): string | undefined {
   if (
-    params.content === undefined ||
+    params.directDiff
+    && (
+      (params.action !== "add" && params.action !== "delete")
+      || looksLikeUnifiedDiff(params.directDiff)
+    )
+  ) {
+    return params.directDiff;
+  }
+  const content = params.directDiff ?? params.content;
+  if (
+    content === undefined ||
     (params.action !== "add" && params.action !== "delete")
   ) {
     return undefined;
   }
   const path = params.path.replace(/^\/+/, "") || "file";
-  const lines = params.content.length ? params.content.split("\n") : [];
+  const lines = content.length ? content.split(/\r?\n/) : [];
   if (lines.at(-1) === "") {
     lines.pop();
   }
   const hunkLineCount = lines.length;
+  if (hunkLineCount === 0) {
+    return undefined;
+  }
   const header =
     params.action === "add"
       ? [`--- /dev/null`, `+++ b/${path}`, `@@ -0,0 +1,${hunkLineCount} @@`]
       : [`--- a/${path}`, `+++ /dev/null`, `@@ -1,${hunkLineCount} +0,0 @@`];
   const prefix = params.action === "add" ? "+" : "-";
   return [...header, ...lines.map((line) => `${prefix}${line}`)].join("\n");
+}
+
+function looksLikeUnifiedDiff(value: string): boolean {
+  const lines = value.split(/\r?\n/);
+  if (
+    lines.some(
+      (line) =>
+        /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(?: |$)/.test(line)
+        || /^@@@ (?:-\d+(?:,\d+)? ){2,}\+\d+(?:,\d+)? @@@(?: |$)/.test(line),
+    )
+  ) {
+    return true;
+  }
+  return lines.some(
+    (line, index) =>
+      line.startsWith("--- ") && lines[index + 1]?.startsWith("+++ "),
+  );
 }
 
 function activityMatchesItem(
@@ -325,27 +367,7 @@ export function formatApprovalPath(
   value: string,
   directoryPaths: string[] | undefined,
 ): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  const roots = [...(directoryPaths ?? [])]
-    .map((root) => normalizePath(root))
-    .filter(Boolean)
-    .sort((left, right) => right.length - left.length);
-  const normalizedValue = normalizePath(trimmed);
-
-  for (const root of roots) {
-    if (normalizedValue === root) {
-      return ".";
-    }
-    if (normalizedValue.startsWith(`${root}/`)) {
-      return normalizedValue.slice(root.length + 1) || ".";
-    }
-  }
-
-  return trimmed;
+  return formatPathRelativeToDirectories(value, directoryPaths);
 }
 
 export function buildPendingRequestResponse(
@@ -938,13 +960,21 @@ function readFirstString(
   return undefined;
 }
 
+function readFirstNonEmptyRawString(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function normalizePath(value: string): string {
-  const normalized = value.trim().replace(/\\/g, "/");
-  return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
 }

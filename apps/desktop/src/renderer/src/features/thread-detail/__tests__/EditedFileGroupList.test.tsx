@@ -388,6 +388,28 @@ describe("EditedFileRow path + open affordances", () => {
       screen.queryByRole("button", { name: /Open .* in editor/ }),
     ).not.toBeInTheDocument();
   });
+
+  it("shows Windows separators for a Windows worktree", () => {
+    const windowsGroup: EditedFileGroup = {
+      ...fileGroup,
+      details: [
+        {
+          ...fileGroup.details[0],
+          path: "C:/repo/apps/desktop/Foo.ts",
+        },
+      ],
+    };
+    render(
+      <EditedFileGroupList
+        groups={[windowsGroup]}
+        worktreeRoot={"C:\\repo"}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Foo\.ts/ }));
+
+    expect(screen.getByText("apps\\desktop\\Foo.ts")).toBeInTheDocument();
+  });
 });
 
 describe("EditedFileViewToggle", () => {
