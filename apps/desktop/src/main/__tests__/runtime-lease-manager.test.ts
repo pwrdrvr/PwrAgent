@@ -165,6 +165,33 @@ describe("RuntimeLeaseManager", () => {
     });
   });
 
+  it("keeps a live federation owner across a forward clock correction", () => {
+    const owner = createManager({
+      instanceId: "instance-a",
+      processId: 123,
+      now: () => 1_000,
+    });
+    const challenger = createManager({
+      instanceId: "instance-b",
+      processId: 456,
+      now: () => 20_000,
+      // A wall-clock correction makes the inferred boot time appear later
+      // than the live owner's recorded wall-clock start time.
+      systemBootedAt: 10_000,
+    });
+    owner.acquire("federation");
+
+    expect(challenger.acquire("federation")).toMatchObject({
+      acquired: false,
+      holder: { instanceId: "instance-a", processId: 123 },
+    });
+    expect(store.getInstance("instance-a")).not.toHaveProperty("exitedAt");
+    expect(store.getFederationLease()).toMatchObject({
+      ownerInstanceId: "instance-a",
+      status: "active",
+    });
+  });
+
   it("reclaims a pre-boot owner after an earlier dead observation", () => {
     const owner = createManager({
       instanceId: "instance-a",
