@@ -31,6 +31,7 @@ const DEFAULT_ROWS = 18;
 const MAX_COLUMNS = 500;
 const MAX_ROWS = 200;
 const OUTPUT_BUFFER_LIMIT = 128 * 1024;
+const PTY_SHUTDOWN_FORCE_KILL_MS = 500;
 
 type TerminalSession = {
   sessionId: string;
@@ -48,6 +49,16 @@ type TerminalSession = {
 };
 
 type NodePtyModule = typeof import("node-pty");
+
+/**
+ * node-pty's concrete terminals expose `destroy()` even though its public
+ * `IPty` type omits the method. On Unix it closes the PTY master and then
+ * sends SIGHUP once the master stream has closed; `kill()` only sends the
+ * signal and leaves the master open.
+ */
+type DestroyablePty = IPty & {
+  destroy?: () => void;
+};
 
 /**
  * One shell holding up the quit. The owning peer travels with the thread key
@@ -112,6 +123,7 @@ export class IntegratedTerminalService {
    *  in one window used to install 10 and trip Node's max-listeners warning. */
   private readonly subscribedWebContents = new Set<WebContents>();
   private disposing = false;
+  private disposePromise: Promise<void> | undefined;
 
   constructor(options: IntegratedTerminalServiceOptions = {}) {
     this.loadNodePty = options.loadNodePty ?? loadNodePty;
@@ -271,11 +283,18 @@ export class IntegratedTerminalService {
     }
   }
 
-  dispose(): void {
-    this.disposing = true;
-    for (const session of Array.from(this.sessionsById.values())) {
-      this.disposeSessionForShutdown(session);
+  dispose(): Promise<void> {
+    if (this.disposePromise) {
+      return this.disposePromise;
     }
+    this.disposing = true;
+    this.disposePromise = Promise.all(
+      Array.from(this.sessionsById.values()).map((session) =>
+        this.disposeSessionForShutdown(session),
+      ),
+    ).then(() => undefined);
+    this.subscribedWebContents.clear();
+    return this.disposePromise;
   }
 
   getQuitSnapshot(): IntegratedTerminalQuitSnapshot {
@@ -450,15 +469,59 @@ export class IntegratedTerminalService {
     this.emitSessionsChanged();
   }
 
-  private disposeSessionForShutdown(session: TerminalSession): void {
+  private async disposeSessionForShutdown(
+    session: TerminalSession,
+  ): Promise<void> {
+    // Keep a dedicated exit subscription outside `session.disposables`: the
+    // renderer-facing listeners must be removed before teardown, but shutdown
+    // itself cannot complete until node-pty reports that waitpid finished and
+    // its master stream closed.
+    let exitDisposable: IDisposable | undefined;
+    const exited = new Promise<void>((resolve) => {
+      exitDisposable = session.pty.onExit(() => resolve());
+    });
     this.deleteSession(session);
     try {
-      session.pty.kill();
+      const destroy = (session.pty as DestroyablePty).destroy;
+      if (destroy) {
+        destroy.call(session.pty);
+      } else {
+        // Preserve compatibility with test doubles or a future node-pty
+        // implementation that removes the concrete destroy method.
+        session.pty.kill();
+      }
     } catch (error) {
       this.logger.warn("shutdown-kill-failed", {
         error: error instanceof Error ? error.message : String(error),
         sessionId: session.sessionId,
       });
+      exitDisposable?.dispose();
+      throw error;
+    }
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    if (this.platform !== "win32") {
+      forceKillTimer = setTimeout(() => {
+        this.logger.warn("shutdown-force-kill", {
+          graceMs: PTY_SHUTDOWN_FORCE_KILL_MS,
+          sessionId: session.sessionId,
+        });
+        try {
+          session.pty.kill("SIGKILL");
+        } catch (error) {
+          this.logger.warn("shutdown-force-kill-failed", {
+            error: error instanceof Error ? error.message : String(error),
+            sessionId: session.sessionId,
+          });
+        }
+      }, PTY_SHUTDOWN_FORCE_KILL_MS);
+    }
+    try {
+      await exited;
+    } finally {
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+      exitDisposable?.dispose();
     }
   }
 

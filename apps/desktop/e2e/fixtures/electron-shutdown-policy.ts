@@ -77,6 +77,7 @@ export type ElectronShutdownSummary = {
   forceExitOutcome: ElectronCloseExecution["forceExitOutcome"];
   phases: {
     rendererWindow: ElectronShutdownPhaseSummary;
+    integratedTerminal: ElectronShutdownPhaseSummary;
     messaging: ElectronShutdownPhaseSummary;
     federation: ElectronShutdownPhaseSummary;
     mcpConnections: ElectronShutdownPhaseSummary;
@@ -252,6 +253,7 @@ export function buildElectronShutdownSummary(params: {
     forceExitOutcome: params.execution.forceExitOutcome,
     phases: {
       rendererWindow: summarizePhase(params.events, "renderer-window"),
+      integratedTerminal: summarizePhase(params.events, "integrated-terminal"),
       messaging: summarizePhase(params.events, "messaging"),
       federation: summarizePhase(params.events, "federation"),
       mcpConnections: summarizePhase(params.events, "mcp-connections"),
