@@ -608,3 +608,26 @@ function buildOutputInvocation(outputChars: number): ThreadToolInvocationRecord 
     turnId: "turn-1",
   };
 }
+
+describe("mcp invocation identity", () => {
+  it("categorizes by the protocol item type and keeps the server", () => {
+    /* The item declares itself: {type: "mcpToolCall", server, tool}. The
+       name-substring fallback filed Context7's `query-docs` under unknown
+       while `list_mcp_resources` matched by accident. */
+    expect(normalizeToolInvocationCommand({
+      itemType: "mcpToolCall",
+      server: "context7",
+      toolName: "query-docs",
+    })).toEqual({
+      category: "mcp",
+      normalizedCommand: "context7/query-docs",
+    });
+  });
+
+  it("still categorizes as mcp when the server is not recorded", () => {
+    expect(normalizeToolInvocationCommand({
+      itemType: "mcpToolCall",
+      toolName: "query-docs",
+    })).toEqual({ category: "mcp", normalizedCommand: "query-docs" });
+  });
+});

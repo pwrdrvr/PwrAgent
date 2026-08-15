@@ -150,7 +150,8 @@ const VERB_CATEGORIES = new Map<string, ThreadToolInvocationCategory>([
 export type RefinedToolCategory =
   | ThreadToolInvocationCategory
   | "agent-instructions"
-  | "skill-files";
+  | "skill-files"
+  | `mcp:${string}`;
 
 export function unwrapShellCommand(command: string): string {
   const match = SHELL_WRAPPER_PATTERN.exec(command.trim());
@@ -186,6 +187,13 @@ export function refineToolCategory(
   >,
 ): RefinedToolCategory {
   const raw = invocation.normalizedCommand ?? invocation.toolName;
+  /* MCP identities are persisted as `server/tool`, so the split into a
+     per-server subcategory is a prefix read — each MCP answers for its own
+     output rather than pooling under one bucket. */
+  if (invocation.category === "mcp") {
+    const server = raw.includes("/") ? raw.split("/", 1)[0] : undefined;
+    return server ? `mcp:${server}` : "mcp";
+  }
   const command = unwrapShellCommand(raw);
   /* Only second-guess the persisted category when it is untrustworthy: either
      it was computed from a shell wrapper we have now seen through, or it is
@@ -211,7 +219,8 @@ export function formatCategoryLabel(
   if (category === "other") return "Other";
   if (category === "agent-instructions") return "Agent instructions";
   if (category === "skill-files") return "Skill files";
-  return CATEGORY_LABELS[category];
+  if (category.startsWith("mcp:")) return `MCP · ${category.slice(4)}`;
+  return CATEGORY_LABELS[category as ThreadToolInvocationCategory];
 }
 
 /**

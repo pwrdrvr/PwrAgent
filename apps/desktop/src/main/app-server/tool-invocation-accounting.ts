@@ -242,6 +242,8 @@ export function toolInvocationFromNotification(params: {
   const normalized = normalizeToolInvocationCommand({
     args,
     command,
+    itemType,
+    ...(readString(item, "server") ? { server: readString(item, "server") } : {}),
     toolName,
   });
   const processId =
@@ -409,9 +411,23 @@ export function mergeToolInvocationLifecycleWithStreamedOutput(
 export function normalizeToolInvocationCommand(params: {
   args?: Record<string, unknown>;
   command?: string;
+  itemType?: string;
+  server?: string;
   toolName: string;
 }): NormalizedToolCommand {
   const toolName = params.toolName.trim() || "unknown";
+  /* MCP is declared by the protocol item, not inferred from the name. The
+     name-substring fallback below filed Context7's `query-docs` under
+     unknown while `list_mcp_resources` matched by luck. The server joins the
+     stored identity so surfaces can split cost per MCP. */
+  if (params.itemType === "mcpToolCall" || params.server) {
+    return {
+      category: "mcp",
+      normalizedCommand: params.server
+        ? `${params.server}/${toolName}`
+        : toolName,
+    };
+  }
   if (toolName === "write_stdin") {
     const sessionId = readString(params.args, "session_id") ??
       readString(params.args, "sessionId");

@@ -7,6 +7,7 @@ import {
   formatCapShare,
   formatCompactTokens,
   countRepeatedCommands,
+  formatCategoryLabel,
   formatInvocationIdentity,
   formatMicrosCurrency,
   formatTurnWhen,
@@ -433,6 +434,28 @@ describe("compound command categorization", () => {
       normalizedCommand: "/bin/bash -c 'cat AGENTS.md'",
       toolName: "commandExecution",
     })).toBe("agent-instructions");
+  });
+});
+
+describe("mcp subcategories", () => {
+  it("splits MCP by server from the persisted server/tool identity", () => {
+    /* Context7's `query-docs` was filed under Other: the old classifier
+       inferred MCP from an "mcp" substring in the tool name, which
+       `list_mcp_resources` happened to carry and `query-docs` did not. */
+    expect(refineToolCategory({
+      category: "mcp",
+      normalizedCommand: "context7/query-docs",
+      toolName: "query-docs",
+    })).toBe("mcp:context7");
+    expect(formatCategoryLabel("mcp:context7")).toBe("MCP · context7");
+  });
+
+  it("keeps a bare MCP call without a recorded server in the plain bucket", () => {
+    expect(refineToolCategory({
+      category: "mcp",
+      normalizedCommand: "query-docs",
+      toolName: "query-docs",
+    })).toBe("mcp");
   });
 });
 
