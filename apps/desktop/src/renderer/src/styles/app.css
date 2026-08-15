@@ -20534,14 +20534,15 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--scrim-opaque);
 }
 
+/* The dialog itself never scrolls: the identity header stays pinned and only
+   the detail body below it moves, so status, model, and elapsed time remain
+   readable while a long prompt is being read. */
 .subagent-modal__content {
   display: flex;
   flex-direction: column;
-  gap: 14px;
   width: min(100%, 560px);
   max-height: min(100vh - 96px, 720px);
-  overflow-y: auto;
-  padding: 20px;
+  overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel);
@@ -20549,9 +20550,33 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .subagent-modal__head {
   display: flex;
-  align-items: center;
+  flex: 0 0 auto;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.subagent-modal__identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subagent-modal__status-line {
+  margin: 0;
+}
+
+.subagent-modal__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 16px 20px 20px;
 }
 
 .subagent-modal__close {
@@ -20591,13 +20616,19 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: nowrap;
 }
 
+/* Identity, not the prompt. Two lines is plenty for an agent name or the
+   "PwrAgent task monitor" fallback; the task text lives in the body. */
 .subagent-modal__title {
   margin: 0;
   color: var(--text-primary);
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 650;
   line-height: 1.3;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .subagent-modal__facts {
@@ -20623,16 +20654,24 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.subagent-modal__mono {
-  font-family: var(--font-mono);
-}
-
 .subagent-modal__section {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding-top: 14px;
   border-top: 1px solid var(--border-subtle);
+}
+
+.subagent-modal__section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.subagent-modal__section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .subagent-modal__section h3 {
@@ -20644,7 +20683,34 @@ a.transcript-message__messaging-origin:focus-visible {
   text-transform: uppercase;
 }
 
-.subagent-modal__body,
+.subagent-modal__section-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
+.subagent-modal__text-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.subagent-modal__text-action:hover {
+  color: var(--accent-bright);
+}
+
+.subagent-modal__text-action:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.subagent-modal__body-text,
 .subagent-modal__usage-summary {
   margin: 0;
   color: var(--text-secondary);
@@ -20652,6 +20718,24 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.45;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+/* Collapsed by default so a several-hundred-word monitor prompt cannot bury
+   the rest of the dialog. `Show more` renders only when this actually clips. */
+.subagent-modal__body-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.subagent-modal__body-text--expanded {
+  display: block;
+  overflow: visible;
+}
+
+.subagent-modal__body-text--empty {
+  color: var(--text-muted);
 }
 
 .subagent-modal__usage-summary {

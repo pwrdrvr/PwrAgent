@@ -1,18 +1,22 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AppServerBackendKind, ThreadSubAgentSummary } from "@pwragent/shared";
 import { CloseIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
+import { copyText } from "../../../lib/copy-text";
 import { useDesktopApi } from "../../../lib/desktop-api";
 import { formatTimestamp } from "./context-rail-shared";
 import {
   formatSubAgentUsageEstimates,
   formatSubAgentUsageSummary,
   formatTokenCount,
+  isTerminalSubAgent,
   type PricingDisplayOptions,
+  subAgentCompletedAt,
   subAgentStatusLabel,
   subAgentTone,
 } from "./subagent-format";
+import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { RailStatusChip } from "./RailStatusChip";
 import { isCodexNativeSubAgent, subAgentOriginLabel } from "./subagent-kind";
 
@@ -26,16 +30,32 @@ type SubAgentDetailsModalProps = {
 
 /**
  * Centered, in-window detail view for a single sub-agent — opened from the
- * card's Details button. Mirrors {@link ImageLightbox}: a fixed
- * scrim that closes on backdrop click or Escape, portaled to the body so it
- * escapes the context rail's clipping + transforms. Surfaces the request,
- * final response, run timing, model, and token/pricing usage.
+ * card's Details button. Mirrors {@link ImageLightbox}: a fixed scrim that
+ * closes on backdrop click or Escape, portaled to the body so it escapes the
+ * context rail's clipping + transforms.
+ *
+ * Layout deliberately reads as the rail card, expanded: a pinned header
+ * carrying identity (status, name, provider/model, timing) over a scrolling
+ * body. The task prompt is a clamped block inside that body rather than the
+ * dialog's headline — a monitor prompt runs to hundreds of words and pushed
+ * every fact worth reading below the fold.
  */
 export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const { onClose, subAgent } = props;
   const contentRef = useRef<HTMLDivElement>(null);
   const desktopApi = useDesktopApi();
   const openSubAgentTranscriptWindow = desktopApi?.openSubAgentTranscriptWindow;
+
+  // The dialog stays mounted while the sub-agent streams updates, and the
+  // opener hands us a fresh `onClose` on every one of those renders. Reading
+  // it through a ref keeps the focus effect below a true mount/unmount effect:
+  // re-running it would re-focus the header on each poll, and the browser
+  // would scroll the focused element into view — silently yanking a
+  // half-read prompt back to the top.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   // Dialog focus management: move focus into the dialog on open, keep Tab
   // cycling within it (so focus can't fall behind the scrim), restore focus
@@ -54,7 +74,7 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") {
@@ -84,19 +104,21 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
       window.removeEventListener("keydown", handleKeyDown, true);
       restoreFocus?.focus?.();
     };
-  }, [onClose]);
+  }, []);
 
   const tone = subAgentTone(subAgent.status);
   const usage = subAgent.monitorUsage;
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
   const fastMode = subAgent.preferredFastMode ?? usage?.fastMode;
+  const running = !isTerminalSubAgent(subAgent);
+  const now = useNowWhileActive(running);
   const transcriptThreadId =
     isCodexNativeSubAgent(subAgent) &&
     subAgent.monitorThreadId &&
     subAgent.monitorThreadId !== props.parentThreadId
       ? subAgent.monitorThreadId
       : undefined;
-  const backendLabel = subAgent.backend ? formatBackendLabel(subAgent.backend) : undefined;
+  const backendLabel = formatBackendLabel(subAgent.backend ?? props.defaultBackend);
   const usageEstimates = usage
     ? formatSubAgentUsageEstimates({
         displayOptions: props.pricingDisplayOptions,
@@ -105,9 +127,17 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
       })
     : undefined;
   const originLabel = subAgentOriginLabel(subAgent);
-  const ariaLabel = subAgent.agentName
-    ? `${subAgent.agentName}: ${subAgent.task}`
-    : subAgent.task;
+  const runtimeDetails = [
+    model,
+    subAgent.preferredReasoningEffort,
+    fastMode ? "Fast" : undefined,
+  ].filter((value): value is string => Boolean(value));
+  // Identity first: a name if the spawner gave one, otherwise what kind of
+  // sub-agent this is. Never the prompt.
+  const headline = subAgent.agentName ?? originLabel ?? "Sub-agent";
+  // The headline already says what spawned this when there is no agent name,
+  // so the Source fact would only restate it.
+  const showSourceFact = Boolean(subAgent.agentName && originLabel);
 
   if (typeof document === "undefined") {
     return null;
@@ -118,7 +148,7 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
       className="subagent-modal"
       role="dialog"
       aria-modal="true"
-      aria-label={`Sub-agent details: ${ariaLabel}`}
+      aria-label={`Sub-agent details: ${headline}`}
       onClick={props.onClose}
     >
       <div
@@ -126,10 +156,31 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
         className="subagent-modal__content"
         onClick={(event) => event.stopPropagation()}
       >
+        {/* A plain div, not <header>: inside the dialog it would expose a
+            stray banner landmark. */}
         <div className="subagent-modal__head">
-          <RailStatusChip tone={tone} alert={tone === "error"}>
-            {subAgentStatusLabel(subAgent.status)}
-          </RailStatusChip>
+          <div className="subagent-modal__identity">
+            <p className="subagent-modal__status-line">
+              <RailStatusChip tone={tone} alert={tone === "error"}>
+                {subAgentStatusLabel(subAgent.status)}
+              </RailStatusChip>
+            </p>
+            <h2 className="subagent-modal__title">{headline}</h2>
+            <p className="rail-card__runtime">
+              <span className="rail-card__provider-chip">{backendLabel}</span>
+              {runtimeDetails.length > 0 ? (
+                <span className="rail-card__model">
+                  {runtimeDetails.join(" · ")}
+                </span>
+              ) : null}
+            </p>
+            <RailCardTiming
+              completedAt={subAgentCompletedAt(subAgent)}
+              now={now}
+              running={running}
+              startedAt={subAgent.createdAt}
+            />
+          </div>
           <div className="subagent-modal__actions">
             {openSubAgentTranscriptWindow && transcriptThreadId ? (
               <button
@@ -159,112 +210,180 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
           </div>
         </div>
 
-        <h2 className="subagent-modal__title">{subAgent.task}</h2>
+        <div className="subagent-modal__body">
+          <ClampedTextSection copyable heading="Task" text={subAgent.task} />
 
-        <dl className="subagent-modal__facts">
-          {subAgent.agentName ? (
-            <div>
-              <dt>Name</dt>
-              <dd>{subAgent.agentName}</dd>
-            </div>
-          ) : null}
-          {originLabel ? (
-            <div>
-              <dt>Source</dt>
-              <dd>{originLabel}</dd>
-            </div>
-          ) : null}
-          {backendLabel ? (
-            <div>
-              <dt>Provider</dt>
-              <dd>{backendLabel}</dd>
-            </div>
-          ) : null}
-          {model ? (
-            <div>
-              <dt>Model</dt>
-              <dd className="subagent-modal__mono">{model}</dd>
-            </div>
-          ) : null}
-          {subAgent.preferredReasoningEffort ? (
-            <div>
-              <dt>Reasoning</dt>
-              <dd>{subAgent.preferredReasoningEffort}</dd>
-            </div>
-          ) : null}
-          {fastMode !== undefined ? (
-            <div>
-              <dt>Fast mode</dt>
-              <dd>{fastMode ? "On" : "Off"}</dd>
-            </div>
-          ) : null}
-          <div>
-            <dt>Started</dt>
-            <dd>{formatTimestamp(subAgent.createdAt)}</dd>
-          </div>
-          {subAgent.completedAt ? (
-            <div>
-              <dt>Ended</dt>
-              <dd>{formatTimestamp(subAgent.completedAt)}</dd>
-            </div>
-          ) : null}
-        </dl>
+          <ClampedTextSection
+            heading="Latest message"
+            placeholder="No messages yet."
+            text={subAgent.lastMessage}
+          />
 
-        <section className="subagent-modal__section">
-          <h3>Latest message</h3>
-          <p className="subagent-modal__body">
-            {subAgent.lastMessage ?? "No messages yet."}
-          </p>
-        </section>
+          {/* Only facts the pinned header does not already carry. Provider,
+              model, effort, fast mode, and the start time live up there; a dl
+              repeating them one scroll down is noise, not detail. */}
+          {showSourceFact || subAgent.completedAt !== undefined ? (
+            <section className="subagent-modal__section">
+              <div className="subagent-modal__section-head">
+                <h3>Run</h3>
+              </div>
+              <dl className="subagent-modal__facts">
+                {showSourceFact ? (
+                  <div>
+                    <dt>Source</dt>
+                    <dd>{originLabel}</dd>
+                  </div>
+                ) : null}
+                {subAgent.completedAt !== undefined ? (
+                  <div>
+                    <dt>Ended</dt>
+                    <dd>{formatTimestamp(subAgent.completedAt)}</dd>
+                  </div>
+                ) : null}
+              </dl>
+            </section>
+          ) : null}
 
-        {usage ? (
-          <section className="subagent-modal__section">
-            <h3>Tokens &amp; pricing</h3>
-            <dl className="subagent-modal__facts">
-              {usage.tokenUsage.inputTokens !== undefined ? (
-                <div>
-                  <dt>Input</dt>
-                  <dd>{formatTokenCount(usage.tokenUsage.inputTokens)}</dd>
-                </div>
+          {usage ? (
+            <section className="subagent-modal__section">
+              <div className="subagent-modal__section-head">
+                <h3>Tokens &amp; pricing</h3>
+              </div>
+              <dl className="subagent-modal__facts">
+                {usage.tokenUsage.inputTokens !== undefined ? (
+                  <div>
+                    <dt>Input</dt>
+                    <dd>{formatTokenCount(usage.tokenUsage.inputTokens)}</dd>
+                  </div>
+                ) : null}
+                {usage.tokenUsage.outputTokens !== undefined ? (
+                  <div>
+                    <dt>Output</dt>
+                    <dd>{formatTokenCount(usage.tokenUsage.outputTokens)}</dd>
+                  </div>
+                ) : null}
+                {usage.tokenUsage.reasoningOutputTokens !== undefined ? (
+                  <div>
+                    <dt>Reasoning</dt>
+                    <dd>{formatTokenCount(usage.tokenUsage.reasoningOutputTokens)}</dd>
+                  </div>
+                ) : null}
+                {usage.tokenUsage.totalTokens !== undefined ? (
+                  <div>
+                    <dt>Total</dt>
+                    <dd>{formatTokenCount(usage.tokenUsage.totalTokens)}</dd>
+                  </div>
+                ) : null}
+                {usageEstimates ? (
+                  <div>
+                    <dt>Cost</dt>
+                    <dd>{usageEstimates}</dd>
+                  </div>
+                ) : null}
+              </dl>
+              {usage.summary ? (
+                <p className="subagent-modal__usage-summary">
+                  {formatSubAgentUsageSummary({
+                    displayOptions: props.pricingDisplayOptions,
+                    model,
+                    usage,
+                  })}
+                </p>
               ) : null}
-              {usage.tokenUsage.outputTokens !== undefined ? (
-                <div>
-                  <dt>Output</dt>
-                  <dd>{formatTokenCount(usage.tokenUsage.outputTokens)}</dd>
-                </div>
-              ) : null}
-              {usage.tokenUsage.reasoningOutputTokens !== undefined ? (
-                <div>
-                  <dt>Reasoning</dt>
-                  <dd>{formatTokenCount(usage.tokenUsage.reasoningOutputTokens)}</dd>
-                </div>
-              ) : null}
-              {usage.tokenUsage.totalTokens !== undefined ? (
-                <div>
-                  <dt>Total</dt>
-                  <dd>{formatTokenCount(usage.tokenUsage.totalTokens)}</dd>
-                </div>
-              ) : null}
-              {usageEstimates ? (
-                <div>
-                  <dt>Cost</dt>
-                  <dd>{usageEstimates}</dd>
-                </div>
-              ) : null}
-            </dl>
-            {usage.summary ? (
-              <p className="subagent-modal__usage-summary">
-                {formatSubAgentUsageSummary({
-                  displayOptions: props.pricingDisplayOptions,
-                  model,
-                  usage,
-                })}
-              </p>
-            ) : null}
-          </section>
-        ) : null}
+            </section>
+          ) : null}
+        </div>
       </div>
     </div>,
     document.body,
+  );
+}
+
+type ClampedTextSectionProps = {
+  copyable?: boolean;
+  heading: string;
+  placeholder?: string;
+  text?: string;
+};
+
+/**
+ * A long free-text block (task prompt, latest message) clamped to a few lines
+ * with an in-place expander. The toggle only appears once the text actually
+ * overflows, measured after layout rather than guessed from length — a
+ * wrapped prompt's line count depends on the dialog width.
+ */
+function ClampedTextSection(props: ClampedTextSectionProps) {
+  const textRef = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const text = props.text;
+
+  useLayoutEffect(() => {
+    const element = textRef.current;
+    if (!element || expanded) {
+      return;
+    }
+    setOverflowing(element.scrollHeight > element.clientHeight + 1);
+  }, [expanded, text]);
+
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+    const timerId = window.setTimeout(() => setCopied(false), 1_500);
+    return () => window.clearTimeout(timerId);
+  }, [copied]);
+
+  if (!text) {
+    return (
+      <section className="subagent-modal__section">
+        <div className="subagent-modal__section-head">
+          <h3>{props.heading}</h3>
+        </div>
+        <p className="subagent-modal__body-text subagent-modal__body-text--empty">
+          {props.placeholder ?? "—"}
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="subagent-modal__section">
+      <div className="subagent-modal__section-head">
+        <h3>{props.heading}</h3>
+        <div className="subagent-modal__section-actions">
+          {overflowing ? (
+            <button
+              type="button"
+              className="subagent-modal__text-action"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          ) : null}
+          {props.copyable ? (
+            <button
+              type="button"
+              className="subagent-modal__text-action"
+              onClick={() => {
+                void copyText(text).then(() => setCopied(true));
+              }}
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <p
+        ref={textRef}
+        className={`subagent-modal__body-text${
+          expanded ? " subagent-modal__body-text--expanded" : ""
+        }`}
+      >
+        {text}
+      </p>
+    </section>
   );
 }
