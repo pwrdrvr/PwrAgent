@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -7,10 +8,14 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useViewportTooltip } from "../useViewportTooltip";
+import {
+  TOOLTIP_HOVER_DELAY_MS,
+  useViewportTooltip,
+} from "../useViewportTooltip";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -31,6 +36,27 @@ function TooltipFixture() {
         </button>
       </div>
       <div data-testid="transcript-scroll-region" />
+      {tooltip.tooltipNode}
+    </div>
+  );
+}
+
+function DelayedTooltipFixture() {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+
+  return (
+    <div>
+      <div data-testid="sidebar-scroll-region">
+        <button
+          type="button"
+          onMouseEnter={(event) =>
+            tooltip.showAfterDelay(event.currentTarget, "Branch details")
+          }
+          onMouseLeave={tooltip.hide}
+        >
+          agent/delay-tooltip
+        </button>
+      </div>
       {tooltip.tooltipNode}
     </div>
   );
@@ -71,6 +97,28 @@ describe("useViewportTooltip", () => {
 
     fireEvent.mouseEnter(screen.getByRole("button"));
     fireEvent.scroll(screen.getByTestId("sidebar-scroll-region"));
+
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("cancels a pending tooltip when the window loses focus", () => {
+    vi.useFakeTimers();
+    render(<DelayedTooltipFixture />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    fireEvent.blur(window);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("cancels a pending tooltip when scrolling moves its anchor", () => {
+    vi.useFakeTimers();
+    render(<DelayedTooltipFixture />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    fireEvent.scroll(screen.getByTestId("sidebar-scroll-region"));
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
 
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });

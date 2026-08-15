@@ -44,6 +44,8 @@ type TooltipState = {
   top?: number;
 };
 
+type DelayedTooltipContent = ReactNode | (() => ReactNode);
+
 /**
  * Hook for portal-rendered tooltips that escape any clipping ancestor
  * (sidebar scroll regions, overflow:hidden chips, etc.) and clamp
@@ -87,7 +89,10 @@ export function useViewportTooltip(options: {
    * Arm a tooltip after a short delay from pointer entry. Pointer movement does
    * not restart the delay; leaving the target should call `hide` to cancel it.
    */
-  showAfterDelay: (target: HTMLElement, content: ReactNode) => void;
+  showAfterDelay: (
+    target: HTMLElement,
+    content: DelayedTooltipContent,
+  ) => void;
   /**
    * Replace the content of an already-visible tooltip in place (no-op
    * while hidden). Keeps the current position until the re-measure pass
@@ -104,6 +109,7 @@ export function useViewportTooltip(options: {
   const hoverDelayTimerRef = useRef<number | null>(null);
   const tooltipId = useId();
   const [state, setState] = useState<TooltipState | undefined>(undefined);
+  const [delayPending, setDelayPending] = useState(false);
 
   const clearHoverDelay = useCallback((): void => {
     if (hoverDelayTimerRef.current === null) {
@@ -164,6 +170,7 @@ export function useViewportTooltip(options: {
 
   const show = useCallback((target: HTMLElement, content: ReactNode): void => {
     clearHoverDelay();
+    setDelayPending(false);
     if (isNativeDragInteractionActive()) {
       targetRef.current = null;
       setState(undefined);
@@ -180,14 +187,17 @@ export function useViewportTooltip(options: {
   }, [clearHoverDelay]);
 
   const showAfterDelay = useCallback(
-    (target: HTMLElement, content: ReactNode): void => {
+    (target: HTMLElement, content: DelayedTooltipContent): void => {
       if (targetRef.current === target) {
         return;
       }
       clearHoverDelay();
+      targetRef.current = target;
+      setDelayPending(true);
       hoverDelayTimerRef.current = window.setTimeout(() => {
         hoverDelayTimerRef.current = null;
-        show(target, content);
+        setDelayPending(false);
+        show(target, typeof content === "function" ? content() : content);
       }, TOOLTIP_HOVER_DELAY_MS);
     },
     [clearHoverDelay, show],
@@ -199,23 +209,25 @@ export function useViewportTooltip(options: {
 
   const hide = useCallback((): void => {
     clearHoverDelay();
+    setDelayPending(false);
     targetRef.current = null;
     setState(undefined);
   }, [clearHoverDelay]);
 
   useEffect(() => clearHoverDelay, [clearHoverDelay]);
 
-  // A hover tooltip is shown on pointerenter/focus, but those handlers give
+  // A hover tooltip is armed or shown on pointerenter/focus, but those handlers give
   // us no dismissal signal when the window loses focus (cmd-tab away leaves
   // the pointer "over" the chip, so no `mouseleave` fires) or when the list
   // scrolls underneath the position:fixed portal (the tooltip detaches from
   // its target and lingers). Tear it down when the viewport or an ancestor of
   // the target scrolls. A captured scroll from an unrelated pane must not
   // dismiss it — transcript auto-scrolls otherwise close sidebar tooltips.
-  // Keyed on visibility so the measure pass doesn't resubscribe each render.
+  // Keyed on activity so the measure pass doesn't resubscribe each render.
   const visible = state !== undefined;
+  const active = delayPending || visible;
   useEffect(() => {
-    if (!visible) {
+    if (!active) {
       return;
     }
     const unsubscribeNativeDrag = subscribeNativeDragInteraction((active) => {
@@ -239,7 +251,7 @@ export function useViewportTooltip(options: {
       window.removeEventListener("blur", hide);
       window.removeEventListener("scroll", onScroll, { capture: true });
     };
-  }, [visible, hide]);
+  }, [active, hide]);
 
   const tooltipNode =
     state && typeof document !== "undefined"

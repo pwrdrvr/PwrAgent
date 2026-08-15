@@ -220,6 +220,42 @@ describe("PrChip", () => {
     expect(document.querySelector(".pr-status-card")).toBeNull();
   });
 
+  it("opens delayed hover content with the latest PR data", () => {
+    vi.useFakeTimers();
+    const initialPr = basePr({
+      title: "Initial pull request title",
+      additions: 12,
+      deletions: 3,
+    });
+    const { container, rerender } = render(
+      <PrChip
+        pr={initialPr}
+        showRepoPrefix={false}
+        onOpen={vi.fn()}
+      />,
+    );
+    const chip = container.querySelector(".pr-chip") as HTMLElement;
+
+    fireEvent.mouseEnter(chip);
+    rerender(
+      <PrChip
+        pr={{
+          ...initialPr,
+          title: "Hydrated pull request title",
+          additions: 47,
+        }}
+        showRepoPrefix={false}
+        onOpen={vi.fn()}
+      />,
+    );
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+
+    const card = document.querySelector(".pr-status-card") as HTMLElement;
+    expect(card).toHaveTextContent("Hydrated pull request title");
+    expect(card).toHaveTextContent("+47");
+    expect(card).not.toHaveTextContent("Initial pull request title");
+  });
+
   it("mounts no card at all until the chip is hovered", () => {
     vi.useFakeTimers();
     // A sidebar renders hundreds of these. The card element is built on every
