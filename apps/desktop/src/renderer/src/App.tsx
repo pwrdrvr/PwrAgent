@@ -863,15 +863,18 @@ function DesktopAppShell(props: {
                   projectPath: resolveThreadWorkingStatePath(thread),
                   threadId: thread.id,
                   title: thread.title,
+                  federation: thread.federation,
+                  federationHealth: liveFederationHealth,
+                  federationWindowTarget: readRendererFederationTarget(),
                 }
-              : {},
+              : { federationHealth: liveFederationHealth },
             metadata,
           ),
           desktopApi,
         );
       });
     });
-  }, [desktopApi, navigation.selectedThread]);
+  }, [desktopApi, liveFederationHealth, navigation.selectedThread]);
   const scheduledActionFederationTargets = useFederationThreadEventSubscriptions({
     desktopApi,
     enabled: !readRendererFederationTarget(),
