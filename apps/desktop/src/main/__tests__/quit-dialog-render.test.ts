@@ -64,6 +64,7 @@ describe("quit dialog HTML", () => {
     expect(html).toContain("Agent turns in progress");
     expect(html).toContain("Integrated terminals");
     expect(html).toContain("Environment actions");
+    expect(html).not.toContain(">Sub-agent</span>");
     expect(html).toContain(
       'href="pwragent-quit-confirmation://tok/show-thread/codex%3Aterm-0/terminal"',
     );
@@ -100,6 +101,34 @@ describe("quit dialog HTML", () => {
     expect(html).toContain("Reap Windows Worktrees");
     expect(html).toContain("Studio Mac");
     expect(html).not.toContain(">0f9c2b7a-remote<");
+  });
+
+  it("names the owning thread and labels a sub-agent blocker", () => {
+    const html = buildQuitConfirmationHtml({
+      countdownSeconds: 10,
+      inProgressThreadCount: 1,
+      terminalSessionCount: 0,
+      actionRunCount: 0,
+      items: [
+        {
+          kind: "turn",
+          backend: "codex",
+          threadId: "parent-thread",
+          threadKey: "codex:parent-thread",
+          title: "Deploy recoverable M2 Max runner",
+          isSubAgent: true,
+        },
+      ],
+      navigationPrefix: "pwragent-quit-confirmation://tok/",
+      colorScheme: "dark",
+      palette: QUIT_DIALOG_PALETTES.dark,
+    });
+
+    expect(html).toContain("Deploy recoverable M2 Max runner");
+    expect(html).toContain(">Sub-agent</span>");
+    expect(html).toContain(
+      'href="pwragent-quit-confirmation://tok/show-thread/codex%3Aparent-thread/turn"',
+    );
   });
 
   it("escapes the action detail, which carries a user-configured command", () => {

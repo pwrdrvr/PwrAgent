@@ -296,6 +296,8 @@ export function buildQuitBlockerSnapshot(params: {
   inProgressThreads: {
     count: number;
     threadIds: string[];
+    subAgentThreadKeys?: string[];
+    threadTitles?: Record<string, string>;
     automationRuns?: Array<{
       agentThreadId: string;
       automationName?: string;
@@ -315,6 +317,10 @@ export function buildQuitBlockerSnapshot(params: {
   const terminalThreadKeys = terminalThreads.map((thread) => thread.threadKey);
   const actionRuns = params.actionRuns ?? [];
   const automationRuns = params.inProgressThreads.automationRuns ?? [];
+  const subAgentThreadKeys = new Set(
+    params.inProgressThreads.subAgentThreadKeys ?? [],
+  );
+  const threadTitles = params.inProgressThreads.threadTitles ?? {};
 
   const items: QuitBlockerItem[] = [
     // Turns and actions are driven by THIS instance's registry and runtime,
@@ -323,6 +329,8 @@ export function buildQuitBlockerSnapshot(params: {
       kind: "turn" as const,
       ...splitQuitThreadKey(threadKey),
       threadKey,
+      ...(threadTitles[threadKey] ? { title: threadTitles[threadKey] } : {}),
+      ...(subAgentThreadKeys.has(threadKey) ? { isSubAgent: true } : {}),
     })),
     ...automationRuns.map((run) => ({
       kind: "automation" as const,
