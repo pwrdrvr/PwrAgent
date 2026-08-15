@@ -175,6 +175,11 @@ export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
 };
 
+type FederationMaterializeDirectoryLaunchpadRequest =
+  MaterializeDirectoryLaunchpadRequest & {
+    messageOrigin?: AppServerThreadMessageOrigin;
+  };
+
 export type FederationMountRemoteChildRequest = {
   ref: FederatedThreadRef;
   summary: NavigationThreadSummary;
@@ -1178,10 +1183,20 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
-    async (envelope) =>
-      await params.backend.materializeDirectoryLaunchpad(
-        envelope.params as MaterializeDirectoryLaunchpadRequest,
+    async (envelope) => {
+      const {
+        messageOrigin: claimedMessageOrigin,
+        ...request
+      } = envelope.params as FederationMaterializeDirectoryLaunchpadRequest;
+      const messageOrigin = authenticateMessageOrigin({
+        messageOrigin: claimedMessageOrigin,
+        resolveSourceInstance: params.resolveSourceInstance,
+        sourceInstanceId: envelope.sourceInstanceId,
+      });
+      return await params.backend.materializeDirectoryLaunchpad(
+        request,
         {
+          ...(messageOrigin ? { messageOrigin } : {}),
           sourceInstanceId: envelope.sourceInstanceId,
           onCodexEnvironmentSetupProgress: (event) => {
             params.onEnvironmentSetupProgress?.(
@@ -1190,7 +1205,8 @@ export function registerFederationBackendHandlers(params: {
             );
           },
         },
-      ),
+      );
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
@@ -1800,10 +1816,16 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
 
   async materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
+    options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     return await this.rpc.request<MaterializeDirectoryLaunchpadResponse>({
       method: FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
-      params: request,
+      params: {
+        ...request,
+        ...(options?.messageOrigin
+          ? { messageOrigin: options.messageOrigin }
+          : {}),
+      } satisfies FederationMaterializeDirectoryLaunchpadRequest,
     });
   }
 

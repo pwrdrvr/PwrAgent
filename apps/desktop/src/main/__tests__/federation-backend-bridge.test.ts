@@ -38,6 +38,148 @@ describe("federation backend bridge", () => {
     );
   });
 
+  it("carries and authenticates Agent provenance for remote thread creation", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "created-thread",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+      turnId: "created-turn",
+    }));
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["environment_actions"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: {
+        materializeDirectoryLaunchpad,
+      } as unknown as FederationBackendOperations,
+      resolveSourceInstance: () => ({
+        label: "Viewer Mac",
+        celestialIcon: "moon",
+      }),
+    });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "materialize-thread",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
+        params: {
+          directoryKey: "dir:/repo",
+          input: [{ type: "text", text: "Deploy the runner" }],
+          messageOrigin: {
+            kind: "agent",
+            sourceThread: {
+              backend: "codex",
+              instanceId: "spoofed_instance",
+              instanceLabel: "Spoofed Mac",
+              threadId: "source-thread",
+              title: "Runner rollout",
+            },
+          },
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      {
+        directoryKey: "dir:/repo",
+        input: [{ type: "text", text: "Deploy the runner" }],
+      },
+      expect.objectContaining({
+        sourceInstanceId: "viewer_one",
+        messageOrigin: {
+          kind: "agent",
+          sourceThread: {
+            backend: "codex",
+            instanceId: "viewer_one",
+            instanceLabel: "Viewer Mac",
+            celestialIcon: "moon",
+            threadId: "source-thread",
+            title: "Runner rollout",
+          },
+        },
+      }),
+    );
+    expect(replies).toMatchObject([
+      { kind: "response", requestId: "materialize-thread" },
+    ]);
+  });
+
+  it("sends thread-creation provenance from the remote backend client", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+    const pending = client.materializeDirectoryLaunchpad(
+      {
+        directoryKey: "dir:/repo",
+        input: [{ type: "text", text: "Deploy the runner" }],
+      },
+      {
+        messageOrigin: {
+          kind: "agent",
+          sourceThread: {
+            backend: "codex",
+            threadId: "source-thread",
+          },
+        },
+      },
+    );
+    const request = sent.at(-1)!;
+    expect(request).toMatchObject({
+      method: FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
+      params: {
+        directoryKey: "dir:/repo",
+        input: [{ type: "text", text: "Deploy the runner" }],
+        messageOrigin: {
+          kind: "agent",
+          sourceThread: {
+            backend: "codex",
+            threadId: "source-thread",
+          },
+        },
+      },
+    });
+
+    rpc.receiveEnvelope({
+      id: "materialize-response",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        backend: "codex",
+        threadId: "created-thread",
+        executionMode: "default",
+        workMode: "local",
+        turnId: "created-turn",
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      threadId: "created-thread",
+      turnId: "created-turn",
+    });
+  });
+
   it("rejects grouping RPCs from a legacy thread-navigation peer", async () => {
     const backend = {
       updateSubthreadOrder: vi.fn(),
