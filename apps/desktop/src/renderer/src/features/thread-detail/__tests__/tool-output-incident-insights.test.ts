@@ -7,6 +7,7 @@ import {
   formatCapShare,
   formatCompactTokens,
   formatInvocationIdentity,
+  invocationStatusTone,
   isOverOutputCap,
   sortIncidentCases,
   summarizeIncidents,
@@ -45,7 +46,42 @@ describe("buildTurnCostStrip", () => {
 
     expect(strip.rows).toHaveLength(1);
     expect(strip.rows[0]?.callCount).toBe(3);
-    expect(strip.rows[0]?.noisyCount).toBe(1);
+  });
+
+  it("keeps a high-round-trip turn when ranking drops rows", () => {
+    /* Ranking on output alone would cut the polling turn — the pathology the
+       tick rail exists to show — and then call it lower-cost. */
+    const polling = Array.from({ length: 40 }, (_, index) =>
+      invocation({
+        estimatedOutputTokens: 50,
+        observedAt: 1_000 + index,
+        turnId: "turn-polling",
+      }));
+    const verbose = Array.from({ length: 3 }, (_, index) =>
+      invocation({
+        estimatedOutputTokens: 5_000,
+        observedAt: 10_000 + index * 1_000,
+        turnId: `turn-verbose-${index}`,
+      }));
+    const strip = buildTurnCostStrip([...polling, ...verbose], { limit: 2 });
+
+    expect(strip.ordering).toBe("cost");
+    expect(strip.rows.map((row) => row.key)).toContain("turn-polling");
+  });
+
+  it("labels every turn, including the ones the row limit dropped", () => {
+    const strip = buildTurnCostStrip(
+      [
+        invocation({ estimatedOutputTokens: 900, observedAt: 10, turnId: "turn-a" }),
+        invocation({ estimatedOutputTokens: 800, observedAt: 20, turnId: "turn-b" }),
+        invocation({ estimatedOutputTokens: 1, observedAt: 30, turnId: "turn-c" }),
+      ],
+      { limit: 2 },
+    );
+
+    expect(strip.rows.map((row) => row.key)).not.toContain("turn-c");
+    /* A case in the dropped turn still has to name its turn. */
+    expect(strip.labelsByKey.get("turn-c")).toBe("Turn 3");
   });
 
   it("numbers turns chronologically and keeps the numbering when ranked by cost", () => {
@@ -161,6 +197,19 @@ describe("output cap meters", () => {
 
   it("pins rather than overflowing past the cap", () => {
     expect(capMeterWidth(400_000)).toBe(1);
+  });
+});
+
+describe("invocationStatusTone", () => {
+  it("reserves success coloring for a call that actually succeeded", () => {
+    expect(invocationStatusTone(invocation({ exitCode: 0, status: "completed" })))
+      .toBe("ok");
+    /* A non-zero exit is a failure whatever the transport status says. */
+    expect(invocationStatusTone(invocation({ exitCode: 1, status: "completed" })))
+      .toBe("error");
+    expect(invocationStatusTone(invocation({ status: "failed" }))).toBe("error");
+    expect(invocationStatusTone(invocation({ status: "cancelled" }))).toBeUndefined();
+    expect(invocationStatusTone(invocation({ status: "in_progress" }))).toBeUndefined();
   });
 });
 

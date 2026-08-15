@@ -15299,8 +15299,11 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow: hidden;
 }
 
+/* A category the legend lists has to be visible in the bar the legend
+   explains, so a tiny share keeps a 2px mark instead of rounding away. */
 .incident-explorer__composition i {
   display: block;
+  min-width: 2px;
   height: 100%;
 }
 

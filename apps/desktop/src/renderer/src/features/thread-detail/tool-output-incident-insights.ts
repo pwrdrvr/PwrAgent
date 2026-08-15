@@ -40,7 +40,6 @@ export type IncidentSummary = {
   incidentTokens: number;
   /** Estimated tokens across every accounted call, flagged or not. */
   totalTokens: number;
-  totalCallCount: number;
   /** Flagged share of all tool output, 0–1. Zero when nothing is accounted. */
   share: number;
   turnCount: number;
@@ -53,14 +52,18 @@ export type TurnCostRow = {
   firstObservedAt: number;
   key: string;
   label: string;
-  noisyCount: number;
   /** Calls that reached the harness's output cap, where output is truncated. */
   overCapCount: number;
-  outputChars: number;
   turnId?: string;
 };
 
 export type TurnCostStrip = {
+  /**
+   * Every turn's label, including turns the row limit dropped. Callers label
+   * cases from this rather than from `rows` — a case belonging to a turn that
+   * did not make the strip still belongs to a turn.
+   */
+  labelsByKey: Map<string, string>;
   /** Largest single-turn values in the strip, for scaling both bars. */
   maxCallCount: number;
   maxTokens: number;
@@ -74,7 +77,6 @@ export type TurnCostStrip = {
 };
 
 export type CategoryShare = {
-  caseCount: number;
   category: ThreadToolInvocationCategory | "other";
   estimatedOutputTokens: number;
   label: string;
@@ -115,7 +117,6 @@ export function summarizeIncidents(
     incidentChars: flagged.reduce((sum, entry) => sum + entry.outputChars, 0),
     incidentTokens,
     share: totalTokens > 0 ? incidentTokens / totalTokens : 0,
-    totalCallCount: invocations.length,
     totalTokens,
     turnCount: turnKeys.size,
     worstChars: flagged.reduce((worst, entry) => Math.max(worst, entry.outputChars), 0),
@@ -141,16 +142,12 @@ export function buildTurnCostStrip(
       firstObservedAt: invocation.observedAt,
       key,
       label: "",
-      noisyCount: 0,
-      outputChars: 0,
       overCapCount: 0,
       ...(invocation.turnId ? { turnId: invocation.turnId } : {}),
     };
     row.callCount += 1;
     row.estimatedOutputTokens += invocation.estimatedOutputTokens;
-    row.outputChars += invocation.outputChars;
     row.firstObservedAt = Math.min(row.firstObservedAt, invocation.observedAt);
-    if (invocation.noisy) row.noisyCount += 1;
     if (isOverOutputCap(invocation.outputChars)) row.overCapCount += 1;
     groups.set(key, row);
   }
@@ -167,14 +164,29 @@ export function buildTurnCostStrip(
   const ordering: TurnCostStrip["ordering"] = chronological.length > limit
     ? "cost"
     : "time";
+  /* Rank on BOTH axes, not just output. Sorting by tokens alone would cut the
+     80-call polling turn that returns almost nothing — the pathology the tick
+     rail exists to show — and leave the strip claiming it was "quieter". */
+  const scale = {
+    calls: chronological.reduce((max, row) => Math.max(max, row.callCount), 0),
+    tokens: chronological.reduce(
+      (max, row) => Math.max(max, row.estimatedOutputTokens),
+      0,
+    ),
+  };
+  const score = (row: TurnCostRow): number =>
+    (scale.tokens > 0 ? row.estimatedOutputTokens / scale.tokens : 0)
+    + (scale.calls > 0 ? row.callCount / scale.calls : 0);
   const ordered = ordering === "cost"
     ? [...chronological].sort((left, right) =>
-        right.estimatedOutputTokens - left.estimatedOutputTokens
+        score(right) - score(left)
+        || right.estimatedOutputTokens - left.estimatedOutputTokens
         || right.callCount - left.callCount)
     : chronological;
   const rows = ordered.slice(0, limit);
   return {
     hiddenTurnCount: chronological.length - rows.length,
+    labelsByKey: new Map(chronological.map((row) => [row.key, row.label])),
     maxCallCount: rows.reduce((max, row) => Math.max(max, row.callCount), 0),
     maxTokens: rows.reduce((max, row) => Math.max(max, row.estimatedOutputTokens), 0),
     ordering,
@@ -190,13 +202,11 @@ export function buildCategoryComposition(
   const groups = new Map<ThreadToolInvocationCategory, CategoryShare>();
   for (const invocation of invocations) {
     const share = groups.get(invocation.category) ?? {
-      caseCount: 0,
       category: invocation.category,
       estimatedOutputTokens: 0,
       label: formatCategoryLabel(invocation.category),
       share: 0,
     };
-    share.caseCount += 1;
     share.estimatedOutputTokens += invocation.estimatedOutputTokens;
     groups.set(invocation.category, share);
   }
@@ -208,7 +218,6 @@ export function buildCategoryComposition(
   const tail = ranked.slice(limit);
   if (tail.length > 0) {
     head.push({
-      caseCount: tail.reduce((sum, entry) => sum + entry.caseCount, 0),
       category: "other",
       estimatedOutputTokens: sumEntries(tail),
       label: `Other (${tail.length})`,
@@ -269,8 +278,22 @@ function leadingWords(value: string, budget: number): string {
   return boundary > 0 ? value.slice(0, boundary) : "";
 }
 
-export function capShare(outputChars: number): number {
+function capShare(outputChars: number): number {
   return toolOutputCapShare(outputChars);
+}
+
+/**
+ * Success coloring is reserved for a call that actually succeeded. A non-zero
+ * exit is a failure whatever the transport status says, and cancelled or still
+ * running is neither — those stay neutral rather than borrowing green.
+ */
+export function invocationStatusTone(
+  invocation: ThreadToolInvocationRecord,
+): "error" | "ok" | undefined {
+  if (invocation.status === "failed") return "error";
+  if (invocation.status !== "completed") return undefined;
+  if (invocation.exitCode !== undefined && invocation.exitCode !== 0) return "error";
+  return "ok";
 }
 
 /** Meter width, clamped — a case past the cap pins rather than overflowing. */

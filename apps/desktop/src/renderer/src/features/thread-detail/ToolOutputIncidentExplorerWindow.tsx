@@ -26,6 +26,7 @@ import {
   formatCategoryLabel,
   formatCompactTokens,
   formatInvocationIdentity,
+  invocationStatusTone,
   isOverOutputCap,
   sortIncidentCases,
   summarizeIncidents,
@@ -111,10 +112,9 @@ export function ToolOutputIncidentExplorerWindow() {
   const summary = useMemo(() => summarizeIncidents(allInvocations), [allInvocations]);
   const turnStrip = useMemo(() => buildTurnCostStrip(allInvocations), [allInvocations]);
   const composition = useMemo(() => buildCategoryComposition(flagged), [flagged]);
-  const turnLabels = useMemo(
-    () => new Map(turnStrip.rows.map((row) => [row.key, row.label])),
-    [turnStrip.rows],
-  );
+  /* Every turn, not just the rows the strip had room for — a case in a turn
+     that fell below the row limit still belongs to that turn. */
+  const turnLabels = turnStrip.labelsByKey;
 
   const invocations = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -468,7 +468,7 @@ export function ToolOutputIncidentExplorerWindow() {
                 <div className="incident-explorer__facts">
                   <Fact
                     label={selected.status}
-                    tone={selected.status === "failed" ? "error" : "ok"}
+                    tone={invocationStatusTone(selected)}
                     value={selected.exitCode !== undefined ? `exit ${selected.exitCode}` : "—"}
                   />
                   <Fact
@@ -649,7 +649,7 @@ function TurnStrip(props: {
       ))}
       {props.strip.hiddenTurnCount > 0 ? (
         <p className="incident-explorer__turns-note">
-          {props.strip.hiddenTurnCount.toLocaleString()} quieter{" "}
+          {props.strip.hiddenTurnCount.toLocaleString()} lower-cost{" "}
           {props.strip.hiddenTurnCount === 1 ? "turn is" : "turns are"} not shown.
         </p>
       ) : null}
@@ -730,9 +730,16 @@ function countLaterTripsInTurn(
   invocations: ThreadToolInvocationRecord[],
   selected: ThreadToolInvocationRecord,
 ): number {
-  return invocations.filter((invocation) =>
+  /* A full-history analyze pass can stamp several of a turn's calls with the
+     same millisecond, so "later" falls back to persisted order rather than
+     dropping every tie and understating the replay count. */
+  const selectedIndex = invocations.indexOf(selected);
+  return invocations.filter((invocation, index) =>
     (invocation.turnId ?? "") === (selected.turnId ?? "")
-    && invocation.observedAt > selected.observedAt
+    && (
+      invocation.observedAt > selected.observedAt
+      || (invocation.observedAt === selected.observedAt && index > selectedIndex)
+    )
   ).length;
 }
 
