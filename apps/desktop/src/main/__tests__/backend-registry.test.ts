@@ -19059,7 +19059,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("emits a live large-output alert at the warning threshold without another sqlite write", async () => {
+  it("persists a live large-output alert at the warning threshold without completion", async () => {
     vi.useFakeTimers();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
@@ -19067,8 +19067,12 @@ command = "pnpm dev"
     const upsertThreadToolInvocation = vi.fn(
       async (params: { invocation: unknown }) => params.invocation,
     );
+    const persistThreadToolInvocationBoundary = vi.fn(
+      async (params: { invocation: unknown }) => params.invocation,
+    );
     const overlayStore = {
       ...createOverlayStoreMock(),
+      persistThreadToolInvocationBoundary,
       upsertThreadToolInvocation,
     };
     const registry = new DesktopBackendRegistry({
@@ -19122,9 +19126,26 @@ command = "pnpm dev"
           },
         ],
       });
+      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledTimes(1);
+      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledWith({
+        alerts: [
+          expect.objectContaining({
+            kind: "large-output",
+            severity: "warning",
+            totalOutputChars: 4_000,
+          }),
+        ],
+        invocation: expect.objectContaining({
+          invocationId: "tool:codex:thread-1:turn-1:cmd-1",
+          noisy: true,
+          noisyReason: "large-output",
+          outputChars: 2_000,
+          status: "in_progress",
+        }),
+      });
 
       await registry.close();
-      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(2);
+      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

@@ -216,6 +216,58 @@ describe("sqlite write metrics", () => {
     await registry.close();
   });
 
+  it("persists a streamed large-output alert boundary in one commit", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/commandExecution/outputDelta",
+          params: {
+            threadId: "thread-streaming-alert",
+            turnId: "turn-1",
+            itemId: "cmd-1",
+            delta: "x".repeat(4_100),
+          },
+        },
+      } as AgentEvent);
+    });
+
+    expectSqliteWriteBudget({
+      note: "one threshold-crossing streamed output window and its alert",
+      scenario: "streamed-large-output-alert-boundary",
+      writes,
+    });
+
+    const accounting = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-streaming-alert",
+    });
+    expect(accounting.alerts).toEqual([
+      expect.objectContaining({
+        kind: "large-output",
+        totalOutputChars: 4_100,
+      }),
+    ]);
+    expect(accounting.invocations).toEqual([
+      expect.objectContaining({
+        noisy: true,
+        noisyReason: "large-output",
+        outputChars: 4_100,
+        status: "in_progress",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("holds five deferred checks and their first alert to one commit", async () => {
     vi.useFakeTimers();
     const registry = new DesktopBackendRegistry({

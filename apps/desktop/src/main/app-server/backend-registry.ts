@@ -6659,7 +6659,7 @@ export class DesktopBackendRegistry {
   private readonly persistedToolInvocationAlertCounts = new Map<string, number>();
   private pendingToolInvocationDeltaTimer: NodeJS.Timeout | undefined;
   /**
-   * Serializes every flush so a timer-driven write can never land after the
+   * Serializes every flush and streamed alert boundary so a timer-driven write
    * `item/completed` write it accumulated before — the store keeps the
    * terminal status and stops summing once a row is terminal, so an
    * out-of-order delta flush would silently under-count the command's output.
@@ -21777,9 +21777,9 @@ export class DesktopBackendRegistry {
     if (event.notification.method === "item/commandExecution/outputDelta") {
       // Streamed output never notifies anyone (`shouldNotify` stays false for
       // deltas) and never triggers noisy-polling detection (that only looks at
-      // `write_stdin`), so nothing downstream needs this write to have landed
-      // before the event reaches listeners. Accumulate and let the flush timer
-      // write it.
+      // `write_stdin`). Ordinary deltas can wait for the flush timer; a large-
+      // output threshold crossing becomes a durable boundary before its live
+      // alert reaches listeners.
       const buffered = this.bufferStreamedToolInvocationDelta(invocation);
       const detection = detectLargeToolOutput({
         current: buffered.current,
@@ -21787,9 +21787,13 @@ export class DesktopBackendRegistry {
         previousOutputChars: buffered.previousOutputChars,
       });
       if (detection) {
+        const stored = await this.persistStreamedToolInvocationAlertBoundary({
+          alert: detection.alert,
+          invocationId: invocation.invocationId,
+        });
         await this.emitThreadToolAccountingUpdated({
-          backend: invocation.backend,
-          threadId: invocation.threadId,
+          backend: stored.backend,
+          threadId: stored.threadId,
           triggeredAlerts: [detection.alert],
         });
       }
@@ -22007,6 +22011,61 @@ export class DesktopBackendRegistry {
       current,
       previousOutputChars: accumulatedTotal?.outputChars ?? 0,
     };
+  }
+
+  /**
+   * Replace the threshold-crossing delta's ordinary buffered write with one
+   * durable invocation-plus-alert boundary. Reserving the pending delta before
+   * joining the flush chain prevents a timer drain from stealing it, while the
+   * chain still guarantees that any older window lands first.
+   */
+  private persistStreamedToolInvocationAlertBoundary(params: {
+    alert: ThreadToolInvocationAlert;
+    invocationId: string;
+  }): Promise<ThreadToolInvocationRecord> {
+    const pending = this.pendingToolInvocationDeltas.get(params.invocationId);
+    if (!pending) {
+      return Promise.reject(
+        new Error(`Missing streamed tool invocation boundary ${params.invocationId}`),
+      );
+    }
+    this.pendingToolInvocationDeltas.delete(params.invocationId);
+    const invocation = {
+      ...pending,
+      noisy: true,
+      noisyReason: "large-output",
+    };
+    const persisted = this.toolInvocationDeltaFlushChain.then(async () => {
+      try {
+        if (
+          typeof this.overlayStore.persistThreadToolInvocationBoundary === "function"
+        ) {
+          return await this.overlayStore.persistThreadToolInvocationBoundary({
+            alerts: [params.alert],
+            invocation,
+          });
+        }
+        const stored = await this.overlayStore.upsertThreadToolInvocation({
+          invocation,
+        });
+        if (
+          typeof this.overlayStore.upsertThreadToolInvocationAlert === "function"
+        ) {
+          await this.overlayStore.upsertThreadToolInvocationAlert({
+            alert: params.alert,
+          });
+        }
+        return stored;
+      } catch (error) {
+        this.requeueFailedToolInvocationDelta(invocation);
+        throw error;
+      }
+    });
+    this.toolInvocationDeltaFlushChain = persisted.then(
+      () => undefined,
+      () => undefined,
+    );
+    return persisted;
   }
 
   private readVolatileDeferredChecks(
