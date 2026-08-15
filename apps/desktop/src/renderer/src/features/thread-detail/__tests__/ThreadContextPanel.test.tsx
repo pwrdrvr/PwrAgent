@@ -158,6 +158,8 @@ type PanelOverrides = Partial<
     | "editedFileGroups"
     | "editedFilesDock"
     | "onEditedFilesDockChange"
+    | "onAnalyzeToolHistory"
+    | "onOpenToolOutputIncidentExplorer"
     | "pricing"
     | "toolAccounting"
     | "toolCallEntries"
@@ -860,7 +862,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("3 invocations")).toBeInTheDocument();
     expect(screen.getByText("6k est. tokens")).toBeInTheDocument();
     expect(screen.getByText("Diagnostics")).toBeInTheDocument();
-    expect(screen.getByText("Noisy polling detected")).toBeInTheDocument();
+    expect(screen.getByText("Repeated queued checks")).toBeInTheDocument();
     expect(screen.getByText(/Repeated write_stdin polling/)).toBeInTheDocument();
     expect(screen.getByText("write_stdin · polling")).toBeInTheDocument();
     expect(screen.queryByText("poll session 40500")).not.toBeInTheDocument();
@@ -955,6 +957,23 @@ describe("ThreadContextPanel", () => {
 
     expect(screen.getByText(/ACP captured output/)).toBeInTheDocument();
     expect(screen.queryByText(/unavailable in transcript history/)).not.toBeInTheDocument();
+  });
+
+  it("offers history analysis and the explorer from an empty Tool Calls panel", () => {
+    const onAnalyzeToolHistory = vi.fn();
+    const onOpenToolOutputIncidentExplorer = vi.fn();
+    renderPanel({
+      activeTab: "tool-calls",
+      onAnalyzeToolHistory,
+      onOpenToolOutputIncidentExplorer,
+      pinned: true,
+      threadToolAccountingEnabled: true,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Analyze history" }));
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+    expect(onAnalyzeToolHistory).toHaveBeenCalledOnce();
+    expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledOnce();
   });
 
   it("hides the Tool calls tab while its experimental flag is off", () => {

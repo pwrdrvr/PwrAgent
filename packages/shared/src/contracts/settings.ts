@@ -673,7 +673,8 @@ export type DesktopSettingsSnapshot = {
     /**
      * Shows the experimental Tool calls tab in the thread context rail.
      * The desktop app may still collect tool metrics while this is disabled;
-     * this only gates the operator-facing panel and noisy-polling alerts.
+     * this only gates the operator-facing panel. Replay-risk safety notices
+     * remain active because their cost grows while the turn is running.
      */
     threadToolAccounting?: DesktopSettingsValue<boolean>;
     /**

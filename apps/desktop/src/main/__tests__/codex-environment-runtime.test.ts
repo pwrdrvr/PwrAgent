@@ -146,6 +146,10 @@ describe("codex environment runtime", () => {
   it("runs detached actions with the provided hydrated environment", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-runtime-"));
     const outputPath = path.join(root, "env.txt");
+    let resolveDetachedExit!: (event: { exitCode: number | null }) => void;
+    const detachedExit = new Promise<{ exitCode: number | null }>((resolve) => {
+      resolveDetachedExit = resolve;
+    });
 
     try {
       const result = await startLocalCodexEnvironmentAction({
@@ -155,6 +159,7 @@ describe("codex environment runtime", () => {
           ...process.env,
           PWRAGENT_TEST_HYDRATED_ENV: "hydrated",
         },
+        onDetachedExit: resolveDetachedExit,
         runtime: {
           environmentId: "env",
           environmentName: "Env",
@@ -180,6 +185,10 @@ describe("codex environment runtime", () => {
       await expect(expectEventually(async () => await readFile(outputPath, "utf8"))).resolves.toBe(
         "hydrated",
       );
+      // File creation proves the shell ran, not that the detached Windows Job
+      // and its PowerShell launcher have released their cwd handles. Await the
+      // owner lifecycle before deleting that cwd.
+      await expect(detachedExit).resolves.toMatchObject({ exitCode: 0 });
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

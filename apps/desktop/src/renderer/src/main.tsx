@@ -137,6 +137,10 @@ const SubAgentTranscriptWindow = lazy(async () => ({
   default: (await import("./features/thread-detail/SubAgentTranscriptWindow"))
     .SubAgentTranscriptWindow,
 }));
+const ToolOutputIncidentExplorerWindow = lazy(async () => ({
+  default: (await import("./features/thread-detail/ToolOutputIncidentExplorerWindow"))
+    .ToolOutputIncidentExplorerWindow,
+}));
 const AutomationRunWindow = lazy(async () => ({
   default: (await import("./features/automations/AutomationRunWindow"))
     .AutomationRunWindow,
@@ -188,6 +192,10 @@ const routes: Array<{
   {
     match: (hash) => hash.startsWith("sub-agent/"),
     render: () => <SubAgentTranscriptWindow />,
+  },
+  {
+    match: (hash) => hash.startsWith("tool-output-incidents/"),
+    render: () => <ToolOutputIncidentExplorerWindow />,
   },
   {
     match: (hash) => hash.startsWith("automation-run/"),

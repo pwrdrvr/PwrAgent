@@ -94,6 +94,8 @@ import {
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
+  type AnalyzeThreadToolHistoryRequest,
+  type AnalyzeThreadToolHistoryResponse,
   type AppServerCollaborationModeRequest,
   type BackendAccountSummary,
   type BackendAcpRuntimeCapabilities,
@@ -259,6 +261,7 @@ import {
   type ThreadOverlayState,
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
+  type ThreadToolInvocationAlert,
   type ThreadToolInvocationRecord,
   type ThreadUsageLineRecord,
   type PrSummary,
@@ -446,11 +449,16 @@ import {
   createProtocolLogObserverFromEnv,
 } from "./protocol-log-observer";
 import {
+  detectLargeToolOutput,
   detectNoisyPolling,
+  mergeLargeToolOutputIncident,
   mergeStreamedToolInvocationDeltas,
+  mergeToolInvocationLifecycleWithStreamedOutput,
   toolAccountingLookbackSince,
   toolInvocationFromNotification,
+  type ToolOutputIncidentAggregate,
 } from "./tool-invocation-accounting";
+import { analyzeNormalizedToolReplay } from "./tool-output-replay-analyzer";
 import {
   ThreadTitleGenerationService,
   type ThreadTitleGenerator,
@@ -6328,6 +6336,8 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "readThreadGitWorkingStateCache"
     | "listRemoteThreadPins"
     | "reconcileOrphanedThreadSubAgents"
+    | "markThreadToolInvocationsNoisy"
+    | "persistThreadToolInvocationBoundary"
     | "upsertThreadUsageLines"
     | "writeThreadGitWorkingStateCacheEntry"
   >
@@ -6639,11 +6649,34 @@ export class DesktopBackendRegistry {
     string,
     ThreadToolInvocationRecord
   >();
+  /**
+   * Full in-memory output totals for active commands. Flush windows clear the
+   * sqlite write buffer every 250ms, but warning thresholds must span those
+   * windows or a steady stream of small chunks never reaches 4,000 chars.
+   */
+  private readonly streamedToolInvocationOutputTotals = new Map<
+    string,
+    ThreadToolInvocationRecord
+  >();
+  /**
+   * Short-lived polling samples used only for replay-amplification detection.
+   * Persisting every `wait` / `write_stdin` check would turn the detector into
+   * a timer-driven sqlite writer, so only incident boundaries reach sqlite.
+   */
+  private readonly volatileDeferredCheckInvocations = new Map<
+    string,
+    ThreadToolInvocationRecord[]
+  >();
+  private readonly persistedToolInvocationAlertCounts = new Map<string, number>();
+  private readonly liveToolOutputIncidents = new Map<
+    string,
+    ToolOutputIncidentAggregate
+  >();
   private pendingToolInvocationDeltaTimer: NodeJS.Timeout | undefined;
   /**
-   * Serializes every flush so a timer-driven write can never land after the
-   * `item/completed` write it accumulated before — the store keeps the
-   * terminal status and stops summing once a row is terminal, so an
+   * Serializes every flush and streamed alert boundary so a timer-driven write
+   * can never land after the `item/completed` write it accumulated before. The
+   * store keeps the terminal status and stops summing once a row is terminal, so an
    * out-of-order delta flush would silently under-count the command's output.
    */
   private toolInvocationDeltaFlushChain: Promise<void> = Promise.resolve();
@@ -8812,6 +8845,9 @@ export class DesktopBackendRegistry {
       typeof this.overlayStore.readThreadToolAccounting === "function"
         ? await this.overlayStore.readThreadToolAccounting({
             backend,
+            ...(request.includeAllToolInvocations
+              ? { includeAllInvocations: true }
+              : {}),
             threadId: request.threadId,
           })
         : undefined;
@@ -10551,6 +10587,9 @@ export class DesktopBackendRegistry {
       typeof this.overlayStore.readThreadToolAccounting === "function"
         ? await this.overlayStore.readThreadToolAccounting({
             backend,
+            ...(request.includeAllToolInvocations
+              ? { includeAllInvocations: true }
+              : {}),
             threadId: request.threadId,
           })
         : undefined;
@@ -10572,6 +10611,71 @@ export class DesktopBackendRegistry {
         : {}),
       replay: replayWithMessageOrigins,
     };
+  }
+
+  async analyzeThreadToolHistory(
+    request: AnalyzeThreadToolHistoryRequest,
+  ): Promise<AnalyzeThreadToolHistoryResponse> {
+    this.assertNotBootstrap("analyzeThreadToolHistory");
+    if (typeof this.overlayStore.persistThreadToolHistoryAnalysis !== "function") {
+      throw new Error("Tool-output history analysis storage is unavailable.");
+    }
+
+    const pages: AppServerThreadReplay[] = [];
+    const seenCursors = new Set<string>();
+    let before: string | undefined;
+    let complete = false;
+    for (let page = 0; page < 1_000; page += 1) {
+      let response: AppServerReadThreadResponse;
+      try {
+        response = await this.readThread({
+          backend: request.backend,
+          ...(before ? { before } : {}),
+          limit: 100,
+          threadId: request.threadId,
+          viewOnly: true,
+        });
+      } catch (error) {
+        if (pages.length === 0) {
+          throw error;
+        }
+        break;
+      }
+      pages.push(response.replay);
+      if (!response.replay.pagination.hasPreviousPage) {
+        complete = true;
+        break;
+      }
+      const cursor = response.replay.pagination.previousCursor;
+      if (!cursor || seenCursors.has(cursor)) {
+        break;
+      }
+      seenCursors.add(cursor);
+      before = cursor;
+    }
+
+    const analysis = analyzeNormalizedToolReplay({
+      backend: request.backend,
+      complete,
+      pages,
+      threadId: request.threadId,
+    });
+    await this.overlayStore.persistThreadToolHistoryAnalysis({
+      backend: request.backend,
+      coverage: analysis.coverage,
+      invocations: analysis.invocations,
+      threadId: request.threadId,
+    });
+    const accounting = await this.overlayStore.readThreadToolAccounting({
+      backend: request.backend,
+      includeAllInvocations: true,
+      threadId: request.threadId,
+    });
+    await this.emitThreadToolAccountingUpdated({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    return { accounting, coverage: analysis.coverage };
   }
 
   async getThreadTranscriptImageRoots(params: {
@@ -10645,11 +10749,18 @@ export class DesktopBackendRegistry {
   private async emitThreadToolAccountingUpdated(params: {
     backend: AppServerBackendKind;
     threadId: string;
+    triggeredAlerts?: ThreadToolInvocationAlert[];
   }): Promise<void> {
     if (typeof this.overlayStore.readThreadToolAccounting !== "function") {
       return;
     }
     const toolAccounting = await this.overlayStore.readThreadToolAccounting({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    /* The operator's dismissal/mute for this thread, so a freshly launched
+       renderer honors a decision made in an earlier session. */
+    const overlay = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
       threadId: params.threadId,
     });
@@ -10660,6 +10771,12 @@ export class DesktopBackendRegistry {
         params: {
           threadId: params.threadId,
           toolAccounting,
+          ...(overlay?.toolIncidentNotice
+            ? { incidentNotice: overlay.toolIncidentNotice }
+            : {}),
+          ...(params.triggeredAlerts?.length
+            ? { triggeredAlerts: params.triggeredAlerts }
+            : {}),
         },
       },
     });
@@ -21901,6 +22018,23 @@ export class DesktopBackendRegistry {
   }
 
   private async recordToolInvocationAccounting(event: AgentEvent): Promise<void> {
+    if (
+      event.notification.method === "turn/completed"
+      || event.notification.method === "turn/failed"
+      || event.notification.method === "turn/interrupted"
+    ) {
+      const params = readRecord(event.notification.params);
+      const threadId = readNonEmptyString(params?.threadId);
+      const turnId = readNonEmptyString(params?.turnId);
+      if (threadId && turnId) {
+        this.liveToolOutputIncidents.delete(
+          `large-output:${event.backend}:${threadId}:${turnId}`,
+        );
+        this.liveToolOutputIncidents.delete(
+          `noisy-polling:${event.backend}:${threadId}:${turnId}`,
+        );
+      }
+    }
     if (typeof this.overlayStore.upsertThreadToolInvocation !== "function") {
       return;
     }
@@ -21917,76 +22051,384 @@ export class DesktopBackendRegistry {
     if (event.notification.method === "item/commandExecution/outputDelta") {
       // Streamed output never notifies anyone (`shouldNotify` stays false for
       // deltas) and never triggers noisy-polling detection (that only looks at
-      // `write_stdin`), so nothing downstream needs this write to have landed
-      // before the event reaches listeners. Accumulate and let the flush timer
-      // write it.
-      this.bufferStreamedToolInvocationDelta(invocation);
+      // `write_stdin`). Ordinary deltas can wait for the flush timer; a large-
+      // output threshold crossing becomes a durable boundary before its live
+      // alert reaches listeners.
+      const buffered = this.bufferStreamedToolInvocationDelta(invocation);
+      const detection = detectLargeToolOutput({
+        current: buffered.current,
+        now,
+        previousOutputChars: buffered.previousOutputChars,
+      });
+      if (detection) {
+        const incident = mergeLargeToolOutputIncident({
+          current: this.liveToolOutputIncidents.get(detection.alert.alertId),
+          detection,
+        });
+        this.liveToolOutputIncidents.set(
+          incident.aggregate.alert.alertId,
+          incident.aggregate,
+        );
+        if (!incident.shouldNotify) {
+          return;
+        }
+        const stored = await this.persistStreamedToolInvocationAlertBoundary({
+          alert: incident.aggregate.alert,
+          invocationId: invocation.invocationId,
+        });
+        await this.emitThreadToolAccountingUpdated({
+          backend: stored.backend,
+          threadId: stored.threadId,
+          triggeredAlerts: [incident.aggregate.alert],
+        });
+      }
       return;
     }
+
+    const invocationWithStreamedOutput =
+      mergeToolInvocationLifecycleWithStreamedOutput(
+        invocation,
+        this.streamedToolInvocationOutputTotals.get(invocation.invocationId),
+      );
+    if (event.notification.method === "item/completed") {
+      this.streamedToolInvocationOutputTotals.delete(invocation.invocationId);
+    }
+    let shouldNotify = event.notification.method === "item/completed";
+    const triggeredAlerts: ThreadToolInvocationAlert[] = [];
+    const rawLargeOutputDetection = detectLargeToolOutput({
+      current: invocationWithStreamedOutput,
+      now,
+    });
+    const largeOutputIncident = rawLargeOutputDetection
+      ? mergeLargeToolOutputIncident({
+          current: this.liveToolOutputIncidents.get(
+            rawLargeOutputDetection.alert.alertId,
+          ),
+          detection: rawLargeOutputDetection,
+        })
+      : undefined;
+    if (largeOutputIncident) {
+      this.liveToolOutputIncidents.set(
+        largeOutputIncident.aggregate.alert.alertId,
+        largeOutputIncident.aggregate,
+      );
+    }
+    const largeOutputDetection = largeOutputIncident
+      ? {
+          alert: largeOutputIncident.aggregate.alert,
+          cases: rawLargeOutputDetection!.cases,
+          invocationIds: rawLargeOutputDetection!.invocationIds,
+        }
+      : undefined;
+    const isVolatileDeferredCheck =
+      invocationWithStreamedOutput.category === "polling"
+      && (
+        invocationWithStreamedOutput.toolName === "wait"
+        || invocationWithStreamedOutput.toolName === "write_stdin"
+      );
+    const volatileRecent = isVolatileDeferredCheck
+      ? this.readVolatileDeferredChecks(invocationWithStreamedOutput, now)
+      : [];
+    const rawPollingDetection =
+      typeof this.overlayStore.readRecentThreadToolInvocations === "function"
+      ? detectNoisyPolling({
+          current: invocationWithStreamedOutput,
+          now,
+          recent: [
+            ...volatileRecent,
+            ...this.overlayStore.readRecentThreadToolInvocations({
+              backend: invocationWithStreamedOutput.backend,
+              limit:
+                invocationWithStreamedOutput.toolName === "commandExecution"
+                  ? 50
+                  : 12,
+              ...(invocationWithStreamedOutput.toolName === "wait"
+                ? {}
+                : {
+                    processId: invocationWithStreamedOutput.processId,
+                    sessionId: invocationWithStreamedOutput.sessionId,
+                  }),
+              since: toolAccountingLookbackSince(now),
+              threadId: invocationWithStreamedOutput.threadId,
+              toolName: invocationWithStreamedOutput.toolName,
+            }),
+          ],
+        })
+      : undefined;
+    const pollingIncident = rawPollingDetection
+      ? mergeLargeToolOutputIncident({
+          current: this.liveToolOutputIncidents.get(
+            rawPollingDetection.alert.alertId,
+          ),
+          detection: rawPollingDetection,
+        })
+      : undefined;
+    if (pollingIncident) {
+      this.liveToolOutputIncidents.set(
+        pollingIncident.aggregate.alert.alertId,
+        pollingIncident.aggregate,
+      );
+    }
+    const pollingDetection = pollingIncident
+      ? {
+          alert: pollingIncident.aggregate.alert,
+          cases: rawPollingDetection!.cases,
+          invocationIds: pollingIncident.aggregate.alert.invocationIds ?? [],
+          lookbackSince: rawPollingDetection!.lookbackSince,
+        }
+      : undefined;
+    if (isVolatileDeferredCheck) {
+      this.rememberVolatileDeferredCheck(invocationWithStreamedOutput, now);
+    }
+    const noisyReason = pollingDetection
+      ? "repeat-polling-output"
+      : largeOutputDetection
+        ? "large-output"
+        : undefined;
 
     // Land accumulated stream output before the lifecycle row: the store stops
     // summing once a row is terminal, so a delta flushed after `item/completed`
     // would be dropped down to a MAX() and under-count the command.
     await this.flushStreamedToolInvocationDeltas();
 
-    const stored = await this.overlayStore.upsertThreadToolInvocation({
-      invocation,
-    });
-    let shouldNotify = event.notification.method === "item/completed";
+    const previousPersistedPollingCount = pollingDetection
+      ? this.persistedToolInvocationAlertCounts.get(
+          pollingDetection.alert.alertId,
+        )
+      : undefined;
+    const shouldPersistPollingAlert = Boolean(
+      pollingDetection
+      && (
+        previousPersistedPollingCount === undefined
+        || pollingDetection.alert.invocationCount
+          >= previousPersistedPollingCount * 2
+      ),
+    );
+    const alertsToPersist = [
+      ...(largeOutputDetection ? [largeOutputDetection.alert] : []),
+      ...(pollingDetection && shouldPersistPollingAlert
+        ? [pollingDetection.alert]
+        : []),
+    ];
+    if (isVolatileDeferredCheck && !largeOutputDetection) {
+      if (
+        pollingDetection
+        && shouldPersistPollingAlert
+        && typeof this.overlayStore.upsertThreadToolInvocationAlert === "function"
+      ) {
+        await this.overlayStore.upsertThreadToolInvocationAlert({
+          alert: pollingDetection.alert,
+        });
+        this.persistedToolInvocationAlertCounts.set(
+          pollingDetection.alert.alertId,
+          pollingDetection.alert.invocationCount,
+        );
+      }
+      if (pollingDetection && pollingIncident?.shouldNotify) {
+        await this.emitThreadToolAccountingUpdated({
+          backend: invocationWithStreamedOutput.backend,
+          threadId: invocationWithStreamedOutput.threadId,
+          triggeredAlerts: [pollingDetection.alert],
+        });
+      }
+      return;
+    }
+    const previousNoisyInvocationIds =
+      pollingDetection && previousPersistedPollingCount === undefined
+        ? pollingDetection.invocationIds.filter(
+            (invocationId) => invocationId !== invocation.invocationId,
+          )
+        : [];
+    const suggestedPrompt = pollingDetection?.alert.suggestedPrompt
+      ?? largeOutputDetection?.alert.suggestedPrompt;
+    const invocationToPersist = {
+      ...invocation,
+      outputState: invocation.outputTruncated ? "truncated" as const : "available" as const,
+      source: "live" as const,
+      ...(noisyReason
+        ? {
+            noisy: true,
+            noisyReason,
+          }
+        : {}),
+      ...(suggestedPrompt ? { suggestedPrompt } : {}),
+    };
+    let stored: ThreadToolInvocationRecord;
     if (
-      typeof this.overlayStore.readRecentThreadToolInvocations === "function" &&
-      typeof this.overlayStore.markThreadToolInvocationNoisy === "function" &&
-      typeof this.overlayStore.upsertThreadToolInvocationAlert === "function"
+      typeof this.overlayStore.persistThreadToolInvocationBoundary === "function"
     ) {
-      const recent = this.overlayStore.readRecentThreadToolInvocations({
-        backend: stored.backend,
-        limit: 12,
-        processId: stored.processId,
-        sessionId: stored.sessionId,
-        since: toolAccountingLookbackSince(now),
-        threadId: stored.threadId,
-        toolName: stored.toolName,
+      stored = await this.overlayStore.persistThreadToolInvocationBoundary({
+        alerts: alertsToPersist,
+        invocation: invocationToPersist,
+        noisyInvocationIds: previousNoisyInvocationIds,
+        ...(previousNoisyInvocationIds.length
+          ? { noisyReason: "repeat-polling-output" }
+          : {}),
       });
-      const detection = detectNoisyPolling({
-        current: stored,
-        now,
-        recent,
+    } else {
+      stored = await this.overlayStore.upsertThreadToolInvocation({
+        invocation: invocationToPersist,
       });
-      if (detection) {
-        for (const invocationId of detection.invocationIds) {
-          await this.overlayStore.markThreadToolInvocationNoisy({
-            invocationId,
+      if (previousNoisyInvocationIds.length > 0) {
+        if (
+          typeof this.overlayStore.markThreadToolInvocationsNoisy === "function"
+        ) {
+          await this.overlayStore.markThreadToolInvocationsNoisy({
+            invocationIds: previousNoisyInvocationIds,
             reason: "repeat-polling-output",
           });
+        } else if (
+          typeof this.overlayStore.markThreadToolInvocationNoisy === "function"
+        ) {
+          for (const invocationId of previousNoisyInvocationIds) {
+            await this.overlayStore.markThreadToolInvocationNoisy({
+              invocationId,
+              reason: "repeat-polling-output",
+            });
+          }
         }
-        await this.overlayStore.upsertThreadToolInvocationAlert({
-          alert: detection.alert,
-        });
-        shouldNotify = true;
       }
+      if (typeof this.overlayStore.upsertThreadToolInvocationAlert === "function") {
+        for (const alert of alertsToPersist) {
+          await this.overlayStore.upsertThreadToolInvocationAlert({ alert });
+        }
+      }
+    }
+    if (pollingDetection && shouldPersistPollingAlert) {
+      this.persistedToolInvocationAlertCounts.set(
+        pollingDetection.alert.alertId,
+        pollingDetection.alert.invocationCount,
+      );
+    }
+    if (largeOutputDetection && largeOutputIncident?.shouldNotify) {
+      triggeredAlerts.push(largeOutputDetection.alert);
+      shouldNotify = true;
+    }
+    if (pollingDetection && pollingIncident?.shouldNotify) {
+      triggeredAlerts.push(pollingDetection.alert);
+      shouldNotify = true;
     }
 
     if (shouldNotify) {
       await this.emitThreadToolAccountingUpdated({
         backend: stored.backend,
         threadId: stored.threadId,
+        triggeredAlerts,
       });
     }
   }
 
   private bufferStreamedToolInvocationDelta(
     invocation: ThreadToolInvocationRecord,
-  ): void {
+  ): {
+    current: ThreadToolInvocationRecord;
+    previousOutputChars: number;
+  } {
     const accumulated = this.pendingToolInvocationDeltas.get(
       invocation.invocationId,
     );
+    const pending = accumulated
+      ? mergeStreamedToolInvocationDeltas(accumulated, invocation)
+      : invocation;
+    const accumulatedTotal = this.streamedToolInvocationOutputTotals.get(
+      invocation.invocationId,
+    );
+    const current = accumulatedTotal
+      ? mergeStreamedToolInvocationDeltas(accumulatedTotal, invocation)
+      : invocation;
     this.pendingToolInvocationDeltas.set(
       invocation.invocationId,
-      accumulated
-        ? mergeStreamedToolInvocationDeltas(accumulated, invocation)
-        : invocation,
+      pending,
     );
+    this.streamedToolInvocationOutputTotals.set(invocation.invocationId, current);
     this.scheduleStreamedToolInvocationFlush();
+    return {
+      current,
+      previousOutputChars: accumulatedTotal?.outputChars ?? 0,
+    };
+  }
+
+  /**
+   * Replace the threshold-crossing delta's ordinary buffered write with one
+   * durable invocation-plus-alert boundary. Reserving the pending delta before
+   * joining the flush chain prevents a timer drain from stealing it, while the
+   * chain still guarantees that any older window lands first.
+   */
+  private persistStreamedToolInvocationAlertBoundary(params: {
+    alert: ThreadToolInvocationAlert;
+    invocationId: string;
+  }): Promise<ThreadToolInvocationRecord> {
+    const pending = this.pendingToolInvocationDeltas.get(params.invocationId);
+    if (!pending) {
+      return Promise.reject(
+        new Error(`Missing streamed tool invocation boundary ${params.invocationId}`),
+      );
+    }
+    this.pendingToolInvocationDeltas.delete(params.invocationId);
+    const invocation = {
+      ...pending,
+      noisy: true,
+      noisyReason: "large-output",
+      outputState: pending.outputTruncated ? "truncated" as const : "available" as const,
+      source: "live" as const,
+      suggestedPrompt: params.alert.suggestedPrompt,
+    };
+    const persisted = this.toolInvocationDeltaFlushChain.then(async () => {
+      try {
+        if (
+          typeof this.overlayStore.persistThreadToolInvocationBoundary === "function"
+        ) {
+          return await this.overlayStore.persistThreadToolInvocationBoundary({
+            alerts: [params.alert],
+            invocation,
+          });
+        }
+        const stored = await this.overlayStore.upsertThreadToolInvocation({
+          invocation,
+        });
+        if (
+          typeof this.overlayStore.upsertThreadToolInvocationAlert === "function"
+        ) {
+          await this.overlayStore.upsertThreadToolInvocationAlert({
+            alert: params.alert,
+          });
+        }
+        return stored;
+      } catch (error) {
+        this.requeueFailedToolInvocationDelta(invocation);
+        throw error;
+      }
+    });
+    this.toolInvocationDeltaFlushChain = persisted.then(
+      () => undefined,
+      () => undefined,
+    );
+    return persisted;
+  }
+
+  private readVolatileDeferredChecks(
+    invocation: ThreadToolInvocationRecord,
+    now: number,
+  ): ThreadToolInvocationRecord[] {
+    const key = [invocation.backend, invocation.threadId].join(":");
+    const recent = (
+      this.volatileDeferredCheckInvocations.get(key) ?? []
+    ).filter((record) => record.observedAt >= toolAccountingLookbackSince(now));
+    if (recent.length > 0) {
+      this.volatileDeferredCheckInvocations.set(key, recent);
+    } else {
+      this.volatileDeferredCheckInvocations.delete(key);
+    }
+    return recent;
+  }
+
+  private rememberVolatileDeferredCheck(
+    invocation: ThreadToolInvocationRecord,
+    now: number,
+  ): void {
+    const key = [invocation.backend, invocation.threadId].join(":");
+    const recent = this.readVolatileDeferredChecks(invocation, now);
+    this.volatileDeferredCheckInvocations.set(key, [...recent, invocation]);
   }
 
   private scheduleStreamedToolInvocationFlush(): void {

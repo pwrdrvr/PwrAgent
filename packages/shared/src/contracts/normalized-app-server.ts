@@ -17,6 +17,7 @@ import type {
   ThreadPrAutoDispatchPending,
 } from "./navigation";
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "../token-usage-pricing";
+import type { ThreadToolIncidentNoticeState } from "./tool-output-incidents";
 
 export type AppServerBuiltinBackendKind = "codex";
 export type AcpBackendId = `acp:${string}`;
@@ -864,6 +865,12 @@ export type AppServerReadThreadRequest = {
   before?: string;
   limit?: number;
   /**
+   * Return every persisted tool invocation instead of the ordinary 200-row
+   * thread-snapshot cap. Reserved for the thread-scoped incident explorer,
+   * which must agree with explicit full-history analysis coverage.
+   */
+  includeAllToolInvocations?: boolean;
+  /**
    * Reads transcript data without applying PwrAgent's normal selected-thread
    * enrichment writes. Used by inspection-only secondary windows such as the
    * native sub-agent transcript viewer.
@@ -900,6 +907,7 @@ export type ThreadToolInvocationCategory =
   | "build-test"
   | "file-io"
   | "git"
+  | "mcp"
   | "package-manager"
   | "polling"
   | "search"
@@ -914,12 +922,22 @@ export type ThreadToolInvocationStatus =
   | "failed"
   | "cancelled";
 
+export type ThreadToolInvocationSource = "history" | "live";
+
+export type ThreadToolInvocationOutputState =
+  | "available"
+  | "compacted"
+  | "truncated"
+  | "unavailable";
+
 export type ThreadToolInvocationRecord = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId?: string;
   itemId: string;
   invocationId: string;
+  /** Stable finding identity. Historical IDs are deterministic across rescans. */
+  findingId?: string;
   toolName: string;
   normalizedCommand?: string;
   category: ThreadToolInvocationCategory;
@@ -939,8 +957,11 @@ export type ThreadToolInvocationRecord = {
   infoLines: number;
   debugLines: number;
   outputTruncated: boolean;
+  outputState?: ThreadToolInvocationOutputState;
+  source?: ThreadToolInvocationSource;
   noisy: boolean;
   noisyReason?: string;
+  suggestedPrompt?: string;
 };
 
 export type ThreadToolInvocationSummary = {
@@ -962,16 +983,20 @@ export type ThreadToolInvocationAlert = {
   alertId: string;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  kind: "noisy-polling";
-  severity: "warning";
+  turnId?: string;
+  kind: "large-output" | "noisy-polling";
+  severity: "warning" | "critical";
   toolName: string;
   sessionId?: string;
   processId?: string;
   firstObservedAt: number;
   lastObservedAt: number;
   invocationCount: number;
+  invocationIds?: string[];
   totalOutputChars: number;
   estimatedOutputTokens: number;
+  worstInvocationId?: string;
+  worstOutputChars?: number;
   averageIntervalMs?: number;
   message: string;
   suggestedPrompt: string;
@@ -979,7 +1004,20 @@ export type ThreadToolInvocationAlert = {
   updatedAt: number;
 };
 
+export type ThreadToolAnalysisCoverage = {
+  analyzerVersion: string;
+  analyzedAt: number;
+  completeness: "complete" | "partial";
+  entryCount: number;
+  invocationCount: number;
+  missingOutputCount: number;
+  pageCount: number;
+  scannedThrough?: string;
+  explanation?: string;
+};
+
 export type ThreadToolAccounting = {
+  analysis?: ThreadToolAnalysisCoverage;
   alerts: ThreadToolInvocationAlert[];
   invocations: ThreadToolInvocationRecord[];
   summaries: ThreadToolInvocationSummary[];
@@ -1343,6 +1381,13 @@ export type AppServerNotification =
       params: {
         threadId: string;
         toolAccounting: ThreadToolAccounting;
+        /**
+         * The operator's persisted disposition for this thread's incident
+         * card. Carried here so a renderer that just launched knows what was
+         * dismissed or muted before it existed, without a per-thread read.
+         */
+        incidentNotice?: ThreadToolIncidentNoticeState;
+        triggeredAlerts?: ThreadToolInvocationAlert[];
       };
     }
   | {

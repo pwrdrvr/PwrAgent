@@ -5,7 +5,9 @@ import type {
 import { describe, expect, it } from "vitest";
 import {
   buildToolOutputMetrics,
+  detectLargeToolOutput,
   detectNoisyPolling,
+  mergeLargeToolOutputIncident,
   normalizeToolInvocationCommand,
   toolInvocationFromNotification,
 } from "../app-server/tool-invocation-accounting";
@@ -44,6 +46,24 @@ describe("tool invocation accounting", () => {
     ).toEqual({
       category: "shell",
       normalizedCommand: "write stdin session 40500",
+    });
+    expect(
+      normalizeToolInvocationCommand({
+        args: { cell_id: "cell-9", yield_time_ms: 30_000 },
+        toolName: "wait",
+      }),
+    ).toEqual({
+      category: "polling",
+      normalizedCommand: "wait cell cell-9",
+    });
+    expect(
+      normalizeToolInvocationCommand({
+        command: "sleep 30",
+        toolName: "commandExecution",
+      }),
+    ).toEqual({
+      category: "polling",
+      normalizedCommand: "sleep 30",
     });
   });
 
@@ -195,6 +215,53 @@ describe("tool invocation accounting", () => {
     },
   );
 
+  it.each([
+    {
+      label: "structured object result",
+      result: {
+        tabs: [{ title: "x".repeat(4_100) }],
+      },
+    },
+    {
+      label: "MCP content array",
+      result: {
+        content: [{ type: "text", text: "x".repeat(4_100) }],
+      },
+    },
+  ])("accounts a large $label", ({ result }) => {
+    const invocation = toolInvocationFromNotification({
+      backend: "codex",
+      now: 1_800_000_030_000,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "mcp-1",
+            type: "mcpToolCall",
+            server: "playwright",
+            tool: "browser_tabs",
+            status: "completed",
+            arguments: { action: "list" },
+            result,
+          },
+        },
+      } as AppServerNotification,
+    });
+
+    expect(invocation).toMatchObject({
+      outputChars: JSON.stringify(result).length,
+      status: "completed",
+      toolName: "browser_tabs",
+    });
+    expect(detectLargeToolOutput({ current: invocation! })?.alert).toMatchObject({
+      kind: "large-output",
+      severity: "warning",
+      toolName: "browser_tabs",
+    });
+  });
+
   it("marks completed command invocations failed from success false or exit code", () => {
     const successFalseInvocation = toolInvocationFromNotification({
       backend: "codex",
@@ -240,30 +307,145 @@ describe("tool invocation accounting", () => {
     });
   });
 
-  it("detects repeated noisy write_stdin polling against one process session", () => {
+  it("accounts deferred wait function calls as polling", () => {
+    const invocation = toolInvocationFromNotification({
+      backend: "codex",
+      now: 1_800_000_030_000,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "wait-1",
+            type: "functionCall",
+            name: "wait",
+            status: "completed",
+            arguments: { cell_id: "cell-9", yield_time_ms: 30_000 },
+            functionCallOutput: "still running",
+          },
+        },
+      } as AppServerNotification,
+    });
+
+    expect(invocation).toMatchObject({
+      category: "polling",
+      normalizedCommand: "wait cell cell-9",
+      outputChars: 13,
+      sessionId: "cell-9",
+      toolName: "wait",
+      turnId: "turn-1",
+    });
+  });
+
+  it("detects five low-output write_stdin polls against one process session", () => {
     const records = [
-      buildPollingInvocation("tool-1", 1_800_000_000_000, 9_000),
-      buildPollingInvocation("tool-2", 1_800_000_030_000, 8_000),
-      buildPollingInvocation("tool-3", 1_800_000_060_000, 7_000),
+      buildPollingInvocation("tool-1", 1_800_000_000_000, 0),
+      buildPollingInvocation("tool-2", 1_800_000_030_000, 0),
+      buildPollingInvocation("tool-3", 1_800_000_060_000, 0),
+      buildPollingInvocation("tool-4", 1_800_000_090_000, 0),
+      buildPollingInvocation("tool-5", 1_800_000_120_000, 0),
     ];
 
     const detection = detectNoisyPolling({
-      current: records[2]!,
-      now: records[2]!.observedAt,
-      recent: records.slice(0, 2),
+      current: records[4]!,
+      now: records[4]!.observedAt,
+      recent: records.slice(0, 4),
     });
 
-    expect(detection?.invocationIds).toEqual(["tool-1", "tool-2", "tool-3"]);
+    expect(detection?.invocationIds).toEqual([
+      "tool-1",
+      "tool-2",
+      "tool-3",
+      "tool-4",
+      "tool-5",
+    ]);
     expect(detection?.alert).toMatchObject({
-      estimatedOutputTokens: 6_000,
-      invocationCount: 3,
+      estimatedOutputTokens: 0,
+      invocationCount: 5,
       kind: "noisy-polling",
       sessionId: "40500",
-      totalOutputChars: 24_000,
+      totalOutputChars: 0,
     });
     expect(detection?.alert.suggestedPrompt).toContain(
       "create_monitor_delegation",
     );
+  });
+
+  it("groups deferred waits by turn even when each check has a new cell", () => {
+    const records = Array.from({ length: 5 }, (_, index) => ({
+      ...buildPollingInvocation(
+        `wait-${index + 1}`,
+        1_800_000_000_000 + index * 30_000,
+        12,
+      ),
+      normalizedCommand: `wait cell cell-${index + 1}`,
+      sessionId: `cell-${index + 1}`,
+      toolName: "wait",
+      turnId: "turn-1",
+    }));
+
+    const detection = detectNoisyPolling({
+      current: records[4]!,
+      now: records[4]!.observedAt,
+      recent: records.slice(0, 4),
+    });
+
+    expect(detection?.alert).toMatchObject({
+      invocationCount: 5,
+      kind: "noisy-polling",
+      toolName: "wait",
+      turnId: "turn-1",
+    });
+  });
+
+  it("detects repeated shell sleeps as queued checks in one turn", () => {
+    const records = Array.from({ length: 5 }, (_, index) => ({
+      ...buildPollingInvocation(
+        `sleep-${index + 1}`,
+        1_800_000_000_000 + index * 30_000,
+        0,
+      ),
+      normalizedCommand: "sleep 30",
+      sessionId: undefined,
+      toolName: "commandExecution",
+      turnId: "turn-1",
+    }));
+
+    const detection = detectNoisyPolling({
+      current: records[4]!,
+      now: records[4]!.observedAt,
+      recent: records.slice(0, 4),
+    });
+
+    expect(detection?.alert).toMatchObject({
+      invocationCount: 5,
+      kind: "noisy-polling",
+      toolName: "commandExecution",
+      turnId: "turn-1",
+    });
+  });
+
+  it("warns at ten percent of the observed output cap and escalates at the cap", () => {
+    const warning = detectLargeToolOutput({
+      current: buildOutputInvocation(4_000),
+      previousOutputChars: 3_999,
+    });
+    const critical = detectLargeToolOutput({
+      current: buildOutputInvocation(40_000),
+      previousOutputChars: 39_999,
+    });
+
+    expect(warning?.alert).toMatchObject({
+      kind: "large-output",
+      severity: "warning",
+      totalOutputChars: 4_000,
+    });
+    expect(critical?.alert).toMatchObject({
+      kind: "large-output",
+      severity: "critical",
+      totalOutputChars: 40_000,
+    });
   });
 
   it("does not flag non-empty stdin writes as polling", () => {
@@ -280,6 +462,108 @@ describe("tool invocation accounting", () => {
     });
 
     expect(detection).toBeUndefined();
+  });
+
+  it("aggregates cases by turn and keeps a stable worst-case summary", () => {
+    const first = detectLargeToolOutput({
+      current: buildOutputInvocation(8_000),
+      previousOutputChars: 0,
+    })!;
+    const firstIncident = mergeLargeToolOutputIncident({ detection: first });
+    const second = detectLargeToolOutput({
+      current: {
+        ...buildOutputInvocation(12_000),
+        invocationId: "command-2",
+        itemId: "command-2",
+      },
+      previousOutputChars: 0,
+    })!;
+    const secondIncident = mergeLargeToolOutputIncident({
+      current: firstIncident.aggregate,
+      detection: second,
+    });
+
+    expect(secondIncident.shouldNotify).toBe(true);
+    expect(secondIncident.aggregate.alert).toMatchObject({
+      invocationCount: 2,
+      totalOutputChars: 20_000,
+      worstInvocationId: "command-2",
+      worstOutputChars: 12_000,
+    });
+  });
+
+  it("does not rewrite a live warning at terminal completion", () => {
+    const live = detectLargeToolOutput({
+      current: buildOutputInvocation(4_000),
+      previousOutputChars: 0,
+    })!;
+    const incident = mergeLargeToolOutputIncident({ detection: live });
+    const terminal = detectLargeToolOutput({
+      current: { ...buildOutputInvocation(4_000), status: "completed" },
+    })!;
+    const completed = mergeLargeToolOutputIncident({
+      current: incident.aggregate,
+      detection: terminal,
+    });
+
+    expect(completed.shouldNotify).toBe(false);
+  });
+
+  it("aggregates repeated polling cases under the turn and alert kind", () => {
+    const records = Array.from({ length: 6 }, (_, index) => ({
+      ...buildPollingInvocation(
+        `wait-${index + 1}`,
+        1_800_000_000_000 + index * 30_000,
+        (index + 1) * 10,
+      ),
+      normalizedCommand: undefined,
+      sessionId: undefined,
+      toolName: "wait",
+      turnId: "turn-1",
+    }));
+    const firstDetection = detectNoisyPolling({
+      current: records[4]!,
+      now: records[4]!.observedAt,
+      recent: records.slice(0, 4),
+    })!;
+    const firstIncident = mergeLargeToolOutputIncident({
+      detection: firstDetection,
+    });
+    const secondIncident = mergeLargeToolOutputIncident({
+      current: firstIncident.aggregate,
+      detection: detectNoisyPolling({
+        current: records[5]!,
+        now: records[5]!.observedAt,
+        recent: records.slice(0, 5),
+      })!,
+    });
+
+    expect(secondIncident.aggregate.alert).toMatchObject({
+      alertId: "noisy-polling:codex:thread-1:turn-1",
+      invocationCount: 6,
+      totalOutputChars: 210,
+      worstInvocationId: "wait-6",
+      worstOutputChars: 60,
+    });
+  });
+
+  it("reopens a case only when it escalates to critical", () => {
+    const warning = mergeLargeToolOutputIncident({
+      detection: detectLargeToolOutput({
+        current: buildOutputInvocation(4_000),
+        previousOutputChars: 0,
+      })!,
+    });
+    const critical = mergeLargeToolOutputIncident({
+      current: warning.aggregate,
+      detection: detectLargeToolOutput({
+        current: buildOutputInvocation(40_000),
+        previousOutputChars: 4_000,
+      })!,
+    });
+
+    expect(critical.shouldNotify).toBe(true);
+    expect(critical.aggregate.alert.severity).toBe("critical");
   });
 });
 
@@ -312,3 +596,38 @@ function buildPollingInvocation(
     warningLines: 0,
   };
 }
+
+function buildOutputInvocation(outputChars: number): ThreadToolInvocationRecord {
+  return {
+    ...buildPollingInvocation("command-1", 1_800_000_000_000, outputChars, "shell"),
+    estimatedOutputTokens: Math.ceil(outputChars / 4),
+    normalizedCommand: "pnpm test",
+    outputLines: 500,
+    status: "in_progress",
+    toolName: "commandExecution",
+    turnId: "turn-1",
+  };
+}
+
+describe("mcp invocation identity", () => {
+  it("categorizes by the protocol item type and keeps the server", () => {
+    /* The item declares itself: {type: "mcpToolCall", server, tool}. The
+       name-substring fallback filed Context7's `query-docs` under unknown
+       while `list_mcp_resources` matched by accident. */
+    expect(normalizeToolInvocationCommand({
+      itemType: "mcpToolCall",
+      server: "context7",
+      toolName: "query-docs",
+    })).toEqual({
+      category: "mcp",
+      normalizedCommand: "context7/query-docs",
+    });
+  });
+
+  it("still categorizes as mcp when the server is not recorded", () => {
+    expect(normalizeToolInvocationCommand({
+      itemType: "mcpToolCall",
+      toolName: "query-docs",
+    })).toEqual({ category: "mcp", normalizedCommand: "query-docs" });
+  });
+});

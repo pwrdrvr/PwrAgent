@@ -85,7 +85,7 @@ export function ExperimentalSettings(props: {
       <SettingsSection
         eyebrow="Experimental"
         title="Tool Call Tracking"
-        description="Show tool-call volume, command instances, output, and noisy-polling alerts in a dedicated thread panel."
+        description="Show tool-call volume, command instances, output, and replay-risk history in a dedicated thread panel. Safety notices remain active while this is off."
         chip={threadToolAccounting.value ? "On" : "Off"}
         chipKind={threadToolAccounting.value ? "ok" : "default"}
       >
