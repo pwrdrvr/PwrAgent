@@ -3,6 +3,15 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessage,
 } from "@pwragent/shared";
+import {
+  addTranscriptReviewSegmentToIndex,
+  createTranscriptReviewHistoryIndex,
+  deriveTranscriptReviewPresentation,
+  iterateTranscriptReviewHistoryEvents,
+  summarizeTranscriptReviewSegment,
+  type TranscriptReviewHistoryIndex,
+  type TranscriptReviewPresentation,
+} from "./transcript-review-presentation";
 
 export type TranscriptHistoryPage = {
   entries: AppServerThreadEntry[];
@@ -24,12 +33,14 @@ export type LoadedTranscriptHistory = {
 export type TranscriptHistoryIndex = {
   entryIds: Set<string>;
   messageIds: Set<string>;
+  review: TranscriptReviewHistoryIndex;
 };
 
 export function createTranscriptHistoryIndex(): TranscriptHistoryIndex {
   return {
     entryIds: new Set(),
     messageIds: new Set(),
+    review: createTranscriptReviewHistoryIndex(),
   };
 }
 
@@ -81,6 +92,7 @@ export function prependTranscriptHistoryPage(params: {
       && !params.index.entryIds.has(entry.id),
   );
   const messages = messagesForEntries(entries, params.page.replay.messages);
+  const reviewSummary = summarizeTranscriptReviewSegment(entries, messages);
 
   for (const entry of entries) {
     params.index.entryIds.add(entry.id);
@@ -88,6 +100,7 @@ export function prependTranscriptHistoryPage(params: {
   for (const message of messages) {
     params.index.messageIds.add(message.id);
   }
+  addTranscriptReviewSegmentToIndex(params.index.review, reviewSummary);
 
   const previousEntryCount = params.history?.entryCount ?? 0;
   const previousMessageCount = params.history?.messageCount ?? 0;
@@ -138,6 +151,7 @@ type SegmentedArraySource<T> = {
   historyCount: number;
   historyNewestPage: TranscriptHistoryPage | undefined;
   historyPage: TranscriptHistoryPage | undefined;
+  itemOverrides?: ReadonlyMap<string, T>;
   pageItems: (page: TranscriptHistoryPage) => readonly T[];
   tail: readonly T[];
 };
@@ -149,7 +163,7 @@ function* iterateSegmentedArray<T extends { id: string }>(
   while (page) {
     for (const item of source.pageItems(page)) {
       if (!source.excludedHistoryIds.has(item.id)) {
-        yield item;
+        yield source.itemOverrides?.get(item.id) ?? item;
       }
     }
     page = page.newerPage;
@@ -174,7 +188,7 @@ function* iterateSegmentedArrayReverse<T extends { id: string }>(
       if (source.excludedHistoryIds.has(item.id)) {
         continue;
       }
-      yield item;
+      yield source.itemOverrides?.get(item.id) ?? item;
       remainingHistoryItems -= 1;
       if (remainingHistoryItems === 0) {
         return;
@@ -417,16 +431,24 @@ export function combineTranscriptEntries(
   history: LoadedTranscriptHistory | undefined,
   index: TranscriptHistoryIndex | undefined,
   tailEntries: AppServerThreadEntry[],
+  presentation?: Pick<
+    TranscriptReviewPresentation,
+    "excludedHistoryEntryIds" | "historyEntryOverrides"
+  >,
 ): AppServerThreadEntry[] {
   if (!history?.oldestPage || !index) {
     return tailEntries;
   }
   const excludedHistoryIds = historyOverlapIds(tailEntries, index.entryIds);
+  for (const id of presentation?.excludedHistoryEntryIds ?? []) {
+    excludedHistoryIds.add(id);
+  }
   return createSegmentedArray({
     excludedHistoryIds,
     historyCount: history.entryCount,
     historyNewestPage: history.newestPage,
     historyPage: history.oldestPage,
+    itemOverrides: presentation?.historyEntryOverrides,
     pageItems: (page) => page.entries,
     tail: tailEntries,
   });
@@ -436,11 +458,18 @@ export function combineTranscriptMessages(
   history: LoadedTranscriptHistory | undefined,
   index: TranscriptHistoryIndex | undefined,
   tailMessages: AppServerThreadMessage[],
+  presentation?: Pick<
+    TranscriptReviewPresentation,
+    "excludedHistoryMessageIds"
+  >,
 ): AppServerThreadMessage[] {
   if (!history?.oldestPage || !index) {
     return tailMessages;
   }
   const excludedHistoryIds = historyOverlapIds(tailMessages, index.messageIds);
+  for (const id of presentation?.excludedHistoryMessageIds ?? []) {
+    excludedHistoryIds.add(id);
+  }
   return createSegmentedArray({
     excludedHistoryIds,
     historyCount: history.messageCount,
@@ -448,6 +477,24 @@ export function combineTranscriptMessages(
     historyPage: history.oldestPage,
     pageItems: (page) => page.messages,
     tail: tailMessages,
+  });
+}
+
+export function createTranscriptReviewPresentation(params: {
+  history: LoadedTranscriptHistory | undefined;
+  index: TranscriptHistoryIndex | undefined;
+  tailEntries: AppServerThreadEntry[];
+  tailMessages: AppServerThreadMessage[];
+}): TranscriptReviewPresentation {
+  return deriveTranscriptReviewPresentation({
+    historyEvents: params.history && params.index
+      ? iterateTranscriptReviewHistoryEvents(params.index.review)
+      : [],
+    historyIndex:
+      params.index?.review
+      ?? createTranscriptReviewHistoryIndex(),
+    tailEntries: params.tailEntries,
+    tailMessages: params.tailMessages,
   });
 }
 
