@@ -439,24 +439,42 @@ function firstPrereleaseId(tag: string | undefined): string | undefined {
   return typeof parsed.pre[0] === "string" ? parsed.pre[0] : undefined;
 }
 
-function isBetaLatestRelease(
+function isBetaTrainIdentifier(tag: string | undefined): boolean {
+  const id = firstPrereleaseId(tag);
+  return id === "alpha" || id === "beta";
+}
+
+// Beta slots must never advertise a downgrade from Stable Latest. Historical
+// `v1.0.0-beta.N` tags, leftover `v1.1.0-beta.N` after `v1.1.0` is promoted,
+// and same-core alphas all lose to the current Latest and stay off the Beta
+// train. If there is not yet a GitHub Latest, only an alpha (or a beta that
+// has a same-core alpha) counts — a lone `-beta.N` line is the old 1.0 train.
+function isBetaTrainRelease(
   release: GitHubRelease,
   stableLatest: GitHubRelease | undefined,
   releases: GitHubRelease[],
 ): boolean {
-  if (release.prerelease !== true) {
+  if (release.prerelease !== true || !isBetaTrainIdentifier(release.tag_name)) {
     return false;
   }
-  const parsed = parseSemver(release.tag_name);
-  if (!parsed || parsed.pre[0] !== "beta") {
-    return false;
+  if (stableLatest) {
+    const releaseParsed = parseSemver(release.tag_name);
+    const stableParsed = parseSemver(stableLatest.tag_name);
+    return (
+      releaseParsed !== undefined
+      && stableParsed !== undefined
+      && compareSemverCore(releaseParsed.core, stableParsed.core) > 0
+    );
   }
-  const stableCore = parseSemver(stableLatest?.tag_name)?.core;
-  if (stableCore && compareSemverCore(parsed.core, stableCore) > 0) {
+  if (firstPrereleaseId(release.tag_name) === "alpha") {
     return true;
   }
+  const parsed = parseSemver(release.tag_name);
+  if (!parsed) {
+    return false;
+  }
   return releases.some((candidate) => {
-    if (candidate.draft === true) {
+    if (candidate.draft === true || candidate.prerelease !== true) {
       return false;
     }
     const other = parseSemver(candidate.tag_name);
@@ -466,6 +484,17 @@ function isBetaLatestRelease(
       && other.pre[0] === "alpha"
     );
   });
+}
+
+function isBetaLatestRelease(
+  release: GitHubRelease,
+  stableLatest: GitHubRelease | undefined,
+  releases: GitHubRelease[],
+): boolean {
+  return (
+    firstPrereleaseId(release.tag_name) === "beta"
+    && isBetaTrainRelease(release, stableLatest, releases)
+  );
 }
 
 export type SelectedUpdateReleases = {
@@ -480,11 +509,10 @@ export type SelectedUpdateReleases = {
 // Resolve slots by semver identifier and GitHub Latest, not publish order:
 //   - stable latest      → highest GitHub non-prerelease (the 1.0 / normie feed)
 //   - stable prerelease  → max(stable latest, 1.0 `-prerelease` / legacy `-beta`)
-//   - beta latest        → highest `-beta` whose core is ahead of stable,
-//                          or that has a same-core `-alpha` to promote from
-//   - beta prerelease    → max(beta latest, highest `-alpha`)
-// Legacy `v1.0.0-beta.N` GitHub prereleases stay on the stable prerelease
-// track so existing `channel = "prerelease"` configs keep following them.
+//   - beta latest        → highest `-beta` whose core is ahead of Stable Latest
+//   - beta prerelease    → max(beta latest, highest `-alpha` on a newer core)
+// Empty Beta slots stay empty. The Settings Beta control remains selectable
+// so an operator can follow the next `main` tag after a Stable promotion.
 export function selectChannelReleases(
   releases: GitHubRelease[],
 ): SelectedUpdateReleases {
@@ -510,12 +538,9 @@ export function selectChannelReleases(
     }
     return !isBetaLatestRelease(release, stableLatest, publicReleases);
   });
-  const betaPrerelease = byPrecedenceDesc.find((release) => {
-    if (release === betaLatest) {
-      return true;
-    }
-    return firstPrereleaseId(release.tag_name) === "alpha";
-  });
+  const betaPrerelease = byPrecedenceDesc.find((release) =>
+    isBetaTrainRelease(release, stableLatest, publicReleases),
+  );
   return {
     latest: stableLatest,
     prerelease: stablePrerelease,

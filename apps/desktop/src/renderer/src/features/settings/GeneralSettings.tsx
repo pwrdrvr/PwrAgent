@@ -484,7 +484,7 @@ export function GeneralSettings(props: {
         <div className="settings-fields">
           <SettingsField
             label="Release channel"
-            sub="Stable follows the 1.0 train. Beta follows main."
+            sub="Stable is the smoke-checked train. Beta follows main and stays selectable even when its versions are still Unavailable."
             help={releaseHelpText(releaseVersions)}
             error={updateTrain.error}
             source={sourceBadge(updateTrain)}

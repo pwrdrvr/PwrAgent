@@ -690,6 +690,49 @@ describe("selectChannelReleases", () => {
     expect(selected.betaPrerelease?.tag_name).toBe("v1.1.0-beta.1");
   });
 
+  it("does not put shipped 1.0.0-beta tags on the Beta train after 1.0.1", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    const releases = [
+      { tag_name: "v1.0.1", prerelease: false, draft: false },
+      { tag_name: "v1.0.1-prerelease.5", prerelease: true, draft: false },
+      { tag_name: "v1.0.0", prerelease: false, draft: false },
+      { tag_name: "v1.0.0-beta.50", prerelease: false, draft: false },
+      { tag_name: "v1.0.0-beta.48", prerelease: true, draft: false },
+    ];
+    const selected = selectChannelReleases(releases);
+    expect(selected.stableLatest?.tag_name).toBe("v1.0.1");
+    expect(selected.stablePrerelease?.tag_name).toBe("v1.0.1");
+    expect(selected.betaLatest).toBeUndefined();
+    expect(selected.betaPrerelease).toBeUndefined();
+  });
+
+  it("does not advertise leftover same-core betas after that train becomes Latest", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    const releases = [
+      { tag_name: "v1.1.0", prerelease: false, draft: false },
+      { tag_name: "v1.1.0-beta.3", prerelease: true, draft: false },
+      { tag_name: "v1.1.0-alpha.7", prerelease: true, draft: false },
+      { tag_name: "v1.0.1", prerelease: false, draft: false },
+    ];
+    const selected = selectChannelReleases(releases);
+    expect(selected.stableLatest?.tag_name).toBe("v1.1.0");
+    expect(selected.betaLatest).toBeUndefined();
+    expect(selected.betaPrerelease).toBeUndefined();
+  });
+
+  it("keeps a newer main-train alpha on Beta after Stable is promoted", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    const releases = [
+      { tag_name: "v1.1.0", prerelease: false, draft: false },
+      { tag_name: "v1.1.0-beta.3", prerelease: true, draft: false },
+      { tag_name: "v1.2.0-alpha.1", prerelease: true, draft: false },
+    ];
+    const selected = selectChannelReleases(releases);
+    expect(selected.stableLatest?.tag_name).toBe("v1.1.0");
+    expect(selected.betaLatest).toBeUndefined();
+    expect(selected.betaPrerelease?.tag_name).toBe("v1.2.0-alpha.1");
+  });
+
   it("shows an alpha as beta prerelease before a beta exists", async () => {
     const { selectChannelReleases } = await import("../auto-updater");
     const releases = [
