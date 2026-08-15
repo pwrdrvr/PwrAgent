@@ -612,6 +612,33 @@ describe("buildQuitBlockerSnapshot", () => {
     ]);
   });
 
+  it("projects a sub-agent blocker onto its named owning thread", async () => {
+    const { buildQuitBlockerSnapshot } = await import("../quit-manager");
+
+    const snapshot = buildQuitBlockerSnapshot({
+      inProgressThreads: {
+        count: 1,
+        threadIds: ["codex:parent-thread"],
+        subAgentThreadKeys: ["codex:parent-thread"],
+        threadTitles: {
+          "codex:parent-thread": "Deploy recoverable M2 Max runner",
+        },
+      },
+      terminalSessions: { count: 0, threads: [] },
+    });
+
+    expect(snapshot.items).toEqual([
+      {
+        kind: "turn",
+        backend: "codex",
+        threadId: "parent-thread",
+        threadKey: "codex:parent-thread",
+        title: "Deploy recoverable M2 Max runner",
+        isSubAgent: true,
+      },
+    ]);
+  });
+
   it("carries a remote terminal's owning peer onto its row", async () => {
     const { buildQuitBlockerSnapshot } = await import("../quit-manager");
 

@@ -8113,15 +8113,18 @@ export class DesktopBackendRegistry {
           threads,
         });
       }
+      this.rememberThreadListContexts(threads);
       return threads;
     }
 
     if (params.backend && isAcpBackendId(params.backend)) {
-      return this.listInstalledAcpThreads(
+      const threads = await this.listInstalledAcpThreads(
         params.backend,
         params.filter,
         params.archived,
       );
+      this.rememberThreadListContexts(threads);
+      return threads;
     }
 
     const threadLists = await Promise.all([
@@ -8138,9 +8141,11 @@ export class DesktopBackendRegistry {
       this.listAllInstalledAcpThreads(params.filter, params.archived),
     ]);
 
-    return threadLists
+    const threads = threadLists
       .flat()
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    this.rememberThreadListContexts(threads);
+    return threads;
   }
 
   private async filterArchivedThreadsPresentInActiveList(params: {
@@ -11719,6 +11724,8 @@ export class DesktopBackendRegistry {
   getInProgressThreadSnapshotForQuit(): {
     count: number;
     threadIds: string[];
+    subAgentThreadKeys?: string[];
+    threadTitles?: Record<string, string>;
     automationRuns?: Array<{
       agentThreadId: string;
       automationName?: string;
@@ -11728,6 +11735,8 @@ export class DesktopBackendRegistry {
     }>;
   } {
     const threadKeys = new Set<string>();
+    const subAgentThreadKeys = new Set<string>();
+    const threadTitles = new Map<string, string>();
     const automationExecutionThreadKeys = new Set<string>();
     const automationRunsByKey = new Map<
       string,
@@ -11756,9 +11765,17 @@ export class DesktopBackendRegistry {
       }
     }
     const addThread = (backend: AppServerBackendKind, threadId: string): void => {
-      const threadKey = formatQuitThreadKey(backend, threadId);
+      const owner = this.resolveQuitThreadOwner({ backend, threadId });
+      const threadKey = formatQuitThreadKey(owner.backend, owner.threadId);
       if (!automationExecutionThreadKeys.has(threadKey)) {
         threadKeys.add(threadKey);
+        if (owner.isSubAgent) {
+          subAgentThreadKeys.add(threadKey);
+          const title = this.cachedQuitThreadTitle(owner.backend, owner.threadId);
+          if (title) {
+            threadTitles.set(threadKey, title);
+          }
+        }
       }
     };
     for (const threadId of this.backendActiveCodexThreadIds) {
@@ -11802,8 +11819,117 @@ export class DesktopBackendRegistry {
     return {
       count: threadIds.length + automationRuns.length,
       threadIds,
+      ...(subAgentThreadKeys.size > 0
+        ? { subAgentThreadKeys: [...subAgentThreadKeys].sort() }
+        : {}),
+      ...(threadTitles.size > 0
+        ? { threadTitles: Object.fromEntries(threadTitles) }
+        : {}),
       ...(automationRuns.length > 0 ? { automationRuns } : {}),
     };
+  }
+
+  /**
+   * Collapse a worker thread onto the ordinary thread that owns it. Quit is a
+   * thread-level decision: the worker id is intentionally ephemeral and is not
+   * present in PwrAgent's navigation or title index.
+   */
+  private resolveQuitThreadOwner(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): {
+    backend: AppServerBackendKind;
+    isSubAgent: boolean;
+    threadId: string;
+  } {
+    let backend = params.backend;
+    let threadId = params.threadId;
+    let isSubAgent = false;
+    const visited = new Set<string>();
+
+    while (true) {
+      const key = buildThreadIdentityKey(backend, threadId);
+      if (visited.has(key)) {
+        break;
+      }
+      visited.add(key);
+
+      const taskMonitor = [...this.taskMonitorDelegations.values()].find(
+        (record) =>
+          record.backend === backend
+          && record.monitorThreadId === threadId,
+      );
+      const reviewSubAgentCandidate = !taskMonitor
+        ? [...this.activeReviewSubAgents.values()].find(
+            (record) =>
+              record.backend === backend
+              && record.reviewThreadId === threadId,
+          )
+        : undefined;
+      const reviewSubAgent =
+        reviewSubAgentCandidate
+        && (
+          reviewSubAgentCandidate.parentBackend !== backend
+          || reviewSubAgentCandidate.parentThreadId !== threadId
+        )
+          ? reviewSubAgentCandidate
+          : undefined;
+      const nativeParentThreadId =
+        !taskMonitor && !reviewSubAgent && backend === "codex"
+          ? this.codexNativeSubAgentParents.get(threadId)
+          : undefined;
+      const parent = taskMonitor
+        ? {
+            backend: taskMonitor.parentBackend,
+            threadId: taskMonitor.parentThreadId,
+          }
+        : reviewSubAgent
+          ? {
+              backend: reviewSubAgent.parentBackend,
+              threadId: reviewSubAgent.parentThreadId,
+            }
+          : nativeParentThreadId
+            ? { backend: "codex" as const, threadId: nativeParentThreadId }
+            : undefined;
+      if (!parent) {
+        break;
+      }
+
+      if (parent.backend === backend && parent.threadId === threadId) {
+        break;
+      }
+      isSubAgent = true;
+      backend = parent.backend;
+      threadId = parent.threadId;
+    }
+
+    return { backend, isSubAgent, threadId };
+  }
+
+  /** Cached only: quit must never wait for a provider round trip to name work. */
+  private cachedQuitThreadTitle(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): string | undefined {
+    const key = buildThreadIdentityKey(backend, threadId);
+    const remembered =
+      this.observedThreadNames.get(key) ?? this.notificationThreadTitles.get(key);
+    if (remembered?.trim()) {
+      return remembered.trim();
+    }
+    for (const state of this.threadListCache.values()) {
+      const thread = state.threads?.find(
+        (candidate) =>
+          candidate.source === backend
+          && candidate.id === threadId
+          && candidate.titleSource !== "fallback",
+      );
+      const title = thread?.title.trim();
+      if (title) {
+        return title;
+      }
+    }
+    return undefined;
   }
 
   async supportsMessagingPdfTools(params: {
@@ -19244,6 +19370,12 @@ export class DesktopBackendRegistry {
             return [];
           })
         : [];
+    for (const thread of nativeSubAgentThreads) {
+      const parentThreadId = thread.codexNativeSubAgent?.parentThreadId.trim();
+      if (parentThreadId && parentThreadId !== thread.id) {
+        this.codexNativeSubAgentParents.set(thread.id, parentThreadId);
+      }
+    }
     const allThreads = groupCodexNativeSubAgents({
       nativeThreads: nativeSubAgentThreads,
       parentThreads: defaultThreads,
@@ -28906,6 +29038,18 @@ export class DesktopBackendRegistry {
     const projectLabel = readNotificationProjectLabel(record);
     if (projectLabel) {
       this.notificationThreadProjectLabels.set(key, projectLabel);
+    }
+  }
+
+  /** Keep titles already shown in navigation available to time-bounded UI. */
+  private rememberThreadListContexts(
+    threads: readonly AppServerThreadSummary[],
+  ): void {
+    for (const thread of threads) {
+      if (thread.titleSource === "fallback") {
+        continue;
+      }
+      this.rememberThreadNotificationContext(thread.source, thread.id, thread);
     }
   }
 

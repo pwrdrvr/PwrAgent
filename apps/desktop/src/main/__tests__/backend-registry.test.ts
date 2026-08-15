@@ -18637,6 +18637,14 @@ command = "pnpm dev"
       reviewThreadId: "codex-review-child",
       turnId: "turn-1",
     });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [`${acpBackendId}:${parentThreadId}`],
+      subAgentThreadKeys: [`${acpBackendId}:${parentThreadId}`],
+      threadTitles: {
+        [`${acpBackendId}:${parentThreadId}`]: "Grok parent",
+      },
+    });
 
     const approvalResponse = codexClient.emitRequest({
       method: "item/commandExecution/requestApproval",
@@ -20831,6 +20839,10 @@ command = "pnpm dev"
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
     });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-1"],
+    });
 
     await expect
       .poll(async () => {
@@ -21363,6 +21375,19 @@ command = "pnpm dev"
     });
     expect(overlay?.subAgents?.[0]?.task).toEqual(expect.stringContaining("correctness"));
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
+
+    await codexClient.emit({
+      method: "thread/status/changed",
+      params: {
+        threadId: nativeThreadId,
+        status: { type: "active" },
+      },
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-parent"],
+      subAgentThreadKeys: ["codex:thread-parent"],
+    });
 
     await codexClient.emit({
       method: "thread/tokenUsage/updated",
@@ -34033,12 +34058,23 @@ script = "printf setup"
       initializeResult: { methods: ["turn/start"] },
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
+      threads: [
+        {
+          id: "parent-thread",
+          title: "Deploy recoverable M2 Max runner",
+          titleSource: "explicit",
+          threadStatus: "idle",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
     });
+    await registry.listThreads({ backend: "codex" });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -34083,7 +34119,11 @@ script = "printf setup"
 
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
-      threadIds: ["codex:monitor-thread"],
+      threadIds: ["codex:parent-thread"],
+      subAgentThreadKeys: ["codex:parent-thread"],
+      threadTitles: {
+        "codex:parent-thread": "Deploy recoverable M2 Max runner",
+      },
     });
 
     await registry.publishLocalEvent({
