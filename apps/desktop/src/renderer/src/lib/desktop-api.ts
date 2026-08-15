@@ -166,6 +166,8 @@ import type {
   SetDirectoryThreadsCollapsedResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadToolIncidentNoticeRequest,
+  SetThreadToolIncidentNoticeResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetThreadPinRequest,
@@ -900,6 +902,9 @@ export type DesktopApi = {
   setThreadReaction?: (
     request: SetThreadReactionRequest
   ) => Promise<SetThreadReactionResponse>;
+  setThreadToolIncidentNotice?: (
+    request: SetThreadToolIncidentNoticeRequest,
+  ) => Promise<SetThreadToolIncidentNoticeResponse>;
   setThreadPin?: (
     request: SetThreadPinRequest
   ) => Promise<SetThreadPinResponse>;

@@ -691,7 +691,32 @@ describe("App", () => {
           method: "thread/toolAccounting/updated",
           params: {
             threadId: "thread-1",
-            toolAccounting: { alerts: [], invocations: [], summaries: [] },
+            toolAccounting: {
+              alerts: [],
+              invocations: Array.from({ length: 5 }, (_, index) => ({
+                backend: "codex",
+                category: "polling",
+                debugLines: 0,
+                errorLines: 0,
+                estimatedOutputTokens: 0,
+                infoLines: 0,
+                invocationId: `wait-${index}`,
+                itemId: `item-${index}`,
+                noisy: true,
+                noisyReason: "repeat-polling-output",
+                observedAt: 1_000 + index * 30_000,
+                outputChars: 0,
+                outputLines: 0,
+                outputTruncated: false,
+                status: "completed",
+                threadId: "thread-1",
+                toolName: "wait",
+                turnId: "turn-1",
+                updatedAt: 1_000 + index * 30_000,
+                warningLines: 0,
+              })),
+              summaries: [],
+            },
             triggeredAlerts: [{
               alertId: "noisy-polling:codex:thread-1:wait:turn-1",
               backend: "codex",
@@ -719,7 +744,9 @@ describe("App", () => {
     });
 
     expect(screen.getByText("Repeated queued checks")).toBeInTheDocument();
-    expect(screen.getByText(/Five queued checks/)).toBeInTheDocument();
+    /* One consolidated card for the thread, describing the whole pattern,
+       rather than one card per turn that tripped the detector. */
+    expect(screen.getByText(/5 are repeated queued checks/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Examine 5 cases" }));
 
     await waitFor(() => {

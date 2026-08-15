@@ -26,6 +26,7 @@ import type { DesktopGhDiscoverySnapshot } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
 import type { CelestialIconId } from "./celestial";
+import type { ThreadToolIncidentNoticeState } from "./tool-output-incidents";
 import type {
   FederatedThreadRef,
   FederationCapability,
@@ -1856,6 +1857,13 @@ export type ThreadOverlayState = {
    * (e.g., "needs follow-up"), not multi-user voting.
    */
   reactions?: string[];
+  /**
+   * Consolidated tool-output incident state for this thread: when it first
+   * warned, what the operator dismissed, and what they muted. Persisted so an
+   * undismissed incident is still waiting when the thread is reopened, and so
+   * the cost baseline does not reset on restart.
+   */
+  toolIncidentNotice?: ThreadToolIncidentNoticeState;
   /** User-curated position in the pinned section. Undefined means unpinned. */
   pinnedRank?: string;
   /**

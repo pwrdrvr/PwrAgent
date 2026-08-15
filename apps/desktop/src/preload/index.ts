@@ -150,6 +150,8 @@ import type {
   SetThreadPinResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadToolIncidentNoticeRequest,
+  SetThreadToolIncidentNoticeResponse,
   GetGhStatusRequest,
   GhStatus,
   ApproveMessagingPairingRequest,
@@ -641,6 +643,7 @@ import {
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -1649,6 +1652,13 @@ const desktopApi = Object.freeze({
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_REACTION_CHANNEL, request),
+  setThreadToolIncidentNotice: async (
+    request: SetThreadToolIncidentNoticeRequest,
+  ): Promise<SetThreadToolIncidentNoticeResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
+      request,
+    ),
   setThreadPin: async (
     request: SetThreadPinRequest,
   ): Promise<SetThreadPinResponse> =>
