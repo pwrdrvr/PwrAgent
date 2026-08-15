@@ -801,6 +801,11 @@ function DesktopAppShell(props: {
             ?? matchingThread?.linkedDirectories[0]?.label;
           void desktopApi?.openToolOutputIncidentExplorerWindow?.({
             backend: event.backend,
+            /* The event names the owning instance; without it a viewer's
+               explorer reads the peer's thread id locally and finds nothing. */
+            ...(event.federationTarget
+              ? { federationTarget: event.federationTarget }
+              : {}),
             ...(projectLabel ? { projectLabel } : {}),
             threadId: params.threadId,
             title: matchingThread?.title ?? labelForThread(

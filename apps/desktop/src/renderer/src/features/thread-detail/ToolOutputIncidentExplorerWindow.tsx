@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AppServerBackendKind,
+  FederationInstanceId,
+  FederationTarget,
   AppServerReadThreadResponse,
   AppServerThreadActivityDetail,
   ThreadToolAccounting,
@@ -78,6 +80,9 @@ export function ToolOutputIncidentExplorerWindow() {
     try {
       const response = await desktopApi.readThread({
         backend: route.backend,
+        ...(route.federationTarget
+          ? { federationTarget: route.federationTarget }
+          : {}),
         includeAllToolInvocations: true,
         limit: HISTORY_PAGE_LIMIT,
         threadId: route.threadId,
@@ -185,6 +190,9 @@ export function ToolOutputIncidentExplorerWindow() {
     void readInvocationOutput({
       backend: route.backend,
       desktopApi,
+      ...(route.federationTarget
+        ? { federationTarget: route.federationTarget }
+        : {}),
       initial: latest,
       invocation: selected,
       threadId: route.threadId,
@@ -225,6 +233,9 @@ export function ToolOutputIncidentExplorerWindow() {
     try {
       const response = await desktopApi.analyzeThreadToolHistory({
         backend: route.backend,
+        ...(route.federationTarget
+          ? { federationTarget: route.federationTarget }
+          : {}),
         threadId: route.threadId,
       });
       setAccounting(response.accounting);
@@ -950,16 +961,27 @@ function countLaterTripsInTurn(
 
 function readIncidentRoute(): {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   projectLabel?: string;
   threadId: string;
   title: string;
 } | undefined {
-  const [kind, backend, threadId, title, projectLabel] = window.location.hash
-    .replace(/^#/, "")
-    .split("/");
+  const [kind, backend, threadId, title, projectLabel, instanceId] =
+    window.location.hash.replace(/^#/, "").split("/");
   if (kind !== "tool-output-incidents" || !backend || !threadId) return undefined;
+  const owner = instanceId ? decodeURIComponent(instanceId) : "";
   return {
     backend: decodeURIComponent(backend) as AppServerBackendKind,
+    /* Present only for a peer's thread; a local thread carries no target and
+       every read stays on this instance. */
+    ...(owner
+      ? {
+          federationTarget: {
+            scope: "remote" as const,
+            instanceId: owner as FederationInstanceId,
+          },
+        }
+      : {}),
     ...(projectLabel
       ? { projectLabel: decodeURIComponent(projectLabel) }
       : {}),
@@ -1009,6 +1031,7 @@ function groupCases(
 async function readInvocationOutput(params: {
   backend: AppServerBackendKind;
   desktopApi: NonNullable<ReturnType<typeof useDesktopApi>>;
+  federationTarget?: FederationTarget;
   initial: AppServerReadThreadResponse;
   invocation: ThreadToolInvocationRecord;
   threadId: string;
@@ -1028,6 +1051,9 @@ async function readInvocationOutput(params: {
     seen.add(cursor);
     response = await params.desktopApi.readThread({
       backend: params.backend,
+      ...(params.federationTarget
+        ? { federationTarget: params.federationTarget }
+        : {}),
       before: cursor,
       limit: HISTORY_PAGE_LIMIT,
       threadId: params.threadId,

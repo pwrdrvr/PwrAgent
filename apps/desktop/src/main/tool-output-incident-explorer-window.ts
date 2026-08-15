@@ -109,6 +109,13 @@ export function showToolOutputIncidentExplorerWindow(
     encodeURIComponent(threadId),
     encodeURIComponent(title.slice(0, TITLE_MAX_LENGTH)),
     encodeURIComponent(request.projectLabel?.trim() ?? ""),
+    /* The owning instance. A viewer's explorer must read the peer's thread,
+       not a local thread that happens to share the id. */
+    encodeURIComponent(
+      request.federationTarget?.scope === "remote"
+        ? request.federationTarget.instanceId
+        : "",
+    ),
   ].join("/");
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {

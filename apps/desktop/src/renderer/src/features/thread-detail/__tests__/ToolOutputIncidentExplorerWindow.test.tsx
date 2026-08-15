@@ -460,3 +460,54 @@ function buildInvocation(): ThreadToolInvocationRecord {
     warningLines: 1,
   };
 }
+
+describe("ToolOutputIncidentExplorerWindow federation", () => {
+  it("reads and analyzes a peer's thread on the instance that owns it", async () => {
+    /* Without the target every read runs against the local registry, which
+       does not have the peer's thread id — the viewer's explorer came up
+       empty with no explanation. */
+    const readThread = vi.fn(async () => buildMultiTurnResponse());
+    const analyzeThreadToolHistory = vi.fn(async () => ({
+      accounting: { alerts: [], invocations: [], summaries: [] },
+      coverage: {
+        analyzedAt: 1,
+        analyzerVersion: "1",
+        completeness: "complete" as const,
+        entryCount: 0,
+        invocationCount: 0,
+        missingOutputCount: 0,
+        pageCount: 1,
+      },
+    }));
+    installApi({ analyzeThreadToolHistory, readThread });
+    window.location.hash =
+      "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent/peer-instance";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await waitFor(() => expect(readThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        federationTarget: { instanceId: "peer-instance", scope: "remote" },
+      }),
+    ));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Analyze history/ }));
+    await waitFor(() => expect(analyzeThreadToolHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        federationTarget: { instanceId: "peer-instance", scope: "remote" },
+        threadId: "thread-1",
+      }),
+    ));
+  });
+
+  it("leaves a local thread's reads untargeted", async () => {
+    const readThread = vi.fn(async () => buildMultiTurnResponse());
+    installApi({ readThread });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await waitFor(() => expect(readThread).toHaveBeenCalled());
+    expect(readThread).not.toHaveBeenCalledWith(
+      expect.objectContaining({ federationTarget: expect.anything() }),
+    );
+  });
+});

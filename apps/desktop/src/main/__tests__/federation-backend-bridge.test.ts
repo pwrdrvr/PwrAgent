@@ -714,6 +714,7 @@ describe("federation backend bridge", () => {
         threads: [],
       })),
       readThread: vi.fn(),
+      analyzeThreadToolHistory: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
       archiveThread: vi.fn(async () => ({
@@ -2383,6 +2384,7 @@ describe("federation backend bridge", () => {
       backend: {
         listThreads: vi.fn(),
         readThread: vi.fn(),
+        analyzeThreadToolHistory: vi.fn(),
         listSkills: vi.fn(),
         listBackends: vi.fn(),
         startTurn: vi.fn(),
@@ -2460,6 +2462,7 @@ describe("federation backend bridge", () => {
     const backend: FederationBackendOperations = {
       listThreads: vi.fn(),
       readThread: vi.fn(),
+      analyzeThreadToolHistory: vi.fn(),
       listSkills: vi.fn(),
       startTurn: vi.fn(async () => ({
         backend: "codex",
@@ -2608,6 +2611,7 @@ describe("federation backend bridge", () => {
       listThreads: vi.fn(),
       resolveThread: vi.fn(),
       readThread: vi.fn(),
+      analyzeThreadToolHistory: vi.fn(),
       readTranscriptImage: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
@@ -2993,6 +2997,7 @@ describe("federation backend bridge", () => {
         listThreads: vi.fn(),
         resolveThread: vi.fn(),
         readThread: vi.fn(),
+        analyzeThreadToolHistory: vi.fn(),
         readTranscriptImage: vi.fn(),
         listSkills: vi.fn(),
         listBackends: vi.fn(),

@@ -128,6 +128,12 @@ export type SetThreadToolIncidentNoticeResponse = {
 
 export type OpenToolOutputIncidentExplorerWindowRequest = {
   backend: AppServerBackendKind;
+  /**
+   * The instance that owns the thread. A federation viewer's incidents are
+   * the peer's incidents: without this the explorer reads the thread id
+   * against the local registry, which does not have it.
+   */
+  federationTarget?: FederationTarget;
   projectLabel?: string;
   threadId: string;
   title: string;
@@ -139,6 +145,7 @@ export type OpenToolOutputIncidentExplorerWindowResponse = {
 
 export type AnalyzeThreadToolHistoryRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: string;
 };
 
