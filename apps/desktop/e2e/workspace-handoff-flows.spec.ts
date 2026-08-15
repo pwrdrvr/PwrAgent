@@ -130,7 +130,13 @@ async function createHandoffFixture(testId: string): Promise<HandoffFixture> {
                 name: "Replay Codex",
                 version: "1.0.0",
               },
-              methods: ["thread/list", "thread/read", "skills/list", "turn/start"],
+              methods: [
+                "thread/list",
+                "thread/read",
+                "thread/settings/update",
+                "skills/list",
+                "turn/start",
+              ],
             },
           },
           {
@@ -185,6 +191,12 @@ async function createHandoffFixture(testId: string): Promise<HandoffFixture> {
                 hasPreviousPage: false,
               },
             },
+          },
+          {
+            id: "thread-settings-update-1",
+            kind: "response",
+            method: "thread/settings/update",
+            result: {},
           },
         ],
       },
