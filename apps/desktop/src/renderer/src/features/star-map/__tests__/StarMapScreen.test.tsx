@@ -541,6 +541,11 @@ describe("StarMapScreen", () => {
   });
 
   it("does not move a single thread card when the load card opens", async () => {
+    // The invariant under guard lives in the LANES branch: thread slots
+    // are computed as if the load card did not exist. Orbit gives the
+    // load card a fixed slot that provably cannot move cards, so running
+    // this under the orbit default would make the test vacuous.
+    seedLayout("lanes");
     const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
     const desktopApi: DesktopApi = {
       ...buildDesktopApi(),
@@ -1260,6 +1265,10 @@ describe("StarMapScreen", () => {
     // property of the cloud, not of where a card happens to start. Drives
     // it through the real wiring, so a per-card radius would fail here
     // even though the pure geometry tests pass.
+    // The expected drop coordinates were computed under the lanes
+    // geometry; the default lens is orbit now, so pin the layout the
+    // numbers assume rather than inheriting whatever the default is.
+    seedLayout("lanes");
     const committed = new Map<string, { dx: number; dy: number }>();
     const setStarMapCardPosition = vi.fn(
       async (request: {
