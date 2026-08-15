@@ -56,10 +56,13 @@ import {
 } from "../shared/ipc";
 import {
   readBootstrapAppearance,
-  themedTitleBarOverlay,
   themedWindowAdditionalArguments,
-  themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import {
+  installWindowsTitleBarAppearanceSync,
+  themedTitleBarOverlay,
+  themedWindowBackgroundColor,
+} from "./native-appearance";
 import {
   navigationPreferencesAdditionalArguments,
   readBootstrapNavigationPreferences,
@@ -333,6 +336,7 @@ export function createMainWindow(options?: {
     attachWindow: (window: BrowserWindow) => void;
   };
 }): BrowserWindow {
+  installWindowsTitleBarAppearanceSync();
   const preloadPath = getPreloadPath();
   const windowTitle = mainWindowTitle(options?.federationLabel);
   const appearance = readBootstrapAppearance();

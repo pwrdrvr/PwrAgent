@@ -13,7 +13,7 @@
 
 import { BrowserWindow } from "electron";
 import type { BootstrapAppearance } from "./settings/appearance-bootstrap";
-import { themedTitleBarOverlay } from "./settings/appearance-bootstrap";
+import { themedTitleBarOverlay } from "./native-appearance";
 import { APPEARANCE_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
 import { subscribersForChannel } from "./window-channels";
 
