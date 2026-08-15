@@ -4262,7 +4262,8 @@ export function useThreadSessionState(params: {
       const remoteSummaryAdvanced =
         thread.federation?.ref.target.scope === "remote"
         && thread.updatedAt != null
-        && session.hydratedUpdatedAt !== thread.updatedAt;
+        && session.hydratedUpdatedAt !== thread.updatedAt
+        && session.failedHydrationVersion !== hydrationVersion;
       if (remoteSummaryAdvanced) {
         // Federation events are live-only. A selected mounted thread can miss
         // commentary or a request-user-input notification during a transport

@@ -12259,6 +12259,76 @@ describe("useThreadSessionState", () => {
     }));
   });
 
+  it("does not immediately retry a failed active remote rehydration", async () => {
+    const activeTurn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 5_000,
+    };
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          {
+            type: "message",
+            id: "user-1",
+            role: "user",
+            text: "Continue remotely.",
+            turn: activeTurn,
+          },
+        ],
+        hasPreviousPage: false,
+        threadStatus: "active",
+      }))
+      .mockRejectedValue(new Error("Remote federation unavailable"));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const remoteThread = (updatedAt: number): NavigationThreadSummary => ({
+      ...buildThread({ id: "thread-1", updatedAt }),
+      threadStatus: "active",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: {
+            scope: "remote",
+            instanceId: "owner-m5",
+          },
+          threadId: "thread-1",
+        },
+        instanceLabel: "Remote M5",
+        capabilities: [
+          "thread_detail",
+          "event_subscriptions",
+        ],
+      },
+    });
+
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: remoteThread(updatedAt),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    expect(readThread).toHaveBeenCalledTimes(1);
+
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(result.current.error).toBe("Remote federation unavailable");
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(readThread).toHaveBeenCalledTimes(2);
+    expect(result.current.activeTurnId).toBe("turn-1");
+  });
+
   it("cancels missed-completion reconciliation when navigation becomes active again", async () => {
     const activeTurn = {
       id: "turn-1",
