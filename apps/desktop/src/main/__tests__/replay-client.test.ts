@@ -298,4 +298,15 @@ describe("ReplayClient", () => {
       messages: []
     });
   });
+
+  it("supports workspace updates for existing threads", async () => {
+    const client = ReplayClient.fromFixture(buildFixture());
+
+    await expect(
+      client.updateThreadWorkspace({
+        threadId: "thread-1",
+        cwd: "/tmp/pwragent-worktree",
+      }),
+    ).resolves.toEqual({ threadId: "thread-1" });
+  });
 });
