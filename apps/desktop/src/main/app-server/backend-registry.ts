@@ -10615,6 +10615,7 @@ export class DesktopBackendRegistry {
       throw new Error("Tool-output history analysis storage is unavailable.");
     }
 
+    const scanStartedAt = performance.now();
     const pages: AppServerThreadReplay[] = [];
     const seenCursors = new Set<string>();
     let before: string | undefined;
@@ -10648,22 +10649,50 @@ export class DesktopBackendRegistry {
       before = cursor;
     }
 
+    /* Phase timings, because "is this well behaved on the main process" is a
+       measurement and not an argument. The paging loop awaits between pages
+       so it yields; the two phases below do not, and each is one
+       uninterrupted block on the process every window's IPC shares.
+       `analyzeMs` normalizes every entry of every page in one pass;
+       `persistMs` writes every invocation through better-sqlite3, which is
+       synchronous. Whichever is larger is the one worth moving. */
+    const pagesMs = Math.round(performance.now() - scanStartedAt);
+    const analyzeStartedAt = performance.now();
     const analysis = analyzeNormalizedToolReplay({
       backend: request.backend,
       complete,
       pages,
       threadId: request.threadId,
     });
+    const analyzeMs = Math.round(performance.now() - analyzeStartedAt);
+    const persistStartedAt = performance.now();
     await this.overlayStore.persistThreadToolHistoryAnalysis({
       backend: request.backend,
       coverage: analysis.coverage,
       invocations: analysis.invocations,
       threadId: request.threadId,
     });
+    const persistMs = Math.round(performance.now() - persistStartedAt);
+    const readbackStartedAt = performance.now();
     const accounting = await this.overlayStore.readThreadToolAccounting({
       backend: request.backend,
       includeAllInvocations: true,
       threadId: request.threadId,
+    });
+    const readbackMs = Math.round(performance.now() - readbackStartedAt);
+    /* Info, not debug: this is the number that decides whether the scan needs
+       to move off the main process, and it should not require a dev build to
+       read. One line per scan, and a scan is operator-initiated. */
+    backendRegistryLog.info("analyzeThreadToolHistory:timing", {
+      analyzeMs,
+      complete,
+      entryCount: analysis.coverage.entryCount,
+      invocationCount: analysis.coverage.invocationCount,
+      pageCount: pages.length,
+      pagesMs,
+      persistMs,
+      readbackMs,
+      totalMs: Math.round(performance.now() - scanStartedAt),
     });
     await this.emitThreadToolAccountingUpdated({
       backend: request.backend,
