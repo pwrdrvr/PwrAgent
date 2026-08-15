@@ -10,6 +10,7 @@ import {
 } from "react";
 import type {
   AppServerAvailableCommandSummary,
+  AcpThreadRewindPoint,
   AppServerCollaborationModeRequest,
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
@@ -1034,6 +1035,7 @@ export type ThreadViewProps = {
   onLoadOlder: () => Promise<void>;
   onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onRefreshNavigation?: () => Promise<void>;
+  onReloadThread?: () => Promise<void>;
   onLiveTranscriptEntry?: (entry: AppServerThreadEntry) => void;
   onMaterializeLaunchpad?: (
     directoryKey: string,
@@ -1134,6 +1136,22 @@ type BranchDriftDialogState = {
   observedBranch: string;
   reason: "focus" | "turn";
   threadKey: string;
+};
+
+type RewindDialogState = {
+  busy: boolean;
+  error?: string;
+  loading: boolean;
+  points: AcpThreadRewindPoint[];
+  selectedPromptIndex?: number;
+};
+
+type WorkflowBudgetDialogState = {
+  busy: boolean;
+  defaultAgentBudget: string;
+  error?: string;
+  loading: boolean;
+  maxAgentBudget: string;
 };
 
 type PendingTranscriptTurnTarget =
@@ -1319,6 +1337,9 @@ export function ThreadView(props: ThreadViewProps) {
   const onEditedFilesDockChange = props.onEditedFilesDockChange ?? noop;
   const onActionRunsDockChange = props.onActionRunsDockChange ?? noop;
   const onToggleSidebar = props.onToggleSidebar ?? noop;
+  const [rewindDialog, setRewindDialog] = useState<RewindDialogState>();
+  const [workflowBudgetDialog, setWorkflowBudgetDialog] =
+    useState<WorkflowBudgetDialogState>();
   // Transcript element the in-thread find bar (⌘F) searches + highlights.
   const transcriptPanelRef = useRef<HTMLElement>(null);
 
@@ -1342,6 +1363,8 @@ export function ThreadView(props: ThreadViewProps) {
     setLaunchpadSetupProgress(undefined);
     setSetupFailureContinuing(false);
     setSetupFailureContinueError(undefined);
+    setRewindDialog(undefined);
+    setWorkflowBudgetDialog(undefined);
   }, [
     props.selectedLaunchpad?.directoryKey,
     props.pendingForkEnvironmentSetup?.directoryKey,
@@ -1448,6 +1471,196 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadKey = selectedThread
     ? buildThreadIdentityKey(selectedThread.source, selectedThread.id)
     : undefined;
+  const rewindDesktopApi = props.desktopApi;
+  const onRefreshNavigationAfterRewind = props.onRefreshNavigation;
+  const onReloadThreadAfterRewind = props.onReloadThread;
+  const onShowRewindNotice = props.onShowNotice;
+  const openRewindDialog = useCallback(async (): Promise<void> => {
+    if (!selectedThread || selectedThread.source !== "acp:grok") {
+      return;
+    }
+    const listRewindPoints = rewindDesktopApi?.listAcpThreadRewindPoints;
+    if (!listRewindPoints) {
+      setRewindDialog({
+        busy: false,
+        error: "This PwrAgent build does not expose Grok conversation rewind.",
+        loading: false,
+        points: [],
+      });
+      return;
+    }
+    setRewindDialog({ busy: false, loading: true, points: [] });
+    try {
+      const response = await listRewindPoints({
+        backend: "acp:grok",
+        threadId: selectedThread.id,
+      });
+      const points = [...response.rewindPoints].sort(
+        (left, right) => right.promptIndex - left.promptIndex,
+      );
+      setRewindDialog({
+        busy: false,
+        loading: false,
+        points,
+        selectedPromptIndex: points[0]?.promptIndex,
+      });
+    } catch (error) {
+      setRewindDialog({
+        busy: false,
+        error: error instanceof Error ? error.message : String(error),
+        loading: false,
+        points: [],
+      });
+    }
+  }, [rewindDesktopApi, selectedThread]);
+  const executeRewind = useCallback(async (): Promise<void> => {
+    if (
+      !selectedThread
+      || selectedThread.source !== "acp:grok"
+      || rewindDialog?.selectedPromptIndex === undefined
+    ) {
+      return;
+    }
+    const rewindAcpThread = rewindDesktopApi?.rewindAcpThread;
+    if (!rewindAcpThread) {
+      setRewindDialog((current) => current
+        ? { ...current, error: "This PwrAgent build cannot rewind Grok threads." }
+        : current);
+      return;
+    }
+    setRewindDialog((current) => current
+      ? { ...current, busy: true, error: undefined }
+      : current);
+    try {
+      await rewindAcpThread({
+        backend: "acp:grok",
+        threadId: selectedThread.id,
+        targetPromptIndex: rewindDialog.selectedPromptIndex,
+      });
+      await onRefreshNavigationAfterRewind?.();
+      await onReloadThreadAfterRewind?.();
+      setRewindDialog(undefined);
+      onShowRewindNotice?.({
+        id: `grok-rewind:${selectedThread.id}`,
+        message: "The active Grok conversation was rewound. Files were not changed.",
+        title: "Conversation rewound",
+        tone: "success",
+      });
+    } catch (error) {
+      setRewindDialog((current) => current
+        ? {
+            ...current,
+            busy: false,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        : current);
+    }
+  }, [
+    onRefreshNavigationAfterRewind,
+    onReloadThreadAfterRewind,
+    onShowRewindNotice,
+    rewindDesktopApi,
+    rewindDialog?.selectedPromptIndex,
+    selectedThread,
+  ]);
+  const openWorkflowBudgetDialog = useCallback(async (): Promise<void> => {
+    if (!selectedThread || selectedThread.source !== "acp:grok") {
+      return;
+    }
+    const configureWorkflowBudget = rewindDesktopApi?.configureGrokWorkflowBudget;
+    if (!configureWorkflowBudget) {
+      setWorkflowBudgetDialog({
+        busy: false,
+        defaultAgentBudget: "",
+        error: "This PwrAgent build does not expose Grok workflow budgets.",
+        loading: false,
+        maxAgentBudget: "",
+      });
+      return;
+    }
+    setWorkflowBudgetDialog({
+      busy: false,
+      defaultAgentBudget: "",
+      loading: true,
+      maxAgentBudget: "",
+    });
+    try {
+      const response = await configureWorkflowBudget({
+        backend: "acp:grok",
+        threadId: selectedThread.id,
+      });
+      setWorkflowBudgetDialog({
+        busy: false,
+        defaultAgentBudget: String(response.policy.defaultAgentBudget),
+        loading: false,
+        maxAgentBudget: String(response.policy.maxAgentBudget),
+      });
+    } catch (error) {
+      setWorkflowBudgetDialog({
+        busy: false,
+        defaultAgentBudget: "",
+        error: error instanceof Error ? error.message : String(error),
+        loading: false,
+        maxAgentBudget: "",
+      });
+    }
+  }, [rewindDesktopApi, selectedThread]);
+  const saveWorkflowBudget = useCallback(async (): Promise<void> => {
+    if (!selectedThread || selectedThread.source !== "acp:grok" || !workflowBudgetDialog) {
+      return;
+    }
+    const defaultAgentBudget = Number(workflowBudgetDialog.defaultAgentBudget);
+    const maxAgentBudget = Number(workflowBudgetDialog.maxAgentBudget);
+    const validInteger = (value: number): boolean =>
+      Number.isInteger(value) && value >= 1 && value <= 1024;
+    if (!validInteger(defaultAgentBudget) || !validInteger(maxAgentBudget)) {
+      setWorkflowBudgetDialog((current) => current
+        ? { ...current, error: "Budgets must be whole numbers from 1 to 1024." }
+        : current);
+      return;
+    }
+    if (defaultAgentBudget > maxAgentBudget) {
+      setWorkflowBudgetDialog((current) => current
+        ? { ...current, error: "The default cannot exceed the enforced maximum." }
+        : current);
+      return;
+    }
+    const configureWorkflowBudget = rewindDesktopApi?.configureGrokWorkflowBudget;
+    if (!configureWorkflowBudget) {
+      return;
+    }
+    setWorkflowBudgetDialog((current) => current
+      ? { ...current, busy: true, error: undefined }
+      : current);
+    try {
+      await configureWorkflowBudget({
+        backend: "acp:grok",
+        threadId: selectedThread.id,
+        defaultAgentBudget,
+        maxAgentBudget,
+      });
+      setWorkflowBudgetDialog(undefined);
+      onShowRewindNotice?.({
+        id: `grok-workflow-budget:${selectedThread.id}`,
+        message: `New workflows default to ${defaultAgentBudget} child-agent calls, with an enforced maximum of ${maxAgentBudget}.`,
+        title: "Workflow budgets updated",
+        tone: "success",
+      });
+    } catch (error) {
+      setWorkflowBudgetDialog((current) => current
+        ? {
+            ...current,
+            busy: false,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        : current);
+    }
+  }, [
+    onShowRewindNotice,
+    rewindDesktopApi,
+    selectedThread,
+    workflowBudgetDialog,
+  ]);
   const [mcpInventoryRequest, setMcpInventoryRequest] =
     useState<McpInventoryPanelRequest>();
   const mcpInventoryRequestSequence = useRef(0);
@@ -3139,6 +3352,32 @@ export function ThreadView(props: ThreadViewProps) {
         masthead={props.mastheadActions}
         history={props.historyNav}
         starMap={props.starMap}
+        rewind={
+          selectedThread?.source === "acp:grok"
+          && selectedThread.federation?.ref.target.scope !== "remote"
+            ? {
+                disabledReason: props.threadBusy
+                  ? "Wait for the active Grok turn to finish before rewinding"
+                  : undefined,
+                onOpen: () => {
+                  void openRewindDialog();
+                },
+              }
+            : undefined
+        }
+        workflowBudget={
+          selectedThread?.source === "acp:grok"
+          && selectedThread.federation?.ref.target.scope !== "remote"
+            ? {
+                disabledReason: props.threadBusy
+                  ? "Wait for the active Grok turn to finish before changing budgets"
+                  : undefined,
+                onOpen: () => {
+                  void openWorkflowBudgetDialog();
+                },
+              }
+            : undefined
+        }
       />
 
       <div
@@ -3497,6 +3736,212 @@ export function ThreadView(props: ThreadViewProps) {
               : undefined
           }
         />
+      ) : null}
+
+      {rewindDialog ? (
+        <div className="workspace-handoff-modal">
+          <div
+            aria-labelledby="grok-rewind-title"
+            aria-modal="true"
+            className="workspace-handoff-dialog rewind-dialog"
+            role="dialog"
+          >
+            <div className="workspace-handoff-dialog__header">
+              <h2 id="grok-rewind-title">Rewind Grok conversation</h2>
+              <button
+                aria-label="Close rewind dialog"
+                className="workspace-handoff-dialog__close"
+                disabled={rewindDialog.busy}
+                type="button"
+                onClick={() => setRewindDialog(undefined)}
+              >
+                x
+              </button>
+            </div>
+            <p>
+              Choose the prompt to remove. That prompt and every later turn will be
+              discarded from Grok&apos;s active conversation.
+            </p>
+            {rewindDialog.loading ? (
+              <p role="status">Loading rewind points...</p>
+            ) : rewindDialog.points.length > 0 ? (
+              <div
+                aria-label="Grok conversation rewind points"
+                className="rewind-dialog__points"
+                role="radiogroup"
+              >
+                {rewindDialog.points.map((point) => (
+                  <button
+                    aria-checked={
+                      rewindDialog.selectedPromptIndex === point.promptIndex
+                    }
+                    className="rewind-dialog__point"
+                    disabled={rewindDialog.busy}
+                    key={point.promptIndex}
+                    role="radio"
+                    type="button"
+                    onClick={() => setRewindDialog((current) => current
+                      ? { ...current, selectedPromptIndex: point.promptIndex }
+                      : current)}
+                  >
+                    <span>{point.promptPreview}</span>
+                    <small>
+                      Prompt {point.promptIndex + 1}
+                      {point.createdAt
+                        ? ` · ${new Date(point.createdAt).toLocaleString()}`
+                        : ""}
+                    </small>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p role="status">This conversation has no rewind points.</p>
+            )}
+            <p className="rewind-dialog__warning">
+              Files stay exactly as they are. Grok does not provide undo for the
+              discarded conversation branch, and PwrAgent cannot fork ACP threads yet.
+            </p>
+            {rewindDialog.error ? (
+              <p className="rewind-dialog__error" role="alert">
+                {rewindDialog.error}
+              </p>
+            ) : null}
+            <div className="rewind-dialog__actions">
+              <button
+                disabled={rewindDialog.busy}
+                type="button"
+                onClick={() => setRewindDialog(undefined)}
+              >
+                Cancel
+              </button>
+              <button
+                className="rewind-dialog__confirm"
+                disabled={
+                  rewindDialog.busy
+                  || rewindDialog.loading
+                  || rewindDialog.selectedPromptIndex === undefined
+                }
+                type="button"
+                onClick={() => {
+                  void executeRewind();
+                }}
+              >
+                {rewindDialog.busy ? "Rewinding..." : "Rewind conversation"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {workflowBudgetDialog ? (
+        <div className="workspace-handoff-modal">
+          <div
+            aria-labelledby="grok-workflow-budget-title"
+            aria-modal="true"
+            className="workspace-handoff-dialog rewind-dialog"
+            role="dialog"
+          >
+            <div className="workspace-handoff-dialog__header">
+              <h2 id="grok-workflow-budget-title">Grok workflow budgets</h2>
+              <button
+                aria-label="Close workflow budget dialog"
+                className="workspace-handoff-dialog__close"
+                disabled={workflowBudgetDialog.busy}
+                type="button"
+                onClick={() => setWorkflowBudgetDialog(undefined)}
+              >
+                x
+              </button>
+            </div>
+            <p>
+              These limits apply to child-agent calls in model-launched workflows for
+              this resident Grok session.
+            </p>
+            {workflowBudgetDialog.loading ? (
+              <p role="status">Loading workflow budgets...</p>
+            ) : (
+              <div className="workflow-budget-dialog__fields">
+                <label>
+                  <span>Default when omitted</span>
+                  <input
+                    disabled={workflowBudgetDialog.busy}
+                    max={1024}
+                    min={1}
+                    step={1}
+                    type="number"
+                    value={workflowBudgetDialog.defaultAgentBudget}
+                    onChange={(event) => setWorkflowBudgetDialog((current) =>
+                      current
+                        ? {
+                            ...current,
+                            defaultAgentBudget: event.target.value,
+                            error: undefined,
+                          }
+                        : current)}
+                  />
+                  <small>
+                    Used only when a workflow does not pass its own agent_budget.
+                  </small>
+                </label>
+                <label>
+                  <span>Enforced maximum</span>
+                  <input
+                    disabled={workflowBudgetDialog.busy}
+                    max={1024}
+                    min={1}
+                    step={1}
+                    type="number"
+                    value={workflowBudgetDialog.maxAgentBudget}
+                    onChange={(event) => setWorkflowBudgetDialog((current) =>
+                      current
+                        ? {
+                            ...current,
+                            error: undefined,
+                            maxAgentBudget: event.target.value,
+                          }
+                        : current)}
+                  />
+                  <small>
+                    Explicit workflow budgets above this value are rejected, not clamped.
+                  </small>
+                </label>
+              </div>
+            )}
+            <p>
+              Valid range: 1-1024. The policy is session-only and resets when the
+              Grok process restarts; existing workflow runs keep their admitted budget.
+            </p>
+            {workflowBudgetDialog.error ? (
+              <p className="rewind-dialog__error" role="alert">
+                {workflowBudgetDialog.error}
+              </p>
+            ) : null}
+            <div className="rewind-dialog__actions">
+              <button
+                disabled={workflowBudgetDialog.busy}
+                type="button"
+                onClick={() => setWorkflowBudgetDialog(undefined)}
+              >
+                Cancel
+              </button>
+              <button
+                className="button--primary"
+                disabled={
+                  workflowBudgetDialog.busy
+                  || workflowBudgetDialog.loading
+                  || !workflowBudgetDialog.defaultAgentBudget
+                  || !workflowBudgetDialog.maxAgentBudget
+                }
+                type="button"
+                onClick={() => {
+                  void saveWorkflowBudget();
+                }}
+              >
+                {workflowBudgetDialog.busy ? "Saving..." : "Save budgets"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {branchDriftDialog && selectedThread ? (

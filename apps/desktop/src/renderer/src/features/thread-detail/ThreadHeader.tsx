@@ -9,6 +9,8 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { TerminalIcon } from "../../icons/TerminalIcon";
+import { HistoryIcon } from "../../icons/HistoryIcon";
+import { SubAgentsIcon } from "../../icons/SubAgentsIcon";
 import { StarMapIcon } from "../../icons/StarMapIcon";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
 import {
@@ -82,6 +84,14 @@ type ThreadHeaderProps = {
    * have to thread history state; App always supplies it.
    */
   history?: HistoryNavControls;
+  rewind?: {
+    disabledReason?: string;
+    onOpen: () => void;
+  };
+  workflowBudget?: {
+    disabledReason?: string;
+    onOpen: () => void;
+  };
 };
 
 function missingDirectoryPath(thread: NavigationThreadSummary): string | undefined {
@@ -113,6 +123,8 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // slow, edge-clipping native `title`.
   const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const starMapTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const rewindTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const workflowBudgetTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const starMapLabel = "Open Star Map";
   // A collapsed-but-running terminal gets its own affordance: the toggle wears
   // a live dot and says so, otherwise the shell is invisible from here.
@@ -202,6 +214,74 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           </div>
         </div>
         <div className="thread-header__chrome">
+          {props.rewind ? (
+            <button
+              aria-disabled={props.rewind.disabledReason ? true : undefined}
+              aria-label={props.rewind.disabledReason ?? "Rewind Grok conversation"}
+              className={`thread-header__rewind-toggle${
+                props.rewind.disabledReason ? " is-disabled" : ""
+              }`}
+              type="button"
+              onBlur={rewindTooltip.hide}
+              onClick={() => {
+                rewindTooltip.hide();
+                if (!props.rewind?.disabledReason) {
+                  props.rewind?.onOpen();
+                }
+              }}
+              onFocus={(event) =>
+                rewindTooltip.show(
+                  event.currentTarget,
+                  props.rewind?.disabledReason ?? "Rewind conversation",
+                )
+              }
+              onMouseEnter={(event) =>
+                rewindTooltip.show(
+                  event.currentTarget,
+                  props.rewind?.disabledReason ?? "Rewind conversation",
+                )
+              }
+              onMouseLeave={rewindTooltip.hide}
+            >
+              <HistoryIcon size={14} />
+            </button>
+          ) : null}
+          {rewindTooltip.tooltipNode}
+          {props.workflowBudget ? (
+            <button
+              aria-disabled={props.workflowBudget.disabledReason ? true : undefined}
+              aria-label={
+                props.workflowBudget.disabledReason ?? "Configure Grok workflow budgets"
+              }
+              className={`thread-header__rewind-toggle${
+                props.workflowBudget.disabledReason ? " is-disabled" : ""
+              }`}
+              type="button"
+              onBlur={workflowBudgetTooltip.hide}
+              onClick={() => {
+                workflowBudgetTooltip.hide();
+                if (!props.workflowBudget?.disabledReason) {
+                  props.workflowBudget?.onOpen();
+                }
+              }}
+              onFocus={(event) =>
+                workflowBudgetTooltip.show(
+                  event.currentTarget,
+                  props.workflowBudget?.disabledReason ?? "Configure workflow budgets",
+                )
+              }
+              onMouseEnter={(event) =>
+                workflowBudgetTooltip.show(
+                  event.currentTarget,
+                  props.workflowBudget?.disabledReason ?? "Configure workflow budgets",
+                )
+              }
+              onMouseLeave={workflowBudgetTooltip.hide}
+            >
+              <SubAgentsIcon size={14} />
+            </button>
+          ) : null}
+          {workflowBudgetTooltip.tooltipNode}
           {props.layout && !isWindows ? (
             <PanelToggleButtons
               sidebarOpen={props.layout.sidebarOpen}

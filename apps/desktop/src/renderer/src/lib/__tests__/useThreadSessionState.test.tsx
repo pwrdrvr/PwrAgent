@@ -1631,6 +1631,76 @@ describe("useThreadSessionState", () => {
     unmount();
   });
 
+  it("invalidates loaded transcript history after a rewind notification", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [messageEntry({
+          id: "discarded-message",
+          role: "assistant",
+          text: "Discarded branch",
+          createdAt: 1_000,
+        })],
+        hasPreviousPage: false,
+      }))
+      .mockResolvedValue(readThreadResponse({
+        entries: [messageEntry({
+          id: "retained-message",
+          role: "assistant",
+          text: "Retained branch",
+          createdAt: 900,
+        })],
+        hasPreviousPage: false,
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+    await waitForThreadHydration(result);
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Discarded branch",
+    ]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/rewound",
+          params: {
+            threadId: "thread-1",
+            targetPromptIndex: 0,
+            updatedAt: 2_000,
+          },
+        },
+      });
+    });
+    expect(result.current.entries).toEqual([]);
+
+    rerender({ updatedAt: 2_000 });
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Retained branch",
+      ]);
+    });
+  });
+
   it("releases older-history loading when a fresher hydration supersedes it", async () => {
     const initialTail = readThreadResponse({
       entries: [

@@ -13,7 +13,9 @@ export async function admitSteerTurn(
 ): Promise<SteerTurnResponse> {
   try {
     const response = await registry.steerTurn(request);
-    return { ...response, disposition: "steered" };
+    return response.disposition
+      ? response
+      : { ...response, disposition: "steered" };
   } catch (error) {
     if (!request.fallback || !isStaleSteerError(error)) throw error;
     const scheduled = await scheduler.create(

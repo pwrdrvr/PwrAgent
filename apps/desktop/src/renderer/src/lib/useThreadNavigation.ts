@@ -1796,6 +1796,46 @@ function applyThreadNameUpdate(
     : snapshot;
 }
 
+function applyThreadRewindUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    updatedAt: number;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (
+      thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
+      return thread;
+    }
+    const updatedAt = Math.max(thread.updatedAt ?? 0, params.updatedAt);
+    if (thread.updatedAt === updatedAt && thread.threadStatus === "idle") {
+      return thread;
+    }
+    changed = true;
+    return {
+      ...thread,
+      threadStatus: "idle" as const,
+      updatedAt,
+    };
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
 function applyThreadStatusUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -4001,6 +4041,33 @@ export function useThreadNavigation(
             titleSource: "explicit",
           };
         });
+        return;
+      }
+
+      if (method === "thread/rewound") {
+        const { threadId, updatedAt } = event.notification.params as {
+          threadId: string;
+          updatedAt: number;
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadRewindUpdate(current.response, {
+            backend: event.backend,
+            federationTarget: event.federationTarget,
+            threadId,
+            updatedAt,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current && agentEventMatchesThread(event, current, threadId)
+            ? {
+                ...current,
+                threadStatus: "idle",
+                updatedAt: Math.max(current.updatedAt ?? 0, updatedAt),
+              }
+            : current
+        );
+        scheduleRefresh();
         return;
       }
 

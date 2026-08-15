@@ -81,6 +81,19 @@ describe("describeInstalledAcpBackend", () => {
     expect(gemini.capabilities.startReview).toBe(false);
   });
 
+  it("advertises ACP steering only for Grok", () => {
+    const grok = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:grok" as AcpBackendId,
+      registryId: "grok",
+      name: "Grok",
+    });
+    const gemini = describeInstalledAcpBackend(buildInstalledAgent());
+
+    expect(grok.capabilities.steerTurn).toBe(true);
+    expect(gemini.capabilities.steerTurn).toBe(false);
+  });
+
   it("advertises Grok 4.5 reasoning efforts in launchpad options", () => {
     const backend = describeInstalledAcpBackend({
       ...buildInstalledAgent(),

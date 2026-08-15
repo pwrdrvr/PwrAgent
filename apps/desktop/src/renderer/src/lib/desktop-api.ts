@@ -74,6 +74,8 @@ import type {
   DraftAutomationPromptResponse,
   ConfigureFederationTailscaleRequest,
   ConfigureFederationTailscaleResponse,
+  ConfigureGrokWorkflowBudgetRequest,
+  ConfigureGrokWorkflowBudgetResponse,
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -87,6 +89,8 @@ import type {
   StopSubAgentRequest,
   StopSubAgentResponse,
   LatestCodexConfigWarningResponse,
+  ListAcpThreadRewindPointsRequest,
+  ListAcpThreadRewindPointsResponse,
   ListAutomationReplayCandidatesRequest,
   ListAutomationReplayCandidatesResponse,
   OpenAutomationRunWindowRequest,
@@ -288,6 +292,8 @@ import type {
   QueueThreadExecutionModeResponse,
   ReloadCodexMcpConfigRequest,
   ReloadCodexMcpConfigResponse,
+  RewindAcpThreadRequest,
+  RewindAcpThreadResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -694,6 +700,15 @@ export type DesktopApi = {
     request: StopSubAgentRequest,
   ) => Promise<StopSubAgentResponse>;
   steerTurn?: (request: SteerTurnRequest) => Promise<SteerTurnResponse>;
+  listAcpThreadRewindPoints?: (
+    request: ListAcpThreadRewindPointsRequest,
+  ) => Promise<ListAcpThreadRewindPointsResponse>;
+  rewindAcpThread?: (
+    request: RewindAcpThreadRequest,
+  ) => Promise<RewindAcpThreadResponse>;
+  configureGrokWorkflowBudget?: (
+    request: ConfigureGrokWorkflowBudgetRequest,
+  ) => Promise<ConfigureGrokWorkflowBudgetResponse>;
   setThreadExecutionMode?: (
     request: SetThreadExecutionModeRequest
   ) => Promise<SetThreadExecutionModeResponse>;

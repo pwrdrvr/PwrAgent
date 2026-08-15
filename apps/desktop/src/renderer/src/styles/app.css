@@ -1621,7 +1621,8 @@ textarea,
   pointer-events: none;
 }
 
-.thread-header__terminal-toggle {
+.thread-header__terminal-toggle,
+.thread-header__rewind-toggle {
   display: inline-flex;
   width: 24px;
   height: 24px;
@@ -1642,16 +1643,20 @@ textarea,
 }
 
 .thread-header__terminal-toggle,
-.thread-header__terminal-toggle * {
+.thread-header__terminal-toggle *,
+.thread-header__rewind-toggle,
+.thread-header__rewind-toggle * {
   -webkit-app-region: no-drag;
 }
 
-.thread-header__terminal-toggle:hover {
+.thread-header__terminal-toggle:hover,
+.thread-header__rewind-toggle:hover {
   background: var(--bg-row-active);
   color: var(--text-primary);
 }
 
-.thread-header__terminal-toggle:focus-visible {
+.thread-header__terminal-toggle:focus-visible,
+.thread-header__rewind-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -1660,13 +1665,15 @@ textarea,
    stays visible (the terminal exists as a concept) but reads inert, with the
    tooltip carrying the reason. aria-disabled, not disabled, so hover still
    reaches it and the tooltip can explain why. */
-.thread-header__terminal-toggle.is-disabled {
+.thread-header__terminal-toggle.is-disabled,
+.thread-header__rewind-toggle.is-disabled {
   color: var(--text-muted);
   opacity: 0.45;
   cursor: default;
 }
 
-.thread-header__terminal-toggle.is-disabled:hover {
+.thread-header__terminal-toggle.is-disabled:hover,
+.thread-header__rewind-toggle.is-disabled:hover {
   background: transparent;
   color: var(--text-muted);
 }
@@ -23429,6 +23436,141 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 600;
   line-height: 1.35;
   overflow-wrap: break-word;
+}
+
+.rewind-dialog {
+  width: min(560px, 100%);
+}
+
+.rewind-dialog__points {
+  display: grid;
+  max-height: min(320px, 45vh);
+  gap: 6px;
+  margin-top: 14px;
+  overflow-y: auto;
+}
+
+.rewind-dialog__point {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rewind-dialog__point:hover,
+.rewind-dialog__point:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  outline: none;
+}
+
+.rewind-dialog__point[aria-checked="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.rewind-dialog__point small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.workspace-handoff-dialog p.rewind-dialog__warning {
+  color: var(--danger-text);
+}
+
+.workspace-handoff-dialog p.rewind-dialog__error {
+  color: var(--danger-text);
+}
+
+.rewind-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.rewind-dialog__actions button {
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rewind-dialog__actions button:hover:not(:disabled),
+.rewind-dialog__actions button:focus-visible:not(:disabled) {
+  border-color: var(--border-strong);
+  outline: none;
+}
+
+.rewind-dialog__actions .rewind-dialog__confirm {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.rewind-dialog__actions button:disabled,
+.rewind-dialog__point:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.workflow-budget-dialog__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.workflow-budget-dialog__fields label {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workflow-budget-dialog__fields input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.workflow-budget-dialog__fields input:focus-visible {
+  border-color: var(--accent-border);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.workflow-budget-dialog__fields small {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+@media (max-width: 620px) {
+  .workflow-budget-dialog__fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 .workspace-handoff-dialog__summary {

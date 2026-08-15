@@ -1472,6 +1472,14 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/rewound";
+      params: {
+        threadId: string;
+        targetPromptIndex: number;
+        updatedAt: number;
+      };
+    }
+  | {
       method: "thread/executionMode/updated";
       params: {
         threadId: string;

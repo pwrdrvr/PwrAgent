@@ -99,6 +99,11 @@ export const CODEX_MCP_SERVER_REMOVE_CHANNEL = "codex-mcp-server:remove";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
 export const AGENT_STOP_SUB_AGENT_CHANNEL = "agent:stop-sub-agent";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
+export const AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL =
+  "agent:list-acp-thread-rewind-points";
+export const AGENT_REWIND_ACP_THREAD_CHANNEL = "agent:rewind-acp-thread";
+export const AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL =
+  "agent:configure-grok-workflow-budget";
 export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL = "agent:set-thread-execution-mode";
 export const AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL =
   "agent:queue-thread-execution-mode";
