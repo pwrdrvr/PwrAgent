@@ -10,7 +10,7 @@ import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
 } from "../../../lib/native-drag-interaction";
-import { TOOLTIP_HOVER_INTENT_DELAY_MS } from "../../../lib/useViewportTooltip";
+import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 
 // Regression coverage for the unified chip-flow refactor (#188 / plan
 // 2026-05-05-001). The historical bug pattern was:
@@ -672,7 +672,7 @@ describe("ThreadRow chip flow", () => {
     expect(tooltip.querySelector(".pr-status-card__section")).toBeNull();
   });
 
-  it("waits for stationary pointer intent before showing branch and PR tooltips", () => {
+  it("uses a fixed tooltip delay that does not require a stationary pointer", () => {
     vi.useFakeTimers();
     try {
       renderRow({
@@ -698,13 +698,9 @@ describe("ThreadRow chip flow", () => {
       fireEvent.mouseEnter(branchChip);
       expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
-      act(() =>
-        vi.advanceTimersByTime(TOOLTIP_HOVER_INTENT_DELAY_MS - 1),
-      );
+      act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS / 2));
       fireEvent.mouseMove(branchChip, { clientX: 40, clientY: 20 });
-      act(() =>
-        vi.advanceTimersByTime(TOOLTIP_HOVER_INTENT_DELAY_MS - 1),
-      );
+      act(() => vi.advanceTimersByTime((TOOLTIP_HOVER_DELAY_MS / 2) - 1));
       expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
       act(() => vi.advanceTimersByTime(1));
@@ -715,13 +711,9 @@ describe("ThreadRow chip flow", () => {
         name: /Open pwrdrvr\/PwrAgent#123/,
       });
       fireEvent.mouseEnter(prChip);
-      act(() =>
-        vi.advanceTimersByTime(TOOLTIP_HOVER_INTENT_DELAY_MS - 1),
-      );
+      act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS / 2));
       fireEvent.mouseMove(prChip, { clientX: 70, clientY: 20 });
-      act(() =>
-        vi.advanceTimersByTime(TOOLTIP_HOVER_INTENT_DELAY_MS - 1),
-      );
+      act(() => vi.advanceTimersByTime((TOOLTIP_HOVER_DELAY_MS / 2) - 1));
       expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
       act(() => vi.advanceTimersByTime(1));

@@ -189,10 +189,7 @@ export function PrChip(props: PrChipProps) {
           }
         }}
         onMouseEnter={(event) =>
-          tooltipController.showWithHoverIntent(event.currentTarget, card)
-        }
-        onMouseMove={(event) =>
-          tooltipController.showWithHoverIntent(event.currentTarget, card)
+          tooltipController.showAfterDelay(event.currentTarget, card)
         }
         onMouseLeave={tooltipController.hide}
       >

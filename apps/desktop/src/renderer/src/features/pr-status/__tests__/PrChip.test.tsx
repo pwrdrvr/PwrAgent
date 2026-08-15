@@ -2,7 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
-import { TOOLTIP_HOVER_INTENT_DELAY_MS } from "../../../lib/useViewportTooltip";
+import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { PrChip } from "../PrChip";
 import { pullRequestCopyTargets } from "../PrChipContextMenu";
 
@@ -203,7 +203,7 @@ describe("PrChip", () => {
     }));
 
     fireEvent.mouseEnter(chip);
-    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_INTENT_DELAY_MS));
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
 
     const card = document.querySelector(".pr-status-card") as HTMLElement;
     expect(card).not.toBeNull();
@@ -234,7 +234,7 @@ describe("PrChip", () => {
     expect(document.querySelector(".pr-status-card")).toBeNull();
 
     fireEvent.mouseEnter(chip);
-    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_INTENT_DELAY_MS));
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
     expect(document.querySelector(".pr-status-card")).not.toBeNull();
 
     fireEvent.mouseLeave(chip);
