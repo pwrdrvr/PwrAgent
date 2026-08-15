@@ -230,9 +230,17 @@ describe("Tangerine Terminal theme contract", () => {
           + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,\n"
           + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading",
       ),
-    ).toMatch(/padding-right:\s*44px;/);
+    ).toMatch(/padding-right:\s*46px;/);
     expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
-      /right:\s*9px;[\s\S]*gap:\s*4px;/,
+      /right:\s*11px;[\s\S]*gap:\s*4px;/,
+    );
+    // The cluster's 11px offset and the reserve inequality's first term
+    // both derive from the card's inline padding (10px + 1px border), so
+    // that literal belongs in the same pin set: shrink the card padding
+    // and 11/46 stay green while the kebab drifts off the content edge
+    // and the pin loses its clearance.
+    expect(extractRuleBody(css, ".thread-row")).toMatch(
+      /padding:\s*4px 10px;/,
     );
     // Not extractRuleBody: the bare selector would match the shared
     // pin+kebab chrome rule first; this anchors the standalone width
@@ -243,6 +251,15 @@ describe("Tangerine Terminal theme contract", () => {
     // in-flow button carried: at the XS title notch a chipless card
     // computes to 23.75px, so covering the card alone is not enough.
     expect(extractRuleBody(css, ".thread-row__open")).toMatch(
+      /min-height:\s*24px;/,
+    );
+
+    // The directory summary button is a 2.5.8 target too. The third
+    // density pass took its block padding to 2px (content ~20px), so
+    // this min-height is the ONLY thing holding the button — and the
+    // selected-directory highlight box that shares its chrome — at the
+    // floor. Padding is free to move; this is not.
+    expect(extractRuleBody(css, ".directory-row__summary")).toMatch(
       /min-height:\s*24px;/,
     );
   });

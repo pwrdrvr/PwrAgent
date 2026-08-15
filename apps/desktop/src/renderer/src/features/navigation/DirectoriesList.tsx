@@ -406,8 +406,11 @@ function getDirectoryRowLinkedDirectoryMode(
 }
 
 /**
- * One activity count in a directory header: the indicator alone, then the
- * number. The words ("active", "to review") moved into the tooltip — a
+ * One activity count in a directory header: the number, then the indicator
+ * (mark last, so the trailing count's mark sits at one x on every row — see
+ * the inline comment; when both counts render, the leading scanner still
+ * moves with the review digits). The words ("active", "to review") moved
+ * into the tooltip — a
  * directory row is a dense line already carrying a chevron, a folder glyph,
  * an elided path, and a new-thread button, and two trailing phrases pushed
  * the label it belongs to down to a few characters.
@@ -447,8 +450,15 @@ function DirectoryCount(props: {
         }
         onMouseLeave={tooltip.hide}
       >
-        {props.indicator}
+        {/* Count BEFORE the mark. The meta block is right-aligned, so
+            the mark (cookie / scanner) is the last thing before the row
+            edge and lands at one x on every directory; the count is
+            variable-width (1–3 digits) and grows LEFT into empty space.
+            Mark-first put the cookie left of the digits, so it zigzagged
+            row to row with the digit count — a ragged column of the one
+            glyph the eye scans the rail for. */}
         <span>{props.count}</span>
+        {props.indicator}
       </span>
       {tooltip.tooltipNode}
     </>

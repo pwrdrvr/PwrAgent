@@ -4076,7 +4076,14 @@ textarea,
      boundary (which would antialias-shift the visual goldens). At the
      md notch (13px) this resolves to 1. */
   top: round(calc(4px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 12px), 1px);
-  right: 9px;
+  /* 11px (from 9): the card's own right inset is 10px padding + 1px
+     border, so 9 put the kebab's edge 2px inside the border while its
+     6px corner radius sat against the card's 8px one — the two curves
+     read as touching. 11 lines the cluster's right edge up with the
+     content edge every chip and the timestamp already respect, giving
+     the same visible air the row's left side keeps. The pinned-row
+     heading reserve below derives from this offset — move both. */
+  right: 11px;
   z-index: 3;
   display: flex;
   align-items: center;
@@ -4115,9 +4122,11 @@ textarea,
 }
 
 .thread-row__overflow-button {
+  /* 26px is the pinned cluster-side literal the pinned-row heading
+     reserve derives from, and the 24px-tall button reads as a
+     slightly wider pill next to the square 24px add-reaction chip on
+     purpose. */
   width: 26px;
-  font-size: 13px;
-  font-weight: 700;
 }
 
 /* The hover-only add-reaction chip rides in the same cluster; match the
@@ -4163,18 +4172,18 @@ textarea,
    for them; the transition on `.thread-row__heading` glides the dock
    in step with the cluster's 120ms fade.
 
-   44px derivation, all border-box worst case. The cluster zone spans
-   69px from the card's right border: 9px offset + 26px kebab + 4px gap
-   + the add-reaction chip's RENDERED width of 30px (its `min-width:
-   24px` is a floor — the 14px smiley plus the base chip's 0 8px
-   padding is what actually paints). The pin's border box must clear
-   that zone: card padding 10px + header gap 12px + timestamp + reserve
-   − the pin's 3px `margin-right: -3px` overhang ≥ 69px + 4px air. The
-   narrowest timestamp ("1h"/"2d") measures ~13px at its fixed 12px
-   font, giving reserve ≥ 41px; 44px leaves 3px of real slack at every
-   title-size notch. The cluster-side literals in this arithmetic are
-   pinned by theme-contract next to this rule's own pin, so a cluster
-   resize fails a test instead of silently re-covering the pin.
+   46px derivation, all border-box worst case. The cluster zone spans
+   71px from the card's right border: 11px offset + 26px kebab + 4px
+   gap + the add-reaction chip's RENDERED width of 30px (its
+   `min-width: 24px` is a floor — the 14px smiley plus the base chip's
+   0 8px padding is what actually paints). The pin's border box must
+   clear that zone: card padding 10px + header gap 12px + timestamp +
+   reserve − the pin's 3px `margin-right: -3px` overhang ≥ 71px + 4px
+   air. The narrowest timestamp ("1h"/"2d") measures ~13px at its fixed
+   12px font, giving reserve ≥ 43px; 46px leaves 3px of real slack at
+   every title-size notch. The cluster-side literals in this arithmetic
+   are pinned by theme-contract next to this rule's own pin, so a
+   cluster resize fails a test instead of silently re-covering the pin.
 
    Scoped by the row's `--pinned` modifier (set by ThreadRow from the
    same expression that renders the pin — a plain class match instead
@@ -4183,7 +4192,7 @@ textarea,
    cluster's reveal states in the fade/reveal rules above (the cluster
    pin's states are absent because pinned rows never render it).
    Deliberate over-reserve: on a surface without a reaction handler the
-   revealed cluster is kebab-only (35px zone) and the rest-state gap
+   revealed cluster is kebab-only (37px zone) and the rest-state gap
    already clears it, so the reserve protects nothing there — accepted,
    since every production surface wires reactions and a narrower
    conditional would re-add the `:has()` scan this class avoids. */
@@ -4191,7 +4200,7 @@ textarea,
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading {
-  padding-right: 44px;
+  padding-right: 46px;
 }
 
 .thread-row__pin-button:hover,
@@ -5497,10 +5506,16 @@ textarea,
      section instead of only the sticky header. Plan 2026-05-09-002
      Unit K follow-up. */
   position: relative;
-  /* 2px top (was 4): with the hairline gone and the summary's own
-     min-height slack, 4px pushed collapsed directories ~20px of blank
-     label-to-label; 2px + the 2px list gap + the summary slack lands
-     at ~10px. */
+  /* 2px top pad is the ONLY seam between directory rows: unlike the
+     thread lanes, `.directory-list` zeroes the `.sidebar-list` gap
+     (see that rule), so this pad is doing seam work, not rhythm — it
+     keeps a selected summary's accent border and its hovered
+     neighbour's fill from kissing, and keeps the 3px drop-indicator
+     bar (`.is-drop-target-*`, at -3px) landing between rows instead
+     of inside the row above. Third density pass: the collapsed-lens
+     pitch is 24px summary (min-height-bound at every notch ≤13px) +
+     this 2px = 26px, down from ~29; the summary's block padding
+     (4→2) is what closed the gap, not this pad. */
   padding: 2px 0 0;
 }
 
@@ -5611,16 +5626,25 @@ textarea,
      matched the masthead's button height, but rows are list entries
      and don't need that hit-target generosity; at 32 the leftover
      slack was still the largest blank band in the collapsed
-     Directories lens. 24 fits the 16px title line + block padding
-     with ~3px of slack, and the 24px launchpad cluster still fills
-     the row exactly on hover. */
+     Directories lens. 24 is the WCAG 2.5.8 target floor for the whole
+     summary button, not a content fit: the content box is ~20px (16px
+     line + 2px block padding each side), so this floor is what binds
+     the collapsed-lens pitch and the selected-directory highlight box
+     at every title notch ≤13px. Pinned by theme-contract; the padding
+     below is free to move, this is not. The 24px launchpad cluster
+     fills the row exactly on hover. */
   min-height: 24px;
   /* Lateral inset: 4px on the left sits before the disclosure chevron
      and folder icon; 6px on the right still clears the selected-row
      border for the meta block (attention count pill) without stranding
      the count away from the launchpad icon beside it. Was 10px, the
-     largest share of an 18px count-to-icon gap. */
-  padding: 4px 6px 4px 4px;
+     largest share of an 18px count-to-icon gap.
+
+     Block inset 2px (from 4) in the third density pass: at 4px the
+     summary alone was 24–28px and label-to-label measured ~29px for a
+     16px label — the loosest rhythm left in the lens. At 2px the
+     min-height floor binds and the pitch is 24 + the row's 2px seam. */
+  padding: 2px 6px 2px 4px;
 }
 
 .directory-row__summary:focus,
@@ -5896,10 +5920,15 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 8px;
-  /* Bottom tightened 14 → 10 with the inter-card spacing pass so the
-     seam between an expanded directory's last thread and the next
-     directory header tracks the tighter row rhythm. */
-  padding: 8px 0 10px 0;
+  /* Bottom tightened 14 → 10 → 4 across the density passes so the seam
+     between an expanded directory's last thread (or its "DIRECTORY
+     THREADS" divider) and the next directory header tracks the tighter
+     row rhythm: 4px here + the next `.directory-row`'s 2px top pad =
+     6px, the same band the thread cards keep between each other
+     (`.directory-list` zeroes the sidebar-list gap, so the row pad is
+     the only other term). Top 8 → 4 for the mirror seam under the
+     sticky header. */
+  padding: 4px 0 4px 0;
 }
 
 .directory-row__threads {
@@ -5976,8 +6005,17 @@ textarea,
   background: transparent;
   font-family: inherit;
   cursor: pointer;
+  /* Symmetric 4px above and below in the shipped configuration. The
+     base `.recents-pinned-divider` margin is 2px each side and the
+     pinned lane's list gap adds 2px below — but ABOVE the divider the
+     always-mounted `.directory-row__pin-drop-boundary` (reorder is
+     wired on every production surface) cancels that gap with its
+     `margin-block: -2px`, so the base rule alone lands 2px above vs
+     4px below. Override the top to 4px so both seams read as one band,
+     a hair wider than the 2px the cards keep between each other — it
+     is a section label, not a card. (The bottom stays at the base 2px:
+     with the list gap it totals 4.) */
   margin-top: 4px;
-  margin-bottom: 2px;
 }
 
 .directory-row__thread-divider:hover:not(:disabled) {
