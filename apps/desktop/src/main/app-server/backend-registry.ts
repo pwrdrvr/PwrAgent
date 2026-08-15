@@ -11859,13 +11859,21 @@ export class DesktopBackendRegistry {
           record.backend === backend
           && record.monitorThreadId === threadId,
       );
-      const reviewSubAgent = !taskMonitor
+      const reviewSubAgentCandidate = !taskMonitor
         ? [...this.activeReviewSubAgents.values()].find(
             (record) =>
               record.backend === backend
               && record.reviewThreadId === threadId,
           )
         : undefined;
+      const reviewSubAgent =
+        reviewSubAgentCandidate
+        && (
+          reviewSubAgentCandidate.parentBackend !== backend
+          || reviewSubAgentCandidate.parentThreadId !== threadId
+        )
+          ? reviewSubAgentCandidate
+          : undefined;
       const nativeParentThreadId =
         !taskMonitor && !reviewSubAgent && backend === "codex"
           ? this.codexNativeSubAgentParents.get(threadId)
@@ -11877,7 +11885,7 @@ export class DesktopBackendRegistry {
           }
         : reviewSubAgent
           ? {
-              backend: reviewSubAgent.backend,
+              backend: reviewSubAgent.parentBackend,
               threadId: reviewSubAgent.parentThreadId,
             }
           : nativeParentThreadId
@@ -11887,10 +11895,10 @@ export class DesktopBackendRegistry {
         break;
       }
 
-      isSubAgent = true;
       if (parent.backend === backend && parent.threadId === threadId) {
         break;
       }
+      isSubAgent = true;
       backend = parent.backend;
       threadId = parent.threadId;
     }

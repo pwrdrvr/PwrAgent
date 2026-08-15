@@ -18637,6 +18637,14 @@ command = "pnpm dev"
       reviewThreadId: "codex-review-child",
       turnId: "turn-1",
     });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [`${acpBackendId}:${parentThreadId}`],
+      subAgentThreadKeys: [`${acpBackendId}:${parentThreadId}`],
+      threadTitles: {
+        [`${acpBackendId}:${parentThreadId}`]: "Grok parent",
+      },
+    });
 
     const approvalResponse = codexClient.emitRequest({
       method: "item/commandExecution/requestApproval",
@@ -20830,6 +20838,10 @@ command = "pnpm dev"
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-1"],
     });
 
     await expect
