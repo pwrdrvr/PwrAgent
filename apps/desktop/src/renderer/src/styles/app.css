@@ -883,14 +883,25 @@ textarea,
   -webkit-app-region: drag;
 }
 
-/* Left cluster: wordmark + menu + action buttons (all interactive → no-drag).
-   The spacer between left and right clusters stays draggable. */
+/* Left/right clusters hold interactive chrome; the spacer between them stays
+   draggable. Apply no-drag to every descendant, not only the cluster boxes.
+   Chromium can otherwise turn a descendant back into native title-bar drag
+   hit-testing — including the transparent bridge between a hover trigger and
+   its popover. On Windows that swallows pointer movement through the bridge,
+   so the wrapper receives mouseleave and closes before the pointer reaches the
+   menu. This also keeps icon/text pixels as interactive as button padding. */
+.app-titlebar__left,
+.app-titlebar__left *,
+.app-titlebar__right,
+.app-titlebar__right * {
+  -webkit-app-region: no-drag;
+}
+
 .app-titlebar__left {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  -webkit-app-region: no-drag;
 }
 
 .app-titlebar__spacer {
@@ -902,7 +913,6 @@ textarea,
 .app-titlebar__right {
   display: flex;
   align-items: center;
-  -webkit-app-region: no-drag;
 }
 
 /* Wordmark — reuse the sidebar brand tokens (--text-primary / --accent), sized

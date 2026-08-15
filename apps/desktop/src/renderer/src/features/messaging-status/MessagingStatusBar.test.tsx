@@ -7,13 +7,59 @@ import type {
   MessagingPlatformStatusEvent,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { HOVER_TRANSITION_GRACE_MS } from "../../lib/useHoverTransitionGrace";
 import { MessagingStatusBar } from "./MessagingStatusBar";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("MessagingStatusBar", () => {
+  it("keeps a hover popover mounted across the title-bar boundary grace period", async () => {
+    const statuses = [
+      {
+        changedAt: 1000,
+        health: "enabled",
+        platform: "telegram",
+      },
+    ] satisfies MessagingPlatformStatus[];
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => statuses),
+      onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
+    };
+
+    render(<MessagingStatusBar desktopApi={desktopApi} />);
+    await screen.findByRole("button", { name: /Telegram/ });
+    const statusBar = screen.getByRole("group", {
+      name: "Messaging platform status",
+    });
+    vi.useFakeTimers();
+
+    fireEvent.pointerEnter(statusBar);
+    expect(
+      screen.getByRole("dialog", { name: "Messaging platforms" }),
+    ).toBeInTheDocument();
+    fireEvent.pointerLeave(statusBar);
+    expect(
+      screen.getByRole("dialog", { name: "Messaging platforms" }),
+    ).toBeInTheDocument();
+
+    fireEvent.pointerEnter(
+      screen.getByRole("dialog", { name: "Messaging platforms" }),
+    );
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS));
+    expect(
+      screen.getByRole("dialog", { name: "Messaging platforms" }),
+    ).toBeInTheDocument();
+
+    fireEvent.pointerLeave(statusBar);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS));
+    expect(
+      screen.queryByRole("dialog", { name: "Messaging platforms" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders Feishu / Lark with the brand icon instead of the text fallback", async () => {
     const statuses = [
       {
