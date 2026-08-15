@@ -98,7 +98,7 @@ export type PwrAgentFederatedThreadControlResult = {
   backend: StopThreadToolArgs["backend"];
   threadId: StopThreadToolArgs["threadId"];
   turnId: string;
-  disposition: "interrupted" | "steered";
+  disposition: "interrupted" | "queued" | "steered";
   idempotentReplay?: boolean;
   instanceId: string;
   instanceLabel: string;

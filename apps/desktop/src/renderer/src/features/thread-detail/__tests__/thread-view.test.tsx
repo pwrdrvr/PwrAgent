@@ -251,6 +251,7 @@ describe("ThreadView", () => {
       backend: "acp:grok" as const,
       threadId: "grok-thread",
       targetPromptIndex: 0,
+      updatedAt: 2000,
     }));
     const onReloadThread = vi.fn(async () => undefined);
     render(

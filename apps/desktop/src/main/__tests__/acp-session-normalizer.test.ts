@@ -43,6 +43,26 @@ describe("AcpSessionReplayNormalizer", () => {
     );
   });
 
+  it("clears incomplete local history after an authoritative provider rewind", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "user_message_chunk",
+        content: "Only locally observed prompt",
+      },
+    });
+
+    const replay = normalizer.rewindToPromptIndex(3, {
+      missingTarget: "clear",
+    });
+
+    expect(replay.entries).toEqual([]);
+    expect(replay.messages).toEqual([]);
+    expect(replay.threadStatus).toBe("idle");
+  });
+
   it("keeps inferred provider work inside user-message boundaries", () => {
     const replay = inferAcpReplayTurns({
       entries: [

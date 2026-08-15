@@ -322,7 +322,10 @@ export class AcpSessionReplayNormalizer {
     return this.replay();
   }
 
-  rewindToPromptIndex(targetPromptIndex: number): AppServerThreadReplay {
+  rewindToPromptIndex(
+    targetPromptIndex: number,
+    options: { missingTarget?: "clear" | "throw" } = {},
+  ): AppServerThreadReplay {
     if (!Number.isInteger(targetPromptIndex) || targetPromptIndex < 0) {
       throw new Error("ACP rewind target must be a non-negative prompt index");
     }
@@ -340,7 +343,14 @@ export class AcpSessionReplayNormalizer {
       promptIndex += 1;
     }
     if (boundary === this.entries.length && promptIndex <= targetPromptIndex) {
-      throw new Error(`ACP rewind target ${targetPromptIndex} was not found`);
+      if (options.missingTarget !== "clear") {
+        throw new Error(`ACP rewind target ${targetPromptIndex} was not found`);
+      }
+      // The provider is authoritative after it accepts an irreversible
+      // rewind. If local history was incomplete, retaining any of it would
+      // risk showing turns that Grok has already discarded. Clear the replay
+      // and let session/load hydrate the provider's retained branch.
+      boundary = 0;
     }
 
     this.entries = this.entries.slice(0, boundary);
@@ -484,6 +494,7 @@ export class AcpSessionReplayNormalizer {
       } else if (kind === "pwragent_rewind_marker") {
         this.rewindToPromptIndex(
           readNumber(update.update, "targetPromptIndex") ?? -1,
+          { missingTarget: "clear" },
         );
       } else {
         // An unrecognized kind is worth a breadcrumb — it is how new protocol

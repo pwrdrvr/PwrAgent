@@ -3469,6 +3469,7 @@ const TRANSIENT_MESSAGE_SETTLEMENT_METHODS = new Set([
   "item/mcpToolCall/progress",
   "item/started",
   "thread/compacted",
+  "thread/rewound",
   "turn/cancelled",
   "turn/completed",
   "turn/failed",
@@ -3504,7 +3505,10 @@ function transitionTransientMessagesAtBoundary(
   current: ThreadSessionEntry,
   notification: AppServerNotification
 ): ThreadSessionEntry {
-  if (notification.method === "thread/compacted") {
+  if (
+    notification.method === "thread/compacted"
+    || notification.method === "thread/rewound"
+  ) {
     if (
       !current.transientMessage &&
       current.settledTransientMessages.length === 0
@@ -3547,6 +3551,7 @@ function transitionTransientMessagesAtBoundary(
   if (
     notification.method !== "turn/started" &&
     notification.method !== "thread/compacted" &&
+    notification.method !== "thread/rewound" &&
     statusType !== "idle" &&
     notificationTurnId &&
     transientTurnId &&
@@ -5366,7 +5371,10 @@ export function useThreadSessionState(params: {
           }
         }
 
-        if (event.notification.method === "thread/compacted") {
+        if (
+          event.notification.method === "thread/compacted"
+          || event.notification.method === "thread/rewound"
+        ) {
           delete loadedHistoryIndexesRef.current[targetThreadKey];
           return {
             ...current,

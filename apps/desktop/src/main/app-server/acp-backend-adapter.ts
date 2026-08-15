@@ -1417,7 +1417,7 @@ export class AcpBackendAdapter {
     backend: AcpBackendId;
     sessionId: string;
     targetPromptIndex: number;
-  }): Promise<{ promptText?: string }> {
+  }): Promise<{ promptText?: string; updatedAt: number }> {
     const session = this.requireIdleGrokRewindSession(
       params.backend,
       params.sessionId,

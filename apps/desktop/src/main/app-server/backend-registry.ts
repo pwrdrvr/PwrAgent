@@ -13565,7 +13565,8 @@ export class DesktopBackendRegistry {
           threadId: steered.threadId,
           requestId: request.requestId,
           turnId: steered.turnId,
-          disposition: "steered",
+          disposition:
+            steered.disposition === "queued" ? "queued" : "steered",
         };
       } catch (error) {
         if (error instanceof ActiveTurnControlPreconditionError) {
@@ -13649,6 +13650,35 @@ export class DesktopBackendRegistry {
       },
     });
     return params;
+  }
+
+  private assertExpectedAcpSteerTurn(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    expectedTurnId: string;
+  }): void {
+    const active = this.getActiveTurnForThread(params);
+    if (!active) {
+      throw new Error(`Thread ${params.threadId} has no active turn to steer`);
+    }
+    if (active.turnId !== params.expectedTurnId) {
+      throw new Error(
+        `expected active turn id \`${params.expectedTurnId}\` but found \`${active.turnId}\``,
+      );
+    }
+  }
+
+  private assertIdleAcpThreadMutation(params: {
+    action: string;
+    backend: AcpBackendId;
+    threadId: string;
+  }): void {
+    const active = this.getActiveTurnForThread(params);
+    if (active) {
+      throw new Error(
+        `Wait for active turn ${active.turnId} to finish before ${params.action}`,
+      );
+    }
   }
 
   async interruptTurn(params: {
@@ -14155,15 +14185,37 @@ export class DesktopBackendRegistry {
   async rewindAcpThread(
     request: RewindAcpThreadRequest,
   ): Promise<RewindAcpThreadResponse> {
-    const result = await this.acpBackend.rewindSession({
+    const result = await this.acpSessionPromptLocks.run(
+      executionModeQueueKey(request.backend, request.threadId),
+      async () => {
+        this.assertIdleAcpThreadMutation({
+          backend: request.backend,
+          threadId: request.threadId,
+          action: "rewinding",
+        });
+        return await this.acpBackend.rewindSession({
+          backend: request.backend,
+          sessionId: request.threadId,
+          targetPromptIndex: request.targetPromptIndex,
+        });
+      },
+    );
+    await this.emit({
       backend: request.backend,
-      sessionId: request.threadId,
-      targetPromptIndex: request.targetPromptIndex,
+      notification: {
+        method: "thread/rewound",
+        params: {
+          threadId: request.threadId,
+          targetPromptIndex: request.targetPromptIndex,
+          updatedAt: result.updatedAt,
+        },
+      },
     });
     return {
       backend: request.backend,
       threadId: request.threadId,
       targetPromptIndex: request.targetPromptIndex,
+      updatedAt: result.updatedAt,
       ...(result.promptText ? { promptText: result.promptText } : {}),
     };
   }
@@ -14171,12 +14223,22 @@ export class DesktopBackendRegistry {
   async configureGrokWorkflowBudget(
     request: ConfigureGrokWorkflowBudgetRequest,
   ): Promise<ConfigureGrokWorkflowBudgetResponse> {
-    const policy = await this.acpBackend.configureWorkflowBudget({
-      backend: request.backend,
-      sessionId: request.threadId,
-      defaultAgentBudget: request.defaultAgentBudget,
-      maxAgentBudget: request.maxAgentBudget,
-    });
+    const policy = await this.acpSessionPromptLocks.run(
+      executionModeQueueKey(request.backend, request.threadId),
+      async () => {
+        this.assertIdleAcpThreadMutation({
+          backend: request.backend,
+          threadId: request.threadId,
+          action: "changing workflow budgets",
+        });
+        return await this.acpBackend.configureWorkflowBudget({
+          backend: request.backend,
+          sessionId: request.threadId,
+          defaultAgentBudget: request.defaultAgentBudget,
+          maxAgentBudget: request.maxAgentBudget,
+        });
+      },
+    );
     return {
       backend: request.backend,
       threadId: request.threadId,
@@ -14191,6 +14253,64 @@ export class DesktopBackendRegistry {
     const input = await enrichLocalFileInputs(params.input, {
       privateStorageRoots: this.localFilePrivateStorageRoots,
     });
+    if (isAcpBackendId(params.backend)) {
+      const acpBackend = params.backend;
+      const promptPayload = inputToAcpPrompt(input);
+      if (!promptPayload) {
+        throw new Error("ACP steering requires text or image input");
+      }
+      const pendingMessageContextId = await this.registerPendingThreadMessageContext({
+        backend: params.backend,
+        input,
+        threadId: params.threadId,
+        origin: messageOrigin,
+        text: extractFirstMeaningfulTextInput(params.input),
+      });
+      const text = promptPayload.prompt
+        || promptPayload.promptContent.flatMap((block) =>
+          block.type === "text" && block.text.trim() ? [block.text] : []
+        )[0]
+        || "Additional image context.";
+      let result: { delivery: "currentTurn" | "nextTurn" };
+      try {
+        result = await this.acpSessionPromptLocks.run(
+          executionModeQueueKey(acpBackend, params.threadId),
+          async () => {
+            this.assertExpectedAcpSteerTurn({
+              backend: acpBackend,
+              threadId: params.threadId,
+              expectedTurnId: params.expectedTurnId,
+            });
+            return await this.acpBackend.steerSession({
+              backend: acpBackend,
+              content: promptPayload.promptContent,
+              interjectionId: params.requestId,
+              sessionId: params.threadId,
+              text,
+            });
+          },
+        );
+      } catch (error) {
+        this.forgetPendingThreadMessageContext(pendingMessageContextId);
+        throw error;
+      }
+      if (result.delivery === "currentTurn") {
+        this.bindPendingThreadMessageContext(
+          pendingMessageContextId,
+          params.expectedTurnId,
+        );
+      }
+      // A next-turn steer has no turn id yet. Leave its message context
+      // unbound so the next turn/started or matching user item can claim its
+      // origin and image parts instead of attaching them to the finished turn.
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        turnId: params.expectedTurnId,
+        disposition:
+          result.delivery === "nextTurn" ? "queued" : "steered",
+      };
+    }
     const pendingMessageContextId = await this.registerPendingThreadMessageContext({
       backend: params.backend,
       input,
@@ -14199,40 +14319,6 @@ export class DesktopBackendRegistry {
       origin: messageOrigin,
       text: extractFirstMeaningfulTextInput(params.input),
     });
-    if (isAcpBackendId(params.backend)) {
-      const promptPayload = inputToAcpPrompt(input);
-      if (!promptPayload) {
-        this.forgetPendingThreadMessageContext(pendingMessageContextId);
-        throw new Error("ACP steering requires text or image input");
-      }
-      const text = promptPayload.prompt
-        || promptPayload.promptContent.flatMap((block) =>
-          block.type === "text" && block.text.trim() ? [block.text] : []
-        )[0]
-        || "Additional image context.";
-      try {
-        await this.acpBackend.steerSession({
-          backend: params.backend,
-          content: promptPayload.promptContent,
-          interjectionId: params.requestId,
-          sessionId: params.threadId,
-          text,
-        });
-      } catch (error) {
-        this.forgetPendingThreadMessageContext(pendingMessageContextId);
-        throw error;
-      }
-      this.bindPendingThreadMessageContext(
-        pendingMessageContextId,
-        params.expectedTurnId,
-      );
-      return {
-        backend: params.backend,
-        threadId: params.threadId,
-        turnId: params.expectedTurnId,
-        disposition: "steered",
-      };
-    }
     const steerWithClient = async (
       client: BackendClient,
     ): Promise<{ threadId: string; turnId: string }> => {
@@ -18900,6 +18986,7 @@ export class DesktopBackendRegistry {
       method === "thread/name/updated" ||
       method === "thread/parent/cleared" ||
       method === "thread/parent/set" ||
+      method === "thread/rewound" ||
       method === "thread/started" ||
       method === "thread/status/changed" ||
       method === "thread/subAgents/updated" ||
@@ -25227,7 +25314,7 @@ export class DesktopBackendRegistry {
             backend: AppServerBackendKind;
             threadId: string;
             turnId: string;
-            disposition: "interrupted" | "steered";
+            disposition: "interrupted" | "queued" | "steered";
             idempotentReplay?: boolean;
           }
         | undefined;
@@ -25358,7 +25445,8 @@ export class DesktopBackendRegistry {
             ok: true,
             data: {
               ...base,
-              disposition: "steered",
+              disposition:
+                result.disposition === "queued" ? "queued" : "steered",
               promptPreview: truncateThreadInspectionText(request.args.prompt, 240),
             },
           };

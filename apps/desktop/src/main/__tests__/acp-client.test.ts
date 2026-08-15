@@ -168,7 +168,10 @@ describe("AcpAgentClient", () => {
     await expect(client.rewindSession({
       sessionId: session.sessionId,
       targetPromptIndex: 0,
-    })).resolves.toEqual({ promptText: "Write a breakfast poem" });
+    })).resolves.toEqual({
+      promptText: "Write a breakfast poem",
+      updatedAt: 2000,
+    });
 
     expect(transport.requests.slice(-2)).toEqual([
       {
@@ -188,6 +191,41 @@ describe("AcpAgentClient", () => {
       },
     ]);
     expect(client.readReplay(session.sessionId).entries).toEqual([]);
+  });
+
+  it("keeps provider rewind success authoritative when local history is incomplete", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "grok-session" },
+      "_x.ai/rewind/execute": {
+        success: true,
+        prompt_text: "Provider-only prompt",
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 3000,
+    });
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      mcpServers: "none",
+    });
+
+    await expect(client.rewindSession({
+      sessionId: session.sessionId,
+      targetPromptIndex: 4,
+    })).resolves.toEqual({
+      promptText: "Provider-only prompt",
+      updatedAt: 3000,
+    });
+    expect(client.readReplay(session.sessionId).entries).toEqual([]);
+    expect(store.getSession("acp:grok", session.sessionId)).toMatchObject({
+      status: "idle",
+      updatedAt: 3000,
+    });
   });
 
   it("tracks non-turn RPCs until their transport requests settle", async () => {

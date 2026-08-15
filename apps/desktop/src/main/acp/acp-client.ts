@@ -427,7 +427,7 @@ export class AcpAgentClient {
   async rewindSession(params: {
     sessionId: string;
     targetPromptIndex: number;
-  }): Promise<{ promptText?: string }> {
+  }): Promise<{ promptText?: string; updatedAt: number }> {
     return await this.withOperation(async () => {
       const result = asRecord(await this.options.transport.request(
         "_x.ai/rewind/execute",
@@ -446,6 +446,7 @@ export class AcpAgentClient {
       }
       this.normalizerFor(params.sessionId).rewindToPromptIndex(
         params.targetPromptIndex,
+        { missingTarget: "clear" },
       );
       const receivedAt = this.now();
       this.appendHistoryUpdate(params.sessionId, receivedAt, {
@@ -454,6 +455,7 @@ export class AcpAgentClient {
       });
       this.updateSessionStatus(params.sessionId, "idle", receivedAt);
       return {
+        updatedAt: receivedAt,
         promptText:
           readStringValue(result, "prompt_text")
           ?? readStringValue(result, "promptText"),

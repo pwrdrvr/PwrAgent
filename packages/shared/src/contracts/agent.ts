@@ -366,7 +366,7 @@ export type ControlActiveTurnResponse =
       threadId: ThreadIdentifier;
       requestId: string;
       turnId: string;
-      disposition: "interrupted" | "steered";
+      disposition: "interrupted" | "queued" | "steered";
       idempotentReplay?: boolean;
     }
   | {
@@ -529,7 +529,7 @@ export type SteerTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId: string;
-  disposition?: "steered" | "scheduled";
+  disposition?: "queued" | "steered" | "scheduled";
   scheduledAction?: ScheduledThreadAction;
 };
 
@@ -564,6 +564,7 @@ export type RewindAcpThreadResponse = {
   backend: AcpBackendId;
   threadId: ThreadIdentifier;
   targetPromptIndex: number;
+  updatedAt: number;
   promptText?: string;
 };
 
