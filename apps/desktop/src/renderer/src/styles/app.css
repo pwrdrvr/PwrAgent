@@ -4617,8 +4617,8 @@ textarea,
      past that it becomes an absolute date ("Aug 8") that carries a space.
      As a plain flex item that date shrank to its min-content width ("Aug")
      in a narrow sidebar and wrapped, so an older row stood a blank line
-     taller than every row beside it. The heading is `flex: 1 1 auto` with
-     an ellipsized title and absorbs the squeeze on its own. */
+     taller than every row beside it. The heading is a 1-1-auto flex item
+     with an ellipsized title and absorbs the squeeze on its own. */
   flex: 0 0 auto;
   white-space: nowrap;
   transition: opacity 120ms ease;

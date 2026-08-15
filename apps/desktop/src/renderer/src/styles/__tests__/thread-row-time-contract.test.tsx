@@ -19,10 +19,11 @@ import { ThreadRow } from "../../features/navigation/ThreadRow";
  * title while every younger row beside it stays one line tall.
  *
  * Wrapping is a layout outcome and jsdom does not lay out CSS, so this
- * asserts the two halves separately: a render test that the ≥7-day label
- * really is breakable (the precondition — if the format ever became one
- * token the CSS assertions would be measuring nothing), and the
- * declarations that keep the flex item from shrinking or breaking.
+ * asserts the halves separately: render tests that the ≥7-day label is the
+ * absolute date and that the date is breakable text (the precondition — if
+ * the format ever became one token the CSS assertions would be measuring
+ * nothing), then the declarations that keep the flex item from shrinking
+ * or breaking.
  */
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(path.resolve(testDir, "../app.css"), "utf8");
@@ -47,6 +48,12 @@ function declaration(body: string, property: string): string | undefined {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The shape ThreadRow's own module-level formatter is built with. */
+const ABSOLUTE_DATE_OPTIONS: Intl.DateTimeFormatOptions = {
+  month: "short",
+  day: "numeric",
+};
 
 const baseThread: NavigationThreadSummary = {
   id: "thread-time",
@@ -81,11 +88,29 @@ afterEach(() => {
 });
 
 describe("thread row timestamp line contract", () => {
-  it("renders a breakable absolute date once a thread ages past a week", () => {
-    // The precondition the CSS below exists for. `Intl.DateTimeFormat`
-    // with `{ month: "short", day: "numeric" }` produces two tokens in
-    // en-US ("Aug 8"), and other locales are no safer.
-    expect(renderTime(Date.now() - 30 * DAY_MS)).toMatch(/\s/);
+  it("switches to an absolute date once a thread ages past a week", () => {
+    const updatedAt = Date.now() - 30 * DAY_MS;
+
+    // Deliberately compared against the machine's own locale, the way the
+    // row formats it — the claim is "past a week the label is the absolute
+    // date", not what that date looks like here.
+    expect(renderTime(updatedAt)).toBe(
+      new Intl.DateTimeFormat(undefined, ABSOLUTE_DATE_OPTIONS).format(updatedAt)
+    );
+  });
+
+  it("formats that date as text a line break can split", () => {
+    // The precondition the CSS below exists for, pinned to en-US rather
+    // than read off the row: the row formats in the OPERATOR's locale, and
+    // asserting breakability against the test machine's `LANG` would fail
+    // on a ja-JP or zh-CN box, where the same options render "8月8日" with
+    // nothing to break. The wrap is real wherever the date has a space,
+    // which is most locales, so the rule below is not en-US-only.
+    expect(
+      new Intl.DateTimeFormat("en-US", ABSOLUTE_DATE_OPTIONS).format(
+        Date.now() - 30 * DAY_MS
+      )
+    ).toMatch(/\s/);
   });
 
   it("renders single-token relative labels while a thread is younger", () => {
