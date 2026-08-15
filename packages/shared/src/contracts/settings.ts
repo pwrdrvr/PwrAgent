@@ -54,6 +54,12 @@ export type DesktopUpdateChannel = (typeof DESKTOP_UPDATE_CHANNELS)[number];
 
 export const DESKTOP_UPDATE_CHANNEL_DEFAULT: DesktopUpdateChannel = "latest";
 
+export const DESKTOP_UPDATE_TRAINS = ["stable", "beta"] as const;
+
+export type DesktopUpdateTrain = (typeof DESKTOP_UPDATE_TRAINS)[number];
+
+export const DESKTOP_UPDATE_TRAIN_DEFAULT: DesktopUpdateTrain = "stable";
+
 export const DESKTOP_APPEARANCE_THEMES = ["system", "dark", "light"] as const;
 export type DesktopAppearanceTheme = (typeof DESKTOP_APPEARANCE_THEMES)[number];
 export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";
@@ -371,6 +377,7 @@ export type DesktopImageUploadSettingsSnapshot = {
 
 export type DesktopUpdateSettingsSnapshot = {
   channel: DesktopSettingsValue<DesktopUpdateChannel>;
+  train: DesktopSettingsValue<DesktopUpdateTrain>;
 };
 
 export type DesktopIntegratedTerminalSettingsSnapshot = {
@@ -953,6 +960,7 @@ export type DesktopSettingsConfigPatch = {
   };
   updates?: {
     channel?: DesktopUpdateChannel;
+    train?: DesktopUpdateTrain;
   };
   integratedTerminal?: {
     windowsShell?: DesktopIntegratedTerminalWindowsShell;
@@ -1532,6 +1540,12 @@ export function isDesktopUpdateChannel(
   value: string,
 ): value is DesktopUpdateChannel {
   return DESKTOP_UPDATE_CHANNELS.includes(value as DesktopUpdateChannel);
+}
+
+export function isDesktopUpdateTrain(
+  value: string,
+): value is DesktopUpdateTrain {
+  return DESKTOP_UPDATE_TRAINS.includes(value as DesktopUpdateTrain);
 }
 
 export function isDesktopAppearanceTheme(

@@ -122,6 +122,7 @@ describe("desktop settings contracts", () => {
       },
       updates: {
         channel: { value: "latest", source: "default" },
+        train: { value: "stable", source: "default" },
       },
       integratedTerminal: {
         windowsShell: { value: "auto", source: "default" },

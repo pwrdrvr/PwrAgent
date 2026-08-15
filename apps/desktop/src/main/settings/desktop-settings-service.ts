@@ -27,6 +27,7 @@ import type {
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
   DesktopUpdateChannel,
+  DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
@@ -49,6 +50,7 @@ import {
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
+  DESKTOP_UPDATE_TRAIN_DEFAULT,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
   MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
@@ -723,6 +725,7 @@ export class DesktopSettingsService {
       },
       updates: {
         channel: this.resolveUpdateChannelValue(config.updates?.channel),
+        train: this.resolveUpdateTrainValue(config.updates?.train),
       },
       integratedTerminal: {
         windowsShell: this.resolveIntegratedTerminalWindowsShellValue(
@@ -1201,6 +1204,11 @@ export class DesktopSettingsService {
 
   resolveUpdateChannel(): DesktopUpdateChannel {
     return this.resolveUpdateChannelValue(this.readConfig().config.updates?.channel)
+      .value;
+  }
+
+  resolveUpdateTrain(): DesktopUpdateTrain {
+    return this.resolveUpdateTrainValue(this.readConfig().config.updates?.train)
       .value;
   }
 
@@ -1954,6 +1962,15 @@ export class DesktopSettingsService {
   ): DesktopSettingsValue<DesktopUpdateChannel> {
     return {
       value: configValue ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
+      source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveUpdateTrainValue(
+    configValue: DesktopUpdateTrain | undefined,
+  ): DesktopSettingsValue<DesktopUpdateTrain> {
+    return {
+      value: configValue ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
   }

@@ -202,6 +202,10 @@ describe("DesktopSettingsService", () => {
       value: "prerelease",
       source: "config",
     });
+    expect(snapshot.updates.train).toEqual({
+      value: "stable",
+      source: "default",
+    });
     expect(snapshot.federation).toMatchObject({
       mode: { value: "gateway", source: "config" },
       listenHost: { value: "127.0.0.1", source: "config" },
@@ -316,33 +320,51 @@ describe("DesktopSettingsService", () => {
       value: "latest",
       source: "default",
     });
+    expect(initial.updates.train).toEqual({
+      value: "stable",
+      source: "default",
+    });
     expect(service.resolveUpdateChannel()).toBe("latest");
+    expect(service.resolveUpdateTrain()).toBe("stable");
 
     await service.writeConfigPatch({
       updates: {
         channel: "prerelease",
+        train: "beta",
       },
     });
 
     const afterPrerelease = fs.readFileSync(configPath, "utf8");
     expect(afterPrerelease).toContain("[updates]");
     expect(afterPrerelease).toContain('channel = "prerelease"');
+    expect(afterPrerelease).toContain('train = "beta"');
     expect((await service.readSettings()).updates.channel).toEqual({
       value: "prerelease",
       source: "config",
     });
+    expect((await service.readSettings()).updates.train).toEqual({
+      value: "beta",
+      source: "config",
+    });
     expect(service.resolveUpdateChannel()).toBe("prerelease");
+    expect(service.resolveUpdateTrain()).toBe("beta");
 
     await service.writeConfigPatch({
       updates: {
         channel: "latest",
+        train: "stable",
       },
     });
 
     const afterDefault = fs.readFileSync(configPath, "utf8");
     expect(afterDefault).not.toContain("channel");
+    expect(afterDefault).not.toContain("train");
     expect((await service.readSettings()).updates.channel).toEqual({
       value: "latest",
+      source: "default",
+    });
+    expect((await service.readSettings()).updates.train).toEqual({
+      value: "stable",
       source: "default",
     });
   });

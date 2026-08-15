@@ -86,8 +86,13 @@ export type AppUpdateReleaseInfo = {
   unavailableReason?: string;
 };
 
-export type AppUpdateReleaseVersions = {
+export type AppUpdateReleaseSlotVersions = {
   latest: AppUpdateReleaseInfo;
   prerelease: AppUpdateReleaseInfo;
+};
+
+export type AppUpdateReleaseVersions = {
+  stable: AppUpdateReleaseSlotVersions;
+  beta: AppUpdateReleaseSlotVersions;
   fetchedAt: number;
 };

@@ -410,6 +410,37 @@ describe("desktopSettingsPatchToEdits — updates", () => {
       },
     ]);
   });
+
+  it("writes the beta update train", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        updates: {
+          train: "beta",
+        },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["updates", "train"],
+        value: "beta",
+      },
+    ]);
+  });
+
+  it("removes the update train when saving the default", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        updates: {
+          train: "stable",
+        },
+      }),
+    ).toEqual([
+      {
+        op: "delete",
+        path: ["updates", "train"],
+      },
+    ]);
+  });
 });
 
 describe("desktopSettingsPatchToEdits — messaging attachments", () => {
