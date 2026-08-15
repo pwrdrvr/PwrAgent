@@ -2620,6 +2620,7 @@ type TaskMonitorDelegationRecord = {
 };
 
 type ReviewSubAgentRecord = {
+  /** Backend running the review child. */
   backend: AppServerBackendKind;
   createdAt: number;
   displayText: string;
@@ -2627,6 +2628,8 @@ type ReviewSubAgentRecord = {
   latestUsage?: TaskMonitorUsageSnapshot;
   mode: "managed" | "native";
   model?: string;
+  /** Backend owning the thread being reviewed. */
+  parentBackend: AppServerBackendKind;
   parentThreadId: string;
   serviceTier?: string;
   reviewThreadId: string;
@@ -12908,12 +12911,13 @@ export class DesktopBackendRegistry {
       this.reservedAcpStartThreadKeys.delete(acpReviewReservationKey);
     }
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
-      backend: params.backend,
+      backend: reviewBackend,
       createdAt: Date.now(),
       displayText: reviewTaskLabel(params.target),
       ...(modelSettings.fastMode !== undefined ? { fastMode: modelSettings.fastMode } : {}),
       ...(modelSettings.model ? { model: modelSettings.model } : {}),
       mode: managedMode ? "managed" : "native",
+      parentBackend: params.backend,
       parentThreadId: result.threadId,
       reviewThreadId: result.reviewThreadId || result.threadId,
       ...(modelSettings.serviceTier ? { serviceTier: modelSettings.serviceTier } : {}),
@@ -12930,7 +12934,9 @@ export class DesktopBackendRegistry {
     await this.persistReviewSubAgent(reviewSubAgentRecord);
     backendRegistryLog.info("code review started", {
       mode: reviewSubAgentRecord.mode,
+      parentBackend: reviewSubAgentRecord.parentBackend,
       parentThreadId: reviewSubAgentRecord.parentThreadId,
+      reviewBackend: reviewSubAgentRecord.backend,
       reviewThreadId: reviewSubAgentRecord.reviewThreadId,
       turnId: reviewSubAgentRecord.turnId,
     });
@@ -13069,12 +13075,12 @@ export class DesktopBackendRegistry {
       },
     };
     await this.overlayStore.upsertManagedReviewEntry({
-      backend: record.backend,
+      backend: record.parentBackend,
       threadId: record.parentThreadId,
       entry,
     });
     await this.emit({
-      backend: record.backend,
+      backend: record.parentBackend,
       notification: {
         method: "turn/started",
         params: {
@@ -13089,7 +13095,7 @@ export class DesktopBackendRegistry {
       },
     });
     await this.emit({
-      backend: record.backend,
+      backend: record.parentBackend,
       notification: {
         method: "item/completed",
         params: {
@@ -13647,15 +13653,15 @@ export class DesktopBackendRegistry {
       turnId: params.turnId,
     });
     if (managedReview) {
-      if (isAcpBackendId(params.backend)) {
+      if (isAcpBackendId(managedReview.backend)) {
         const childLockKey = executionModeQueueKey(
-          params.backend,
+          managedReview.backend,
           managedReview.reviewThreadId,
         );
         await this.acpSessionPromptLocks.run(
           childLockKey,
           async () => await this.interruptAcpTurn({
-            backend: params.backend,
+            backend: managedReview.backend,
             threadId: managedReview.reviewThreadId,
             turnId: managedReview.turnId,
           }),
@@ -19645,7 +19651,7 @@ export class DesktopBackendRegistry {
         });
         if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
           const line = buildTaskMonitorUsageLine({
-            backend: event.backend,
+            backend: reviewRecord.parentBackend,
             fastMode,
             model,
             monitorId: reviewSubAgentId(reviewRecord.turnId),
@@ -19660,14 +19666,14 @@ export class DesktopBackendRegistry {
           logUnpricedThreadUsageLine(line);
           await this.overlayStore.upsertThreadUsageLine({ line });
           await this.emitThreadPricingUpdated({
-            backend: event.backend,
+            backend: reviewRecord.parentBackend,
             threadId: line.parentThreadId ?? line.threadId,
           });
         }
         return;
       }
       const reviewUsagePersisted = await this.persistExistingReviewSubAgentUsage({
-        backend: event.backend,
+        backend: completedReviewRecord?.parentBackend ?? event.backend,
         parentThreadId:
           completedReviewRecord?.parentThreadId ?? notification.params.threadId,
         reviewThreadId:
@@ -19684,7 +19690,7 @@ export class DesktopBackendRegistry {
         });
         if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
           const line = buildTaskMonitorUsageLine({
-            backend: event.backend,
+            backend: completedReviewRecord?.parentBackend ?? event.backend,
             fastMode,
             model,
             monitorId: reviewSubAgentId(notification.params.turnId),
@@ -19701,7 +19707,7 @@ export class DesktopBackendRegistry {
           logUnpricedThreadUsageLine(line);
           await this.overlayStore.upsertThreadUsageLine({ line });
           await this.emitThreadPricingUpdated({
-            backend: event.backend,
+            backend: completedReviewRecord?.parentBackend ?? event.backend,
             threadId: line.parentThreadId ?? line.threadId,
           });
         }
@@ -21184,7 +21190,7 @@ export class DesktopBackendRegistry {
     > = {},
   ): Promise<void> {
     const existingOverlay = await this.overlayStore.getThreadOverlayState({
-      backend: record.backend,
+      backend: record.parentBackend,
       threadId: record.parentThreadId,
     });
     const monitorId = reviewSubAgentId(record.turnId);
@@ -21222,13 +21228,13 @@ export class DesktopBackendRegistry {
     };
 
     await this.overlayStore.upsertThreadSubAgent({
-      backend: record.backend,
+      backend: record.parentBackend,
       threadId: record.parentThreadId,
       subAgent,
     });
-    this.invalidateThreadListCache(record.backend);
+    this.invalidateThreadListCache(record.parentBackend);
     await this.emit({
-      backend: record.backend,
+      backend: record.parentBackend,
       notification: {
         method: "thread/subAgents/updated",
         params: {
@@ -21292,7 +21298,7 @@ export class DesktopBackendRegistry {
     return Array.from(this.activeReviewSubAgents.values()).find(
       (record) =>
         record.mode === "managed"
-        && record.backend === params.backend
+        && record.parentBackend === params.backend
         && record.parentThreadId === params.parentThreadId
         && record.turnId === params.turnId,
     );
@@ -21349,13 +21355,13 @@ export class DesktopBackendRegistry {
         },
       };
       await this.overlayStore.upsertManagedReviewEntry({
-        backend: params.record.backend,
+        backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,
         entry,
-        pendingContext: isAcpBackendId(params.record.backend),
+        pendingContext: isAcpBackendId(params.record.parentBackend),
       });
       await this.emit({
-        backend: params.record.backend,
+        backend: params.record.parentBackend,
         notification: {
           method: "item/completed",
           params: {
@@ -21378,7 +21384,7 @@ export class DesktopBackendRegistry {
         turnId: params.record.turnId,
       });
       await this.emit({
-        backend: params.record.backend,
+        backend: params.record.parentBackend,
         notification: {
           method: "turn/completed",
           params: {
@@ -21404,7 +21410,7 @@ export class DesktopBackendRegistry {
     });
     if (params.method === "turn/cancelled") {
       await this.emit({
-        backend: params.record.backend,
+        backend: params.record.parentBackend,
         notification: {
           method: "turn/cancelled",
           params: {
@@ -21428,7 +21434,7 @@ export class DesktopBackendRegistry {
       >
     ).params.turn?.error?.message;
     await this.emit({
-      backend: params.record.backend,
+      backend: params.record.parentBackend,
       notification: {
         method: "turn/failed",
         params: {
@@ -23484,38 +23490,41 @@ export class DesktopBackendRegistry {
           },
         } as AppServerPendingRequestNotification
       : request;
+    const routedBackend = managedReview?.parentBackend ?? backend;
     if (managedReview) {
       backendRegistryLog.info("managed review request routed to parent", {
         method: request.method,
+        parentBackend: managedReview.parentBackend,
         parentThreadId: managedReview.parentThreadId,
         requestId: request.params.requestId,
+        reviewBackend: managedReview.backend,
         reviewThreadId: managedReview.reviewThreadId,
         turnId: managedReview.turnId,
       });
     }
 
     const key = buildPendingRequestKey({
-      backend,
+      backend: routedBackend,
       threadId: routedRequest.params.threadId,
       requestId: routedRequest.params.requestId,
     });
 
     return await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
       this.pendingServerRequests.set(key, {
-        backend,
+        backend: routedBackend,
         notification: routedRequest,
         resolve,
         reject,
       });
 
       void this.emit({
-        backend,
+        backend: routedBackend,
         notification: routedRequest as AppServerNotification,
       }).catch((error) => {
         backendRegistryLog.error(
           "failed to publish pending server request; keeping request pending",
           {
-            backend,
+            backend: routedBackend,
             error: error instanceof Error ? error.message : String(error),
             requestId: routedRequest.params.requestId,
             threadId: routedRequest.params.threadId,
@@ -29294,7 +29303,7 @@ export class DesktopBackendRegistry {
     // the pipeline would write a second tool-invocation row per item and add
     // parent-keyed entries to the file-change approval-context cache.
     await this.emitToListeners({
-      backend: event.backend,
+      backend: record.parentBackend,
       notification: {
         ...event.notification,
         params: {
