@@ -173,6 +173,16 @@ const e2eShutdownDiagnostics = createE2eShutdownDiagnosticsRecorder({
   filePath: process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV],
   launchId: process.env[E2E_SHUTDOWN_LAUNCH_ID_ENV],
 });
+
+// Tart's AppleParavirtGPU can reset under sustained Electron E2E load,
+// delaying WindowServer paints or rebooting the guest. This must run before
+// Electron is ready. It is opt-in for the macOS VM lane only; normal local
+// development and host E2E continue to exercise the hardware GPU path.
+if (process.env.PWRAGENT_E2E_DISABLE_GPU === "1") {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+}
+
 let mainProcessResourcesDisposed = false;
 let mainProcessShutdownComplete = false;
 let mainProcessShutdownPromise: Promise<void> | undefined;
