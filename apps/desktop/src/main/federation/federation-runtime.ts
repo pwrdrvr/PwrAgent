@@ -4616,9 +4616,6 @@ function localBackendOperations(): FederationBackendOperations {
         ...(request.includeTurns !== undefined
           ? { includeTurns: request.includeTurns }
           : {}),
-        ...(request.includeAllToolInvocations !== undefined
-          ? { includeAllToolInvocations: request.includeAllToolInvocations }
-          : {}),
         before: request.before,
         limit: request.limit,
         ...(request.viewOnly !== undefined

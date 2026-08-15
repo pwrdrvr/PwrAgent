@@ -29,17 +29,10 @@
   },
   "composer-draft-typing": {
     "commits": 70,
-    "note": "70 direct store saves (a stress case for prefix collapse, NOT the app's typing cadence — the renderer coalesces to one save per 5s): exactly one journal row survives, and commits track save calls because each save is its own transaction",
+    "note": "70 direct store saves (a stress case for prefix collapse, NOT the app's typing cadence \u2014 the renderer coalesces to one save per 5s): exactly one journal row survives, and commits track save calls because each save is its own transaction",
     "observedWalBytes": 1738640,
     "rowsChanged": 140,
     "statements": 209
-  },
-  "deferred-check-alert": {
-    "commits": 1,
-    "note": "five in-memory 30-second deferred checks and one persisted alert boundary",
-    "observedWalBytes": 12360,
-    "rowsChanged": 1,
-    "statements": 1
   },
   "federated-child-archive-ungroup": {
     "commits": 2,
@@ -98,31 +91,10 @@
     "statements": 8
   },
   "streamed-command-output": {
-    "commits": 3,
+    "commits": 2,
     "note": "500 streamed output deltas plus the completion for one command",
-    "observedWalBytes": 74160,
-    "rowsChanged": 5,
-    "statements": 5
-  },
-  "streamed-large-output-alert-boundary": {
-    "commits": 1,
-    "note": "one threshold-crossing streamed output window and its alert",
-    "observedWalBytes": 32960,
+    "observedWalBytes": 37080,
     "rowsChanged": 2,
     "statements": 2
-  },
-  "structured-mcp-output-alert": {
-    "commits": 1,
-    "note": "one large structured MCP result and its alert in one boundary",
-    "observedWalBytes": 32960,
-    "rowsChanged": 2,
-    "statements": 2
-  },
-  "tool-output-history-analysis": {
-    "commits": 1,
-    "note": "replace 25 deterministic history findings plus coverage metadata in one explicit analysis transaction",
-    "observedWalBytes": 28840,
-    "rowsChanged": 26,
-    "statements": 27
   }
 }

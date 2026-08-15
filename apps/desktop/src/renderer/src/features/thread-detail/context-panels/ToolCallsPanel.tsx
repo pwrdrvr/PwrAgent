@@ -18,8 +18,6 @@ import {
 type ToolCallsPanelProps = {
   entries?: AppServerThreadEntry[];
   loadingDetailItemId?: string;
-  onAnalyzeHistory?: () => void;
-  onOpenIncidentExplorer?: () => void;
   onRequestInvocationDetails?: (invocation: ThreadToolInvocationRecord) => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   toolAccounting?: ThreadToolAccounting;
@@ -50,16 +48,7 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
 
   return (
     <section className="context-panel__section tool-calls-panel">
-      <div className="tool-calls-panel__heading">
-        <h3>Tool calls</h3>
-        <button
-          className="button button--ghost"
-          onClick={props.onOpenIncidentExplorer}
-          type="button"
-        >
-          Explore
-        </button>
-      </div>
+      <h3>Tool calls</h3>
       {totals ? (
         <div className="rail-summary-card tool-call-summary-card">
           <div className="rail-summary-card__header">
@@ -100,27 +89,14 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
           </div>
         </div>
       ) : (
-        <div className="context-empty">
-          <p>No tool calls recorded yet.</p>
-          <button
-            className="button button--ghost"
-            onClick={props.onAnalyzeHistory}
-            type="button"
-          >
-            Analyze history
-          </button>
-        </div>
+        <p className="context-empty">No tool calls recorded yet.</p>
       )}
 
       {accounting?.alerts.length ? (
         <ul className="context-list context-list--cards tool-call-alert-list">
           {accounting.alerts.map((alert) => (
             <li key={alert.alertId} className="rail-card tool-call-alert">
-              <p className="rail-card__title">
-                {alert.kind === "noisy-polling"
-                  ? "Repeated queued checks"
-                  : "Large tool output"}
-              </p>
+              <p className="rail-card__title">Noisy polling detected</p>
               <p className="rail-card__usage">{alert.message}</p>
               <p className="rail-card__usage">
                 Suggested steering: {alert.suggestedPrompt}

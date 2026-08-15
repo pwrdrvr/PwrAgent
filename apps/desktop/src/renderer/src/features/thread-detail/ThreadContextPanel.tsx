@@ -116,8 +116,6 @@ type ThreadContextPanelProps = {
   toolCallEntries?: AppServerThreadEntry[];
   loadingToolCallDetailItemId?: string;
   onRequestToolCallDetails?: (invocation: ThreadToolInvocationRecord) => void;
-  onAnalyzeToolHistory?: () => void;
-  onOpenToolOutputIncidentExplorer?: () => void;
   pricingDisplayOptions?: {
     codexCredits: boolean;
     usd: boolean;
@@ -757,8 +755,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <ToolCallsPanel
             entries={props.toolCallEntries}
             loadingDetailItemId={props.loadingToolCallDetailItemId}
-            onAnalyzeHistory={props.onAnalyzeToolHistory}
-            onOpenIncidentExplorer={props.onOpenToolOutputIncidentExplorer}
             onRequestInvocationDetails={props.onRequestToolCallDetails}
             onScrollToTurn={props.onScrollToTurn}
             toolAccounting={props.toolAccounting}
