@@ -216,6 +216,8 @@ type LaunchElectronAppParams = {
     width: number;
     height: number;
   };
+  /** Additional Chromium arguments appended after the shared E2E switches. */
+  extraArgs?: readonly string[];
   /**
    * Runs after the tmp `homeRoot` is created but before Electron
    * launches. Use this to seed
@@ -403,6 +405,7 @@ export async function launchElectronApp(
       // no spec plays video.
       "--disable-accelerated-video-decode",
       "--disable-accelerated-video-encode",
+      ...(params.extraArgs ?? []),
     ],
     cwd: path.resolve(fixtureDir, "../.."),
     env,
