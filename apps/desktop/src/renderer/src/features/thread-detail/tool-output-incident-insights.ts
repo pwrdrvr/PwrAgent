@@ -1,6 +1,7 @@
 import type {
   ThreadToolInvocationCategory,
   ThreadToolInvocationRecord,
+  ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
   isFlaggedToolInvocation,
@@ -52,6 +53,8 @@ export type IncidentSummary = {
 
 export type TurnCostRow = {
   callCount: number;
+  /** Billed cost of this turn, when the pricing ledger has priced it. */
+  costMicros?: number;
   estimatedOutputTokens: number;
   firstObservedAt: number;
   key: string;
@@ -84,6 +87,12 @@ export type CategoryShare = {
   category: RefinedToolCategory | "other";
   estimatedOutputTokens: number;
   label: string;
+  /**
+   * Categories this entry stands for. One for a named entry; for the folded
+   * "Other" entry, every category inside it — which is what lets that entry
+   * be a real filter rather than an unreachable remainder.
+   */
+  members: RefinedToolCategory[];
   /** Share of flagged output tokens, 0–1. */
   share: number;
 };
@@ -119,10 +128,56 @@ const CATEGORY_LABELS: Record<ThreadToolInvocationCategory, string> = {
 const AGENT_INSTRUCTION_PATTERN = /\b(?:AGENTS|CLAUDE)\.md\b/i;
 const SKILL_FILE_PATTERN = /\bSKILL\.md\b|[/\\]skills?[/\\]|[/\\]plugins[/\\]/i;
 
+/** Shell wrappers whose payload is the command we actually care about. */
+const SHELL_WRAPPER_PATTERN =
+  /^(?:\/(?:usr\/)?bin\/)?(?:ba|z|k)?sh\s+-[a-z]*c\s+(['"])([\s\S]*)\1\s*$/i;
+
+/**
+ * Command verbs we can categorize, and what they mean. Scanned across the
+ * whole command rather than read off its first token.
+ */
+const VERB_CATEGORIES = new Map<string, ThreadToolInvocationCategory>([
+  ["git", "git"],
+  ["cat", "file-io"], ["head", "file-io"], ["tail", "file-io"],
+  ["sed", "file-io"], ["awk", "file-io"], ["ls", "file-io"], ["wc", "file-io"],
+  ["rg", "search"], ["grep", "search"], ["find", "search"], ["fd", "search"],
+  ["npm", "package-manager"], ["pnpm", "package-manager"],
+  ["yarn", "package-manager"], ["bun", "package-manager"],
+  ["npx", "package-manager"],
+  ["sleep", "polling"],
+]);
+
 export type RefinedToolCategory =
   | ThreadToolInvocationCategory
   | "agent-instructions"
   | "skill-files";
+
+export function unwrapShellCommand(command: string): string {
+  const match = SHELL_WRAPPER_PATTERN.exec(command.trim());
+  return match?.[2]?.trim() ?? command;
+}
+
+/**
+ * The one category every verb in the command agrees on, or undefined when
+ * they disagree or none is recognized.
+ *
+ * Reading the first token alone gets a compound command wrong twice over: a
+ * `/bin/bash -c '…'` wrapper reports the shell rather than what it ran, and a
+ * script that is four `git` invocations in a row is plainly git work. Real
+ * example from a 236-turn thread: `/bin/bash -c 'git diff --check git diff
+ * --stat git status --short --branch git diff -- …'` was filed under
+ * "Tests & builds", because the substring " test" appeared in a path.
+ */
+function unanimousVerbCategory(
+  command: string,
+): ThreadToolInvocationCategory | undefined {
+  const found = new Set<ThreadToolInvocationCategory>();
+  for (const token of command.split(/[\s;|&()]+/)) {
+    const category = VERB_CATEGORIES.get(token.toLowerCase());
+    if (category) found.add(category);
+  }
+  return found.size === 1 ? [...found][0] : undefined;
+}
 
 export function refineToolCategory(
   invocation: Pick<
@@ -130,13 +185,24 @@ export function refineToolCategory(
     "category" | "normalizedCommand" | "toolName"
   >,
 ): RefinedToolCategory {
-  if (invocation.category !== "file-io" && invocation.category !== "search") {
-    return invocation.category;
-  }
-  const command = invocation.normalizedCommand ?? invocation.toolName;
+  const raw = invocation.normalizedCommand ?? invocation.toolName;
+  const command = unwrapShellCommand(raw);
+  /* Only second-guess the persisted category when it is untrustworthy: either
+     it was computed from a shell wrapper we have now seen through, or it is
+     one of the buckets that means "no pattern matched". `pnpm test` stays
+     Tests & builds — the verb scan is a fallback, not a better classifier. */
+  const persistedIsWeak =
+    command !== raw.trim()
+    || invocation.category === "shell"
+    || invocation.category === "unknown";
+  const category = (persistedIsWeak ? unanimousVerbCategory(command) : undefined)
+    ?? invocation.category;
+  /* Only a read gets refined by what it read. `git diff -- …/SKILL.md` is git
+     work that happens to touch a skill file, not a skill read. */
+  if (category !== "file-io" && category !== "search") return category;
   if (AGENT_INSTRUCTION_PATTERN.test(command)) return "agent-instructions";
   if (SKILL_FILE_PATTERN.test(command)) return "skill-files";
-  return invocation.category;
+  return category;
 }
 
 export function formatCategoryLabel(
@@ -204,9 +270,20 @@ export function summarizeIncidents(
  */
 export function buildTurnCostStrip(
   invocations: ThreadToolInvocationRecord[],
-  options?: { limit?: number },
+  options?: { limit?: number; usageLines?: readonly ThreadUsageLineRecord[] },
 ): TurnCostStrip {
   const limit = options?.limit ?? DEFAULT_TURN_ROW_LIMIT;
+  /* Billed cost per turn, joined by turn id. The ledger is the authority on
+     money; the token bar is an estimate from character counts, so the two are
+     reported side by side rather than one derived from the other. */
+  const costByTurn = new Map<string, number>();
+  for (const line of options?.usageLines ?? []) {
+    if (!line.turnId) continue;
+    costByTurn.set(
+      line.turnId,
+      (costByTurn.get(line.turnId) ?? 0) + line.totalCostMicros,
+    );
+  }
   const groups = new Map<string, TurnCostRow>();
   for (const invocation of invocations) {
     const key = invocation.turnId ?? "";
@@ -224,6 +301,11 @@ export function buildTurnCostStrip(
     row.firstObservedAt = Math.min(row.firstObservedAt, invocation.observedAt);
     if (isOverOutputCap(invocation.outputChars)) row.overCapCount += 1;
     groups.set(key, row);
+  }
+
+  for (const row of groups.values()) {
+    const cost = row.turnId ? costByTurn.get(row.turnId) : undefined;
+    if (cost !== undefined) row.costMicros = cost;
   }
 
   /* Ordinals come from time order across all turns, so "Turn 3" keeps meaning
@@ -280,6 +362,7 @@ export function buildCategoryComposition(
       category,
       estimatedOutputTokens: 0,
       label: formatCategoryLabel(category),
+      members: [category],
       share: 0,
     };
     share.estimatedOutputTokens += invocation.estimatedOutputTokens;
@@ -300,6 +383,7 @@ export function buildCategoryComposition(
       category: "other",
       estimatedOutputTokens: sumEntries(tail),
       label: `Other (${tail.length})`,
+      members: tail.map((entry) => entry.category as RefinedToolCategory),
       share: 0,
     });
   }
@@ -396,6 +480,20 @@ export function formatCapShare(
   return options?.short
     ? `${percentage.toLocaleString()}% of cap`
     : `${percentage.toLocaleString()}% of the output cap`;
+}
+
+export function formatMicrosCurrency(
+  micros: number,
+  currency: string | undefined,
+): string {
+  const units = micros / 1_000_000;
+  const rounded = units >= 100
+    ? Math.round(units)
+    : Number(units.toFixed(units >= 1 ? 2 : 3));
+  const value = rounded.toLocaleString();
+  if (!currency || currency === "USD") return `$${value}`;
+  if (currency.toLowerCase().includes("credit")) return `${value} cr`;
+  return `${value} ${currency}`;
 }
 
 export function formatCompactTokens(tokens: number): string {

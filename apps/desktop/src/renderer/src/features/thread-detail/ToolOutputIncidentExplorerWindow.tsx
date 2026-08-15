@@ -31,6 +31,7 @@ import {
   formatCategoryLabel,
   formatCompactTokens,
   formatInvocationIdentity,
+  formatMicrosCurrency,
   formatTurnWhen,
   invocationStatusTone,
   isOverOutputCap,
@@ -48,7 +49,7 @@ export function ToolOutputIncidentExplorerWindow() {
   const [accounting, setAccounting] = useState<ThreadToolAccounting>();
   const [latest, setLatest] = useState<AppServerReadThreadResponse>();
   const [selectedId, setSelectedId] = useState<string>();
-  const [category, setCategory] = useState<RefinedToolCategory | "all">("all");
+  const [category, setCategory] = useState<RefinedToolCategory | "all" | "other">("all");
   const [turnFilter, setTurnFilter] = useState<string>();
   const [sortMode, setSortMode] = useState<IncidentSortMode>("largest");
   const [search, setSearch] = useState("");
@@ -118,8 +119,24 @@ export function ToolOutputIncidentExplorerWindow() {
     [allInvocations],
   );
   const summary = useMemo(() => summarizeIncidents(allInvocations), [allInvocations]);
-  const turnStrip = useMemo(() => buildTurnCostStrip(allInvocations), [allInvocations]);
+  const usageLines = latest?.pricing?.lines;
+  const turnStrip = useMemo(
+    () => buildTurnCostStrip(allInvocations, {
+      ...(usageLines ? { usageLines } : {}),
+    }),
+    [allInvocations, usageLines],
+  );
+  const currency = usageLines?.[0]?.currency;
   const composition = useMemo(() => buildCategoryComposition(flagged), [flagged]);
+  /* Which refined categories the active legend entry stands for. "Other" is a
+     real set, not a leftover, so selecting it filters to its members. */
+  const selectedCategories = useMemo(() => {
+    if (category === "all") return undefined;
+    const entry = composition.find((share) => share.category === category);
+    /* A refresh can retire the selected category. Showing everything is the
+       safer failure than an unexplained empty list. */
+    return entry ? new Set<RefinedToolCategory>(entry.members) : undefined;
+  }, [category, composition]);
   const repeatedCommands = useMemo(
     () => countRepeatedCommands(flagged),
     [flagged],
@@ -132,7 +149,7 @@ export function ToolOutputIncidentExplorerWindow() {
     const normalizedSearch = search.trim().toLowerCase();
     return sortIncidentCases(
       flagged.filter((invocation) =>
-        (category === "all" || refineToolCategory(invocation) === category)
+        (!selectedCategories || selectedCategories.has(refineToolCategory(invocation)))
         && (turnFilter === undefined || (invocation.turnId ?? "") === turnFilter)
         && (
           !normalizedSearch
@@ -144,7 +161,7 @@ export function ToolOutputIncidentExplorerWindow() {
       ),
       sortMode,
     );
-  }, [category, flagged, search, sortMode, turnFilter]);
+  }, [flagged, search, selectedCategories, sortMode, turnFilter]);
   const selected = invocations.find((invocation) => invocation.invocationId === selectedId)
     ?? invocations[0];
 
@@ -358,11 +375,13 @@ export function ToolOutputIncidentExplorerWindow() {
               <button
                 aria-pressed={category === entry.category}
                 className="incident-explorer__legend-item"
-                disabled={entry.category === "other"}
                 key={entry.category}
                 onClick={() => setCategory(
-                  entry.category === "other" ? "all" : entry.category,
+                  category === entry.category ? "all" : entry.category,
                 )}
+                title={entry.category === "other"
+                  ? entry.members.map(formatCategoryLabel).join(", ")
+                  : undefined}
                 type="button"
               >
                 <i
@@ -381,7 +400,9 @@ export function ToolOutputIncidentExplorerWindow() {
       </div>
 
       <TurnStrip
+        {...(currency ? { currency } : {})}
         now={renderedAt}
+        showCost={turnStrip.rows.some((row) => row.costMicros !== undefined)}
         onSelect={(row) => setTurnFilter(
           turnFilter === row.key ? undefined : row.key,
         )}
@@ -639,9 +660,11 @@ function CompositionBar(props: { composition: CategoryShare[] }) {
  * the two need to be told apart at a glance.
  */
 function TurnStrip(props: {
+  currency?: string;
   /* Captured once by the caller so every row in a render measures "ago"
      against the same instant. */
   now: number;
+  showCost: boolean;
   onSelect: (row: TurnCostRow) => void;
   selectedKey?: string;
   strip: TurnCostStrip;
@@ -663,6 +686,7 @@ function TurnStrip(props: {
         <button
           aria-pressed={props.selectedKey === row.key}
           className="incident-explorer__turn"
+          data-cost={props.showCost}
           key={row.key}
           onClick={() => props.onSelect(row)}
           type="button"
@@ -688,6 +712,13 @@ function TurnStrip(props: {
           <span className="incident-explorer__turn-number">
             {row.callCount.toLocaleString()} {row.callCount === 1 ? "call" : "calls"}
           </span>
+          {props.showCost ? (
+            <span className="incident-explorer__turn-cost">
+              {row.costMicros !== undefined
+                ? formatMicrosCurrency(row.costMicros, props.currency)
+                : "—"}
+            </span>
+          ) : null}
         </button>
       ))}
       {props.strip.hiddenTurnCount > 0 ? (

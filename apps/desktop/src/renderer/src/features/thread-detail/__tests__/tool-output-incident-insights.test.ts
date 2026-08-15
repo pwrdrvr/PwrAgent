@@ -8,12 +8,14 @@ import {
   formatCompactTokens,
   countRepeatedCommands,
   formatInvocationIdentity,
+  formatMicrosCurrency,
   formatTurnWhen,
   invocationStatusTone,
   refineToolCategory,
   isOverOutputCap,
   sortIncidentCases,
   summarizeIncidents,
+  unwrapShellCommand,
 } from "../tool-output-incident-insights";
 
 describe("summarizeIncidents", () => {
@@ -232,9 +234,25 @@ describe("formatCompactTokens", () => {
   });
 });
 
+/* Commands whose verbs agree with the category, so a fixture that declares a
+   category is not silently re-categorized by the verb scan. */
+const COMMAND_FOR_CATEGORY: Partial<Record<string, string>> = {
+  "build-test": "vitest run",
+  "file-io": "cat notes.md",
+  git: "git status",
+  mcp: "mcp__server__call",
+  "package-manager": "pnpm install",
+  polling: "sleep 5",
+  search: "rg pattern",
+  shell: "./deploy.sh",
+  "sub-agent": "task_monitor",
+  unknown: "opaque_tool",
+};
+
 function invocation(
   overrides: Partial<ThreadToolInvocationRecord> = {},
 ): ThreadToolInvocationRecord {
+  const category = overrides.category ?? "shell";
   return {
     backend: "codex",
     category: "shell",
@@ -245,7 +263,7 @@ function invocation(
     invocationId: "invocation-1",
     itemId: "item-1",
     noisy: true,
-    normalizedCommand: "pnpm test",
+    normalizedCommand: COMMAND_FOR_CATEGORY[category] ?? "./deploy.sh",
     observedAt: 1_800_000_000_000,
     outputChars: 4_000,
     outputLines: 20,
@@ -336,5 +354,113 @@ describe("buildCategoryComposition tail", () => {
     ]);
 
     expect(composition.at(-1)?.label).toBe("MCP");
+  });
+});
+
+describe("composition members", () => {
+  it("carries the folded categories so Other can filter", () => {
+    /* "Other" was rendered as a disabled remainder — 10% of a real thread's
+       output with no way to reach it. */
+    const composition = buildCategoryComposition([
+      invocation({ category: "file-io", estimatedOutputTokens: 900 }),
+      invocation({ category: "git", estimatedOutputTokens: 800 }),
+      invocation({ category: "shell", estimatedOutputTokens: 700 }),
+      invocation({ category: "build-test", estimatedOutputTokens: 600 }),
+      invocation({ category: "mcp", estimatedOutputTokens: 500 }),
+      invocation({ category: "polling", estimatedOutputTokens: 400 }),
+    ]);
+
+    const other = composition.at(-1);
+    expect(other?.category).toBe("other");
+    expect(other?.label).toBe("Other (2)");
+    expect(other?.members.sort()).toEqual(["mcp", "polling"]);
+  });
+
+  it("gives a named entry itself as its only member", () => {
+    const composition = buildCategoryComposition([
+      invocation({ category: "git", estimatedOutputTokens: 100 }),
+    ]);
+    expect(composition[0]?.members).toEqual(["git"]);
+  });
+});
+
+describe("compound command categorization", () => {
+  it("unwraps a shell wrapper and reads every verb, not the first token", () => {
+    /* Real row from a 236-turn thread. Persisted as `shell`/`build-test`:
+       the first token is /bin/bash, and " test" matched a path. Note the
+       missing separators — redactCommandText collapses the script's newlines
+       at persist time, so the sub-commands run together. */
+    expect(refineToolCategory({
+      category: "build-test",
+      normalizedCommand:
+        "/bin/bash -c 'git diff --check git diff --stat git status --short "
+        + "--branch git diff -- tests/test-macos-images.sh'",
+      toolName: "commandExecution",
+    })).toBe("git");
+  });
+
+  it("leaves a category the persisted classifier got right", () => {
+    /* `pnpm test` is Tests & builds; the verb scan would call it a package
+       manager. It only runs when the persisted value is untrustworthy. */
+    expect(refineToolCategory({
+      category: "build-test",
+      normalizedCommand: "pnpm test",
+      toolName: "commandExecution",
+    })).toBe("build-test");
+  });
+
+  it("still separates when the verbs disagree", () => {
+    expect(refineToolCategory({
+      category: "shell",
+      normalizedCommand: "find . -name '*.ts' | xargs cat",
+      toolName: "commandExecution",
+    })).toBe("shell");
+  });
+
+  it("does not treat a git diff of a skill file as a skill read", () => {
+    expect(refineToolCategory({
+      category: "shell",
+      normalizedCommand: "git diff -- .agents/skills/build/SKILL.md",
+      toolName: "commandExecution",
+    })).toBe("git");
+  });
+
+  it("unwraps the wrapper for reads too", () => {
+    expect(unwrapShellCommand("/bin/bash -c 'cat AGENTS.md'"))
+      .toBe("cat AGENTS.md");
+    expect(refineToolCategory({
+      category: "shell",
+      normalizedCommand: "/bin/bash -c 'cat AGENTS.md'",
+      toolName: "commandExecution",
+    })).toBe("agent-instructions");
+  });
+});
+
+describe("turn cost", () => {
+  it("joins billed cost onto turns by turn id", () => {
+    const strip = buildTurnCostStrip(
+      [
+        invocation({ observedAt: 10, turnId: "turn-a" }),
+        invocation({ observedAt: 20, turnId: "turn-b" }),
+      ],
+      {
+        usageLines: [
+          { createdAt: 1, currency: "USD", totalCostMicros: 1_500_000, turnId: "turn-a" },
+          { createdAt: 2, currency: "USD", totalCostMicros: 900_000, turnId: "turn-a" },
+        ] as never,
+      },
+    );
+
+    expect(strip.rows.find((row) => row.key === "turn-a")?.costMicros)
+      .toBe(2_400_000);
+    /* A turn the ledger has not priced reports nothing rather than zero. */
+    expect(strip.rows.find((row) => row.key === "turn-b")?.costMicros)
+      .toBeUndefined();
+  });
+
+  it("formats money in the ledger's units", () => {
+    expect(formatMicrosCurrency(2_400_000, "USD")).toBe("$2.4");
+    expect(formatMicrosCurrency(358_000_000, "USD")).toBe("$358");
+    expect(formatMicrosCurrency(2_400_000, "credits")).toBe("2.4 cr");
   });
 });
