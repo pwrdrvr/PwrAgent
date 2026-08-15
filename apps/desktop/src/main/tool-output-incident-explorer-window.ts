@@ -125,8 +125,9 @@ export function showToolOutputIncidentExplorerWindow(
   }
   showAuxiliaryWindowWhenReady(window);
   incidentWindows.set(windowKey, window);
+  const webContentsId = window.webContents.id;
   if (source.sourceWindow && !source.sourceWindow.isDestroyed()) {
-    incidentWindowContexts.set(window.webContents.id, {
+    incidentWindowContexts.set(webContentsId, {
       owner: source.sourceWindow.webContents,
       threadKey: windowKey,
     });
@@ -135,7 +136,10 @@ export function showToolOutputIncidentExplorerWindow(
     if (incidentWindows.get(windowKey) === window) {
       incidentWindows.delete(windowKey);
     }
-    incidentWindowContexts.delete(window.webContents.id);
+    // Electron has destroyed the BrowserWindow by the time `closed` fires.
+    // Reading `window.webContents` here throws "Object has been destroyed",
+    // so retain the primitive id while the window is still live.
+    incidentWindowContexts.delete(webContentsId);
     log.debug("tool-output incident explorer closed", { windowKey });
   });
   log.debug("tool-output incident explorer created", { windowKey });
