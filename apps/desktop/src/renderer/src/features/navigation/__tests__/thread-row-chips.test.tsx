@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   MessagingThreadBindingSummary,
@@ -10,6 +10,7 @@ import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
 } from "../../../lib/native-drag-interaction";
+import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 
 // Regression coverage for the unified chip-flow refactor (#188 / plan
 // 2026-05-05-001). The historical bug pattern was:
@@ -659,7 +660,7 @@ describe("ThreadRow chip flow", () => {
     });
     expect(prChip).not.toHaveAttribute("title");
 
-    fireEvent.mouseEnter(prChip);
+    fireEvent.focus(prChip);
 
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip).toHaveClass("pr-status-card");
@@ -669,6 +670,57 @@ describe("ThreadRow chip flow", () => {
     // This row's PR predates the stats fields, so the card shows no sections at
     // all rather than zeros.
     expect(tooltip.querySelector(".pr-status-card__section")).toBeNull();
+  });
+
+  it("uses a fixed tooltip delay that does not require a stationary pointer", () => {
+    vi.useFakeTimers();
+    try {
+      renderRow({
+        thread: {
+          ...baseThread,
+          prs: [
+            {
+              provider: "github.com",
+              number: 123,
+              org: "pwrdrvr",
+              repo: "PwrAgent",
+              title: "Retain thread pull request history",
+              state: "passing",
+              url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+            },
+          ],
+        },
+      });
+
+      const branchChip = screen.getByRole("button", {
+        name: "Copy branch feat/chips",
+      });
+      fireEvent.mouseEnter(branchChip);
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+      act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS / 2));
+      fireEvent.mouseMove(branchChip, { clientX: 40, clientY: 20 });
+      act(() => vi.advanceTimersByTime((TOOLTIP_HOVER_DELAY_MS / 2) - 1));
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByRole("tooltip")).toHaveTextContent("feat/chips");
+      fireEvent.mouseLeave(branchChip);
+
+      const prChip = screen.getByRole("button", {
+        name: /Open pwrdrvr\/PwrAgent#123/,
+      });
+      fireEvent.mouseEnter(prChip);
+      act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS / 2));
+      fireEvent.mouseMove(prChip, { clientX: 70, clientY: 20 });
+      act(() => vi.advanceTimersByTime((TOOLTIP_HOVER_DELAY_MS / 2) - 1));
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByRole("tooltip")).toHaveClass("pr-status-card");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("marks Agent threads and explains their messaging role", () => {
@@ -836,7 +888,7 @@ describe("ThreadRow chip flow", () => {
     const prChip = screen.getByRole("button", {
       name: /Open pwrdrvr\/PwrAgent#123/,
     });
-    fireEvent.mouseEnter(prChip);
+    fireEvent.focus(prChip);
     expect(screen.getByRole("tooltip")).toBeInTheDocument();
 
     // Switching apps never fires mouseleave on the chip, so the tooltip
@@ -868,7 +920,7 @@ describe("ThreadRow chip flow", () => {
     const prChip = screen.getByRole("button", {
       name: /Open pwrdrvr\/PwrAgent#123/,
     });
-    fireEvent.mouseEnter(prChip);
+    fireEvent.focus(prChip);
     expect(screen.getByRole("tooltip")).toBeInTheDocument();
 
     fireEvent.click(prChip);
@@ -937,7 +989,7 @@ describe("ThreadRow chip flow", () => {
     const prChip = screen.getByRole("button", {
       name: /Open pwrdrvr\/PwrAgent#123/,
     });
-    fireEvent.mouseEnter(prChip);
+    fireEvent.focus(prChip);
     expect(screen.getByRole("tooltip")).toBeInTheDocument();
 
     // The portal is position:fixed, so it detaches from its target on scroll.
@@ -971,7 +1023,7 @@ describe("ThreadRow chip flow", () => {
     expect(prChip).toHaveClass("pr-chip--merged");
     expect(prChip).not.toHaveClass("pr-chip--unknown");
 
-    fireEvent.mouseEnter(prChip);
+    fireEvent.focus(prChip);
 
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip).toHaveTextContent("pwrdrvr/PwrAgent#542");

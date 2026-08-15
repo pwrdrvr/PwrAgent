@@ -351,6 +351,7 @@ export function ThreadMetaChips({
             kind: thread.gitBranch ? "expected" : "current",
           })}
           className="thread-row__chip path-copy-target tooltip-target thread-row__chip--mono"
+          delayedTooltip
           tooltipText={branchTooltip}
           value={branchChip}
         >
@@ -368,6 +369,7 @@ export function ThreadMetaChips({
             kind: "current",
           })}
           className="thread-row__chip path-copy-target tooltip-target thread-row__chip--muted thread-row__chip--mono"
+          delayedTooltip
           value={thread.observedGitBranch}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
@@ -519,6 +521,7 @@ function CopyableThreadChip(props: {
   "aria-label": string;
   children: ReactNode;
   className: string;
+  delayedTooltip?: boolean;
   tooltipText?: string;
   value: string;
 }) {
@@ -566,7 +569,11 @@ function CopyableThreadChip(props: {
           event.stopPropagation();
           copy(event.currentTarget);
         }}
-        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onMouseEnter={(event) =>
+          props.delayedTooltip
+            ? tooltip.showAfterDelay(event.currentTarget, tooltipText)
+            : tooltip.show(event.currentTarget, tooltipText)
+        }
         onMouseLeave={tooltip.hide}
       >
         {props.children}
