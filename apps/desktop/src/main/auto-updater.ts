@@ -40,7 +40,9 @@ let updateCheckInFlight: Promise<AppUpdateCheckResult> | undefined;
 type UpdateSelectionKey = `${DesktopUpdateTrain}:${DesktopUpdateChannel}`;
 
 let updateCheckChannelInFlight: UpdateSelectionKey | undefined;
-let downloadedUpdateChannel: UpdateSelectionKey | undefined;
+let heldDownloadedUpdate:
+  | { selection: UpdateSelectionKey; version: string }
+  | undefined;
 const pendingDownloadChannelsByVersion = new Map<string, UpdateSelectionKey>();
 
 type GitHubRelease = {
@@ -61,9 +63,6 @@ type GitHubReleaseAsset = {
 const MAC_UPDATE_CHANNEL_FILE = "latest-mac.yml";
 
 function setUpdateStatus(nextStatus: AppUpdateStatus): void {
-  if (nextStatus.status !== "downloaded") {
-    downloadedUpdateChannel = undefined;
-  }
   updateStatus = nextStatus;
   for (const window of BrowserWindow.getAllWindows()) {
     if (window.isDestroyed()) {
@@ -73,11 +72,8 @@ function setUpdateStatus(nextStatus: AppUpdateStatus): void {
   }
 }
 
-function downloadedVersion(): string | undefined {
-  return updateStatus.status === "downloaded" ? updateStatus.version : undefined;
-}
-
 export function readAppUpdateStatus(): AppUpdateStatus {
+  reconcileDownloadedUpdateEligibility();
   return updateStatus;
 }
 
@@ -108,6 +104,10 @@ function updateSelectionKey(
   updateChannel: DesktopUpdateChannel,
 ): UpdateSelectionKey {
   return `${updateTrain}:${updateChannel}`;
+}
+
+function currentUpdateSelectionKey(): UpdateSelectionKey {
+  return updateSelectionKey(currentUpdateTrain(), currentUpdateChannel());
 }
 
 function configureAutoUpdaterChannel(
@@ -169,13 +169,12 @@ function preserveDownloadedStatus(nextStatus: AppUpdateStatus): boolean {
 }
 
 function setUpdateStatusUnlessDownloaded(nextStatus: AppUpdateStatus): void {
-  const currentStatus = updateStatus;
-  if (
-    currentStatus.status === "downloaded" &&
-    preserveDownloadedStatus(nextStatus)
-  ) {
+  const eligibleDownload = downloadedUpdateMatchesChannel(
+    currentUpdateSelectionKey(),
+  );
+  if (eligibleDownload && preserveDownloadedStatus(nextStatus)) {
     log.info("keeping downloaded update status during follow-up check", {
-      currentVersion: currentStatus.version,
+      currentVersion: eligibleDownload.version,
       nextStatus: nextStatus.status,
     });
     return;
@@ -186,13 +185,42 @@ function setUpdateStatusUnlessDownloaded(nextStatus: AppUpdateStatus): void {
 function downloadedUpdateMatchesChannel(
   updateSelection: UpdateSelectionKey,
 ): Extract<AppUpdateCheckResult, { status: "downloaded" }> | undefined {
-  if (
-    updateStatus.status !== "downloaded" ||
-    downloadedUpdateChannel !== updateSelection
-  ) {
+  if (heldDownloadedUpdate?.selection !== updateSelection) {
     return undefined;
   }
-  return { status: "downloaded", version: updateStatus.version };
+  return { status: "downloaded", version: heldDownloadedUpdate.version };
+}
+
+function syncAutoInstallOnAppQuit(updateSelection: UpdateSelectionKey): void {
+  autoUpdater.autoInstallOnAppQuit =
+    downloadedUpdateMatchesChannel(updateSelection) !== undefined
+    || heldDownloadedUpdate === undefined;
+}
+
+function reconcileDownloadedUpdateEligibility(
+  updateSelection: UpdateSelectionKey = currentUpdateSelectionKey(),
+): void {
+  const eligibleDownload = downloadedUpdateMatchesChannel(updateSelection);
+  syncAutoInstallOnAppQuit(updateSelection);
+  if (eligibleDownload) {
+    if (
+      updateStatus.status !== "downloaded"
+      || updateStatus.version !== eligibleDownload.version
+    ) {
+      setUpdateStatus(eligibleDownload);
+    }
+    return;
+  }
+  if (updateStatus.status === "downloaded") {
+    const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
+    log.info("hiding downloaded update from the unselected train", {
+      currentVersion,
+      heldSelection: heldDownloadedUpdate?.selection,
+      heldVersion: heldDownloadedUpdate?.version,
+      updateSelection,
+    });
+    setUpdateStatus({ status: "no-update", version: currentVersion });
+  }
 }
 
 function recordPendingDownloadChannel(
@@ -230,6 +258,7 @@ export async function checkForAppUpdatesNow(
       const updateChannel = currentUpdateChannel();
       const updateTrain = currentUpdateTrain();
       const updateSelection = updateSelectionKey(updateTrain, updateChannel);
+      reconcileDownloadedUpdateEligibility(updateSelection);
       const downloadedResult = downloadedUpdateMatchesChannel(updateSelection);
       if (downloadedResult) {
         log.info("skipping app update check; update already downloaded", {
@@ -656,6 +685,15 @@ export function initAutoUpdater(): void {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   configureAutoUpdaterChannel();
+  try {
+    getDesktopSettingsService().onConfigWritten(() => {
+      reconcileDownloadedUpdateEligibility();
+    });
+  } catch (err) {
+    log.warn("failed to subscribe to update-selection setting changes", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   autoUpdater.on("checking-for-update", () => {
     log.info("checking-for-update");
@@ -688,13 +726,20 @@ export function initAutoUpdater(): void {
   });
   autoUpdater.on("update-downloaded", (info) => {
     log.info("update-downloaded", { version: info.version });
-    downloadedUpdateChannel = info.version
+    const selection = info.version
       ? pendingDownloadChannelsByVersion.get(info.version)
+        ?? currentUpdateSelectionKey()
       : undefined;
     if (info.version) {
       pendingDownloadChannelsByVersion.delete(info.version);
     }
-    setUpdateStatus({ status: "downloaded", version: info.version });
+    if (info.version && selection) {
+      heldDownloadedUpdate = {
+        selection,
+        version: info.version,
+      };
+    }
+    reconcileDownloadedUpdateEligibility();
   });
   autoUpdater.on("error", (err: Error) => {
     log.warn("auto-update error", { message: err.message });
@@ -708,11 +753,16 @@ export function initAutoUpdater(): void {
 export async function installDownloadedAppUpdate(options?: {
   requestQuit?: (performQuit: () => void) => Promise<boolean>;
 }): Promise<AppUpdateInstallResult> {
-  const version = downloadedVersion();
+  const eligibleDownload = downloadedUpdateMatchesChannel(
+    currentUpdateSelectionKey(),
+  );
+  const version = eligibleDownload?.version;
   if (!version) {
     return {
       status: "error",
-      message: "No downloaded update is ready to install.",
+      message: heldDownloadedUpdate
+        ? "The downloaded update is not for the selected channel."
+        : "No downloaded update is ready to install.",
     };
   }
   try {
@@ -767,7 +817,10 @@ export function registerAppUpdateIpcHandlers(options?: {
   ipcMain.removeHandler(APP_UPDATE_RELEASES_READ_CHANNEL);
   ipcMain.handle(
     APP_UPDATE_STATUS_READ_CHANNEL,
-    async (): Promise<AppUpdateStatus> => updateStatus,
+    async (): Promise<AppUpdateStatus> => {
+      reconcileDownloadedUpdateEligibility();
+      return updateStatus;
+    },
   );
   ipcMain.handle(
     APP_UPDATE_RELEASES_READ_CHANNEL,

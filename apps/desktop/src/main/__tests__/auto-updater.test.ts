@@ -9,6 +9,13 @@ const checkForUpdatesMock = vi.fn();
 const setFeedURLMock = vi.fn();
 const resolveUpdateChannelMock = vi.fn();
 const resolveUpdateTrainMock = vi.fn();
+const configWrittenListeners = new Set<() => void>();
+const onConfigWrittenMock = vi.fn((listener: () => void) => {
+  configWrittenListeners.add(listener);
+  return () => {
+    configWrittenListeners.delete(listener);
+  };
+});
 const logInfoMock = vi.fn();
 const logWarnMock = vi.fn();
 const fetchMock = vi.fn();
@@ -58,6 +65,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: vi.fn(() => ({
     resolveUpdateChannel: resolveUpdateChannelMock,
     resolveUpdateTrain: resolveUpdateTrainMock,
+    onConfigWritten: onConfigWrittenMock,
   })),
 }));
 
@@ -161,6 +169,8 @@ describe("auto updater", () => {
     resolveUpdateChannelMock.mockReturnValue("latest");
     resolveUpdateTrainMock.mockReset();
     resolveUpdateTrainMock.mockReturnValue("stable");
+    configWrittenListeners.clear();
+    onConfigWrittenMock.mockClear();
     logInfoMock.mockReset();
     logWarnMock.mockReset();
     autoUpdaterMock.allowPrerelease = false;
@@ -285,6 +295,10 @@ describe("auto updater", () => {
       status: "no-update",
       version: "1.0.0-beta.7",
     });
+    expect(updater.readAppUpdateStatus()).toEqual({
+      status: "no-update",
+      version: "1.0.0-beta.7",
+    });
     expect(checkForUpdatesMock).not.toHaveBeenCalled();
 
     resolveUpdateChannelMock.mockReturnValue("prerelease");
@@ -294,6 +308,64 @@ describe("auto updater", () => {
       version: "1.0.0-beta.8",
     });
     expect(checkForUpdatesMock).not.toHaveBeenCalled();
+  });
+
+  it("does not offer a downloaded update after switching trains", async () => {
+    resolveUpdateTrainMock.mockReturnValue("beta");
+    resolveUpdateChannelMock.mockReturnValue("latest");
+    mockGitHubReleases([
+      githubRelease("v1.1.0-beta.2", { prerelease: true }),
+      githubRelease("v1.0.0"),
+    ]);
+    checkForUpdatesMock.mockResolvedValue({
+      updateInfo: { version: "1.1.0-beta.2" },
+    });
+    autoUpdaterMock.currentVersion = { version: "1.0.0" };
+    const updater = await importAutoUpdater();
+    const requestQuit = vi.fn(async (performQuit: () => void) => {
+      performQuit();
+      return true;
+    });
+
+    updater.initAutoUpdater();
+    updater.registerAppUpdateIpcHandlers({ requestQuit });
+    await vi.waitFor(() => {
+      expect(checkForUpdatesMock).toHaveBeenCalledTimes(1);
+    });
+    updateEventHandlers.get("update-downloaded")?.({ version: "1.1.0-beta.2" });
+    expect(updater.readAppUpdateStatus()).toEqual({
+      status: "downloaded",
+      version: "1.1.0-beta.2",
+    });
+    expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(true);
+
+    resolveUpdateTrainMock.mockReturnValue("stable");
+    for (const listener of configWrittenListeners) {
+      listener();
+    }
+
+    expect(updater.readAppUpdateStatus()).toEqual({
+      status: "no-update",
+      version: "1.0.0",
+    });
+    expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
+    const install = ipcHandlers.get("app:install-update");
+    await expect(install?.()).resolves.toEqual({
+      status: "error",
+      message: "The downloaded update is not for the selected channel.",
+    });
+    expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+
+    resolveUpdateTrainMock.mockReturnValue("beta");
+    for (const listener of configWrittenListeners) {
+      listener();
+    }
+
+    expect(updater.readAppUpdateStatus()).toEqual({
+      status: "downloaded",
+      version: "1.1.0-beta.2",
+    });
+    expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(true);
   });
 
   it("skips electron-updater on Linux package builds", async () => {
