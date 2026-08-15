@@ -854,7 +854,21 @@ function DesktopAppShell(props: {
     }
     return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
       const thread = navigation.selectedThread;
-      void desktopApi.readAppMetadata?.().then((metadata) => {
+      const metadataPromise = desktopApi.readAppMetadata?.();
+      if (!metadataPromise) {
+        return;
+      }
+      const federationHealthPromise = desktopApi.readFederationHealth
+        ? desktopApi.readFederationHealth({})
+            .then((response) => response.health)
+            .catch(() => undefined)
+        : Promise.resolve(undefined);
+      void Promise.all([metadataPromise, federationHealthPromise]).then(([
+        metadata,
+        refreshedFederationHealth,
+      ]) => {
+        const federationHealth =
+          refreshedFederationHealth ?? liveFederationHealth;
         void copyText(
           buildLocalThreadDiagnosticsInfo(
             thread
@@ -863,15 +877,23 @@ function DesktopAppShell(props: {
                   projectPath: resolveThreadWorkingStatePath(thread),
                   threadId: thread.id,
                   title: thread.title,
+                  federation: thread.federation,
+                  federationHealth,
+                  federationWindowLabel: readRendererFederationLabel(),
+                  federationWindowTarget: readRendererFederationTarget(),
                 }
-              : {},
+              : {
+                  federationHealth,
+                  federationWindowLabel: readRendererFederationLabel(),
+                  federationWindowTarget: readRendererFederationTarget(),
+                },
             metadata,
           ),
           desktopApi,
         );
       });
     });
-  }, [desktopApi, navigation.selectedThread]);
+  }, [desktopApi, liveFederationHealth, navigation.selectedThread]);
   const scheduledActionFederationTargets = useFederationThreadEventSubscriptions({
     desktopApi,
     enabled: !readRendererFederationTarget(),

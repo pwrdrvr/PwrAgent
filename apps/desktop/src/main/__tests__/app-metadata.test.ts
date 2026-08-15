@@ -2,6 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveStartupCodexHome = vi.hoisted(() => vi.fn());
 
+vi.mock("node:os", () => ({
+  arch: () => "arm64",
+  hostname: () => "viewer-mac.local",
+  platform: () => "darwin",
+  release: () => "25.0.0",
+}));
+
 vi.mock("electron", () => ({
   app: {
     getAppPath: vi.fn(() => "/app"),
@@ -64,9 +71,13 @@ describe("app metadata", () => {
     expect(resolveStartupCodexHome).toHaveBeenCalledOnce();
     expect(metadata).toMatchObject({
       activeProfileName: "sstk",
+      architecture: "arm64",
       codexProfilePath: "/Users/operator/.codex/profiles/work",
+      hostname: "viewer-mac.local",
       logFilePath:
         "/Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
+      osVersion: "25.0.0",
+      platform: "darwin",
       rendererProcessId: 4101,
     });
   });
