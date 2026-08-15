@@ -2,13 +2,16 @@
 // surfaces. These are locator-scoped on purpose: BrowserWindow chrome and OS
 // shadows belong to native screenshot documentation, not renderer contracts.
 //
-// The reference PNG files are generated on the matching Tart VM runner and
-// stored in Git LFS. Update them from the off-desktop VM lab, never from a
-// Linux host or a developer's active desktop:
+// The reference images are lossless WebP generated on the matching Tart VM
+// runner and stored in Git LFS. Playwright infers WebP from the extension and
+// uses its lossless default at quality 100. Use workspace/MCP tools to locate
+// the separately managed PwrSuiteLab checkout, then run from a clean committed
+// worktree. See CONTRIBUTING.md for the checkpoint/promotion workflow:
 //
-//   ~/pwrdrvr/PwrSuiteLab/macos-tart/run-e2e.sh --confirm-live-run \
-//     --workload pwragent --local /path/to/PwrAgent \
-//     e2e/visual-regression.spec.ts --update-snapshots
+//   suite_lab_root="<discovered PwrSuiteLab checkout>"
+//   "$suite_lab_root/macos-tart/run-e2e.sh" --confirm-live-run \
+//     --workload pwragent --local "$(git rev-parse --show-toplevel)" \
+//     e2e/visual-regression.spec.ts
 //
 // VISUAL_MAX_DIFF_PIXELS exists because the lab guest and the CI macOS runner
 // no longer rasterize identically. A golden regenerated on the lab lands 8
@@ -120,7 +123,7 @@ test.describe("visual regression", () => {
       const shell = app.window.locator(".app-shell");
       await expect(shell).toBeVisible();
       await waitForFonts(app.window);
-      await expect(shell).toHaveScreenshot("todo-thread-shell.png", {
+      await expect(shell).toHaveScreenshot("todo-thread-shell.webp", {
         animations: "disabled",
         caret: "hide",
         maxDiffPixels: VISUAL_MAX_DIFF_PIXELS,
@@ -168,7 +171,7 @@ test.describe("visual regression", () => {
       const approval = app.window.getByRole("group", { name: "Pending approval" });
       await expect(approval).toBeVisible();
       await waitForFonts(app.window);
-      await expect(approval).toHaveScreenshot("pending-approval.png", {
+      await expect(approval).toHaveScreenshot("pending-approval.webp", {
         animations: "disabled",
         caret: "hide",
         maxDiffPixels: VISUAL_MAX_DIFF_PIXELS,
