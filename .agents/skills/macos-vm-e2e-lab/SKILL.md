@@ -77,21 +77,44 @@ until you explicitly ask to view the VM.
 
 ## Visual-regression goldens
 
-PwrAgent's macOS golden images are PNG files under
+PwrAgent's macOS golden images are lossless WebP files under
 `apps/desktop/e2e/*.spec.ts-snapshots/` and are intentionally tracked in Git
-LFS. Generate or update them only inside this VM lab, matching the macOS/ARM64
-CI renderer:
+LFS. Generate or update them only inside the authoritative PwrSuiteLab Tart VM,
+matching the macOS/ARM64 CI renderer.
+
+The bundled setup above does not install PwrSuiteLab. It is a separately
+managed checkout with its own access and provisioning policy. Use available
+workspace/directory tools, PwrAgent Federation tools, or MCP resources to find
+an existing local PwrSuiteLab checkout; do not assume a pathname or clone,
+install, or provision it as part of a baseline update. If no checkout is
+discoverable, ask the operator for the appropriate lab pointer.
 
 ```bash
-cd ~/pwragent-mac-vm
-./run-e2e.sh --local /absolute/path/to/PwrAgent \
-  e2e/visual-regression.spec.ts --update-snapshots
+suite_lab_root="<PwrSuiteLab checkout discovered with tools/MCP>"
+pwragent_root="$(git rev-parse --show-toplevel)"
+"$suite_lab_root/macos-tart/run-e2e.sh" --confirm-live-run \
+  --workload pwragent --local "$pwragent_root" \
+  e2e/visual-regression.spec.ts
 ```
 
-Review the generated files before committing them. `git lfs status` should
-list each new `.png` baseline as an LFS object rather than an ordinary Git
-blob. Do not generate macOS goldens on a Linux host or compare them against a
-different platform's output.
+The controller accepts only a clean worktree and transports committed `HEAD`.
+Use this checkpoint workflow:
+
+1. Commit the code-under-test checkpoint, confirm the worktree is clean, and
+   run the focused spec. A missing or changed baseline can fail while emitting
+   reviewable `*-actual.webp` artifacts.
+2. Review the retrieved artifacts and promote approved files to their
+   `*-darwin.webp` baseline names.
+3. Stage the promoted files explicitly and check `git lfs status`; every WebP
+   baseline must be an LFS object rather than an ordinary Git blob. Commit a
+   disposable checkpoint containing the promoted baselines and confirm the
+   worktree is clean again.
+4. Rerun the same focused spec so the VM verifies the exact committed
+   references. Amend or squash the disposable checkpoint only after that run
+   passes.
+
+Do not generate macOS goldens on a Linux host or an active developer desktop,
+and do not compare them against a different platform's output.
 
 ## Self-hosted GitHub Actions runner
 
