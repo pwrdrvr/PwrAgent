@@ -23,14 +23,12 @@ import { useThreadNavigation } from "../useThreadNavigation";
 
 describe("useThreadNavigation", () => {
   beforeEach(() => {
-    window.sessionStorage.clear();
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   });
 
   afterEach(() => {
     endNativeDragInteraction();
-    window.sessionStorage.clear();
     delete (window as unknown as {
       __pwragentNavigationPreferences?: unknown;
     }).__pwragentNavigationPreferences;
