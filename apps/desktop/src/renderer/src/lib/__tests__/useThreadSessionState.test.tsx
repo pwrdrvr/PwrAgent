@@ -566,25 +566,34 @@ describe("useThreadSessionState", () => {
     const loadedEntries = pageCount * entriesPerPage;
     const legacyTriangularHistorySlots =
       entriesPerPage * pageCount * (pageCount + 1) / 2;
-    const parentHookPagingClassificationReads =
+    // The same generated hook harness measured these exact formulas at
+    // pre-#1625 9eb1ce533 and #1625 d418e6335, respectively.
+    const pre1625HookPagingClassificationReads =
+      5 * legacyTriangularHistorySlots;
+    const pre1625HookLiveClassificationReads = 4 * loadedEntries * 100;
+    const pr1625HookPagingClassificationReads =
       loadedEntries + 3 * legacyTriangularHistorySlots;
-    const parentHookLiveClassificationReads = 3 * loadedEntries * 100;
+    const pr1625HookLiveClassificationReads = 3 * loadedEntries * 100;
     expect({
       legacyTriangularHistorySlots,
       liveAppendClassificationReads: retainedEntryClassificationReads,
       loadedEntries,
-      parentHookLiveClassificationReads,
-      parentHookPagingClassificationReads,
       pagingClassificationReads,
+      pre1625HookLiveClassificationReads,
+      pre1625HookPagingClassificationReads,
+      pr1625HookLiveClassificationReads,
+      pr1625HookPagingClassificationReads,
     }).toEqual({
       legacyTriangularHistorySlots: 252_500,
       liveAppendClassificationReads: 0,
       loadedEntries: 5_000,
-      parentHookLiveClassificationReads: 1_500_000,
-      parentHookPagingClassificationReads: 762_500,
       // One classification builds replay messages and one builds the compact
       // review summary. Neither revisits a page after it has been retained.
       pagingClassificationReads: 10_000,
+      pre1625HookLiveClassificationReads: 2_000_000,
+      pre1625HookPagingClassificationReads: 1_262_500,
+      pr1625HookLiveClassificationReads: 1_500_000,
+      pr1625HookPagingClassificationReads: 762_500,
     });
   });
 
@@ -882,6 +891,8 @@ describe("useThreadSessionState", () => {
   });
 
   it("replaces an overlapping live tail when hydrated message ids change", async () => {
+    let now = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now++);
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
