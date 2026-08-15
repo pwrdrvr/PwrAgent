@@ -154,4 +154,32 @@ describe("tool-output incident explorer window", () => {
       { backend: "acp:grok", threadId: "another-thread" },
     )).toThrow("can only open its own thread");
   });
+
+  it("cleans up after Electron destroys the closed window", async () => {
+    const { showToolOutputIncidentExplorerWindow } = await import(
+      "../tool-output-incident-explorer-window"
+    );
+    const request = {
+      backend: "codex" as const,
+      threadId: "thread-destroyed",
+      title: "Destroyed window",
+    };
+    showToolOutputIncidentExplorerWindow(request);
+    const window = mocks.windows[0]!;
+    const closedHandler = window.on.mock.calls.find(
+      ([event]) => event === "closed",
+    )?.[1] as (() => void) | undefined;
+    expect(closedHandler).toBeDefined();
+
+    Object.defineProperty(window, "webContents", {
+      configurable: true,
+      get: () => {
+        throw new Error("Object has been destroyed");
+      },
+    });
+
+    expect(() => closedHandler?.()).not.toThrow();
+    showToolOutputIncidentExplorerWindow(request);
+    expect(mocks.BrowserWindow).toHaveBeenCalledTimes(2);
+  });
 });
