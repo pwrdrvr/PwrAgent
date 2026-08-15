@@ -2,7 +2,11 @@ import type {
   ThreadToolInvocationCategory,
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
-import { TOOL_OUTPUT_CAP_CHARS, toolOutputCapShare } from "@pwragent/shared";
+import {
+  isFlaggedToolInvocation,
+  TOOL_OUTPUT_CAP_CHARS,
+  toolOutputCapShare,
+} from "@pwragent/shared";
 
 /**
  * Derivations behind the incident explorer's visual summary.
@@ -108,7 +112,7 @@ export function formatCategoryLabel(
 export function summarizeIncidents(
   invocations: ThreadToolInvocationRecord[],
 ): IncidentSummary {
-  const flagged = invocations.filter((invocation) => invocation.noisy);
+  const flagged = invocations.filter(isFlaggedToolInvocation);
   const turnKeys = new Set(flagged.map((invocation) => invocation.turnId ?? ""));
   const totalTokens = sumTokens(invocations);
   const incidentTokens = sumTokens(flagged);

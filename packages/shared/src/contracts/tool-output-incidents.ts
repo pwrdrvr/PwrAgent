@@ -29,6 +29,25 @@ export function toolOutputCapShare(outputChars: number): number {
   return outputChars / TOOL_OUTPUT_CAP_CHARS;
 }
 
+/**
+ * Whether an invocation counts as a case.
+ *
+ * `noisy` is written at record time — live by the detectors while a turn runs,
+ * or by the history analyzer on demand. Neither has touched a thread whose
+ * turns predate the feature, so every one of its rows reads `noisy = 0` and a
+ * surface that filters on the flag alone shows an empty screen next to a
+ * populated turn strip. The size test is re-derivable from a row we already
+ * have, so derive it rather than trusting when the row was written.
+ *
+ * The flag still matters and is ORed in, because polling is a pattern across
+ * invocations: no single row carries enough to reconstruct it.
+ */
+export function isFlaggedToolInvocation(
+  invocation: Pick<ThreadToolInvocationRecord, "noisy" | "outputChars">,
+): boolean {
+  return invocation.noisy || invocation.outputChars >= TOOL_OUTPUT_WARNING_CHARS;
+}
+
 export type OpenToolOutputIncidentExplorerWindowRequest = {
   backend: AppServerBackendKind;
   projectLabel?: string;

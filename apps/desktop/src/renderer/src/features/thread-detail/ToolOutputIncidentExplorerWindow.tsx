@@ -7,7 +7,11 @@ import type {
   ThreadToolInvocationCategory,
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
-import { buildThreadToolIncidentPrompt } from "@pwragent/shared";
+import {
+  buildThreadToolIncidentPrompt,
+  isFlaggedToolInvocation,
+  TOOL_OUTPUT_WARNING_CHARS,
+} from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { ThreadChip } from "./ThreadChip";
@@ -106,7 +110,7 @@ export function ToolOutputIncidentExplorerWindow() {
     [accounting?.invocations],
   );
   const flagged = useMemo(
-    () => allInvocations.filter((invocation) => invocation.noisy),
+    () => allInvocations.filter(isFlaggedToolInvocation),
     [allInvocations],
   );
   const summary = useMemo(() => summarizeIncidents(allInvocations), [allInvocations]);
@@ -181,13 +185,21 @@ export function ToolOutputIncidentExplorerWindow() {
   const analyze = async (): Promise<void> => {
     if (!desktopApi?.analyzeThreadToolHistory) return;
     setAnalyzing(true);
-    setStatus(undefined);
+    setStatusTone("info");
+    /* The scan pages through the whole thread 100 entries at a time, which on
+       a long thread is tens of seconds of silence. Say so up front rather
+       than leaving a disabled button as the only feedback. */
+    setStatus("Scanning this thread's history…");
     try {
       const response = await desktopApi.analyzeThreadToolHistory({
         backend: route.backend,
         threadId: route.threadId,
       });
       setAccounting(response.accounting);
+      /* Analysis persisted new rows and new output availability; re-read so
+         the transcript pages backing captured-output retrieval match the
+         findings now on screen. */
+      void refresh();
       setStatusTone(response.coverage.completeness === "complete" ? "info" : "error");
       setStatus(
         response.coverage.completeness === "complete"
@@ -281,7 +293,9 @@ export function ToolOutputIncidentExplorerWindow() {
             onClick={() => void analyze()}
             disabled={analyzing}
           >
-            {accounting?.analysis ? "Refresh analysis" : "Analyze history"}
+            {analyzing
+              ? "Analyzing…"
+              : accounting?.analysis ? "Refresh analysis" : "Analyze history"}
           </button>
           <button
             className="incident-explorer__button incident-explorer__button--ghost"
@@ -432,7 +446,13 @@ export function ToolOutputIncidentExplorerWindow() {
             </section>
           ))}
           {!loading && invocations.length === 0 ? (
-            <p className="incident-explorer__empty">No findings match these filters.</p>
+            <p className="incident-explorer__empty">
+              {flagged.length > 0
+                ? "No findings match these filters."
+                : allInvocations.length === 0
+                  ? "No tool calls are recorded for this thread yet."
+                  : `None of this thread's ${allInvocations.length.toLocaleString()} recorded tool calls returned more than ${TOOL_OUTPUT_WARNING_CHARS.toLocaleString()} characters.`}
+            </p>
           ) : null}
         </aside>
 

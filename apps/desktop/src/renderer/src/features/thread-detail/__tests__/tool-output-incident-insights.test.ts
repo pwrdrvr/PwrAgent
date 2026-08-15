@@ -18,7 +18,8 @@ describe("summarizeIncidents", () => {
     const summary = summarizeIncidents([
       invocation({ estimatedOutputTokens: 3_000, noisy: true, outputChars: 12_000 }),
       invocation({ estimatedOutputTokens: 1_000, noisy: true, outputChars: 4_000 }),
-      invocation({ estimatedOutputTokens: 1_000, noisy: false, outputChars: 4_000 }),
+      /* Small and unmarked: below the size test, so not a case either way. */
+      invocation({ estimatedOutputTokens: 1_000, noisy: false, outputChars: 500 }),
     ]);
 
     expect(summary.caseCount).toBe(2);
