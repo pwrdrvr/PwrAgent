@@ -19,6 +19,100 @@ export type ProcessTreeTerminationOptions = {
   forceTimeoutMs: number;
 };
 
+export type ProcessTreeWaitOptions = {
+  knownPids?: Iterable<number>;
+  pollIntervalMs?: number;
+  rootPid?: number;
+  timeoutMs?: number;
+};
+
+export function isProcessIdAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Snapshot a process and its current descendants. Call this before kill:
+ * Windows reparents grandchildren (sleep.exe) after the PowerShell/Job
+ * launcher dies, so later parent walks cannot find them.
+ */
+export function collectProcessTreeIds(rootPid: number): number[] {
+  const tracked = new Set<number>();
+  if (!Number.isInteger(rootPid) || rootPid <= 0) {
+    return [];
+  }
+  tracked.add(rootPid);
+  if (process.platform !== "win32") {
+    return [...tracked];
+  }
+
+  let added = true;
+  while (added) {
+    added = false;
+    for (const pid of [...tracked]) {
+      if (!isProcessIdAlive(pid)) {
+        continue;
+      }
+      for (const childPid of listWindowsChildProcessIds(pid)) {
+        if (!tracked.has(childPid)) {
+          tracked.add(childPid);
+          added = true;
+        }
+      }
+    }
+  }
+  return [...tracked];
+}
+
+/**
+ * Wait until the root pid and every previously observed descendant are gone.
+ * `taskkill /T /F` returning 0 is not enough: the Windows Job path
+ * `child.kill`s the PowerShell launcher and directory handles can linger
+ * until powershell/conhost/bash/sleep actually exit.
+ */
+export async function waitForProcessTreeGone(
+  options: ProcessTreeWaitOptions = {},
+): Promise<boolean> {
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 50);
+  const tracked = new Set<number>(
+    [...(options.knownPids ?? [])].filter(
+      (pid) => Number.isInteger(pid) && pid > 0,
+    ),
+  );
+  if (options.rootPid) {
+    for (const pid of collectProcessTreeIds(options.rootPid)) {
+      tracked.add(pid);
+    }
+  }
+
+  const startedAt = Date.now();
+  while (true) {
+    for (const pid of [...tracked]) {
+      if (isProcessIdAlive(pid)) {
+        for (const childPid of collectProcessTreeIds(pid)) {
+          tracked.add(childPid);
+        }
+      }
+    }
+    const alive = [...tracked].filter((pid) => isProcessIdAlive(pid));
+    if (alive.length === 0) {
+      return true;
+    }
+    if (Date.now() - startedAt >= timeoutMs) {
+      return false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
 function isExited(child: OwnedChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
@@ -93,6 +187,54 @@ function waitForOwnedProcessTreeExit(
       timeoutMs,
     );
   });
+}
+
+function resolveWindowsPowerShell(): string {
+  const childEnv = buildPwrAgentChildProcessEnv(process.env);
+  const systemRoot = Object.entries(childEnv).find(
+    ([key]) => key.toUpperCase() === "SYSTEMROOT",
+  )?.[1];
+  return systemRoot
+    ? path.win32.join(
+        systemRoot,
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+      )
+    : "powershell.exe";
+}
+
+function listWindowsChildProcessIds(pid: number): number[] {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return [];
+  }
+  const result = spawnSync(
+    resolveWindowsPowerShell(),
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | Select-Object -ExpandProperty ProcessId`,
+    ],
+    {
+      encoding: "utf8",
+      env: buildPwrAgentChildProcessEnv(process.env),
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 5_000,
+      windowsHide: true,
+    },
+  );
+  if (result.status !== 0) {
+    return [];
+  }
+  return String(result.stdout ?? "")
+    .split(/\r?\n/)
+    .map((line) => Number(line.trim()))
+    .filter((childPid) => Number.isInteger(childPid) && childPid > 0);
 }
 
 function terminateWindowsTree(
