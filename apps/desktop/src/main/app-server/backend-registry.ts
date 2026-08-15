@@ -6669,8 +6669,8 @@ export class DesktopBackendRegistry {
   private pendingToolInvocationDeltaTimer: NodeJS.Timeout | undefined;
   /**
    * Serializes every flush and streamed alert boundary so a timer-driven write
-   * `item/completed` write it accumulated before — the store keeps the
-   * terminal status and stops summing once a row is terminal, so an
+   * can never land after the `item/completed` write it accumulated before. The
+   * store keeps the terminal status and stops summing once a row is terminal, so an
    * out-of-order delta flush would silently under-count the command's output.
    */
   private toolInvocationDeltaFlushChain: Promise<void> = Promise.resolve();
