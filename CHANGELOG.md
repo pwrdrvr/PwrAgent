@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.0.1 - 2026-08-14
+
+- Windows Installer and Release Safety - Added Azure-signed Windows NSIS installers and made release publication wait for signed macOS and Windows builds plus both Linux packages. Releases now publish the Windows installer/blockmap, macOS updater assets, Linux packages, and one checksum manifest together.
+- Windows Desktop - Made Codex and ACP command shims reliable with complex Windows paths and arguments; improved approval diffs, prefix actions, worktree cleanup, overlay branding, and titlebar hover transitions.
+- Providers and Onboarding - Improved discovery and setup for Codex, Gemini, Kimi, Qwen, and Grok; deferred Gemini login until needed; restored selected profiles reliably after onboarding; and added Grok CLI update notices.
+- ACP Sessions - Hardened completion behavior, branch adoption, launch selection, replay timing, scratch workspaces, and Working Updates so late provider events do not corrupt newer thread activity.
+- Pull Requests and Reviews - Added richer pull-request hover cards, including head-branch and status details, and made GitHub status refreshes more resilient to slow, stale, or unauthenticated responses.
+- Worktrees and Handoffs - Added searchable handoff branch selection, safer concurrent-worktree paths, stronger directory discovery, and more reliable cross-worktree thread behavior.
+- Composer and Drafts - Reduced draft-journal writes while improving recovery across continuous edits, app changes, and failed saves.
+- Sub-agents and Approvals - Reconciled orphaned sub-agent lifecycle records, preserved ownership through refreshes, and moved approval status into the thread header.
+- Thread Experience - Improved transcript density, pin controls, branch-picker layering, skill-file directory labels, Markdown tables, tooltips, and sidebar typography.
+- Messaging and Reliability - Improved Slack mention handling, adapter startup, status rendering, startup watchdog behavior, clipboard protection, shutdown recovery, and diagnostics.
+- Desktop Stability - Kept the main window within the usable display area and hardened hot-CPU profiler, E2E cleanup, and abnormal-shutdown handling.
+- Maintenance - Updated Electron and aligned local/CI Node with Electron’s bundled runtime to keep packaging and native rebuilds consistent.
+
 ## v1.0.1-prerelease.5 - 2026-08-14
 
 - Sub-agent Activity - Reconciled orphaned sub-agent lifecycle records and preserved correct ownership as thread activity refreshes.
