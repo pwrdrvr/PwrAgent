@@ -42,7 +42,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.x
+          node-version: 24.18.0
           cache-electron: "true"
           lookup-only: "true"
 
@@ -59,7 +59,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.x
+          node-version: 24.18.0
           cache-electron: "true"
 
       - name: License metadata
@@ -117,7 +117,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.x
+          node-version: 24.18.0
           cache-electron: "true"
 
       - name: Build
@@ -137,7 +137,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.x
+          node-version: 24.18.0
           cache-electron: "true"
 
       - name: Install ripgrep
@@ -170,7 +170,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.14.1
+          node-version: 24.18.0
           working-directory: .
           cache-electron: "true"
           lookup-only: "true"
@@ -189,7 +189,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.14.1
+          node-version: 24.18.0
           working-directory: .
           cache-electron: "true"
 
@@ -215,7 +215,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.14.1
+          node-version: 24.18.0
           working-directory: .
           cache-electron: "true"
 
@@ -237,7 +237,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.14.1
+          node-version: 24.18.0
           working-directory: .
           cache-electron: "true"
 
@@ -348,7 +348,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.x
+          node-version: 24.18.0
           cache-electron: "true"
 
       - name: Run desktop replay-backed Electron tests
@@ -409,7 +409,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.x
+          node-version: 24.18.0
           cache-electron: "true"
           lookup-only: "true"
 
@@ -457,7 +457,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.x
+          node-version: 24.18.0
           cache-electron: "true"
 
       - name: Clear leftover Electron state from previous jobs
@@ -564,7 +564,7 @@ jobs:
         uses: pwrdrvr/configure-nodejs@v1
         timeout-minutes: 10
         with:
-          node-version: 24.x
+          node-version: 24.18.0
           cache-electron: "true"
 
       - name: Install ripgrep
