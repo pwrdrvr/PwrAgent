@@ -11,6 +11,7 @@ export type LocalThreadDiagnosticsContext = {
   backend?: AppServerBackendKind;
   federation?: NavigationThreadSummary["federation"];
   federationHealth?: FederationHealthStatus;
+  federationWindowLabel?: string;
   federationWindowTarget?: FederationRemoteTarget;
   projectPath?: string;
   threadId?: string;
@@ -30,7 +31,10 @@ function processIdLines(metadata: AppMetadata): string[] {
   ];
 }
 
-function federationLines(context: LocalThreadDiagnosticsContext): string[] {
+function federationLines(
+  context: LocalThreadDiagnosticsContext,
+  metadata: AppMetadata,
+): string[] {
   const federation = context.federation;
   const target = federation?.ref.target;
   const remoteTarget = target && isRemoteFederationTarget(target)
@@ -41,17 +45,23 @@ function federationLines(context: LocalThreadDiagnosticsContext): string[] {
         (peer) => peer.id === remoteTarget.instanceId,
       )
     : undefined;
-  const remoteWindow = Boolean(remoteTarget && context.federationWindowTarget);
+  const remoteViewerTarget = context.federationWindowTarget;
+  const remoteViewer = remoteViewerTarget
+    ? context.federationHealth?.peers.find(
+        (peer) => peer.id === remoteViewerTarget.instanceId,
+      )
+    : undefined;
+  const classification = remoteViewerTarget
+    ? remoteTarget && remoteTarget.instanceId !== remoteViewerTarget.instanceId
+      ? "Remote² Thread in Remote Viewer"
+      : "Remote Thread in Remote Viewer"
+    : remoteTarget
+      ? "Remote Thread Mounted in Local Viewer"
+      : "Local Thread in Local Viewer";
+  const localThreadOwner = !remoteTarget;
 
   return [
-    `Thread location: ${remoteTarget ? "Remote" : "Local"}`,
-    `Federation view: ${
-      remoteTarget
-        ? remoteWindow
-          ? "Dedicated remote window"
-          : "Mounted in local window"
-        : "Local thread"
-    }`,
+    `Thread/view classification: ${classification}`,
     `Federation mount provenance: ${
       remoteTarget
         ? federation?.derivedFromMountedParent
@@ -59,13 +69,45 @@ function federationLines(context: LocalThreadDiagnosticsContext): string[] {
           : "Direct"
         : "Not mounted"
     }`,
-    `Federation viewer instance ID: ${available(context.federationHealth?.instanceId)}`,
-    `Federation owner instance ID: ${available(remoteTarget?.instanceId)}`,
-    `Federation owner label: ${available(federation?.instanceLabel)}`,
-    `Federation owner hostname: ${available(owner?.host?.hostname)}`,
-    `Federation owner machine ID: ${available(owner?.host?.machineId)}`,
-    `Federation owner profile: ${available(owner?.profileName)}`,
-    `Federation peer status: ${available(federation?.peerStatus ?? owner?.status)}`,
+    `Local viewer federation instance ID: ${available(context.federationHealth?.instanceId)}`,
+    `Remote viewer target instance ID: ${available(remoteViewerTarget?.instanceId)}`,
+    `Remote viewer target label: ${available(
+      context.federationWindowLabel ?? remoteViewer?.label,
+    )}`,
+    `Remote viewer target hostname: ${available(remoteViewer?.host?.hostname)}`,
+    `Remote viewer target machine ID: ${available(remoteViewer?.host?.machineId)}`,
+    `Remote viewer target profile: ${available(remoteViewer?.profileName)}`,
+    `Remote viewer target status: ${available(remoteViewer?.status)}`,
+    `Thread owner federation instance ID: ${available(
+      remoteTarget?.instanceId
+      ?? (localThreadOwner ? context.federationHealth?.instanceId : undefined),
+    )}`,
+    `Thread owner label: ${available(
+      remoteTarget
+        ? federation?.instanceLabel ?? owner?.label
+        : context.federationHealth?.localLabel,
+    )}`,
+    `Thread owner hostname: ${available(
+      remoteTarget ? owner?.host?.hostname : metadata.hostname,
+    )}`,
+    `Thread owner machine ID: ${available(owner?.host?.machineId)}`,
+    `Thread owner platform: ${available(
+      remoteTarget ? owner?.host?.platform : metadata.platform,
+    )}`,
+    `Thread owner OS version: ${available(
+      remoteTarget ? owner?.host?.osVersion : metadata.osVersion,
+    )}`,
+    `Thread owner architecture: ${available(
+      remoteTarget ? owner?.host?.arch : metadata.architecture,
+    )}`,
+    `Thread owner profile: ${available(
+      remoteTarget ? owner?.profileName : metadata.activeProfileName,
+    )}`,
+    `Thread owner status: ${available(
+      remoteTarget
+        ? federation?.peerStatus ?? owner?.status
+        : context.federationHealth?.status,
+    )}`,
     `Federation routing target: ${
       remoteTarget ? `remote:${remoteTarget.instanceId}` : "local"
     }`,
@@ -93,10 +135,21 @@ export function buildLocalThreadDiagnosticsInfo(
     `Project directory/worktree path: ${available(context.projectPath)}`,
     `Provider/backend: ${available(context.backend)}`,
     `Thread title: ${available(context.title)}`,
-    ...federationLines(context),
-    `PwrAgent profile: ${metadata.activeProfileName}`,
-    ...processIdLines(metadata),
-    `PwrAgent log path: ${available(metadata.logFilePath)}`,
-    `Codex profile path: ${available(metadata.codexProfilePath)}`,
+    ...federationLines(context, metadata),
+    `Viewer machine hostname: ${available(metadata.hostname)}`,
+    `Viewer platform: ${available(metadata.platform)}`,
+    `Viewer OS version: ${available(metadata.osVersion)}`,
+    `Viewer architecture: ${available(metadata.architecture)}`,
+    `Viewer PwrAgent version: ${available(metadata.applicationVersion)}`,
+    `Viewer Electron version: ${available(metadata.electronVersion)}`,
+    `Viewer Chrome version: ${available(metadata.chromeVersion)}`,
+    `Viewer Node version: ${available(metadata.nodeVersion)}`,
+    `Viewer PwrAgent profile: ${metadata.activeProfileName}`,
+    `Viewer main process PID: ${metadata.mainProcessId}`,
+    ...(metadata.rendererProcessId === undefined
+      ? []
+      : [`Viewer renderer process PID: ${metadata.rendererProcessId}`]),
+    `Viewer PwrAgent log path: ${available(metadata.logFilePath)}`,
+    `Viewer Codex profile path: ${available(metadata.codexProfilePath)}`,
   ].join("\n");
 }

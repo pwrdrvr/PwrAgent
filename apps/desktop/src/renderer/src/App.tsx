@@ -854,7 +854,21 @@ function DesktopAppShell(props: {
     }
     return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
       const thread = navigation.selectedThread;
-      void desktopApi.readAppMetadata?.().then((metadata) => {
+      const metadataPromise = desktopApi.readAppMetadata?.();
+      if (!metadataPromise) {
+        return;
+      }
+      const federationHealthPromise = desktopApi.readFederationHealth
+        ? desktopApi.readFederationHealth({})
+            .then((response) => response.health)
+            .catch(() => undefined)
+        : Promise.resolve(undefined);
+      void Promise.all([metadataPromise, federationHealthPromise]).then(([
+        metadata,
+        refreshedFederationHealth,
+      ]) => {
+        const federationHealth =
+          refreshedFederationHealth ?? liveFederationHealth;
         void copyText(
           buildLocalThreadDiagnosticsInfo(
             thread
@@ -864,10 +878,15 @@ function DesktopAppShell(props: {
                   threadId: thread.id,
                   title: thread.title,
                   federation: thread.federation,
-                  federationHealth: liveFederationHealth,
+                  federationHealth,
+                  federationWindowLabel: readRendererFederationLabel(),
                   federationWindowTarget: readRendererFederationTarget(),
                 }
-              : { federationHealth: liveFederationHealth },
+              : {
+                  federationHealth,
+                  federationWindowLabel: readRendererFederationLabel(),
+                  federationWindowTarget: readRendererFederationTarget(),
+                },
             metadata,
           ),
           desktopApi,
